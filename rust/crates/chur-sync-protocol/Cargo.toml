@@ -1,0 +1,13 @@
+[package]
+name = "chur-sync-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Canonical encrypted operations, device logs, grants, protocol versioning."
+
+[dependencies]
+chur-core.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,19 @@
+[package]
+name = "chur-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Test vectors, inspection, validation, migration, recovery tooling."
+
+[[bin]]
+name = "chur-cli"
+path = "src/main.rs"
+
+[dependencies]
+chur-core.workspace = true
+
+clap.workspace = true
+
+[lints]
+workspace = true

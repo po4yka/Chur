@@ -1,0 +1,15 @@
+//! Chur sync and sharing protocol records.
+//!
+//! Canonical, signed, encrypted operation-log records, device identities,
+//! collection grants, and rollback state. Gated by ADR-0007: nothing here is
+//! production-approved until the local vault formats are stable and the
+//! protocol passes its dedicated review (`docs/assurance/RELEASE_GATES.md`
+//! gates 5 and 6).
+//!
+//! Normative sources:
+//!
+//! - `docs/sync/SYNC_PROTOCOL_V1.md` (proposed future protocol outline)
+//! - `docs/sync/OPERATION_LOG.md`, `DEVICE_IDENTITY.md`,
+//!   `COLLECTION_GRANTS.md`, `REVOCATION.md`, `ROLLBACK_PROTECTION.md`
+//!
+//! This crate intentionally contains no code yet.

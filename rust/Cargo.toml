@@ -1,0 +1,50 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/chur-core",
+    "crates/chur-crypto",
+    "crates/chur-format",
+    "crates/chur-catalog",
+    "crates/chur-media",
+    "crates/chur-sync-protocol",
+    "crates/chur-ffi",
+    "crates/chur-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "BSD-3-Clause"
+repository = "https://github.com/po4yka/Chur"
+
+[workspace.dependencies]
+chur-core = { path = "crates/chur-core" }
+chur-crypto = { path = "crates/chur-crypto" }
+chur-format = { path = "crates/chur-format" }
+
+# Cryptography. Narrow, well-reviewed libraries only (DEPENDENCY_POLICY.md).
+argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+getrandom = "0.3"
+hkdf = "0.12"
+sha2 = { version = "0.10", default-features = false }
+subtle = { version = "2", default-features = false }
+zeroize = { version = "1", default-features = false, features = ["alloc"] }
+
+# Errors and CLI.
+thiserror = "2"
+clap = { version = "4", features = ["derive"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
+panic = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+todo = "warn"
+
+[profile.release]
+overflow-checks = true

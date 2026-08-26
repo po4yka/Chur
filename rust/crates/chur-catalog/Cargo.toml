@@ -1,0 +1,13 @@
+[package]
+name = "chur-catalog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Rust-owned encrypted catalog: schema, transactions, indexes."
+
+[dependencies]
+chur-core.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,14 @@
+[package]
+name = "chur-format"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Canonical encoding, object containers, key envelopes, versioning."
+
+[dependencies]
+chur-core.workspace = true
+chur-crypto.workspace = true
+
+[lints]
+workspace = true

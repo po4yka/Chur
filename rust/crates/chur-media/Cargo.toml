@@ -1,0 +1,13 @@
+[package]
+name = "chur-media"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Streaming import/export, random-access readers, derived assets."
+
+[dependencies]
+chur-core.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,13 @@
+[package]
+name = "chur-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Vault lifecycle, sessions, orchestration, and stable domain types."
+
+[dependencies]
+thiserror.workspace = true
+
+[lints]
+workspace = true

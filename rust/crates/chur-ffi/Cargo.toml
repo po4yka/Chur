@@ -1,0 +1,16 @@
+[package]
+name = "chur-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Stable C ABI data plane and ABI handshake for mobile hosts."
+
+[lib]
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[dependencies]
+chur-core.workspace = true
+
+[lints]
+workspace = true
