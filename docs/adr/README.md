@@ -1,0 +1,77 @@
+# Architecture Decision Records
+
+ADRs record durable architectural choices, alternatives, consequences, and security impact. They explain **why** a decision exists; normative format and behavior remain in focused specifications.
+
+## Status values
+
+```text
+Proposed
+Accepted
+Deprecated
+Superseded by ADR-NNNN
+Rejected
+```
+
+## Template
+
+```markdown
+# ADR-NNNN: Title
+
+- Status: Proposed
+- Date: YYYY-MM-DD
+- Decision owners: ...
+- Related: links
+
+## Context
+
+## Decision
+
+## Alternatives considered
+
+## Consequences
+
+### Positive
+
+### Negative / tradeoffs
+
+## Security and privacy impact
+
+## Compatibility and migration impact
+
+## Validation
+
+## Follow-up
+```
+
+## Process
+
+- create an ADR for a decision affecting ownership, trust boundary, persisted/wire bytes, key lifecycle, major dependency, platform security policy, or release gate;
+- do not edit the historical decision into a different choice after acceptance; supersede it with a new ADR;
+- update related normative docs and vectors in the same change or state the sequencing explicitly;
+- accepted ADRs must identify unresolved proposals and evidence required;
+- security-sensitive ADRs require a second reviewer when possible.
+
+## Index
+
+| ADR | Decision | Status |
+| --- | --- | --- |
+| [0001](0001-rust-owns-private-vault.md) | Rust owns the private vault | Accepted |
+| [0002](0002-independent-aead-chunks.md) | Independent AEAD chunks for media | Accepted |
+| [0003](0003-separate-object-key-envelope.md) | Separate object-key envelope from immutable container | Accepted |
+| [0004](0004-rust-owned-private-catalog.md) | Rust-owned private catalog; SQLCipher preferred pending validation | Proposed |
+| [0005](0005-real-and-decoy-vault-isolation.md) | Real and decoy vault cryptographic isolation | Accepted |
+| [0006](0006-control-and-data-plane-ffi.md) | Split FFI control and data planes | Accepted |
+| [0007](0007-local-first-before-sync.md) | Stabilize local vault before sync/sharing | Accepted |
+
+## Future ADR backlog
+
+- canonical encoding choice and frozen profile;
+- object-container constants and default chunk size;
+- password Unicode and Argon2id parameter profile;
+- SQLCipher build/link/backup validation result;
+- Android Keystore and iOS Keychain exact policies;
+- UniFFI/Gobley versus handwritten C ABI control plane;
+- backup outer framing and optional age integration;
+- device identity portability;
+- conflict-resolution data types;
+- post-quantum recipient profile.
