@@ -1,0 +1,99 @@
+# Hot-path data across JNI
+
+Deep material for moving bytes between the JVM and Rust. The decision rule is in
+[../SKILL.md](../SKILL.md); this file holds the code and the safety arguments.
+
+## Rank the options by copy count
+
+| Option | Copies per payload | Use it for |
+|--------|--------------------|------------|
+| File-descriptor handoff | 0 | A stream that Rust owns for the life of the session. |
+| DirectByteBuffer | 0 | Bytes that must transit, at a rate that makes a copy visible. |
+| `JByteArray` region or conversion | 1 each way | Control-plane payloads: configuration, a report, a command. |
+| `GetByteArrayElements` | VM choice: copy or pin | Short synchronous access that always releases the elements. |
+
+## File-descriptor handoff
+
+Transfer ownership of the descriptor once, as a `jint`, at session start. Rust
+then reads and writes the device or the socket directly, and the payload never
+crosses JNI again. This is the only option that removes the boundary from the
+data path completely.
+
+Rules:
+
+- Duplicate the descriptor (for example with `nix::unistd::dup`) before you use
+  it asynchronously. The JVM side can close or revoke the original.
+- Document who closes the descriptor. A double close is a hard-to-attribute
+  failure in an unrelated part of the process, because the number is reused.
+- Do not send the same descriptor twice. Send it at create or at start, and
+  make every later call use the handle instead.
+
+## DirectByteBuffer
+
+Allocate the buffer with `ByteBuffer.allocateDirect` on the JVM side, then map
+the address in Rust:
+
+```rust
+use jni::objects::JByteBuffer;
+use jni::Env;
+
+// The accessor names are the same on 0.21 and 0.22. On 0.22 both are safe
+// functions. The wrapper is unsafe because Rust cannot prove the JVM-side
+// lifetime and aliasing contract.
+unsafe fn map_direct_buffer<'local>(
+    env: &Env<'local>,
+    buf: &'local JByteBuffer<'local>,
+) -> jni::errors::Result<&'local [u8]> {
+    let ptr = env.get_direct_buffer_address(buf)?;
+    let len = env.get_direct_buffer_capacity(buf)?;
+    // SAFETY: the caller upholds this function's safety contract.
+    Ok(unsafe { std::slice::from_raw_parts(ptr, len) })
+}
+```
+
+The returned lifetime is tied to the borrowed local reference. The function is
+still `unsafe`. The caller must prove that the direct buffer stays allocated and
+that no Java or native thread writes the bytes while the shared slice exists.
+Do not widen the returned lifetime or store the slice after the JNI call.
+
+The memory belongs to the JVM. The slice is valid only while a Java reference to
+that buffer is alive. If Rust must retain the buffer after the current call,
+store a `GlobalRef` with the native owner. Do not store a borrowed slice in the
+owner. Recreate the slice from the retained buffer only inside a method that
+borrows the owner, and do not let the slice escape that borrow. Drop the slice
+before you drop the `GlobalRef`.
+
+The `no other thread writes it concurrently` half of that SAFETY comment is a
+contract with the JVM side, not something Rust can check. Write it down in the
+binding class as well: state which side owns the buffer between calls.
+
+## JByteArray
+
+`convert_byte_array` and the region accessors copy between the JVM heap and
+native memory. That cost is irrelevant for a call that happens once per
+session and decisive for a call that happens per packet.
+
+```rust
+use jni::objects::JByteArray;
+use jni::Env;
+
+// Acceptable for control-plane payloads. The accessor is the same on 0.21.
+fn read_control_payload(env: &Env<'_>, array: &JByteArray<'_>) -> jni::errors::Result<()> {
+    let bytes = env.convert_byte_array(array)?;
+    process_config(&bytes);
+    Ok(())
+}
+
+fn process_config(_bytes: &[u8]) {}
+```
+
+If a per-packet path already uses `JByteArray`, treat the change to a descriptor
+handoff or a direct buffer as a throughput fix, not a style fix. The copy
+couples throughput to the boundary.
+
+Raw `GetByteArrayElements` is different. The VM can return a copy or pin the
+array, and `isCopy` reports that choice. Pair every successful get with
+`ReleaseByteArrayElements`, including error paths. Use `JNI_ABORT` after
+read-only access. Use mode `0` when native writes must reach the Java array.
+The `jni` elements guard releases on drop; keep its scope explicit. Never hold
+elements across `.await` or a blocking operation.
