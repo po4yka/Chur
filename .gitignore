@@ -1,2 +1,32 @@
+# Agent state directories
 .omc/
 .omo/
+
+# Rust
+/rust/target/
+**/*.rs.bk
+
+# Gradle / Kotlin / JVM
+.gradle/
+build/
+.kotlin/
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+captures/
+
+# Xcode
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# macOS
+.DS_Store
+
+# Native build intermediates
+*.o
+*.a
+*.so
+*.dylib

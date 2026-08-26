@@ -1,0 +1,5 @@
+# Chur pins the Rust toolchain per DEVELOPMENT.md ("Do not rely on globally
+# mutable defaults"). The channel tracks repository-approved stable releases;
+# an exact version pin is recorded once the first CI matrix is configured.
+[toolchain]
+channel = "stable"
