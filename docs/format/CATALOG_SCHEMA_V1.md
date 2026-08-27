@@ -1,6 +1,6 @@
 # Private Catalog Schema v1
 
-> **Status:** Proposed normative logical schema; SQLCipher is the preferred physical implementation pending prototype validation
+> **Status:** Proposed normative logical schema. The v1 catalog has two representations and no third: a physical SQLCipher schema for the live local database, and the canonical serialization of [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) when exported into a portable backup. SQLCipher build, linkage, WAL, migration, and performance validation remain outstanding.
 
 The private catalog is Rust-owned. It stores queryable private metadata, object and collection relationships, key envelopes, journals, integrity state, and future sync projections. Room and DataStore never open or mirror it.
 
@@ -31,7 +31,7 @@ SyncProjection (future)
 
 Tracks:
 
-- catalog schema version;
+- `catalog_format_version`, `0x0001` for v1, allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.2 and mirrored by the vault descriptor in [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §5; a disagreement between the two is `CATALOG_CORRUPT`;
 - catalog generation;
 - active migration transaction;
 - object-store reconciliation checkpoint;
@@ -149,7 +149,7 @@ Proposed:
 - file placed in private protected storage;
 - connection closes before key zeroization on lock;
 - no Room schema or DAO for private data;
-- backups copy through a Chur backup format, not raw live pages by default.
+- a portable backup carries the canonical catalog export named in [`BACKUP_FORMAT_V1.md`](BACKUP_FORMAT_V1.md) §2, and never raw SQLCipher pages, WAL segments, or a file copy of the live database. Raw pages are a local storage detail: they carry one client's page format and SQLCipher build options into the package, and no other platform build is required to read them.
 
 Prototype must validate Android/iOS build size, linkage, WAL behavior, migration, performance, and backup correctness.
 
@@ -172,6 +172,8 @@ Atomic boundaries are required for:
 Filesystem and DB commit order is specified per operation with recovery reconciliation.
 
 ## 18. Migrations
+
+Schema versions are values of the `catalog_format_version` namespace of [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.2. They begin at `0x0001` and increase by one with no gap and no branch, so "prior supported version" below is always exactly one step back and a multi-step upgrade runs each step in order.
 
 Every schema version has:
 

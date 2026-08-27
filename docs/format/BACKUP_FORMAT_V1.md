@@ -21,7 +21,7 @@ BackupPackageV1
 ├── PublicBackupPreamble
 ├── EncryptedBackupManifest
 ├── PortableVaultDescriptor
-├── EncryptedCatalogSnapshot / canonical catalog export
+├── EncryptedCanonicalCatalogExport
 ├── ObjectContainer entries
 ├── ObjectKey/Collection envelopes
 ├── Optional incremental operation segment

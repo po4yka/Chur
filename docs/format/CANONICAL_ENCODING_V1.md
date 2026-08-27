@@ -310,7 +310,7 @@ Backup package, `BackupPackageV1`, over the components of its package model:
 | --- | --- |
 | `0x01` | encrypted backup manifest |
 | `0x02` | portable vault descriptor |
-| `0x03` | encrypted catalog snapshot |
+| `0x03` | encrypted canonical catalog export |
 | `0x04` | object container entry |
 | `0x05` | object-key or collection-key envelope entry |
 | `0x06` | incremental operation segment |
