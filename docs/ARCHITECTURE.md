@@ -1110,19 +1110,9 @@ BLAKE3-256 is the commitment hash. Its result gains authenticity only by being s
 
 ### 21.2 Object states
 
-The catalog tracks explicit states:
+The catalog persists two values per object and this document defines neither: the lifecycle `state` and the `integrity_summary` of [`format/CATALOG_SCHEMA_V1.md`](format/CATALOG_SCHEMA_V1.md) §5.1, which also derives the presentation names of [`../DESIGN.md`](../DESIGN.md) §20.1 from the pair. Names used earlier in this document are not values of either enum: `Incoming` is the `stage` of an `ImportTransaction` row per §22.1, and a purged object is the absence of the row after garbage collection per [`format/CATALOG_SCHEMA_V1.md`](format/CATALOG_SCHEMA_V1.md) §14.1.
 
-```text
-Incoming
-Committed
-VerificationRequired
-Corrupt
-Quarantined
-Tombstoned
-Purged
-```
-
-A catalog entry MUST NOT mark an object `Committed` before its encrypted container and final commit are durably written.
+A catalog entry MUST NOT set an object's `state` to `ACTIVE` before its encrypted container and final commit are durably written.
 
 ### 21.3 Startup reconciliation
 
@@ -1130,7 +1120,7 @@ After a crash, Rust scans journals and incoming objects:
 
 - an open import transaction is resumed or declared dead under [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §14.3 and §14.4; a temporary object with no journal record is always dead;
 - finalized orphan objects can be reconciled into the catalog;
-- catalog entries pointing to absent or uncommitted objects are quarantined;
+- an object row whose container is absent or uncommitted keeps `state` `ACTIVE` and takes `integrity_summary` `QUARANTINED`;
 - no unverified object becomes visible as successfully imported.
 
 ---

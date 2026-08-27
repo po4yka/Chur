@@ -1186,7 +1186,7 @@ Unsupported format
 Migration required
 ```
 
-Each state has distinct language and actions.
+Each state has distinct language and actions. These are presentation names, not stored values: each one is derived from the object row's `state` and `integrity_summary` by the table in [`docs/format/CATALOG_SCHEMA_V1.md`](docs/format/CATALOG_SCHEMA_V1.md) §5.1, which owns both enums. A name that does not appear in that table is not renderable.
 
 ### 20.2 Integrity banner
 

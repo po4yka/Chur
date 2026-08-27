@@ -71,10 +71,52 @@ primary_stream_id
 creation/import metadata (private)
 logical media kind (private)
 state: ACTIVE / DELETING / TOMBSTONED / CORRUPT
-integrity summary
+integrity_summary
 ```
 
 Physical path is an opaque random store identifier, not a user filename.
+
+### 5.1 Lifecycle and integrity states
+
+An object row carries two independent enums and this specification is the authority for both. `state` is the lifecycle:
+
+| `state` | Meaning |
+| --- | --- |
+| `ACTIVE` | the container and final commit are durably written and the object is listable |
+| `DELETING` | deletion has started and the object is no longer listable, §14.1 |
+| `TOMBSTONED` | every object-key envelope is destroyed and a tombstone row exists, §14.1 |
+| `CORRUPT` | a structural or cryptographic check proved the object unusable and no repair path remains |
+
+`integrity_summary` is the verification verdict, and it is meaningful only while `state` is `ACTIVE`:
+
+| `integrity_summary` | Meaning |
+| --- | --- |
+| `UNVERIFIED` | committed, never verified on this device |
+| `VERIFYING` | a scan of §13 is in progress |
+| `RANGE_VERIFIED` | some ranges authenticated; complete verification has not run |
+| `COMPLETE_VERIFIED` | manifest, every expected chunk, lengths, ordered commitment, and final commit are valid |
+| `INCOMPLETE` | required records are absent; resume or restore may still succeed |
+| `QUARANTINED` | the container is absent or unreadable, so the object must not be presented or silently retried |
+| `UNSUPPORTED` | `container_version` or `suite_id` is outside the range this build reads |
+| `MIGRATION_REQUIRED` | readable, but a migration must run before use |
+
+Proven corruption is a lifecycle change, not an integrity value: a check that proves corruption sets `state` to `CORRUPT`. Quarantine is the opposite case and stays an integrity value, because an absent container is a fact about this device rather than a verdict on the object. Two names used by lower-authority documents are values of neither enum: `Incoming` is the `stage` of an `ImportTransaction` row, §11, and a purged object is the absence of the row after garbage collection, §14.1.
+
+Transitions: `ACTIVE` to `DELETING` to `TOMBSTONED` is the only deletion path and it never reverses; `ACTIVE` to `CORRUPT` is terminal; `integrity_summary` changes only while `state` is `ACTIVE`.
+
+The user-facing states of [`../../DESIGN.md`](../../DESIGN.md) §20.1 are derived from the pair and are never stored:
+
+| `state` | `integrity_summary` | Presented state |
+| --- | --- | --- |
+| `ACTIVE` | `UNVERIFIED` or `RANGE_VERIFIED` | Verification recommended |
+| `ACTIVE` | `VERIFYING` | Verification in progress |
+| `ACTIVE` | `COMPLETE_VERIFIED` | Verified |
+| `ACTIVE` | `INCOMPLETE` | Incomplete |
+| `ACTIVE` | `QUARANTINED` | Quarantined |
+| `ACTIVE` | `UNSUPPORTED` | Unsupported format |
+| `ACTIVE` | `MIGRATION_REQUIRED` | Migration required |
+| `CORRUPT` | any | Corrupt |
+| `DELETING` or `TOMBSTONED` | any | not presented |
 
 ## 6. Object streams
 
