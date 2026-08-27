@@ -91,7 +91,11 @@ Server-visible leakage may include:
 - approximate number and size of objects;
 - sharing graph/recipient count unless grants are additionally hidden;
 - IP/network metadata;
-- ciphertext version/capability.
+- ciphertext version/capability;
+- the per-device causal graph carried by the cleartext `observed_heads` vector of [`OPERATION_LOG.md`](OPERATION_LOG.md) §4, which shows which devices had accepted which of each other's operations;
+- the grouping of operations by `key_selector`, so operations under one key epoch are linkable to each other, and the count of distinct live selectors. The selector is a random 16-byte value and names no collection.
+
+Per-operation action kind and collection attribution are deliberately absent from this list: `operation_kind` and the collection context are inside `encrypted_payload` under [`OPERATION_LOG.md`](OPERATION_LOG.md) §6, and a change that moved either back into the cleartext record would add a row here.
 
 Padding, batching, relay privacy, and private information retrieval are outside v1 but should remain possible extensions.
 

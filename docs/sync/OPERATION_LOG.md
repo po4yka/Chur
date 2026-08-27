@@ -26,8 +26,7 @@ OperationV1
 ├── device_sequence
 ├── previous_operation_hash
 ├── observed_heads
-├── operation_kind
-├── collection/key epoch context when required
+├── key_selector
 ├── encrypted_payload
 ├── payload commitment
 └── Ed25519 signature
@@ -120,16 +119,28 @@ It is a deduplication and idempotency key only. Two received records are the sam
 
 ## 6. Encryption
 
-Payload encryption context binds:
+The cleartext outer record is closed. It carries exactly the fields of §2 and nothing else:
 
-- operation version/kind;
-- vault/collection;
-- device and sequence;
-- operation ID;
-- relevant object/album IDs;
-- key epoch.
+```text
+protocol_version
+operation_id
+vault/account binding
+device_id
+device_sequence
+previous_operation_hash
+observed_heads
+key_selector
+encrypted_payload
+Ed25519 signature
+```
 
-The server can route by minimal opaque fields. Fields not required for routing should remain encrypted.
+Every other field of an operation lives inside `encrypted_payload`: `operation_kind`, the collection and key epoch the operation belongs to, and every object, album, tag, and device identifier the operation names. Without this, the server reads a timestamped per-device stream of delete, favorite, rename, and tag events attributed to a collection, which is a behavioural profile of a private library and contradicts §1. A new routing need is a `protocol_version` change, not a new cleartext field.
+
+`key_selector` is 16 random bytes assigned to a `(collection, epoch)` pair when that epoch is created, and it selects the key the receiver decrypts with. It is opaque: it carries no collection identity and no ordering, and the server learns only that two operations use the same epoch. Root-domain operations carry the vault's root selector.
+
+The payload AAD is the canonical concatenation of the cleartext fields above, excluding `encrypted_payload` and the signature, after the operation signing domain tag. AAD must be readable before decryption, so no field inside the ciphertext may appear in it: `operation_kind`, collection, epoch, and object identifiers are authenticated as payload plaintext by the AEAD tag, and the signature of §7 binds the sealed payload to the outer record.
+
+What the server still observes is enumerated in [`SERVER_TRUST_MODEL.md`](SERVER_TRUST_MODEL.md) §8.
 
 ## 7. Signatures
 
