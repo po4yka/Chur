@@ -82,4 +82,5 @@ No container bytes exist yet, so nothing migrates. `container_version`, `canonic
 - assign the vault-descriptor and backup-package magics and record them beside `CHUROBJ1`;
 - freeze the approved chunk-size range, the maximum supported plaintext size, and the maximum chunk count;
 - freeze the sealed plaintext schemas of the manifest and the final commit;
-- generate and publish the vectors listed under Validation.
+- generate and publish the vectors listed under Validation;
+- reconcile the final-commit AAD in `CRYPTOGRAPHY.md` §38 with §3 of this specification, which binds `container_version` as well as `suite_id`.

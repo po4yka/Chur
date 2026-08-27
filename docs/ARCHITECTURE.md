@@ -1024,39 +1024,19 @@ Portable backup packages must include the required object-key envelopes alongsid
 
 ## 20. Encrypted object container v1
 
-The proposed logical structure is:
+The record sequence is:
 
 ```text
 ChurObjectV1
-├── Fixed public preamble
-│   ├── magic
-│   ├── container version
-│   ├── algorithm suite ID
-│   ├── opaque object ID
-│   ├── encrypted manifest length
-│   └── framing version
-│
-├── Encrypted manifest
-│   ├── object kind
-│   ├── stream kind
-│   ├── stream revision
-│   ├── chunk size
-│   ├── stream nonce prefix
-│   └── immutable stream properties
-│
-├── ChunkRecord[0..N]
-│   ├── plaintext length
-│   └── ciphertext + authentication tag
-│
-└── Encrypted final commit
-    ├── total plaintext size
-    ├── chunk count
-    ├── final chunk length
-    ├── ordered ciphertext commitment
-    └── stream revision
+├── PublicPreambleV1
+├── EncryptedManifestRecordV1
+├── ChunkRecordV1[0..N-1]
+└── FinalCommitRecordV1
 ```
 
-The preamble exposes only values required to parse and locate encrypted records. It MUST NOT expose plaintext filename, MIME type, dimensions, duration, EXIF, capture time, GPS, album membership, or human-readable vault identity.
+Byte offsets, field widths, v1 constants, and record framing are frozen in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §3, §5, §8, and §11. That specification governs container bytes, and this section MUST NOT restate its fields.
+
+The preamble carries no object identifier; object and stream identifiers live in the encrypted manifest and the final commit. The preamble exposes only values required to parse and locate encrypted records. It MUST NOT expose plaintext filename, MIME type, dimensions, duration, EXIF, capture time, GPS, album membership, or human-readable vault identity.
 
 ### 20.1 Serialization requirements
 
@@ -1090,17 +1070,7 @@ The architecture invariant is uniqueness of every `(key, nonce)` pair. The imple
 
 ### 20.3 Chunk AAD
 
-Canonical AAD binds a chunk to its complete context:
-
-```text
-container_version
-suite_id
-object_id
-stream_kind
-stream_revision
-chunk_index
-chunk_plaintext_length
-```
+Canonical AAD binds a chunk to its complete context. The bound items are frozen in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §9 and MUST NOT be restated here; the tuple encoding is in [`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md) §35. The binding includes the manifest ciphertext commitment, so a chunk cannot be substituted against a different manifest, as SEC-014 in [`security/SECURITY_INVARIANTS.md`](security/SECURITY_INVARIANTS.md) requires.
 
 Total length and total chunk count are not required in each chunk AAD, because some import sources do not provide a trustworthy length before streaming begins. Completeness is authenticated by the final commit.
 
@@ -1133,15 +1103,9 @@ A video player MAY consume a `VerifiedRange` without verifying a two-hour file f
 
 ### 21.1 Final commit
 
-The encrypted final commit authenticates:
+The encrypted final commit authenticates the object and stream identity, the manifest ciphertext commitment, the expected chunk count, the exact total plaintext length, the final chunk length, and the ordered commitment over canonical ciphertext records. Its record framing and sealed contents are defined in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §11.
 
-- stream revision;
-- expected chunk count;
-- exact total plaintext length;
-- final chunk length;
-- ordered commitment over canonical ciphertext records.
-
-BLAKE3 is the proposed commitment hash. Its result gains authenticity by being stored inside an AEAD-protected final commit.
+BLAKE3-256 is the commitment hash. Its result gains authenticity only by being stored inside the AEAD-protected final commit.
 
 ### 21.2 Object states
 

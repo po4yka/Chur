@@ -616,34 +616,15 @@ ObjectKeyEnvelope
 
 ```text
 ChurObjectV1
-├── Public preamble
-│   ├── magic
-│   ├── format_version
-│   ├── algorithm_suite_id
-│   ├── opaque_object_id
-│   └── encrypted_manifest_length
-│
-├── Encrypted manifest
-│   ├── stream_kind
-│   ├── stream_id
-│   ├── stream_revision
-│   ├── chunk_size
-│   ├── nonce_prefix
-│   └── immutable stream properties
-│
-├── ChunkRecord[0..N]
-│   ├── plaintext_length
-│   └── ciphertext_and_tag
-│
-└── Encrypted final commit
-    ├── total_plaintext_size
-    ├── chunk_count
-    ├── last_chunk_length
-    ├── ordered_chunk_commitment
-    └── stream_revision
+├── PublicPreambleV1
+├── EncryptedManifestRecordV1
+├── ChunkRecordV1[0..N-1]
+└── FinalCommitRecordV1
 ```
 
-The public preamble contains only information required to parse the container. It must not expose the original filename, media type, dimensions, duration, album, EXIF, GPS, or user-visible identifiers.
+Byte offsets, field widths, and v1 constants are frozen in [`docs/format/OBJECT_CONTAINER_V1.md`](docs/format/OBJECT_CONTAINER_V1.md), which is the authority for container bytes.
+
+The public preamble carries no object identifier; object and stream identifiers live in the encrypted records. It contains only information required to parse the container, and it must not expose the original filename, media type, dimensions, duration, album, EXIF, GPS, or user-visible identifiers.
 
 Ciphertext length still reveals an approximate object size. Optional padding may be added later, but Chur does not initially attempt oblivious storage.
 
@@ -670,20 +651,9 @@ Reusing the same key-and-nonce pair is forbidden.
 
 ### Chunk AAD
 
-Each chunk is bound to its context through canonical associated data:
+Each chunk is bound to its context through canonical associated data. The bound items are listed in [`docs/format/OBJECT_CONTAINER_V1.md`](docs/format/OBJECT_CONTAINER_V1.md) §9 and are not repeated here.
 
-```text
-format_version
-algorithm_suite_id
-opaque_object_id
-stream_id
-stream_kind
-stream_revision
-chunk_index
-chunk_plaintext_length
-```
-
-This prevents unnoticed chunk reordering, cross-object substitution, stream-kind confusion, and interpretation under an incompatible format revision.
+This prevents unnoticed chunk reordering, cross-object substitution, stream-kind confusion, substitution against a different manifest, and interpretation under an incompatible format revision.
 
 The total length and expected chunk count are not required in every chunk AAD because an import source may not know its final length in advance. Whole-object completeness is committed separately in the final record.
 
@@ -714,15 +684,9 @@ CompleteVerifiedObject
     order, and commitment were validated as a complete object
 ```
 
-The final commit authenticates:
+The final commit authenticates the object and stream identity, the manifest ciphertext commitment, the expected chunk count, the total plaintext size, the final chunk length, and an ordered commitment over all ciphertext records. Its sealed contents are listed in [`docs/format/OBJECT_CONTAINER_V1.md`](docs/format/OBJECT_CONTAINER_V1.md) §11.
 
-- expected chunk count;
-- total plaintext size;
-- final chunk length;
-- stream revision;
-- an ordered commitment over all ciphertext records.
-
-A candidate implementation is a BLAKE3 root over canonically encoded ciphertext records. The root itself is protected inside the AEAD-authenticated final commit.
+The ordered commitment is BLAKE3-256 over the exact wire bytes of every chunk record. The value gains authenticity only inside the AEAD-authenticated final commit.
 
 ### Playback verification
 
