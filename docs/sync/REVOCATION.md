@@ -20,6 +20,7 @@ These have different scopes and must not share ambiguous UI language.
 
 A signed membership operation removes the device. Clients then:
 
+- record the revoked device's final accepted `device_sequence` in the `RevokeDevice` operation, so later operations may omit it from `observed_heads` per [`OPERATION_LOG.md`](OPERATION_LOG.md) §4.4;
 - reject later operations signed by it beyond accepted revocation point;
 - stop issuing root/collection envelopes;
 - rotate affected collection epochs according to policy;

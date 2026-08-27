@@ -514,7 +514,7 @@ The following MUST be excluded from backup:
 - active session state;
 - nonportable device-only secret references;
 - Keychain assumptions that cannot survive restore;
-- incomplete operations unsafe to resume elsewhere.
+- temporary import containers, so a restored vault finds no resumable import transaction and marks each open one dead per [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §14.4.
 
 ### 14.2 Portable encrypted state
 

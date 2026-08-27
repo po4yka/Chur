@@ -1512,6 +1512,8 @@ new random ObjectKey
     ↓
 new manifest and nonce prefix
     ↓
+per chunk: durably reserve the index in the import journal, then encrypt
+    ↓
 streamed chunk encryption into temporary object
     ↓
 ordered ciphertext commitment
@@ -1535,10 +1537,11 @@ Requirements:
 - temporary output is ciphertext, not a plaintext copy;
 - the original MUST NOT be deleted before durable encrypted commit;
 - the catalog MUST NOT reference an uncommitted object;
-- a finalized orphan object MUST be recoverable through startup reconciliation;
-- an abandoned temporary object MUST be deleted or resumed only with its original transaction state;
+- a finalized orphan object MUST be recoverable through startup reconciliation, and a temporary object with no journal record is always dead;
+- every chunk index MUST be durably reserved in the import journal before it is encrypted, per [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §14.2;
+- an abandoned or cancelled transaction is dead under §14.4: its temporary object is deleted and its key and prefix pair is retired, never reused;
 - import progress MUST not expose private filenames in logs or notifications;
-- cancellation MUST leave either a resumable authenticated transaction or a removable incomplete object;
+- cancellation MUST leave either a transaction resumable under §14.3 from its journaled reserved index, or a removable dead one;
 - source size MAY be unknown at start;
 - media probing and thumbnail creation MUST follow the plaintext-lifecycle policy.
 

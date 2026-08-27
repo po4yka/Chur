@@ -727,7 +727,7 @@ The catalog record is committed only after the encrypted object has been durably
 
 Crash recovery rules:
 
-- incomplete temporary objects are removed or resumed according to an explicit journal;
+- an open import transaction is resumed from its journaled reserved index or declared dead, per [`docs/format/OBJECT_CONTAINER_V1.md`](docs/format/OBJECT_CONTAINER_V1.md) §14.3 and §14.4;
 - finalized orphan objects can be reconciled into the catalog;
 - a catalog entry must never point to an uncommitted object;
 - source deletion is offered only after successful encrypted commit.

@@ -1126,7 +1126,7 @@ A catalog entry MUST NOT mark an object `Committed` before its encrypted contain
 
 After a crash, Rust scans journals and incoming objects:
 
-- incomplete temporary objects are removed or resumed according to transaction state;
+- an open import transaction is resumed or declared dead under [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §14.3 and §14.4; a temporary object with no journal record is always dead;
 - finalized orphan objects can be reconciled into the catalog;
 - catalog entries pointing to absent or uncommitted objects are quarantined;
 - no unverified object becomes visible as successfully imported.
