@@ -21,6 +21,7 @@ import dev.po4yka.chur.app.vault.CreateVaultScreen
 import dev.po4yka.chur.app.vault.LibraryTile
 import dev.po4yka.chur.app.vault.RecoveryPhraseScreen
 import dev.po4yka.chur.app.vault.RecoveryScreen
+import dev.po4yka.chur.app.vault.ThumbnailCache
 import dev.po4yka.chur.app.vault.UnlockScreen
 import dev.po4yka.chur.app.vault.VaultActions
 import dev.po4yka.chur.app.vault.VaultDestination
@@ -294,7 +295,10 @@ private fun VaultRoute(controller: ChurController) {
             onCloseAlbum = { openAlbum = null },
             onCreateAlbum = { creatingAlbum = true },
             onLock = {
-                cache.clear()
+                // §8 step 7 clears the decoded cache. The lock does not wait
+                // for it, because the cache holds no handle: what matters is
+                // that the pixels go, not the order they go in.
+                scope.launch { cache.clear() }
                 controller.lock()
             },
             onVerifyAll = { controller.verifyEverything() },

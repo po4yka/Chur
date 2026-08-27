@@ -1,13 +1,12 @@
-package dev.po4yka.chur.android
+package dev.po4yka.chur.app.vault
 
-import android.graphics.BitmapFactory
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.StreamKind
 import dev.po4yka.chur.vault.VaultRepository
-import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -21,12 +20,16 @@ import kotlinx.coroutines.withContext
  * The cache is bounded. §12 of the media pipeline bounds one derivative and
  * this bounds how many are held, so a library of a million objects scrolls
  * without the cache growing to a million thumbnails.
+ *
+ * Only the decode is per platform, so only the decode is an `expect`. The
+ * eviction, the key, and the lock rule are the same on both and live here,
+ * where one reading of them covers both hosts.
  */
 class ThumbnailCache(private val capacity: Int = DEFAULT_CAPACITY) {
     private data class Key(val generation: Long, val id: String, val kind: StreamKind)
 
-    private val entries = ConcurrentHashMap<Key, ImageBitmap>()
-    private val order = ArrayDeque<Key>()
+    private val mutex = Mutex()
+    private val entries = LinkedHashMap<Key, ImageBitmap>()
 
     /**
      * The decoded derivative, loading it when the cache does not hold it.
@@ -43,17 +46,20 @@ class ThumbnailCache(private val capacity: Int = DEFAULT_CAPACITY) {
         kind: StreamKind = StreamKind.THUMBNAIL,
     ): ImageBitmap? {
         val key = Key(generation, id, kind)
-        entries[key]?.let { return it }
+        mutex.withLock { entries[key] }?.let { return it }
         val bytes = try {
-            withContext(Dispatchers.IO) { repository.readDerived(objectId, kind) }
+            withContext(Dispatchers.Default) { repository.readDerived(objectId, kind) }
         } catch (_: ChurFailure) {
             return null
         }
-        val bitmap = withContext(Dispatchers.Default) {
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-        } ?: return null
-        val image = bitmap.asImageBitmap()
-        put(key, image)
+        val image = withContext(Dispatchers.Default) { decodeThumbnail(bytes) } ?: return null
+        mutex.withLock {
+            entries[key] = image
+            while (entries.size > capacity) {
+                val oldest = entries.keys.firstOrNull() ?: break
+                entries.remove(oldest)
+            }
+        }
         return image
     }
 
@@ -64,19 +70,8 @@ class ThumbnailCache(private val capacity: Int = DEFAULT_CAPACITY) {
      * new session opens; this is what makes it unreachable while the process is
      * still locked, which is the case §8 is about.
      */
-    fun clear() {
-        entries.clear()
-        synchronized(order) { order.clear() }
-    }
-
-    private fun put(key: Key, image: ImageBitmap) {
-        entries[key] = image
-        synchronized(order) {
-            order.addLast(key)
-            while (order.size > capacity) {
-                entries.remove(order.removeFirst())
-            }
-        }
+    suspend fun clear() {
+        mutex.withLock { entries.clear() }
     }
 
     private companion object {
@@ -90,3 +85,12 @@ class ThumbnailCache(private val capacity: Int = DEFAULT_CAPACITY) {
         const val DEFAULT_CAPACITY = 256
     }
 }
+
+/**
+ * Decodes one derivative into an image.
+ *
+ * It returns `null` for bytes the platform decoder refuses rather than raising:
+ * a derivative that will not decode is a defect in the object, and §11.1 shows
+ * a placeholder for it exactly as it does for one that is not ready.
+ */
+internal expect fun decodeThumbnail(bytes: ByteArray): ImageBitmap?

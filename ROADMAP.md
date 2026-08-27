@@ -52,7 +52,7 @@ Gate 1 may be declared once the two approvals are recorded.
 | Rust-owned encrypted catalog | done: SQLCipher with the pragma order of [ADR-0038](docs/adr/0038-adopt-sqlcipher-as-the-v1-catalog-engine.md), the schema of [`docs/format/CATALOG_SCHEMA_V1.md`](docs/format/CATALOG_SCHEMA_V1.md), and keyset paging |
 | photo import through platform pickers | **partly done.** The Android host imports through `PickVisualMedia` and requests no permission. The iOS picker is specified in [`apps/iosApp/README.md`](apps/iosApp/README.md) and lives in an Xcode project that is not in this repository |
 | immutable encrypted originals | done: the container is written once, and the catalog holds no operation that rewrites one |
-| encrypted metadata, thumbnails, and previews | **partly done.** All three are derived, encrypted, and read back by Rust, and the Android host decodes and shows them. The iOS grid draws tiles without them, because no platform decode is bound there yet |
+| encrypted metadata, thumbnails, and previews | done. All three are derived, encrypted, and read back by Rust, and both hosts decode them through one cache whose only per-platform part is the decode |
 | timeline, albums, favorites, viewer, and export | done |
 | catalog search as bounded by [`docs/format/CATALOG_SCHEMA_V1.md`](docs/format/CATALOG_SCHEMA_V1.md) §16, over the in-database FTS5 table of §16.4 | done |
 | immediate, timed, background, and panic lock | **partly done.** All four transitions run, and three of them are reachable from a screen. The panic transition has no gesture bound to it, because [`docs/product/DISCREET_MODE.md`](docs/product/DISCREET_MODE.md) records the gesture as an open specification item and reserves the decision to itself |

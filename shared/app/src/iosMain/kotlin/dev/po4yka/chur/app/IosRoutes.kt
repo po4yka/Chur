@@ -6,13 +6,16 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.ImageBitmap
 import dev.po4yka.chur.app.notes.NoteEditorScreen
 import dev.po4yka.chur.app.notes.NotesScreen
 import dev.po4yka.chur.app.vault.CreateVaultScreen
 import dev.po4yka.chur.app.vault.LibraryTile
 import dev.po4yka.chur.app.vault.RecoveryPhraseScreen
 import dev.po4yka.chur.app.vault.RecoveryScreen
+import dev.po4yka.chur.app.vault.ThumbnailCache
 import dev.po4yka.chur.app.vault.UnlockScreen
 import dev.po4yka.chur.app.vault.VaultActions
 import dev.po4yka.chur.app.vault.VaultDestination
@@ -23,17 +26,17 @@ import dev.po4yka.chur.ffi.ObjectQuery
 import dev.po4yka.chur.ffi.QueryScope
 import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.vault.VaultState
+import kotlinx.coroutines.launch
 import platform.Foundation.NSDate
 import platform.Foundation.timeIntervalSince1970
 
 /**
  * The iOS route table.
  *
- * It is the Android one without the two things the Android host owns: the photo
- * picker, which is a `PHPickerViewController` the Xcode project presents, and
- * the thumbnail decode, which needs a platform image decoder. The picker calls
- * back into [ChurController] with the file URL, so the flow is the same and the
- * presentation is the platform's.
+ * It is the Android one without the one thing the Android host owns: the photo
+ * picker, which is a `PHPickerViewController` the Xcode project presents. The
+ * picker calls back into [ChurController] with the file URL, so the flow is the
+ * same and the presentation is the platform's.
  */
 @Composable
 internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: VaultState) {
@@ -65,7 +68,7 @@ internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: 
             onRecover = controller::recover,
             onBack = { controller.goTo(AppRoute.Unlock) },
         )
-        AppRoute.Vault -> VaultRoute(controller)
+        AppRoute.Vault -> VaultRoute(controller, vaultState)
     }
 }
 
@@ -102,7 +105,7 @@ private fun PublicShell(controller: ChurController) {
 }
 
 @Composable
-private fun VaultRoute(controller: ChurController) {
+private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     val page by controller.page.collectAsState()
     val albums by controller.albums.collectAsState()
     val slots by controller.slots.collectAsState()
@@ -124,13 +127,39 @@ private fun VaultRoute(controller: ChurController) {
         }
     }
 
+    val scope = rememberCoroutineScope()
+    val cache = remember { ThumbnailCache() }
+    val generation = (vaultState as? VaultState.Unlocked)?.generation ?: 0L
+    // §4 of `PLAINTEXT_LIFECYCLE.md`: the decoded cache is cleared on lock, and
+    // the session generation is what makes a stale entry unreachable after a
+    // new session opens.
+    LaunchedEffect(generation) { cache.clear() }
+
+    // The tiles carry whatever the cache already holds, and a tile whose
+    // thumbnail is missing loads it. §11.1 keeps the geometry stable while it
+    // arrives, so nothing jumps.
+    var thumbnails by remember { mutableStateOf(mapOf<String, ImageBitmap>()) }
+    LaunchedEffect(page, generation) {
+        page.objects.filter { it.thumbnailReady }.forEach { projection ->
+            val image = cache.load(
+                repository = controller.vault,
+                generation = generation,
+                objectId = projection.objectId,
+                id = projection.id,
+            )
+            if (image != null) {
+                thumbnails = thumbnails + (projection.id to image)
+            }
+        }
+    }
+
     VaultShell(
         state = VaultUiState(
             destination = destination,
             tiles = page.objects.map { projection ->
                 LibraryTile(
                     projection = projection,
-                    thumbnail = null,
+                    thumbnail = thumbnails[projection.id],
                     selected = projection.id in selection,
                 )
             },
@@ -172,7 +201,11 @@ private fun VaultRoute(controller: ChurController) {
             onOpenAlbum = { openAlbum = it },
             onCloseAlbum = { openAlbum = null },
             onCreateAlbum = { controller.createAlbum("Album") },
-            onLock = { controller.lock() },
+            onLock = {
+                // §8 step 7 clears the decoded cache, as the Android host does.
+                scope.launch { cache.clear() }
+                controller.lock()
+            },
             onVerifyAll = { controller.verifyEverything() },
             onAddRecoverySlot = controller::addRecoverySlot,
         ),
