@@ -69,9 +69,9 @@ Signature covers all canonical outer fields including HPKE encapsulation/ciphert
 
 ## 5. Recipient verification
 
-Before sharing, user verifies recipient identity through fingerprint/QR/existing trusted device. Server-provided names/avatars are not sufficient cryptographic proof.
+Recipient key trust follows [`SERVER_TRUST_MODEL.md`](SERVER_TRUST_MODEL.md) §7: an external recipient's keys are pinned on the first grant, and out-of-band verification before that first grant is offered but not required. Server-provided names/avatars are not sufficient cryptographic proof. The fingerprint the user compares is constructed in [`DEVICE_IDENTITY.md`](DEVICE_IDENTITY.md) §5.
 
-Key changes trigger warning/re-verification unless authorized by signed identity rotation.
+A change to a pinned recipient key blocks: no further grant is issued to that recipient until the user re-verifies the fingerprint, or until a signed identity rotation chaining to the pinned key authorizes the change. It is not a dismissible banner.
 
 ## 6. Permissions
 

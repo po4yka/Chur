@@ -80,7 +80,12 @@ The server may substitute public keys. Mitigations:
 - collection grants signed by sender identity;
 - transparency/witness mechanisms in later versions.
 
-Trust-on-first-use is a product decision and must be explicit.
+Trust models are fixed here, not left open:
+
+- enrolling a device into the user's own vault requires verification. The enrolling device shows the device fingerprint of [`DEVICE_IDENTITY.md`](DEVICE_IDENTITY.md) §5, and the new device is not signed into membership until that fingerprint is compared or its QR payload is scanned. Both devices are in the user's hands at that moment, so the check costs nothing and removes server key substitution from own-device enrollment;
+- a collection grant to an external recipient uses trust on first use. The recipient's keys are accepted as presented with the first grant and pinned. A later change to either pinned key blocks further grants until the user verifies the new fingerprint out of band or a signed identity rotation chaining to the pinned key authorizes it. Requiring out-of-band verification before every first share would make sharing unusable; pinning with a blocking key-change prompt limits the server to a substitution it must commit to before the first share and cannot repeat later.
+
+The first device of a vault is self-enrolled and has no second device to compare against; its fingerprint is verified when the second device enrolls.
 
 ## 8. Metadata leakage
 
