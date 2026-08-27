@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-27
+- **Decision owners:** @po4yka
 - **Related:** [`../sync/OPERATION_LOG.md`](../sync/OPERATION_LOG.md), [`../sync/SERVER_TRUST_MODEL.md`](../sync/SERVER_TRUST_MODEL.md), [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md), [`0014`](0014-observed-heads-causality-vector.md)
 
 ## Context

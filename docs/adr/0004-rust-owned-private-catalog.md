@@ -51,6 +51,8 @@ Rejected: private catalog ownership escapes Rust.
 
 ## Security impact
 
+Affected invariants: SEC-019, SEC-020, SEC-032.
+
 Catalog key derives from root domain and exists only in unlocked Rust session. Object/collection keys remain wrapped inside the catalog. Lock closes DB before zeroizing key.
 
 ## Compatibility impact

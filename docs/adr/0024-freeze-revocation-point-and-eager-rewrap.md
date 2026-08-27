@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-27
+- **Decision owners:** @po4yka
 - **Related:** [`../sync/REVOCATION.md`](../sync/REVOCATION.md), [`../sync/DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md), [`../sync/COLLECTION_GRANTS.md`](../sync/COLLECTION_GRANTS.md), [`0014`](0014-observed-heads-causality-vector.md)
 
 ## Context

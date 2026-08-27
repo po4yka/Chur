@@ -54,6 +54,8 @@ Rejected as the primary media format: weaker media semantics and cross-platform 
 
 ## Security impact
 
+Affected invariants: SEC-011, SEC-014, SEC-016, SEC-017.
+
 Nonce uniqueness and canonical AAD are mandatory. The API must distinguish `VerifiedRange` from `CompleteVerifiedObject`; a missing final commit cannot be accepted as complete.
 
 ## Compatibility impact

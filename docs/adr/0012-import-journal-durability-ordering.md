@@ -35,17 +35,17 @@ Rejected. It creates a second durability domain and a reconciliation between tha
 
 - the indexes ever encrypted under a prefix are a durable superset of what reached the container, so resume is safe without trusting bytes an attacker may have truncated, and it checks one record instead of rescanning.
 
-### Negative / tradeoffs
+### Tradeoffs
 
 - one durable journal commit and one container fsync per chunk, which the chunk-size benchmark must now include;
 - a crash between a reservation and the completed chunk write kills the transaction, and the import restarts at index 0 with new key material;
 - the journal cannot be excluded from a catalog backup file by file, so a restored vault finds no temp container and marks every open transaction dead.
 
-## Security and privacy impact
+## Security impact
 
 Affected invariants: SEC-011, SEC-012, SEC-013, SEC-024. Reservation before use is what makes SEC-011 provable on the resume path: the used-index set is bounded by a durable value at every crash point, so the resumed writer picks an index above it without consulting container bytes. Destroying the key envelope before the temp container leaves an abandoned stream unreadable even where discarded blocks survive on flash.
 
-## Compatibility and migration impact
+## Compatibility impact
 
 No container bytes and no vectors change. The journal record is private catalog state, so its shape is covered by the catalog schema version, not by `container_version`.
 

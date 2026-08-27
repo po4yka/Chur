@@ -281,7 +281,7 @@ Rows with `state` `DELETING` or `TOMBSTONED` are never returned. A row with `int
 
 ### 16.3 Required indexes
 
-Each one covers a scope under a sort, so a page is a range scan and never a sort:
+The first four bullets hold the five indexes that cover a scope under a sort, so a page is a range scan and never a sort; the remaining five serve lookups that are not query scopes:
 
 - `objects(state, capture_time_ms, object_id)` and `objects(state, import_time_ms, object_id)`;
 - `album_memberships(album_id, capture_time_ms, object_id)`;

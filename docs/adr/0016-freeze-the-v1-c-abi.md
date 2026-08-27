@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-27
+- **Decision owners:** @po4yka
 - **Related:** [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md), [`../ERROR_MODEL.md`](../ERROR_MODEL.md), [`0006`](0006-control-and-data-plane-ffi.md)
 
 ## Context
@@ -63,3 +64,9 @@ No shipped binary exists, so nothing migrates. The major ABI version is the comp
 - an unknown status value and an unknown capability bit, asserting fail-closed behavior;
 - double close, closed-handle reuse, and a fabricated handle value;
 - Android and iOS built against the same `chur.h`.
+
+## Follow-up
+
+- publish the checked-in `chur.h` and the header check that keeps both hand-written binding sets in step with it; neither exists yet, and both land with the first `chur-ffi` implementation;
+- allocate the value of the first `(major, minor)` ABI version pair, which `interop/FFI_CONTRACT.md` §2 exports and no document sets;
+- the exact `ChurQueryV1` and page encoding of [`0028`](0028-freeze-the-catalog-query-surface.md) enter the frozen export list with the first `chur-catalog` implementation.

@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-27
+- **Decision owners:** @po4yka
 - **Related:** [`../sync/CONFLICT_RESOLUTION.md`](../sync/CONFLICT_RESOLUTION.md), [`0014`](0014-observed-heads-causality-vector.md), [`0022`](0022-freeze-operation-chain-hash-and-identifier.md)
 
 ## Context

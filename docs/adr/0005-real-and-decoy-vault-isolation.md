@@ -53,6 +53,8 @@ Not selected: significantly different threat model and forensic guarantees; unsa
 
 ## Security impact
 
+Affected invariants: SEC-035, SEC-036, SEC-037, SEC-038, SEC-039.
+
 External credential failure should not reveal which identity exists. Product copy must state forensic limitations.
 
 ## Compatibility impact

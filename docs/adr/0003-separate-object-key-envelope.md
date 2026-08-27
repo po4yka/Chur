@@ -52,6 +52,8 @@ Rejected: expensive and unnecessary for gigabyte objects.
 
 ## Security impact
 
+Affected invariants: SEC-021, SEC-026.
+
 AAD binds envelope to vault, collection, epoch, object, and generation. Active duplicate/stale envelopes are rejected by catalog policy.
 
 ## Compatibility impact

@@ -52,6 +52,8 @@ Rejected: expands review surface and can freeze weak key-distribution assumption
 
 ## Security impact
 
+Affected invariants: SEC-040, SEC-055.
+
 No server/account recovery is assumed for local guarantees. Sync and sharing cannot bypass their own release gates.
 
 ## Compatibility impact

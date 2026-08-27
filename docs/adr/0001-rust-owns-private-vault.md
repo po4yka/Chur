@@ -55,6 +55,8 @@ Rejected: private metadata serialization and transaction logic would escape the 
 
 ## Security impact
 
+Affected invariants: SEC-019, SEC-020.
+
 This is the primary trust boundary. KMP/public storage must not become a shadow private database. Rust compromise remains high impact and requires independent review.
 
 ## Compatibility impact

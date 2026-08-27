@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-27
+- **Decision owners:** @po4yka
 - **Related:** [`../format/OBJECT_CONTAINER_V1.md`](../format/OBJECT_CONTAINER_V1.md), [`../format/VAULT_DESCRIPTOR_V1.md`](../format/VAULT_DESCRIPTOR_V1.md), [`../format/COLLECTION_KEY_ENVELOPE_V1.md`](../format/COLLECTION_KEY_ENVELOPE_V1.md), [`0008`](0008-freeze-object-container-v1-layout.md), [`0011`](0011-freeze-vault-descriptor-authentication.md)
 
 ## Context

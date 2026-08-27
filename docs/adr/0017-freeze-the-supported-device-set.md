@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-27
+- **Decision owners:** @po4yka
 - **Related:** [`../assurance/PERFORMANCE_BUDGETS.md`](../assurance/PERFORMANCE_BUDGETS.md), [`../security/PASSWORD_PROFILE.md`](../security/PASSWORD_PROFILE.md), [`../ANDROID.md`](../ANDROID.md), [`../IOS.md`](../IOS.md)
 
 ## Context
@@ -55,6 +56,8 @@ Rejected. Argon2id memory and seek latency do not scale predictably across therm
 
 ## Security impact
 
+Affected invariants: SEC-007.
+
 The KDF cost parameter is a security parameter set by measurement. Naming the floor device prevents the usual failure where the parameter is calibrated on a fast device and then quietly reduced in the field to keep unlock latency acceptable, which weakens the password profile for exactly the users on the weakest hardware.
 
 ## Compatibility impact
@@ -66,3 +69,8 @@ No vault byte changes. `minSdk` and the deployment target are packaging metadata
 - the Argon2id calibration run recorded on all five devices, including thermal state and any low-memory kill;
 - chunk-size candidates compared on the floor device for seek amplification and import throughput;
 - unlock, first-grid, and lock-invalidation budgets measured on the floor device before any value becomes a gate.
+
+## Follow-up
+
+- record the Argon2id calibration run of `assurance/PERFORMANCE_BUDGETS.md` §6 on the five devices above, which [`0026`](0026-argon2id-memory-floor-and-candidate-set.md) also requires;
+- compare the chunk-size candidates of `format/OBJECT_CONTAINER_V1.md` §6 on the floor device, which [`0020`](0020-set-the-v1-parser-limits.md) leaves open.

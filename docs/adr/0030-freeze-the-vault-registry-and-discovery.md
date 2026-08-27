@@ -54,7 +54,7 @@ Rejected as a registry rule: the registry holds only the entries that exist, so 
 
 ## Security impact
 
-Affected invariants: SEC-005, SEC-027.
+Affected invariants: SEC-027, SEC-036, SEC-038.
 
 The registry is read before authentication, so everything in it is attacker-visible in the sandbox-extraction profile. Random filenames keep it free of stable identifiers, the ascending-filename order removes the creation-order signal, and evaluating every candidate on every attempt is what makes ADR-0011's constant-work rules realizable rather than aspirational. Skipping an unparseable entry before any credential is used keeps a malformed file from becoming an authentication oracle.
 

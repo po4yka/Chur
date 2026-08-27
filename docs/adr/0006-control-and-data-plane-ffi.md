@@ -56,6 +56,8 @@ Rejected: inconsistent ownership and harder common validation.
 
 ## Security impact
 
+Affected invariants: SEC-028, SEC-031, SEC-050, SEC-051.
+
 Session generation invalidates all native handles on lock. Secrets cross FFI only when unavoidable for slot operations. Panics cannot unwind across boundary.
 
 ## Compatibility impact
