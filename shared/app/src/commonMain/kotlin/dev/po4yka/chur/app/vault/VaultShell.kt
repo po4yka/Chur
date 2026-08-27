@@ -20,6 +20,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -79,6 +80,8 @@ data class VaultUiState(
     val progress: String? = null,
     /** Whether this platform can hold a device slot at all. */
     val deviceSlotAvailable: Boolean = false,
+    /** How many tiles the selection holds, §11.4. */
+    val selectedCount: Int = 0,
 )
 
 /** What the shell can ask the application to do. */
@@ -107,6 +110,16 @@ data class VaultActions(
     val onAddRecoverySlot: () -> Unit,
     /** Enroll this device's platform key slot. */
     val onAddDeviceSlot: () -> Unit = {},
+    /** Select every tile the current scope shows. */
+    val onSelectAll: () -> Unit = {},
+    /** Leave selection mode without acting. */
+    val onClearSelection: () -> Unit = {},
+    /** Export every selected object. */
+    val onExportSelection: () -> Unit = {},
+    /** Remove every selected object from the open album, §11.4. */
+    val onRemoveSelectionFromAlbum: () -> Unit = {},
+    /** Delete every selected object from this vault, §11.4. */
+    val onDeleteSelection: () -> Unit = {},
 )
 
 /**
@@ -124,21 +137,30 @@ fun VaultShell(state: VaultUiState, actions: VaultActions) {
     Scaffold(
         containerColor = colors.canvas,
         topBar = {
-            TopAppBar(
-                title = { Text(state.openAlbum?.name ?: state.destination.label) },
-                navigationIcon = {
-                    if (state.openAlbum != null) {
-                        IconButton(onClick = actions.onCloseAlbum) {
-                            Icon(dev.po4yka.chur.app.theme.BackGlyph, contentDescription = "Back")
+            // §11.4: selection replaces the ordinary top actions rather than
+            // adding to them, so nothing here is reachable in both modes.
+            if (state.selectedCount > 0) {
+                SelectionBar(state, actions)
+            } else {
+                TopAppBar(
+                    title = { Text(state.openAlbum?.name ?: state.destination.label) },
+                    navigationIcon = {
+                        if (state.openAlbum != null) {
+                            IconButton(onClick = actions.onCloseAlbum) {
+                                Icon(
+                                    dev.po4yka.chur.app.theme.BackGlyph,
+                                    contentDescription = "Back",
+                                )
+                            }
                         }
-                    }
-                },
-                actions = {
-                    IconButton(onClick = actions.onLock) {
-                        Icon(LockGlyph, contentDescription = "Lock now")
-                    }
-                },
-            )
+                    },
+                    actions = {
+                        IconButton(onClick = actions.onLock) {
+                            Icon(LockGlyph, contentDescription = "Lock now")
+                        }
+                    },
+                )
+            }
         },
         bottomBar = {
             NavigationBar {
@@ -155,12 +177,17 @@ fun VaultShell(state: VaultUiState, actions: VaultActions) {
         floatingActionButton = {
             // §10.1: import is the primary floating action on Library and a
             // contextual action inside an open album, and a destination
-            // nowhere.
-            if (state.destination == VaultDestination.LIBRARY) {
+            // nowhere. §11.4 replaces the ordinary actions while a selection
+            // runs, and the floating action is one of them.
+            if (state.selectedCount == 0 && state.destination == VaultDestination.LIBRARY) {
                 FloatingActionButton(onClick = actions.onImport) {
                     Icon(PlusGlyph, contentDescription = "Import")
                 }
-            } else if (state.destination == VaultDestination.ALBUMS && state.openAlbum == null) {
+            } else if (
+                state.selectedCount == 0 &&
+                state.destination == VaultDestination.ALBUMS &&
+                state.openAlbum == null
+            ) {
                 FloatingActionButton(onClick = actions.onCreateAlbum) {
                     Icon(PlusGlyph, contentDescription = "New album")
                 }
@@ -187,6 +214,41 @@ fun VaultShell(state: VaultUiState, actions: VaultActions) {
             }
         }
     }
+}
+
+/**
+ * The selection bar of `DESIGN.md` §11.4.
+ *
+ * §11.4 fixes both the contents and the wording. The count comes first; the
+ * destructive actions name their scope, so "Delete from this vault" and "Remove
+ * from album" are two actions and never one ambiguous `Delete`; and the album
+ * action appears only where it has a scope to act in.
+ *
+ * "More" and "move to album" are not here. They are the two entries of §11.4
+ * that need a picker this shell does not have yet, and an action that opens
+ * nothing would be worse than one that is absent.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SelectionBar(state: VaultUiState, actions: VaultActions) {
+    TopAppBar(
+        title = { Text("${state.selectedCount} selected") },
+        navigationIcon = {
+            IconButton(onClick = actions.onClearSelection) {
+                Icon(dev.po4yka.chur.app.theme.BackGlyph, contentDescription = "Clear selection")
+            }
+        },
+        actions = {
+            TextButton(onClick = actions.onSelectAll) { Text("Select all") }
+            TextButton(onClick = actions.onExportSelection) { Text("Export") }
+            if (state.openAlbum != null) {
+                TextButton(onClick = actions.onRemoveSelectionFromAlbum) {
+                    Text("Remove from album")
+                }
+            }
+            TextButton(onClick = actions.onDeleteSelection) { Text("Delete from this vault") }
+        },
+    )
 }
 
 private fun glyphFor(destination: VaultDestination) = when (destination) {

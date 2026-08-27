@@ -22,6 +22,7 @@ import dev.po4yka.chur.app.vault.VaultDestination
 import dev.po4yka.chur.app.vault.VaultShell
 import dev.po4yka.chur.app.vault.VaultUiState
 import dev.po4yka.chur.ffi.AlbumSummary
+import dev.po4yka.chur.ffi.ObjectPage
 import dev.po4yka.chur.ffi.ObjectQuery
 import dev.po4yka.chur.ffi.QueryScope
 import dev.po4yka.chur.notes.Note
@@ -169,6 +170,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             openAlbum = openAlbum,
             widthDp = 400,
             progress = message,
+            selectedCount = selection.size,
         ),
         actions = VaultActions(
             onDestination = {
@@ -208,6 +210,28 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             },
             onVerifyAll = { controller.verifyEverything() },
             onAddRecoverySlot = controller::addRecoverySlot,
+            onSelectAll = { selection = page.objects.map { it.id }.toSet() },
+            onClearSelection = { selection = emptySet() },
+            onExportSelection = {
+                controller.exportAll(selectedObjects(page, selection))
+                selection = emptySet()
+            },
+            onRemoveSelectionFromAlbum = {
+                openAlbum?.let { album ->
+                    controller.removeAllFromAlbum(album.albumId, selectedObjects(page, selection))
+                }
+                selection = emptySet()
+            },
+            onDeleteSelection = {
+                controller.deleteAll(selectedObjects(page, selection))
+                selection = emptySet()
+            },
         ),
     )
 }
+
+/** The object identifiers the selection names, in the page's order. */
+private fun selectedObjects(
+    page: ObjectPage,
+    selection: Set<String>,
+): List<ByteArray> = page.objects.filter { it.id in selection }.map { it.objectId }

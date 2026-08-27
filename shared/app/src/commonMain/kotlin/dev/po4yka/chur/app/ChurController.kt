@@ -273,6 +273,32 @@ class ChurController(
         reload()
     }
 
+    /**
+     * Deletes every selected object, `DESIGN.md` §11.4.
+     *
+     * One reload rather than one per object: the page is read once at the end,
+     * so a selection of two hundred does not redraw the grid two hundred times.
+     */
+    fun deleteAll(objectIds: List<ByteArray>) = guarded {
+        withContext(Dispatchers.Default) {
+            objectIds.forEach { repository.delete(it) }
+        }
+        reload()
+    }
+
+    /**
+     * Removes every selected object from one album, §11.4.
+     *
+     * It is a separate action from [deleteAll] because §11.4 forbids collapsing
+     * the two: one changes a membership and the other destroys the object.
+     */
+    fun removeAllFromAlbum(albumId: ByteArray, objectIds: List<ByteArray>) = guarded {
+        withContext(Dispatchers.Default) {
+            objectIds.forEach { repository.setAlbumMembership(albumId, it, false) }
+        }
+        reload()
+    }
+
     /** Creates an album and reloads the list. */
     fun createAlbum(name: String) = guarded {
         withContext(Dispatchers.Default) { repository.createAlbum(name) }
@@ -331,6 +357,17 @@ class ChurController(
      * the only way to observe a terminal result. The message carries a count
      * and a status name and nothing private.
      */
+    /**
+     * Exports every selected object, one destination each.
+     *
+     * A single archive would be a second container format, which
+     * `CANONICAL_ENCODING_V1.md` §13 does not admit, so the loop is the design
+     * rather than a simplification.
+     */
+    fun exportAll(objectIds: List<ByteArray>) {
+        objectIds.forEach { export(it) }
+    }
+
     fun verifyEverything() = guarded {
         val operation = withContext(Dispatchers.Default) { repository.beginIntegrityScan(null) }
         try {

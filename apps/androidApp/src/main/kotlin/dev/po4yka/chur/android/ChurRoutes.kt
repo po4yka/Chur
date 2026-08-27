@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import dev.po4yka.chur.app.vault.ViewerScreen
 import dev.po4yka.chur.ffi.AlbumSummary
 import dev.po4yka.chur.ffi.ObjectDetail
+import dev.po4yka.chur.ffi.ObjectPage
 import dev.po4yka.chur.ffi.ObjectProjection
 import dev.po4yka.chur.ffi.ObjectQuery
 import dev.po4yka.chur.ffi.QueryScope
@@ -261,6 +262,7 @@ private fun VaultRoute(controller: ChurController) {
             openAlbum = openAlbum,
             widthDp = configuration.screenWidthDp,
             progress = message,
+            selectedCount = selection.size,
             deviceSlotAvailable = true,
         ),
         actions = VaultActions(
@@ -303,6 +305,22 @@ private fun VaultRoute(controller: ChurController) {
             },
             onVerifyAll = { controller.verifyEverything() },
             onAddRecoverySlot = controller::addRecoverySlot,
+            onSelectAll = { selection = page.objects.map { it.id }.toSet() },
+            onClearSelection = { selection = emptySet() },
+            onExportSelection = {
+                controller.exportAll(selectedObjects(page, selection))
+                selection = emptySet()
+            },
+            onRemoveSelectionFromAlbum = {
+                openAlbum?.let { album ->
+                    controller.removeAllFromAlbum(album.albumId, selectedObjects(page, selection))
+                }
+                selection = emptySet()
+            },
+            onDeleteSelection = {
+                controller.deleteAll(selectedObjects(page, selection))
+                selection = emptySet()
+            },
             onAddDeviceSlot = controller::enrollDeviceSlot,
         ),
     )
@@ -398,3 +416,9 @@ private fun NameDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
+
+/** The object identifiers the selection names, in the page's order. */
+private fun selectedObjects(
+    page: ObjectPage,
+    selection: Set<String>,
+): List<ByteArray> = page.objects.filter { it.id in selection }.map { it.objectId }
