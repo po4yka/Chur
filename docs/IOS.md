@@ -60,7 +60,7 @@ The iOS target MUST NOT own:
 | Area | Planned choice |
 | --- | --- |
 | Bundle identifier | `dev.po4yka.chur` |
-| Primary platform target | iOS 26+ design baseline; exact deployment target requires an ADR |
+| Primary platform target | iOS 26 design baseline; deployment target iOS 18.0, frozen by [ADR-0017](adr/0017-freeze-the-supported-device-set.md) |
 | Native language | Swift 6.2 target baseline |
 | Shared language | Kotlin 2.4.10 / K2 |
 | Shared UI | Compose Multiplatform 1.11.1 |

@@ -68,6 +68,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0013](0013-allocate-v1-format-constants.md) | Allocate the v1 format constants in one registry | Accepted |
 | [0014](0014-observed-heads-causality-vector.md) | Observed-heads causality vector in the operation record | Accepted |
 | [0016](0016-freeze-the-v1-c-abi.md) | Freeze the v1 C ABI: exports, handles, status type, and panic containment | Accepted |
+| [0017](0017-freeze-the-supported-device-set.md) | Freeze the supported device set and the benchmark baseline | Accepted |
 
 ## Future ADR backlog
 

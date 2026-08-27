@@ -63,7 +63,7 @@ Android MUST NOT own:
 | Application ID | `dev.po4yka.chur` |
 | Compile SDK | Android API 37 |
 | Target SDK | Android API 37 |
-| Minimum SDK | API 23, subject to a final support ADR |
+| Minimum SDK | API 29, frozen by [ADR-0017](adr/0017-freeze-the-supported-device-set.md) |
 | Kotlin | Kotlin 2.4.10 / K2 |
 | UI | Compose Multiplatform 1.11.1 hosted by a thin Android shell |
 | Navigation | Navigation 3 Multiplatform |
@@ -1236,7 +1236,7 @@ At minimum:
 - device without StrongBox;
 - biometric enrollment and invalidation scenarios;
 - low-memory device;
-- multiple API levels within support range;
+- API 29, one mid-range level, and the current level, per [ADR-0017](adr/0017-freeze-the-supported-device-set.md);
 - OEM launchers if alternate presentation is enabled;
 - large cloud-backed picker source;
 - a 16 KiB page-size device running Android 15 or later;

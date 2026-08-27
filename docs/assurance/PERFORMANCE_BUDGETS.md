@@ -6,7 +6,7 @@ Performance is a security property when unbounded work, memory, lock latency, or
 
 ## 1. Measurement principles
 
-- measure release-like builds on physical Android/iOS baseline and high-end devices;
+- measure release-like builds on the physical floor, baseline, and high-end devices named in [ADR-0017](../adr/0017-freeze-the-supported-device-set.md);
 - record toolchain, OS, device, thermal state, object profile, and sample size;
 - report p50/p95/p99 where meaningful;
 - separate platform provider/codec time from Rust crypto/storage time;
@@ -81,7 +81,7 @@ Format records selected chunk size within an approved range; v1 default is chose
 
 ## 6. Argon2 calibration
 
-Benchmark approved memory/iteration candidates across the minimum supported device set. Do not automatically reduce memory below the security floor to meet latency. Capture OOM/thermal/background behavior and CLI interoperability.
+Benchmark approved memory/iteration candidates across the device set frozen in [ADR-0017](../adr/0017-freeze-the-supported-device-set.md); the floor device sets the ceiling, and a candidate that fits only the high-end device is not approved. Do not automatically reduce memory below the 64 MiB floor in [`../security/PASSWORD_PROFILE.md`](../security/PASSWORD_PROFILE.md) to meet latency. Capture OOM/thermal/background behavior and CLI interoperability.
 
 ## 7. Storage budgets
 

@@ -1999,7 +1999,7 @@ Sync and sharing require additional protocol review.
 
 ## 40. Performance and resource budgets
 
-Values are provisional targets and must be benchmarked on the minimum supported devices.
+Values are provisional targets and MUST be benchmarked on the device set frozen in [ADR-0017](adr/0017-freeze-the-supported-device-set.md).
 
 ### 40.1 Memory
 
