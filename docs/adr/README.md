@@ -82,6 +82,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0029](0029-freeze-the-recovery-secret-encoding.md) | Freeze the recovery-secret human encoding as BIP-39 English | Accepted |
 | [0030](0030-freeze-the-vault-registry-and-discovery.md) | Freeze the vault registry layout and discovery order | Accepted |
 | [0032](0032-vault-creation-requires-a-password-slot.md) | Vault creation requires a verified password slot | Accepted |
+| [0033](0033-chur-operates-no-sync-service.md) | Chur operates no sync service; deployments are user-controlled | Accepted |
 
 ## Future ADR backlog
 

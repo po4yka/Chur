@@ -2,7 +2,7 @@
 
 > **Status:** Proposed future-sync threat model; not part of the initial local release
 
-Chur treats the sync/backup server as untrusted for confidentiality and content integrity. The server is a storage and relay service, not a cryptographic authority.
+Chur treats the sync/backup server as untrusted for confidentiality and content integrity. The server is a storage and relay service, not a cryptographic authority. §11 names who operates it, who controls the metadata it observes, and what an implementation distributed as a Chur sync server must do.
 
 ## 1. Server capabilities
 
@@ -126,3 +126,20 @@ Simulate:
 - deletion and availability failures.
 
 Expected detection/limitation is documented per scenario.
+
+---
+
+## 11. Deployment model and operator
+
+The Chur project operates no service. There is no first-party account, no first-party server, and no first-party storage in any phase of [`../../ROADMAP.md`](../../ROADMAP.md). A vault that syncs does so against a deployment the user controls: a self-hosted Chur sync service, or object storage the user holds with a provider of their choosing. This is fixed by [ADR-0033](../adr/0033-chur-operates-no-sync-service.md).
+
+The operator of a deployment is the data controller for everything §1 says the server observes — account and device identifiers, IP addresses, request timing, object counts, and transfer sizes — and in both supported cases the user is that operator. A third party operating a deployment for other people is out of scope for this specification until an ADR adds it, and must not be described as Chur's service.
+
+An implementation distributed as a Chur sync server must:
+
+- retain a request log containing an IP address for at most 30 days, and retain none where the deployment does not need one for abuse control;
+- delete a device's stored records and its account row within 30 days of an authenticated deletion request, and expose that request through the protocol rather than an out-of-band process;
+- ship operator documentation stating what it retains, for how long, and where;
+- add no analytics, no third-party log shipping, and no content-derived indexing.
+
+These are requirements on the implementation, not guarantees to the client. §5 already states that a client cannot prove the server showed every operation, and §9 that a delete acknowledgment is not proof of erasure. An operator obligation reduces exposure where the operator is honest; it adds nothing against the malicious server this document assumes.

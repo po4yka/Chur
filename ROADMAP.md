@@ -88,7 +88,8 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 
 ### Scope
 
-- opaque object storage;
+- opaque object storage in a deployment the user controls, per [`docs/sync/SERVER_TRUST_MODEL.md`](docs/sync/SERVER_TRUST_MODEL.md) §11;
+- reference sync-server implementation with its operator documentation;
 - ciphertext-only background transfers;
 - device identities;
 - signed per-device operation logs;
