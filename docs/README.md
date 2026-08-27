@@ -84,6 +84,7 @@ Document status describes a whole document. Individual statements inside a docum
 - [`security/PASSWORD_PROFILE.md`](security/PASSWORD_PROFILE.md)
 - [`security/PLAINTEXT_LIFECYCLE.md`](security/PLAINTEXT_LIFECYCLE.md)
 - [`security/DECOY_VAULT.md`](security/DECOY_VAULT.md)
+- [`security/PROVISIONING.md`](security/PROVISIONING.md)
 - [`security/RECOVERY.md`](security/RECOVERY.md)
 
 ## Formats

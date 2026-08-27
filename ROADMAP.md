@@ -37,6 +37,7 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 
 - functional Notes public shell;
 - one private vault;
+- vault creation and first run per [`docs/security/PROVISIONING.md`](docs/security/PROVISIONING.md);
 - password, device, and recovery key slots;
 - Rust-owned encrypted catalog;
 - photo import through platform pickers;

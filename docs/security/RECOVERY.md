@@ -18,7 +18,7 @@ password slot     → portable fallback
 recovery slot     → high-entropy emergency fallback
 ```
 
-The user may choose password only or recovery only if product policy permits, but the risk must be explicit.
+The password slot is mandatory and the other two are optional: [`PROVISIONING.md`](PROVISIONING.md) §3 requires one verified password slot before the vault opens, and §9 of [`KEY_SLOTS.md`](KEY_SLOTS.md) keeps a verified recovery path through every slot update, so the last portable slot cannot be removed. The device-bound mode above is consequently never created by the product; it stays documented because the descriptor format still accepts one and a future peer-device or managed profile may reintroduce it under its own ADR.
 
 ### Multi-device/synced
 
@@ -157,6 +157,9 @@ Synthetic reproduction and structural ciphertext diagnostics are preferred.
 ## 11. Required tests
 
 - every factor combination in the matrix;
+- vault creation interrupted at each step of [`PROVISIONING.md`](PROVISIONING.md) §3, leaving no openable vault;
+- creation refused when no password slot verifies;
+- declined recovery re-offered after the first import;
 - one-bit recovery-secret error and checksum failure;
 - wrong vault binding;
 - slot replacement crash at each step;
