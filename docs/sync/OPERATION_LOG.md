@@ -112,7 +112,11 @@ A revoked device must not pin the vector:
 
 ## 5. Operation ID
 
-Random or deterministic-from-signed-bytes ID must be collision-resistant and cannot be a plaintext-content hash. It supports deduplication/idempotency but signature/chain validation remains authoritative.
+`operation_id` is 16 random bytes from the vault CSPRNG, encoded as bytes per [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §8. It is never derived from the signed bytes: it is a field of the record whose signed bytes would derive it, so the derived form is circular, and it is never a plaintext-content hash.
+
+It is a deduplication and idempotency key only. Two received records are the same operation when their complete canonical bytes are identical; that is what §4 means by a duplicate identical record. Records sharing an `operation_id` but differing in any other byte are not duplicates: at the same `(device_id, device_sequence)` they are a fork under §4, and at any other position the second one is rejected as reuse of an identifier. Signature and chain validation remain authoritative.
+
+`operation_id` is not a conflict tie-break input. The tie-break reads `operation_digest` from §4, which commits to the whole record including `observed_heads`, and which the receiver has already computed for the chain.
 
 ## 6. Encryption
 
