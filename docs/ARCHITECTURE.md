@@ -2162,7 +2162,8 @@ docs/
 ├── interop/
 │   ├── FFI_CONTRACT.md
 │   ├── ANDROID_INTEGRATION.md
-│   └── IOS_INTEGRATION.md
+│   ├── IOS_INTEGRATION.md
+│   └── MEDIA_PIPELINE.md
 │
 ├── sync/
 │   ├── OPERATION_LOG.md

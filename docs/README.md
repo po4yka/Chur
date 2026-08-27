@@ -13,7 +13,8 @@ When documents conflict, use this order until the conflict is resolved:
 3. focused normative security, interop, assurance, sync, and product specifications, and [`DESIGN.md`](../DESIGN.md) for visual and interaction contracts only;
 4. [`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md);
 5. [`ARCHITECTURE.md`](ARCHITECTURE.md);
-6. root [`README.md`](../README.md), roadmap, and explanatory material.
+6. [`ANDROID.md`](ANDROID.md) and [`IOS.md`](IOS.md), normative for platform behavior only; where either restates a rule owned by a document above, the higher document wins and the platform text is a defect;
+7. root [`README.md`](../README.md), roadmap, and explanatory material.
 
 Implementation behavior is not authoritative merely because it exists. A divergence from a normative specification is a defect unless a migration and specification change are approved.
 
@@ -97,7 +98,7 @@ Document status describes a whole document. Individual statements inside a docum
 
 ## Interop
 
-The complete platform documents are `ANDROID.md` and `IOS.md`; these focused contracts define the cross-platform boundary expected by the shared Rust/KMP architecture.
+The complete platform documents are [`ANDROID.md`](ANDROID.md) and [`IOS.md`](IOS.md), at tier 6 of the hierarchy above; these focused contracts define the cross-platform boundary they implement, and the platform documents defer to them for the boundary itself.
 
 - [`interop/FFI_CONTRACT.md`](interop/FFI_CONTRACT.md)
 - [`interop/ANDROID_INTEGRATION.md`](interop/ANDROID_INTEGRATION.md)

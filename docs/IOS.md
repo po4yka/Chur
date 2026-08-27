@@ -1505,6 +1505,11 @@ Before an iOS release candidate:
 
 ## 41. References
 
+- [Chur error model](ERROR_MODEL.md) — the sole registry of error codes and values
+- [Rust-KMP FFI contract](interop/FFI_CONTRACT.md) — exports, handles, handshake, and read semantics
+- [iOS integration contract](interop/IOS_INTEGRATION.md)
+- [Media pipeline contract](interop/MEDIA_PIPELINE.md)
+
 - [Chur README](../README.md)
 - [Chur system architecture](ARCHITECTURE.md)
 - [Chur Android platform architecture](ANDROID.md)

@@ -1358,6 +1358,10 @@ Before an Android release candidate:
 - [Chur README](../README.md)
 - [Chur system architecture](ARCHITECTURE.md)
 - [Chur iOS platform architecture](IOS.md)
+- [Chur error model](ERROR_MODEL.md) — the sole registry of error codes and values
+- [Rust-KMP FFI contract](interop/FFI_CONTRACT.md) — exports, handles, handshake, and read semantics
+- [Android integration contract](interop/ANDROID_INTEGRATION.md)
+- [Media pipeline contract](interop/MEDIA_PIPELINE.md)
 - [Android Keystore system](https://developer.android.com/privacy-and-security/keystore)
 - [Biometric authentication](https://developer.android.com/identity/sign-in/biometric-auth)
 - [Android Photo Picker](https://developer.android.com/training/data-storage/shared/photo-picker)
