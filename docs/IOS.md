@@ -1156,7 +1156,7 @@ If AVFoundation calls the Rust data plane directly, it links to the same runtime
 
 ### 30.4 Control and data planes
 
-Control-plane operations may use generated bindings:
+Both planes cross the same hand-written C ABI frozen by [ADR-0016](adr/0016-freeze-the-v1-c-abi.md), reached from Swift through the KMP `expect`/`actual` adapter or directly. Control-plane operations carry small structured records:
 
 - unlock/lock;
 - queries;

@@ -1356,7 +1356,7 @@ Interop is split into a control plane and data plane.
 
 ### 27.1 Control plane
 
-Suitable for generated bindings and small records:
+Small structured records:
 
 - runtime initialization and API-version handshake;
 - unlock and lock;

@@ -854,7 +854,7 @@ Interop is split into a small **control plane** and a streaming **data plane**.
 
 ### Control plane
 
-Suitable for generated bindings or simple records:
+Small structured records:
 
 - unlock and lock commands;
 - object queries;
