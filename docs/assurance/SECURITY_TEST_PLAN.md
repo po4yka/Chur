@@ -169,29 +169,31 @@ Every `SEC-*` invariant of [`../security/SECURITY_INVARIANTS.md`](../security/SE
 
 A row states what would produce the evidence, not that it runs today. Whether it runs is governed by [`RELEASE_GATES.md`](RELEASE_GATES.md#enforcement): until a job executes the procedure, the row is unenforced whatever it names.
 
+Eighteen rows now name a test target rather than a section of this plan. Each of those runs in the `test`, `gradle`, `kotlin-native`, or `fuzz` job of that workflow, so those eighteen are enforced. Every remaining row names a procedure that no job executes.
+
 | Invariant | Evidence procedure |
 | --- | --- |
 | SEC-001 | §2 |
 | SEC-002 | §2; §6 |
 | SEC-003 | §2 |
 | SEC-004 | §2 |
-| SEC-005 | §2 |
-| SEC-006 | §2; §4 |
-| SEC-007 | §3; §11 |
+| SEC-005 | `chur-crypto` `kdf::tests::every_label_derives_a_distinct_key_from_one_input` |
+| SEC-006 | `chur-format` `slot::tests::a_recovery_slot_and_a_password_slot_unwrap_the_same_root` |
+| SEC-007 | `chur-crypto` `password::tests::parameters_below_the_floor_are_refused` |
 | SEC-008 | §4 |
 | SEC-009 | §4 |
-| SEC-010 | compile-fail test: formatting a secret-bearing type with `{:?}` does not compile; §6 |
-| SEC-011 | §2 |
+| SEC-010 | `chur-crypto` compile-fail doctests on `secret::Secret` |
+| SEC-011 | `chur-crypto` `aead::tests::two_chunk_indexes_never_share_a_nonce` |
 | SEC-012 | §2 |
-| SEC-013 | §3 |
-| SEC-014 | §2; §3 substitution cases |
+| SEC-013 | `chur-format` `container::tests::a_forged_chunk_header_is_rejected_without_a_key` |
+| SEC-014 | `chur-format` `container::tests::opening_under_another_identity_fails` |
 | SEC-015 | §3 |
-| SEC-016 | §3 |
-| SEC-017 | §3 |
-| SEC-018 | §3; [`FUZZING.md`](FUZZING.md) §2 |
+| SEC-016 | `chur-format` `container::tests::a_missing_final_commit_is_object_incomplete` |
+| SEC-017 | `chur-format` `tests/corruption.rs::every_bit_of_a_small_container_is_caught` |
+| SEC-018 | `chur-format` `tests/migration.rs::a_container_from_a_later_version_is_unsupported_not_corrupt` |
 | SEC-019 | audit-only; becomes a build-graph assertion when the Gradle build exists |
 | SEC-020 | §6 |
-| SEC-021 | §3 |
+| SEC-021 | `chur-format` `envelope::tests::the_whole_chain_recovers_the_object_key` |
 | SEC-022 | §4 |
 | SEC-023 | §4 |
 | SEC-024 | §4 |
@@ -208,7 +210,7 @@ A row states what would produce the evidence, not that it runs today. Whether it
 | SEC-035 | §7 |
 | SEC-036 | §7 |
 | SEC-037 | audit-only; API review of the surface in [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md) at each change |
-| SEC-038 | §7 |
+| SEC-038 | `chur-format` `descriptor::tests::a_failed_slot_unwrap_still_returns_the_authentication_failure` |
 | SEC-039 | repository check: no forbidden claim listed in [`../security/DECOY_VAULT.md`](../security/DECOY_VAULT.md) §10 or [`../product/DISCREET_MODE.md`](../product/DISCREET_MODE.md) "Forbidden claims" appears in `docs/`, `DESIGN.md`, `README.md`, or a localized string resource |
 | SEC-040 | [`../sync/SERVER_TRUST_MODEL.md`](../sync/SERVER_TRUST_MODEL.md) §10 harness |
 | SEC-041 | §2; SERVER_TRUST_MODEL §10 harness |
@@ -217,16 +219,16 @@ A row states what would produce the evidence, not that it runs today. Whether it
 | SEC-044 | §2 |
 | SEC-045 | SERVER_TRUST_MODEL §10 harness for the behaviour; audit-only for the claim wording |
 | SEC-046 | audit-only; design review of any deduplication proposal |
-| SEC-047 | [`FUZZING.md`](FUZZING.md) §6 |
-| SEC-048 | §3 |
-| SEC-049 | §3 |
+| SEC-047 | [`FUZZING.md`](FUZZING.md) §2 targets, ten of which exist |
+| SEC-048 | `chur-format` `codec::tests::a_boolean_other_than_zero_or_one_is_non_canonical` |
+| SEC-049 | `chur-format` `container::tests::the_seek_formula_matches_the_walked_record_offsets` |
 | SEC-050 | [`FUZZING.md`](FUZZING.md) §8 |
-| SEC-051 | §10 |
-| SEC-052 | §10 |
+| SEC-051 | `:shared:core-model` `ChurStatusTest.an_unknown_value_fails_closed` |
+| SEC-052 | `chur-format` `tests/migration.rs` |
 | SEC-053 | §2; §8; §9 |
 | SEC-054 | audit-only; key-domain review at each catalog schema change |
 | SEC-055 | §4; [`../security/RECOVERY.md`](../security/RECOVERY.md) §11 |
-| SEC-056 | §3; policy review |
+| SEC-056 | `chur-format` `tests/migration.rs::a_writer_emits_only_the_current_approved_version` |
 | SEC-057 | §3 |
 | SEC-058 | §3 |
 | SEC-059 | §5; §8; §9 |
