@@ -17,7 +17,7 @@ Define the surface in `CATALOG_SCHEMA_V1.md` §16:
 
 - one fixed-width `ObjectProjectionV1` for every grid scope, carrying no free-form user text, so a 200-row page never carries 200 filenames across the boundary;
 - an `ObjectQueryV1` with six scopes, a media-kind mask, three sorts, and `limit` bounded at 500 with a default of 200;
-- keyset paging on `(sort value, object_id)`, never offset, with the double-return and skip consequences stated and a `catalog_generation` change as the restart signal;
+- keyset paging on `(sort value, object_id)`, never offset, with the double-return and skip consequences stated and the `catalog_generation` returned with every page as the restart signal;
 - ten indexes in `CATALOG_SCHEMA_V1.md` §16.3: five that cover a scope under a sort, and five that support stream, derived-asset, envelope, import-transaction, and tombstone lookups; `capture_time_ms` is duplicated into album-membership and favourite rows so those scopes do not join before sorting;
 - v1 search as a SQLite FTS5 table inside the SQLCipher database over filename, caption, and tag names, tokenizer `unicode61 remove_diacritics 2` with 2- and 3-character prefix indexes.
 

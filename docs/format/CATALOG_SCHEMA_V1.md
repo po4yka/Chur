@@ -234,9 +234,9 @@ Prototype must validate Android/iOS build size, linkage, WAL behavior, migration
 
 ## 16. Query surface, indexes, and leakage
 
-### 16.1 Object projection
+Within an unlocked encrypted database, ordinary indexes over the entities of §1 serve the timeline, album, favourite, tag, and search scopes. §16.1 fixes the projection every page returns, §16.2 the query and its paging, §16.3 the indexes those scopes require, §16.4 search, and §16.5 what a persisted catalog still leaks.
 
-Within an unlocked encrypted DB, indexes may support timeline, albums, tags, and metadata search. Persisted database/page sizes still leak approximate scale. Index names/schema should avoid user labels but schema itself is not assumed secret after binary analysis.
+### 16.1 Object projection
 
 Search in v1 is a bounded query over the entities of §1 — media objects, metadata revisions, albums, and tags — served by the ordinary indexes of §16.3 and by the in-database FTS5 table of §16.4. v1 defines no separate index file and no key domain of its own, so search adds no artifact and no leakage surface beyond the ones this section already states: it lives inside the catalog and is protected by the catalog key domain of §15. Query text is session-scoped and is never written to the catalog. An OCR, face, or embedding index is a new persisted artifact and requires its own `catalog_format_version` step, key domain, leakage analysis, and ADR. [`../../DESIGN.md`](../../DESIGN.md) §12.2 owns presentation only.
 
@@ -273,9 +273,9 @@ ObjectQueryV1
     limit     1 to 500, default 200
 ```
 
-A page returns the projections, a `total_count` for the scope, and a `next_cursor` that is empty when the scope is exhausted. A `limit` above 500 is `RESOURCE_LIMIT_EXCEEDED`.
+A page returns the projections, a `total_count` for the scope, the `catalog_generation` the page was read at, and a `next_cursor` that is empty when the scope is exhausted. A `limit` above 500 is `RESOURCE_LIMIT_EXCEEDED`.
 
-Paging is keyset, never offset. The cursor is the sort value of the last row returned followed by its `object_id`, and the next page selects the rows ordered strictly after that pair. Every page therefore costs the same whatever its position, and a page boundary stays valid while rows are inserted and deleted. The consequence is stated rather than hidden: a row whose sort key changes between two pages may be returned twice or skipped, so a caller that observes a change in `catalog_generation` restarts the scope instead of continuing the cursor. A cursor that does not parse, or that was issued for a different scope or sort, is `INVALID_INPUT`.
+Paging is keyset, never offset. The cursor is the sort value of the last row returned followed by its `object_id`, and the next page selects the rows ordered strictly after that pair. Every page therefore costs the same whatever its position, and a page boundary stays valid while rows are inserted and deleted. The consequence is stated rather than hidden: a row whose sort key changes between two pages may be returned twice or skipped, so a caller whose page carries a `catalog_generation` different from the previous page's restarts the scope instead of continuing the cursor. A cursor that does not parse, or that was issued for a different scope or sort, is `INVALID_INPUT`.
 
 Rows with `state` `DELETING` or `TOMBSTONED` are never returned. A row with `integrity_summary` `QUARANTINED` is returned only in the `quarantine` scope, which is what keeps it out of the ordinary library under [`../../DESIGN.md`](../../DESIGN.md) §20.3.
 
