@@ -96,6 +96,33 @@ jobs:
           name: vector-set-digest
           path: vector-set-digest.txt
 
+  abi:
+    name: C ABI harness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: abi-${{ hashFiles('rust/Cargo.lock', 'rust/rust-toolchain.toml') }}
+      # FFI_CONTRACT.md section 2 makes the handshake what a platform gate
+      # checks before a vault opens. Linking a C program against the real
+      # static library proves the symbols exist with C linkage and the declared
+      # types, which a Rust test cannot.
+      - run: cargo build -p chur-ffi --release
+      - name: build and run the handshake harness
+        run: |
+          set -euo pipefail
+          cc -Wall -Wextra -Werror \
+            -I crates/chur-ffi/include \
+            crates/chur-ffi/tests/handshake.c \
+            target/release/libchur_ffi.a \
+            -o handshake
+          ./handshake
+
   fuzz:
     name: fuzz smoke
     runs-on: ubuntu-latest
