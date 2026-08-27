@@ -31,7 +31,7 @@ It does not require UI/domain models to use the same in-memory representation.
 | variable bytes | `u32` length followed by bytes |
 | UTF-8 string | `u32` byte length followed by strict UTF-8 |
 | enum | fixed-width numeric discriminant defined by owning spec |
-| optional | one presence byte followed by value when present |
+| optional | one presence byte: `0x00` absent and nothing follows, `0x01` present and the value follows |
 | list | `u32` count followed by elements in order |
 
 Signed integers and floating-point values are forbidden in v1 cryptographic records unless a focused specification defines their canonical representation.
@@ -76,7 +76,7 @@ Maps are forbidden in signed/AAD structures by default. A specification that req
 - maximum count;
 - whether unknown keys are rejected.
 
-Sets are encoded as sorted unique lists under a defined comparator. Duplicate elements are rejected as non-canonical.
+Sets are encoded as sorted unique lists. The default comparator is ascending lexicographic byte order over the canonical encoding of each element, comparing byte by byte and treating the shorter sequence as smaller when it is a prefix of the longer one. A specification may name a different comparator only by defining it in full; it may not leave one implied. Duplicate elements are rejected as non-canonical.
 
 ## 6. Tagged extension records
 
@@ -185,6 +185,8 @@ A decoder for authenticated bytes must reject:
 - alternate integer widths;
 - leading padding;
 - boolean values other than 0 or 1;
+- optional presence bytes other than `0x00` or `0x01`;
+- set elements that are out of comparator order;
 - non-minimal or duplicate optional fields;
 - unordered or duplicate tagged fields;
 - invalid UTF-8;
