@@ -16,6 +16,7 @@ import dev.po4yka.chur.app.GateResult
 import dev.po4yka.chur.app.NativeHandshake
 import dev.po4yka.chur.app.gate
 import dev.po4yka.chur.ffi.ChurVault
+import dev.po4yka.chur.notes.FileNoteStore
 import dev.po4yka.chur.vault.VaultState
 import kotlinx.coroutines.launch
 
@@ -44,6 +45,7 @@ class MainActivity : ComponentActivity() {
             privacy = privacy,
             exports = ExportDestinations(contentResolver),
             clock = { System.currentTimeMillis() },
+            notes = FileNoteStore(java.io.File(filesDir, "notes.json").path),
         )
 
         val verdict = runGate()

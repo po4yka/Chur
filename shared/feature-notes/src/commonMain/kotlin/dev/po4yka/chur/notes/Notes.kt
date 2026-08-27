@@ -1,5 +1,7 @@
 package dev.po4yka.chur.notes
 
+import kotlinx.serialization.Serializable
+
 /**
  * The public Notes shell of `docs/product/DISCREET_MODE.md` and `DESIGN.md`
  * §19.
@@ -17,6 +19,7 @@ package dev.po4yka.chur.notes
  */
 
 /** One public note. Nothing here is private, and nothing here is encrypted. */
+@Serializable
 data class Note(
     val id: String,
     val title: String,

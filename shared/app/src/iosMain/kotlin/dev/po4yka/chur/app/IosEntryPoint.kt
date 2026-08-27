@@ -5,6 +5,8 @@ package dev.po4yka.chur.app
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.window.ComposeUIViewController
+import dev.po4yka.chur.notes.FileNoteStore
+import dev.po4yka.chur.notes.NoteStore
 import platform.Foundation.NSDocumentDirectory
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSSearchPathForDirectoriesInDomains
@@ -56,4 +58,25 @@ fun churStorageRoot(): String {
         error = null,
     )
     return root
+}
+
+/**
+ * Where the public shell keeps its notes.
+ *
+ * It returns the bound store rather than the path, because a path in the
+ * framework header is an invitation for the host to open the file itself, and
+ * the file's format belongs to `:shared:feature-notes`.
+ *
+ * The file sits beside the vault root rather than inside it. Nothing forbids a
+ * public file in that directory, but a directory that holds only the vault is
+ * one an inspection can reason about, and `PLAINTEXT_LIFECYCLE.md` §1 draws the
+ * line between the two stores exactly here.
+ */
+fun churNoteStore(): NoteStore {
+    val documents = NSSearchPathForDirectoriesInDomains(
+        NSDocumentDirectory,
+        NSUserDomainMask,
+        true,
+    ).first() as String
+    return FileNoteStore("$documents/notes.json")
 }

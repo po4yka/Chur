@@ -19,27 +19,34 @@ exists for Android only.
 
 ## What the project must do
 
-Four things, and each one is a requirement of a normative document rather than a
+Five things, and each one is a requirement of a normative document rather than a
 preference.
 
-1. **Present `ChurViewController`.** It is exported by the framework and takes
-   the gate verdict of [`../../docs/interop/FFI_CONTRACT.md`](../../docs/interop/FFI_CONTRACT.md)
+1. **Create one `ChurController`.** Its storage root is `churStorageRoot()` and
+   its note store is `churNoteStore()`; both functions are
+   exported by the framework so the two hosts agree on where each store lives.
+   [`../../docs/product/DISCREET_MODE.md`](../../docs/product/DISCREET_MODE.md)
+   requires a shell that keeps what a person writes in it, which is why the note
+   store is bound here rather than left at its in-memory default.
+
+2. **Present `ChurViewController`.** It is exported by the framework and takes
+   the controller and the gate verdict of [`../../docs/interop/FFI_CONTRACT.md`](../../docs/interop/FFI_CONTRACT.md)
    §2. A library that fails the gate is not called again in the process, so the
    verdict is computed once at launch and the vault route is never composed
    after a refusal.
 
-2. **Attach the privacy cover on `sceneWillResignActive` and remove it on
+3. **Attach the privacy cover on `sceneWillResignActive` and remove it on
    `sceneDidBecomeActive`.** `IosPrivacyCover` is exported for this.
    [`../../docs/security/PLAINTEXT_LIFECYCLE.md`](../../docs/security/PLAINTEXT_LIFECYCLE.md)
    §1 puts the app-switcher snapshot in the forbidden column, and iOS takes that
    snapshot after `willResignActive`: a cover attached later is attached after
    the picture was taken.
 
-3. **Lock on backgrounding.** The same transition calls the repository's
+4. **Lock on backgrounding.** The same transition calls the repository's
    background hook, which locks under the default policy of
    [`../../DESIGN.md`](../../DESIGN.md) §14.
 
-4. **Present `PHPickerViewController` for import and write exports through the
+5. **Present `PHPickerViewController` for import and write exports through the
    share sheet.** `IosMediaCodec` takes the resulting file URL. §8 of
    [`../../docs/interop/MEDIA_PIPELINE.md`](../../docs/interop/MEDIA_PIPELINE.md)
    keeps the decoded derivative only long enough to encrypt it, so the picker's
