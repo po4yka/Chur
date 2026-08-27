@@ -72,6 +72,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0018](0018-freeze-backup-package-framing.md) | Freeze the backup package framing and manifest key | Accepted |
 | [0019](0019-freeze-remaining-v1-record-layouts.md) | Freeze the remaining v1 record layouts | Accepted |
 | [0020](0020-set-the-v1-parser-limits.md) | Set the v1 parser limits | Accepted |
+| [0023](0023-define-signed-checkpoint-and-bootstrap-attestation.md) | Signed checkpoint record and new-device bootstrap attestation | Accepted |
 
 ## Future ADR backlog
 

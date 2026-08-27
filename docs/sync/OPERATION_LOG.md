@@ -51,7 +51,6 @@ AddTag / RemoveTag
 DeleteObject / RestoreObject if policy permits
 CreateCollectionEpoch
 AddDevice / RevokeDevice
-Checkpoint
 ```
 
 Kinds and payload schemas are versioned. Unknown critical kinds fail closed.

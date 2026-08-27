@@ -82,6 +82,7 @@ Additional requirements:
 - device identity and signed operation log;
 - device revocation, including the revocation point recorded in the operation log and the collection-epoch rotation that follows it;
 - sync protocol/conflict/tombstone specs;
+- checkpoint format and trust rule, with new-device bootstrap attested against a checkpoint commitment;
 - replay/rollback/fork malicious-server tests;
 - ciphertext-only background verification;
 - recovery across multiple devices;

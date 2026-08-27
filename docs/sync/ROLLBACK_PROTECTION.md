@@ -52,17 +52,37 @@ Device enrollment/revocation and collection epoch changes are signed, monotonica
 
 ## 6. Checkpoints
 
-A checkpoint may include:
+A checkpoint is one device's signed statement of the history it had accepted. It is a standalone record, not an operation, so it never advances a device chain:
 
 ```text
-membership commitment
-map/commitment of per-device heads
-catalog/materialized-state commitment
-collection epoch summary
-issuer/quorum signatures
+CheckpointHeadV1 =
+    device_id:bytes[16]
+    device_sequence:u64
+    operation_digest:bytes[32]
+
+CheckpointV1 =
+    protocol_version:u16
+    vault/account binding:bytes[16]
+    issuer_device_id:bytes[16]
+    issuer_device_sequence:u64
+    membership_generation:u64
+    membership_commitment:bytes[32]
+    heads:list of CheckpointHeadV1
+    collection_epoch_commitment:bytes[32]
+    catalog_state_commitment:bytes[32]
+    issuer_signature:bytes[64]
 ```
 
-Checkpoint design requires its own canonical format and trust rule. A single-device self-signed checkpoint cannot prove server did not hide later unseen operations from every device.
+Encoding follows [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md): a `u32` count followed by 56-byte elements sorted by ascending `device_id`, with duplicates and unsorted entries rejected. `operation_digest` is the value defined in [`OPERATION_LOG.md`](OPERATION_LOG.md) §4, so a checkpoint pins a branch and not only a length. Unlike `observed_heads` the list includes the issuer's own head, so it holds at most 32 entries. The Ed25519 signature covers the whole record except the signature field, under the checkpoint domain tag registered in §15.5 of the encoding profile.
+
+One device signs. There is no quorum: a quorum rule needs a membership the receiver already trusts, and membership is exactly what is under attack after state loss, so the rule would be circular. What a checkpoint is trusted for instead:
+
+- a device trusts its own checkpoints as its freshness floor after local state loss, when one is recovered from a portable backup or from the enrollment attestation of §7;
+- a checkpoint issued by another device is accepted only as a lower bound, and only to raise the receiver's floor, never to lower it. Raising a floor can reject more server responses and never fewer, so a checkpoint that overstates heads costs availability rather than integrity, and it is signed evidence of who overstated them;
+- a checkpoint naming a head at a sequence the receiver accepted with a different `operation_digest` is fork evidence under §4;
+- no checkpoint proves the server hid nothing that no signer had seen. Completeness still needs cross-device comparison or a witness service.
+
+A device issues a checkpoint at the end of every sync session in which it accepted an operation, and includes its latest one in every portable backup. It retains its own latest checkpoint and the latest it has accepted from each other device.
 
 ## 7. Device loss and reinstall
 
