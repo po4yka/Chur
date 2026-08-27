@@ -236,9 +236,9 @@ Prototype must validate Android/iOS build size, linkage, WAL behavior, migration
 
 Within an unlocked encrypted database, ordinary indexes over the entities of §1 serve the timeline, album, favourite, tag, and search scopes. §16.1 fixes the projection every page returns, §16.2 the query and its paging, §16.3 the indexes those scopes require, §16.4 search, and §16.5 what a persisted catalog still leaks.
 
-### 16.1 Object projection
-
 Search in v1 is a bounded query over the entities of §1 — media objects, metadata revisions, albums, and tags — served by the ordinary indexes of §16.3 and by the in-database FTS5 table of §16.4. v1 defines no separate index file and no key domain of its own, so search adds no artifact and no leakage surface beyond the ones this section already states: it lives inside the catalog and is protected by the catalog key domain of §15. Query text is session-scoped and is never written to the catalog. An OCR, face, or embedding index is a new persisted artifact and requires its own `catalog_format_version` step, key domain, leakage analysis, and ADR. [`../../DESIGN.md`](../../DESIGN.md) §12.2 owns presentation only.
+
+### 16.1 Object projection
 
 One projection serves the timeline, album, favourite, tag, and search screens. It is the only object shape a page returns, it is fixed-width so it fits the caller buffer of [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md) §6.2, and it carries no free-form user text:
 

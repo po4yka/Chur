@@ -126,7 +126,7 @@ test(format): add truncated-final-commit vectors
 fix(ffi): invalidate readers on lock
 ```
 
-The subject states the change in the imperative, never the finding that prompted it: write `docs: scope DESIGN.md to presentation and index the orphaned root documents`, not `docs: DESIGN.md claims normative authority`. Keep the subject inside 72 characters and never truncate it; the finding, the evidence, and the reasoning belong in the body.
+The subject states the change in the imperative, never the finding that prompted it: write `docs: scope DESIGN.md to presentation and index root documents`, not `docs: DESIGN.md claims normative authority`. Keep the subject inside 72 characters and never truncate it; the finding, the evidence, and the reasoning belong in the body.
 
 Do not include generated binaries, signing material, real vaults, real media, or secrets.
 
