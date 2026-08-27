@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The light canvas of DESIGN.md section 6.2, and the launcher ground. -->
+<resources>
+    <color name="canvas">#FAFAF9</color>
+    <color name="launcher_background">#F4F4F2</color>
+</resources>

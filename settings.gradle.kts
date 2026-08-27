@@ -38,6 +38,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "chur"
 
+include(":apps:androidApp")
 include(":shared:app")
 include(":shared:core-ffi")
 include(":shared:core-model")

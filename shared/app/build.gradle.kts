@@ -29,9 +29,10 @@ kotlin {
     iosArm64()
     iosSimulatorArm64()
 
-    // The iOS side consumes a framework. The Xcode project that embeds it
-    // lands with the Phase 1 shell; the framework itself links today, which is
-    // what keeps the target honest.
+    // The iOS side consumes a framework, which `apps/iosApp` presents. It is
+    // static and links `libchur_ffi.a` through the cinterop bindings of
+    // `:shared:core-ffi`, so the link is where the framework and the library
+    // are proved to agree on every symbol.
     targets.withType<org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget>().configureEach {
         binaries.framework {
             baseName = "ChurApp"
@@ -42,8 +43,9 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             implementation(project(":shared:core-model"))
-            implementation(project(":shared:core-vault"))
-            implementation(project(":shared:feature-notes"))
+            api(project(":shared:core-vault"))
+            api(project(":shared:feature-notes"))
+            implementation(libs.kotlinx.coroutines.core)
             implementation(libs.compose.runtime)
             implementation(libs.compose.foundation)
             implementation(libs.compose.material3)

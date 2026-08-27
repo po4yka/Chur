@@ -268,32 +268,29 @@ The root runtime follows a closed state machine.
 
 ---
 
-## 9. Planned repository structure
+## 9. Repository structure
+
+The tree below is the repository, not a plan. Phase 1 built fewer Kotlin modules
+than the original plan listed, and the difference is deliberate: a module that
+holds one screen and no rule of its own is a directory rather than a boundary.
+The boundaries that exist are the ones that enforce something — the public shell
+cannot see the vault, the design system cannot see the boundary, and the FFI
+adapter is the only module that names a handle.
 
 ```text
 Chur/
 ├── apps/
-│   ├── androidApp/
-│   └── iosApp/
+│   ├── androidApp/          composition root, JNI packaging, pickers, exports
+│   └── iosApp/              the Xcode project's specification, README.md
 │
 ├── shared/
-│   ├── app/
-│   ├── design/
-│   ├── navigation/
-│   ├── core-model/
-│   ├── core-platform/
-│   ├── core-rust-bridge/
-│   ├── core-public-data/
-│   ├── core-settings/
-│   ├── core-network/
-│   ├── core-media/
-│   ├── feature-public-shell/
-│   ├── feature-unlock/
-│   ├── feature-library/
-│   ├── feature-import/
-│   ├── feature-viewer/
-│   ├── feature-audio/
-│   └── feature-settings/
+│   ├── app/                 design system, screens, and the shared controller
+│   ├── core-model/          the status vocabulary and the vector index
+│   ├── core-ffi/            the expect/actual C ABI adapter and its records
+│   ├── core-vault/          the session state machine and the lock policy
+│   ├── core-platform-keys/  the Keystore and Keychain slot prototypes
+│   ├── feature-import/      the platform half of the media pipeline
+│   └── feature-notes/       the public shell's own logic
 │
 ├── rust/
 │   ├── Cargo.toml
@@ -307,9 +304,6 @@ Chur/
 │       ├── chur-ffi/
 │       ├── chur-jni/
 │       └── chur-cli/
-│
-├── build-logic/
-│   └── convention/
 │
 ├── docs/
 │   ├── ARCHITECTURE.md

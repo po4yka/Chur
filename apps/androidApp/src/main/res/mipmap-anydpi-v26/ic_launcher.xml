@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The launcher icon is the public shell's.
+
+  docs/product/DISCREET_MODE.md keeps the public surface ordinary, so this is a
+  notes glyph on a neutral ground and carries no vault mark: an icon that hinted
+  at what the shell hides would be the disclosure the shell exists to avoid.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>

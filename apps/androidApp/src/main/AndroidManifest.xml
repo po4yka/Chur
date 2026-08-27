@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Android host application.
+
+  docs/security/PROVISIONING.md section 8 forbids requesting a permission the
+  flow does not use, so this manifest declares none: the photo picker returns a
+  content URI the application already has permission to read, and nothing else
+  Chur does touches a permission-guarded API.
+
+  android:allowBackup is false and android:dataExtractionRules is absent because
+  PLAINTEXT_LIFECYCLE.md section 5 excludes vault storage from backup, and the
+  simplest way to be excluded is for the application to opt out of backup
+  entirely: a rules file that listed exclusions would have to be kept correct as
+  the storage layout changes.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="false"
+        android:hasFragileUserData="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Chur">
+
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

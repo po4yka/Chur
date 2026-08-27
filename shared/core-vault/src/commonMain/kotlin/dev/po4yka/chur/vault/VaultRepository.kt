@@ -9,6 +9,7 @@ import dev.po4yka.chur.ffi.LockReason
 import dev.po4yka.chur.ffi.ObjectDetail
 import dev.po4yka.chur.ffi.ObjectPage
 import dev.po4yka.chur.ffi.ObjectQuery
+import dev.po4yka.chur.ffi.OperationProgress
 import dev.po4yka.chur.ffi.SlotSummary
 import dev.po4yka.chur.ffi.StreamKind
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -241,6 +242,21 @@ class VaultRepository(
     /** Starts an integrity scan; a null identifier scans every object. */
     suspend fun beginIntegrityScan(objectId: ByteArray?): Long =
         withSession { ChurVault.beginIntegrityScan(it, objectId) }
+
+    /**
+     * One progress snapshot, §10.
+     *
+     * It takes no session lock. §10 makes polling cheap and says it never waits
+     * on the operation, and holding the session mutex here would make a poll
+     * wait on the very worker it is asking about.
+     */
+    fun poll(operation: Long): OperationProgress = ChurVault.poll(operation)
+
+    /** Asks an operation to stop, §9. Callable at any time, like poll. */
+    fun cancel(operation: Long) = ChurVault.cancel(operation)
+
+    /** Closes an operation handle, waiting for its worker. */
+    fun closeOperation(operation: Long) = ChurVault.closeOperation(operation)
 
     // -----------------------------------------------------------------------
 

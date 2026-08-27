@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A bare theme.
+
+  The application's colour is Compose's, from DESIGN.md sections 6 and 7. This
+  theme exists only so the window has a background before the first frame, and
+  it is the neutral canvas of section 6.2 rather than a platform default that
+  would flash a different colour.
+-->
+<resources>
+    <style name="Theme.Chur" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/canvas</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

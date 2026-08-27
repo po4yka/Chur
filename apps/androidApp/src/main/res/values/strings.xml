@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The launcher label is the public shell's, not the vault's.
+
+  docs/product/DISCREET_MODE.md keeps the public surface ordinary: an
+  application called "Chur Vault" on the home screen announces exactly what the
+  shell exists not to announce.
+-->
+<resources>
+    <string name="app_name">Notes</string>
+</resources>
