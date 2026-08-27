@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-08-27
 - **Decision owners:** @po4yka
-- **Related:** [`../security/KEY_HIERARCHY.md`](../security/KEY_HIERARCHY.md), [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md), [`0018`](0018-freeze-the-hkdf-label-registry.md)
+- **Related:** [`../security/KEY_HIERARCHY.md`](../security/KEY_HIERARCHY.md), [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md), [`0009`](0009-one-hkdf-label-registry.md), [`0010`](0010-define-canonical-tuple-and-freeze-hkdf-salt.md)
 
 ## Context
 
