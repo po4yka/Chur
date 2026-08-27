@@ -177,7 +177,14 @@ Signed checkpoints may summarize accepted per-device heads and materialized stat
 
 ## 11. Tombstones
 
-Deletion operations create durable tombstones with causal ordering. Garbage collection waits until retention/acknowledgment policy ensures stale devices cannot legitimately resurrect deleted state.
+Deletion operations create durable tombstones with causal ordering. A tombstone authored by device A at `device_sequence` `s` is retained until whichever comes first of:
+
+- every device in the accepted membership has acknowledged it and 30 days have passed since it was authored;
+- 180 days have passed since it was authored.
+
+Acknowledgment needs no operation kind of its own. Device D has acknowledged the tombstone once the receiver holds an operation authored by D whose `observed_heads` entry for A is at or above `s`; the vector of §4 already carries exactly that fact. A revoked device stops counting toward the condition once its revocation is accepted.
+
+The 180-day cap stops one permanently offline device from blocking compaction forever, and it is safe because a device whose accepted head predates a compaction point does not replay into it. It re-bootstraps from a checkpoint under [`ROLLBACK_PROTECTION.md`](ROLLBACK_PROTECTION.md) §6, which carries the compacted state rather than the discarded tombstones, so neither branch of the rule permits resurrection.
 
 ## 12. Limits
 

@@ -87,7 +87,9 @@ Defined in [`CONFLICT_RESOLUTION.md`](CONFLICT_RESOLUTION.md). The server never 
 
 ## 9. Deletion
 
-Deletion is a signed tombstone. Server physical deletion may occur after retention/acknowledgment policy, but server acknowledgment is not proof of erasure. Key-envelope destruction and collection revocation are client-side decisions.
+Deletion is a signed tombstone. The retention rule that server physical deletion follows is normative in [`OPERATION_LOG.md`](OPERATION_LOG.md) §11.
+
+The server deletes stored ciphertext only on an authenticated signed operation from an enrolled device. A transport session token authorizes fetch and upload, never deletion, so a stolen token alone destroys nothing. Server acknowledgment of a deletion is not proof of erasure. Key-envelope destruction and collection revocation are client-side decisions.
 
 ## 10. Error/retry
 

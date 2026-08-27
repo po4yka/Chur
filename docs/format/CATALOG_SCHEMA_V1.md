@@ -133,7 +133,7 @@ Record structural and cryptographic status with stable codes, not secret error s
 
 ## 14. Tombstones
 
-Deletion creates a tombstone before physical garbage collection so future sync or crash recovery cannot resurrect removed objects. Tombstone retention and crypto-erasure are distinct:
+Deletion creates a tombstone before physical garbage collection so future sync or crash recovery cannot resurrect removed objects. The retention rule is normative in [`../sync/OPERATION_LOG.md`](../sync/OPERATION_LOG.md) §11. Tombstone retention and crypto-erasure are distinct:
 
 - key envelopes may be destroyed according to policy;
 - ciphertext cleanup may lag;

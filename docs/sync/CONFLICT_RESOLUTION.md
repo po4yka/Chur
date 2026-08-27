@@ -77,7 +77,7 @@ Derived assets are cache-like records bound to source revision/generator profile
 
 ## 10. Compaction
 
-Operation/history compaction requires an authenticated checkpoint proving retained state and tombstones. Do not discard conflict/tombstone evidence until retention and device-acknowledgment policy permits.
+Operation/history compaction requires a checkpoint as defined in [`ROLLBACK_PROTECTION.md`](ROLLBACK_PROTECTION.md) §6, which commits to the retained state and to the per-device heads the compaction assumes. Conflict and tombstone evidence is discarded only when the retention rule of [`OPERATION_LOG.md`](OPERATION_LOG.md) §11 permits it.
 
 ## 11. UX
 
