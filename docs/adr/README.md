@@ -64,6 +64,7 @@ Rejected
 | [0007](0007-local-first-before-sync.md) | Stabilize local vault before sync/sharing | Accepted |
 | [0008](0008-freeze-object-container-v1-layout.md) | Freeze the object container v1 public layout | Accepted |
 | [0009](0009-one-hkdf-label-registry.md) | One HKDF label registry | Accepted |
+| [0010](0010-define-canonical-tuple-and-freeze-hkdf-salt.md) | Define the canonical tuple encoding and freeze the HKDF extract salt | Accepted |
 
 ## Future ADR backlog
 

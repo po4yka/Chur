@@ -326,18 +326,9 @@ label || objectId || chunkIndex
 
 is forbidden unless every field is fixed-width and the exact order is specified.
 
-Canonical tuples MUST encode:
+Canonical tuple bytes, including the encoding of the leading domain tag, are defined by [`format/CANONICAL_ENCODING_V1.md`](format/CANONICAL_ENCODING_V1.md) §7.1, which governs them under the authority hierarchy in [`README.md`](README.md). Every `CanonicalTuple(...)` in this document is that construct.
 
-- a domain tag;
-- format version;
-- field count or schema version;
-- fixed-width numeric representation;
-- explicit byte lengths for variable fields;
-- enum identifiers rather than localized strings;
-- no platform-default serialization;
-- no JSON for key material, nonces, AEAD AAD, signatures, or key envelopes.
-
-The format specification will choose a canonical encoding. Candidate choices include a tightly specified custom binary encoding or deterministic CBOR with a restricted profile. The choice remains **Proposed** until test vectors are published.
+Independently of the encoding profile, JSON and platform-default serialization MUST NOT be used for key material, nonces, AEAD AAD, signatures, or key envelopes, and enum identifiers MUST be used instead of localized strings. The profile itself remains **Proposed** until test vectors are published.
 
 All protocol integers MUST use one specified byte order. The current direction is unsigned big-endian for values embedded in nonce/AAD tuples and canonical binary fields.
 
@@ -427,15 +418,14 @@ Conceptually:
 
 ```text
 PRK = HKDF-Extract(
-    salt = fixed profile salt or all-zero SHA-256-length salt,
+    salt = 32 zero bytes,
     IKM  = parent secret
 )
 
 DerivedKey = HKDF-Expand(
     PRK,
     info = CanonicalTuple(
-        "chur",
-        protocol_version,
+        "CHUR\x00KDF\x00INFO\x00V1",
         purpose_label,
         context_fields
     ),
@@ -443,7 +433,7 @@ DerivedKey = HKDF-Expand(
 )
 ```
 
-The exact `salt` and canonical tuple bytes will be fixed by the test-vector specification. They MUST NOT vary by platform.
+The extract salt is exactly 32 bytes of `0x00`, the RFC 5869 default for HKDF-SHA-256 when no salt is supplied. It is the same value for every vault, platform, profile, and derivation, and it MUST NOT vary; all domain separation is carried by `info`. In the `info` tuple, `purpose_label` is one of the labels below encoded as a UTF-8 string, and `context_fields` expands to one element per value listed by the specification that owns the derivation. Tuple bytes follow [`format/CANONICAL_ENCODING_V1.md`](format/CANONICAL_ENCODING_V1.md) §7.1.
 
 Every domain label, the key it derives, its input key, and its output length are registered in [`security/KEY_HIERARCHY.md`](security/KEY_HIERARCHY.md) §3. That table is the only definition of a label string; this document does not restate it.
 
@@ -636,7 +626,7 @@ Conceptually:
 ```text
 slot_nonce = random 24 bytes
 slot_aad   = CanonicalTuple(
-    "chur/password-slot/v1",
+    "CHUR\x00SLOT\x00PASSWORD\x00V1",
     vault_id,
     identity_id,
     slot_id,
@@ -895,7 +885,7 @@ CollectionEnvelopeKey = HKDF(
 nonce = random 24 bytes
 
 aad = CanonicalTuple(
-    "chur/collection-key-envelope/v1",
+    "CHUR\x00COLLECTION\x00KEY-ENVELOPE\x00V1",
     vault_id,
     collection_id,
     epoch,
@@ -984,7 +974,7 @@ ObjectEnvelopeKey = HKDF(
 nonce = random 24 bytes
 
 aad = CanonicalTuple(
-    "chur/object-key-envelope/v1",
+    "CHUR\x00OBJECT\x00KEY-ENVELOPE\x00V1",
     object_id,
     collection_id,
     epoch,
@@ -1124,7 +1114,7 @@ Manifest encryption:
 ```text
 manifest_nonce = random 24 bytes
 manifest_aad   = CanonicalTuple(
-    "chur/object-manifest/v1",
+    "CHUR\x00OBJECT\x00MANIFEST-AAD\x00V1",
     object_id,
     stream_id,
     stream_kind,
@@ -1211,7 +1201,7 @@ Proposed AAD tuple:
 
 ```text
 CanonicalTuple(
-    "chur/object-chunk/v1",
+    "CHUR\x00OBJECT\x00CHUNK-AAD\x00V1",
     container_format_version,
     suite_id,
     object_id,
@@ -1304,7 +1294,7 @@ Encryption:
 ```text
 commit_nonce = random 24 bytes
 commit_aad   = CanonicalTuple(
-    "chur/object-final-commit/v1",
+    "CHUR\x00OBJECT\x00FINAL-COMMIT-AAD\x00V1",
     object_id,
     stream_id,
     stream_kind,
@@ -2518,7 +2508,7 @@ The following MUST be resolved before v1 production bytes are frozen:
 3. final Argon2id mobile creation profile and latency target;
 4. final Argon2 parser hard bounds;
 5. exact password input maximum;
-6. exact HKDF extract salt and canonical `info` bytes;
+6. exact HKDF extract salt and canonical `info` bytes — resolved in §13: the extract salt is 32 zero bytes, and tuple bytes follow [`format/CANONICAL_ENCODING_V1.md`](format/CANONICAL_ENCODING_V1.md) §7.1;
 7. exact chunk-size defaults and limits;
 8. exact BLAKE3 ordered-commitment framing — resolved in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §10;
 9. whether object IDs appear in the public preamble or only encrypted records — resolved in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §3: encrypted records only;

@@ -100,7 +100,7 @@ Rules:
 
 Core v1 security records should prefer fixed schemas over extensible tagged maps.
 
-## 7. Domain tags
+## 7. Domain tags and canonical tuples
 
 Every authenticated or signed record begins logically with a unique fixed domain tag, for example:
 
@@ -110,7 +110,42 @@ CHUR\x00OBJECT\x00CHUNK-AAD\x00V1
 CHUR\x00SYNC\x00OPERATION\x00V1
 ```
 
-Exact tags are registry-controlled and included in test vectors. A tag must never be reused for a different structure.
+A domain tag is a bare ASCII byte constant. It is encoded as its exact registered bytes, with no length prefix, no terminator, and no trailing NUL. It is a fixed-bytes value under §2, not a UTF-8 string under §3; the `\x00` bytes shown above are separators inside the constant itself.
+
+Exact tags are registry-controlled and included in test vectors. A tag must never be reused for a different structure, and no registered tag may be a byte prefix of another registered tag. A version suffix past `V9` must not extend an existing tag, because `V1` is a byte prefix of `V10`.
+
+### 7.1 Canonical tuples
+
+`CanonicalTuple(tag, element, ...)`, as written in [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md), is not a separate construct. It names a §4 structure whose first field is a domain tag, and it adds no framing of its own: no element count, no separate schema-version field, no separator between elements, and no terminator. The version suffix in the tag is the tuple's schema version.
+
+Each element after the tag is one primitive from §2, encoded by the rule for its declared type. The specification that owns the record declares the element list in order, with the type and width of every element. A group of related values, such as the Argon2 public parameters of a password slot, is not one element; it is written as one element per value.
+
+For an illustrative tuple, not a registered one:
+
+```text
+CanonicalTuple(
+    "CHUR\x00EXAMPLE\x00TUPLE\x00V1",
+    suite_id:u16,
+    object_id:bytes[16],
+    label:string
+)
+```
+
+encodes as:
+
+```text
+43 48 55 52 00 45 58 41 4D 50 4C 45 00 54 55 50 4C 45 00 56 31  tag, 21 bytes, no prefix
+2 bytes                                                          suite_id, big-endian
+16 bytes                                                         object_id, no length prefix
+4 bytes                                                          label byte length, u32 big-endian
+label byte length bytes                                          label, strict UTF-8
+```
+
+A fixed-length element carries no prefix and a variable-length element carries its `u32` length, so the two are never confusable: the tag selects exactly one element list, and that list fixes the width of every fixed-length element and the position of every length prefix. Because no registered tag is a byte prefix of another, the tag is recoverable from the leading bytes, so two distinct tuples never encode to the same bytes.
+
+Tuple bytes are produced, not parsed. They are AEAD additional authenticated data, HKDF `info`, or hash input, so a mismatch surfaces as an authentication failure rather than as a decode error. Nested tuples and nested structures are forbidden in v1 tuples.
+
+A hash input that a byte-exact specification defines directly, such as the commitments in [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §5 and §10, is a domain tag followed by declared record bytes. It is not a canonical tuple and this subsection does not apply to it.
 
 ## 8. Identifiers
 
