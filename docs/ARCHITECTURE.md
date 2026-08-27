@@ -578,8 +578,7 @@ Initially contains versioned types and test scaffolding only. Later it owns:
 
 Owns:
 
-- stable C ABI;
-- optional UniFFI/Gobley adapter;
+- the stable C ABI frozen by [`ADR-0016`](adr/0016-freeze-the-v1-c-abi.md);
 - opaque handle table;
 - input length validation;
 - panic containment;
@@ -2188,7 +2187,7 @@ Chur is an independent design. The following are reference points rather than dr
 - [Apple Keychain data protection](https://support.apple.com/guide/security/keychain-data-protection-secb0694df1a/web) — Keychain protection model.
 - [Apple Data Protection classes](https://support.apple.com/guide/security/data-protection-classes-secb010e978a/web) — file protection.
 - [AVAssetResourceLoaderDelegate](https://developer.apple.com/documentation/avfoundation/avassetresourceloaderdelegate) — custom byte-range loading.
-- [UniFFI](https://github.com/mozilla/uniffi-rs) and [Gobley](https://gobley.dev/) — candidate control-plane binding tools.
+- [UniFFI](https://github.com/mozilla/uniffi-rs) and [Gobley](https://gobley.dev/) — binding generators evaluated for the control plane and rejected by [`ADR-0016`](adr/0016-freeze-the-v1-c-abi.md).
 
 Licenses and protocol assumptions must be reviewed before reusing implementation code. Architectural similarity does not imply license compatibility or protocol interoperability.
 
