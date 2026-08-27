@@ -18,6 +18,9 @@ Security invariants are properties that implementation, migrations, platform ada
 | SEC-008 | Password changes rewrap the root and do not re-encrypt media. | `chur-core` | integration test |
 | SEC-009 | Deleting or replacing one slot cannot invalidate every other valid slot in the same transaction. | `chur-core` | fault injection |
 | SEC-010 | Secret-bearing types never expose unredacted `Debug`, display, serialization, or error output. | Rust core | compile/review/log tests |
+| SEC-053 | Platform key services protect short root and KEK material only, and never media streams. | `chur-core`, platform adapters | key-use audit, platform tests |
+| SEC-054 | Logical albums are not automatically cryptographic security collections. | `chur-catalog` | key-domain review |
+| SEC-055 | Device-bound and portable recovery state are explicitly distinguished and never interchanged. | `chur-core` | recovery matrix tests |
 
 ## Nonce and AEAD invariants
 
@@ -31,6 +34,7 @@ Security invariants are properties that implementation, migrations, platform ada
 | SEC-016 | Verified chunks do not imply a complete object. | `chur-media` | truncated-final tests |
 | SEC-017 | Complete verification requires a valid authenticated final commit and ordered commitment. | `chur-format` | negative vectors |
 | SEC-018 | Unknown or disallowed suites fail closed. | parser/policy | fuzz and compatibility tests |
+| SEC-056 | Algorithm agility is policy-controlled and never selectable by a remote party or by input bytes alone. | parser/policy | policy review, negative vectors |
 
 ## Storage and transaction invariants
 
@@ -45,6 +49,8 @@ Security invariants are properties that implementation, migrations, platform ada
 | SEC-025 | Private catalog and object migrations are versioned and atomic. | migration runtime | migration matrix |
 | SEC-026 | Crypto-erasure claims require destruction of every accessible key envelope, not only ciphertext deletion. | deletion flow | backup/sync tests |
 | SEC-027 | Physical filenames and paths reveal no user filename or unkeyed plaintext hash. | object store | filesystem inspection |
+| SEC-057 | Original media containers are immutable after commit. | `chur-format` | write-path and rewrap tests |
+| SEC-058 | Derived assets are bound to their parent content revision and asset kind. | `chur-media` | derivation vectors |
 
 ## Session and runtime invariants
 
@@ -57,6 +63,7 @@ Security invariants are properties that implementation, migrations, platform ada
 | SEC-032 | Root and session secrets are zeroized in place to the extent supported by the runtime. | Rust core | review/observable tests |
 | SEC-033 | Private data does not enter logs, analytics, crash reports, notifications, widgets, or public deep links. | all layers | leakage tests |
 | SEC-034 | Scratch plaintext is app-private, backup-excluded, protected, random-named, bounded, and cleaned. | platform adapters | platform tests |
+| SEC-059 | Background work performed while locked does not require private root-key access unless explicitly designed and consented. | platform adapters | background-execution tests |
 
 ## Real/decoy invariants
 

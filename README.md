@@ -1175,30 +1175,7 @@ The primary guarantee is data-at-rest confidentiality and integrity under a lock
 
 ## Security invariants
 
-The implementation must preserve these invariants:
-
-1. Rust is the only canonical owner of private storage format and migrations.
-2. Passwords derive KEKs; they never become media keys or root secrets.
-3. `VaultRootSecret` is random and is never persisted in plaintext.
-4. Every media object has an independent random `ObjectKey`.
-5. Every semantic key purpose uses explicit HKDF domain separation.
-6. Every stream revision uses a fresh nonce prefix.
-7. No key-and-nonce pair may ever repeat.
-8. A returned plaintext range is never released before its AEAD tag verifies.
-9. Authenticated chunks do not imply a complete object; completeness requires the final commit.
-10. The object-key envelope is separate from the immutable media container.
-11. Logical albums are not automatically cryptographic key domains.
-12. Real and decoy vaults never share private roots, catalogs, object namespaces, or caches.
-13. Public Room/DataStore storage never contains private-vault metadata.
-14. Private navigation state is destroyed on lock and is not restored after process death.
-15. Lock invalidates native handles independently of UI cleanup.
-16. Source media is never deleted before encrypted import is durably committed.
-17. Secret-bearing Rust types do not implement unredacted `Debug`.
-18. Logs, analytics, and crash reports contain no private filenames, metadata, keys, or user input.
-19. Imported parameters and lengths are validated before allocation or expensive KDF work.
-20. Unsupported or deprecated suites fail closed; algorithm agility is policy-controlled.
-21. Sync wire bytes are canonicalized and signed/encrypted by Rust, not serialized ad hoc in KMP.
-22. A security-sensitive format change requires a versioned migration and test vectors.
+[`docs/security/SECURITY_INVARIANTS.md`](docs/security/SECURITY_INVARIANTS.md) is the registry of the properties that the implementation, migrations, platform adapters, and future protocols must preserve. Each entry has a stable `SEC-` identifier that ADRs, tests, and audit findings cite. This README does not restate them.
 
 ---
 

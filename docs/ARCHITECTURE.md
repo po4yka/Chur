@@ -1889,40 +1889,7 @@ The primary guarantee is confidentiality and integrity of data at rest while the
 
 ## 38. Security invariants
 
-The implementation and every migration MUST preserve these invariants:
-
-1. Rust is the only canonical owner of private storage format and migrations.
-2. Passwords derive KEKs; they never become object, collection, or root data keys.
-3. `VaultRootSecret` is random and is never persisted in plaintext.
-4. Platform key services protect short root/KEK material, not media streams.
-5. Every media object has an independent random `ObjectKey`.
-6. Security-collection keys are random and versioned by epoch.
-7. Every semantic key purpose uses explicit HKDF domain separation.
-8. Every stream revision receives a fresh random nonce prefix.
-9. No `(key, nonce)` pair may repeat.
-10. Plaintext from a chunk is not returned before that chunk's AEAD tag verifies.
-11. Authenticated chunks do not imply a complete object.
-12. Complete-object verification requires a valid final commit and ordered commitment.
-13. The object-key envelope is separate from the immutable media container.
-14. Logical albums are not automatically cryptographic security collections.
-15. Original media containers are immutable after commit.
-16. Derived assets are bound to parent content revision and asset kind.
-17. Real and decoy vaults do not share roots, catalogs, namespaces, caches, or sessions.
-18. Public Room/DataStore storage contains no private-vault metadata or key material.
-19. Private navigation state is destroyed on lock and not restored after process death.
-20. Lock invalidates native handles independently of UI cleanup.
-21. A source is not deleted before encrypted import is durably committed.
-22. A catalog entry never points to an object considered successfully committed before durable finalization.
-23. Secret-bearing Rust types do not implement unredacted `Debug`.
-24. Logs, analytics, and crash reports contain no private content, credentials, or key material.
-25. Imported lengths and KDF parameters are validated before allocation or expensive work.
-26. Unsupported formats and suites fail closed.
-27. Algorithm agility is policy-controlled and not remotely selectable.
-28. Sync wire bytes are canonicalized and protected by Rust, not ad hoc Kotlin serialization.
-29. Security-sensitive format changes require versioned migrations and golden vectors.
-30. Device-bound and portable recovery state are explicitly distinguished.
-31. Background work performed while locked does not require private root-key access unless explicitly designed and consented.
-32. Global plaintext-hash deduplication is not used.
+[`security/SECURITY_INVARIANTS.md`](security/SECURITY_INVARIANTS.md) is the registry. The implementation and every migration MUST preserve every invariant recorded there. Each entry carries a stable `SEC-` identifier that this document, the ADRs, the test plan, and audit findings cite; this section does not restate them, so there is one list to keep correct.
 
 ---
 
