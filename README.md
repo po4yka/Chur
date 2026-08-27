@@ -333,7 +333,7 @@ Chur/
 | `chur-catalog` | Rust-owned private database, transactions, indexes, catalog migrations |
 | `chur-media` | Streaming import/export, random-access readers, derived asset coordination |
 | `chur-sync-protocol` | Canonical encrypted operations, device logs, grants, protocol versioning |
-| `chur-ffi` | Stable C ABI and/or isolated generated bindings |
+| `chur-ffi` | Stable C ABI, handle registry, and panic containment |
 | `chur-cli` | Test vectors, inspection, validation, migration, recovery, fuzz corpora |
 
 `chur-cli` is a first-class architecture component. The storage format must be testable and recoverable independently of Android and iOS UI code.
@@ -918,12 +918,12 @@ chur-core
     ↓
 chur-ffi
     ├── stable C ABI data plane
-    └── optional UniFFI/Gobley control plane
+    └── stable C ABI control plane
         ↓
 KMP wrapper
 ```
 
-The secure core must not depend on UniFFI-, JNI-, Kotlin-, or Swift-specific types.
+The secure core must not depend on UniFFI-, JNI-, Kotlin-, or Swift-specific types, and no binding generator is part of the boundary: both planes cross one hand-written C ABI, frozen by ADR-0016.
 
 ### Session invalidation
 
@@ -1281,7 +1281,7 @@ Chur is an independent design. The following projects and standards are useful r
 - [Apple Keychain data protection](https://support.apple.com/guide/security/keychain-data-protection-secb0694df1a/web) — Keychain access and Secure Enclave interaction.
 - [Apple Data Protection classes](https://support.apple.com/guide/security/data-protection-classes-secb010e978a/web) — file protection policy.
 - [AVAssetResourceLoaderDelegate](https://developer.apple.com/documentation/avfoundation/avassetresourceloaderdelegate) — custom byte-range media loading.
-- [UniFFI](https://github.com/mozilla/uniffi-rs) and [Gobley](https://gobley.dev/) — candidate generated interop layers for the control plane.
+- [UniFFI](https://github.com/mozilla/uniffi-rs) and [Gobley](https://gobley.dev/) — generated interop layers evaluated for the control plane and rejected by ADR-0016.
 
 Licenses of reference projects must be reviewed before reusing code. Architectural similarity does not grant permission to copy implementation.
 

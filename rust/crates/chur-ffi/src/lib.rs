@@ -1,8 +1,8 @@
 //! Chur FFI boundary.
 //!
-//! Splits into a structured control plane (generated bindings allowed) and a
-//! bounded streaming data plane on a stable C ABI (ADR-0006). Generated
-//! bindings never become the canonical protocol definition.
+//! Splits into a structured control plane and a bounded streaming data plane,
+//! both on one stable C ABI (ADR-0006, frozen by ADR-0016). No binding
+//! generator is part of the boundary.
 //!
 //! Normative sources:
 //!

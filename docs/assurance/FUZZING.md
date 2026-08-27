@@ -85,7 +85,7 @@ Targets should track or constrain:
 - chunk iterations;
 - path/temp-file creation;
 - database transaction count;
-- callback count.
+- poll count.
 
 A clean rejection after bounded work is success.
 
@@ -112,7 +112,7 @@ Exercise:
 - offset/length overflow;
 - double close;
 - concurrent close/read;
-- lock/cancel during callbacks;
+- lock/cancel during a progress poll and between polls (§10 of [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md));
 - panic containment;
 - unknown ABI/error codes.
 

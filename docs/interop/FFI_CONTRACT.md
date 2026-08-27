@@ -139,9 +139,9 @@ ChurContentInfoV1
 
 ### 6.2 Exported symbols
 
-Every exported symbol is `chur_` followed by lower snake case, in the shape `chur_<subject>_<verb>`. Nothing else leaves the artifact: the Android link step applies a version script, the Apple link step an exported-symbols list, and a release check fails on any symbol outside this set. `chur_handle_t` is `uint64_t` with `0` as the null handle, and `chur_status_t` is the `int32_t` of [`../ERROR_MODEL.md`](../ERROR_MODEL.md).
+Every exported symbol is `chur_` followed by lower snake case. An operation on a handle takes the shape `chur_<subject>_<verb>`; the eight handshake accessors of §2 are named `chur_<fact>` for the value they return and are the only exceptions. Nothing else leaves the artifact: the Android link step applies a version script, the Apple link step an exported-symbols list, and a release check fails on any symbol outside this set. `chur_handle_t` is `uint64_t` with `0` as the null handle, and `chur_status_t` is the `int32_t` of [`../ERROR_MODEL.md`](../ERROR_MODEL.md).
 
-The Phase-1 surface is frozen. Adding an export raises the minor ABI version; changing or removing one raises the major version. The checked-in `chur.h` is the deliverable both platform teams build against, and every binding derives from it.
+The Phase-1 surface is frozen. Adding an export raises the minor ABI version; changing or removing one raises the major version. `chur.h`, checked in with the first `chur-ffi` export, is the deliverable both platform teams build against, and every binding derives from it.
 
 ```c
 /* handshake: any thread, before initialization, cannot fail (§2) */
@@ -219,7 +219,7 @@ Default data-plane policy: caller allocates a bounded mutable buffer, Rust write
 
 ## 8. Threads and blocking
 
-Native FFI calls are synchronous unless explicitly callback-based. KMP wraps blocking work on a dedicated I/O dispatcher. Rust may use internal workers but must not call arbitrary Kotlin/Swift code while holding secret locks.
+Native FFI calls are synchronous. v1 exposes no callback-based call (§10). KMP wraps blocking work on a dedicated I/O dispatcher. Rust may use internal workers but must not call arbitrary Kotlin/Swift code while holding secret locks.
 
 Thread affinity is a property of the handle type, not of the creating thread. No handle is bound to the thread that created it:
 

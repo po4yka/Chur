@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-08-27
 - **Decision owners:** @po4yka
-- **Related:** [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md), [`../ERROR_MODEL.md`](../ERROR_MODEL.md), [`0006`](0006-control-and-data-plane-ffi.md)
+- **Related:** [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md), [`../ERROR_MODEL.md`](../ERROR_MODEL.md), [`0006`](0006-control-and-data-plane-ffi.md), [`0031`](0031-continuous-integration-owns-gate-enforcement.md)
 
 ## Context
 
@@ -15,12 +15,12 @@ Freeze the v1 boundary:
 
 - `chur_status_t` is `int32_t`, `0` is success, defined values are positive, and `ERROR_MODEL.md` is the sole registry with domain blocks of 100, reserved ranges, and append-only allocation;
 - `chur_handle_t` is `uint64_t`: a 32-bit registry slot index plus a 32-bit per-slot generation, so a value is never reissued and a stale value cannot alias a live handle;
-- every export is `chur_<subject>_<verb>`, and nothing else is exported, enforced by a version script on Android and an exported-symbols list on Apple;
+- every export is `chur_` followed by lower snake case, and nothing else is exported, enforced by a version script on Android and an exported-symbols list on Apple; a handle operation takes the shape `chur_<subject>_<verb>`, and each handshake accessor of `FFI_CONTRACT.md` §2 is named `chur_<fact>` for the value it returns;
 - the Phase-1 export list in `FFI_CONTRACT.md` §6.2 is complete: adding an export raises the minor version, changing or removing one raises the major version;
 - the handshake exports the version pair, the object-format range, the key-slot range, the build flavor, and a `uint64_t` capability bitmask, so all five gate facts are retrievable before a vault opens;
 - v1 has no foreign callbacks: progress is polled from the operation handle;
 - the FFI artifacts build with `panic = "unwind"`, and every export wraps its body in `catch_unwind` and returns `INTERNAL_FAILURE`;
-- the control plane uses the same C ABI through a KMP `expect`/`actual` adapter. No UniFFI, no Gobley, no generated boundary. The checked-in `chur.h` is the deliverable.
+- the control plane uses the same C ABI through a KMP `expect`/`actual` adapter. No UniFFI, no Gobley, no generated boundary. `chur.h`, checked in with the first `chur-ffi` export, is the deliverable.
 
 ## Alternatives considered
 
@@ -46,7 +46,7 @@ Rejected for v1. Callbacks need a delivery-thread contract, a re-entrancy rule, 
 
 ### Tradeoffs
 
-- hand-written bindings on both platforms must be kept in step with `chur.h`, which the ABI version check and a header-diff CI job enforce;
+- hand-written bindings on both platforms must be kept in step with `chur.h`. The ABI version check of `FFI_CONTRACT.md` §2 detects drift at run time, and a header-diff job joins the workflow of [`0031`](0031-continuous-integration-owns-gate-enforcement.md) when the header lands;
 - polling costs one extra call per progress tick compared with a callback.
 
 ## Security impact
