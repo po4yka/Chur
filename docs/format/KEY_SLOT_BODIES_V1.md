@@ -23,7 +23,7 @@ wrap_suite_id:u16
 slot_generation:u64
 ```
 
-Those six are the descriptor header fields of [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §7 plus the `vault_id` of §2.1 there. They are 61 bytes and satisfy the rule in [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §2 that AAD binds slot type, version, vault identity, generation, and suite. The family-specific elements that follow are the public parameters of that family: everything in its body except the nonce or platform reference and the wrapped root.
+Those six are the descriptor header fields of [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §7 plus the `vault_id` of §2.1 there. They encode to 45 bytes, 16 + 16 + 1 + 2 + 2 + 8, and satisfy the rule in [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §2 that AAD binds slot type, version, vault identity, generation, and suite. The family-specific elements that follow are the public parameters of that family: everything in its body except the nonce or platform reference and the wrapped root.
 
 The nonce and `wrapped_root_secret` are never AAD elements: the nonce is an AEAD input and the wrapped bytes are what the tag already covers. `slot_body_length` is not an element either, because §1 fixes it as a function of the declared fields.
 
@@ -85,7 +85,7 @@ wrapped_root_secret = XChaCha20Poly1305.Encrypt(
 )
 ```
 
-`salt` is a variable-bytes element, so it carries its own `u32` length inside the tuple. The tag is 21 bytes and the elements add `65 + salt_length`, so the AAD is `86 + salt_length` bytes, 102 at a 16-byte salt.
+`salt` is a variable-bytes element, so it carries its own `u32` length inside the tuple. The tag is 21 bytes and the elements add `65 + salt_length`, the 45 common bytes plus 16 for the profile and Argon2 parameters plus the `u32` length prefix, so the AAD is `86 + salt_length` bytes, 102 at a 16-byte salt.
 
 Every Argon2 parameter is inside the AAD, so an attacker who lowers `memory_kib` in the body to make the slot cheap to attack changes the AAD and the unwrap fails. The parser bound of §18.3 rejects such a value first; the AAD is what makes the rejection unnecessary for correctness.
 
@@ -172,7 +172,7 @@ wrapped_root_secret = AES-256-GCM.Encrypt(
 )
 ```
 
-The tag is 29 bytes and the elements add `49 + alias_length`, so the AAD is `78 + alias_length` bytes, 94 at a 16-byte alias.
+The tag is 29 bytes and the elements add `51 + alias_length`, the 45 common bytes plus 2 for the profile plus the `u32` length prefix, so the AAD is `80 + alias_length` bytes, 96 at a 16-byte alias.
 
 `wrap_suite_id` for this family is `0x0002`, allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.2. It denotes AES-256-GCM performed by the platform keystore rather than the XChaCha20-Poly1305 of suite `0x0001`, and it is valid in this field only. Every other v1 family carries `0x0001`, and a descriptor rejects any other pairing of `slot_type` and `wrap_suite_id`.
 
