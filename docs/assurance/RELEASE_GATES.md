@@ -61,7 +61,8 @@ Required:
 - signed/repeatable release process and SBOM;
 - `SECURITY.md` private reporting configured;
 - migration/recovery evidence;
-- support policy and production warning removed only when justified.
+- support policy and production warning removed only when justified;
+- the compliance record above is complete, with the classification, storefronts, jurisdictions, exclusions, and filings named.
 
 ## Gate 4 — portable backup
 
@@ -98,6 +99,14 @@ Additional requirements:
 - multi-device/multi-recipient interoperability;
 - explicit recipient-retention limitation;
 - separate sharing-protocol audit.
+
+## Compliance
+
+Two things are decided here and are not release paperwork.
+
+Chur ships only the standard published algorithms of [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md), adds no proprietary construction, and performs no cryptanalytic function, so the classification path is mass-market self-classification for both stores. No build variant may shorten a key, substitute an algorithm, disable a slot type, or remove the discreet presentation in order to enter a market; a market that cannot accept the shipped design is a market Chur does not enter. This rule exists before the formats freeze, because the alternative is a per-market format and a second set of vectors.
+
+The remainder is a determination rather than a design choice, and the repository maintainer owns it. Before Gate 3 the evidence package records the export classification and its basis, the storefronts and jurisdictions the release targets, any market excluded and the reason, and any filing or notification made. Gate 1 and Gate 2 builds are not publicly distributed, so the record blocks Gate 3 only. `IOS.md` §37, `ANDROID.md` §37, and [`../interop/IOS_INTEGRATION.md`](../interop/IOS_INTEGRATION.md) answer store questions from that record and must not answer independently.
 
 ## Blocking findings
 

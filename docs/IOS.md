@@ -1397,7 +1397,7 @@ Private media and metadata are not used for tracking or advertising.
 
 ### 37.3 Encryption export compliance
 
-The release process must answer Apple encryption/export-compliance questions accurately. Legal classification and any required filings are release tasks, not cryptographic design decisions.
+The release process must answer Apple encryption/export-compliance questions accurately. Legal classification, the storefront and jurisdiction list, and any required filings belong to the compliance record in [`assurance/RELEASE_GATES.md`](assurance/RELEASE_GATES.md#compliance), which is owned by the repository maintainer and blocks Gate 3. They are not cryptographic design decisions, and a market requirement MUST NOT change an algorithm, a key length, a slot type, or a published constant.
 
 ### 37.4 Security claims
 
