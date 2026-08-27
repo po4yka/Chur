@@ -22,6 +22,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -83,10 +84,31 @@ class ChurController(
     /** The repository, for a host flow that drives operations itself. */
     val vault: VaultRepository get() = repository
 
-    /** Opens the runtime and loads the public shell. */
+    /** Opens the runtime, loads the public shell, and starts the idle timer. */
     suspend fun start() {
         withContext(Dispatchers.Default) { repository.start() }
         _notes.value = notes.all()
+        scope.launch { runIdleTimer() }
+    }
+
+    /**
+     * The timer behind the auto-lock choices of `DESIGN.md` §14.4.
+     *
+     * It lives here rather than in each host because the rule is the same on
+     * both and a timer neither host started is the failure this replaces: the
+     * idle check existed and nothing called it, so a timed lock never happened.
+     *
+     * `collectLatest` cancels the loop as soon as the session is not unlocked,
+     * so no wakeup runs while there is nothing to lock.
+     */
+    private suspend fun runIdleTimer() {
+        repository.state.collectLatest { current ->
+            if (current !is VaultState.Unlocked) return@collectLatest
+            while (true) {
+                delay(IDLE_TICK_MS)
+                checkIdle()
+            }
+        }
     }
 
     /** Creates a vault, `PROVISIONING.md` §3. */
@@ -143,7 +165,7 @@ class ChurController(
         }
     }
 
-    /** The idle check of `DESIGN.md` §14.4, which a host timer drives. */
+    /** The idle check of `DESIGN.md` §14.4, which [runIdleTimer] drives. */
     suspend fun checkIdle() {
         if (withContext(Dispatchers.Default) { repository.lockIfIdle() }) {
             privacy.setEnabled(false)
@@ -357,6 +379,16 @@ class ChurController(
     private companion object {
         /** Fast enough to feel immediate, slow enough not to spin a core. */
         const val POLL_INTERVAL_MS = 50L
+
+        /**
+         * How often the idle timer looks.
+         *
+         * The shortest choice of §14.4 is "immediately", so the tick has to be
+         * short enough that the shortest choice still reads as immediate; a
+         * second is that, and it is one wakeup a second only while a session is
+         * unlocked.
+         */
+        const val IDLE_TICK_MS = 1_000L
     }
 }
 

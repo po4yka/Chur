@@ -6,7 +6,7 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 
 ## Current status
 
-**Phase 0 implementation.** The normative documentation set, the byte-exact v1 formats, the Rust core that reads and writes them, the deterministic vector set, the harnesses, and the enforcing workflow exist. The remaining Phase 0 items are the two approvals, which are decisions rather than code.
+**Phase 1 implementation.** The vault exists and runs: Rust owns the catalog, the containers, the key slots, and the import journal; the C ABI carries a product surface as well as a control plane; and both hosts build an installable application over it. What Phase 1 still owes is the independent review, which is an engagement rather than code, and the fault-injection matrix of Gate 2. Phase 0 owes the same two approvals it owed before, which are decisions rather than code.
 
 ## Phase 0 — specification and repository foundation
 
@@ -43,21 +43,25 @@ Gate 1 may be declared once the two approvals are recorded.
 
 ### Scope
 
-- functional Notes public shell;
-- one private vault;
-- vault creation and first run per [`docs/security/PROVISIONING.md`](docs/security/PROVISIONING.md);
-- password, device, and recovery key slots;
-- Rust-owned encrypted catalog;
-- photo import through platform pickers;
-- immutable encrypted originals;
-- encrypted metadata, thumbnails, and previews;
-- timeline, albums, favorites, viewer, and export;
-- catalog search as bounded by [`docs/format/CATALOG_SCHEMA_V1.md`](docs/format/CATALOG_SCHEMA_V1.md) §16, over the in-database FTS5 table of §16.4;
-- immediate, timed, background, and panic lock;
-- app-switcher privacy handling;
-- interrupted-import recovery and integrity inspection.
+| Item | State |
+| --- | --- |
+| functional Notes public shell | done: a list, an editor, search, pinning, and a JSON store that keeps notes across launches. It depends on no private module, so it cannot reach the vault even by accident |
+| one private vault | done |
+| vault creation and first run per [`docs/security/PROVISIONING.md`](docs/security/PROVISIONING.md) | done: the descriptor transaction of §9, an abandoned creation that leaves nothing openable, and the recovery phrase shown once |
+| password, device, and recovery key slots | **partly done.** Password and recovery are complete and unlock. The device slot unlocks on Apple through the Keychain factor `CHUR_FACTOR_APPLE_KEYCHAIN`. The Android Keystore slot has its body, its AAD, and its wrap suite `0x0002` in `chur-format`, and a Kotlin prototype that wraps and unwraps, and it has no unlock factor: nothing opens a vault with it |
+| Rust-owned encrypted catalog | done: SQLCipher with the pragma order of [ADR-0038](docs/adr/0038-adopt-sqlcipher-as-the-v1-catalog-engine.md), the schema of [`docs/format/CATALOG_SCHEMA_V1.md`](docs/format/CATALOG_SCHEMA_V1.md), and keyset paging |
+| photo import through platform pickers | **partly done.** The Android host imports through `PickVisualMedia` and requests no permission. The iOS picker is specified in [`apps/iosApp/README.md`](apps/iosApp/README.md) and lives in an Xcode project that is not in this repository |
+| immutable encrypted originals | done: the container is written once, and the catalog holds no operation that rewrites one |
+| encrypted metadata, thumbnails, and previews | **partly done.** All three are derived, encrypted, and read back by Rust, and the Android host decodes and shows them. The iOS grid draws tiles without them, because no platform decode is bound there yet |
+| timeline, albums, favorites, viewer, and export | done |
+| catalog search as bounded by [`docs/format/CATALOG_SCHEMA_V1.md`](docs/format/CATALOG_SCHEMA_V1.md) §16, over the in-database FTS5 table of §16.4 | done |
+| immediate, timed, background, and panic lock | **partly done.** All four transitions run, and three of them are reachable from a screen. The panic transition has no gesture bound to it, because [`docs/product/DISCREET_MODE.md`](docs/product/DISCREET_MODE.md) records the gesture as an open specification item and reserves the decision to itself |
+| app-switcher privacy handling | done: `FLAG_SECURE` and a cover on Android, the cover on iOS |
+| interrupted-import recovery and integrity inspection | done: the journal ordering of [`docs/format/OBJECT_CONTAINER_V1.md`](docs/format/OBJECT_CONTAINER_V1.md) §14.2, resumption on the next unlock, and a whole-vault integrity scan |
 
 ### Explicit exclusions
+
+None of these is started, which is the intent:
 
 - cloud account;
 - sync;
@@ -68,10 +72,14 @@ Gate 1 may be declared once the two approvals are recorded.
 
 ### Exit criteria
 
-- initialization, import, key-slot, and migration fault injection passes, matching Gate 2; the complete matrix, including media, large-file, and decoy paths, is a Phase 2 exit criterion;
-- no private data persists in public storage or navigation state;
-- platform-key invalidation and recovery work on supported devices;
-- local format and Rust core receive independent review before production use.
+| Criterion | State |
+| --- | --- |
+| initialization, import, key-slot, and migration fault injection passes, matching Gate 2; the complete matrix, including media, large-file, and decoy paths, is a Phase 2 exit criterion | **outstanding.** Interrupted creation, interrupted import, a wrong password, a corrupt container, and an unknown format version each have a test. There is no fault-injection harness that drives them as a matrix, so what exists is a set of cases rather than the pass this criterion names |
+| no private data persists in public storage or navigation state | met, and enforced by construction rather than by inspection: the public shell's module cannot see a private module, the routes hold no object identifier, and both hosts disable backup for the directories Chur writes into |
+| platform-key invalidation and recovery work on supported devices | **outstanding.** Invalidation is implemented on the Apple side and untested on a device from [ADR-0017](docs/adr/0017-freeze-the-supported-device-set.md); the Android side has no unlock factor to invalidate |
+| local format and Rust core receive independent review before production use | **outstanding.** [`docs/assurance/SECURITY_REVIEW_SCOPE.md`](docs/assurance/SECURITY_REVIEW_SCOPE.md) defines the review and none has been commissioned |
+
+[`docs/assurance/EVIDENCE_PHASE_1.md`](docs/assurance/EVIDENCE_PHASE_1.md) records what runs, what does not, and where each number comes from.
 
 ## Phase 2 — video, audio, and decoy
 
