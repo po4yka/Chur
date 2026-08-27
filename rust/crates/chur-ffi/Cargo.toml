@@ -25,7 +25,10 @@ unsafe_code = "deny"
 missing_docs = "warn"
 
 [lints.clippy]
-all = "warn"
+# `all` is a lint group, so it needs a lower priority than the individual
+# lints below it; at equal priority rustc cannot order the group against its
+# members and refuses to compile.
+all = { level = "warn", priority = -1 }
 panic = "deny"
 unwrap_used = "deny"
 expect_used = "deny"

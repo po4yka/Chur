@@ -1,0 +1,50 @@
+# cargo-deny policy for the Chur Rust workspace.
+#
+# DEPENDENCY_POLICY.md requires license review, advisory checks, and a small
+# reviewed dependency surface. ADR-0031 makes `cargo deny check` one of the
+# four jobs of the enforcing workflow.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+# BSD-3-Clause is the repository license. The rest are the permissive licenses
+# the reviewed cryptographic dependencies carry. AGPL and GPL are absent on
+# purpose: DEPENDENCY_POLICY.md "Licenses" forbids them without an explicit
+# distribution and architecture decision.
+allow = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.93
+# The allow list above is the reviewed set for the whole workspace, so a
+# license no crate currently carries is expected rather than a finding.
+unused-allowed-license = "allow"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# A second implementation of a primitive Chur already depends on is a second
+# thing to review and a way for persisted bytes to change by accident.
+deny = [
+    { name = "openssl" },
+    { name = "openssl-sys" },
+    { name = "ring" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

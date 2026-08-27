@@ -1,0 +1,78 @@
+# Enforcing workflow for the release gates.
+#
+# ADR-0031 fixes the v1 minimum job set and RELEASE_GATES.md "Enforcement" is
+# the single place the enforcement rules live. Jobs join this file as their
+# subject lands; a document may not name a job that does not exist here.
+#
+# Every action is pinned to an immutable commit SHA per DEPENDENCY_POLICY.md
+# "Version policy". The Rust toolchain is not installed by an action: the
+# runner's rustup reads rust/rust-toolchain.toml, so the pinned version in
+# that file is the version that runs these checks.
+
+name: rust
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: rust
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    name: cargo fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - run: rustup component add rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: cargo clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: clippy-${{ hashFiles('rust/Cargo.lock', 'rust/rust-toolchain.toml') }}
+      - run: rustup component add clippy
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: cargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: test-${{ hashFiles('rust/Cargo.lock', 'rust/rust-toolchain.toml') }}
+      - run: cargo test --workspace
+
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cargo
+          key: deny-${{ hashFiles('rust/Cargo.lock') }}
+      - run: cargo install --locked cargo-deny
+      - run: cargo deny check
