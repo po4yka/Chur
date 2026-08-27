@@ -1154,17 +1154,15 @@ The media data plane uses a stable C ABI:
 
 ### 30.5 Native API handshake
 
-At startup, Swift/Kotlin verifies:
+At startup, before any vault opens, Swift or Kotlin calls the handshake exports frozen in [`interop/FFI_CONTRACT.md`](interop/FFI_CONTRACT.md) §2 and verifies the same five facts as Android:
 
-```text
-native API version
-supported object-format range
-supported key-slot range
-build flavor compatibility
-required feature flags
-```
+- native API version, the `chur_abi_version_major`/`chur_abi_version_minor` pair; a differing major value is rejected;
+- the supported object-format range from `chur_object_format_min`/`chur_object_format_max`;
+- the supported key-slot range from `chur_key_slot_format_min`/`chur_key_slot_format_max`;
+- the build flavor from `chur_build_flavor`; debug assertions or test hooks are rejected in a release archive;
+- the required feature flags from the `chur_capabilities` bitmask.
 
-Mismatch fails closed before any vault opens.
+Any rejection reports `ABI_INCOMPATIBLE` ([`ERROR_MODEL.md`](ERROR_MODEL.md)), fails closed before any vault opens, and MUST NOT be retried in the same process. Because the AVFoundation adapter and the Kotlin framework share one runtime (§30.3), the handshake runs once per process.
 
 ---
 

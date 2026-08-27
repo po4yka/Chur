@@ -1071,17 +1071,17 @@ Rules:
 
 ### 28.3 Native API handshake
 
-At startup, Kotlin verifies:
+At startup, before any vault opens, Kotlin calls the handshake exports frozen in [`interop/FFI_CONTRACT.md`](interop/FFI_CONTRACT.md) §2:
 
-```text
-native API version
-supported object-format range
-supported key-slot range
-build flavor compatibility
-required feature flags
-```
+| Fact | Export | Rejected when |
+| --- | --- | --- |
+| native API version | `chur_abi_version_major` / `chur_abi_version_minor` | the major value differs from the one the application was built against |
+| supported object-format range | `chur_object_format_min` / `chur_object_format_max` | the vault's `container_version` falls outside it |
+| supported key-slot range | `chur_key_slot_format_min` / `chur_key_slot_format_max` | the slot format falls outside it |
+| build flavor | `chur_build_flavor` | debug assertions or test hooks are compiled into a release application |
+| required feature flags | `chur_capabilities` | a capability this build requires is not set |
 
-An incompatible native library fails closed before any vault opens.
+Any rejection reports `ABI_INCOMPATIBLE` ([`ERROR_MODEL.md`](ERROR_MODEL.md)), fails closed before any vault opens, and MUST NOT be retried in the same process.
 
 ### 28.4 R8 and packaging rules
 

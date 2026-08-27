@@ -22,15 +22,39 @@ Generated bindings are replaceable. The secure core has no dependency on generat
 
 ## 2. ABI versioning
 
-The native library exports an ABI handshake:
+The native library exports a handshake that answers every fact a platform gate checks before a vault opens. These functions are callable from any thread before runtime initialization and cannot fail:
 
 ```text
-chur_abi_version_major()
-chur_abi_version_minor()
-chur_capabilities()
+chur_abi_version_major()   -> uint32_t
+chur_abi_version_minor()   -> uint32_t
+chur_capabilities()        -> uint64_t
+chur_object_format_min()   -> uint16_t
+chur_object_format_max()   -> uint16_t
+chur_key_slot_format_min() -> uint16_t
+chur_key_slot_format_max() -> uint16_t
+chur_build_flavor()        -> uint32_t
 ```
 
-Major mismatch fails loading. Minor/capability differences are negotiated only within explicitly compatible behavior; they never select cryptographic suites from untrusted input.
+- native API version is the (major, minor) pair. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process;
+- the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
+- the key-slot range is the inclusive key-slot format interval;
+- build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
+- required feature flags are capability bits.
+
+`chur_capabilities()` returns a bitmask:
+
+| Bit | Name | Meaning |
+| ---: | --- | --- |
+| 0 | `CHUR_CAP_DECOY_VAULT` | independent decoy identity supported |
+| 1 | `CHUR_CAP_OBJECT_READER` | random-access authenticated reader available |
+| 2 | `CHUR_CAP_SEQUENTIAL_READER` | sequential reader available |
+| 3 | `CHUR_CAP_INTEGRITY_SCAN` | background integrity scan available |
+| 4 | `CHUR_CAP_BACKUP_PACKAGE` | portable backup package import/export available |
+| 5 | `CHUR_CAP_SYNC` | ciphertext sync available |
+| 6 | `CHUR_CAP_CONCURRENT_READS` | one reader handle serves parallel reads (§8) |
+| 7-63 | reserved | zero in v1 |
+
+An unknown set bit is ignored and never enables behavior. Minor and capability differences are negotiated only within explicitly compatible behavior; they never select cryptographic suites from untrusted input.
 
 ## 3. Handles
 
