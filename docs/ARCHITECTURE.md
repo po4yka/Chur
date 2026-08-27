@@ -2104,7 +2104,7 @@ A feature is not complete until its privacy and lifecycle behavior is specified.
 
 ## 43. Architecture decision backlog
 
-[`adr/README.md`](adr/README.md) holds the project's only backlog of decisions that still require an ADR. This section keeps no list of its own.
+[`adr/README.md`](adr/README.md) holds the backlog of decisions that still require an ADR, and [`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md) §74 holds the open cryptographic decisions. This section keeps no list of its own.
 
 The decisions this section previously listed as open are now recorded: the canonical encrypted-record encoding in [`ADR-0010`](adr/0010-define-canonical-tuple-and-freeze-hkdf-salt.md) and [`ADR-0013`](adr/0013-allocate-v1-format-constants.md); the chunk-size policy in [`ADR-0008`](adr/0008-freeze-object-container-v1-layout.md) and [`ADR-0020`](adr/0020-set-the-v1-parser-limits.md); the control-plane binding generator in [`ADR-0016`](adr/0016-freeze-the-v1-c-abi.md); the portable backup format in [`ADR-0018`](adr/0018-freeze-backup-package-framing.md); the sync conflict model in [`ADR-0014`](adr/0014-observed-heads-causality-vector.md), [`ADR-0021`](adr/0021-freeze-conflict-tie-break-and-set-semantics.md), and [`ADR-0022`](adr/0022-freeze-operation-chain-hash-and-identifier.md); the metadata and derived-asset transaction boundary in §22.2 and [`format/CATALOG_SCHEMA_V1.md`](format/CATALOG_SCHEMA_V1.md) §10; and optional size padding in [`sync/SYNC_PROTOCOL_V1.md`](sync/SYNC_PROTOCOL_V1.md) §11, which defers it to a later versioned transport profile.
 

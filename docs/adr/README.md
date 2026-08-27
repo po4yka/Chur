@@ -72,25 +72,27 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0018](0018-freeze-backup-package-framing.md) | Freeze the backup package framing and manifest key | Accepted |
 | [0019](0019-freeze-remaining-v1-record-layouts.md) | Freeze the remaining v1 record layouts | Accepted |
 | [0020](0020-set-the-v1-parser-limits.md) | Set the v1 parser limits | Accepted |
+| [0021](0021-freeze-conflict-tie-break-and-set-semantics.md) | Freeze the conflict tie-break and set semantics | Accepted |
+| [0022](0022-freeze-operation-chain-hash-and-identifier.md) | Freeze the operation chain hash, identifier, and cleartext field set | Accepted |
 | [0023](0023-define-signed-checkpoint-and-bootstrap-attestation.md) | Signed checkpoint record and new-device bootstrap attestation | Accepted |
 | [0024](0024-freeze-revocation-point-and-eager-rewrap.md) | Accepted revocation point and eager epoch rewrap | Accepted |
-| [0022](0022-freeze-operation-chain-hash-and-identifier.md) | Freeze the operation chain hash, identifier, and cleartext field set | Accepted |
-| [0021](0021-freeze-conflict-tie-break-and-set-semantics.md) | Freeze the conflict tie-break and set semantics | Accepted |
 | [0025](0025-freeze-the-object-key-envelope-aad.md) | Freeze the object-key envelope AAD | Accepted |
 | [0026](0026-argon2id-memory-floor-and-candidate-set.md) | Argon2id memory floor and the constant password-candidate set | Accepted |
+| [0027](0027-freeze-the-deletion-transaction.md) | Freeze the deletion transaction and the crypto-erasure point | Accepted |
 | [0028](0028-freeze-the-catalog-query-surface.md) | Freeze the catalog query surface, index set, and v1 search | Accepted |
 | [0029](0029-freeze-the-recovery-secret-encoding.md) | Freeze the recovery-secret human encoding as BIP-39 English | Accepted |
 | [0030](0030-freeze-the-vault-registry-and-discovery.md) | Freeze the vault registry layout and discovery order | Accepted |
+| [0031](0031-continuous-integration-owns-gate-enforcement.md) | Continuous integration owns release-gate enforcement | Accepted |
 | [0032](0032-vault-creation-requires-a-password-slot.md) | Vault creation requires a verified password slot | Accepted |
 | [0033](0033-chur-operates-no-sync-service.md) | Chur operates no sync service; deployments are user-controlled | Accepted |
-| [0027](0027-freeze-the-deletion-transaction.md) | Freeze the deletion transaction and the crypto-erasure point | Accepted |
-| [0031](0031-continuous-integration-owns-gate-enforcement.md) | Continuous integration owns release-gate enforcement | Accepted |
+
+Rows are ordered by ADR number. Number 0015 was not used; no ADR carries it and none will.
 
 ## Future ADR backlog
 
-This list is the project's only register of decisions that still require an ADR. [`../ARCHITECTURE.md`](../ARCHITECTURE.md) §43 points here and keeps no list of its own. An entry leaves this list only when an accepted ADR, or a specification of rank 1 to rank 3 in the [authority hierarchy](../README.md#authority-hierarchy), records the decision.
+This list registers the decisions that still require an ADR. [`../ARCHITECTURE.md`](../ARCHITECTURE.md) §43 points here and keeps no list of its own. [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §74 is the second register: it tracks every open cryptographic decision item by item and annotates each one as it is resolved, and an item there is copied here only when it needs an ADR of its own. An entry leaves this list only when an accepted ADR, or a specification of rank 1 to rank 3 in the [authority hierarchy](../README.md#authority-hierarchy), records the decision.
 
-- password Unicode and Argon2id parameter profile, including the parser bounds and the password input maximum, which freezes [`../security/PASSWORD_PROFILE.md`](../security/PASSWORD_PROFILE.md);
+- the exact password input maximum, [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §74 item 5, which [`../security/PASSWORD_PROFILE.md`](../security/PASSWORD_PROFILE.md) §3 proposes as 1024 encoded bytes and does not freeze; the rest of that profile is decided, the Unicode rules in §3 there, the Argon2id floor and default in §4 and [`0026`](0026-argon2id-memory-floor-and-candidate-set.md), and the Argon2 parser bounds in [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §18.3;
 - SQLCipher build, linkage, WAL, migration, performance, and backup validation result required by [`../format/CATALOG_SCHEMA_V1.md`](../format/CATALOG_SCHEMA_V1.md) §15, which decides whether [`0004`](0004-rust-owned-private-catalog.md) is accepted or replaced;
 - Android Keystore and iOS Keychain exact policies, including the Apple slot representation that [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §5 leaves open between a protected `DeviceUnlockSecret` and wrapped root bytes held directly as the Keychain secret;
 - device identity portability, including whether the optional Secure Enclave or Android hardware identity keys of [`../sync/DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md) §6 become a second suite;
