@@ -13,8 +13,11 @@ test-vectors/
     ├── README.md
     ├── manifest.json
     ├── canonical-encoding/
+    ├── key-derivations/
     ├── password-slots/
     ├── recovery-slots/
+    ├── keystore-slots/
+    ├── keychain-slots/
     ├── vault-descriptors/
     ├── collection-envelopes/
     ├── object-key-envelopes/
@@ -80,8 +83,8 @@ Required:
 - canonical primitive/structure encodings;
 - Unicode password profile cases;
 - Argon2id derivations;
-- every key-slot family;
-- every HKDF label in the registry in [`../security/KEY_HIERARCHY.md`](../security/KEY_HIERARCHY.md) §3;
+- every key-slot family, under its own `format` word: `password-slot`, `recovery-slot`, `keystore-slot`, and `keychain-slot`. The Android family's AEAD runs in the platform Keystore, so its vector carries the body and the AAD and no wrapped bytes a Rust implementation could reproduce;
+- every HKDF label in the registry in [`../security/KEY_HIERARCHY.md`](../security/KEY_HIERARCHY.md) §3, one `key-derivation` vector each, carrying the encoded `info` tuple as well as the derived key so a mismatch names the element that differs;
 - valid object-key envelope;
 - zero-byte, one-chunk, multi-chunk, and partial-final object;
 - recovery-secret round trip: 32 bytes to 24 BIP-39 English words and back, including the checksum bits and one denormalized re-entry that must normalize to the same words;
@@ -159,8 +162,11 @@ The `case` describes the input, never the expectation, because `outcome` already
 | `format` | Directory |
 | --- | --- |
 | `canonical-encoding` | `canonical-encoding/` |
+| `key-derivation` | `key-derivations/` |
 | `password-slot` | `password-slots/` |
 | `recovery-slot` | `recovery-slots/` |
+| `keystore-slot` | `keystore-slots/` |
+| `keychain-slot` | `keychain-slots/` |
 | `vault-descriptor` | `vault-descriptors/` |
 | `collection-envelope` | `collection-envelopes/` |
 | `object-key-envelope` | `object-key-envelopes/` |
