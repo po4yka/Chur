@@ -39,12 +39,22 @@ Operation IDs alone are not freshness proof.
 
 On fork:
 
-- stop applying that device's subsequent chain;
-- retain both signed branches as evidence where safe;
-- mark device/account security state;
-- compare with another authorized device or recovery checkpoint;
-- require explicit reconciliation/revocation;
+- stop applying that device's subsequent chain. Every other device's chain keeps applying: a fork is scoped to the forked chain, and freezing the whole vault would let one forged record stop the account;
+- retain as evidence the two conflicting signed records at the shared sequence and the last head accepted before them;
+- enter the fork state below;
 - do not let server choose branch silently.
+
+The fork state is per (vault, device), persisted in the encrypted catalog, and holds one of three values:
+
+```text
+detected        set when the conflicting record is seen; the chain freezes and the user is told
+acknowledged    set when the user has seen the report; the chain stays frozen
+resolved        set only by reconciliation or by an accepted revocation; the state clears
+```
+
+Reconciliation is one procedure. On a device holding a checkpoint issued before the fork, the branch whose head that checkpoint commits to under §6 is the true branch, and the other is discarded with its evidence retained. When no device holds such a checkpoint, reconciliation is impossible and the only exit is revoking the forked device under [`REVOCATION.md`](REVOCATION.md) §2. The user does not pick a branch by hand: that choice is exactly what an equivocating server wants to influence.
+
+The state is surfaced through the `SYNC_CHAIN_FORK` and `SYNC_HEAD_ROLLBACK` codes of [`../ERROR_MODEL.md`](../ERROR_MODEL.md). Neither is retryable, and both persist until the state clears.
 
 ## 5. Membership and key epochs
 

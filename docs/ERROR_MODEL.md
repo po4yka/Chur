@@ -33,6 +33,8 @@ This table is the sole registry of Chur error names and values. `ARCHITECTURE.md
 | 203 | `PERMISSION_DENIED` | platform denied requested resource | Yes | grant/select resource |
 | 204 | `NOT_FOUND` | opaque requested entity is absent | Sometimes | refresh state |
 | 205 | `CONFLICT` | operation conflicts with current revision | Yes | refresh and merge |
+| `SYNC_CHAIN_FORK` | two different signed records at one device sequence | No | reconcile or revoke the device |
+| `SYNC_HEAD_ROLLBACK` | offered sync state is below a locally accepted head | No | reconcile; do not retry the same source |
 | 300 | `UNSUPPORTED_VERSION` | recognized artifact has unsupported version | No | upgrade or migrate |
 | 301 | `UNSUPPORTED_SUITE` | algorithm suite is not permitted | No | migrate with supported client |
 | 302 | `NON_CANONICAL_ENCODING` | record has multiple or invalid encodings | No | reject source |
@@ -136,7 +138,8 @@ A caller requesting playback may accept `VerifiedRange`; export, backup, or migr
 - do not retry authenticated corruption without a different source;
 - resume incomplete immutable object transfer only after validating journal state;
 - re-open a session after `SESSION_EXPIRED` rather than reviving a handle;
-- do not retry `RESOURCE_LIMIT_EXCEEDED` with the same input.
+- do not retry `RESOURCE_LIMIT_EXCEEDED` with the same input;
+- never retry `SYNC_CHAIN_FORK` or `SYNC_HEAD_ROLLBACK`. Both are security states that persist until the fork state of [`sync/ROLLBACK_PROTECTION.md`](sync/ROLLBACK_PROTECTION.md) §4 clears, and a retry loop against an equivocating server is the failure they exist to prevent.
 
 ## Logging severity
 
@@ -151,7 +154,7 @@ A caller requesting playback may accept `VerifiedRange`; export, backup, or migr
 
 ## Wire and persistence compatibility
 
-Error codes are not persisted inside encrypted content unless a versioned format explicitly includes an integrity state. Sync protocol errors use separate versioned wire codes. Unknown remote codes map to `INTERNAL_FAILURE` or `NETWORK_FAILURE` without weakening validation.
+Error codes are not persisted inside encrypted content unless a versioned format explicitly includes an integrity state. Sync protocol errors use separate versioned wire codes. Unknown remote codes map to `INTERNAL_FAILURE` or `NETWORK_FAILURE` without weakening validation. `SYNC_CHAIN_FORK` and `SYNC_HEAD_ROLLBACK` are local verdicts and are never adopted from a remote code, so a server can neither induce them nor suppress them.
 
 ## Testing
 
