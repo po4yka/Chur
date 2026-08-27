@@ -18,5 +18,6 @@
 pub mod codec;
 pub mod constants;
 pub mod container;
+pub mod descriptor;
 pub mod envelope;
 pub mod slot;
