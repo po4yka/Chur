@@ -1397,7 +1397,52 @@ Before an Android release candidate:
 
 ---
 
-## 37. References
+## 37. Play Store, privacy, and compliance
+
+### 37.1 Review disclosure
+
+Google Play review receives complete documentation of the vault, decoy vault, discreet presentation, launcher alias, recovery, and authentication flows. The public shell MUST NOT be used to conceal dormant behavior from review.
+
+### 37.2 Data safety declaration
+
+The Data safety form MUST match the shared store answers in [`product/DISCREET_MODE.md`](product/DISCREET_MODE.md) and the implementation that ships:
+
+| Data safety question | v1 answer |
+| --- | --- |
+| Is data collected or shared? | No data leaves the device |
+| Photos and videos | Stored on device only and encrypted; not collected |
+| App activity and diagnostics | Not collected by default |
+| Is data encrypted in transit? | No data in transit in v1; ciphertext only when sync ships |
+| Can the user request deletion? | Yes, in-app; deletion is local |
+| Independent security review | Declared only after one exists |
+
+### 37.3 Permissions justification
+
+Every declared permission MUST have a documented product need in §24 and MUST be requested at point of use. Broad media-library permissions are not declared while the Photo Picker suffices. No accessibility service, device-admin, overlay, `QUERY_ALL_PACKAGES`, or usage-stats permission is declared.
+
+### 37.4 Encryption export compliance
+
+The release process answers Google Play's US export-compliance question on the basis of the suite in [`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md) §15.1. Legal classification and any filing are release tasks rather than cryptographic design decisions, and the answer MUST match the one given to Apple in [`IOS.md`](IOS.md) §37.3.
+
+### 37.5 Deceptive-behaviour policy and the alternate icon
+
+Play's Device and Network Abuse and Deceptive Behavior policies prohibit an app that hides itself or misrepresents its function. The discreet presentation stays inside those policies only while every one of the following holds, and each is a release check:
+
+- the launcher alias changes only by an explicit user action and is reversible from the public shell;
+- the package stays visible in Settings, installed-app lists, and device-policy tooling;
+- the public shell is a working utility rather than a facade over dormant behavior;
+- the store listing and the review notes describe the vault and the alternate icon;
+- no component is enabled to evade uninstall, parental controls, or policy enforcement.
+
+An alternate presentation that fails any of these is removed from the release rather than shipped and appealed.
+
+### 37.6 Security claims
+
+The forbidden-claim list is owned by [`product/DISCREET_MODE.md`](product/DISCREET_MODE.md). Marketing MUST NOT exceed it and MUST NOT differ between Google Play and the App Store.
+
+---
+
+## 38. References
 
 - [Chur README](../README.md)
 - [Chur system architecture](ARCHITECTURE.md)
@@ -1416,7 +1461,7 @@ Before an Android release candidate:
 
 ---
 
-## 38. Summary
+## 39. Summary
 
 The Android implementation is a thin, security-sensitive platform shell around shared KMP/CMP application code and a Rust-owned vault runtime.
 

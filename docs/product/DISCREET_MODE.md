@@ -142,6 +142,32 @@ Review notes must explain:
 - why neutral UI surfaces exist;
 - that cryptographic and recovery features are user-facing and documented.
 
+### Shared store answers
+
+Both stores receive the same facts. These answers are owned here; `ANDROID.md` §37 and `IOS.md` §37 cite them and must not answer differently:
+
+- the app stores user-selected media in an encrypted local vault, and the user chooses what enters it;
+- no analytics or diagnostics leave the device by default;
+- private media, metadata, and vault identity are never used for tracking or advertising, and are not linked to an account in v1;
+- photo access is selection-only wherever the platform picker suffices;
+- the vault, decoy vault, discreet presentation, alternate icon, and recovery flows are documented to review and reachable by a reviewer;
+- the app uses standard cryptography as listed in `CRYPTOGRAPHY.md` §15.1, and answers export-compliance questions on that basis;
+- deletion removes the encrypted object and its catalog rows, and no server copy exists in v1.
+
+A change that makes any answer false is a release blocker, not a form update afterwards.
+
+### Forbidden claims
+
+Marketing and store listings must not claim:
+
+- an independent audit before one exists;
+- universal screenshot prevention;
+- physical secure erase of flash storage;
+- protection from a compromised or unlocked operating system;
+- cryptographically undetectable plausible deniability;
+- recoverability when the user chose device-bound-only storage;
+- invisibility to the platform, the store, or a forensic examiner.
+
 ## Verification checklist
 
 - cold launch opens public/locked state;

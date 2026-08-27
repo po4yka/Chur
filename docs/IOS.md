@@ -1401,14 +1401,7 @@ The release process must answer Apple encryption/export-compliance questions acc
 
 ### 37.4 Security claims
 
-Marketing MUST NOT claim:
-
-- independent audit before one exists;
-- universal screenshot prevention;
-- physical secure erase;
-- protection from a compromised unlocked OS;
-- cryptographically undetectable plausible deniability;
-- recoverability when the user selected device-bound-only storage.
+The forbidden-claim list and the shared store answers are owned by [`product/DISCREET_MODE.md`](product/DISCREET_MODE.md) so that Apple and Google receive the same facts. Marketing MUST NOT exceed that list, and the answers given here MUST match the ones given to Google Play in [`ANDROID.md`](ANDROID.md) §37.
 
 ---
 
