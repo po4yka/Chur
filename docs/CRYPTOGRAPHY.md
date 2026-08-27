@@ -829,7 +829,7 @@ They MUST NOT share:
 
 The unlock result exposed to ordinary application features is an opaque `VaultSessionHandle`, not an `isDecoy` boolean.
 
-Where multiple password identities coexist, implementations SHOULD use the same Argon2 profile and uniform high-level error behavior. They MAY attempt a fixed candidate set after one derivation where the slot format supports it. This reduces simple timing distinctions but does not create an undetectable hidden volume.
+Where multiple password identities coexist, implementations MUST use the same Argon2 profile and uniform high-level error behavior. Every unlock attempt that uses a password MUST run the same constant number of Argon2id derivations, padded with dummy derivations, as required by [`security/KEY_SLOTS.md`](security/KEY_SLOTS.md) §8. One derivation cannot be reused against a second slot: each slot carries its own random salt, so its Argon2id output is salt-bound. This equalizes the derivation cost of an attempt; it does not create an undetectable hidden volume, and the residual signals are listed in [`security/DECOY_VAULT.md`](security/DECOY_VAULT.md) §5.
 
 Chur describes this feature as **Decoy Vault** or **coercion-resistant UX**, not cryptographic plausible deniability.
 
@@ -2418,7 +2418,7 @@ The following MUST be resolved before v1 production bytes are frozen:
 12. standard versus paranoid import verification default;
 13. backup package encoding and optional age profile — resolved in [`format/BACKUP_FORMAT_V1.md`](format/BACKUP_FORMAT_V1.md) §2;
 14. recovery-secret mnemonic/checksum format;
-15. exact real/decoy password-slot candidate-discovery behavior;
+15. exact real/decoy password-slot candidate-discovery behavior — resolved in [`security/KEY_SLOTS.md`](security/KEY_SLOTS.md) §8 and [ADR-0026](adr/0026-argon2id-memory-floor-and-candidate-set.md): a constant two-candidate list padded with dummy derivations;
 16. HPKE library and canonical grant encoding;
 17. device-log consistency and malicious-server omission strategy;
 18. optional padding profiles;

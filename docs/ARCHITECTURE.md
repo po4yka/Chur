@@ -2014,7 +2014,7 @@ Values are provisional targets and MUST be benchmarked on the device set frozen 
 Targets to validate:
 
 - platform-biometric unlock adds minimal work beyond root release and catalog open;
-- password unlock intentionally costs approximately the calibrated Argon2 budget;
+- password unlock intentionally costs approximately the calibrated Argon2 budget for each of the constant candidates of [`security/KEY_SLOTS.md`](security/KEY_SLOTS.md) §8;
 - a video `readAt` supports sustained throughput above the highest supported media bitrate;
 - random seek decrypts only required chunks;
 - lock makes private UI unavailable immediately, even if cleanup continues briefly behind the covered surface.

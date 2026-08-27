@@ -129,6 +129,16 @@ External errors must not reveal:
 
 A failed unwrap at step 4 still performs the step 5 derivation and tag computation over a random substitute root, so an invalid credential and a credential valid for a sibling vault cost the same work and return the same error. The exact rule is in [`../format/VAULT_DESCRIPTOR_V1.md`](../format/VAULT_DESCRIPTOR_V1.md) §8.
 
+An unlock attempt that uses a password runs exactly two Argon2id derivations, whatever the device holds. Argon2id output is salt-bound and §3 gives every slot its own random salt, so one derivation can never be tried against a second slot; a constant candidate count, not a reused derivation, is what removes the cost signal.
+
+- the candidate list holds the highest `slot_generation` of each `PasswordSlotV1` reachable from the descriptors present, in ascending `slot_id` order;
+- v1 provisions at most two password-unlockable vault identities on one device, a vault and the optional decoy of [`DECOY_VAULT.md`](DECOY_VAULT.md), and §11 admits at most one `PasswordSlotV1` identity per descriptor, so the list never holds more than two real entries;
+- a list shorter than two is padded to two with dummy candidates. A dummy candidate runs the parameters of the first real candidate over a fresh random 16-byte salt and discards the output;
+- candidates run one at a time and every candidate, real or dummy, runs to completion before any result is used, so peak Argon2 memory is one profile allocation and the attempt costs two derivations whether it succeeds, fails, or matches a sibling identity;
+- the memory the profile requires is checked once, before the first candidate, under [`PASSWORD_PROFILE.md`](PASSWORD_PROFILE.md) §6; a device that cannot allocate it runs no candidate at all.
+
+The constant equalizes the derivation cost of one attempt. It does not hide the number of descriptors on the device or the Argon2 parameters they publish; the residual signals are in [`DECOY_VAULT.md`](DECOY_VAULT.md) §5.
+
 ## 9. Transactions
 
 Creating/replacing a slot uses:
@@ -163,7 +173,8 @@ The parser must enforce, before any derivation runs:
 - nonce exactly 24 bytes, and `wrapped_root_secret` exactly 48 bytes: a 32-byte root plus a 16-byte tag;
 - Argon2id salt length, memory, iterations, parallelism, and output length exactly as bounded in [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §18.3, which the parser checks before Argon2 starts; a value outside any bound is `RESOURCE_LIMIT_EXCEEDED` and no derivation runs;
 - zero unknown extension records: v1 defines none and rejects any;
-- duplicate `slot_id` values, and duplicate `(slot_id, slot_generation)` pairs.
+- duplicate `slot_id` values, and duplicate `(slot_id, slot_generation)` pairs;
+- at most one `PasswordSlotV1` `slot_id` per descriptor, whatever its generations. A descriptor offering a second password-slot identity is `RESOURCE_LIMIT_EXCEEDED`, which is what keeps the §8 candidate set constant.
 
 ## 12. Test requirements
 

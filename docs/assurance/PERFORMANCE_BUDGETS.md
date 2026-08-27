@@ -18,7 +18,7 @@ Performance is a security property when unbounded work, memory, lock latency, or
 
 | Operation | Initial candidate |
 | --- | --- |
-| password unlock | 350–750 ms target on baseline; Argon2 memory ≥ approved floor |
+| password unlock | 350–750 ms per Argon2id derivation on baseline, and [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §8 runs two candidates per attempt, so the whole-attempt budget is twice that; Argon2 memory ≥ the floor of [`../security/PASSWORD_PROFILE.md`](../security/PASSWORD_PROFILE.md) §4 |
 | platform unlock after prompt authorization | <250 ms core unwrap/open target |
 | thumbnail decrypt/read | p95 <50 ms for warm local storage |
 | first private grid content | p95 <500 ms after session open for local catalog |

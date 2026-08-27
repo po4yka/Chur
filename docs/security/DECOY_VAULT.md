@@ -68,6 +68,11 @@ Potential distinguishing signals include:
 
 Mitigations may normalize user-visible flow and avoid explicit labels, but Chur does not promise constant-time whole-vault behavior or hidden storage volume.
 
+Unlock latency is the one signal that is bounded. [`KEY_SLOTS.md`](KEY_SLOTS.md) §8 fixes the password-candidate count at two and pads the list with dummy derivations, so the Argon2id cost of one attempt does not grow with the number of identities present. Two residual leaks remain and are accepted:
+
+- the Argon2id parameters of a password slot are public descriptor bytes, so identities calibrated to different parameters differ in both the published parameters and the cost of one derivation. Provision every identity on one device with the same profile, as [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §23 requires;
+- a device holding one identity still pays two derivations, and a device that cannot allocate the memory floor fails before the first one under [`PASSWORD_PROFILE.md`](PASSWORD_PROFILE.md) §6. Both are constants of the unlock procedure, readable from these documents, and neither counts identities.
+
 ## 6. Public and decoy UI
 
 The public shell remains separate from the decoy vault. A decoy session should behave as a complete private vault:
