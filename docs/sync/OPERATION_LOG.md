@@ -74,7 +74,7 @@ previous_operation_hash = operation_digest of this device's prior operation
 
 BLAKE3-256 is the commitment primitive of suite `0x0001`; the output is 32 bytes. The domain tag is a fixed ASCII byte constant with no length prefix, per [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §7, allocated in §15.5 of that document. The hash input is every byte of the prior record as it was written on the wire, in the order §2 lists, including the signature, so the chain commits to the signature as well as to the content and a re-signed variant of an accepted operation breaks the chain.
 
-The genesis value is 32 zero bytes. An all-zero digest is not producible in practice, and the encoding profile §8 already reserves the all-zero value as invalid, so a genesis link can never be mistaken for a real head. A record with `device_sequence` of 1 and a non-zero `previous_operation_hash`, or a later record with an all-zero one, is rejected.
+The genesis value is 32 zero bytes. An all-zero digest is not producible in practice, and an all-zero value carries no other meaning in this field, so a genesis link can never be mistaken for a real head. A record with `device_sequence` of 1 and a non-zero `previous_operation_hash`, or a later record with an all-zero one, is rejected.
 
 `operation_digest` is also the concurrency tie-break of [`CONFLICT_RESOLUTION.md`](CONFLICT_RESOLUTION.md) §1, so a receiver computes it once per operation and uses it twice.
 

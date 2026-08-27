@@ -38,7 +38,7 @@ HPKE ciphertext of CollectionKey and context
 sender signature
 ```
 
-The exact fields are minimized and canonically encoded.
+The exact fields are minimized and canonically encoded. `membership_generation` is the vault device-membership counter of [`DEVICE_IDENTITY.md`](DEVICE_IDENTITY.md) §4, not a per-collection counter: it fixes which device-membership state the grant was issued under, which is what §9 compares.
 
 ## 3. HPKE plaintext/context
 
