@@ -1,0 +1,45 @@
+# The pinned toolchain and dependency set for the Gradle build.
+#
+# `DEVELOPMENT.md` requires exact versions rather than globally mutable
+# defaults, and `DEPENDENCY_POLICY.md` requires lockfiles and deliberate
+# upgrades. Every version here is exact; none is a range.
+
+[versions]
+# Toolchain
+jdk = "21"
+kotlin = "2.4.10"
+agp = "9.3.2"
+composeMultiplatform = "1.11.1"
+
+# Android, frozen by ADR-0017: minSdk 29, targetSdk 37.
+androidMinSdk = "29"
+androidCompileSdk = "37"
+androidTargetSdk = "37"
+
+# Libraries
+kotlinxSerialization = "1.11.0"
+kotlinxCoroutines = "1.11.0"
+androidxCoreKtx = "1.19.0"
+androidxActivityCompose = "1.13.0"
+androidxLifecycle = "2.11.0"
+androidxBiometric = "1.1.0"
+
+[libraries]
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
+androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidxCoreKtx" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidxActivityCompose" }
+androidx-lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "androidxLifecycle" }
+androidx-biometric = { module = "androidx.biometric:biometric", version.ref = "androidxBiometric" }
+
+[plugins]
+kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+# AGP 9 requires this plugin for a Kotlin Multiplatform module; the classic
+# `com.android.library` plugin refuses to apply beside the multiplatform one.
+android-kmp-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
+compose-multiplatform = { id = "org.jetbrains.compose", version.ref = "composeMultiplatform" }
+compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
