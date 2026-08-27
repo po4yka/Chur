@@ -6,32 +6,38 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 
 ## Current status
 
-**Architecture and protocol design.** The product overview, system architecture, and cryptographic design exist. Focused specifications, implementation scaffolding, vectors, and assurance infrastructure are being established.
+**Phase 0 implementation.** The normative documentation set, the byte-exact v1 formats, the Rust core that reads and writes them, the deterministic vector set, the harnesses, and the enforcing workflow exist. The remaining Phase 0 items are the two approvals, which are decisions rather than code.
 
 ## Phase 0 — specification and repository foundation
 
 ### Scope
 
-- complete the normative documentation set;
-- create architecture decision records;
-- scaffold KMP/CMP and Rust workspaces;
-- pin toolchains and dependencies;
-- establish canonical encoding and byte-exact v1 formats;
-- implement `chur-cli` foundations;
-- publish deterministic positive and negative vectors;
-- add fuzzing, corruption, migration, and FFI harnesses;
-- land the continuous-integration workflow that enforces the release gates, per [ADR-0031](docs/adr/0031-continuous-integration-owns-gate-enforcement.md);
-- prototype Android Keystore and iOS Keychain slots;
-- benchmark candidate chunk sizes and Argon2id profiles.
+| Item | State |
+| --- | --- |
+| complete the normative documentation set | done |
+| create architecture decision records | done, 36 |
+| scaffold KMP/CMP and Rust workspaces | Rust and KMP done; no Compose Multiplatform module exists yet, because the first screen is Phase 1 |
+| pin toolchains and dependencies | done: `rust-toolchain.toml`, `gradle/libs.versions.toml`, a wrapper distribution SHA-256, and both lockfiles |
+| establish canonical encoding and byte-exact v1 formats | done |
+| implement `chur-cli` foundations | done: vector generation and verification, container inspection, the two benchmarks, the ABI handshake |
+| publish deterministic positive and negative vectors | done, 62 |
+| add fuzzing, corruption, migration, and FFI harnesses | done: ten fuzz targets, a bitwise corruption sweep, a version-domain migration harness, a header-consistency harness, and a C ABI harness |
+| land the continuous-integration workflow that enforces the release gates | done, [ADR-0031](docs/adr/0031-continuous-integration-owns-gate-enforcement.md) |
+| prototype Android Keystore and iOS Keychain slots | done |
+| benchmark candidate chunk sizes and Argon2id profiles | done on a workstation; a measurement on the [ADR-0017](docs/adr/0017-freeze-the-supported-device-set.md) device set is outstanding, and no candidate above the frozen floor is approved until then |
 
 ### Exit criteria
 
-- no unresolved circular key dependencies;
-- parser limits specified and tested;
-- Android, iOS, and CLI consume identical vectors;
-- security invariants mapped to tests, through the per-invariant table in [`docs/assurance/SECURITY_TEST_PLAN.md`](docs/assurance/SECURITY_TEST_PLAN.md) §13, with every audit-only row named rather than implied;
-- release gates and review scope approved;
-- the minimum job set of [ADR-0031](docs/adr/0031-continuous-integration-owns-gate-enforcement.md) runs on every pull request, and every gate item that no job covers is recorded as unenforced.
+| Criterion | State |
+| --- | --- |
+| no unresolved circular key dependencies | met. The one circle the implementation found is recorded and broken: the manifest key and AAD bind fields sealed inside the manifest, so a reader supplies the stream identity from the catalog, per [`docs/format/OBJECT_CONTAINER_V1.md`](docs/format/OBJECT_CONTAINER_V1.md) §4 |
+| parser limits specified and tested | met. `chur-core::limits` gathers every bound beside the section that owns it and checks their consistency at compile time; ten fuzz targets and the corruption harness exercise them |
+| Android, iOS, and CLI consume identical vectors | met at the index level. One generated source embeds `test-vectors/v1`, and the same suite runs in `jvmTest`, `testAndroidHostTest`, and `iosSimulatorArm64Test`. Decoding a private record on a platform is not in scope: [`docs/format/CANONICAL_ENCODING_V1.md`](docs/format/CANONICAL_ENCODING_V1.md) §13 reserves that for Rust, so the platform side checks the index and the FFI handshake |
+| security invariants mapped to tests | met. Eighteen rows of [`docs/assurance/SECURITY_TEST_PLAN.md`](docs/assurance/SECURITY_TEST_PLAN.md) §13 name a running test target; every other row names a procedure no job executes, and the six audit-only rows are named as such |
+| release gates and review scope approved | **outstanding.** This is a decision, not an artifact |
+| the minimum job set of ADR-0031 runs on every pull request | met. The four minimum jobs run, and the vector, C ABI, fuzz, Gradle, and Kotlin/Native jobs joined them as their subjects landed |
+
+Gate 1 may be declared once the two approvals are recorded.
 
 ## Phase 1 — local recoverable photo vault
 
