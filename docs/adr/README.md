@@ -74,8 +74,6 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 
 ## Future ADR backlog
 
-- canonical encoding choice and frozen profile;
-- object-container default chunk size and approved size range;
 - password Unicode and Argon2id parameter profile;
 - SQLCipher build/link/backup validation result;
 - Android Keystore and iOS Keychain exact policies;

@@ -1052,7 +1052,7 @@ The byte-level specification MUST define:
 
 Default `serde`, `bincode`, Kotlin serialization, JSON, or unspecified CBOR encoding MUST NOT define persistent protocol bytes.
 
-A fixed preamble plus a deterministic bounded structured encoding for encrypted records is preferred. The exact structured encoding remains an ADR.
+A fixed preamble plus a deterministic bounded structured encoding for encrypted records is required. The chosen encoding is the custom binary profile of [`format/CANONICAL_ENCODING_V1.md`](format/CANONICAL_ENCODING_V1.md), recorded by [`adr/0010-define-canonical-tuple-and-freeze-hkdf-salt.md`](adr/0010-define-canonical-tuple-and-freeze-hkdf-salt.md) and [`adr/0013-allocate-v1-format-constants.md`](adr/0013-allocate-v1-format-constants.md). Deterministic CBOR was considered and not chosen.
 
 ### 20.2 Chunk nonce
 
