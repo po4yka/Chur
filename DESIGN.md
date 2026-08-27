@@ -775,7 +775,7 @@ Search
 Settings
 ```
 
-Viewer, selection, import, export, recovery, and integrity are contextual flows.
+Viewer, selection, import, export, recovery, and integrity are contextual flows. Import is not a destination: it is the primary floating action on Library and a contextual action inside an open album. These four destinations and this import placement are the decided compact set; a fifth destination is a change to this section, not a product option.
 
 ### 10.2 Public shell navigation
 
@@ -807,7 +807,8 @@ Examples:
 - selection uses a 2dp outline plus checkmark;
 - duration, Live/RAW/spatial indicators use compact overlays only when necessary;
 - failed thumbnail and integrity states use deliberate placeholders;
-- grid loading uses stable geometry to avoid layout jumps.
+- grid loading uses stable geometry to avoid layout jumps;
+- the column count is `floor(available_width / target_tile)`, clamped to 3 through 8 columns, with `target_tile` 112dp compact, 148dp medium, and 180dp expanded; gaps are 2dp compact and 4dp above. The result is deterministic for a given width, so a screenshot test pins it and density needs no separate setting.
 
 ### 11.2 Timeline grouping
 
@@ -1241,6 +1242,8 @@ A local vault remains usable. Offline is not an error unless a requested remote 
 
 Ciphertext upload/download may continue in future versions, but UI must not imply that private media is currently decrypted.
 
+In Phase 1 there is nothing to present. Startup reconciliation, garbage collection, and integrity scans all need the catalog key, so they run only inside an unlocked session, and [`ROADMAP.md`](ROADMAP.md) excludes sync from the phase. The locked-state surface is specified by the phase that first runs work while locked, and until then no locked screen shows background activity of any kind.
+
 ---
 
 ## 22. Motion and haptics
@@ -1647,26 +1650,34 @@ Screenshot/golden tests should never commit genuine private user data. Use deter
 
 ## 31. Design decisions still requiring ADR or prototype
 
+No item in this list blocks Phase 1. An item that did block it has been decided, or moved to the document that owns it, and is recorded under "Closed" below.
+
 1. Final primary app icon and interrupted-boundary geometry.
-2. Public shell shipped at launch: Notes, Journal, Calculator, or multiple choices.
-3. Exact owner access gesture and discoverability model.
-4. Whether custom Geist fonts are bundled or only used as optional Latin display fonts.
-5. Dynamic color policy.
-6. Exact compact navigation destinations and import placement.
-7. Library grid density and adaptive column algorithm.
-8. Shared-element media transitions versus simpler privacy-first navigation.
-9. Screenshot/capture warning behavior on iOS.
-10. Alternate launcher/icon policy on both platforms.
-11. Multi-window and multi-scene behavior.
-12. Recovery mnemonic/QR visual encoding.
-13. Search and future local-AI presentation.
-14. Live Photo, RAW pair, spatial media, and compound-object badges.
-15. Background operation presentation while locked.
-16. Public and decoy sample-content onboarding.
-17. Tablet three-pane breakpoints.
-18. Exact semantic colors after contrast testing on real displays.
-19. Haptic policy.
-20. Design-token code generation and linting.
+2. Whether custom Geist fonts are bundled or only used as optional Latin display fonts.
+3. Dynamic color policy.
+4. Shared-element media transitions versus simpler privacy-first navigation.
+5. Screenshot/capture warning behavior on iOS.
+6. Alternate launcher/icon policy on both platforms.
+7. Local-AI search presentation beyond the v1 query surface.
+8. Live Photo, RAW pair, spatial media, and compound-object badges.
+9. Public and decoy sample-content onboarding.
+10. Tablet three-pane breakpoints.
+11. Exact semantic colors after contrast testing on real displays.
+12. Haptic policy.
+13. Design-token code generation and linting.
+
+### Closed
+
+| Was | Now |
+| --- | --- |
+| Public shell shipped at launch | Notes, fixed by [`ROADMAP.md`](ROADMAP.md) Phase 1 |
+| Compact navigation destinations and import placement | §10.1 |
+| Library grid density and adaptive column algorithm | §11.1 |
+| Multi-window and multi-scene behavior | one runtime and one session per process, [`docs/interop/FFI_CONTRACT.md`](docs/interop/FFI_CONTRACT.md) §8.1 |
+| Recovery mnemonic/QR visual encoding | [`docs/security/RECOVERY.md`](docs/security/RECOVERY.md) §2 |
+| Background operation presentation while locked | §21, Locked background work |
+| Exact owner access gesture and discoverability model | owned by [`docs/product/DISCREET_MODE.md`](docs/product/DISCREET_MODE.md), Session gate, which carries it as its open item |
+| Search presentation, v1 query surface | [`docs/format/CATALOG_SCHEMA_V1.md`](docs/format/CATALOG_SCHEMA_V1.md) §16 |
 
 ---
 

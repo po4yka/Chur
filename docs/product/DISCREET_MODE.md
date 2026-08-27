@@ -44,6 +44,8 @@ A secret gesture, route, or credential may enter the vault unlock flow, but it m
 - accessible without relying on ambiguous or unsafe gestures;
 - separated from ordinary public-shell credentials.
 
+Open item: the exact gesture and its discoverability model are decided here and nowhere else. [`../../DESIGN.md`](../../DESIGN.md) §31 routed the question to this section and no longer carries it.
+
 The feature layer receives an opaque session result. It should not branch on `isReal` or `isDecoy`.
 
 ## Lock behavior
