@@ -1233,7 +1233,7 @@ Chur MUST NOT claim physical overwrite on flash storage. Wear levelling, snapsho
 
 ### 23.3 Crypto-erasure
 
-Local crypto-erasure requires removal of every locally accessible envelope for an object key, including current catalog state, WAL/journal copies, backup snapshots, and queued sync operations.
+Local crypto-erasure requires removal of every locally accessible envelope for an object key, including current catalog state, WAL/journal copies, backup snapshots, and queued sync operations. The ordering that achieves this, the transaction that is the erasure moment, the garbage-collection trigger, and the recovery of a half-deleted object are normative in [`format/CATALOG_SCHEMA_V1.md`](format/CATALOG_SCHEMA_V1.md) §14.1 and are not restated here ([`ADR-0027`](adr/0027-freeze-the-deletion-transaction.md)).
 
 It cannot force already-authorized recipients, remote devices, old backups, or previously exported plaintext to forget data.
 

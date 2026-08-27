@@ -188,11 +188,35 @@ Record structural and cryptographic status with stable codes, not secret error s
 
 ## 14. Tombstones
 
-Deletion creates a tombstone before physical garbage collection so future sync or crash recovery cannot resurrect removed objects. The retention rule is normative in [`../sync/OPERATION_LOG.md`](../sync/OPERATION_LOG.md) §11. Tombstone retention and crypto-erasure are distinct:
+Deletion creates a tombstone before physical garbage collection so future sync or crash recovery cannot resurrect removed objects. Tombstone retention and crypto-erasure are distinct:
 
-- key envelopes may be destroyed according to policy;
-- ciphertext cleanup may lag;
+- key envelopes are destroyed at step 2 of §14.1, which is the erasure moment;
+- ciphertext cleanup may lag, because steps 3 to 6 of §14.1 carry no security property;
 - remote/backup copies may persist.
+
+Retention: in a vault with no enrolled peer device a tombstone may be discarded once garbage collection for its object has completed, because nothing local can resurrect an object whose row, envelopes, and containers are all gone. Every other vault follows the membership rule of [`../sync/OPERATION_LOG.md`](../sync/OPERATION_LOG.md) §11, which stays normative for retention wherever a peer exists.
+
+### 14.1 Deletion transaction
+
+Deletion runs in this order and no other:
+
+1. one catalog transaction sets the object row's `state` to `DELETING`; the object stops being listable from this point;
+2. one catalog transaction destroys every object-key envelope for the object, writes the tombstone row, and sets `state` to `TOMBSTONED`. This transaction is the erasure moment: once it commits durably the `ContentKey` is unrecoverable and every remaining copy of the container, including WAL pages, local backup manifests, and queued sync operations, is ciphertext no reachable key opens;
+3. unlink the derived-asset containers of §10;
+4. unlink the original container;
+5. delete the scratch entries of §12 that the object owns;
+6. delete the object row, leaving the tombstone.
+
+Steps 1 and 2 are the atomic boundary §17 requires for deletion. Steps 3 to 6 are garbage collection: each is idempotent, none is required for the crypto-erasure claim of [`../security/SECURITY_INVARIANTS.md`](../security/SECURITY_INVARIANTS.md) SEC-026, and a crash inside them loses no security property.
+
+Garbage collection runs at the first unlock of a session and again after each deletion that session performs. It never runs while locked, because it needs the catalog key that lock has already zeroized. A run sweeps every row left in `DELETING` or `TOMBSTONED`, so an interrupted deletion always completes rather than being repaired.
+
+Recovery of a half-deleted object rolls forward and never back, because rolling back would return to `ACTIVE` an object whose key may already be gone:
+
+- `state` `DELETING` with envelopes present: step 2 never committed, so step 2 is run now;
+- `state` `DELETING` or any other value with every envelope already destroyed: step 2 is completed, and the row is never returned to `ACTIVE`;
+- `state` `TOMBSTONED` with containers still present: steps 3 to 6 are re-run;
+- a container in the committed namespace with no object row and no `ImportTransaction` row is deleted; the import-temporary case is §14.4 of [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md).
 
 ## 15. Physical SQLCipher direction
 
