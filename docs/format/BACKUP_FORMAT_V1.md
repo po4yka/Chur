@@ -115,7 +115,9 @@ operation-log heads when applicable
 required free-space/restore policy metadata
 ```
 
-The manifest is encrypted/authenticated under a dedicated root-derived backup key or portable backup content key.
+The manifest is sealed under `BackupManifestKey`, derived by HKDF-SHA-256 from `VaultRootSecret` under the label `chur/v1/root/backup-manifest` registered in [`../security/KEY_HIERARCHY.md`](../security/KEY_HIERARCHY.md) §3, with `vault_id:bytes[16]` and `backup_id:bytes[16]` as its context fields.
+
+This is the only manifest-key source in v1. A password slot and a recovery slot both restore the same `VaultRootSecret`, so there is no separate portable content key and no key-source discriminant in the preamble; §8 step 3 has one deterministic input.
 
 ## 5. Full backup
 

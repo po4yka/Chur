@@ -1650,7 +1650,7 @@ Requirements:
 - device-only Keystore/Keychain slots are excluded;
 - at least one password or recovery slot can restore the root secret;
 - package metadata that reveals private semantics is encrypted;
-- `BackupManifestV1` is authenticated under `BackupManifestKey` or a recovery-derived equivalent;
+- `BackupManifestV1` is authenticated under `BackupManifestKey` and under no other key; a recovery slot restores the same `VaultRootSecret` from which that key is derived, as [`format/BACKUP_FORMAT_V1.md`](format/BACKUP_FORMAT_V1.md) §4 requires;
 - restore validates every length, suite, key slot, manifest, envelope, and object before activation;
 - restore writes into a new temporary vault namespace and atomically activates it;
 - backup generation and creation time shown after unlock are authenticated;
