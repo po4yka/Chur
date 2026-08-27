@@ -63,6 +63,7 @@ Requirements:
 - multi-gigabyte objects do not scale memory with object size;
 - parser allocations obey hard limits;
 - plaintext buffer pools are bounded;
+- scratch files stay inside the caps of [`../security/PLAINTEXT_LIFECYCLE.md`](../security/PLAINTEXT_LIFECYCLE.md) §5, which are enforced limits and not quantities to measure;
 - lock releases session-scoped caches;
 - low-memory handling cancels safely without committing incomplete state.
 

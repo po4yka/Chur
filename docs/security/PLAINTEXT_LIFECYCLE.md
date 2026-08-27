@@ -77,12 +77,25 @@ Some platform codecs, editors, share targets, or APIs require a file URL. Scratc
 - random opaque filename and extension only when required;
 - excluded from backup and indexing;
 - minimal permissions;
-- bounded lifetime and size;
+- bounded lifetime and size, within the caps below;
 - deletion immediately after consumer completion;
 - startup cleanup of abandoned entries;
 - no claim of physical overwrite on flash.
 
 A scratch journal records opaque cleanup state without private filenames.
+
+The caps are checked before the first plaintext byte is written. Exceeding any of them fails the operation with `RESOURCE_LIMIT_EXCEEDED`; nothing is truncated, and no existing entry is evicted to make room.
+
+| Cap | Value |
+| --- | --- |
+| single scratch entry | at most 4 GiB, and never more than the plaintext length of its source object |
+| concurrent scratch entries | at most 4 |
+| total scratch directory | at most 8 GiB |
+| lifetime after the consumer completes or is cancelled | none; deletion is part of the completion path |
+| lifetime while a consumer holds the entry | at most 30 minutes, after which the entry is deleted and the consumer sees a closed file |
+| lifetime across a lock or a process restart | none; §8 step 8 and the startup cleanup above delete every entry |
+
+An object larger than the single-entry cap has no scratch path. The range reader of [`../interop/MEDIA_PIPELINE.md`](../interop/MEDIA_PIPELINE.md) serves it instead, which is the preferred path at every size: a scratch file is permitted only where a platform API accepts nothing but a file URL. The cap sits far below the 1 TiB object limit of [`../format/OBJECT_CONTAINER_V1.md`](../format/OBJECT_CONTAINER_V1.md) §16 for exactly that reason, and the directory cap keeps the worst case inside the storage preflight of [`../assurance/PERFORMANCE_BUDGETS.md`](../assurance/PERFORMANCE_BUDGETS.md) §7.
 
 ## 6. Export
 

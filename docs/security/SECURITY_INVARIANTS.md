@@ -62,7 +62,7 @@ Security invariants are properties that implementation, migrations, platform ada
 | SEC-031 | Long-running import/export/playback observes cancellation caused by lock. | FFI/media | race tests |
 | SEC-032 | Root and session secrets are zeroized in place to the extent supported by the runtime. | Rust core | review/observable tests |
 | SEC-033 | Private data does not enter logs, analytics, crash reports, notifications, widgets, or public deep links. | all layers | leakage tests |
-| SEC-034 | Scratch plaintext is app-private, backup-excluded, protected, random-named, bounded, and cleaned. | platform adapters | platform tests |
+| SEC-034 | Scratch plaintext is app-private, backup-excluded, protected, random-named, cleaned, and inside the caps of [`PLAINTEXT_LIFECYCLE.md`](PLAINTEXT_LIFECYCLE.md) §5. | platform adapters | platform tests asserting each cap |
 | SEC-059 | Background work performed while locked does not require private root-key access unless explicitly designed and consented. | platform adapters | background-execution tests |
 
 ## Real/decoy invariants
