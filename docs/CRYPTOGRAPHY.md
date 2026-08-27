@@ -1474,7 +1474,13 @@ Requirements:
 - source size MAY be unknown at start;
 - media probing and thumbnail creation MUST follow the plaintext-lifecycle policy.
 
-A standard import may verify the manifest, final commit, record framing, and ordered ciphertext commitment after fsync. A separate paranoid/full verification mode may decrypt every chunk before catalog activation. The exact default requires benchmark and reliability testing.
+Import verification has one default and one opt-in mode, and the default is what `ACTIVE` means for an imported object.
+
+The default is structural verification. After fsync, and before the catalog activates the object, the importer re-reads the container from disk and verifies the magic and every constant preamble field, the manifest record framing and `manifest_commitment`, every chunk record header in ascending index order, `ordered_chunk_commitment` over the exact record bytes it just read, and the final commit record under its AEAD. No chunk is decrypted. This proves that the bytes that reached the disk are the bytes that were written and that they are internally consistent under a key, because `ordered_chunk_commitment` covers the same bytes a chunk AEAD verification would read and is itself sealed inside the final commit.
+
+Paranoid verification, which additionally decrypts and authenticates every chunk before activation, is an opt-in setting and MUST NOT be the default. It roughly doubles import time for a guarantee the ordered commitment already provides against storage error, and any residual bit flip is detected by the first read of the affected range.
+
+An import that fails the default verification does not activate the object and is dead under [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §14.4. Source deletion is offered only after the default verification passes and the catalog transaction commits; that pair is the fixed meaning of "durably committed" in SEC-022.
 
 ---
 
@@ -2415,7 +2421,7 @@ The following MUST be resolved before v1 production bytes are frozen:
 9. whether object IDs appear in the public preamble or only encrypted records — resolved in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §3: encrypted records only;
 10. SQLCipher versus an alternative Rust-owned encrypted catalog implementation;
 11. catalog field-level encryption policy inside SQLCipher;
-12. standard versus paranoid import verification default;
+12. standard versus paranoid import verification default — resolved in §45: the default is structural and commitment verification over the re-read container with no chunk decryption, and full re-decryption is an opt-in setting;
 13. backup package encoding and optional age profile — resolved in [`format/BACKUP_FORMAT_V1.md`](format/BACKUP_FORMAT_V1.md) §2;
 14. recovery-secret mnemonic/checksum format — resolved in [`security/RECOVERY.md`](security/RECOVERY.md) §2: 24 BIP-39 English words with the BIP-39 checksum, a `chur-recovery-v1` marker outside the mnemonic, and NFKD plus lowercase plus whitespace-collapse normalization on re-entry ([ADR-0029](adr/0029-freeze-the-recovery-secret-encoding.md));
 15. exact real/decoy password-slot candidate-discovery behavior — resolved in [`security/KEY_SLOTS.md`](security/KEY_SLOTS.md) §8 and [ADR-0026](adr/0026-argon2id-memory-floor-and-candidate-set.md): a constant two-candidate list padded with dummy derivations;
