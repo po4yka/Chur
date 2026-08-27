@@ -61,7 +61,7 @@ Required:
 - Unicode password profile cases;
 - Argon2id derivations;
 - every key-slot family;
-- root/collection/object HKDF labels;
+- every HKDF label in the registry in [`../security/KEY_HIERARCHY.md`](../security/KEY_HIERARCHY.md) §3;
 - valid object-key envelope;
 - zero-byte, one-chunk, multi-chunk, and partial-final object;
 - catalog logical fixtures/migrations;

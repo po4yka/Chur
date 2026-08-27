@@ -63,6 +63,7 @@ Rejected
 | [0006](0006-control-and-data-plane-ffi.md) | Split FFI control and data planes | Accepted |
 | [0007](0007-local-first-before-sync.md) | Stabilize local vault before sync/sharing | Accepted |
 | [0008](0008-freeze-object-container-v1-layout.md) | Freeze the object container v1 public layout | Accepted |
+| [0009](0009-one-hkdf-label-registry.md) | One HKDF label registry | Accepted |
 
 ## Future ADR backlog
 

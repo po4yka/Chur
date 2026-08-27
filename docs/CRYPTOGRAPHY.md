@@ -445,37 +445,12 @@ DerivedKey = HKDF-Expand(
 
 The exact `salt` and canonical tuple bytes will be fixed by the test-vector specification. They MUST NOT vary by platform.
 
-Proposed labels:
-
-```text
-chur/v1/root/collection-envelope
-chur/v1/root/catalog-database
-chur/v1/root/catalog-records
-chur/v1/root/search
-chur/v1/root/identifiers
-chur/v1/root/private-settings
-chur/v1/root/device-identity-wrap
-chur/v1/root/backup-manifest
-
-chur/v1/collection/object-envelope
-chur/v1/collection/metadata
-
-chur/v1/object/manifest
-chur/v1/object/content
-chur/v1/object/metadata
-chur/v1/object/thumbnail
-chur/v1/object/preview
-chur/v1/object/video-poster
-chur/v1/object/waveform
-chur/v1/object/final-commit
-chur/v1/object/local-fingerprint
-```
+Every domain label, the key it derives, its input key, and its output length are registered in [`security/KEY_HIERARCHY.md`](security/KEY_HIERARCHY.md) §3. That table is the only definition of a label string; this document does not restate it.
 
 Requirements:
 
-- labels are ASCII and immutable within a protocol version;
 - context fields include the relevant opaque identifiers and epochs;
-- a label change creates a new protocol version or explicit migration;
+- labels follow the registry rules in [`security/KEY_HIERARCHY.md`](security/KEY_HIERARCHY.md) §3, including that a label is never redefined and that a changed label is a new label plus a migration;
 - direct use of a parent secret in multiple AEAD contexts is forbidden;
 - derived keys MUST NOT be promoted back to parent-key status.
 
@@ -508,7 +483,7 @@ At minimum:
 
 | Derived key | Purpose |
 | --- | --- |
-| `CollectionEnvelopeRootKey` | wraps random security-collection keys |
+| `CollectionEnvelopeKey` | wraps random security-collection keys |
 | `CatalogDatabaseKey` | opens the Rust-owned private catalog |
 | `CatalogRecordRootKey` | protects catalog records if field/record encryption is used |
 | `SearchKey` | protects private search structures and keyed fingerprints |

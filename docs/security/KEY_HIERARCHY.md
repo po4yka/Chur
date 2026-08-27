@@ -11,7 +11,7 @@ Password / Device protector / Recovery / Peer device
                        ↓ HKDF root domains
        ┌───────────────┼───────────────────────┐
        ↓               ↓                       ↓
-CollectionWrapRoot  CatalogDatabaseKey   Other root-domain keys
+CollectionEnvelopeKey  CatalogDatabaseKey      Other root-domain keys
        ↓
 SecurityCollectionKey[epoch] (random)
        ↓ wrap
@@ -35,24 +35,51 @@ A password is not a root key. A platform biometric is not a key. Android Keystor
 | stream/domain key | 32 bytes | HKDF from parent | never persisted unless format explicitly requires |
 | device identity private key | algorithm-specific | Rust/platform CSPRNG | wrapped under identity-domain key/platform policy |
 
-## 3. Root-domain derivation
+## 3. HKDF label registry
 
 The root secret must not be used directly for unrelated AEAD operations. HKDF-SHA-256 derives versioned domains.
 
-Proposed labels:
+This table is the only registry of HKDF domain labels. [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md), [`../ARCHITECTURE.md`](../ARCHITECTURE.md), and the root [`../../README.md`](../../README.md) explain why domain separation exists and refer here for the strings.
 
-```text
-chur/v1/root/collection-envelope
-chur/v1/root/catalog-database
-chur/v1/root/catalog-record
-chur/v1/root/search
-chur/v1/root/identifier
-chur/v1/root/private-settings
-chur/v1/root/device-identity-wrap
-chur/v1/root/backup-manifest
-```
+| Label | Derived key | Input key | Output |
+| --- | --- | --- | ---: |
+| `chur/v1/root/collection-envelope` | `CollectionEnvelopeKey` | `VaultRootSecret` | 32 bytes |
+| `chur/v1/root/catalog-database` | `CatalogDatabaseKey` | `VaultRootSecret` | 32 bytes |
+| `chur/v1/root/catalog-records` | `CatalogRecordRootKey` | `VaultRootSecret` | 32 bytes |
+| `chur/v1/root/search` | `SearchKey` | `VaultRootSecret` | 32 bytes |
+| `chur/v1/root/identifiers` | `IdentifierKey` | `VaultRootSecret` | 32 bytes |
+| `chur/v1/root/local-fingerprint` | `LocalFingerprintKey` | `VaultRootSecret` | 32 bytes |
+| `chur/v1/root/private-settings` | `PrivateSettingsKey` | `VaultRootSecret` | 32 bytes |
+| `chur/v1/root/device-identity-wrap` | `IdentityWrapKey` | `VaultRootSecret` | 32 bytes |
+| `chur/v1/root/backup-manifest` | `BackupManifestKey` | `VaultRootSecret` | 32 bytes |
+| `chur/v1/collection/object-envelope` | `ObjectEnvelopeKey` | `SecurityCollectionKey[epoch]` | 32 bytes |
+| `chur/v1/collection/metadata` | `CollectionMetadataKey` | `SecurityCollectionKey[epoch]` | 32 bytes |
+| `chur/v1/object/manifest` | `ManifestKey` | `ObjectKey` | 32 bytes |
+| `chur/v1/object/content` | `ContentKey` | `ObjectKey` | 32 bytes |
+| `chur/v1/object/metadata` | `MetadataKey` | `ObjectKey` | 32 bytes |
+| `chur/v1/object/thumbnail` | `ThumbnailKey` | `ObjectKey` | 32 bytes |
+| `chur/v1/object/preview` | `PreviewKey` | `ObjectKey` | 32 bytes |
+| `chur/v1/object/poster-frame` | `PosterFrameKey` | `ObjectKey` | 32 bytes |
+| `chur/v1/object/waveform` | `WaveformKey` | `ObjectKey` | 32 bytes |
+| `chur/v1/object/ocr` | `OcrKey` | `ObjectKey` | 32 bytes |
+| `chur/v1/object/embedding` | `EmbeddingKey` | `ObjectKey` | 32 bytes |
+| `chur/v1/object/final-commit` | `FinalCommitKey` | `ObjectKey` | 32 bytes |
+| `chur/v1/recovery/root-envelope` | `RecoveryKEK` | `RecoverySecret` | 32 bytes |
 
-Labels are ASCII protocol constants included in test vectors. Changing a label changes the derived key and therefore requires a format/protocol decision.
+Labels are ASCII protocol constants and every row is covered by test vectors. The label alone does not fix the key: each derivation also binds the context fields required by [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §13, so `CollectionEnvelopeKey` is per vault, collection, and epoch, and an object-domain key is per object.
+
+### Label rules
+
+- a label is lowercase ASCII with the segments `chur` / protocol version / tier / purpose, separated by `/`;
+- the tier segment names the input key: `root` for `VaultRootSecret`, `collection` for a security-collection key, `object` for an `ObjectKey`, `recovery` for a `RecoverySecret`. A root-derived label always keeps the `/root/` segment; a form such as `chur/v1/search` is not a valid label;
+- the purpose segment is plural when the key covers a class of records (`catalog-records`, `identifiers`, `private-settings`) and singular when it covers one named artifact or stream (`catalog-database`, `backup-manifest`, `manifest`, `content`);
+- the purpose segment names the protected artifact, not the media type it comes from: `poster-frame` and `waveform`, not `video-poster` or `audio-waveform`;
+- a label enters this table before it is implemented, and no derivation uses a label that is absent from it;
+- a byte-exact format specification may restate a label it consumes; the strings must then be identical, and a divergence is a defect.
+
+### Changing a label
+
+A label selects key bytes, so a label is never redefined. A different purpose, tier, or spelling is a new label plus a migration that rewraps or re-encrypts everything derived under the old one. The old label and its vectors stay here until no reachable data depends on it. Editing a label in place is a silent key change and is a defect, not a correction.
 
 ## 4. Security collection keys
 
@@ -79,20 +106,7 @@ Compromise of one object key must not reveal:
 
 ## 6. Object-domain derivation
 
-Proposed labels:
-
-```text
-chur/v1/object/manifest
-chur/v1/object/content
-chur/v1/object/metadata
-chur/v1/object/thumbnail
-chur/v1/object/preview
-chur/v1/object/poster-frame
-chur/v1/object/waveform
-chur/v1/object/ocr
-chur/v1/object/embedding
-chur/v1/object/final-commit
-```
+Object-domain labels and their derived keys are registered in §3. An object-domain key is derived from the object's random `ObjectKey`, never from a collection or root key.
 
 A stream revision also receives a fresh random nonce prefix. Domain separation does not replace nonce uniqueness.
 
@@ -100,9 +114,11 @@ A stream revision also receives a fresh random nonce prefix. Domain separation d
 
 User-facing or server-visible identifiers should be random or derived through a dedicated identifier domain. An unkeyed plaintext hash must not become a global object identifier.
 
+`LocalFingerprintKey` is root-derived rather than object-derived, because a fingerprint computed under a per-object random key can never match two objects with identical content.
+
 A keyed local fingerprint may support duplicate detection only when:
 
-- derived under a dedicated key;
+- derived under `LocalFingerprintKey`;
 - never exposed globally by default;
 - collision and deletion behavior are specified;
 - users can disable or rebuild it.

@@ -788,39 +788,30 @@ Production v1 MUST support exactly the approved mandatory local suite. Format fi
 ```text
 VaultRootSecret                         random 256-bit secret
     │
-    ├─ HKDF("chur/v1/catalog/database")
-    │      └─ CatalogDatabaseKey
-    │
-    ├─ HKDF("chur/v1/collection/wrap-root")
-    │      └─ CollectionWrapRootKey
-    │
-    ├─ HKDF("chur/v1/identifiers")
-    │      └─ IdentifierKey
-    │
-    ├─ HKDF("chur/v1/search")
-    │      └─ SearchKey
-    │
-    ├─ HKDF("chur/v1/private-settings")
-    │      └─ PrivateSettingsKey
-    │
-    └─ HKDF("chur/v1/device-identity-wrap")
-           └─ DeviceIdentityWrapKey
+    └─ HKDF root domains, registered in security/KEY_HIERARCHY.md §3
+           ├─ CatalogDatabaseKey
+           ├─ CollectionEnvelopeKey
+           ├─ IdentifierKey
+           ├─ SearchKey
+           ├─ PrivateSettingsKey
+           └─ IdentityWrapKey
 
 SecurityCollectionKey[epoch]           random 256-bit key
     │
     └─ wraps ObjectKey                 random 256-bit key per object
            │
-           ├─ HKDF("chur/v1/object/content")
-           ├─ HKDF("chur/v1/object/manifest")
-           ├─ HKDF("chur/v1/object/metadata")
-           ├─ HKDF("chur/v1/object/preview")
-           ├─ HKDF("chur/v1/object/thumbnail")
-           └─ HKDF("chur/v1/object/final-commit")
+           └─ HKDF object domains
+                  ├─ ManifestKey
+                  ├─ ContentKey
+                  ├─ MetadataKey
+                  ├─ PreviewKey
+                  ├─ ThumbnailKey
+                  └─ FinalCommitKey
 ```
 
 Security-collection and object keys are random rather than derived. This permits independent rotation, sharing, rewrapping, and deletion.
 
-Domain strings, salt use, context encoding, and exact output lengths must be locked by the format specification and golden vectors.
+The label for each derivation, its input key, and its output length are registered in [`security/KEY_HIERARCHY.md`](security/KEY_HIERARCHY.md) §3. Salt use, context encoding, and the canonical vectors that fix them are locked by the format specifications.
 
 ### 15.3 Album versus security collection
 

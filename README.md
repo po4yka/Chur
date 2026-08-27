@@ -422,7 +422,7 @@ Chur uses envelope encryption. Passwords and platform credentials do not directl
               ┌───────────────────┼────────────────────┐
               │                   │                    │
               ▼                   ▼                    ▼
-    CollectionWrapRootKey   CatalogDatabaseKey   IdentifierKey
+    CollectionEnvelopeKey   CatalogDatabaseKey   IdentifierKey
               │
               ▼
       SecurityCollectionKey[epoch]
@@ -435,21 +435,7 @@ Chur uses envelope encryption. Passwords and platform credentials do not directl
  ContentKey MetadataKey PreviewKey ThumbnailKey FinalCommitKey
 ```
 
-Root subkeys are derived with HKDF-SHA-256 and explicit versioned domain strings, for example:
-
-```text
-chur/v1/root/collection-wrap
-chur/v1/root/catalog-database
-chur/v1/root/catalog-records
-chur/v1/root/identifiers
-chur/v1/root/search
-chur/v1/root/private-settings
-chur/v1/object/content
-chur/v1/object/metadata
-chur/v1/object/preview
-chur/v1/object/thumbnail
-chur/v1/object/final-commit
-```
+Root subkeys are derived with HKDF-SHA-256 and explicit versioned domain strings. Every label string, the key it derives, its input key, and its output length are registered in [`docs/security/KEY_HIERARCHY.md`](docs/security/KEY_HIERARCHY.md) §3, which is the only place a label is defined.
 
 A single key must not be reused across different protocols or semantic purposes.
 
