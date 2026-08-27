@@ -373,6 +373,17 @@ An unallocated `record_type` is a parse failure, never an ignorable record.
 | `0x03` | audio |
 | `0x04` | opaque, no decodable media dimensions |
 
+`state` of the catalog object row, [`CATALOG_SCHEMA_V1.md`](CATALOG_SCHEMA_V1.md) §5.1, in the order listed there:
+
+| Value | Lifecycle |
+| --- | --- |
+| `0x01` | `ACTIVE` |
+| `0x02` | `DELETING` |
+| `0x03` | `TOMBSTONED` |
+| `0x04` | `CORRUPT` |
+
+This is a second, independent space from the vault-descriptor `state` above. The two share three names and no values, which is deliberate: a vault and an object are different subjects, and a shared numbering would let a reader that confused them produce a plausible wrong answer instead of failing. The object row's value crosses the boundary in the `state` byte of the object projection, [`CATALOG_SCHEMA_V1.md`](CATALOG_SCHEMA_V1.md) §16.1, which is why it is registered here rather than left to the catalog.
+
 `integrity_summary` of the catalog object row, [`CATALOG_SCHEMA_V1.md`](CATALOG_SCHEMA_V1.md) §5.1, in the order listed there:
 
 | Value | Summary |

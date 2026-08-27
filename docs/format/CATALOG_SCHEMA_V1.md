@@ -52,6 +52,8 @@ created_revision
 status
 ```
 
+Neither `policy_type` nor `status` crosses the FFI boundary, so neither is allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.4. v1 defines one `policy_type`, `0x01` `VAULT_DEFAULT`, which is the collection every object of a single-vault install belongs to; a per-album key domain takes the next value in the change that introduces it. `status` is `0x01` `ACTIVE` or `0x02` `RETIRED`, and a retired collection keeps its envelopes so an object sealed under an earlier epoch stays openable.
+
 Collection names/descriptions are private metadata. A logical album may reference a collection but is not automatically a key domain.
 
 ## 4. Collection-key envelopes
@@ -78,7 +80,7 @@ Physical path is an opaque random store identifier, not a user filename.
 
 ### 5.1 Lifecycle and integrity states
 
-An object row carries two independent enums and this specification is the authority for both. `state` is the lifecycle:
+An object row carries two independent enums and this specification is the authority for both, while [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.4 allocates the byte value of each, because both cross the boundary in the projection of §16.1. `state` is the lifecycle:
 
 | `state` | Meaning |
 | --- | --- |
@@ -174,7 +176,18 @@ Asset kinds include thumbnail, preview, poster frame, waveform, OCR, faces, and 
 
 ## 11. Import journal
 
-The import journal is a catalog table, not a separate file or directory. An `ImportTransaction` row is the journal record of [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §14.1, and §14.2 to §14.4 govern its durability ordering, resume, and abandonment. A row may also carry a source capability summary without a private path, and the expected source length when it is known.
+The import journal is a catalog table, not a separate file or directory. An `ImportTransaction` row is the journal record of [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §14.1, and §14.2 to §14.4 govern its durability ordering, resume, and abandonment.
+
+The `stage` of that record is catalog-internal and crosses no boundary, so it is not allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.4:
+
+| `stage` | Meaning |
+| --- | --- |
+| `0x01` `OPENING` | the row exists; the preamble and manifest are not yet durable |
+| `0x02` `INCOMING` | the manifest is durable and chunk records are being reserved and written |
+| `0x03` `COMMITTING` | every chunk and the final commit are written and fsynced; the rename and the catalog activation have not both completed |
+| `0x04` `DEAD` | the transaction is abandoned under §14.4 and cleanup may run |
+
+`INCOMING` is the name [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §14 uses for a container in the incoming namespace, and §5.1 above records that it is a stage of this row rather than a value of either object enum. The stage only advances; a resume never moves it back. A row may also carry a source capability summary without a private path, and the expected source length when it is known.
 
 The journal shares the catalog transaction domain, so a chunk-index reservation and the catalog state that activates the object cannot disagree after a crash. A reservation is durable when its catalog transaction commits under a synchronization mode that survives power loss, not only process loss; a mode that only flushes to the operating system does not satisfy §14.2 step 2.
 
