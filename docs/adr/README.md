@@ -86,8 +86,10 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 
 ## Future ADR backlog
 
-- password Unicode profile; the Argon2id parameter floor and default are [0026](0026-argon2id-memory-floor-and-candidate-set.md);
-- SQLCipher build/link/backup validation result;
-- Android Keystore and iOS Keychain exact policies;
-- device identity portability;
-- post-quantum recipient profile.
+This list is the project's only register of decisions that still require an ADR. [`../ARCHITECTURE.md`](../ARCHITECTURE.md) §43 points here and keeps no list of its own. An entry leaves this list only when an accepted ADR, or a specification of rank 1 to rank 3 in the [authority hierarchy](../README.md#authority-hierarchy), records the decision.
+
+- password Unicode and Argon2id parameter profile, including the parser bounds and the password input maximum, which freezes [`../security/PASSWORD_PROFILE.md`](../security/PASSWORD_PROFILE.md);
+- SQLCipher build, linkage, WAL, migration, performance, and backup validation result required by [`../format/CATALOG_SCHEMA_V1.md`](../format/CATALOG_SCHEMA_V1.md) §15, which decides whether [`0004`](0004-rust-owned-private-catalog.md) is accepted or replaced;
+- Android Keystore and iOS Keychain exact policies, including the Apple slot representation that [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §5 leaves open between a protected `DeviceUnlockSecret` and wrapped root bytes held directly as the Keychain secret;
+- device identity portability, including whether the optional Secure Enclave or Android hardware identity keys of [`../sync/DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md) §6 become a second suite;
+- post-quantum recipient profile per [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §56 and [`../sync/COLLECTION_GRANTS.md`](../sync/COLLECTION_GRANTS.md) §11.
