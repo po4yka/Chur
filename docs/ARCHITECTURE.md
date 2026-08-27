@@ -761,7 +761,9 @@ chur/
     └── public Room database and public files
 ```
 
-Directories MUST NOT be named `real`, `private`, `decoy`, `secret`, or `vault` in a way exposed outside the app sandbox. The illustrative names above describe responsibilities, not necessarily final on-disk labels.
+The `registry/` directory is not illustrative: its entry naming, its cap of two entries, the order in which candidates are enumerated before unlock, and the resulting per-attempt key-derivation cost are normative in [`format/VAULT_DESCRIPTOR_V1.md`](format/VAULT_DESCRIPTOR_V1.md) §11 ([`ADR-0030`](adr/0030-freeze-the-vault-registry-and-discovery.md)).
+
+Directories MUST NOT be named `real`, `private`, `decoy`, `secret`, or `vault` in a way exposed outside the app sandbox. The remaining illustrative names above describe responsibilities, not necessarily final on-disk labels.
 
 ---
 

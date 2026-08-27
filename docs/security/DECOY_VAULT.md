@@ -59,6 +59,7 @@ Use random vault directory identifiers and opaque descriptor references. Do not 
 Potential distinguishing signals include:
 
 - Argon2 profiles and unlock latency;
+- the number of registry entries, which sets the per-attempt key-derivation cost under [`../format/VAULT_DESCRIPTOR_V1.md`](../format/VAULT_DESCRIPTOR_V1.md) §11 and is therefore visible as unlock latency: a device with a decoy takes roughly twice as long to reject a wrong password as one without;
 - catalog/object count and storage size;
 - presence of platform aliases;
 - backup/sync traffic;

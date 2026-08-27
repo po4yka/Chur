@@ -263,9 +263,20 @@ Local descriptor generations are strictly increasing. A lower generation discove
 
 Future sync/backup rollback protection is separate; a copied old but authentic standalone vault may require an external trusted checkpoint to detect.
 
-## 11. Real/decoy handling
+## 11. Discovery and real/decoy handling
 
-Each identity has an independent descriptor and random path ID. The descriptor does not identify its role. A public registry may locate candidate descriptors through opaque entries, but ordinary failures must not reveal which candidate matched.
+Each identity has an independent descriptor and random path ID. The descriptor does not identify its role.
+
+Descriptors are found through the registry, which is the first thing the application reads and the only thing it reads before any credential exists:
+
+- the registry is the `registry/` directory of [`../ARCHITECTURE.md`](../ARCHITECTURE.md) §14.4. Each entry is one file holding one encoded `VaultDescriptorV1`;
+- an entry is named with 32 lowercase hexadecimal characters and the suffix `.vd`. The 16 bytes come from the CSPRNG when the descriptor is first written and are unrelated to `vault_id`, to any key, and to creation order, so the name discloses nothing and two identities cannot be told apart by their filenames;
+- the registry holds at most 2 entries; a third is `RESOURCE_LIMIT_EXCEEDED`. Two is the product maximum: one real identity and one decoy;
+- the candidate set is every entry in the directory, ordered by filename bytes ascending. This is the fixed enumeration order §8 requires, and it depends on neither creation time, nor modification time, nor which candidate is real;
+- an entry that fails the parser limits of §13 is skipped before any credential is used and its failure is attributed to no credential; it still counts toward the cap;
+- one credential attempt evaluates every candidate before it returns, so an attempt costs exactly one key-derivation evaluation per entry whatever the outcome. With one entry a password unlock costs one Argon2id evaluation and meets the budget of [`../assurance/PERFORMANCE_BUDGETS.md`](../assurance/PERFORMANCE_BUDGETS.md); with two it costs two, so enabling a decoy doubles password-unlock latency.
+
+An ordinary failure must not reveal which candidate matched, which the per-candidate constant-work rules of §8 already require.
 
 ## 12. Backup behavior
 
