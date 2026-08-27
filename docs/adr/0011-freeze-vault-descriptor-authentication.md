@@ -14,7 +14,7 @@ Authenticate the descriptor with a keyed BLAKE3-256 tag over its wire bytes:
 
 - `DescriptorAuthKey` is HKDF-SHA-256 from `VaultRootSecret` under the new label `chur/v1/root/descriptor-auth`, scoped to `vault_id`, 32 bytes, stable across descriptor generations;
 - `descriptor_authentication` is the last 32 bytes of the encoded descriptor, and the body is every preceding byte;
-- the authenticated input is the fixed domain tag `CHUR\x00VAULT\x00DESCRIPTOR-AUTH\x00V1` followed by that body, so magic, versions, `vault_id`, `descriptor_generation`, `state`, both store descriptors, every slot descriptor with its framing, and the optional migration descriptor are bound by one rule with no field-order ambiguity, as in ADR-0008 §10;
+- the authenticated input is the fixed domain tag `CHUR\x00VAULT\x00DESCRIPTOR-AUTH\x00V1` followed by that body, so magic, versions, `vault_id`, `descriptor_generation`, `state`, both store descriptors, every slot descriptor with its framing, and the optional migration descriptor are bound by one rule with no field-order ambiguity, as ADR-0008 did for the ordered chunk commitment of `format/OBJECT_CONTAINER_V1.md` §10;
 - there is no AAD and no nonce, because the construction encrypts nothing;
 - the comparison is constant time, and a mismatch zeroizes the candidate root and returns `AUTHENTICATION_FAILED`, never `VAULT_CORRUPT`;
 - a failed slot unwrap still performs the derivation and tag computation over a random substitute root, so the cost of a failure does not depend on which step failed.
@@ -65,5 +65,5 @@ No descriptors exist yet, so nothing migrates. Tag length, domain tag, and label
 
 ## Follow-up
 
-- freeze the descriptor field encoding and the descriptor magic assigned under ADR-0008 follow-up;
+- freeze the descriptor field encoding and offsets; the descriptor magic `CHURVLT1` is allocated by [`0013`](0013-allocate-v1-format-constants.md) in `format/CANONICAL_ENCODING_V1.md` §15.1;
 - resolve `CRYPTOGRAPHY.md` §74 item 15, real/decoy candidate discovery, which this ADR constrains but does not define.

@@ -35,7 +35,7 @@ Two tag styles were in use: `OBJECT_CONTAINER_V1.md` froze `CHUR\x00OBJECT\x00MA
 ### Tradeoffs
 
 - adding an element to a v1 tuple is a new tag and a new version, never an in-place edit;
-- tag constants are longer than the slash form, about 10 extra bytes per authenticated record.
+- tag constants are longer than the slash form, at most 4 extra bytes per authenticated record; three of the six converted tags are the same length.
 
 ## Security impact
 

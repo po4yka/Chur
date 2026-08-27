@@ -64,7 +64,7 @@ Affected invariants: SEC-013, SEC-014, SEC-017, SEC-018.
 
 The chunk AAD and final commit both consume `manifest_commitment`, so its construction had to be fixed before any chunk could be sealed. Freezing every preamble field to an exact value turns each of them into a compared constant, which removes the attacker-mutable public surface that an unauthenticated preamble would otherwise expose. Requiring `chunk_index` to equal the number of records already read makes reordering and duplication a parse failure rather than a cryptographic one.
 
-This ADR does not resolve the import-journal durability ordering, which remains the outstanding nonce-reuse risk on resume.
+The import-journal durability ordering that this ADR left open, and the nonce-reuse risk on resume it carried, are resolved by [`0012`](0012-import-journal-durability-ordering.md).
 
 ## Compatibility impact
 
@@ -79,7 +79,7 @@ No container bytes exist yet, so nothing migrates. `container_version`, `canonic
 
 ## Follow-up
 
-- assign the vault-descriptor and backup-package magics and record them beside `CHUROBJ1`;
+- the vault-descriptor and backup-package magics were allocated by [`0013`](0013-allocate-v1-format-constants.md) in `format/CANONICAL_ENCODING_V1.md` §15.1;
 - freeze the approved chunk-size range, the maximum supported plaintext size, and the maximum chunk count;
 - freeze the sealed plaintext schemas of the manifest and the final commit;
 - generate and publish the vectors listed under Validation;

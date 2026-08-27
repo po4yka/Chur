@@ -57,6 +57,6 @@ No bytes exist yet for any of these formats, so nothing migrates. The version an
 
 ## Follow-up
 
-- allocate the AAD domain tags once the `chur/object-chunk/v1` form in `CRYPTOGRAPHY.md` and the `CHUR\x00...` form in `CANONICAL_ENCODING_V1.md` §7 are reconciled;
+- allocate a domain tag for each authenticated record whose AAD is not yet frozen, starting with the sync operation record, in the change that freezes it;
 - freeze the backup package framing and confirm or retire the reserved record types;
 - allocate the password profile identifier with the Argon2id parameter profile.

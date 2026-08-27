@@ -1069,7 +1069,7 @@ The architecture invariant is uniqueness of every `(key, nonce)` pair. The imple
 
 ### 20.3 Chunk AAD
 
-Canonical AAD binds a chunk to its complete context. The bound items are frozen in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §9 and MUST NOT be restated here; the tuple encoding is in [`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md) §35. The binding includes the manifest ciphertext commitment, so a chunk cannot be substituted against a different manifest, as SEC-014 in [`security/SECURITY_INVARIANTS.md`](security/SECURITY_INVARIANTS.md) requires.
+Canonical AAD binds a chunk to its complete context. The bound items are frozen in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §9 and MUST NOT be restated here; the tuple encoding is in [`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md) §35. The binding includes the manifest commitment, so a chunk cannot be substituted against a different manifest, as SEC-014 in [`security/SECURITY_INVARIANTS.md`](security/SECURITY_INVARIANTS.md) requires.
 
 Total length and total chunk count are not required in each chunk AAD, because some import sources do not provide a trustworthy length before streaming begins. Completeness is authenticated by the final commit.
 
@@ -1102,7 +1102,7 @@ A video player MAY consume a `VerifiedRange` without verifying a two-hour file f
 
 ### 21.1 Final commit
 
-The encrypted final commit authenticates the object and stream identity, the manifest ciphertext commitment, the expected chunk count, the exact total plaintext length, the final chunk length, and the ordered commitment over canonical ciphertext records. Its record framing and sealed contents are defined in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §11.
+The encrypted final commit authenticates the object and stream identity, the manifest commitment, the expected chunk count, the exact total plaintext length, the final chunk length, and the ordered commitment over canonical ciphertext records. Its record framing and sealed contents are defined in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §11.
 
 BLAKE3-256 is the commitment hash. Its result gains authenticity only by being stored inside the AEAD-protected final commit.
 

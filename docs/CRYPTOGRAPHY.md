@@ -2490,8 +2490,8 @@ Chur may use age as an outer backup layer but keeps its own catalog and object f
 
 The following MUST be resolved before v1 production bytes are frozen:
 
-1. exact canonical binary encoding;
-2. exact algorithm/suite numeric registry;
+1. exact canonical binary encoding — the profile is defined in [`format/CANONICAL_ENCODING_V1.md`](format/CANONICAL_ENCODING_V1.md); the sealed plaintext schemas of the manifest and the final commit are still open;
+2. exact algorithm/suite numeric registry — resolved in [`format/CANONICAL_ENCODING_V1.md`](format/CANONICAL_ENCODING_V1.md) §15;
 3. final Argon2id mobile creation profile and latency target;
 4. final Argon2 parser hard bounds;
 5. exact password input maximum;
