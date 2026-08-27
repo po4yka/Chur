@@ -202,7 +202,12 @@ CREATE TABLE import_transactions (
     stream_kind          INTEGER NOT NULL,
     stream_revision      INTEGER NOT NULL,
     envelope_generation  INTEGER NOT NULL,
-    envelope_body        BLOB NOT NULL,
+    -- NULL once §14.4 step 1 has destroyed it, which is the moment the
+    -- ContentKey and every byte written under it become unrecoverable. The
+    -- column is the envelope itself rather than a reference, because
+    -- object_key_envelopes references an object row that does not exist until
+    -- the transaction commits.
+    envelope_body        BLOB,
     nonce_prefix         BLOB NOT NULL,
     chunk_size           INTEGER NOT NULL,
     manifest_length      INTEGER NOT NULL,

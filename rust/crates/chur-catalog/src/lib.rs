@@ -15,6 +15,7 @@
 //! `docs/format/CANONICAL_ENCODING_V1.md` when a portable backup exports it.
 
 pub mod db;
+pub mod journal;
 pub mod model;
 pub mod query;
 pub(crate) mod row;
