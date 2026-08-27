@@ -383,8 +383,13 @@ A domain tag is a fixed ASCII byte constant written without a length prefix, per
 | `CHUR\x00OBJECT\x00FINAL-COMMIT-AAD\x00V1` | final-commit AAD | [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §38 |
 | `CHUR\x00VAULT\x00DESCRIPTOR-AUTH\x00V1` | vault-descriptor authentication tag | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §8 |
 | `CHUR\x00BACKUP\x00INVENTORY-COMMITMENT\x00V1` | ordered backup inventory commitment | [`BACKUP_FORMAT_V1.md`](BACKUP_FORMAT_V1.md) §7.2 |
+| `CHUR\x00SYNC\x00OPERATION-CHAIN\x00V1` | operation digest and per-device chain hash | [`../sync/OPERATION_LOG.md`](../sync/OPERATION_LOG.md) §4 |
+| `CHUR\x00SYNC\x00CHECKPOINT\x00V1` | checkpoint record signature | [`../sync/ROLLBACK_PROTECTION.md`](../sync/ROLLBACK_PROTECTION.md) §6 |
+| `CHUR\x00IDENTITY\x00FINGERPRINT\x00V1` | device verification fingerprint | [`../sync/DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md) §5 |
 
-No allocated tag is a byte prefix of another, as §7 requires; the eleven above were checked pairwise. The `CHUR\x00SYNC\x00OPERATION\x00V1` tag shown as an example in §7 is not allocated: the sync operation record is not frozen. A tag for an authenticated record whose AAD is not yet frozen is allocated by a row here in the same change that freezes that record.
+No allocated tag is a byte prefix of another, as §7 requires; the fourteen above were checked pairwise. The two sync tags differ at the first byte after `CHUR\x00SYNC\x00`, and `CHUR\x00IDENTITY\x00FINGERPRINT\x00V1` differs from every other allocated tag at byte 5.
+
+The `CHUR\x00SYNC\x00OPERATION\x00V1` tag shown as an example in §7 remains unallocated: the operation record's field widths and signing domain are not frozen. The chain and checkpoint tags are allocated ahead of it because the constructions that consume them are frozen by [`../adr/0022-freeze-operation-chain-hash-and-identifier.md`](../adr/0022-freeze-operation-chain-hash-and-identifier.md) and [`../adr/0023-define-signed-checkpoint-and-bootstrap-attestation.md`](../adr/0023-define-signed-checkpoint-and-bootstrap-attestation.md), and their input is the record's exact wire bytes however those widths are later fixed. The fingerprint tag reaches no persisted or wire bytes; it is the input to a string a person reads, so the ADR requirement of §15.6 does not apply to it. A tag for an authenticated record whose AAD is not yet frozen is otherwise allocated by a row here in the same change that freezes that record.
 
 ### 15.6 Allocation rule
 

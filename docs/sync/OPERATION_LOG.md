@@ -28,11 +28,12 @@ OperationV1
 ├── observed_heads
 ├── key_selector
 ├── encrypted_payload
-├── payload commitment
 └── Ed25519 signature
 ```
 
 Private payload is encrypted under an appropriate root/collection/operation key before signing.
+
+There is no separate payload commitment field. The AEAD tag of `encrypted_payload` already authenticates the payload against the outer AAD of §6, and the Ed25519 signature of §7 covers `encrypted_payload` byte for byte, so a third commitment would restate what two authenticated values already say.
 
 ## 3. Operation kinds
 
@@ -60,9 +61,22 @@ Kinds and payload schemas are versioned. Unknown critical kinds fail closed.
 For each device:
 
 ```text
-sequence = previous sequence + 1
-previous_operation_hash = hash(canonical prior signed record)
+device_sequence = previous device_sequence + 1
+
+operation_digest = BLAKE3-256(
+      "CHUR\x00SYNC\x00OPERATION-CHAIN\x00V1"
+   || complete canonical record bytes as written, signature field included
+)
+
+previous_operation_hash = operation_digest of this device's prior operation
+                        = 32 zero bytes when device_sequence is 1
 ```
+
+BLAKE3-256 is the commitment primitive of suite `0x0001`; the output is 32 bytes. The domain tag is a fixed ASCII byte constant with no length prefix, per [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §7, allocated in §15.5 of that document. The hash input is every byte of the prior record as it was written on the wire, in the order §2 lists, including the signature, so the chain commits to the signature as well as to the content and a re-signed variant of an accepted operation breaks the chain.
+
+The genesis value is 32 zero bytes. An all-zero digest is not producible in practice, and the encoding profile §8 already reserves the all-zero value as invalid, so a genesis link can never be mistaken for a real head. A record with `device_sequence` of 1 and a non-zero `previous_operation_hash`, or a later record with an all-zero one, is rejected.
+
+`operation_digest` is also the concurrency tie-break of [`CONFLICT_RESOLUTION.md`](CONFLICT_RESOLUTION.md) §1, so a receiver computes it once per operation and uses it twice.
 
 Clients store the latest accepted head. A duplicate identical record is idempotent; a different record at an accepted sequence is a fork/security error.
 

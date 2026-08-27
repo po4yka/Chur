@@ -74,6 +74,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0020](0020-set-the-v1-parser-limits.md) | Set the v1 parser limits | Accepted |
 | [0023](0023-define-signed-checkpoint-and-bootstrap-attestation.md) | Signed checkpoint record and new-device bootstrap attestation | Accepted |
 | [0024](0024-freeze-revocation-point-and-eager-rewrap.md) | Accepted revocation point and eager epoch rewrap | Accepted |
+| [0022](0022-freeze-operation-chain-hash-and-identifier.md) | Freeze the operation chain hash, identifier, and cleartext field set | Accepted |
 
 ## Future ADR backlog
 
