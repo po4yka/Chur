@@ -643,7 +643,7 @@ wrapped_root = XChaCha20Poly1305.Encrypt(
 )
 ```
 
-A separate password verifier SHOULD NOT be stored unless independently justified. Successful AEAD unwrap followed by authenticated vault-descriptor validation is sufficient to identify a valid credential.
+A separate password verifier SHOULD NOT be stored unless independently justified. Successful AEAD unwrap followed by authenticated vault-descriptor validation is sufficient to identify a valid credential. That validation is a keyed BLAKE3-256 authenticator under `chur/v1/root/descriptor-auth`, frozen in [`format/VAULT_DESCRIPTOR_V1.md`](format/VAULT_DESCRIPTOR_V1.md) §8, which governs it under the authority hierarchy in [`README.md`](README.md).
 
 ### 18.5 Password changes
 

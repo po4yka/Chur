@@ -65,6 +65,7 @@ Rejected
 | [0008](0008-freeze-object-container-v1-layout.md) | Freeze the object container v1 public layout | Accepted |
 | [0009](0009-one-hkdf-label-registry.md) | One HKDF label registry | Accepted |
 | [0010](0010-define-canonical-tuple-and-freeze-hkdf-salt.md) | Define the canonical tuple encoding and freeze the HKDF extract salt | Accepted |
+| [0011](0011-freeze-vault-descriptor-authentication.md) | Freeze vault-descriptor authentication | Accepted |
 
 ## Future ADR backlog
 

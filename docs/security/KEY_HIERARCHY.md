@@ -52,6 +52,7 @@ This table is the only registry of HKDF domain labels. [`../CRYPTOGRAPHY.md`](..
 | `chur/v1/root/private-settings` | `PrivateSettingsKey` | `VaultRootSecret` | 32 bytes |
 | `chur/v1/root/device-identity-wrap` | `IdentityWrapKey` | `VaultRootSecret` | 32 bytes |
 | `chur/v1/root/backup-manifest` | `BackupManifestKey` | `VaultRootSecret` | 32 bytes |
+| `chur/v1/root/descriptor-auth` | `DescriptorAuthKey` | `VaultRootSecret` | 32 bytes |
 | `chur/v1/collection/object-envelope` | `ObjectEnvelopeKey` | `SecurityCollectionKey[epoch]` | 32 bytes |
 | `chur/v1/collection/metadata` | `CollectionMetadataKey` | `SecurityCollectionKey[epoch]` | 32 bytes |
 | `chur/v1/object/manifest` | `ManifestKey` | `ObjectKey` | 32 bytes |

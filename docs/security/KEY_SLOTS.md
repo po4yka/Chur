@@ -116,7 +116,7 @@ Unlock flow:
 2. obtain user/platform factor;
 3. derive or request the slot KEK operation;
 4. unwrap a candidate root into protected Rust memory;
-5. authenticate the vault descriptor/catalog root;
+5. authenticate the vault descriptor under [`../format/VAULT_DESCRIPTOR_V1.md`](../format/VAULT_DESCRIPTOR_V1.md) §8, then the catalog root;
 6. open an opaque session only after validation;
 7. clear candidate credentials and failed roots.
 
@@ -126,6 +126,8 @@ External errors must not reveal:
 - whether password bytes were close to correct;
 - which AEAD or descriptor check failed;
 - whether a hidden sibling identity exists.
+
+A failed unwrap at step 4 still performs the step 5 derivation and tag computation over a random substitute root, so an invalid credential and a credential valid for a sibling vault cost the same work and return the same error. The exact rule is in [`../format/VAULT_DESCRIPTOR_V1.md`](../format/VAULT_DESCRIPTOR_V1.md) §8.
 
 ## 9. Transactions
 
