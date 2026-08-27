@@ -333,6 +333,8 @@ commit catalog entry/envelope
 
 The catalog never exposes a temp/incomplete container as active media.
 
+On the rename, and before the catalog entry commits, the writer sets the container's access and modification times to zero, the Unix epoch. Every committed container therefore carries the same filesystem timestamp, and a listing of the object store no longer discloses when each object was imported or in what order. This is a store rule rather than a container byte: no reader depends on the value, and a value reset by a backup or restore tool is not an integrity failure. Directory-entry order and inode allocation order still correlate with import order; [`../security/THREAT_MODEL.md`](../security/THREAT_MODEL.md) §9 records that residual as accepted.
+
 ### 14.1 Journal record
 
 The import journal is the `ImportTransaction` state of [`CATALOG_SCHEMA_V1.md`](CATALOG_SCHEMA_V1.md) §11, which also fixes where it is stored. One record per transaction holds:

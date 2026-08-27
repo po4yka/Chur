@@ -169,7 +169,7 @@ Even with full encryption, observers may learn:
 
 - approximate ciphertext sizes;
 - number of physical objects;
-- creation/modification times unless normalized;
+- import order: committed container access and modification times are normalized to the Unix epoch at commit under [`../format/OBJECT_CONTAINER_V1.md`](../format/OBJECT_CONTAINER_V1.md) §14, but directory-entry order and inode allocation order still correlate with the order objects were imported, and that residual is accepted;
 - network timing and transfer volume;
 - existence of a large encrypted application data set;
 - device/account activity.

@@ -142,7 +142,7 @@ Rows follow [`OBJECT_KEY_ENVELOPE_V1.md`](OBJECT_KEY_ENVELOPE_V1.md). Uniqueness
 Private metadata is revisioned rather than mutating ciphertext in place. Fields may include:
 
 - original filename/path source;
-- capture/import times;
+- capture and import times, §8.1;
 - MIME/UTType;
 - dimensions/duration;
 - EXIF/GPS;
@@ -150,6 +150,19 @@ Private metadata is revisioned rather than mutating ciphertext in place. Fields 
 - codec-specific normalized properties.
 
 The logical model may store queryable plaintext inside an unlocked SQLCipher database, but persisted pages remain encrypted and the database key is session-scoped.
+
+### 8.1 Timestamp provenance
+
+Two times are stored per object and neither is trusted:
+
+- **capture time** comes from the source's provider metadata, normalized into the canonical model of [`../interop/MEDIA_PIPELINE.md`](../interop/MEDIA_PIPELINE.md) §4 from hints that §3 of the same document says Rust must not trust. It is parsed, range-checked, and stored as the `u64` milliseconds of [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §9. It is never corrected against the device clock, because a correction would silently rewrite the only record of when a photograph was taken;
+- **import time** is read from the device clock when the catalog transaction of §17 commits. A wrong device clock produces a wrong import time and Chur does not detect it. Nothing cryptographic depends on either value, and neither is ordering proof.
+
+When capture time is absent or fails its range check, it is set equal to import time and `capture_time_substituted` is set on the row, so the timeline still orders the object and the interface can decline to present a capture date it does not have.
+
+The timeline sorts on capture time descending, with import time and then `object_id` as tie-breaks. The order is therefore total and identical on every device without any clock being trusted.
+
+Both values are private metadata. They live inside the encrypted catalog and appear in no filename, no path, and no filesystem timestamp: committed containers carry a normalized modification time under [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §14.
 
 ## 9. Albums and memberships
 
