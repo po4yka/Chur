@@ -31,7 +31,7 @@ apps/                planned
   androidApp/        planned
   iosApp/            planned
 shared/
-  app/               planned
+  app/               Compose Multiplatform shell, currently the ABI gate
   core-model/        error taxonomy and vector contract
   core-platform-keys/ Android Keystore and Apple Keychain slots
   feature-*/         planned
@@ -39,6 +39,7 @@ rust/
   crates/
   fuzz/
   Cargo.toml
+scripts/             native cross-compilation and vendored-skill checks
 build-logic/         planned
   convention/
 docs/
@@ -68,12 +69,17 @@ The workflow named in [`docs/assurance/RELEASE_GATES.md`](docs/assurance/RELEASE
 ./gradlew testAndroidHostTest
 ./gradlew iosSimulatorArm64Test
 ./gradlew compileKotlinIosArm64
+./gradlew linkDebugFrameworkIosSimulatorArm64
+
+scripts/build-native-targets.sh all
+python3 scripts/check-vendored-skills.py
 
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo deny check
 cargo run -p chur-cli -- vectors verify --dir ../test-vectors/v1
+cargo run -p chur-cli -- vectors digest --dir ../test-vectors/v1
 cargo +nightly fuzz run <target> -- -runs=20000
 ```
 

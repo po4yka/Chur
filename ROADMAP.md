@@ -16,8 +16,8 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 | --- | --- |
 | complete the normative documentation set | done |
 | create architecture decision records | done, 36 |
-| scaffold KMP/CMP and Rust workspaces | Rust and KMP done; no Compose Multiplatform module exists yet, because the first screen is Phase 1 |
-| pin toolchains and dependencies | done: `rust-toolchain.toml`, `gradle/libs.versions.toml`, a wrapper distribution SHA-256, and both lockfiles |
+| scaffold KMP/CMP and Rust workspaces | done. `:shared:app` is a Compose Multiplatform module holding the one screen Phase 0 owns, the ABI gate; the Notes public shell and every private screen are Phase 1 |
+| pin toolchains and dependencies | done: `rust-toolchain.toml`, `gradle/libs.versions.toml`, a wrapper distribution SHA-256, `Cargo.lock`, and the four mobile Rust targets built and symbol-checked on every pull request |
 | establish canonical encoding and byte-exact v1 formats | done |
 | implement `chur-cli` foundations | done: vector generation and verification, container inspection, the two benchmarks, the ABI handshake |
 | publish deterministic positive and negative vectors | done, 62 |

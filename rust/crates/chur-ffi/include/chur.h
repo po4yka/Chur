@@ -148,8 +148,8 @@ typedef int32_t chur_status_t;
  * ---------------------------------------------------------------------- */
 
 /*
- * Each returns the matching CHUR_PANIC_* value if its body panics; none can
- * fail otherwise.
+ * None can fail. If a body panics, each returns the matching CHUR_PANIC_*
+ * value above; chur_status_is_known returns false, which already fails closed.
  */
 uint32_t chur_abi_version_major(void);
 uint32_t chur_abi_version_minor(void);
