@@ -129,6 +129,48 @@ object ChurVault {
             ChurNative.vaultAddDeviceSlot(session, keychainItemId, out)
         }
 
+    /**
+     * Begins the Android Keystore enrollment, `KEY_SLOTS.md` §4.
+     *
+     * The result carries the vault root, because the Keystore performs the
+     * AEAD. The caller wraps it, calls [commitKeystoreSlot], and clears the
+     * array; ADR-0041 records why the exception exists.
+     */
+    fun beginKeystoreSlot(session: Long): KeystoreEnrollment =
+        withChurBuffer(KEYSTORE_ENROLLMENT_CAPACITY) { buffer ->
+            val written = IntArray(1)
+            ChurFailure.check(
+                ChurNative.vaultKeystoreBegin(session, buffer, written),
+                "keystore begin",
+            )
+            decodeKeystoreEnrollment(buffer.copyOut(written[0]), written[0])
+        }
+
+    /** Stores what the Keystore wrap returned, completing the slot. */
+    fun commitKeystoreSlot(session: Long, gcmNonce: ByteArray, wrappedRootSecret: ByteArray) {
+        ChurFailure.check(
+            ChurNative.vaultKeystoreCommit(session, gcmNonce, wrappedRootSecret),
+            "keystore commit",
+        )
+    }
+
+    /** What every enrolled Keystore slot needs for its unwrap, on a locked runtime. */
+    fun keystoreMaterial(runtime: Long): List<KeystoreMaterial> =
+        withChurBuffer(KEYSTORE_MATERIAL_CAPACITY) { buffer ->
+            val written = IntArray(1)
+            ChurFailure.check(
+                ChurNative.vaultKeystoreMaterial(runtime, buffer, written),
+                "keystore material",
+            )
+            decodeKeystoreMaterial(buffer.copyOut(written[0]), written[0])
+        }
+
+    /** Unlocks with the root an Android Keystore unwrap returned. */
+    fun unlockWithKeystoreRoot(runtime: Long, rootSecret: ByteArray): Long =
+        handleOf("keystore unlock") { out ->
+            ChurNative.vaultUnlock(runtime, FACTOR_KEYSTORE, rootSecret, out)
+        }
+
     /** Removes one slot, `KEY_SLOTS.md` §9. */
     fun removeSlot(session: Long, slotId: ByteArray) {
         ChurFailure.check(ChurNative.vaultRemoveSlot(session, slotId), "remove slot")
@@ -452,6 +494,15 @@ object ChurVault {
 
     /** `CHUR_FACTOR_APPLE_KEYCHAIN`. */
     private const val FACTOR_DEVICE = 3
+
+    /** The Android Keystore factor, whose secret is the unwrapped root. */
+    private const val FACTOR_KEYSTORE = 4
+
+    /** A length-prefixed alias and AAD and a 32-byte root, §6.6. */
+    private const val KEYSTORE_ENROLLMENT_CAPACITY = 4 + 64 + 4 + 160 + 32
+
+    /** A count and two entries, which is every identity the registry admits. */
+    private const val KEYSTORE_MATERIAL_CAPACITY = 4 + 2 * (4 + 64 + 4 + 160 + 12 + 48)
 
     /** The default page size of §16.2. */
     private const val DEFAULT_PAGE_LIMIT = 200

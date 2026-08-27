@@ -20,7 +20,10 @@ use zeroize::Zeroizing;
 
 use crate::api::Status;
 use crate::panic::guard_status;
-use crate::records::{ChurCreateRequestV1, ChurObjectRefV1, ChurUnlockRequestV1};
+use crate::records::{
+    ChurCreateRequestV1, ChurObjectRefV1, ChurUnlockRequestV1, KEYSTORE_ENROLLMENT_MAX,
+    KEYSTORE_MATERIAL_ENTRY_MAX,
+};
 use crate::registry::{self, Entry, Handle, Kind};
 
 /// The length of a device secret this surface hands back, §12.
@@ -304,6 +307,142 @@ pub unsafe extern "C" fn chur_vault_add_device_slot(
         // SAFETY: the caller guarantees 32 writable bytes.
         unsafe { crate::api::write_secret(out_secret, secret.expose()) }
     })
+}
+
+/// Begins the Android Keystore enrollment of `KEY_SLOTS.md` §4, §6.6.
+///
+/// The enrollment is two calls because the AEAD is the Keystore's. This one
+/// writes what the wrap needs, including the root secret; the caller performs
+/// the wrap and passes the result to [`chur_vault_keystore_commit`]. Nothing
+/// reaches the descriptor until that second call, so an enrollment the platform
+/// abandons leaves the vault exactly as it was.
+///
+/// The record is the canonical bytes of §6.6: a length-prefixed alias, a
+/// length-prefixed AAD, and 32 bytes of root secret. The caller must overwrite
+/// the buffer as soon as the wrap returns; ADR-0041 records why this family is
+/// the one that hands the root out at all.
+///
+/// # Safety
+///
+/// `destination` covers `capacity` writable bytes and `bytes_written` points to
+/// a writable `size_t`.
+#[unsafe(no_mangle)]
+#[expect(
+    unsafe_code,
+    reason = "ADR-0016: the v1 C ABI requires an exported symbol"
+)]
+pub unsafe extern "C" fn chur_vault_keystore_begin(
+    session: Handle,
+    destination: *mut u8,
+    capacity: usize,
+    bytes_written: *mut usize,
+) -> Status {
+    guard_status(|| {
+        // SAFETY: the caller guarantees `bytes_written` is writable.
+        let _ = unsafe { crate::api::write_out(bytes_written, 0usize) };
+        let entry = registry::get(session, Kind::Session)?;
+        let enrollment = with_session_mut(&entry, vault::Session::begin_android_keystore_slot)?;
+        let mut encoded = Zeroizing::new(Vec::with_capacity(KEYSTORE_ENROLLMENT_MAX));
+        push_bounded(&mut encoded, &enrollment.alias);
+        push_bounded(&mut encoded, &enrollment.aad);
+        encoded.extend_from_slice(enrollment.root_secret.expose());
+        // SAFETY: the caller guarantees `destination` covers `capacity` bytes.
+        let buffer = unsafe { crate::api::borrow_bytes_mut(destination, capacity)? };
+        write_record(&encoded, buffer, bytes_written)
+    })
+}
+
+/// Stores what the Keystore wrap returned, completing the slot, §6.6.
+///
+/// # Safety
+///
+/// `gcm_nonce` points to 12 readable bytes and `wrapped_root_secret` to 48.
+#[unsafe(no_mangle)]
+#[expect(
+    unsafe_code,
+    reason = "ADR-0016: the v1 C ABI requires an exported symbol"
+)]
+pub unsafe extern "C" fn chur_vault_keystore_commit(
+    session: Handle,
+    gcm_nonce: *const u8,
+    wrapped_root_secret: *const u8,
+) -> Status {
+    guard_status(|| {
+        let entry = registry::get(session, Kind::Session)?;
+        // SAFETY: the caller guarantees the two lengths above.
+        let nonce = unsafe { crate::api::borrow_bytes(gcm_nonce, 12)? };
+        let wrapped = unsafe { crate::api::borrow_bytes(wrapped_root_secret, 48)? };
+        let nonce: [u8; 12] = nonce
+            .try_into()
+            .map_err(|_| Error::new(ChurStatus::InvalidInput, "a GCM nonce is 12 bytes"))?;
+        let wrapped: [u8; 48] = wrapped
+            .try_into()
+            .map_err(|_| Error::new(ChurStatus::InvalidInput, "a wrapped root is 48 bytes"))?;
+        with_session_mut(&entry, |session| {
+            session.finish_android_keystore_slot(nonce, wrapped)
+        })
+    })
+}
+
+/// What every enrolled Keystore slot needs for its unwrap, §6.6.
+///
+/// It runs on a locked runtime, because the material is what a caller needs
+/// before it can unlock. None of it is secret: every field is stored in the
+/// clear in the descriptor.
+///
+/// The record is a `u32` count followed by that many entries, each a
+/// length-prefixed alias, a length-prefixed AAD, the 12-byte nonce, and the
+/// 48-byte wrapped root.
+///
+/// # Safety
+///
+/// `destination` covers `capacity` writable bytes and `bytes_written` points to
+/// a writable `size_t`.
+#[unsafe(no_mangle)]
+#[expect(
+    unsafe_code,
+    reason = "ADR-0016: the v1 C ABI requires an exported symbol"
+)]
+pub unsafe extern "C" fn chur_vault_keystore_material(
+    runtime: Handle,
+    destination: *mut u8,
+    capacity: usize,
+    bytes_written: *mut usize,
+) -> Status {
+    guard_status(|| {
+        // SAFETY: the caller guarantees `bytes_written` is writable.
+        let _ = unsafe { crate::api::write_out(bytes_written, 0usize) };
+        let entry = registry::get(runtime, Kind::Runtime)?;
+        let Entry::Runtime(guarded) = entry.as_ref() else {
+            return Err(wrong_type());
+        };
+        let root = {
+            let guard = registry::lock(guarded);
+            guard.root().clone()
+        };
+        let material = vault::android_keystore_material(&root)?;
+        let count = u32::try_from(material.len())
+            .map_err(|_| Error::new(ChurStatus::InternalFailure, "the registry is unbounded"))?;
+        let mut encoded = Vec::with_capacity(4 + material.len() * KEYSTORE_MATERIAL_ENTRY_MAX);
+        encoded.extend_from_slice(&count.to_be_bytes());
+        for entry in &material {
+            push_bounded(&mut encoded, &entry.alias);
+            push_bounded(&mut encoded, &entry.aad);
+            encoded.extend_from_slice(&entry.gcm_nonce);
+            encoded.extend_from_slice(&entry.wrapped_root_secret);
+        }
+        // SAFETY: the caller guarantees `destination` covers `capacity` bytes.
+        let buffer = unsafe { crate::api::borrow_bytes_mut(destination, capacity)? };
+        write_record(&encoded, buffer, bytes_written)
+    })
+}
+
+/// Appends a big-endian `u32` length and the bytes it counts.
+fn push_bounded(destination: &mut Vec<u8>, source: &[u8]) {
+    // Every caller passes a value the parser bounds already limit to a `u32`.
+    let length = u32::try_from(source.len()).unwrap_or(u32::MAX);
+    destination.extend_from_slice(&length.to_be_bytes());
+    destination.extend_from_slice(source);
 }
 
 /// Removes one slot, `KEY_SLOTS.md` §9.

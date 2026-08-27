@@ -98,5 +98,12 @@ kotlin {
 appleTriples.keys.forEach { name ->
     tasks.named("cinteropChur${name.replaceFirstChar { it.uppercase() }}") {
         dependsOn(cargoBuildApple.getValue(name))
+        // cinterop tracks the `.def` file and not the headers it names, so an
+        // export added to `chur.h` alone leaves the bindings up to date and the
+        // new symbol unresolved. Declaring the header is what makes a change to
+        // the C ABI regenerate them.
+        inputs.file(rootProject.file("rust/crates/chur-ffi/include/chur.h"))
+            .withPropertyName("churHeader")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
     }
 }

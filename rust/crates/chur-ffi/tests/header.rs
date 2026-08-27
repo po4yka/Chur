@@ -337,6 +337,10 @@ fn every_declared_function_is_exported() {
         "chur_object_set_tag",
         "chur_derived_put",
         "chur_derived_read",
+        // §6.6, the Android Keystore surface added at ABI 1.2.
+        "chur_vault_keystore_begin",
+        "chur_vault_keystore_commit",
+        "chur_vault_keystore_material",
     ]
     .iter()
     .map(|name| (*name).to_owned())
@@ -348,7 +352,7 @@ fn every_declared_function_is_exported() {
 
     // Calling each one proves the list above is not a stale copy.
     assert_eq!(chur_ffi::chur_abi_version_major(), 1);
-    assert_eq!(chur_ffi::chur_abi_version_minor(), 1);
+    assert_eq!(chur_ffi::chur_abi_version_minor(), 2);
     assert_eq!(
         chur_ffi::chur_capabilities(),
         chur_ffi::CHUR_CAP_OBJECT_READER

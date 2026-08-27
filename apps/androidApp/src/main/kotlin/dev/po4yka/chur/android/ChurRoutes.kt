@@ -80,6 +80,8 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
             failed = (vaultState as? VaultState.Locked)?.lastFailure != null,
             onUnlock = controller::unlock,
             onUseRecovery = { controller.goTo(AppRoute.Recover) },
+            deviceUnlockOffered = controller.deviceUnlockOffered.collectAsState().value,
+            onUseDevice = controller::unlockWithDevice,
         )
         AppRoute.Recover -> RecoveryScreen(
             busy = false,
@@ -258,6 +260,7 @@ private fun VaultRoute(controller: ChurController) {
             openAlbum = openAlbum,
             widthDp = configuration.screenWidthDp,
             progress = message,
+            deviceSlotAvailable = true,
         ),
         actions = VaultActions(
             onDestination = {
@@ -296,6 +299,7 @@ private fun VaultRoute(controller: ChurController) {
             },
             onVerifyAll = { controller.verifyEverything() },
             onAddRecoverySlot = controller::addRecoverySlot,
+            onAddDeviceSlot = controller::enrollDeviceSlot,
         ),
     )
 }

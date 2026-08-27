@@ -56,6 +56,9 @@ internal expect object ChurNative {
     fun vaultRemoveSlot(session: Long, slotId: ByteArray): Int
     fun vaultChangePassword(session: Long, password: ByteArray): Int
     fun vaultSlots(session: Long, destination: ChurBuffer, outWritten: IntArray): Int
+    fun vaultKeystoreBegin(session: Long, destination: ChurBuffer, outWritten: IntArray): Int
+    fun vaultKeystoreCommit(session: Long, gcmNonce: ByteArray, wrappedRootSecret: ByteArray): Int
+    fun vaultKeystoreMaterial(runtime: Long, destination: ChurBuffer, outWritten: IntArray): Int
     fun objectSetFavorite(session: Long, objectId: ByteArray, favorite: Boolean): Int
     fun objectDelete(session: Long, objectId: ByteArray): Int
     fun objectMetadata(session: Long, objectId: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int

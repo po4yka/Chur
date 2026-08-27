@@ -85,6 +85,15 @@ internal actual object ChurNative {
 
     actual fun vaultSlots(session: Long, destination: ChurBuffer, outWritten: IntArray): Int = ChurJni.vaultSlots(session, destination.buffer, outWritten)
 
+    actual fun vaultKeystoreBegin(session: Long, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.vaultKeystoreBegin(session, destination.buffer, outWritten)
+
+    actual fun vaultKeystoreCommit(session: Long, gcmNonce: ByteArray, wrappedRootSecret: ByteArray): Int =
+        ChurJni.vaultKeystoreCommit(session, gcmNonce, wrappedRootSecret)
+
+    actual fun vaultKeystoreMaterial(runtime: Long, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.vaultKeystoreMaterial(runtime, destination.buffer, outWritten)
+
     actual fun objectSetFavorite(session: Long, objectId: ByteArray, favorite: Boolean): Int = ChurJni.objectSetFavorite(session, objectId, favorite)
 
     actual fun objectDelete(session: Long, objectId: ByteArray): Int = ChurJni.objectDelete(session, objectId)

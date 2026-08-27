@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
             exports = ExportDestinations(contentResolver),
             clock = { System.currentTimeMillis() },
             notes = FileNoteStore(java.io.File(filesDir, "notes.json").path),
+            deviceUnlock = AndroidDeviceUnlock(),
         )
 
         val verdict = runGate()

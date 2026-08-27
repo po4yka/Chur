@@ -880,6 +880,85 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultAddDeviceSlot<'loca
     finish_secret(&mut env, status, &out_secret, &mut secret)
 }
 
+/// Begins the Android Keystore enrollment.
+///
+/// The buffer receives a root secret. The caller overwrites it as soon as the
+/// Keystore wrap returns, which ADR-0041 requires of every holder.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultKeystoreBegin<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    let Some((address, capacity)) = direct_buffer(&env, &destination) else {
+        return INVALID_INPUT;
+    };
+    let mut written = 0usize;
+    // SAFETY: `written` is a live local and the buffer is direct.
+    let status = unsafe {
+        chur_ffi::product::chur_vault_keystore_begin(
+            handle_of(session),
+            address,
+            capacity,
+            &mut written,
+        )
+    };
+    finish_written(&mut env, status, &out_written, written)
+}
+
+/// Stores what the Keystore wrap returned.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultKeystoreCommit<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    gcm_nonce: JByteArray<'local>,
+    wrapped_root_secret: JByteArray<'local>,
+) -> jint {
+    let Some(nonce) = fixed_array(&mut env, &gcm_nonce, 12) else {
+        return INVALID_INPUT;
+    };
+    let Some(wrapped) = fixed_array(&mut env, &wrapped_root_secret, 48) else {
+        return INVALID_INPUT;
+    };
+    // SAFETY: both vectors are live locals of the required lengths.
+    unsafe {
+        chur_ffi::product::chur_vault_keystore_commit(
+            handle_of(session),
+            nonce.as_ptr(),
+            wrapped.as_ptr(),
+        )
+    }
+}
+
+/// Writes every enrolled Keystore slot's unwrap material. Nothing in it is
+/// secret.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultKeystoreMaterial<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    runtime: jlong,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    let Some((address, capacity)) = direct_buffer(&env, &destination) else {
+        return INVALID_INPUT;
+    };
+    let mut written = 0usize;
+    // SAFETY: `written` is a live local and the buffer is direct.
+    let status = unsafe {
+        chur_ffi::product::chur_vault_keystore_material(
+            handle_of(runtime),
+            address,
+            capacity,
+            &mut written,
+        )
+    };
+    finish_written(&mut env, status, &out_written, written)
+}
+
 /// Removes one slot.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultRemoveSlot<'local>(

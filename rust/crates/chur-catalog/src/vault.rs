@@ -9,6 +9,7 @@
 //! key exists only in an unlocked session, and lock closes the database before
 //! zeroizing the key. Nothing above this module ever holds a root secret.
 
+use chur_core::limits::{GCM_NONCE_LEN, WRAPPED_KEY_LEN};
 use chur_core::{ChurStatus, Error, Id, Result, bail, ensure};
 use chur_crypto::{
     Key, Nonce, commit,
@@ -19,7 +20,9 @@ use chur_format::constants::{SlotType, VaultState};
 use chur_format::descriptor::{
     CatalogDescriptor, KeySlotDescriptor, ObjectStoreDescriptor, VaultDescriptor,
 };
-use chur_format::slot::{AppleKeychainSlotBody, PasswordSlotBody, RecoverySlotBody, SlotBinding};
+use chur_format::slot::{
+    AndroidKeystoreSlotBody, AppleKeychainSlotBody, PasswordSlotBody, RecoverySlotBody, SlotBinding,
+};
 
 use crate::db::{CatalogDb, CatalogKey, CatalogLocation};
 use crate::paths::{RegistryName, VaultRoot};
@@ -27,6 +30,14 @@ use crate::schema;
 
 /// The salt length a v1 writer produces, `KEY_SLOT_BODIES_V1.md` §8.
 const SALT_LEN: usize = 16;
+
+/// The alias length a v1 enrollment generates.
+///
+/// `KEY_SLOTS.md` §4 requires an opaque alias that reveals no identity, and
+/// `chur-core::limits::slot` bounds it to 16 to 64 bytes. Thirty-two is inside
+/// that range with room on both sides and is the width every other opaque
+/// identifier in the descriptor uses.
+const KEYSTORE_ALIAS_LEN: usize = 32;
 
 /// The number of Argon2id derivations one password attempt runs, §8.
 ///
@@ -65,6 +76,44 @@ pub struct Session {
     descriptor: VaultDescriptor,
     entry_name: RegistryName,
     catalog: Option<CatalogDb>,
+    pending_keystore: Option<PendingKeystore>,
+}
+
+/// A Keystore enrollment waiting for the platform's answer.
+///
+/// The slot identity is decided before the wrap rather than after, because the
+/// AAD of `KEY_SLOTS.md` §4 binds the slot id and the generation: a wrap
+/// performed under one identity and stored under another would never unwrap.
+struct PendingKeystore {
+    slot_id: Id,
+    generation: u64,
+    alias: Vec<u8>,
+}
+
+/// What the platform needs to perform the wrap, `KEY_SLOTS.md` §4.
+///
+/// It carries the root secret because this is the one slot family whose AEAD
+/// runs outside Rust. [ADR-0041](../../../docs/adr/0041-the-android-keystore-slot-exchanges-root-bytes.md)
+/// records that exception, what it costs, and why the alternative costs more.
+pub struct KeystoreEnrollment {
+    /// The opaque alias bytes the platform turns into a Keystore alias.
+    pub alias: Vec<u8>,
+    /// The additional authenticated data the wrap must use.
+    pub aad: Vec<u8>,
+    /// The bytes to wrap.
+    pub root_secret: Key,
+}
+
+/// What the platform needs to perform the unwrap.
+pub struct KeystoreUnlockMaterial {
+    /// The opaque alias bytes the slot was enrolled under.
+    pub alias: Vec<u8>,
+    /// The additional authenticated data the unwrap must use.
+    pub aad: Vec<u8>,
+    /// The 96-bit GCM nonce the wrap produced.
+    pub gcm_nonce: [u8; GCM_NONCE_LEN],
+    /// The wrapped root secret the wrap produced.
+    pub wrapped_root_secret: [u8; WRAPPED_KEY_LEN],
 }
 
 /// Creates a vault, running steps 3 and 4 of `PROVISIONING.md` §3.
@@ -204,6 +253,7 @@ impl VaultCreation {
             descriptor: self.descriptor,
             entry_name: self.entry_name,
             catalog: Some(self.catalog),
+            pending_keystore: None,
         })
     }
 
@@ -318,6 +368,79 @@ pub fn unlock_with_apple_keychain(
     )
 }
 
+/// Unlocks with the root secret an Android Keystore unwrap returned.
+///
+/// There is no slot body to open here: the Keystore already performed the
+/// unwrap, so what arrives is the root itself. The descriptor authentication
+/// inside [`finish_unlock`] is the check that it is the right root, which is
+/// the same check every other family passes through, so a wrong or substituted
+/// value fails as `AUTHENTICATION_FAILED` and not as corruption.
+///
+/// A descriptor with no Keystore slot is skipped. Otherwise a root obtained
+/// some other way would open a vault that was never enrolled on this device,
+/// which is a claim `KEY_SLOTS.md` §4 does not make.
+pub fn unlock_with_android_keystore(
+    root_dir: &VaultRoot,
+    root_secret: &Key,
+    now_ms: u64,
+) -> Result<Session> {
+    for name in root_dir.registry_names()? {
+        let bytes = read_entry(root_dir, &name)?;
+        let Ok(descriptor) = VaultDescriptor::parse(&bytes) else {
+            continue;
+        };
+        let enrolled = descriptor
+            .key_slots
+            .iter()
+            .any(|entry| entry.slot_type == SlotType::AndroidKeystore);
+        if !enrolled {
+            continue;
+        }
+        let candidate = Key::new(*root_secret.expose());
+        if let Ok(session) = finish_unlock(root_dir, &name, &bytes, candidate, now_ms) {
+            return Ok(session);
+        }
+    }
+    bail!(
+        AuthenticationFailed,
+        "no candidate slot returned a root that authenticated a descriptor"
+    )
+}
+
+/// What every enrolled Android Keystore slot needs for its unwrap.
+///
+/// A locked vault has to answer this, because the platform cannot ask the
+/// Keystore without the alias, the nonce, the wrapped bytes, and the AAD, and
+/// none of those is a secret: they are stored in the clear in the descriptor.
+///
+/// The result is a list because `DECOY_VAULT.md` admits two identities. Nothing
+/// in the list says which identity a member belongs to, and a caller is
+/// expected to try each in order.
+pub fn android_keystore_material(root_dir: &VaultRoot) -> Result<Vec<KeystoreUnlockMaterial>> {
+    let mut material = Vec::new();
+    for name in root_dir.registry_names()? {
+        let bytes = read_entry(root_dir, &name)?;
+        let Ok(descriptor) = VaultDescriptor::parse(&bytes) else {
+            continue;
+        };
+        for entry in descriptor
+            .key_slots
+            .iter()
+            .filter(|entry| entry.slot_type == SlotType::AndroidKeystore)
+        {
+            let body = AndroidKeystoreSlotBody::decode(&entry.slot_body)?;
+            let binding = entry.binding(descriptor.vault_id);
+            material.push(KeystoreUnlockMaterial {
+                aad: AndroidKeystoreSlotBody::aad(&binding, body.alias())?,
+                alias: body.alias().to_vec(),
+                gcm_nonce: *body.gcm_nonce(),
+                wrapped_root_secret: *body.wrapped_root_secret(),
+            });
+        }
+    }
+    Ok(material)
+}
+
 fn unlock_with_slot(
     root_dir: &VaultRoot,
     slot_type: SlotType,
@@ -402,6 +525,7 @@ fn finish_unlock(
         descriptor,
         entry_name: entry_name.clone(),
         catalog: Some(catalog),
+        pending_keystore: None,
     })
 }
 
@@ -491,6 +615,74 @@ impl Session {
             KeySlotDescriptor::v1(slot_id, SlotType::AppleKeychain, generation, body.encode())?;
         self.commit_slots(|slots| slots.push(slot))?;
         Ok(secret)
+    }
+
+    /// Begins the Android Keystore slot of `KEY_SLOTS.md` §4.
+    ///
+    /// The enrollment is two calls because the AEAD is the platform's: Rust
+    /// decides the slot identity and the AAD, the Keystore performs the wrap,
+    /// and [`Session::finish_android_keystore_slot`] stores what it returned.
+    /// Nothing is written to the descriptor until that second call, so an
+    /// enrollment the platform abandons leaves the vault exactly as it was.
+    ///
+    /// The returned secret is the vault root. ADR-0041 records why this family
+    /// is the one that hands it out, and the caller must destroy its copy as
+    /// soon as the wrap returns.
+    pub fn begin_android_keystore_slot(&mut self) -> Result<KeystoreEnrollment> {
+        let slot_id = random::id()?;
+        let generation = self.next_slot_generation(SlotType::AndroidKeystore);
+        let alias = random::array::<KEYSTORE_ALIAS_LEN>()?.to_vec();
+        let binding = SlotBinding::v1(
+            self.descriptor.vault_id,
+            slot_id,
+            SlotType::AndroidKeystore,
+            generation,
+        );
+        let aad = AndroidKeystoreSlotBody::aad(&binding, &alias)?;
+        self.pending_keystore = Some(PendingKeystore {
+            slot_id,
+            generation,
+            alias: alias.clone(),
+        });
+        Ok(KeystoreEnrollment {
+            alias,
+            aad,
+            root_secret: Key::new(*self.root_secret.expose()),
+        })
+    }
+
+    /// Stores what the Keystore wrap returned, completing the slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ChurStatus::InvalidState`] when no enrollment is open, which
+    /// is what a second commit or a commit without a begin is.
+    pub fn finish_android_keystore_slot(
+        &mut self,
+        gcm_nonce: [u8; GCM_NONCE_LEN],
+        wrapped_root_secret: [u8; WRAPPED_KEY_LEN],
+    ) -> Result<()> {
+        let pending = self.pending_keystore.take().ok_or_else(|| {
+            Error::new(
+                ChurStatus::Conflict,
+                "no Keystore enrollment is waiting for a wrap",
+            )
+        })?;
+        let binding = SlotBinding::v1(
+            self.descriptor.vault_id,
+            pending.slot_id,
+            SlotType::AndroidKeystore,
+            pending.generation,
+        );
+        let body =
+            AndroidKeystoreSlotBody::new(&binding, pending.alias, gcm_nonce, wrapped_root_secret)?;
+        let slot = KeySlotDescriptor::v1(
+            pending.slot_id,
+            SlotType::AndroidKeystore,
+            pending.generation,
+            body.encode(),
+        )?;
+        self.commit_slots(|slots| slots.push(slot))
     }
 
     /// Removes one slot, `KEY_SLOTS.md` §9.
@@ -989,6 +1181,150 @@ mod tests {
             rejection(unlock_with_apple_keychain(&root_dir, &other, 1)),
             ChurStatus::AuthenticationFailed
         );
+    }
+
+    /// A stand-in for the Keystore cipher.
+    ///
+    /// Rust never performs this AEAD and never verifies it, so the algorithm is
+    /// not what these tests are about: what they check is that the alias, the
+    /// nonce, the wrapped bytes, and the AAD travel out and back unchanged, and
+    /// that a wrap performed under one AAD does not open under another. A
+    /// keyed hash over the AAD gives that property without adding an AES-GCM
+    /// dependency the library itself does not use.
+    fn keystore_wrap(aad: &[u8], root: &[u8; 32]) -> ([u8; GCM_NONCE_LEN], [u8; WRAPPED_KEY_LEN]) {
+        let nonce = random::array::<GCM_NONCE_LEN>().expect("nonce");
+        let mask = commit::commit(b"chur/test/keystore-stand-in", &[&nonce, aad]);
+        let mut wrapped = [0u8; WRAPPED_KEY_LEN];
+        for (index, byte) in root.iter().enumerate() {
+            wrapped[index] = byte ^ mask[index];
+        }
+        wrapped[32..].copy_from_slice(&mask[..16]);
+        (nonce, wrapped)
+    }
+
+    fn keystore_unwrap(material: &KeystoreUnlockMaterial) -> Option<Key> {
+        let mask = commit::commit(
+            b"chur/test/keystore-stand-in",
+            &[&material.gcm_nonce, &material.aad],
+        );
+        if material.wrapped_root_secret[32..] != mask[..16] {
+            return None;
+        }
+        let mut root = [0u8; 32];
+        for (index, byte) in root.iter_mut().enumerate() {
+            *byte = material.wrapped_root_secret[index] ^ mask[index];
+        }
+        Some(Key::new(root))
+    }
+
+    #[test]
+    fn an_android_keystore_slot_unlocks_the_vault() {
+        let root_dir = scratch();
+        let mut session = make(&root_dir);
+        let vault_id = session.vault_id();
+        let enrollment = session.begin_android_keystore_slot().expect("begin");
+        let (nonce, wrapped) = keystore_wrap(&enrollment.aad, enrollment.root_secret.expose());
+        session
+            .finish_android_keystore_slot(nonce, wrapped)
+            .expect("finish");
+        drop(session);
+
+        let material = android_keystore_material(&root_dir).expect("material");
+        assert_eq!(material.len(), 1);
+        let root = keystore_unwrap(&material[0]).expect("the wrap opens under the stored AAD");
+        assert_eq!(
+            unlock_with_android_keystore(&root_dir, &root, 1)
+                .expect("unlock")
+                .vault_id(),
+            vault_id
+        );
+    }
+
+    #[test]
+    fn a_root_that_is_not_the_vault_root_is_the_same_external_result() {
+        let root_dir = scratch();
+        let mut session = make(&root_dir);
+        let enrollment = session.begin_android_keystore_slot().expect("begin");
+        let (nonce, wrapped) = keystore_wrap(&enrollment.aad, enrollment.root_secret.expose());
+        session
+            .finish_android_keystore_slot(nonce, wrapped)
+            .expect("finish");
+        drop(session);
+
+        let other: Key = random::secret::<32>().expect("secret");
+        assert_eq!(
+            rejection(unlock_with_android_keystore(&root_dir, &other, 1)),
+            ChurStatus::AuthenticationFailed
+        );
+    }
+
+    #[test]
+    fn a_vault_with_no_keystore_slot_is_never_opened_by_a_root() {
+        let root_dir = scratch();
+        let session = make(&root_dir);
+        drop(session);
+        let material = android_keystore_material(&root_dir).expect("material");
+        assert!(material.is_empty());
+        let any: Key = random::secret::<32>().expect("secret");
+        assert_eq!(
+            rejection(unlock_with_android_keystore(&root_dir, &any, 1)),
+            ChurStatus::AuthenticationFailed
+        );
+    }
+
+    #[test]
+    fn the_stored_aad_is_the_one_the_wrap_received() {
+        let root_dir = scratch();
+        let mut session = make(&root_dir);
+        let enrollment = session.begin_android_keystore_slot().expect("begin");
+        let (nonce, wrapped) = keystore_wrap(&enrollment.aad, enrollment.root_secret.expose());
+        session
+            .finish_android_keystore_slot(nonce, wrapped)
+            .expect("finish");
+        drop(session);
+
+        let material = android_keystore_material(&root_dir).expect("material");
+        assert_eq!(material[0].aad, enrollment.aad);
+        assert_eq!(material[0].alias, enrollment.alias);
+        // The AAD binds the slot generation, so a value from a different slot
+        // identity cannot open the wrap even with the right nonce.
+        let mut forged = KeystoreUnlockMaterial {
+            alias: material[0].alias.clone(),
+            aad: material[0].aad.clone(),
+            gcm_nonce: material[0].gcm_nonce,
+            wrapped_root_secret: material[0].wrapped_root_secret,
+        };
+        forged.aad[0] ^= 0x01;
+        assert!(keystore_unwrap(&forged).is_none());
+    }
+
+    #[test]
+    fn a_wrap_that_was_never_begun_is_refused() {
+        let root_dir = scratch();
+        let mut session = make(&root_dir);
+        assert_eq!(
+            rejection(
+                session.finish_android_keystore_slot([0u8; GCM_NONCE_LEN], [0u8; WRAPPED_KEY_LEN])
+            ),
+            ChurStatus::Conflict
+        );
+    }
+
+    #[test]
+    fn an_abandoned_enrollment_leaves_the_descriptor_alone() {
+        let root_dir = scratch();
+        let mut session = make(&root_dir);
+        let before = session.slots().len();
+        session.begin_android_keystore_slot().expect("begin");
+        drop(session);
+
+        assert!(
+            android_keystore_material(&root_dir)
+                .expect("material")
+                .is_empty()
+        );
+        let reopened = unlock_with_password(&root_dir, PASSWORD, 1).expect("unlock");
+        assert_eq!(reopened.slots().len(), before);
     }
 
     #[test]

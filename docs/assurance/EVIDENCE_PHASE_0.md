@@ -27,7 +27,7 @@ Regenerate every number below with the commands each row names. Nothing here is 
 | --- | --- | --- |
 | ownership boundaries documented | met | [`../ARCHITECTURE.md`](../ARCHITECTURE.md), [ADR-0001](../adr/0001-rust-owns-private-vault.md), [ADR-0006](../adr/0006-control-and-data-plane-ffi.md) |
 | no committed production secrets | met | every key, salt, nonce, password, and recovery secret in the repository is a fixed constant under `test-vectors/`, marked `TEST-ONLY — NEVER USE FOR REAL VAULTS`; no production build can select deterministic randomness |
-| major design decisions tracked by ADR | met | 40 ADRs, indexed in [`../adr/README.md`](../adr/README.md) |
+| major design decisions tracked by ADR | met | 41 ADRs, indexed in [`../adr/README.md`](../adr/README.md) |
 
 Gate 0 is satisfiable on this evidence.
 

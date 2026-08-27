@@ -54,6 +54,9 @@ import dev.po4yka.chur.native.chur_vault_create_begin
 import dev.po4yka.chur.native.chur_vault_creation_abandon
 import dev.po4yka.chur.native.chur_vault_creation_activate
 import dev.po4yka.chur.native.chur_vault_creation_add_recovery_slot
+import dev.po4yka.chur.native.chur_vault_keystore_begin
+import dev.po4yka.chur.native.chur_vault_keystore_commit
+import dev.po4yka.chur.native.chur_vault_keystore_material
 import dev.po4yka.chur.native.chur_vault_lock
 import dev.po4yka.chur.native.chur_vault_present
 import dev.po4yka.chur.native.chur_vault_remove_slot
@@ -435,6 +438,39 @@ internal actual object ChurNative {
             writtenCall(outWritten) { written ->
                 chur_vault_slots(
                     session.toULong(),
+                    destination.pointer,
+                    destination.size.toULong(),
+                    written,
+                )
+            }
+        }
+
+    // The Keystore is Android's. These exist so one `expect` serves both
+    // platforms; an iOS host has no Keystore and calls none of them.
+    actual fun vaultKeystoreBegin(session: Long, destination: ChurBuffer, outWritten: IntArray): Int =
+        memScoped {
+            writtenCall(outWritten) { written ->
+                chur_vault_keystore_begin(
+                    session.toULong(),
+                    destination.pointer,
+                    destination.size.toULong(),
+                    written,
+                )
+            }
+        }
+
+    actual fun vaultKeystoreCommit(session: Long, gcmNonce: ByteArray, wrappedRootSecret: ByteArray): Int =
+        gcmNonce.pinnedPointer { nonce ->
+            wrappedRootSecret.pinnedPointer { wrapped ->
+                chur_vault_keystore_commit(session.toULong(), nonce, wrapped)
+            }
+        }
+
+    actual fun vaultKeystoreMaterial(runtime: Long, destination: ChurBuffer, outWritten: IntArray): Int =
+        memScoped {
+            writtenCall(outWritten) { written ->
+                chur_vault_keystore_material(
+                    runtime.toULong(),
                     destination.pointer,
                     destination.size.toULong(),
                     written,

@@ -50,6 +50,7 @@ android {
 dependencies {
     implementation(project(":shared:app"))
     implementation(project(":shared:core-vault"))
+    implementation(project(":shared:core-platform-keys"))
     implementation(project(":shared:feature-import"))
     implementation(project(":shared:feature-notes"))
     implementation(libs.androidx.core.ktx)

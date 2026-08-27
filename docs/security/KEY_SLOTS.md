@@ -78,6 +78,8 @@ Preferred design:
 
 Invalidation, missing key, or device restore must lead to portable recovery rather than silent vault deletion.
 
+The consequence of a non-exportable wrapping key is that the AEAD runs on the platform side, so the root secret crosses the boundary in both directions: out during enrollment, back at unlock. This is the only family in v1 that does that, [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md) §6.6 is the surface, and [ADR-0041](../adr/0041-the-android-keystore-slot-exchanges-root-bytes.md) argues the exception and states what it costs. The `DeviceUnlockSecret` model of §5 avoids it and is the better design; it is not available to v1 because `AndroidKeystoreSlotBodyV1` is frozen with a `wrapped_root_secret` field.
+
 ## 5. Apple Keychain slot
 
 Preferred design:

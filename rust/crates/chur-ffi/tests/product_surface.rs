@@ -562,3 +562,183 @@ fn a_derivative_above_its_long_edge_is_refused_at_the_boundary() {
     );
     assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
 }
+
+/// A stand-in for the Keystore cipher, as in `chur-catalog`'s vault tests.
+///
+/// Rust neither performs nor verifies this AEAD, so what these tests check is
+/// that the alias, the nonce, the wrapped bytes, and the AAD cross the boundary
+/// unchanged and that the unwrapped root opens the vault.
+fn keystore_wrap(aad: &[u8], root: &[u8; 32]) -> ([u8; 12], [u8; 48]) {
+    let nonce = chur_crypto::random::array::<12>().unwrap();
+    let mask = chur_crypto::commit::commit(b"chur/test/keystore-stand-in", &[&nonce, aad]);
+    let mut wrapped = [0u8; 48];
+    for (index, byte) in root.iter().enumerate() {
+        wrapped[index] = byte ^ mask[index];
+    }
+    wrapped[32..].copy_from_slice(&mask[..16]);
+    (nonce, wrapped)
+}
+
+fn keystore_unwrap(gcm_nonce: &[u8], aad: &[u8], wrapped: &[u8]) -> [u8; 32] {
+    let mask = chur_crypto::commit::commit(b"chur/test/keystore-stand-in", &[gcm_nonce, aad]);
+    assert_eq!(wrapped[32..], mask[..16]);
+    let mut root = [0u8; 32];
+    for (index, byte) in root.iter_mut().enumerate() {
+        *byte = wrapped[index] ^ mask[index];
+    }
+    root
+}
+
+/// Reads a big-endian `u32` and the bytes it counts.
+fn take_bounded<'a>(bytes: &'a [u8], at: &mut usize) -> &'a [u8] {
+    let length = u32::from_be_bytes(bytes[*at..*at + 4].try_into().unwrap()) as usize;
+    *at += 4;
+    let value = &bytes[*at..*at + length];
+    *at += length;
+    value
+}
+
+/// Enrolls a Keystore slot on an open session and returns the alias.
+fn enroll_keystore(session: u64) -> Vec<u8> {
+    let mut buffer = [0u8; 512];
+    let mut written = 0usize;
+    assert_eq!(
+        unsafe {
+            chur_vault_keystore_begin(session, buffer.as_mut_ptr(), buffer.len(), &mut written)
+        },
+        OK
+    );
+    let record = &buffer[..written];
+    let mut at = 0usize;
+    let alias = take_bounded(record, &mut at).to_vec();
+    let aad = take_bounded(record, &mut at).to_vec();
+    let root: [u8; 32] = record[at..at + 32].try_into().unwrap();
+    let (nonce, wrapped) = keystore_wrap(&aad, &root);
+    assert_eq!(
+        unsafe { chur_vault_keystore_commit(session, nonce.as_ptr(), wrapped.as_ptr()) },
+        OK
+    );
+    alias
+}
+
+/// Opens a session on a fresh vault.
+fn fresh_session(runtime: u64) -> u64 {
+    let request = create_request(PASSWORD);
+    let mut creation = 0u64;
+    assert_eq!(
+        unsafe { chur_vault_create_begin(runtime, &request, &mut creation) },
+        OK
+    );
+    let mut session = 0u64;
+    assert_eq!(
+        unsafe { chur_vault_creation_activate(creation, &mut session) },
+        OK
+    );
+    session
+}
+
+#[test]
+fn the_keystore_slot_enrolls_and_unlocks_through_the_boundary() {
+    let root = scratch();
+    let runtime = open_runtime(&root);
+    let session = fresh_session(runtime);
+    let alias = enroll_keystore(session);
+    assert_eq!(alias.len(), 32);
+    assert_eq!(unsafe { chur_vault_lock(session, 1) }, OK);
+    assert_eq!(unsafe { chur_session_close(session) }, OK);
+
+    // The material is readable while the vault is locked, which is what a host
+    // needs: it cannot ask the Keystore before it has the alias and the nonce.
+    let mut buffer = [0u8; 512];
+    let mut written = 0usize;
+    assert_eq!(
+        unsafe {
+            chur_vault_keystore_material(runtime, buffer.as_mut_ptr(), buffer.len(), &mut written)
+        },
+        OK
+    );
+    let record = &buffer[..written];
+    assert_eq!(u32::from_be_bytes(record[..4].try_into().unwrap()), 1);
+    let mut at = 4usize;
+    let stored_alias = take_bounded(record, &mut at).to_vec();
+    let aad = take_bounded(record, &mut at).to_vec();
+    let nonce = &record[at..at + 12];
+    let wrapped = &record[at + 12..at + 60];
+    assert_eq!(stored_alias, alias);
+
+    let unwrapped = keystore_unwrap(nonce, &aad, wrapped);
+    let unlock = ChurUnlockRequestV1 {
+        factor: 4,
+        reserved: [0; 3],
+        secret: unwrapped.as_ptr(),
+        secret_length: unwrapped.len() as u32,
+    };
+    let mut reopened = 0u64;
+    assert_eq!(
+        unsafe { chur_vault_unlock(runtime, &unlock, &mut reopened) },
+        OK
+    );
+    assert_ne!(reopened, 0);
+    assert_eq!(unsafe { chur_session_close(reopened) }, OK);
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+}
+
+#[test]
+fn a_root_the_keystore_did_not_return_is_authentication_failed() {
+    let root = scratch();
+    let runtime = open_runtime(&root);
+    let session = fresh_session(runtime);
+    enroll_keystore(session);
+    assert_eq!(unsafe { chur_session_close(session) }, OK);
+
+    let wrong = [7u8; 32];
+    let unlock = ChurUnlockRequestV1 {
+        factor: 4,
+        reserved: [0; 3],
+        secret: wrong.as_ptr(),
+        secret_length: wrong.len() as u32,
+    };
+    let mut reopened = 0u64;
+    assert_eq!(
+        status(unsafe { chur_vault_unlock(runtime, &unlock, &mut reopened) }),
+        ChurStatus::AuthenticationFailed
+    );
+    assert_eq!(reopened, 0);
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+}
+
+#[test]
+fn a_commit_with_no_enrollment_is_refused() {
+    let root = scratch();
+    let runtime = open_runtime(&root);
+    let session = fresh_session(runtime);
+    let nonce = [0u8; 12];
+    let wrapped = [0u8; 48];
+    assert_eq!(
+        status(unsafe { chur_vault_keystore_commit(session, nonce.as_ptr(), wrapped.as_ptr()) }),
+        ChurStatus::Conflict
+    );
+    assert_eq!(unsafe { chur_session_close(session) }, OK);
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+}
+
+#[test]
+fn a_material_buffer_smaller_than_the_record_writes_nothing() {
+    let root = scratch();
+    let runtime = open_runtime(&root);
+    let session = fresh_session(runtime);
+    enroll_keystore(session);
+    assert_eq!(unsafe { chur_session_close(session) }, OK);
+
+    let mut small = [0u8; 8];
+    let mut written = 7usize;
+    assert_eq!(
+        status(unsafe {
+            chur_vault_keystore_material(runtime, small.as_mut_ptr(), small.len(), &mut written)
+        }),
+        ChurStatus::ResourceLimitExceeded
+    );
+    assert_eq!(written, 0, "the count is set on every failure");
+    assert_eq!(small, [0u8; 8], "a refused write leaves the buffer alone");
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+}

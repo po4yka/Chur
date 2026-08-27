@@ -560,3 +560,22 @@ impl<'a> RecordReader<'a> {
 fn short() -> Error {
     Error::new(ChurStatus::InvalidInput, "the record ends inside a field")
 }
+
+/// The alias bound of `chur-core::limits::slot`.
+pub const KEYSTORE_ALIAS_MAX: usize = 64;
+
+/// The widest §4 AAD a v1 alias can produce.
+///
+/// The AAD is the 29-byte domain tag, the 45-byte slot binding, the 2-byte
+/// profile, and the 4-byte length prefix of the alias, so the widest one is 80
+/// bytes plus the alias bound. A build whose bound stops fitting fails here
+/// rather than at the first enrollment.
+pub const KEYSTORE_AAD_MAX: usize = 160;
+const _: () = assert!(80 + chur_core::limits::slot::ALIAS_MAX as usize <= KEYSTORE_AAD_MAX);
+
+/// The encoded length of the enrollment record of §6.6.
+pub const KEYSTORE_ENROLLMENT_MAX: usize = 4 + KEYSTORE_ALIAS_MAX + 4 + KEYSTORE_AAD_MAX + 32;
+
+/// The encoded length of one entry of the material record of §6.6.
+pub const KEYSTORE_MATERIAL_ENTRY_MAX: usize =
+    4 + KEYSTORE_ALIAS_MAX + 4 + KEYSTORE_AAD_MAX + 12 + 48;

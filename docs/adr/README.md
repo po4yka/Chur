@@ -92,6 +92,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0038](0038-adopt-sqlcipher-as-the-v1-catalog-engine.md) | Adopt SQLCipher as the v1 catalog engine | Accepted |
 | [0039](0039-freeze-the-catalog-header-commitment.md) | Freeze the catalog header commitment | Accepted |
 | [0040](0040-add-a-rust-jni-adapter-crate.md) | Add a Rust JNI adapter crate for the Android boundary | Accepted |
+| [0041](0041-the-android-keystore-slot-exchanges-root-bytes.md) | The Android Keystore slot exchanges root bytes with the host | Accepted |
 
 Rows are ordered by ADR number. Number 0015 was not used; no ADR carries it and none will.
 

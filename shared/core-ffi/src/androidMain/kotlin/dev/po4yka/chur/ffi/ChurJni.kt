@@ -96,6 +96,12 @@ internal object ChurJni {
 
     external fun vaultSlots(session: Long, destination: ByteBuffer, outWritten: IntArray): Int
 
+    external fun vaultKeystoreBegin(session: Long, destination: ByteBuffer, outWritten: IntArray): Int
+
+    external fun vaultKeystoreCommit(session: Long, gcmNonce: ByteArray, wrappedRootSecret: ByteArray): Int
+
+    external fun vaultKeystoreMaterial(runtime: Long, destination: ByteBuffer, outWritten: IntArray): Int
+
     external fun objectSetFavorite(session: Long, objectId: ByteArray, favorite: Boolean): Int
 
     external fun objectDelete(session: Long, objectId: ByteArray): Int

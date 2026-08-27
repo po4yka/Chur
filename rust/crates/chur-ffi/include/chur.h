@@ -9,10 +9,11 @@
  *
  * This header declares the Phase-1 surface: the ABI handshake of
  * FFI_CONTRACT.md section 2, the status vocabulary of docs/ERROR_MODEL.md, the
- * control plane and data plane of section 6.2, and the product surface of
- * section 6.5. Adding an export raises the minor ABI version; changing or
- * removing one raises the major. The library reports 1.1: section 6.5 is the
- * addition that raised the minor from 0.
+ * control plane and data plane of section 6.2, the product surface of section
+ * 6.5, and the Android Keystore surface of section 6.6. Adding an export raises
+ * the minor ABI version; changing or removing one raises the major. The library
+ * reports 1.2: section 6.5 raised the minor from 0 and section 6.6 raised it
+ * again.
  */
 
 #ifndef CHUR_H
@@ -212,6 +213,9 @@ typedef int32_t chur_status_t;
 #define CHUR_FACTOR_PASSWORD 1
 #define CHUR_FACTOR_RECOVERY 2
 #define CHUR_FACTOR_APPLE_KEYCHAIN 3
+/* The Keystore performs the unwrap, so this factor's secret is the unwrapped
+   root itself rather than a value a slot body opens. See ADR-0041. */
+#define CHUR_FACTOR_ANDROID_KEYSTORE 4
 
 /* Operation kinds and stages, FFI_CONTRACT.md section 10. */
 #define CHUR_OPERATION_IMPORT 1
@@ -447,6 +451,36 @@ chur_status_t chur_vault_change_password(chur_handle_t session,
                                          const ChurUnlockRequestV1 *request);
 chur_status_t chur_vault_slots(chur_handle_t session, uint8_t *destination,
                                size_t capacity, size_t *bytes_written);
+
+/* -------------------------------------------------------------------------
+ * The Android Keystore surface, ABI 1.2, FFI_CONTRACT.md section 6.6.
+ *
+ * This is the one key-slot family whose AEAD runs outside Rust: the Keystore
+ * cipher performs it, so the enrollment is two calls with a platform operation
+ * between them, and the unlock factor carries the unwrapped root. ADR-0041
+ * records the exception and what the caller owes: the root_secret field of the
+ * enrollment and the buffer passed to chur_vault_unlock must be overwritten as
+ * soon as the platform call returns.
+ *
+ * chur_vault_keystore_material runs on a locked runtime, because its result is
+ * what a caller needs before it can unlock. Nothing it returns is secret.
+ *
+ * Both records are canonical bytes in a caller buffer, as section 6.4 has every
+ * list be: the enrollment is a length-prefixed alias, a length-prefixed AAD,
+ * and 32 bytes of root secret; the material is a uint32 count followed by that
+ * many entries of a length-prefixed alias, a length-prefixed AAD, a 12-byte
+ * nonce, and a 48-byte wrapped root. Every integer is big-endian.
+ * ---------------------------------------------------------------------- */
+
+chur_status_t chur_vault_keystore_begin(chur_handle_t session,
+                                        uint8_t *destination, size_t capacity,
+                                        size_t *bytes_written);
+chur_status_t chur_vault_keystore_commit(chur_handle_t session,
+                                         const uint8_t *gcm_nonce,
+                                         const uint8_t *wrapped_root_secret);
+chur_status_t chur_vault_keystore_material(chur_handle_t runtime,
+                                           uint8_t *destination, size_t capacity,
+                                           size_t *bytes_written);
 
 chur_status_t chur_object_set_favorite(chur_handle_t session,
                                        const ChurObjectRefV1 *object,

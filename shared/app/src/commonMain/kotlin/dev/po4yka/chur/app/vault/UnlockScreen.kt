@@ -45,6 +45,8 @@ fun UnlockScreen(
     failed: Boolean,
     onUnlock: (String) -> Unit,
     onUseRecovery: () -> Unit,
+    deviceUnlockOffered: Boolean = false,
+    onUseDevice: () -> Unit = {},
 ) {
     var password by remember { mutableStateOf("") }
     val colors = LocalChurColors.current
@@ -91,6 +93,13 @@ fun UnlockScreen(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(if (busy) "Opening" else "Unlock")
+                }
+                // §14.2: the platform draws its own prompt. This button says
+                // what it will ask for and nothing about what the vault holds.
+                if (deviceUnlockOffered) {
+                    TextButton(onClick = onUseDevice, enabled = !busy) {
+                        Text("Use screen lock")
+                    }
                 }
                 TextButton(onClick = onUseRecovery, enabled = !busy) {
                     Text("Use recovery phrase")

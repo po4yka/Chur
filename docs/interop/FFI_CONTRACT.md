@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. v1 ships 1.1: the additions of §6.5 raised the minor from 0. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
+- native API version is the (major, minor) pair. v1 ships 1.2: the additions of §6.5 raised the minor from 0 and those of §6.6 raised it again. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -355,6 +355,54 @@ ChurObjectMetadataV1
 `ChurObjectMetadataV1` is the only record in this contract that carries free-form private text, and §16.1 of [`../format/CATALOG_SCHEMA_V1.md`](../format/CATALOG_SCHEMA_V1.md) is why: a page of 200 rows must never carry 200 filenames, so the projection carries none and a detail screen fetches them for one object. A caller that asked for this record per row would be defeating that rule rather than using this one.
 
 A buffer smaller than the record is `RESOURCE_LIMIT_EXCEEDED` and writes nothing, exactly as in §6.4.
+
+### 6.6 The Android Keystore surface, ABI 1.2
+
+The Android Keystore is the one key-slot family whose AEAD runs outside Rust. Its wrapping key is generated inside the Keystore and is non-exportable, which is the property that makes it worth having, and it means the cipher runs on the platform side. [`../format/KEY_SLOT_BODIES_V1.md`](../format/KEY_SLOT_BODIES_V1.md) §5 already records that in the format: `AndroidKeystoreSlotBodyV1` stores bytes Rust never produced and cannot open, and `wrap_suite_id` `0x0002` says so.
+
+A cipher that runs on the platform side needs its plaintext there. These three exports are the consequence, and [ADR-0041](../adr/0041-the-android-keystore-slot-exchanges-root-bytes.md) is where the exception to §12 is argued rather than assumed. They are an addition, so they raise the minor ABI version to 2 and change nothing above.
+
+```c
+chur_status_t chur_vault_keystore_begin(chur_handle_t session,
+                                        uint8_t *destination, size_t capacity,
+                                        size_t *bytes_written);
+chur_status_t chur_vault_keystore_commit(chur_handle_t session,
+                                         const uint8_t *gcm_nonce,
+                                         const uint8_t *wrapped_root_secret);
+chur_status_t chur_vault_keystore_material(chur_handle_t runtime,
+                                           uint8_t *destination, size_t capacity,
+                                           size_t *bytes_written);
+```
+
+Enrollment is two calls with a platform operation between them:
+
+1. `chur_vault_keystore_begin` allocates the slot id and the slot generation, because the §4 AAD binds both, and records the pending enrollment in the session. It writes nothing to the descriptor, so an enrollment the platform abandons leaves the vault exactly as it was. A second `begin` replaces the pending enrollment; a `commit` without one is `CONFLICT`;
+2. the host asks the Keystore to encrypt the root under the AAD;
+3. `chur_vault_keystore_commit` stores the nonce and the wrapped bytes, and the slot exists.
+
+`chur_vault_keystore_material` takes a **runtime** handle rather than a session, because its result is what a caller needs *before* it can unlock. Nothing it returns is secret: every field is already stored in the clear in the descriptor. It returns one entry per enrolled slot across every identity the registry admits, in registry order, and names no identity: a caller tries each in turn, which is what [`../security/DECOY_VAULT.md`](../security/DECOY_VAULT.md) requires of a caller that must not learn which vault it opened.
+
+Unlock factor `4` carries the unwrapped root itself rather than a value a slot body opens, and is verified the way every other factor is: the descriptor authenticates under the root, so a wrong or substituted value is `AUTHENTICATION_FAILED` and not corruption. A descriptor with no Keystore slot is skipped.
+
+Both records are canonical bytes in a caller buffer, as §6.4 has every list be:
+
+```text
+ChurKeystoreEnrollmentV1
+    alias_length      u32
+    alias             bytes[alias_length]
+    aad_length        u32
+    aad               bytes[aad_length]
+    root_secret       bytes[32]
+
+ChurKeystoreMaterialV1
+    count             u32
+    entries           count × { alias_length: u32, alias: bytes,
+                                aad_length: u32, aad: bytes,
+                                gcm_nonce: bytes[12],
+                                wrapped_root_secret: bytes[48] }
+```
+
+`root_secret` is the one field in this contract that carries a vault root, and every holder clears it: Rust zeroizes the encoded record, and the caller overwrites the buffer as soon as the wrap returns. The same rule applies to the secret passed to `chur_vault_unlock` under factor `4`. A host that will not accept that window has a supported answer, which is not to enroll the slot: [`../security/PROVISIONING.md`](../security/PROVISIONING.md) §5 already makes a device slot never the only slot.
 
 ## 7. Buffer ownership
 

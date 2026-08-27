@@ -42,6 +42,7 @@ class ChurController(
     storageRoot: String,
     private val privacy: PrivacyCover,
     private val exports: ExportSink,
+    private val deviceUnlock: DeviceUnlock = NoDeviceUnlock,
     private val clock: () -> Long,
     private val notes: NoteStore = InMemoryNoteStore(),
     policy: LockPolicy = LockPolicy(),
@@ -56,6 +57,7 @@ class ChurController(
     private val _slots = MutableStateFlow<List<SlotSummary>>(emptyList())
     private val _message = MutableStateFlow<String?>(null)
     private val _recoveryPhrase = MutableStateFlow<String?>(null)
+    private val _deviceUnlockOffered = MutableStateFlow(false)
 
     /** Where the application is, `DESIGN.md` §10.3. */
     val route: StateFlow<AppRoute> = _route.asStateFlow()
@@ -81,6 +83,15 @@ class ChurController(
     /** The recovery phrase, held only until the user acknowledges it. */
     val recoveryPhrase: StateFlow<String?> = _recoveryPhrase.asStateFlow()
 
+    /**
+     * Whether the unlock screen may offer the device slot.
+     *
+     * It is false unless the platform has one and the vault enrolled it, which
+     * `DESIGN.md` §14.1 requires of every affordance on that screen: an offer
+     * that appears when no slot exists would say a slot exists.
+     */
+    val deviceUnlockOffered: StateFlow<Boolean> = _deviceUnlockOffered.asStateFlow()
+
     /** The repository, for a host flow that drives operations itself. */
     val vault: VaultRepository get() = repository
 
@@ -88,6 +99,7 @@ class ChurController(
     suspend fun start() {
         withContext(Dispatchers.Default) { repository.start() }
         _notes.value = notes.all()
+        refreshDeviceUnlockOffer()
         scope.launch { runIdleTimer() }
     }
 
@@ -145,6 +157,45 @@ class ChurController(
     fun recover(phrase: String) = guarded {
         withContext(Dispatchers.Default) { repository.unlockWithRecovery(phrase.trim()) }
         enterVault()
+    }
+
+    /**
+     * Unlocks through the platform device slot, `KEY_SLOTS.md` §4.
+     *
+     * The platform performs the unwrap and hands back the root, which the
+     * repository clears once the session is open. Every enrolled slot is tried
+     * in turn, because the material names no identity.
+     */
+    fun unlockWithDevice() = guarded {
+        val material = withContext(Dispatchers.Default) { repository.keystoreMaterial() }
+        val root = material.firstNotNullOfOrNull { entry ->
+            deviceUnlock.unwrap(entry.alias, entry.aad, entry.gcmNonce, entry.wrappedRootSecret)
+        } ?: throw ChurFailure(ChurStatus.AUTHENTICATION_FAILED, "no device slot opened")
+        withContext(Dispatchers.Default) { repository.unlockWithKeystoreRoot(root) }
+        enterVault()
+    }
+
+    /** Enrolls the platform device slot on the open session. */
+    fun enrollDeviceSlot() = guarded {
+        withContext(Dispatchers.Default) {
+            repository.enrollKeystoreSlot { alias, aad, root -> deviceUnlock.wrap(alias, aad, root) }
+        }
+        _message.value = "This device can now open the vault."
+        loadSlots()
+        refreshDeviceUnlockOffer()
+    }
+
+    /** Recomputes whether the unlock screen may offer the device slot. */
+    private fun refreshDeviceUnlockOffer() {
+        if (!deviceUnlock.available) {
+            _deviceUnlockOffered.value = false
+            return
+        }
+        scope.launch {
+            _deviceUnlockOffered.value = runCatching {
+                withContext(Dispatchers.Default) { repository.keystoreMaterial() }.isNotEmpty()
+            }.getOrDefault(false)
+        }
     }
 
     /** Locks now, `DESIGN.md` §14.3. */

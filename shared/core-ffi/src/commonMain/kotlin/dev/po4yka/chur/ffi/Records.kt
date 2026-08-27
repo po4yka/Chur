@@ -31,6 +31,12 @@ const val PAGE_HEADER_LENGTH: Int = 63
 /** Length of the device secret a slot operation hands back, §6.5. */
 const val SECRET_LENGTH: Int = 32
 
+/** The 96-bit GCM nonce of `KEY_SLOTS.md` §4. */
+const val GCM_NONCE_LENGTH: Int = 12
+
+/** A wrapped 32-byte key and its 16-byte tag. */
+const val WRAPPED_KEY_LENGTH: Int = 48
+
 /**
  * The largest recovery phrase, §6.5.
  *
@@ -191,6 +197,67 @@ fun decodeSlotList(bytes: ByteArray, length: Int): List<SlotSummary> {
     return slots
 }
 
+/**
+ * What the Android Keystore needs to wrap the root, §6.6.
+ *
+ * [rootSecret] is the vault root. `KEY_SLOTS.md` §4 puts the AEAD in the
+ * Keystore, so the bytes have to reach it; ADR-0041 records the exception and
+ * requires the holder to clear the array as soon as the wrap returns.
+ */
+class KeystoreEnrollment(
+    val alias: ByteArray,
+    val aad: ByteArray,
+    val rootSecret: ByteArray,
+)
+
+/** What the Android Keystore needs to unwrap the root, §6.6. Nothing is secret. */
+data class KeystoreMaterial(
+    val alias: ByteArray,
+    val aad: ByteArray,
+    val gcmNonce: ByteArray,
+    val wrappedRootSecret: ByteArray,
+) {
+    override fun equals(other: Any?): Boolean =
+        other is KeystoreMaterial &&
+            alias.contentEquals(other.alias) &&
+            aad.contentEquals(other.aad) &&
+            gcmNonce.contentEquals(other.gcmNonce) &&
+            wrappedRootSecret.contentEquals(other.wrappedRootSecret)
+
+    override fun hashCode(): Int = alias.contentHashCode()
+}
+
+/** Decodes the enrollment record of §6.6. */
+fun decodeKeystoreEnrollment(bytes: ByteArray, length: Int): KeystoreEnrollment {
+    val reader = RecordReader(bytes, length)
+    val enrollment = KeystoreEnrollment(
+        alias = reader.bounded(),
+        aad = reader.bounded(),
+        rootSecret = reader.take(SECRET_LENGTH),
+    )
+    reader.requireExhausted()
+    return enrollment
+}
+
+/** Decodes the material record of §6.6. */
+fun decodeKeystoreMaterial(bytes: ByteArray, length: Int): List<KeystoreMaterial> {
+    val reader = RecordReader(bytes, length)
+    val count = reader.int()
+    val material = ArrayList<KeystoreMaterial>(count)
+    repeat(count) {
+        material.add(
+            KeystoreMaterial(
+                alias = reader.bounded(),
+                aad = reader.bounded(),
+                gcmNonce = reader.take(GCM_NONCE_LENGTH),
+                wrappedRootSecret = reader.take(WRAPPED_KEY_LENGTH),
+            ),
+        )
+    }
+    reader.requireExhausted()
+    return material
+}
+
 /** Decodes `ChurObjectMetadataV1`, §6.5. */
 fun decodeObjectDetail(bytes: ByteArray, length: Int): ObjectDetail {
     val reader = RecordReader(bytes, length)
@@ -297,6 +364,9 @@ private class RecordReader(private val bytes: ByteArray, private val limit: Int)
         val length = short()
         return take(length).decodeToString()
     }
+
+    /** A `u32` length and the bytes it counts. */
+    fun bounded(): ByteArray = take(int())
 
     fun requireExhausted() {
         if (at != limit) {

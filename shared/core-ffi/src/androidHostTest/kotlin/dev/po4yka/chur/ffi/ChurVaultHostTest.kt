@@ -105,11 +105,99 @@ class ChurVaultHostTest {
         return field.getInt(descriptor)
     }
 
+    /**
+     * The Android Keystore round trip of §6.6, with a stand-in cipher.
+     *
+     * A JVM host test has no Keystore, and it does not need one: Rust neither
+     * performs nor verifies that AEAD. What this proves is the part only a test
+     * with both halves running can prove, which is that the alias, the AAD, the
+     * nonce, and the wrapped bytes survive the encoder here and the decoder
+     * there, and that the root the platform returns opens the vault.
+     */
+    @Test
+    fun the_keystore_slot_enrolls_and_unlocks_through_the_adapter() {
+        val runtime = openRuntime()
+        val session = createVault(runtime)
+
+        val enrollment = ChurVault.beginKeystoreSlot(session)
+        assertEquals(32, enrollment.alias.size)
+        assertEquals(32, enrollment.rootSecret.size)
+        assertTrue(enrollment.aad.isNotEmpty())
+        val (nonce, wrapped) = standInWrap(enrollment.aad, enrollment.rootSecret)
+        ChurVault.commitKeystoreSlot(session, nonce, wrapped)
+        ChurVault.lock(session, LockReason.USER)
+        ChurVault.closeSession(session)
+
+        val material = ChurVault.keystoreMaterial(runtime)
+        assertEquals(1, material.size)
+        assertContentEquals(enrollment.alias, material[0].alias)
+        assertContentEquals(enrollment.aad, material[0].aad)
+        assertContentEquals(nonce, material[0].gcmNonce)
+
+        val root = standInUnwrap(material[0])
+        val reopened = ChurVault.unlockWithKeystoreRoot(runtime, root)
+        assertTrue(reopened != 0L)
+        ChurVault.closeSession(reopened)
+    }
+
+    @Test
+    fun a_root_the_platform_did_not_return_is_one_external_result() {
+        val runtime = openRuntime()
+        val session = createVault(runtime)
+        val enrollment = ChurVault.beginKeystoreSlot(session)
+        val (nonce, wrapped) = standInWrap(enrollment.aad, enrollment.rootSecret)
+        ChurVault.commitKeystoreSlot(session, nonce, wrapped)
+        ChurVault.closeSession(session)
+
+        val failure = assertFailsWith<ChurFailure> {
+            ChurVault.unlockWithKeystoreRoot(runtime, ByteArray(32) { 7 })
+        }
+        assertEquals(ChurStatus.AUTHENTICATION_FAILED, failure.status)
+    }
+
+    @Test
+    fun a_vault_with_no_keystore_slot_reports_no_material() {
+        val runtime = openRuntime()
+        ChurVault.closeSession(createVault(runtime))
+
+        assertTrue(ChurVault.keystoreMaterial(runtime).isEmpty())
+    }
+
+    /**
+     * The stand-in for the Keystore cipher.
+     *
+     * A keyed digest over the nonce and the AAD gives the one property that
+     * matters here: a value wrapped under one AAD does not open under another.
+     */
+    private fun standInWrap(aad: ByteArray, root: ByteArray): Pair<ByteArray, ByteArray> {
+        val nonce = ByteArray(12) { index -> (index * 7 + 1).toByte() }
+        val mask = standInMask(nonce, aad)
+        val wrapped = ByteArray(48)
+        for (index in 0 until 32) wrapped[index] = (root[index].toInt() xor mask[index].toInt()).toByte()
+        mask.copyInto(wrapped, 32, 0, 16)
+        return nonce to wrapped
+    }
+
+    private fun standInUnwrap(material: KeystoreMaterial): ByteArray {
+        val mask = standInMask(material.gcmNonce, material.aad)
+        assertContentEquals(mask.copyOfRange(0, 16), material.wrappedRootSecret.copyOfRange(32, 48))
+        return ByteArray(32) { index ->
+            (material.wrappedRootSecret[index].toInt() xor mask[index].toInt()).toByte()
+        }
+    }
+
+    private fun standInMask(nonce: ByteArray, aad: ByteArray): ByteArray =
+        java.security.MessageDigest.getInstance("SHA-256").apply {
+            update("chur/test/keystore-stand-in".encodeToByteArray())
+            update(nonce)
+            update(aad)
+        }.digest()
+
     @Test
     fun the_handshake_matches_the_frozen_abi() {
         val handshake = ChurVault.handshake()
         assertEquals(1, handshake.major)
-        assertEquals(1, handshake.minor, "§6.5 raised the minor to 1")
+        assertEquals(2, handshake.minor, "§6.5 and §6.6 each raised the minor")
         assertEquals(1, handshake.objectFormatMin)
         assertEquals(1, handshake.objectFormatMax)
         assertTrue(handshake.capabilities and 0b0000_0010L != 0L, "the reader is declared")

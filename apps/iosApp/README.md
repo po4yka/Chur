@@ -27,7 +27,11 @@ preference.
    exported by the framework so the two hosts agree on where each store lives.
    [`../../docs/product/DISCREET_MODE.md`](../../docs/product/DISCREET_MODE.md)
    requires a shell that keeps what a person writes in it, which is why the note
-   store is bound here rather than left at its in-memory default.
+   store is bound here rather than left at its in-memory default. Its
+   device-unlock binding is `NoDeviceUnlock.shared`: the Apple device slot needs
+   no platform call during unlock, because Rust performs its AEAD, so
+   [ADR-0041](../../docs/adr/0041-the-android-keystore-slot-exchanges-root-bytes.md)
+   applies to Android alone.
 
 2. **Present `ChurViewController`.** It is exported by the framework and takes
    the controller and the gate verdict of [`../../docs/interop/FFI_CONTRACT.md`](../../docs/interop/FFI_CONTRACT.md)

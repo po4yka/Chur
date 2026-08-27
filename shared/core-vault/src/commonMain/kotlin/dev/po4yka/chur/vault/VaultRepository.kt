@@ -5,6 +5,7 @@ import dev.po4yka.chur.ffi.AlbumSummary
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.ChurVault
 import dev.po4yka.chur.ffi.ImportRequest
+import dev.po4yka.chur.ffi.KeystoreMaterial
 import dev.po4yka.chur.ffi.LockReason
 import dev.po4yka.chur.ffi.ObjectDetail
 import dev.po4yka.chur.ffi.ObjectPage
@@ -199,6 +200,45 @@ class VaultRepository(
     /** Adds the platform device slot and returns the secret to store. */
     suspend fun addDeviceSlot(keychainItemId: ByteArray): ByteArray =
         withSession { ChurVault.addDeviceSlot(it, keychainItemId) }
+
+    /**
+     * Enrolls the Android Keystore slot, `KEY_SLOTS.md` §4.
+     *
+     * The enrollment is one repository call rather than two because the vault
+     * must not be left holding a pending enrollment: [wrap] runs between the
+     * two boundary calls and a failure in it abandons the enrollment instead of
+     * committing half of one.
+     *
+     * [wrap] receives the AAD and the vault root and returns the nonce and the
+     * wrapped bytes the Keystore produced. It must not keep either argument.
+     */
+    suspend fun enrollKeystoreSlot(
+        wrap: (alias: ByteArray, aad: ByteArray, rootSecret: ByteArray) -> Pair<ByteArray, ByteArray>,
+    ) = withSession { session ->
+        val enrollment = ChurVault.beginKeystoreSlot(session)
+        try {
+            val (nonce, wrapped) = wrap(enrollment.alias, enrollment.aad, enrollment.rootSecret)
+            ChurVault.commitKeystoreSlot(session, nonce, wrapped)
+        } finally {
+            enrollment.rootSecret.fill(0)
+        }
+    }
+
+    /** What every enrolled Keystore slot needs for its unwrap, while locked. */
+    suspend fun keystoreMaterial(): List<KeystoreMaterial> = mutex.withLock {
+        requireRuntime()
+        ChurVault.keystoreMaterial(runtime)
+    }
+
+    /** Unlocks with the root an Android Keystore unwrap returned. */
+    suspend fun unlockWithKeystoreRoot(rootSecret: ByteArray) = mutex.withLock {
+        requireRuntime()
+        try {
+            openSession { ChurVault.unlockWithKeystoreRoot(runtime, rootSecret) }
+        } finally {
+            rootSecret.fill(0)
+        }
+    }
 
     /** Removes one slot. */
     suspend fun removeSlot(slotId: ByteArray) = withSession { ChurVault.removeSlot(it, slotId) }

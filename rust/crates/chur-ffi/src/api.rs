@@ -350,6 +350,18 @@ pub unsafe extern "C" fn chur_vault_unlock(
                 })?;
                 vault::unlock_with_apple_keychain(&root, &Key::new(bytes), now)
             }
+            4 => {
+                // The Keystore already performed the unwrap, so what arrives is
+                // the root itself rather than a secret a slot body opens.
+                // ADR-0041 records why this family is the exception.
+                let bytes: [u8; 32] = secret.try_into().map_err(|_| {
+                    Error::new(
+                        ChurStatus::AuthenticationFailed,
+                        "an unwrapped root secret is 32 bytes",
+                    )
+                })?;
+                vault::unlock_with_android_keystore(&root, &Key::new(bytes), now)
+            }
             _ => Err(Error::new(
                 ChurStatus::InvalidInput,
                 "the unlock request names an unallocated factor",

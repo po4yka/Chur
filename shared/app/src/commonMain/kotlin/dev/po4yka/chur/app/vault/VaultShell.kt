@@ -77,6 +77,8 @@ data class VaultUiState(
     val widthDp: Int = 400,
     /** A bounded operation message, carrying no private value. */
     val progress: String? = null,
+    /** Whether this platform can hold a device slot at all. */
+    val deviceSlotAvailable: Boolean = false,
 )
 
 /** What the shell can ask the application to do. */
@@ -103,6 +105,8 @@ data class VaultActions(
     val onVerifyAll: () -> Unit,
     /** Add a recovery slot. */
     val onAddRecoverySlot: () -> Unit,
+    /** Enroll this device's platform key slot. */
+    val onAddDeviceSlot: () -> Unit = {},
 )
 
 /**
@@ -317,6 +321,14 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
         }
         item {
             SettingsAction("Add a recovery phrase", actions.onAddRecoverySlot)
+        }
+        // §4 of KEY_SLOTS makes the device unlock code a vault credential in
+        // the convenient mode, so the label says which factor it enrolls
+        // rather than promising a stronger one.
+        if (state.deviceSlotAvailable) {
+            item {
+                SettingsAction("Unlock with this device's screen lock", actions.onAddDeviceSlot)
+            }
         }
         item {
             Text("Integrity", style = MaterialTheme.typography.titleMedium)
