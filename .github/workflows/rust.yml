@@ -229,7 +229,12 @@ jobs:
       - run: rustup show
       # The JVM and Android host tests. The iOS target needs macOS and runs in
       # the kotlin-native job.
+      #
+      # The isolation task is named as well as the test tasks: it is the
+      # build-graph half of SEC-019 in SECURITY_TEST_PLAN.md section 13, and a
+      # row of that section may not name a job that does not run it.
       - run: ./gradlew --no-daemon jvmTest testAndroidHostTest
+          :shared:feature-notes:churPublicShellIsolation
 
   kotlin-native:
     name: kotlin/native tests

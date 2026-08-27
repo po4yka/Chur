@@ -169,7 +169,7 @@ Every `SEC-*` invariant of [`../security/SECURITY_INVARIANTS.md`](../security/SE
 
 A row states what would produce the evidence, not that it runs today. Whether it runs is governed by [`RELEASE_GATES.md`](RELEASE_GATES.md#enforcement): until a job executes the procedure, the row is unenforced whatever it names.
 
-Nineteen rows now name a test target rather than a section of this plan. Each of those runs in the `test`, `gradle`, `kotlin-native`, or `fuzz` job of that workflow, so those eighteen are enforced. Every remaining row names a procedure that no job executes.
+Twenty-six rows now name a test target rather than a section of this plan. Each one runs in the `test`, `gradle`, `kotlin-native`, or `fuzz` job of that workflow, so all twenty-six are enforced. Every remaining row names a procedure that no job executes.
 
 | Invariant | Evidence procedure |
 | --- | --- |
@@ -191,16 +191,16 @@ Nineteen rows now name a test target rather than a section of this plan. Each of
 | SEC-016 | `chur-format` `container::tests::a_missing_final_commit_is_object_incomplete` |
 | SEC-017 | `chur-format` `tests/corruption.rs::every_bit_of_a_small_container_is_caught` |
 | SEC-018 | `chur-format` `tests/migration.rs::a_container_from_a_later_version_is_unsupported_not_corrupt` |
-| SEC-019 | audit-only; becomes a build-graph assertion when the Gradle build exists |
+| SEC-019 | `:shared:feature-notes` `churPublicShellIsolation` for the half a build graph can see; audit-only for the rest |
 | SEC-020 | §6 |
 | SEC-021 | `chur-format` `envelope::tests::the_whole_chain_recovers_the_object_key` |
 | SEC-022 | §4 |
-| SEC-023 | §4 |
-| SEC-024 | §4 |
+| SEC-023 | `chur-catalog` `store::tests::an_activation_commits_the_object_stream_envelope_and_revision_together` |
+| SEC-024 | `chur-media` `tests/pipeline.rs::reconciliation_kills_an_import_a_crash_left_behind` |
 | SEC-025 | §4; §10 |
-| SEC-026 | §4; §10 |
-| SEC-027 | §6 |
-| SEC-028 | §5 |
+| SEC-026 | `chur-catalog` `deletion::tests::step_two_destroys_every_envelope_and_writes_the_tombstone` |
+| SEC-027 | `chur-catalog` `paths::tests::no_path_carries_a_name_that_is_not_hexadecimal` |
+| SEC-028 | `chur-ffi` `tests/control_plane.rs::locking_invalidates_every_handle_the_session_owns` |
 | SEC-029 | §5 |
 | SEC-030 | §5 |
 | SEC-031 | §5 |
@@ -227,10 +227,10 @@ Nineteen rows now name a test target rather than a section of this plan. Each of
 | SEC-052 | `chur-format` `tests/migration.rs` |
 | SEC-053 | §2; §8; §9 |
 | SEC-054 | audit-only; key-domain review at each catalog schema change |
-| SEC-055 | §4; [`../security/RECOVERY.md`](../security/RECOVERY.md) §11 |
+| SEC-055 | `chur-catalog` `vault::tests::the_last_portable_slot_cannot_be_removed` |
 | SEC-056 | `chur-format` `tests/migration.rs::a_writer_emits_only_the_current_approved_version` |
 | SEC-057 | §3 |
-| SEC-058 | §3 |
+| SEC-058 | `chur-catalog` `model::tests::only_an_original_has_no_source_content_revision` |
 | SEC-059 | §5; §8; §9 |
 
 SEC-019, SEC-032, SEC-037, SEC-046, SEC-054, and the claim half of SEC-045 have no automated evidence. That is a stated gap, carried into the evidence package of every gated release under [`RELEASE_GATES.md`](RELEASE_GATES.md#enforcement), and not a claim of coverage. Adding or changing an invariant adds or changes its row here in the same pull request.

@@ -35,3 +35,30 @@ kotlin {
         }
     }
 }
+
+// The isolation above is a claim until something checks it. This is the check:
+// the public shell declares no dependency on another module of this build, so
+// no later edit can give it a path to the vault without failing `check`.
+//
+// `SECURITY_TEST_PLAN.md` section 13 records SEC-019 as becoming a build-graph
+// assertion once a Gradle build exists. It exists, and this is that assertion
+// for the half of SEC-019 a build graph can see.
+val churPublicShellIsolation = tasks.register("churPublicShellIsolation") {
+    description = "Fails when the public Notes shell gains a dependency on another module."
+    group = "verification"
+    val self: String = project.path
+    val declared: Set<String> = configurations
+        .flatMap { configuration ->
+            configuration.dependencies.withType(ProjectDependency::class.java).map { it.path }
+        }
+        .filterNot { it == self }
+        .toSortedSet()
+    doLast {
+        check(declared.isEmpty()) {
+            "the public Notes shell must depend on no other module of this build, and it declares: " +
+                declared.joinToString(", ")
+        }
+    }
+}
+
+tasks.named("check").configure { dependsOn(churPublicShellIsolation) }
