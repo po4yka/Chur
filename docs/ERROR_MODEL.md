@@ -34,8 +34,8 @@ This table is the sole registry of Chur error names and values. `ARCHITECTURE.md
 | 203 | `PERMISSION_DENIED` | platform denied requested resource | Yes | grant/select resource |
 | 204 | `NOT_FOUND` | opaque requested entity is absent | Sometimes | refresh state |
 | 205 | `CONFLICT` | operation conflicts with current revision | Yes | refresh and merge |
-| `SYNC_CHAIN_FORK` | two different signed records at one device sequence | No | reconcile or revoke the device |
-| `SYNC_HEAD_ROLLBACK` | offered sync state is below a locally accepted head | No | reconcile; do not retry the same source |
+| 206 | `SYNC_CHAIN_FORK` | two different signed records at one device sequence | No | reconcile or revoke the device |
+| 207 | `SYNC_HEAD_ROLLBACK` | offered sync state is below a locally accepted head | No | reconcile; do not retry the same source |
 | 300 | `UNSUPPORTED_VERSION` | recognized artifact has unsupported version | No | upgrade or migrate |
 | 301 | `UNSUPPORTED_SUITE` | algorithm suite is not permitted | No | migrate with supported client |
 | 302 | `NON_CANONICAL_ENCODING` | record has multiple or invalid encodings | No | reject source |
