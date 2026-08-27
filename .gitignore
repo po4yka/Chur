@@ -1,4 +1,6 @@
-# Agent state directories
+# Agent state directories. Only generated state is ignored. The vendored agent
+# skills under .agents/ and .claude/ are tracked on purpose and are governed by
+# the "Vendored agent skills" section of docs/DEPENDENCY_POLICY.md.
 .omc/
 .omo/
 
