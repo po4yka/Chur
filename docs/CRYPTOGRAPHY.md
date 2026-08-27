@@ -700,7 +700,7 @@ The preferred iOS design stores a random device unlock secret in Keychain and us
 ```text
 Keychain-protected DeviceUnlockSecret
     ↓
-HKDF-SHA-256 with slot context
+HKDF-SHA-256 under `chur/v1/slot/apple-device-kek`
     ↓
 AppleDeviceKEK
     ↓
@@ -708,6 +708,17 @@ XChaCha20-Poly1305 unwrap
     ↓
 VaultRootSecret
 ```
+
+```text
+AppleDeviceKEK = HKDF-SHA-256(
+    IKM     = DeviceUnlockSecret,
+    label   = "chur/v1/slot/apple-device-kek",
+    context = vault_id:bytes[16], slot_id:bytes[16], slot_generation:u64,
+    length  = 32
+)
+```
+
+The label is registered in [`security/KEY_HIERARCHY.md`](security/KEY_HIERARCHY.md) §3 and the extract and expand construction is §13. Every context element is a field of [`format/VAULT_DESCRIPTOR_V1.md`](format/VAULT_DESCRIPTOR_V1.md) §2 and §7, so a reader reproduces the derivation from a parsed descriptor, and `vault_id` alone separates a real vault from its decoy.
 
 This keeps the portable Rust slot format explicit while Keychain controls release of the device secret.
 

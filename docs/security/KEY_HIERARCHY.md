@@ -66,13 +66,14 @@ This table is the only registry of HKDF domain labels. [`../CRYPTOGRAPHY.md`](..
 | `chur/v1/object/embedding` | `EmbeddingKey` | `ObjectKey` | 32 bytes |
 | `chur/v1/object/final-commit` | `FinalCommitKey` | `ObjectKey` | 32 bytes |
 | `chur/v1/recovery/root-envelope` | `RecoveryKEK` | `RecoverySecret` | 32 bytes |
+| `chur/v1/slot/apple-device-kek` | `AppleDeviceKEK` | `DeviceUnlockSecret` | 32 bytes |
 
 Labels are ASCII protocol constants and every row is covered by test vectors. The label alone does not fix the key: each derivation also binds the context fields required by [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §13, so `CollectionEnvelopeKey` is per vault, collection, and epoch, and an object-domain key is per object.
 
 ### Label rules
 
 - a label is lowercase ASCII with the segments `chur` / protocol version / tier / purpose, separated by `/`;
-- the tier segment names the input key: `root` for `VaultRootSecret`, `collection` for a security-collection key, `object` for an `ObjectKey`, `recovery` for a `RecoverySecret`. A root-derived label always keeps the `/root/` segment; a form such as `chur/v1/search` is not a valid label;
+- the tier segment names the input key: `root` for `VaultRootSecret`, `collection` for a security-collection key, `object` for an `ObjectKey`, `recovery` for a `RecoverySecret`, and `slot` for a secret a key slot holds outside the root chain, such as the Keychain-held `DeviceUnlockSecret` of [`KEY_SLOTS.md`](KEY_SLOTS.md) §5. `RecoverySecret` is also slot-held and keeps the `recovery` tier it was registered under, because a label is never redefined. A root-derived label always keeps the `/root/` segment; a form such as `chur/v1/search` is not a valid label;
 - the purpose segment is plural when the key covers a class of records (`catalog-records`, `identifiers`, `private-settings`) and singular when it covers one named artifact or stream (`catalog-database`, `backup-manifest`, `manifest`, `content`);
 - the purpose segment names the protected artifact, not the media type it comes from: `poster-frame` and `waveform`, not `video-poster` or `audio-waveform`;
 - a label enters this table before it is implemented, and no derivation uses a label that is absent from it;

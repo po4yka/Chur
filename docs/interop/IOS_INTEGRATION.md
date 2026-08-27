@@ -14,12 +14,13 @@ random DeviceUnlockSecret
 Keychain accessibility: ThisDeviceOnly profile
 SecAccessControl: userPresence by default
 optional strict mode: biometryCurrentSet
-Rust HKDF → AppleDeviceKEK
+Rust HKDF under `chur/v1/slot/apple-device-kek` → AppleDeviceKEK
 Rust AEAD wraps VaultRootSecret
 ```
 
 Requirements:
 
+- derive `AppleDeviceKEK` exactly as [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §5 requires; the label and its context are registry rows, not platform choices;
 - opaque item identifiers independent for real/decoy;
 - `LAContext` scoped to one authorization flow;
 - handle user cancellation, lockout, passcode/biometry changes, item loss, and restore;
