@@ -1163,13 +1163,9 @@ manifest_ciphertext = XChaCha20Poly1305.Encrypt(
 )
 ```
 
-After decryption:
+`manifest_commitment` is frozen in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §5: BLAKE3-256 over a domain tag, `manifest_nonce`, and `manifest_ciphertext_and_tag`. It commits to the sealed record, not to `CanonicalManifest`.
 
-```text
-manifest_commitment = BLAKE3(CanonicalManifest)
-```
-
-The commitment binds chunk and final-commit AAD to the exact manifest. It is not trusted until the manifest AEAD verifies.
+The commitment binds chunk and final-commit AAD to the exact manifest record. Because it covers ciphertext, a reader computes it from container bytes before any key is available, which is what lets a locked object be structurally verified. It is therefore public and MUST NOT be treated as evidence of authenticity: a substituted manifest record carries its own matching commitment. The manifest becomes trusted when its AEAD verifies under `ManifestKey`; a chunk or final commit becomes trusted when its own AEAD verifies over AAD carrying that commitment.
 
 ---
 
@@ -1324,20 +1320,7 @@ The BLAKE3 value is not independently trusted. It becomes authenticated only bec
 
 The final commit proves that the producer completed the object and defines its total structure.
 
-Candidate plaintext fields:
-
-```text
-object_id
-stream_id
-stream_kind
-stream_revision
-manifest_commitment
-total_plaintext_size
-chunk_count
-last_chunk_plaintext_length
-ordered_ciphertext_commitment
-commit_format_version
-```
+Its sealed plaintext fields are listed in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §11. Their widths are not yet frozen.
 
 Encryption:
 

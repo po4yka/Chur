@@ -56,7 +56,7 @@ Deferred. It would change the manifest AAD tuple defined in `CRYPTOGRAPHY.md` §
 
 - 20 bytes of framing per chunk and 32 bytes of record header for the final commit;
 - the ordered commitment is tied to the chunk record framing, so a future `chunk_record_profile` changes the commitment for identical plaintext;
-- the commitment over ciphertext differs from the plaintext-based value in `CRYPTOGRAPHY.md` §32; the container specification governs container bytes, and `CRYPTOGRAPHY.md` needs a matching correction.
+- the commitment covers the sealed manifest record rather than the manifest plaintext, so re-sealing an identical manifest under a fresh nonce changes every chunk AAD and the final commit; `CRYPTOGRAPHY.md` §32 defers to this specification for the construction.
 
 ## Security impact
 
@@ -79,7 +79,6 @@ No container bytes exist yet, so nothing migrates. `container_version`, `canonic
 
 ## Follow-up
 
-- correct the `manifest_commitment` definition in `CRYPTOGRAPHY.md` §32 to match this specification;
 - assign the vault-descriptor and backup-package magics and record them beside `CHUROBJ1`;
 - freeze the approved chunk-size range, the maximum supported plaintext size, and the maximum chunk count;
 - freeze the sealed plaintext schemas of the manifest and the final commit;

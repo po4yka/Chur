@@ -126,8 +126,6 @@ manifest_commitment = BLAKE3-256(
 
 The domain tag is a fixed ASCII byte constant with no length prefix, per [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §3 and §7. The output is 32 bytes. The commitment covers the sealed record, so it is computable before any key is available. It is bound into every chunk AAD (§9) and into the final commit (§11).
 
-Where [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §32 derives a commitment over the decrypted canonical manifest, this section governs container bytes under the authority hierarchy in [`../README.md`](../README.md).
-
 The manifest must not contain the wrapped `ObjectKey`, avoiding circular dependency.
 
 ## 6. Chunk size
@@ -204,7 +202,7 @@ container version and suite
 object ID
 stream ID and kind
 stream revision
-manifest ciphertext commitment
+manifest commitment
 chunk index
 plaintext length
 ```
@@ -255,7 +253,7 @@ Final commit plaintext includes:
 object_id
 stream_id
 stream_revision
-manifest_ciphertext_commitment
+manifest_commitment
 chunk_count
 total_plaintext_length
 last_chunk_plaintext_length
