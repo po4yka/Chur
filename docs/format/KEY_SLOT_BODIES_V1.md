@@ -174,7 +174,7 @@ wrapped_root_secret = AES-256-GCM.Encrypt(
 
 The tag is 29 bytes and the elements add `49 + alias_length`, so the AAD is `78 + alias_length` bytes, 94 at a 16-byte alias.
 
-`wrap_suite_id` for this family denotes AES-256-GCM rather than the XChaCha20-Poly1305 of suite `0x0001`. The value is allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.2 in the change that ships the Android prototype; until then a v1 descriptor carries no `AndroidKeystoreSlotV1` entry.
+`wrap_suite_id` for this family is `0x0002`, allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.2. It denotes AES-256-GCM performed by the platform keystore rather than the XChaCha20-Poly1305 of suite `0x0001`, and it is valid in this field only. Every other v1 family carries `0x0001`, and a descriptor rejects any other pairing of `slot_type` and `wrap_suite_id`.
 
 ## 6. `AppleKeychainSlotBodyV1`
 

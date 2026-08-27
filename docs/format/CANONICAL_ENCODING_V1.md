@@ -260,6 +260,9 @@ Each of the three pairs differs in three byte positions, and byte 4 alone separa
 | Value | Meaning |
 | --- | --- |
 | `0x0001` | XChaCha20-Poly1305 for AEAD, BLAKE3-256 for commitments, HKDF-SHA-256 for key derivation |
+| `0x0002` | AES-256-GCM key wrapping performed by a platform keystore, valid only as `wrap_suite_id` of an `AndroidKeystoreSlotV1`, [`KEY_SLOT_BODIES_V1.md`](KEY_SLOT_BODIES_V1.md) §5 |
+
+`0x0002` names a wrapping operation rather than a whole suite: it fixes the AEAD of one key slot and nothing else. It is invalid as `suite_id` and as `catalog_crypto_suite`, because no Chur record outside that slot body is sealed by a platform keystore, and a reader that finds it in either field rejects the artifact as `UNSUPPORTED_SUITE`.
 
 `canonical_encoding_profile` and `encoding_profile` share one namespace:
 
