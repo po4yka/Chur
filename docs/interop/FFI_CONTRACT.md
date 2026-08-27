@@ -47,7 +47,7 @@ IntegrityScanHandle
 
 Requirements:
 
-- random or generation-tagged opaque values, not raw pointers exposed as business IDs;
+- `chur_handle_t` is `uint64_t`: the low 32 bits index a typed registry slot, the high 32 bits carry that slot's generation counter. It is never a raw pointer and never a business ID; `0` is the null handle;
 - explicit owner runtime/session;
 - thread-safety documented per handle type;
 - idempotent close where practical;
@@ -93,15 +93,58 @@ Large data uses:
 - explicit byte counts;
 - no whole-file `ByteArray`, `NSData`, or generated-binding list.
 
-Conceptual API:
+### 6.2 Exported symbols
 
-```text
-object_reader_open(session, object_ref, stream_kind) -> reader
-object_reader_size(reader) -> u64
-object_reader_read_at(reader, offset, ptr, capacity) -> bytes_written
-object_reader_verify_complete(reader) -> integrity_state
-object_reader_close(reader)
+Every exported symbol is `chur_` followed by lower snake case, in the shape `chur_<subject>_<verb>`. Nothing else leaves the artifact: the Android link step applies a version script, the Apple link step an exported-symbols list, and a release check fails on any symbol outside this set. `chur_handle_t` is `uint64_t` with `0` as the null handle, and `chur_status_t` is the `int32_t` of [`../ERROR_MODEL.md`](../ERROR_MODEL.md).
+
+The Phase-1 surface is frozen. Adding an export raises the minor ABI version; changing or removing one raises the major version. The checked-in `chur.h` is the deliverable both platform teams build against, and every binding derives from it.
+
+```c
+/* handshake: any thread, before initialization, cannot fail (§2) */
+uint32_t chur_abi_version_major(void);
+uint32_t chur_abi_version_minor(void);
+uint64_t chur_capabilities(void);
+uint16_t chur_object_format_min(void);
+uint16_t chur_object_format_max(void);
+uint16_t chur_key_slot_format_min(void);
+uint16_t chur_key_slot_format_max(void);
+uint32_t chur_build_flavor(void);
+
+/* runtime and session */
+chur_status_t chur_runtime_open(const ChurRuntimeConfigV1 *config, chur_handle_t *out_runtime);
+chur_status_t chur_runtime_close(chur_handle_t runtime);
+chur_status_t chur_vault_unlock(chur_handle_t runtime, const ChurUnlockRequestV1 *request,
+                                chur_handle_t *out_session);
+chur_status_t chur_vault_lock(chur_handle_t session, uint32_t reason);
+chur_status_t chur_session_close(chur_handle_t session);
+
+/* catalog queries: a bounded projection written into a caller buffer */
+chur_status_t chur_catalog_query(chur_handle_t session, const ChurQueryV1 *query,
+                                 uint8_t *destination, size_t capacity, size_t *bytes_written);
+
+/* operations */
+chur_status_t chur_import_begin(chur_handle_t session, int32_t source_fd,
+                                const ChurImportRequestV1 *request, chur_handle_t *out_import);
+chur_status_t chur_export_begin(chur_handle_t session, const ChurObjectRefV1 *object,
+                                int32_t destination_fd, chur_handle_t *out_export);
+chur_status_t chur_integrity_scan_begin(chur_handle_t session, const ChurScanRequestV1 *request,
+                                        chur_handle_t *out_scan);
+chur_status_t chur_operation_poll(chur_handle_t operation, ChurProgressV1 *out_progress);
+chur_status_t chur_operation_cancel(chur_handle_t operation);
+chur_status_t chur_operation_close(chur_handle_t operation);
+
+/* object reader */
+chur_status_t chur_object_reader_open(chur_handle_t session, const ChurObjectRefV1 *object,
+                                      uint32_t stream_kind, chur_handle_t *out_reader);
+chur_status_t chur_object_reader_size(chur_handle_t reader, uint64_t *out_size);
+chur_status_t chur_object_reader_content_info(chur_handle_t reader, ChurContentInfoV1 *out_info);
+chur_status_t chur_object_reader_read_at(chur_handle_t reader, uint64_t offset, uint8_t *destination,
+                                         size_t capacity, size_t *bytes_written);
+chur_status_t chur_object_reader_verify_complete(chur_handle_t reader, uint32_t *out_state);
+chur_status_t chur_object_reader_close(chur_handle_t reader);
 ```
+
+The control plane uses these same symbols through a thin KMP `expect`/`actual` adapter. No binding generator is part of the boundary ([ADR-0016](../adr/0016-freeze-the-v1-c-abi.md)).
 
 ## 7. Buffer ownership
 

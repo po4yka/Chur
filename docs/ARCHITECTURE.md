@@ -1390,6 +1390,8 @@ Uses a stable C ABI:
 
 Large media MUST NOT repeatedly cross FFI as allocated Kotlin `ByteArray` or Swift `Data` values.
 
+The exported symbol names, the handle representation, the capability bits, and the status type are frozen in [`interop/FFI_CONTRACT.md`](interop/FFI_CONTRACT.md) §2 and §6.2. The Kotlin interface below illustrates the adapter written above them; it is not the ABI.
+
 ### 27.3 Conceptual KMP API
 
 ```kotlin
@@ -2118,7 +2120,7 @@ The following decisions require dedicated ADRs:
 | ADR-004 | Exact Argon2id calibration policy | bounded device calibration with portable minimum |
 | ADR-005 | Initial chunk-size policy | 256 KiB small media, 1 MiB large media, benchmark-driven |
 | ADR-006 | iOS platform slot representation | protected DeviceKEK versus direct root-secret Keychain item |
-| ADR-007 | Control-plane binding generator | UniFFI/Gobley adapter, stable C ABI retained |
+| ADR-007 | Control-plane binding generator | resolved by [ADR-0016](adr/0016-freeze-the-v1-c-abi.md): hand-written C ABI and checked-in header, no generator |
 | ADR-008 | SQLCipher WAL and backup configuration | prototype and document platform behavior |
 | ADR-009 | Portable backup format | Chur package with optional `age` outer envelope |
 | ADR-010 | Metadata/derived-asset transaction visibility | original commit independent from retryable derivatives |
