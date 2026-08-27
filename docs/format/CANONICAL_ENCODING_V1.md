@@ -143,6 +143,8 @@ label byte length bytes                                          label, strict U
 
 A fixed-length element carries no prefix and a variable-length element carries its `u32` length, so the two are never confusable: the tag selects exactly one element list, and that list fixes the width of every fixed-length element and the position of every length prefix. Because no registered tag is a byte prefix of another, the tag is recoverable from the leading bytes, so two distinct tuples never encode to the same bytes.
 
+One exception is defined: a tuple may delegate the rest of its element list to a registered label carried as its second field. The label is then a §2 UTF-8 string and its registry entry fixes the remaining elements. `CHUR\x00KDF\x00INFO\x00V1` is the only such tuple in v1, and its labels are registered in [`../security/KEY_HIERARCHY.md`](../security/KEY_HIERARCHY.md) §3. Tag plus label still selects exactly one element list, so the collision argument above holds unchanged.
+
 Tuple bytes are produced, not parsed. They are AEAD additional authenticated data, HKDF `info`, or hash input, so a mismatch surfaces as an authentication failure rather than as a decode error. Nested tuples and nested structures are forbidden in v1 tuples.
 
 A hash input that a byte-exact specification defines directly, such as the commitments in [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §5 and §10, is a domain tag followed by declared record bytes. It is not a canonical tuple and this subsection does not apply to it.
@@ -346,11 +348,11 @@ A domain tag is a fixed ASCII byte constant written without a length prefix, per
 | `CHUR\x00SLOT\x00PASSWORD\x00V1` | password key-slot AAD | [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §18 |
 | `CHUR\x00COLLECTION\x00KEY-ENVELOPE\x00V1` | collection-key envelope AAD | [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §25 |
 | `CHUR\x00OBJECT\x00KEY-ENVELOPE\x00V1` | object-key envelope AAD | [`OBJECT_KEY_ENVELOPE_V1.md`](OBJECT_KEY_ENVELOPE_V1.md) §3 |
-| `CHUR\x00OBJECT\x00MANIFEST-AAD\x00V1` | encrypted manifest AAD | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §5 |
+| `CHUR\x00OBJECT\x00MANIFEST-AAD\x00V1` | encrypted manifest AAD | [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §32 |
 | `CHUR\x00OBJECT\x00MANIFEST-COMMITMENT\x00V1` | manifest commitment | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §5 |
 | `CHUR\x00OBJECT\x00CHUNK-AAD\x00V1` | chunk AAD | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §9 |
 | `CHUR\x00OBJECT\x00ORDERED-COMMITMENT\x00V1` | ordered chunk commitment | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §10 |
-| `CHUR\x00OBJECT\x00FINAL-COMMIT-AAD\x00V1` | final-commit AAD | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §11 |
+| `CHUR\x00OBJECT\x00FINAL-COMMIT-AAD\x00V1` | final-commit AAD | [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §38 |
 | `CHUR\x00VAULT\x00DESCRIPTOR-AUTH\x00V1` | vault-descriptor authentication tag | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §8 |
 
 No allocated tag is a byte prefix of another, as §7 requires; the ten above were checked pairwise. The `CHUR\x00SYNC\x00OPERATION\x00V1` tag shown as an example in §7 is not allocated: the sync operation record is not frozen. A tag for an authenticated record whose AAD is not yet frozen is allocated by a row here in the same change that freezes that record.

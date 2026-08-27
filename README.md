@@ -684,7 +684,7 @@ CompleteVerifiedObject
     order, and commitment were validated as a complete object
 ```
 
-The final commit authenticates the object and stream identity, the manifest ciphertext commitment, the expected chunk count, the total plaintext size, the final chunk length, and an ordered commitment over all ciphertext records. Its sealed contents are listed in [`docs/format/OBJECT_CONTAINER_V1.md`](docs/format/OBJECT_CONTAINER_V1.md) §11.
+The final commit authenticates the object and stream identity, the manifest commitment, the expected chunk count, the total plaintext size, the final chunk length, and an ordered commitment over all ciphertext records. Its sealed contents are listed in [`docs/format/OBJECT_CONTAINER_V1.md`](docs/format/OBJECT_CONTAINER_V1.md) §11.
 
 The ordered commitment is BLAKE3-256 over the exact wire bytes of every chunk record. The value gains authenticity only inside the AEAD-authenticated final commit.
 
