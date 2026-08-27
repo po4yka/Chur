@@ -677,7 +677,7 @@ requested plaintext range
 - bind to one `VaultSessionHandle` and generation;
 - validate requested position and length;
 - avoid unbounded arrays;
-- translate `SessionExpired`, integrity, cancellation, and I/O errors predictably;
+- translate `SESSION_EXPIRED`, integrity, cancellation, and I/O errors predictably;
 - close native readers idempotently;
 - stop returning data immediately after lock;
 - avoid exposing private URIs or filenames to player analytics;
@@ -1337,7 +1337,7 @@ Before an Android release candidate:
 - [ ] Room/DataStore contain no private metadata.
 - [ ] Photo/video imports do not require broad library permission where picker access is sufficient.
 - [ ] Complete media never crosses Kotlin as one `ByteArray`.
-- [ ] Media3 readers fail with `SessionExpired` after lock.
+- [ ] Media3 readers fail with `SESSION_EXPIRED` after lock.
 - [ ] Lock clears private Coil, player, decoder, and Rust caches.
 - [ ] `FLAG_SECURE` and task-cover policies match product settings.
 - [ ] Notifications contain no private names, counts, thumbnails, or deep-link data.

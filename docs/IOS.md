@@ -1492,7 +1492,7 @@ Before an iOS release candidate:
 - [ ] Restored ciphertext requires a valid portable recovery slot.
 - [ ] Photos and Files imports do not load complete videos into Swift/Kotlin memory.
 - [ ] Security-scoped URL access is balanced in every path.
-- [ ] AVFoundation readers fail with `SessionExpired` after lock.
+- [ ] AVFoundation readers fail with `SESSION_EXPIRED` after lock.
 - [ ] Scene snapshots contain only neutral public/privacy UI.
 - [ ] Capture policy makes no unsupported prevention claim.
 - [ ] Now Playing, AirPlay, PiP, notifications, Spotlight, widgets, and intents expose no private data.

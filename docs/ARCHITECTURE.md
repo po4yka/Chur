@@ -626,7 +626,7 @@ Every session-bound handle contains or is associated with:
 - object/operation kind;
 - lifecycle state.
 
-After lock, an old handle MUST return `SessionExpired`, even if Kotlin, Swift, Media3, or AVFoundation failed to close it.
+After lock, an old handle MUST return `SESSION_EXPIRED`, even if Kotlin, Swift, Media3, or AVFoundation failed to close it.
 
 ### 13.1 Concurrency model
 
@@ -1337,7 +1337,7 @@ requested plaintext slice
 - supports cancellation;
 - uses a bounded decrypted-chunk cache;
 - clears cache on close or lock;
-- returns `SessionExpired` after lock;
+- returns `SESSION_EXPIRED` after lock;
 - separates range verification from complete-object verification.
 
 Audio MAY additionally expose a sequential reader for long recordings. Cover art and waveforms are encrypted derived assets.
@@ -1582,31 +1582,7 @@ Lock must be idempotent and safe during concurrent reader/import completion.
 
 Rust exposes stable error codes rather than internal strings.
 
-Suggested categories:
-
-```text
-AuthenticationFailed
-PlatformKeyUnavailable
-PlatformKeyInvalidated
-RecoveryRequired
-VaultLocked
-SessionExpired
-OperationCancelled
-UnsupportedFormatVersion
-UnsupportedAlgorithmSuite
-MigrationRequired
-MigrationFailed
-IntegrityFailure
-CorruptObject
-CatalogCorrupt
-ResourceLimitExceeded
-InvalidInput
-IoFailure
-StorageUnavailable
-SyncConflict
-RemoteProtocolFailure
-InternalFailure
-```
+The codes, their numeric values, their retryability, and the rule for an unknown value are registered once in [`ERROR_MODEL.md`](ERROR_MODEL.md). This document MUST NOT restate them or introduce a parallel vocabulary.
 
 Rules:
 

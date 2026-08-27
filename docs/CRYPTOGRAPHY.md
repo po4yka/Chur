@@ -1598,7 +1598,7 @@ Requirements:
 - readers return only authenticated bytes;
 - caches are session-scoped and cleared on lock;
 - decrypted cache entries are bounded and never persisted to disk;
-- a stale reader handle returns `SessionExpired` after lock;
+- a stale reader handle returns `SESSION_EXPIRED` after lock;
 - media players cannot retain a Rust session indefinitely through reference cycles;
 - the data-plane API SHOULD use direct/native buffers rather than repeated `ByteArray` copies.
 
@@ -1973,7 +1973,7 @@ Locking MUST:
 - invalidate object readers;
 - clear private image/media caches;
 - destroy private navigation state;
-- return future stale-handle calls as `SessionExpired`.
+- return future stale-handle calls as `SESSION_EXPIRED`.
 
 ---
 
@@ -2023,22 +2023,7 @@ It SHOULD NOT expose `xchacha_encrypt`, `hkdf_expand`, or raw-key getters.
 
 Cryptographic errors require stable, redacted semantics.
 
-External/high-level error classes may include:
-
-```text
-InvalidCredential
-SessionExpired
-UnsupportedVersion
-UnsupportedSuite
-CorruptRecord
-IncompleteObject
-ResourceLimitExceeded
-PlatformKeyUnavailable
-RecoveryRequired
-MigrationRequired
-IoFailure
-Cancelled
-```
+External error classes are the stable codes registered in [`ERROR_MODEL.md`](ERROR_MODEL.md). This document MUST NOT define an error name or value: a credential failure is `AUTHENTICATION_FAILED`, a damaged authenticated record is `OBJECT_CORRUPT` or `CATALOG_CORRUPT`, and a missing final commit is `OBJECT_INCOMPLETE`.
 
 Requirements:
 
