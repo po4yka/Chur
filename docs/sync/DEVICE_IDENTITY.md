@@ -66,14 +66,34 @@ Canonical encoding and signature domain are versioned.
 
 ## 5. Verification
 
-Users may verify devices through:
+The device fingerprint is the one value every platform displays for a device:
 
-- QR scan;
-- short authentication string/fingerprint;
-- comparison on existing device;
+```text
+device_fingerprint = BLAKE3-256(
+      "CHUR\x00IDENTITY\x00FINGERPRINT\x00V1"
+   || vault/account binding:bytes[16]
+   || device_id:bytes[16]
+   || signing_public_key:bytes[32]
+   || hpke_public_key:bytes[32]
+)
+```
+
+The domain tag is a fixed ASCII byte constant with no length prefix, allocated in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15.5; the four elements follow in the order above with no length prefixes, 96 bytes of input in total. Both public keys enter it, so substituting either one changes the string.
+
+Display is the leading 160 bits of the digest as 40 lowercase hexadecimal digits, most significant byte first, in ten groups of four separated by one space: a 49-character string, identical on Android, iOS, and the CLI, never truncated further and never re-grouped by locale.
+
+160 bits is the security parameter. A server substituting a device's keys must find a key pair whose leading 160 digest bits match those of the real device, a preimage search of about 2^160 operations. A birthday collision between two key pairs of the server's own choosing costs about 2^80 and does not help, because the user compares against a fixed real device. A shorter spoken string was rejected: one string per device removes the chance of comparing the weaker of two.
+
+The QR payload is the same 96 bytes of digest input, encoded as binary. The scanner recomputes the fingerprint from those bytes and compares it against the enrollment record it holds; it never trusts a rendered string carried inside the code. An enrollment QR additionally carries the 32-byte `bootstrap_checkpoint_commitment` of §4, 128 bytes in total.
+
+Users verify a device through:
+
+- QR scan between the two devices;
+- comparison of the 40 digits, read aloud or side by side;
+- comparison on an existing authorized device;
 - recovery-mediated approval.
 
-Server-displayed names alone are not proof.
+Server-displayed names alone are not proof. Which of these is required and which is optional is fixed by [`SERVER_TRUST_MODEL.md`](SERVER_TRUST_MODEL.md) §7.
 
 ## 6. Private-key protection
 

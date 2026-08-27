@@ -1778,7 +1778,7 @@ Requirements:
 - never reuse one private key across X25519 and Ed25519 purposes;
 - private keys are generated in Rust;
 - private keys are encrypted under root-derived identity-wrap keys;
-- public-key fingerprints use a stable human-verifiable representation;
+- public-key fingerprints use the construction and rendering fixed by [`sync/DEVICE_IDENTITY.md`](sync/DEVICE_IDENTITY.md) §5; an implementation MUST NOT define a second representation;
 - recipient verification is explicit for high-value sharing;
 - key replacement and device addition are signed and logged;
 - identity recovery receives separate threat-model review.
