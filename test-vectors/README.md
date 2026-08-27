@@ -17,4 +17,4 @@ Read [`docs/format/TEST_VECTORS.md`](../docs/format/TEST_VECTORS.md) for governa
 
 ## Versions
 
-- [`v1/`](v1/README.md) — scaffold for the proposed v1 formats; bytes are not yet frozen.
+- [`v1/`](v1/README.md) — scaffold for the frozen v1 formats; no fixtures are committed yet.

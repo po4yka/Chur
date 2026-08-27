@@ -276,7 +276,7 @@ Each format version field has its own namespace:
 | `descriptor_version` | `0x0001` | `VaultDescriptorV1` | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §2 |
 | `format_version` | `0x0001` | `ObjectKeyEnvelopeV1` | [`OBJECT_KEY_ENVELOPE_V1.md`](OBJECT_KEY_ENVELOPE_V1.md) §1 |
 | `format_version` | `0x0001` | `CollectionKeyEnvelopeV1` | [`COLLECTION_KEY_ENVELOPE_V1.md`](COLLECTION_KEY_ENVELOPE_V1.md) §1 |
-| `backup_version` | `0x0001` | `BackupPackageV1` | [`BACKUP_FORMAT_V1.md`](BACKUP_FORMAT_V1.md) §4 |
+| `backup_version` | `0x0001` | `BackupPackageV1` | [`BACKUP_FORMAT_V1.md`](BACKUP_FORMAT_V1.md) §2.1 |
 | `catalog_format_version` | `0x0001` | private catalog schema v1 | [`CATALOG_SCHEMA_V1.md`](CATALOG_SCHEMA_V1.md) |
 | `object_store_format_version` | `0x0001` | object store layout v1 | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §6 |
 | `slot_version` | `0x0001` | v1 key-slot families | [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §1 |

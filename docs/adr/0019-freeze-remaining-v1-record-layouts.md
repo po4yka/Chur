@@ -15,7 +15,7 @@ ADR-0008 froze the container's public bytes and left its two sealed plaintexts o
 - "immutable media properties permitted by policy" becomes `MediaPropertiesV1`, a closed 17-byte list of `media_class`, `pixel_width`, `pixel_height`, and `duration_ms`, and nothing mutable may appear there;
 - `CanonicalFinalCommit` is a fixed field list of exactly 128 bytes with no optional;
 - the vault descriptor gains a fixed 40-byte head, a typed body order, a 60-byte catalog sub-descriptor, a 24-byte object-store sub-descriptor, a 34-byte key-slot header with one length-prefixed body, and a 32-byte migration descriptor;
-- `CollectionKeyEnvelopeV1` is a new byte-exact specification: a 126-byte record with the AAD tuple that `CRYPTOGRAPHY.md` §25 already stated;
+- `CollectionKeyEnvelopeV1` is a new byte-exact specification: a 126-byte record whose §3 owns the AAD tuple, which `CRYPTOGRAPHY.md` §25 now points at;
 - `stream_kind` and `media_class` discriminants are allocated in `CANONICAL_ENCODING_V1.md` §15.4.
 
 ## Alternatives considered

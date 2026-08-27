@@ -6,22 +6,26 @@
 
 ## 1. Structure
 
-Canonical fields:
+The record is exactly 142 bytes. Integers are unsigned big-endian per [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §2.
 
 ```text
-format_version:u16
-encoding_profile:u16
-suite_id:u16
-vault_id:bytes[16]
-collection_id:bytes[16]
-collection_epoch:u64
-object_id:bytes[16]
-envelope_generation:u64
-nonce:bytes[24]
-wrapped_object_key:bytes[48]   # 32-byte key + 16-byte tag for XChaCha20-Poly1305
+offset  size  field                      v1 value
+0x00     2    format_version:u16         0x0001
+0x02     2    encoding_profile:u16       0x0001
+0x04     2    suite_id:u16               0x0001
+0x06    16    vault_id                   random, never all zero
+0x16    16    collection_id              random, never all zero
+0x26     8    collection_epoch:u64       starts at 1
+0x2E    16    object_id                  never all zero
+0x3E     8    envelope_generation:u64    starts at 1
+0x46    24    nonce                      fresh 24 random bytes per seal
+0x5E    48    wrapped_object_key         32-byte key plus 16-byte tag
+0x8E          end of record
 ```
 
-The record is exactly 142 bytes in the field order above, as §10 requires; exact offsets are fixed by the canonical vectors. A reader compares `format_version`, `encoding_profile`, and `suite_id` against the supported values before the AEAD runs, so a modified identifier fails as `UNSUPPORTED_VERSION` or `UNSUPPORTED_SUITE` and can never select a different construction. `suite_id` is additionally inside the AAD of §3. The AAD domain tag is `CHUR\x00OBJECT\x00KEY-ENVELOPE\x00V1`, allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.5. V1 values for `format_version`, `encoding_profile`, and `suite_id` are allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.
+The field order is the one §10 requires.
+
+A reader compares `format_version`, `encoding_profile`, and `suite_id` against the supported values before the AEAD runs, so a modified identifier fails as `UNSUPPORTED_VERSION` or `UNSUPPORTED_SUITE` and can never select a different construction. `suite_id` is additionally inside the AAD of §3. The AAD domain tag is `CHUR\x00OBJECT\x00KEY-ENVELOPE\x00V1`, allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.5. V1 values for `format_version`, `encoding_profile`, and `suite_id` are allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15; the registry records the allocation and this section is the authority for these envelope bytes.
 
 ## 2. Wrapping key
 

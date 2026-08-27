@@ -54,7 +54,7 @@ aad = CanonicalTuple(
 )
 ```
 
-The tag and the element order are those of [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §25. The tag is allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.5 and the tuple encoding is §7.1 there, so the AAD is exactly 81 bytes: a 31-byte tag, then 16, 16, 8, 2, and 8.
+This element list, in this order, is the only collection-key-envelope AAD, and [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §25 defers to it. The tag is allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.5 and the tuple encoding is §7.1 there, so the AAD is exactly 81 bytes: a 31-byte tag, then 16, 16, 8, 2, and 8.
 
 `nonce` and `wrapped_collection_key` are not in the AAD: the nonce is an AEAD input and the ciphertext is what the tag already covers. `format_version` and `encoding_profile` are not in the AAD either, because §1 compares them as constants before the AEAD runs.
 

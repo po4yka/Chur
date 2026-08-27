@@ -115,6 +115,8 @@ operation-log heads when applicable
 required free-space/restore policy metadata
 ```
 
+`backup_version` here repeats the public preamble field of §2.1, which is the authority for the value and the copy the §13 limit bounds. A restore rejects the package as `VAULT_CORRUPT` when the two differ.
+
 The manifest is sealed under `BackupManifestKey`, derived by HKDF-SHA-256 from `VaultRootSecret` under the label `chur/v1/root/backup-manifest` registered in [`../security/KEY_HIERARCHY.md`](../security/KEY_HIERARCHY.md) §3, with `vault_id:bytes[16]` and `backup_id:bytes[16]` as its context fields.
 
 This is the only manifest-key source in v1. A password slot and a recovery slot both restore the same `VaultRootSecret`, so there is no separate portable content key and no key-source discriminant in the preamble; §8 step 3 has one deterministic input.
