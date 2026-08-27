@@ -1,6 +1,6 @@
 # Vault Descriptor v1
 
-> **Status:** Proposed normative logical and binary contract; the descriptor-authentication construction in §8 is frozen. The remaining field encoding, offsets, and deterministic vectors are outstanding.
+> **Status:** Proposed normative logical and binary contract; the field layout of §2, the sub-descriptors of §5 to §7, and the descriptor-authentication construction of §8 are frozen. Deterministic vectors are outstanding.
 
 `VaultDescriptorV1` is the small pre-unlock structure that identifies a vault format, lists bounded key-slot descriptors, locates encrypted catalog/object state, and records transaction/migration generation. It contains no private user metadata.
 
@@ -32,7 +32,57 @@ VaultDescriptorV1
 └── descriptor_authentication
 ```
 
-Exact offsets/tags are frozen in vectors before production use. V1 values for `magic`, `descriptor_version`, `canonical_encoding_profile`, `crypto_policy_id`, and the `state` discriminants of §4 are allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.
+V1 values for `magic`, `descriptor_version`, `canonical_encoding_profile`, `crypto_policy_id`, and the `state` discriminants of §4 are allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15; the registry records the allocation, and this section is the authority for these descriptor bytes.
+
+### 2.1 Public head
+
+The descriptor begins with a fixed 40-byte head. Integers are unsigned big-endian per [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §2.
+
+```text
+offset  size  field                           v1 value
+0x00     8    magic                           43 48 55 52 56 4C 54 31   "CHURVLT1"
+0x08     2    descriptor_version:u16          0x0001
+0x0A     2    canonical_encoding_profile:u16  0x0001
+0x0C     2    crypto_policy_id:u16            0x0001
+0x0E     2    flags:u16                       0x0000
+0x10     4    public_header_length:u32        0x00000028   (40)
+0x14     4    descriptor_length:u32           variable, total encoded bytes including the trailing tag
+0x18    16    vault_id                        random, never all zero
+0x28          end of head
+```
+
+`descriptor_length` and `vault_id` are the only variable head fields. A reader rejects the descriptor unless `magic` matches all eight bytes, `flags` and `public_header_length` hold exactly their listed values, `vault_id` is not all zero, `descriptor_length` is within §13, and the version, profile, and policy identifiers are supported. Both variable fields sit inside the authenticated body of §8, so a modified value fails the tag rather than opening a session.
+
+### 2.2 Body
+
+The body follows the head immediately and is encoded as a structure under [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §4, in this order:
+
+```text
+field                      type                             size
+descriptor_generation      u64                                 8
+state                      u8, §15.4 discriminant              1
+catalog_descriptor         structure of §5                    60
+object_store_descriptor    structure of §6                    24
+key_slot_descriptors       list<KeySlotDescriptorV1> of §7     4 + entries
+migration_descriptor       optional<MigrationDescriptorV1>     1, plus 32 when present
+descriptor_authentication  bytes[32], the tag of §8           32
+```
+
+A `state` outside the five allocated discriminants is rejected; it is never treated as an unknown but tolerable value.
+
+`MigrationDescriptorV1` is present exactly when `state` is `MIGRATING` or `RECOVERING`, and is then exactly 32 bytes:
+
+```text
+field                        type       size
+from_descriptor_version      u16           2
+to_descriptor_version        u16           2
+from_catalog_format_version  u16           2
+to_catalog_format_version    u16           2
+migration_generation         u64           8
+checkpoint_id                bytes[16]    16
+```
+
+V1 defines no migration extension records, so the optional is either absent or exactly 33 bytes including its presence byte, and never variable in length.
 
 ## 3. Public fields
 
@@ -76,12 +126,16 @@ A state transition writes a new descriptor generation; it does not mutate authen
 Conceptual fields:
 
 ```text
-catalog_format_version
-catalog_crypto_suite
-opaque_catalog_path_id
-catalog_generation
-catalog_header_commitment
+offset  size  field                          v1 value
+0x00     2    catalog_format_version:u16     0x0001
+0x02     2    catalog_crypto_suite:u16       0x0001
+0x04    16    opaque_catalog_path_id         random, never all zero
+0x14     8    catalog_generation:u64
+0x1C    32    catalog_header_commitment      BLAKE3-256
+0x3C          end of catalog descriptor
 ```
+
+The structure is exactly 60 bytes and carries no variable field. `catalog_format_version` must equal the value the catalog itself records, per [`CATALOG_SCHEMA_V1.md`](CATALOG_SCHEMA_V1.md) §2.
 
 The catalog key is derived after root validation. The descriptor does not contain plaintext schema or SQLCipher passphrase.
 
@@ -90,29 +144,40 @@ The catalog key is derived after root validation. The descriptor does not contai
 Conceptual fields:
 
 ```text
-object_store_format_version
-opaque_root_path_id
-naming_profile_id
-container_version_floor
-container_version_ceiling
+offset  size  field                            v1 value
+0x00     2    object_store_format_version:u16  0x0001
+0x02    16    opaque_root_path_id              random, never all zero
+0x12     2    naming_profile_id:u16            0x0001
+0x14     2    container_version_floor:u16      0x0001
+0x16     2    container_version_ceiling:u16    0x0001
+0x18          end of object-store descriptor
 ```
+
+The structure is exactly 24 bytes and carries no variable field. `container_version_floor` must be less than or equal to `container_version_ceiling`, and both carry values of the `container_version` namespace of [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.2.
 
 Physical paths are app-internal and resolved by the platform/storage adapter from opaque IDs.
 
 ## 7. Key-slot descriptors
 
-Each entry declares only bounded information needed to attempt a slot:
+Each entry declares only bounded information needed to attempt a slot. `KeySlotDescriptorV1` is a fixed 34-byte header followed by one length-prefixed body:
 
 ```text
-slot_id
-slot_type
-slot_version
-slot_generation
-public parameters/reference
-wrapped-root payload or platform envelope reference
+offset  size             field                v1 value
+0x00    16               slot_id              random, never all zero
+0x10     1               slot_type:u8         allocated in CANONICAL_ENCODING_V1.md §15.4
+0x11     1               reserved:u8          0x00
+0x12     2               slot_version:u16     0x0001
+0x14     2               wrap_suite_id:u16    0x0001
+0x16     8               slot_generation:u64
+0x1E     4               slot_body_length:u32
+0x22     slot_body_length slot_body
 ```
 
-Slot count and total bytes are capped. Duplicate IDs/generations are rejected.
+`slot_body` carries both the public parameters and the wrapped-root payload or the platform envelope reference for that family. They are not alternatives at this level: one length-prefixed body always holds whichever of them the family defines. Its internal schema is selected by `slot_type` and owned by [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md), so the descriptor parser bounds and steps over a body it does not interpret without guessing its shape.
+
+A `slot_type` that §15.4 does not allocate is rejected. V1 defines no safe forwarding for an unknown slot family, so an unknown value is never carried through a descriptor rewrite. `0x05` parses as an allocated family and is never attempted as an unlock method in v1.
+
+Slot count, `slot_body_length`, and the total of all slot bodies are capped by §13. Duplicate `slot_id` values, and duplicate `(slot_id, slot_generation)` pairs, are rejected.
 
 ## 8. Descriptor authentication
 
