@@ -114,9 +114,13 @@ Cargo `build.rs`, Gradle plugins, KSP processors, and code generators execute wi
 
 ## Unsafe code
 
-`unsafe_code = "forbid"` in `[workspace.lints.rust]` is the default for every crate in `rust/`. `forbid` cannot be lifted by an inner `allow` or `expect`, so a crate that must contain `unsafe` cannot inherit it. `chur-ffi` is the only such crate: the v1 C ABI of [`interop/FFI_CONTRACT.md`](interop/FFI_CONTRACT.md) requires `#[unsafe(no_mangle)] pub extern "C"` exports and a caller-allocated raw-buffer data plane, and neither compiles under `forbid`. `rust/crates/chur-ffi/Cargo.toml` therefore declares its own `[lints.rust]` and `[lints.clippy]` tables instead of inheriting, and sets `unsafe_code = "deny"`; a block overrides that level with `#[expect(unsafe_code, reason = ...)]` and an adjacent SAFETY comment.
+`unsafe_code = "forbid"` in `[workspace.lints.rust]` is the default for every crate in `rust/`. `forbid` cannot be lifted by an inner `allow` or `expect`, so a crate that must contain `unsafe` cannot inherit it. Two crates are exempt, `chur-ffi` and `chur-jni`, and no third is without an ADR.
 
-Two consequences follow and are requirements, not notes. A crate-local lint table replaces inheritance rather than extending it, so it repeats every workspace level, and a change to `[workspace.lints]` must be applied to it in the same pull request. Adding a second crate to this exception requires an ADR; loosening the workspace lint instead of adding a crate-local table is a defect.
+`chur-ffi` is the first: the v1 C ABI of [`interop/FFI_CONTRACT.md`](interop/FFI_CONTRACT.md) requires `#[unsafe(no_mangle)] pub extern "C"` exports and a caller-allocated raw-buffer data plane, and neither compiles under `forbid`. `rust/crates/chur-ffi/Cargo.toml` therefore declares its own `[lints.rust]` and `[lints.clippy]` tables instead of inheriting, and sets `unsafe_code = "deny"`; a block overrides that level with `#[expect(unsafe_code, reason = ...)]` and an adjacent SAFETY comment.
+
+`chur-jni` is the second, under [ADR-0040](adr/0040-add-a-rust-jni-adapter-crate.md). JNI requires a native function whose symbol name encodes the Java class and method, and [`interop/FFI_CONTRACT.md`](interop/FFI_CONTRACT.md) §6.2 forbids such a symbol in the Chur library, so the Android adapter is a second artifact. It holds no logic: every function reads the JVM arguments, calls one `chur_*` export, and writes the result back.
+
+Two consequences follow and are requirements, not notes. A crate-local lint table replaces inheritance rather than extending it, so it repeats every workspace level, and a change to `[workspace.lints]` must be applied to it in the same pull request. Adding a third crate to this exception requires an ADR; loosening the workspace lint instead of adding a crate-local table is a defect.
 
 New `unsafe` code must:
 

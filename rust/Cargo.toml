@@ -8,6 +8,7 @@ members = [
     "crates/chur-media",
     "crates/chur-sync-protocol",
     "crates/chur-ffi",
+    "crates/chur-jni",
     "crates/chur-cli",
 ]
 
@@ -28,6 +29,7 @@ chur-crypto = { path = "crates/chur-crypto", version = "0.1.0" }
 chur-format = { path = "crates/chur-format", version = "0.1.0" }
 chur-catalog = { path = "crates/chur-catalog", version = "0.1.0" }
 chur-media = { path = "crates/chur-media", version = "0.1.0" }
+chur-ffi = { path = "crates/chur-ffi", version = "0.1.0" }
 
 # Cryptography. Narrow, well-reviewed libraries only (DEPENDENCY_POLICY.md).
 argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
@@ -52,6 +54,9 @@ rusqlite = { version = "0.40", default-features = false, features = [
     "column_decltype",
     "limits",
 ] }
+
+# The Android JNI adapter, ADR-0040. Pure Rust, no build script, no network.
+jni = { version = "0.21", default-features = false }
 
 # Errors and CLI.
 thiserror = "2"

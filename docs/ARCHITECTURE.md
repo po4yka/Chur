@@ -305,6 +305,7 @@ Chur/
 │       ├── chur-media/
 │       ├── chur-sync-protocol/
 │       ├── chur-ffi/
+│       ├── chur-jni/
 │       └── chur-cli/
 │
 ├── build-logic/
@@ -586,6 +587,12 @@ Owns:
 - direct-buffer and descriptor bridges.
 
 It MUST contain minimal business logic.
+
+### `chur-jni`
+
+The Android JNI adapter of [`interop/FFI_CONTRACT.md`](interop/FFI_CONTRACT.md) §14, decided by [`ADR-0040`](adr/0040-add-a-rust-jni-adapter-crate.md). It builds a separate shared library because §6.2 forbids a `Java_*` symbol in the Chur artifact, and it holds no logic: every function reads the JVM arguments, calls one `chur_*` export, and writes the result back.
+
+iOS does not load it. Kotlin/Native reaches `chur.h` through cinterop directly.
 
 ### `chur-cli`
 

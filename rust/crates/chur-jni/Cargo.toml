@@ -1,0 +1,34 @@
+[package]
+name = "chur-jni"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The Android JNI adapter, ADR-0040. Translation only, no logic."
+
+[lib]
+name = "chur_jni"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+chur-ffi.workspace = true
+
+jni.workspace = true
+
+# `chur-jni` is the second crate permitted to contain `unsafe`, under ADR-0040.
+# JNI requires a native function whose symbol name encodes the Java class and
+# method, and FFI_CONTRACT.md section 6.2 forbids such a symbol in the Chur
+# library, so the adapter is a second artifact. As with `chur-ffi`, the crate
+# declares its own lint tables instead of inheriting and sets
+# `unsafe_code = "deny"`; a block overrides that with `#[expect(unsafe_code)]`
+# and an adjacent SAFETY comment. These levels track `[workspace.lints]`.
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+panic = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+todo = "warn"
