@@ -76,9 +76,18 @@ Security-critical additions require a dedicated reviewer.
 
 `.agents/` and `.claude/` hold agent instruction files copied from third-party repositories. They are vendored content under this policy, not generated state: they are tracked, reviewed on update, and never run against a real vault, a production secret, or user media. They contribute no code to the Android, iOS, Rust, or CLI artifacts and are excluded from release evidence and from the SBOM.
 
-`skills-lock.json` is their manifest. Each entry must record the upstream repository, the path within it, a content hash, and the upstream commit the content was taken from. The commit satisfies "record source revision for vendored code" above; a content hash alone proves integrity but not provenance, so it is not a substitute.
+`skills-lock.json` is their manifest. Each entry records the upstream repository, the path within it, a content hash, and the upstream commit the content was taken from. The commit satisfies "record source revision for vendored code" above; a content hash alone proves integrity but not provenance, so it is not a substitute.
 
-Open item, owner: repository maintainer. The current entries predate this rule and carry no commit field. The field is populated at the next skill synchronization, before Gate 1.
+Every entry now carries a `commit`. The forty-six vendored skills trace to twenty-six distinct upstream commits, and each recorded commit reproduces the vendored bytes exactly.
+
+Two hashes are recorded, and they are not interchangeable:
+
+- `computedHash` belongs to the external skill-synchronisation tool. It covers a skill's `SKILL.md` and nothing else. Thirty-three of the forty-six skills also vendor a `references/` directory, and for those thirty-three the recorded value reproduces neither the vendored content nor any state of that directory in upstream history. It verifies nothing and is kept only because the tool owns it;
+- `contentHash` is the value this repository verifies. It covers the whole vendored directory: SHA-256 over every file under it, in ascending order of the file's path relative to that directory, feeding for each file the relative path as UTF-8 with `/` separators and then the file bytes.
+
+`scripts/check-vendored-skills.py` recomputes `contentHash` for every entry, reports a skill that is vendored but unlocked or locked but absent, and fails on any mismatch. It runs offline and is a job of the enforcing workflow. With `--verify-upstream` and a clone of each upstream repository it also checks that every recorded commit still reproduces the vendored bytes, which is the provenance half and needs the network.
+
+A skill synchronisation updates both hashes and the commit, and the checker is what proves it did.
 
 ## Cargo features
 

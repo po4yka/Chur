@@ -5,277 +5,369 @@
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/cargo-workflows/SKILL.md",
-      "computedHash": "486fa314cc6ce0ced2e9fb0af235a07405e913810e73d248e2b3a7643dec5f42"
+      "commit": "cb652d08d2156ad11aa01d94f2cd82718124d573",
+      "computedHash": "486fa314cc6ce0ced2e9fb0af235a07405e913810e73d248e2b3a7643dec5f42",
+      "contentHash": "5ae15e2135bd431e73356b9923b3345dc94f0a070ba4c10c595fc39a86c35d7e"
     },
     "ffi-error-progress-cancel": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/ffi-error-progress-cancel/SKILL.md",
-      "computedHash": "41620a74aacc6026f6b7d70b0704ab45bcd3c84b8edec9dccff3fe3249944623"
+      "commit": "abf22aa0fc90f5f43a3195c5ed36d1512bf24ee1",
+      "computedHash": "41620a74aacc6026f6b7d70b0704ab45bcd3c84b8edec9dccff3fe3249944623",
+      "contentHash": "d7242484d726628b6164ea943c9dcb3d294cc6e084f292f362ed8212f88f5e59"
     },
     "memory-model": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/memory-model/SKILL.md",
-      "computedHash": "554accda064eab7dec7047085b4001f8b962cd4190ef661630253c1a7abf6681"
+      "commit": "b73c7bf2a7e4f78be2440113beb0cd987736d791",
+      "computedHash": "554accda064eab7dec7047085b4001f8b962cd4190ef661630253c1a7abf6681",
+      "contentHash": "13fd25b6673e2bb26e140667e3d63aefb6e66ba8060e8ba08dc1a0fbad63c693"
     },
     "ponytail": {
       "source": "dietrichgebert/ponytail",
       "sourceType": "github",
       "skillPath": "skills/ponytail/SKILL.md",
-      "computedHash": "210fa0831f649ce9f8a305f7b7c8cf2a0dd09ac4dd53067109941b96e7811d4e"
+      "commit": "b6c04480c03e8db2f035751d7c46289779ec3362",
+      "computedHash": "210fa0831f649ce9f8a305f7b7c8cf2a0dd09ac4dd53067109941b96e7811d4e",
+      "contentHash": "210fa0831f649ce9f8a305f7b7c8cf2a0dd09ac4dd53067109941b96e7811d4e"
     },
     "ponytail-audit": {
       "source": "dietrichgebert/ponytail",
       "sourceType": "github",
       "skillPath": "skills/ponytail-audit/SKILL.md",
-      "computedHash": "8b8d72e6ff70b65b6c9518d470fcf29dc696eea93d28f3efa10fdcc60cbd696d"
+      "commit": "bd6176a9b33ab72594ff82e6f34f17b085f25565",
+      "computedHash": "8b8d72e6ff70b65b6c9518d470fcf29dc696eea93d28f3efa10fdcc60cbd696d",
+      "contentHash": "8b8d72e6ff70b65b6c9518d470fcf29dc696eea93d28f3efa10fdcc60cbd696d"
     },
     "ponytail-debt": {
       "source": "dietrichgebert/ponytail",
       "sourceType": "github",
       "skillPath": "skills/ponytail-debt/SKILL.md",
-      "computedHash": "0099b82174e3a4261828b4ec04d2c068b1b294fdab14f76701c2acd1f7c99539"
+      "commit": "ff5d0936bee1f1267f4f4a7c34a2e6c796254f0b",
+      "computedHash": "0099b82174e3a4261828b4ec04d2c068b1b294fdab14f76701c2acd1f7c99539",
+      "contentHash": "0099b82174e3a4261828b4ec04d2c068b1b294fdab14f76701c2acd1f7c99539"
     },
     "ponytail-gain": {
       "source": "dietrichgebert/ponytail",
       "sourceType": "github",
       "skillPath": "skills/ponytail-gain/SKILL.md",
-      "computedHash": "c45ecba7906960eea904218b623abf097ebff84ecbacca6d68da1d0687435f75"
+      "commit": "15749f7ffc94c84ce7be3c000dcefb322ec1eeee",
+      "computedHash": "c45ecba7906960eea904218b623abf097ebff84ecbacca6d68da1d0687435f75",
+      "contentHash": "c45ecba7906960eea904218b623abf097ebff84ecbacca6d68da1d0687435f75"
     },
     "ponytail-help": {
       "source": "dietrichgebert/ponytail",
       "sourceType": "github",
       "skillPath": "skills/ponytail-help/SKILL.md",
-      "computedHash": "10e8382b1033c9a0fec0073de6d3de3846b4f5dca7d78b6df2d476a1f4cd43c6"
+      "commit": "b8f20b8e7cc933c516d8928a7e4f3786df05fb65",
+      "computedHash": "10e8382b1033c9a0fec0073de6d3de3846b4f5dca7d78b6df2d476a1f4cd43c6",
+      "contentHash": "10e8382b1033c9a0fec0073de6d3de3846b4f5dca7d78b6df2d476a1f4cd43c6"
     },
     "ponytail-review": {
       "source": "dietrichgebert/ponytail",
       "sourceType": "github",
       "skillPath": "skills/ponytail-review/SKILL.md",
-      "computedHash": "4646594fcd75455533f7ff1425f4f1c5ba0fa65f88241bf262b1c4fc275f049a"
+      "commit": "bd6176a9b33ab72594ff82e6f34f17b085f25565",
+      "computedHash": "4646594fcd75455533f7ff1425f4f1c5ba0fa65f88241bf262b1c4fc275f049a",
+      "contentHash": "4646594fcd75455533f7ff1425f4f1c5ba0fa65f88241bf262b1c4fc275f049a"
     },
     "rust-android-build": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-android-build/SKILL.md",
-      "computedHash": "540949cad202227ccc591d17a6ea2943920271ec8889a6cb042da0806877086b"
+      "commit": "a3d0f53eb8fb7f55bd96a3829393cb46dabe5433",
+      "computedHash": "540949cad202227ccc591d17a6ea2943920271ec8889a6cb042da0806877086b",
+      "contentHash": "2bafbb25a0987bae269298724345ace60caba294b724718c6bf868a891997fec"
     },
     "rust-async-internals": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-async-internals/SKILL.md",
-      "computedHash": "8b75f714a9852e698de26c01b2fdac713986e5a60c4354150d65139f91f1e980"
+      "commit": "cb652d08d2156ad11aa01d94f2cd82718124d573",
+      "computedHash": "8b75f714a9852e698de26c01b2fdac713986e5a60c4354150d65139f91f1e980",
+      "contentHash": "014a5ad2ab6f93bc63ace441714ebf1b1f5f85ae339efd6eddf3400485b71892"
     },
     "rust-borrow-semantics": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-borrow-semantics/SKILL.md",
-      "computedHash": "bdd00c3501beee6012a6c66b79f2d2d0a28423802ef8fba640105437eae54c56"
+      "commit": "cb652d08d2156ad11aa01d94f2cd82718124d573",
+      "computedHash": "bdd00c3501beee6012a6c66b79f2d2d0a28423802ef8fba640105437eae54c56",
+      "contentHash": "bdd00c3501beee6012a6c66b79f2d2d0a28423802ef8fba640105437eae54c56"
     },
     "rust-callback-bounds": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-callback-bounds/SKILL.md",
-      "computedHash": "77b1108013dded52a6901049021f79bb0542083752bb67ec8b170c77d8a9caae"
+      "commit": "cb652d08d2156ad11aa01d94f2cd82718124d573",
+      "computedHash": "77b1108013dded52a6901049021f79bb0542083752bb67ec8b170c77d8a9caae",
+      "contentHash": "a14bcc8254239e4e83d29e01a6c48a173173be5bc380d167710739285fe9a5db"
     },
     "rust-cli": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-cli/SKILL.md",
-      "computedHash": "b409b221b3c57a03665cd8982c33a7ce9c788d80e450a49cc3ba34de535b71b6"
+      "commit": "97030578f3d2ea0b4414563ded1a71424b617b89",
+      "computedHash": "b409b221b3c57a03665cd8982c33a7ce9c788d80e450a49cc3ba34de535b71b6",
+      "contentHash": "b409b221b3c57a03665cd8982c33a7ce9c788d80e450a49cc3ba34de535b71b6"
     },
     "rust-code-style": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-code-style/SKILL.md",
-      "computedHash": "a4b59fa639cf24f896b90fb3c84b02367a7d8880126fee34a6473a6c36a0954b"
+      "commit": "d0f379d2fbd2c65be6d1f9b0f2a8b18bcd60ab53",
+      "computedHash": "a4b59fa639cf24f896b90fb3c84b02367a7d8880126fee34a6473a6c36a0954b",
+      "contentHash": "0bd7be5c9c7c268a80258c86ae2b4a8ad974306679cce1426545fbae29ffb5a7"
     },
     "rust-compiler-errors": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-compiler-errors/SKILL.md",
-      "computedHash": "7f7fb8ae7834006b7d45ee9872768321745ad694f0fc8b479309410ae1bba2f9"
+      "commit": "cb652d08d2156ad11aa01d94f2cd82718124d573",
+      "computedHash": "7f7fb8ae7834006b7d45ee9872768321745ad694f0fc8b479309410ae1bba2f9",
+      "contentHash": "6c82c66b4bea7e6866d5eb667cba59c60acbc65eb9d1519ea5f56bb5b266f6c6"
     },
     "rust-copy-on-write": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-copy-on-write/SKILL.md",
-      "computedHash": "59823210009a62c7e0de079e0712e43abaf8f769b09bf6cd8aa1d44883cc92d0"
+      "commit": "a58e123048a056cc3ff404b8cce9ab6c193f3004",
+      "computedHash": "59823210009a62c7e0de079e0712e43abaf8f769b09bf6cd8aa1d44883cc92d0",
+      "contentHash": "3db0dee86d8a14f1298cd23cd3c0bc1bd017219913880f8dc3997b1228d0374f"
     },
     "rust-crate-architecture": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-crate-architecture/SKILL.md",
-      "computedHash": "8ea8c0781ceb5a30d2cf5c7888dc34b1c861dff2ae5b0026df16693eb0471f4c"
+      "commit": "54aec29652a3a7351e39c40f074f2572c3b3d1a6",
+      "computedHash": "8ea8c0781ceb5a30d2cf5c7888dc34b1c861dff2ae5b0026df16693eb0471f4c",
+      "contentHash": "2a70082bd09ee4ccad31e8774e9d4b6d46e75f5f5e08e22522b82c6580821cb4"
     },
     "rust-database": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-database/SKILL.md",
-      "computedHash": "e3b44c04bbba35f435fed44629d2eba2699baa890521fa0dc8bffd594e34c0ce"
+      "commit": "1dc3035ccf1083fcf830ab1a877c0eb5400efcc6",
+      "computedHash": "e3b44c04bbba35f435fed44629d2eba2699baa890521fa0dc8bffd594e34c0ce",
+      "contentHash": "e3b44c04bbba35f435fed44629d2eba2699baa890521fa0dc8bffd594e34c0ce"
     },
     "rust-debugging": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-debugging/SKILL.md",
-      "computedHash": "8a6af3981da79ecc84ad81f135751ffe4add7f17378b43d539c34a3b2e4845d1"
+      "commit": "ad60640ab9f83bf06be1f8dbb1375de1383b69bd",
+      "computedHash": "8a6af3981da79ecc84ad81f135751ffe4add7f17378b43d539c34a3b2e4845d1",
+      "contentHash": "cd15c074dc39684dc1ee150817b7e630356d25d5ab75178c05c331665020bfe8"
     },
     "rust-discipline": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-discipline/SKILL.md",
-      "computedHash": "f873200753656b7dc34803d05316f23557f0439f3c6e9444bc470a008ecc4188"
+      "commit": "cb652d08d2156ad11aa01d94f2cd82718124d573",
+      "computedHash": "f873200753656b7dc34803d05316f23557f0439f3c6e9444bc470a008ecc4188",
+      "contentHash": "dc42a999889bee3263c15fb1642d6516aa29d126f51933306c1c2f62be78b6b3"
     },
     "rust-event-loop-state": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-event-loop-state/SKILL.md",
-      "computedHash": "b9f6355a8cf0c94470337b6c6d3fa29f3090d3ce0fab1a6cea4516e1629809d4"
+      "commit": "d1384be95424d5ad00d115bcb65c6673ecb3e62f",
+      "computedHash": "b9f6355a8cf0c94470337b6c6d3fa29f3090d3ce0fab1a6cea4516e1629809d4",
+      "contentHash": "f6f5aed66698c1a66fefc54d2f1bf60c6ae04ab71b314fec3e2586e78608eea8"
     },
     "rust-hot-path": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-hot-path/SKILL.md",
-      "computedHash": "e9c024c5d44db2bcdd9fee606dff037e1c7688b312cf74779f6364a1779c0440"
+      "commit": "c261bc20266cc41bef4025c261a84eb66ef977c0",
+      "computedHash": "e9c024c5d44db2bcdd9fee606dff037e1c7688b312cf74779f6364a1779c0440",
+      "contentHash": "f85bbf2420dc8cc68f358fef0aae522f74cd8faaf5817b54831c8a77a8373ef4"
     },
     "rust-ios-build": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-ios-build/SKILL.md",
-      "computedHash": "017c640b6a52e41063747e5a666eaf83b64074300b3170fc039f3e866072732d"
+      "commit": "6359a67774a6378a91b41aefe5da538bad00b45d",
+      "computedHash": "017c640b6a52e41063747e5a666eaf83b64074300b3170fc039f3e866072732d",
+      "contentHash": "017c640b6a52e41063747e5a666eaf83b64074300b3170fc039f3e866072732d"
     },
     "rust-iterator-impl": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-iterator-impl/SKILL.md",
-      "computedHash": "0cb655248f6d9900725cc4890b1ba07e96889f0aebe0d94fea38e191a79e92ef"
+      "commit": "876b16a72e6896b7c382aad6de0ca5f03de98e08",
+      "computedHash": "0cb655248f6d9900725cc4890b1ba07e96889f0aebe0d94fea38e191a79e92ef",
+      "contentHash": "8357729e89b1b05bdd34d068bf53eb755439969f5872bad2eb025912b7cec222"
     },
     "rust-jni": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-jni/SKILL.md",
-      "computedHash": "c0733eec93912f1de3bc51d1b0bb646b9f3cfd0a62b4776395b8355ac035257a"
+      "commit": "7b7c19eba14b99add799ae76c4b12c5a7231f4a8",
+      "computedHash": "c0733eec93912f1de3bc51d1b0bb646b9f3cfd0a62b4776395b8355ac035257a",
+      "contentHash": "efb9260d449113ae6962aee0795c855732fefdcdf3b1f574575b74599c2d53a7"
     },
     "rust-lints": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-lints/SKILL.md",
-      "computedHash": "b1427b5b61e2e2c9a32f3065301f52e2431fc35e290d44a1a443b8284f77d704"
+      "commit": "c261bc20266cc41bef4025c261a84eb66ef977c0",
+      "computedHash": "b1427b5b61e2e2c9a32f3065301f52e2431fc35e290d44a1a443b8284f77d704",
+      "contentHash": "ba25d9be453be44a32f0c08e6d65ad949745ff57b951392aefd32a7d4e5ea650"
     },
     "rust-macros": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-macros/SKILL.md",
-      "computedHash": "a3c739ed02b9158ce593297b6502de407cf1a4278a63bed652a3e93d5d4c6f25"
+      "commit": "45a845d68d293cd081e1967aeea0741118b11e41",
+      "computedHash": "a3c739ed02b9158ce593297b6502de407cf1a4278a63bed652a3e93d5d4c6f25",
+      "contentHash": "0fdb282881193bfbfef7d2d7635bb58d3312805f3542c87ab5eb24718088650c"
     },
     "rust-native-linking": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-native-linking/SKILL.md",
-      "computedHash": "4c0d92963367a93cac4bd022097a32ecaad19a8a2f5fe760bf179aafe7495bfb"
+      "commit": "cb652d08d2156ad11aa01d94f2cd82718124d573",
+      "computedHash": "4c0d92963367a93cac4bd022097a32ecaad19a8a2f5fe760bf179aafe7495bfb",
+      "contentHash": "cf704b74b9664445726c2bdad7c5317ce5d1f3bc5d9941bc7ad3367192dffbf8"
     },
     "rust-observability": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-observability/SKILL.md",
-      "computedHash": "c5c9c3e33a9607c8dc682594dae4cb73072392300496093394e969736a7ece64"
+      "commit": "36e1097e0b81b4aaaf38e34dafe444b021787b38",
+      "computedHash": "c5c9c3e33a9607c8dc682594dae4cb73072392300496093394e969736a7ece64",
+      "contentHash": "9f1852bf9179cb3395f9bb15147039307d37e86f272146f4d740f7bec86a20d6"
     },
     "rust-panic-safety": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-panic-safety/SKILL.md",
-      "computedHash": "ef6448ab018368f63db0238bef995f93f95331ead21773a9ffb9079e0b716ddc"
+      "commit": "cb652d08d2156ad11aa01d94f2cd82718124d573",
+      "computedHash": "ef6448ab018368f63db0238bef995f93f95331ead21773a9ffb9079e0b716ddc",
+      "contentHash": "8f96870723ab79e5bdb1777d4eefff5f2d051384549f6af9afff763f02b7569f"
     },
     "rust-pattern-semantics": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-pattern-semantics/SKILL.md",
-      "computedHash": "50e2d660a634073db70082e10a3723dc1869de8ea68844032fe2fa687076ecd0"
+      "commit": "cb652d08d2156ad11aa01d94f2cd82718124d573",
+      "computedHash": "50e2d660a634073db70082e10a3723dc1869de8ea68844032fe2fa687076ecd0",
+      "contentHash": "50e2d660a634073db70082e10a3723dc1869de8ea68844032fe2fa687076ecd0"
     },
     "rust-performance": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-performance/SKILL.md",
-      "computedHash": "2f11f10d42b435216943a2b36671c8fbcbb3cd1541efc6163f7bd8dc78590be7"
+      "commit": "c261bc20266cc41bef4025c261a84eb66ef977c0",
+      "computedHash": "2f11f10d42b435216943a2b36671c8fbcbb3cd1541efc6163f7bd8dc78590be7",
+      "contentHash": "b29aa0f6a6e9337ee5865e80210ea3d7ea7ce6cb048bfe81bbf1b2d8da70a93b"
     },
     "rust-pin-projection": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-pin-projection/SKILL.md",
-      "computedHash": "c8cacd3edba7641d7c634aed3b6583cf6fef2b0822ca6eb768dda77e25cf479f"
+      "commit": "d1384be95424d5ad00d115bcb65c6673ecb3e62f",
+      "computedHash": "c8cacd3edba7641d7c634aed3b6583cf6fef2b0822ca6eb768dda77e25cf479f",
+      "contentHash": "ff6ae938776bcf168c3beff451e019e0d2e8de425fa0902214b108b80d33a34c"
     },
     "rust-sanitizers-miri": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-sanitizers-miri/SKILL.md",
-      "computedHash": "92438cb4c651050a68692fa7558d774ff785ce5ef32bc61561c2a0148e37ec12"
+      "commit": "cb652d08d2156ad11aa01d94f2cd82718124d573",
+      "computedHash": "92438cb4c651050a68692fa7558d774ff785ce5ef32bc61561c2a0148e37ec12",
+      "contentHash": "39216900d3ccb1be0b781f09b1773fa42b0ccee644300bdc174f1c3e5c4bf0c4"
     },
     "rust-security": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-security/SKILL.md",
-      "computedHash": "aaaf2e5d94b77b9487331e31e7a3767b1a1fc6676eeffbff3be38b4517cdfca5"
+      "commit": "cd69ab63b91a837d7ab768831aca246abcf9226a",
+      "computedHash": "aaaf2e5d94b77b9487331e31e7a3767b1a1fc6676eeffbff3be38b4517cdfca5",
+      "contentHash": "00fc74964fdc4ce2286f8991986ad5aee87b39022d4e9058959fa4332f11fe8e"
     },
     "rust-send-sync": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-send-sync/SKILL.md",
-      "computedHash": "fc83d4e7727707db25cdbc41f0279285c851b63163f75f00d6ddd25aa7818430"
+      "commit": "1c2d8bbc56aeb9101f0950745079c0c83652941c",
+      "computedHash": "fc83d4e7727707db25cdbc41f0279285c851b63163f75f00d6ddd25aa7818430",
+      "contentHash": "fc83d4e7727707db25cdbc41f0279285c851b63163f75f00d6ddd25aa7818430"
     },
     "rust-serde": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-serde/SKILL.md",
-      "computedHash": "794c8c1e823edb451b11c647234aadc6602c6f16a62a63cdf0db19be61590b5e"
+      "commit": "cb652d08d2156ad11aa01d94f2cd82718124d573",
+      "computedHash": "794c8c1e823edb451b11c647234aadc6602c6f16a62a63cdf0db19be61590b5e",
+      "contentHash": "3ef5d492981106ab6ea996a4a2541f590c6c82d3dcca4efce5c76885b1bb7fdc"
     },
     "rust-swift-ffi": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-swift-ffi/SKILL.md",
-      "computedHash": "0aef507b4307eda062e9902697e7dcf375f528799a8f38dabfcdb86e1e0dc20d"
+      "commit": "0bb1331b37e006e2546dce3d31e2adb4bab3a3aa",
+      "computedHash": "0aef507b4307eda062e9902697e7dcf375f528799a8f38dabfcdb86e1e0dc20d",
+      "contentHash": "0aef507b4307eda062e9902697e7dcf375f528799a8f38dabfcdb86e1e0dc20d"
     },
     "rust-tdd": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-tdd/SKILL.md",
-      "computedHash": "25d0dec0264161510a0ffb20fd35b36444957aa199a79c7596f7dcf5d412c1a6"
+      "commit": "c261bc20266cc41bef4025c261a84eb66ef977c0",
+      "computedHash": "25d0dec0264161510a0ffb20fd35b36444957aa199a79c7596f7dcf5d412c1a6",
+      "contentHash": "3298b31441ce925ea433f3fad9616f749ba835254ca5b6fe855a601f0677ad68"
     },
     "rust-test-tools": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-test-tools/SKILL.md",
-      "computedHash": "70b08b768822ac11a0c8f0e6e084b76ac15713a862e51050db61915ec56fb654"
+      "commit": "c261bc20266cc41bef4025c261a84eb66ef977c0",
+      "computedHash": "70b08b768822ac11a0c8f0e6e084b76ac15713a862e51050db61915ec56fb654",
+      "contentHash": "b0b52c8a357aea2378e0376a5d6a876abf417f67fb0d111e1d7c6b3e9404bfdd"
     },
     "rust-type-erasure": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-type-erasure/SKILL.md",
-      "computedHash": "1a002462502aa3aa3cc132a4846caaf45bfa26929bc1e729ee8de184effe21db"
+      "commit": "d1384be95424d5ad00d115bcb65c6673ecb3e62f",
+      "computedHash": "1a002462502aa3aa3cc132a4846caaf45bfa26929bc1e729ee8de184effe21db",
+      "contentHash": "2915e57f24a2dbc091f2952f2ff594575c890f154cf2d018897376b65fc9ff09"
     },
     "rust-unsafe": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-unsafe/SKILL.md",
-      "computedHash": "4da049742b78f613a3a543f3052f4cc817fc06b049d0c585c68a5055d2140db0"
+      "commit": "cb652d08d2156ad11aa01d94f2cd82718124d573",
+      "computedHash": "4da049742b78f613a3a543f3052f4cc817fc06b049d0c585c68a5055d2140db0",
+      "contentHash": "fa89f7a8762ba60f1fb6e6e06e9b470ef00b66fa7fdbdb2db2aa5d7c256621ab"
     },
     "rust-variance": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/rust-variance/SKILL.md",
-      "computedHash": "05dcef27a206cc69701a412459785804e4df7ed53be6267e328a922ba082bffd"
+      "commit": "d1384be95424d5ad00d115bcb65c6673ecb3e62f",
+      "computedHash": "05dcef27a206cc69701a412459785804e4df7ed53be6267e328a922ba082bffd",
+      "contentHash": "685e4cb65ce30f575ee9467dceac6dfb3210637e37b2f446689d36ed4a5dd1e3"
     },
     "uniffi-boundary": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/uniffi-boundary/SKILL.md",
-      "computedHash": "1ace90d1e44673aa9fe0e4e304e17521efadb91e326833d4c499ebca74e12c16"
+      "commit": "abf22aa0fc90f5f43a3195c5ed36d1512bf24ee1",
+      "computedHash": "1ace90d1e44673aa9fe0e4e304e17521efadb91e326833d4c499ebca74e12c16",
+      "contentHash": "e6f03b38479f6773442a90f3c3b3e243c17cb1f4b19d9d25a03d909556b1c6c0"
     },
     "uniffi-packaging-versioning": {
       "source": "po4yka/rust-skills",
       "sourceType": "github",
       "skillPath": "skills/uniffi-packaging-versioning/SKILL.md",
-      "computedHash": "8f34b059aa3b7b075bff0d1f3820ee39b647275c613db074b6946025a3b325c7"
+      "commit": "926aba3cdc4e72c9aca5b2332a663fc1d16546a5",
+      "computedHash": "8f34b059aa3b7b075bff0d1f3820ee39b647275c613db074b6946025a3b325c7",
+      "contentHash": "aefa0ce49dbbd9141c1e1d1cda8508a510c1c6a22736042d65eed001946f23c4"
     }
   }
 }

@@ -157,6 +157,20 @@ jobs:
             cargo +nightly fuzz run "$target" -- -runs=20000 -max_total_time=30
           done
 
+  vendored-skills:
+    name: vendored skills
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      # DEPENDENCY_POLICY.md "Vendored agent skills": every entry records a
+      # content hash and the upstream commit it came from. The offline half of
+      # the check recomputes the hash of every vendored directory, so content
+      # that drifts from the lockfile fails here.
+      - run: python3 scripts/check-vendored-skills.py
+
   native-targets:
     name: native targets (${{ matrix.kind }})
     runs-on: ${{ matrix.os }}
