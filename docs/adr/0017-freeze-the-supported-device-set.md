@@ -20,12 +20,14 @@ Freeze the support matrix:
 
 | Role | Android | iOS |
 | --- | --- | --- |
-| floor | 4 GB, arm64, API 29 (Pixel 3a class) | iPhone XR class, 3 GB, iOS 18 |
-| baseline | 6 GB, arm64, current Android with a 16 KiB page size (Pixel 6a class) | iPhone SE 3rd generation or iPhone 13 class |
-| high end | current Pixel with StrongBox | current iPhone Pro |
+| floor | 4 GB RAM, arm64, API 29, no StrongBox | 3 GB RAM, iOS 18.0 |
+| baseline | 6 GB RAM, arm64, a 16 KiB page size, an Android release still receiving security updates | 4 GB RAM, a current iOS release |
+| high end | a current Android device with StrongBox | a current iOS device with the largest memory of its generation |
 
 - a candidate constant is approved only when it meets its budget on the floor device; a result from the baseline or high-end device alone does not approve it;
 - Argon2id memory candidates are benchmarked at and above the 64 MiB floor in `PASSWORD_PROFILE.md`, and the floor device decides the ceiling.
+
+Each role is a set of measurable properties, not a model name. A model goes out of stock and out of support while the constants it approved stay frozen, and no test can assert that the device on the bench is the one a document named. RAM, architecture, API level, page size, and StrongBox availability are all readable from the device under test, so a benchmark record states which role the device satisfied and a reviewer can check it.
 
 ## Alternatives considered
 
@@ -52,13 +54,13 @@ Rejected. Argon2id memory and seek latency do not scale predictably across therm
 ### Tradeoffs
 
 - devices below API 29, below iOS 18, or below 3 GB of RAM are excluded;
-- the CI performance lab needs five physical devices rather than two.
+- the CI performance lab needs six physical devices, one per role per platform, rather than two.
 
 ## Security impact
 
 Affected invariants: SEC-007.
 
-The KDF cost parameter is a security parameter set by measurement. Naming the floor device prevents the usual failure where the parameter is calibrated on a fast device and then quietly reduced in the field to keep unlock latency acceptable, which weakens the password profile for exactly the users on the weakest hardware.
+The KDF cost parameter is a security parameter set by measurement. Fixing the floor role prevents the usual failure where the parameter is calibrated on a fast device and then quietly reduced in the field to keep unlock latency acceptable, which weakens the password profile for exactly the users on the weakest hardware.
 
 ## Compatibility impact
 
@@ -66,11 +68,11 @@ No vault byte changes. `minSdk` and the deployment target are packaging metadata
 
 ## Validation
 
-- the Argon2id calibration run recorded on all five devices, including thermal state and any low-memory kill;
+- the Argon2id calibration run recorded on all six devices, including thermal state and any low-memory kill;
 - chunk-size candidates compared on the floor device for seek amplification and import throughput;
 - unlock, first-grid, and lock-invalidation budgets measured on the floor device before any value becomes a gate.
 
 ## Follow-up
 
-- record the Argon2id calibration run of `assurance/PERFORMANCE_BUDGETS.md` §6 on the five devices above, which [`0026`](0026-argon2id-memory-floor-and-candidate-set.md) also requires;
+- record the Argon2id calibration run of `assurance/PERFORMANCE_BUDGETS.md` §6 on the six devices above, which [`0026`](0026-argon2id-memory-floor-and-candidate-set.md) also requires;
 - compare the chunk-size candidates of `format/OBJECT_CONTAINER_V1.md` §6 on the floor device, which [`0020`](0020-set-the-v1-parser-limits.md) leaves open.

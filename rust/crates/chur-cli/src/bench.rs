@@ -6,9 +6,9 @@
 //! and separate the crypto and storage cost from platform work.
 //!
 //! These are deliberately not a benchmark framework. The measurement has to
-//! run on an Android device and an iPhone through the same code path as the
-//! CLI, so it is a subcommand of the binary that already builds for both, and
-//! it takes no dependency a framework would add.
+//! run on an Android device and an iOS device through the same code path as
+//! the CLI, so it is a subcommand of the binary that already builds for both,
+//! and it takes no dependency a framework would add.
 //!
 //! Nothing here is a gate. §1 of that document requires evidence before a
 //! proposal becomes one, and this produces the evidence.

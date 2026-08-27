@@ -120,7 +120,7 @@ Waivers state owner, reason, affected devices, mitigation, and expiry.
 
 Store scripts/configuration and anonymized aggregate results, never private media. Synthetic corpora should include small photos, large photos, long audio, short/long 4K video, random seeks, and pathological metadata within approved limits.
 
-The two Phase 0 measurements run through `chur-cli`, so an Android device, an iPhone, and a workstation execute the same code path:
+The two Phase 0 measurements run through `chur-cli`, so an Android device, an iOS device, and a workstation execute the same code path:
 
 ```text
 chur-cli bench chunk-sizes --object-bytes 16777216 --samples 8
