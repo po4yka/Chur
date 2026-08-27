@@ -67,6 +67,7 @@ fn header_statuses() -> BTreeMap<String, i32> {
         if name.starts_with("CHUR_CAP_")
             || name.starts_with("CHUR_FLAVOR_")
             || name.starts_with("CHUR_INTEGRITY_")
+            || name.starts_with("CHUR_PANIC_")
             || name == "CHUR_H"
             || name == "CHUR_OK"
         {
@@ -202,6 +203,32 @@ fn the_integrity_states_match_the_constant_registry() {
             "{name} disagrees with the registry"
         );
     }
+}
+
+#[test]
+fn the_panic_fallbacks_match() {
+    // ADR-0037. A drift here would let a host accept a value a panicking
+    // library returned.
+    let header = defines("CHUR_PANIC_");
+    assert_eq!(header.len(), 5);
+    for (name, expected) in [
+        ("CHUR_PANIC_ABI_VERSION", "(UINT32_C(0))"),
+        ("CHUR_PANIC_FORMAT_MIN", "(UINT16_C(0xffff))"),
+        ("CHUR_PANIC_FORMAT_MAX", "(UINT16_C(0))"),
+        ("CHUR_PANIC_CAPABILITIES", "(UINT64_C(0))"),
+        ("CHUR_PANIC_BUILD_FLAVOR", "(UINT32_C(0))"),
+    ] {
+        assert_eq!(
+            header.get(name).map(String::as_str),
+            Some(expected),
+            "{name}"
+        );
+    }
+    assert_eq!(chur_ffi::PANIC_ABI_VERSION, 0);
+    assert_eq!(chur_ffi::PANIC_FORMAT_MIN, 0xffff);
+    assert_eq!(chur_ffi::PANIC_FORMAT_MAX, 0);
+    assert_eq!(chur_ffi::PANIC_CAPABILITIES, 0);
+    assert_eq!(chur_ffi::PANIC_BUILD_FLAVOR, 0);
 }
 
 #[test]

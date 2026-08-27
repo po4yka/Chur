@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process;
+- native API version is the (major, minor) pair. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -283,7 +283,9 @@ Every exported function that can fail returns `chur_status_t`, the `int32_t` sta
 
 An unrecognized value maps to `INTERNAL_FAILURE`.
 
-The FFI artifacts build with `panic = "unwind"`; abort is not used. Every exported symbol wraps its whole body in `catch_unwind` and converts a caught panic into `INTERNAL_FAILURE`. This is unconditional: every export, no "where applicable" exemption, verified by panic injection at each symbol. The panic payload is dropped inside the boundary and no payload text crosses it, the handle that owned the call is invalidated so a later call on it also fails, and a panic hook records a synthetic-reproduction diagnostic with no private values. Abort is rejected because it converts a contained, redactable failure into a process kill that skips session zeroization and removes the public shell along with the vault ([ADR-0016](../adr/0016-freeze-the-v1-c-abi.md)).
+The FFI artifacts build with `panic = "unwind"`; abort is not used. Every exported symbol wraps its whole body in `catch_unwind`, and one that returns `chur_status_t` converts a caught panic into `INTERNAL_FAILURE`.
+
+The handshake exports of §2 have no status channel: they return a scalar and cannot fail. Each one instead returns a value the host already refuses, frozen by [ADR-0037](../adr/0037-contain-panics-in-channel-less-exports.md): `0` for either version component, an inclusive range whose minimum is `0xFFFF` and whose maximum is `0` for either format range, `0` for the capability mask, and `0` for the build flavor, which sets neither the release nor the debug bit. Containment is therefore visible to the host rather than silent, and no export is exempt. This is unconditional: every export, no "where applicable" exemption, verified by panic injection at each symbol. The panic payload is dropped inside the boundary and no payload text crosses it, the handle that owned the call is invalidated so a later call on it also fails, and a panic hook records a synthetic-reproduction diagnostic with no private values. Abort is rejected because it converts a contained, redactable failure into a process kill that skips session zeroization and removes the public shell along with the vault ([ADR-0016](../adr/0016-freeze-the-v1-c-abi.md)).
 
 ## 12. Secrets across FFI
 

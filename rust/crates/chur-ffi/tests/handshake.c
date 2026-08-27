@@ -33,6 +33,17 @@ static void check(int condition, const char *what) {
 int main(void) {
     printf("chur ABI handshake\n");
 
+    /*
+     * A panicking export returns its CHUR_PANIC_* fallback, so these two
+     * assertions are the host-side half of ADR-0037: the values are live rather
+     * than contained failures.
+     */
+    check(chur_abi_version_major() != CHUR_PANIC_ABI_VERSION,
+          "the version is computed, not a contained panic");
+    check(chur_object_format_min() <= chur_object_format_max() &&
+              chur_key_slot_format_min() <= chur_key_slot_format_max(),
+          "neither format range is the empty panic fallback");
+
     check(chur_abi_version_major() == 1, "major ABI version is 1");
     check(chur_abi_version_minor() == 0, "minor ABI version is 0");
 

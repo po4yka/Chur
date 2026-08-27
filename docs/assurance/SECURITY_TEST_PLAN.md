@@ -169,7 +169,7 @@ Every `SEC-*` invariant of [`../security/SECURITY_INVARIANTS.md`](../security/SE
 
 A row states what would produce the evidence, not that it runs today. Whether it runs is governed by [`RELEASE_GATES.md`](RELEASE_GATES.md#enforcement): until a job executes the procedure, the row is unenforced whatever it names.
 
-Eighteen rows now name a test target rather than a section of this plan. Each of those runs in the `test`, `gradle`, `kotlin-native`, or `fuzz` job of that workflow, so those eighteen are enforced. Every remaining row names a procedure that no job executes.
+Nineteen rows now name a test target rather than a section of this plan. Each of those runs in the `test`, `gradle`, `kotlin-native`, or `fuzz` job of that workflow, so those eighteen are enforced. Every remaining row names a procedure that no job executes.
 
 | Invariant | Evidence procedure |
 | --- | --- |
@@ -222,7 +222,7 @@ Eighteen rows now name a test target rather than a section of this plan. Each of
 | SEC-047 | [`FUZZING.md`](FUZZING.md) §2 targets, ten of which exist |
 | SEC-048 | `chur-format` `codec::tests::a_boolean_other_than_zero_or_one_is_non_canonical` |
 | SEC-049 | `chur-format` `container::tests::the_seek_formula_matches_the_walked_record_offsets` |
-| SEC-050 | [`FUZZING.md`](FUZZING.md) §8 |
+| SEC-050 | `chur-ffi` `panic::tests::a_panic_carrying_a_value_does_not_return_it` |
 | SEC-051 | `:shared:core-model` `ChurStatusTest.an_unknown_value_fails_closed` |
 | SEC-052 | `chur-format` `tests/migration.rs` |
 | SEC-053 | §2; §8; §9 |

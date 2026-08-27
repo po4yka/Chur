@@ -123,12 +123,34 @@ typedef int32_t chur_status_t;
 #define CHUR_FLAVOR_TEST_HOOKS (UINT32_C(1) << 2)
 
 /* -------------------------------------------------------------------------
+ * Panic containment fallbacks
+ *
+ * FFI_CONTRACT.md section 11 has every export contain panics. A status-
+ * returning export converts a caught panic into CHUR_INTERNAL_FAILURE. The
+ * handshake exports below have no status channel, so ADR-0037 gives each one a
+ * fallback the host already refuses: a major version that is not this ABI, an
+ * inverted format range that contains no version, an empty capability mask, and
+ * a flavor that is neither release nor debug. A host that reads one of these has
+ * a library that panicked and must refuse it.
+ * ---------------------------------------------------------------------- */
+
+#define CHUR_PANIC_ABI_VERSION (UINT32_C(0))
+#define CHUR_PANIC_FORMAT_MIN (UINT16_C(0xffff))
+#define CHUR_PANIC_FORMAT_MAX (UINT16_C(0))
+#define CHUR_PANIC_CAPABILITIES (UINT64_C(0))
+#define CHUR_PANIC_BUILD_FLAVOR (UINT32_C(0))
+
+/* -------------------------------------------------------------------------
  * Handshake
  *
  * Callable from any thread before runtime initialization. None of these can
  * fail, so none returns a status.
  * ---------------------------------------------------------------------- */
 
+/*
+ * Each returns the matching CHUR_PANIC_* value if its body panics; none can
+ * fail otherwise.
+ */
 uint32_t chur_abi_version_major(void);
 uint32_t chur_abi_version_minor(void);
 uint64_t chur_capabilities(void);

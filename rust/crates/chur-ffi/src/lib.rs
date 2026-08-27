@@ -5,6 +5,11 @@
 //! binding generator is part of it: `include/chur.h` is hand-written and is the
 //! authority for the C side, and this crate is the authority for the Rust side.
 //!
+//! Every export contains panics. §11 of that contract is unconditional, and
+//! [`panic::guard`] is how it is met: a caught panic never crosses the boundary
+//! and its payload is dropped inside. A handshake export has no status channel,
+//! so it returns a value the host refuses instead, per ADR-0037.
+//!
 //! What exists today is the ABI handshake of `docs/interop/FFI_CONTRACT.md` §2.
 //! Every function here is callable from any thread before runtime
 //! initialization and cannot fail, which is what a platform gate needs before
@@ -18,8 +23,12 @@
 //! - `docs/ERROR_MODEL.md` (`chur_status_t` and its values)
 //! - `docs/security/SECURITY_INVARIANTS.md` (SEC-050, SEC-051)
 
+mod panic;
+
 use chur_core::ChurStatus;
 use chur_format::constants::{CONTAINER_VERSION_V1, SLOT_VERSION_V1};
+
+use crate::panic::guard;
 
 /// Major component of the native API version.
 ///
@@ -55,6 +64,30 @@ pub const CHUR_FLAVOR_DEBUG_ASSERTIONS: u32 = 1 << 1;
 /// Build-flavor bit: test hooks are compiled in.
 pub const CHUR_FLAVOR_TEST_HOOKS: u32 = 1 << 2;
 
+/// The value a handshake export returns when its body panics, ADR-0037.
+///
+/// Each one is a value the host already refuses: a major version of 0 is not
+/// this ABI, an inverted format range contains no version, a capability mask of
+/// 0 offers nothing, a flavor with no bit set is neither release nor debug, and
+/// an unknown status is unknown.
+pub const PANIC_ABI_VERSION: u32 = 0;
+/// See [`PANIC_ABI_VERSION`]. An empty range: the minimum exceeds the maximum.
+pub const PANIC_FORMAT_MIN: u16 = u16::MAX;
+/// See [`PANIC_ABI_VERSION`]. An empty range: the maximum is below the minimum.
+pub const PANIC_FORMAT_MAX: u16 = 0;
+/// See [`PANIC_ABI_VERSION`]. No capability is offered.
+pub const PANIC_CAPABILITIES: u64 = 0;
+/// See [`PANIC_ABI_VERSION`]. Neither release nor debug, which a host refuses.
+pub const PANIC_BUILD_FLAVOR: u32 = 0;
+
+// ADR-0037: each fallback is a value the host already refuses, so a panicking
+// library fails the gate instead of reporting a value it did not compute.
+const _: () = assert!(PANIC_ABI_VERSION != ABI_VERSION_MAJOR);
+const _: () = assert!(PANIC_FORMAT_MIN > PANIC_FORMAT_MAX);
+const _: () = assert!(PANIC_CAPABILITIES == 0);
+const _: () = assert!(PANIC_BUILD_FLAVOR & CHUR_FLAVOR_RELEASE == 0);
+const _: () = assert!(PANIC_BUILD_FLAVOR & CHUR_FLAVOR_DEBUG_ASSERTIONS == 0);
+
 /// The capabilities this build offers.
 ///
 /// A bit is set in the change that lands the surface it names, never before. A
@@ -74,7 +107,7 @@ const CAPABILITIES: u64 = 0;
 )]
 #[unsafe(no_mangle)]
 pub extern "C" fn chur_abi_version_major() -> u32 {
-    ABI_VERSION_MAJOR
+    guard(PANIC_ABI_VERSION, || ABI_VERSION_MAJOR)
 }
 
 /// The minor ABI version.
@@ -87,7 +120,7 @@ pub extern "C" fn chur_abi_version_major() -> u32 {
 )]
 #[unsafe(no_mangle)]
 pub extern "C" fn chur_abi_version_minor() -> u32 {
-    ABI_VERSION_MINOR
+    guard(PANIC_ABI_VERSION, || ABI_VERSION_MINOR)
 }
 
 /// The capability bitmask.
@@ -102,7 +135,7 @@ pub extern "C" fn chur_abi_version_minor() -> u32 {
 )]
 #[unsafe(no_mangle)]
 pub extern "C" fn chur_capabilities() -> u64 {
-    CAPABILITIES
+    guard(PANIC_CAPABILITIES, || CAPABILITIES)
 }
 
 /// Lowest `container_version` this build reads.
@@ -115,7 +148,7 @@ pub extern "C" fn chur_capabilities() -> u64 {
 )]
 #[unsafe(no_mangle)]
 pub extern "C" fn chur_object_format_min() -> u16 {
-    CONTAINER_VERSION_V1
+    guard(PANIC_FORMAT_MIN, || CONTAINER_VERSION_V1)
 }
 
 /// Highest `container_version` this build reads.
@@ -128,7 +161,7 @@ pub extern "C" fn chur_object_format_min() -> u16 {
 )]
 #[unsafe(no_mangle)]
 pub extern "C" fn chur_object_format_max() -> u16 {
-    CONTAINER_VERSION_V1
+    guard(PANIC_FORMAT_MAX, || CONTAINER_VERSION_V1)
 }
 
 /// Lowest key-slot format version this build reads.
@@ -141,7 +174,7 @@ pub extern "C" fn chur_object_format_max() -> u16 {
 )]
 #[unsafe(no_mangle)]
 pub extern "C" fn chur_key_slot_format_min() -> u16 {
-    SLOT_VERSION_V1
+    guard(PANIC_FORMAT_MIN, || SLOT_VERSION_V1)
 }
 
 /// Highest key-slot format version this build reads.
@@ -154,7 +187,7 @@ pub extern "C" fn chur_key_slot_format_min() -> u16 {
 )]
 #[unsafe(no_mangle)]
 pub extern "C" fn chur_key_slot_format_max() -> u16 {
-    SLOT_VERSION_V1
+    guard(PANIC_FORMAT_MAX, || SLOT_VERSION_V1)
 }
 
 /// The build flavor bitfield.
@@ -171,16 +204,16 @@ pub extern "C" fn chur_key_slot_format_max() -> u16 {
 )]
 #[unsafe(no_mangle)]
 pub extern "C" fn chur_build_flavor() -> u32 {
-    let mut flavor = 0;
-    if cfg!(debug_assertions) {
-        flavor |= CHUR_FLAVOR_DEBUG_ASSERTIONS;
-    } else {
-        flavor |= CHUR_FLAVOR_RELEASE;
-    }
-    // No test hooks are compiled into any build. `docs/CRYPTOGRAPHY.md` §9
-    // forbids a production build that can select deterministic randomness, and
-    // the crate offers no feature that would set this bit.
-    flavor
+    guard(PANIC_BUILD_FLAVOR, || {
+        // No test hooks are compiled into any build. `docs/CRYPTOGRAPHY.md` §9
+        // forbids a production build that can select deterministic randomness,
+        // and the crate offers no feature that would set CHUR_FLAVOR_TEST_HOOKS.
+        if cfg!(debug_assertions) {
+            CHUR_FLAVOR_DEBUG_ASSERTIONS
+        } else {
+            CHUR_FLAVOR_RELEASE
+        }
+    })
 }
 
 /// The `chur_status_t` value of success.
@@ -199,7 +232,7 @@ pub const CHUR_OK: i32 = chur_core::CHUR_OK;
 )]
 #[unsafe(no_mangle)]
 pub extern "C" fn chur_status_is_known(value: i32) -> bool {
-    ChurStatus::is_allocated(value)
+    guard(false, || ChurStatus::is_allocated(value))
 }
 
 #[cfg(test)]
