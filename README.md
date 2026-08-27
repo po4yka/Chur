@@ -1222,21 +1222,7 @@ Every container parser must be tested against:
 
 ### Fuzzing
 
-Planned fuzz targets:
-
-```text
-parse_preamble
-parse_manifest
-parse_final_commit
-parse_object_key_envelope
-decrypt_chunk
-unwrap_key_slot
-decode_private_metadata
-import_backup
-apply_catalog_migration
-apply_sync_operation
-validate_ffi_input
-```
+[`docs/assurance/FUZZING.md`](docs/assurance/FUZZING.md) §2 lists the initial Rust fuzz targets and §1 the properties they establish. This README does not restate the target names.
 
 All parsers must impose hard limits before allocating memory.
 
