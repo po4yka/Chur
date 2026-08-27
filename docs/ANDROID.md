@@ -171,6 +171,8 @@ rust/crates/chur-ffi/
 
 Feature modules MUST depend on interfaces in shared code. They MUST NOT import `android.security.keystore`, `BiometricPrompt`, Media3 `DataSource`, JNI symbols, or filesystem APIs directly.
 
+Android does not use the direct data-plane path that [`interop/FFI_CONTRACT.md`](interop/FFI_CONTRACT.md) §1 permits for the iOS AVFoundation adapter: the Media3 `DataSource` reaches the reader through the JNI adapter and the shared KMP layer. This is a v1 packaging choice rather than a difference in the ABI, and the handle registry is the same process-global registry in both cases.
+
 ---
 
 ## 6. Application and activity startup

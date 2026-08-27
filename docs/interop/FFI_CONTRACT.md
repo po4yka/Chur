@@ -9,16 +9,17 @@ The FFI boundary exposes coarse-grained vault operations without making Kotlin, 
 ```text
 chur-core / crypto / format / catalog / media
     ↓ Rust-native APIs
-chur-ffi
-    ├── stable C ABI data plane
-    └── optional generated control plane
-        ↓
-KMP expect/actual adapter
-        ↓
+chur-ffi   one stable C ABI, one process-global handle registry
+    ├──────────────────────────────┐
+    ↓                              ↓
+KMP expect/actual adapter      platform shell data-plane adapter
+    ↓                              (iOS AVAssetResourceLoader in v1)
 features and platform shells
 ```
 
-Generated bindings are replaceable. The secure core has no dependency on generated-language types.
+The handle registry is process-global and language-agnostic. A handle created through the control plane in one language is usable from the other, and lock invalidates it for both in one step. A platform shell adapter may call the data plane directly when this avoids repeated copies, but it never creates or owns a session: sessions are created and closed through the shared application layer, and exactly one Rust runtime exists in the process (§14).
+
+Bindings are replaceable. The secure core has no dependency on binding-language types.
 
 ## 2. ABI versioning
 
