@@ -1,0 +1,1082 @@
+{
+  "manifest_version": 1,
+  "spec_commit": "eb24a4c5fe548c7ef7488c0c657b046e9f394aec",
+  "generator": {
+    "name": "chur-cli",
+    "version": "0.1.0",
+    "commit": "eb24a4c5fe548c7ef7488c0c657b046e9f394aec",
+    "toolchain": "1.97.0-aarch64-apple-darwin"
+  },
+  "vectors": [
+    {
+      "vector_id": "canonical-encoding-v1-all-zero-identifier",
+      "spec": "docs/format/CANONICAL_ENCODING_V1.md",
+      "spec_section": "8",
+      "purpose": "The all-zero identifier is reserved as invalid.",
+      "outcome": "reject",
+      "inputs": {
+        "identifier": "00000000000000000000000000000000"
+      },
+      "error_code": "INVALID_INPUT"
+    },
+    {
+      "vector_id": "canonical-encoding-v1-boolean-byte-two",
+      "spec": "docs/format/CANONICAL_ENCODING_V1.md",
+      "spec_section": "11",
+      "purpose": "A boolean byte other than 0x00 or 0x01 is not canonical.",
+      "outcome": "reject",
+      "inputs": {
+        "encoded": "02"
+      },
+      "error_code": "NON_CANONICAL_ENCODING"
+    },
+    {
+      "vector_id": "canonical-encoding-v1-declared-length-over-the-limit",
+      "spec": "docs/format/CANONICAL_ENCODING_V1.md",
+      "spec_section": "10",
+      "purpose": "A declared element length above the parser limit allocates nothing.",
+      "outcome": "reject",
+      "inputs": {
+        "encoded": "ee6b280000000000",
+        "parser_limit": 64
+      },
+      "error_code": "RESOURCE_LIMIT_EXCEEDED"
+    },
+    {
+      "vector_id": "canonical-encoding-v1-empty-and-short-variable-elements",
+      "spec": "docs/format/CANONICAL_ENCODING_V1.md",
+      "spec_section": "2",
+      "purpose": "A zero-length variable element carries its u32 length and no bytes; a short one follows it.",
+      "outcome": "accept",
+      "inputs": {
+        "elements": [
+          "",
+          "chur"
+        ]
+      },
+      "expected": {
+        "encoded": "000000000000000463687572"
+      }
+    },
+    {
+      "vector_id": "canonical-encoding-v1-illustrative-tuple",
+      "spec": "docs/format/CANONICAL_ENCODING_V1.md",
+      "spec_section": "7.1",
+      "purpose": "The worked tuple example: a bare tag, a u16, a 16-byte fixed element, then a u32-prefixed string.",
+      "outcome": "accept",
+      "inputs": {
+        "domain_tag": "43485552004558414d504c45005455504c45005631",
+        "label": "label",
+        "object_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "suite_id": 1
+      },
+      "expected": {
+        "encoded": "43485552004558414d504c45005455504c450056310001aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa000000056c6162656c",
+        "encoded_length": 48
+      },
+      "notes": "The tag is unregistered and illustrative; no record uses it."
+    },
+    {
+      "vector_id": "canonical-encoding-v1-invalid-utf8-string",
+      "spec": "docs/format/CANONICAL_ENCODING_V1.md",
+      "spec_section": "3",
+      "purpose": "A string element that is not valid UTF-8 is rejected.",
+      "outcome": "reject",
+      "inputs": {
+        "encoded": "00000002fffe"
+      },
+      "error_code": "NON_CANONICAL_ENCODING"
+    },
+    {
+      "vector_id": "canonical-encoding-v1-maximum-identifier",
+      "spec": "docs/format/CANONICAL_ENCODING_V1.md",
+      "spec_section": "8",
+      "purpose": "The all-ones identifier is a valid 16-byte value; only the all-zero value is reserved.",
+      "outcome": "accept",
+      "inputs": {
+        "identifier": "ffffffffffffffffffffffffffffffff"
+      },
+      "expected": {
+        "accepted": true
+      }
+    },
+    {
+      "vector_id": "canonical-encoding-v1-primitive-boundaries",
+      "spec": "docs/format/CANONICAL_ENCODING_V1.md",
+      "spec_section": "2",
+      "purpose": "Every fixed-width primitive at both bounds, then a boolean and an optional presence byte in both states.",
+      "outcome": "accept",
+      "inputs": {
+        "field_order": [
+          "u8 minimum",
+          "u8 maximum",
+          "u16 minimum",
+          "u16 maximum",
+          "u32 minimum",
+          "u32 maximum",
+          "u64 minimum",
+          "u64 maximum",
+          "boolean false",
+          "boolean true",
+          "optional absent",
+          "optional present"
+        ]
+      },
+      "expected": {
+        "encoded": "00ff0000ffff00000000ffffffff0000000000000000ffffffffffffffff00010001",
+        "encoded_length": 34
+      }
+    },
+    {
+      "vector_id": "collection-envelope-v1-epoch-one-generation-one",
+      "spec": "docs/format/COLLECTION_KEY_ENVELOPE_V1.md",
+      "spec_section": "1",
+      "purpose": "A collection key wrapped under the root-derived envelope key for epoch 1, generation 1.",
+      "outcome": "accept",
+      "inputs": {
+        "collection_epoch": 1,
+        "collection_id": "22222222222222222222222222222222",
+        "envelope_generation": 1,
+        "nonce": "333333333333333333333333333333333333333333333333",
+        "security_collection_key": "4444444444444444444444444444444444444444444444444444444444444444",
+        "vault_id": "11111111111111111111111111111111",
+        "vault_root_secret": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+      },
+      "expected": {
+        "aad": "4348555200434f4c4c454354494f4e004b45592d454e56454c4f50450056311111111111111111111111111111111122222222222222222222222222222222000000000000000100010000000000000001",
+        "aad_length": 81,
+        "collection_envelope_key": "f222f3b2cb87df88064c4321d68d10b8143cb01e6700db6eea428d80dcade47d",
+        "envelope": "00010001000111111111111111111111111111111111222222222222222222222222222222220000000000000001000000000000000133333333333333333333333333333333333333333333333377e0dabbe624248cd585f2f9d10ffdd30ed980b8be82f5c98062e0f5acd55c99a447c09426b88c74adc67f5f3e0b21e5",
+        "envelope_length": 126
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "collection-envelope-v1-foreign-vault-identity",
+      "spec": "docs/format/COLLECTION_KEY_ENVELOPE_V1.md",
+      "spec_section": "3",
+      "purpose": "Changing the vault identity changes both the wrapping key and the AAD, so the envelope does not open.",
+      "outcome": "reject",
+      "inputs": {
+        "envelope": "00010001000112111111111111111111111111111111222222222222222222222222222222220000000000000001000000000000000133333333333333333333333333333333333333333333333377e0dabbe624248cd585f2f9d10ffdd30ed980b8be82f5c98062e0f5acd55c99a447c09426b88c74adc67f5f3e0b21e5",
+        "vault_root_secret": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+      },
+      "error_code": "OBJECT_CORRUPT",
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-collection-metadata",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/collection/metadata` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "222222222222222222222222222222220000000000000001",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/collection/metadata"
+      },
+      "expected": {
+        "derived_key": "50a58d328df71cdd755e335259a532187a985fa40bdce62ce55f44d19ba4be66",
+        "info": "43485552004b444600494e464f0056310000001b636875722f76312f636f6c6c656374696f6e2f6d65746164617461222222222222222222222222222222220000000000000001",
+        "info_length": 71
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-collection-object-envelope",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/collection/object-envelope` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "22222222222222222222222222222222000000000000000133333333333333333333333333333333",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/collection/object-envelope"
+      },
+      "expected": {
+        "derived_key": "8f8d122c5b6b5d1ed2eae65a2c9265a369ba7d528f195c27e536cb1c48b7bb78",
+        "info": "43485552004b444600494e464f00563100000022636875722f76312f636f6c6c656374696f6e2f6f626a6563742d656e76656c6f706522222222222222222222222222222222000000000000000133333333333333333333333333333333",
+        "info_length": 94
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-object-content",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/object/content` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "33333333333333333333333333333333444444444444444444444444444444440100000001",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/object/content"
+      },
+      "expected": {
+        "derived_key": "7efe709023e582f5a7171b54f40a22e5422a431c00478f8909c87bd26d98788c",
+        "info": "43485552004b444600494e464f00563100000016636875722f76312f6f626a6563742f636f6e74656e7433333333333333333333333333333333444444444444444444444444444444440100000001",
+        "info_length": 79
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-object-embedding",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/object/embedding` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "33333333333333333333333333333333020000000100000001",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/object/embedding"
+      },
+      "expected": {
+        "derived_key": "b895e181ca75943a3a59c31f3c69587bf36c46450061aa80cd06242234a4260c",
+        "info": "43485552004b444600494e464f00563100000018636875722f76312f6f626a6563742f656d62656464696e6733333333333333333333333333333333020000000100000001",
+        "info_length": 69
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-object-face",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/object/face` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "33333333333333333333333333333333020000000100000001",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/object/face"
+      },
+      "expected": {
+        "derived_key": "0fde01c453e3d255cb18c04714d92fb3c3455905f9a7cb6b59af9d0b0f6d4a81",
+        "info": "43485552004b444600494e464f00563100000013636875722f76312f6f626a6563742f6661636533333333333333333333333333333333020000000100000001",
+        "info_length": 64
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-object-final-commit",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/object/final-commit` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "33333333333333333333333333333333444444444444444444444444444444440100000001",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/object/final-commit"
+      },
+      "expected": {
+        "derived_key": "4b353a61a9fe20c432cd3fa5f1aeadc6375a18b641b7373e479ce9af9530bd3d",
+        "info": "43485552004b444600494e464f0056310000001b636875722f76312f6f626a6563742f66696e616c2d636f6d6d697433333333333333333333333333333333444444444444444444444444444444440100000001",
+        "info_length": 84
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-object-manifest",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/object/manifest` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "33333333333333333333333333333333444444444444444444444444444444440100000001",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/object/manifest"
+      },
+      "expected": {
+        "derived_key": "09a269e84241dec575a49076948b75229e67505650ab14fc428f7d7664077410",
+        "info": "43485552004b444600494e464f00563100000017636875722f76312f6f626a6563742f6d616e696665737433333333333333333333333333333333444444444444444444444444444444440100000001",
+        "info_length": 80
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-object-metadata",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/object/metadata` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "3333333333333333333333333333333300000001",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/object/metadata"
+      },
+      "expected": {
+        "derived_key": "ec2c248ddf4001a13c8154871327f0a8139f20a3ee36e1ef88e4ff40c7472d39",
+        "info": "43485552004b444600494e464f00563100000017636875722f76312f6f626a6563742f6d657461646174613333333333333333333333333333333300000001",
+        "info_length": 63
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-object-ocr",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/object/ocr` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "33333333333333333333333333333333020000000100000001",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/object/ocr"
+      },
+      "expected": {
+        "derived_key": "9b78b4ef83b31941c2f45473eba57d70a1262bfe061f553d2ba15d1a3040c4e1",
+        "info": "43485552004b444600494e464f00563100000012636875722f76312f6f626a6563742f6f637233333333333333333333333333333333020000000100000001",
+        "info_length": 63
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-object-poster-frame",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/object/poster-frame` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "33333333333333333333333333333333020000000100000001",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/object/poster-frame"
+      },
+      "expected": {
+        "derived_key": "7472126a45724ea9590b47349f1145540b9fae1187e30451641073bf5395af91",
+        "info": "43485552004b444600494e464f0056310000001b636875722f76312f6f626a6563742f706f737465722d6672616d6533333333333333333333333333333333020000000100000001",
+        "info_length": 72
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-object-preview",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/object/preview` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "33333333333333333333333333333333020000000100000001",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/object/preview"
+      },
+      "expected": {
+        "derived_key": "fd625b9e472fc405ebc98ef83f8f519fd80310d3536116fb4ce2999b5de22ab7",
+        "info": "43485552004b444600494e464f00563100000016636875722f76312f6f626a6563742f7072657669657733333333333333333333333333333333020000000100000001",
+        "info_length": 67
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-object-thumbnail",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/object/thumbnail` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "33333333333333333333333333333333020000000100000001",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/object/thumbnail"
+      },
+      "expected": {
+        "derived_key": "b26a3064fdb632930a5f12caa1cc29b633339e6a6bb2b2707e3e47adb6a27cad",
+        "info": "43485552004b444600494e464f00563100000018636875722f76312f6f626a6563742f7468756d626e61696c33333333333333333333333333333333020000000100000001",
+        "info_length": 69
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-object-waveform",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/object/waveform` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "33333333333333333333333333333333020000000100000001",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/object/waveform"
+      },
+      "expected": {
+        "derived_key": "086776cc35fc19a4baa777783d91bf5a7700d538d925ae9d1bff0c0f985ce954",
+        "info": "43485552004b444600494e464f00563100000017636875722f76312f6f626a6563742f77617665666f726d33333333333333333333333333333333020000000100000001",
+        "info_length": 68
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-recovery-root-envelope",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/recovery/root-envelope` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "11111111111111111111111111111111555555555555555555555555555555550000000000000001",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/recovery/root-envelope"
+      },
+      "expected": {
+        "derived_key": "c47b03bb762fe7d623bf01601d0f6f882cf560b8ef47c3f972bc605ce083ad42",
+        "info": "43485552004b444600494e464f0056310000001e636875722f76312f7265636f766572792f726f6f742d656e76656c6f706511111111111111111111111111111111555555555555555555555555555555550000000000000001",
+        "info_length": 90
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-root-backup-manifest",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/root/backup-manifest` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "11111111111111111111111111111111",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/root/backup-manifest"
+      },
+      "expected": {
+        "derived_key": "4413b268d127246465669f03aff8a02886bc123438dfc43f04b81134c03fbea7",
+        "info": "43485552004b444600494e464f0056310000001c636875722f76312f726f6f742f6261636b75702d6d616e696665737411111111111111111111111111111111",
+        "info_length": 64
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-root-catalog-database",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/root/catalog-database` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "11111111111111111111111111111111",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/root/catalog-database"
+      },
+      "expected": {
+        "derived_key": "b68220c67b59dd22afbebde1a2f160dc6dc038a08909fb5ac0c3d9f62228ce4d",
+        "info": "43485552004b444600494e464f0056310000001d636875722f76312f726f6f742f636174616c6f672d646174616261736511111111111111111111111111111111",
+        "info_length": 65
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-root-catalog-records",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/root/catalog-records` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "11111111111111111111111111111111",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/root/catalog-records"
+      },
+      "expected": {
+        "derived_key": "f80e6f213938730d248b69010aac84040b46a268aef7a78d7b18ef0467cbafb7",
+        "info": "43485552004b444600494e464f0056310000001c636875722f76312f726f6f742f636174616c6f672d7265636f72647311111111111111111111111111111111",
+        "info_length": 64
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-root-collection-envelope",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/root/collection-envelope` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "11111111111111111111111111111111222222222222222222222222222222220000000000000001",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/root/collection-envelope"
+      },
+      "expected": {
+        "derived_key": "beffa839f309d96dea73253677234a7d474e2e11db4583405430c16f120f957a",
+        "info": "43485552004b444600494e464f00563100000020636875722f76312f726f6f742f636f6c6c656374696f6e2d656e76656c6f706511111111111111111111111111111111222222222222222222222222222222220000000000000001",
+        "info_length": 92
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-root-descriptor-auth",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/root/descriptor-auth` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "11111111111111111111111111111111",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/root/descriptor-auth"
+      },
+      "expected": {
+        "derived_key": "1d089ac032348b22d3452104ea17d896ff6aeae815a7bd29dbab3cd6ad81108e",
+        "info": "43485552004b444600494e464f0056310000001c636875722f76312f726f6f742f64657363726970746f722d6175746811111111111111111111111111111111",
+        "info_length": 64
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-root-device-identity-wrap",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/root/device-identity-wrap` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "11111111111111111111111111111111",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/root/device-identity-wrap"
+      },
+      "expected": {
+        "derived_key": "02a85971d99d478a1445f1bc60c4a147885dcf615fbcc4dc06cced3543015aac",
+        "info": "43485552004b444600494e464f00563100000021636875722f76312f726f6f742f6465766963652d6964656e746974792d7772617011111111111111111111111111111111",
+        "info_length": 69
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-root-identifiers",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/root/identifiers` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "11111111111111111111111111111111",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/root/identifiers"
+      },
+      "expected": {
+        "derived_key": "5b64fae4248e3074a811eb71aaf4869861b3473bf908ff01a3dfc1db15982f00",
+        "info": "43485552004b444600494e464f00563100000018636875722f76312f726f6f742f6964656e7469666965727311111111111111111111111111111111",
+        "info_length": 60
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-root-local-fingerprint",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/root/local-fingerprint` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "11111111111111111111111111111111",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/root/local-fingerprint"
+      },
+      "expected": {
+        "derived_key": "ad9a3726207fce2059802a6313d516416aafa2bfa191ab9cdca523c08d42fed7",
+        "info": "43485552004b444600494e464f0056310000001e636875722f76312f726f6f742f6c6f63616c2d66696e6765727072696e7411111111111111111111111111111111",
+        "info_length": 66
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-root-private-settings",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/root/private-settings` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "11111111111111111111111111111111",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/root/private-settings"
+      },
+      "expected": {
+        "derived_key": "96b6c0154e1207c2b681bc496fdde18cd2c5c60a3a257eb44d3b278461083d02",
+        "info": "43485552004b444600494e464f0056310000001d636875722f76312f726f6f742f707269766174652d73657474696e677311111111111111111111111111111111",
+        "info_length": 65
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-root-search",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/root/search` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "11111111111111111111111111111111",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/root/search"
+      },
+      "expected": {
+        "derived_key": "a116f485d5a01deb8d2048ecaf7d24a7a5cb1c6be428f2d899b0c4b5c7e23ccb",
+        "info": "43485552004b444600494e464f00563100000013636875722f76312f726f6f742f73656172636811111111111111111111111111111111",
+        "info_length": 55
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-slot-apple-device-kek",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/slot/apple-device-kek` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "11111111111111111111111111111111555555555555555555555555555555550000000000000001",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/slot/apple-device-kek"
+      },
+      "expected": {
+        "derived_key": "7d5732839f68c21dd205d8680da45f1e503683cd4c5228d378b812f683698e20",
+        "info": "43485552004b444600494e464f0056310000001d636875722f76312f736c6f742f6170706c652d6465766963652d6b656b11111111111111111111111111111111555555555555555555555555555555550000000000000001",
+        "info_length": 89
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "keychain-slot-v1-device-unlock-secret",
+      "spec": "docs/format/KEY_SLOT_BODIES_V1.md",
+      "spec_section": "6",
+      "purpose": "The Keychain family: a device-held secret, AppleDeviceKEK derived in Rust, and the root wrapped there.",
+      "outcome": "accept",
+      "inputs": {
+        "device_unlock_secret": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "keychain_item_id": "cccccccccccccccccccccccccccccccc",
+        "slot_nonce": "dddddddddddddddddddddddddddddddddddddddddddddddd",
+        "vault_root_secret": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+      },
+      "expected": {
+        "apple_device_kek": "ca1f18b500e88c247a7534f5db3477611545b6fa93054a145165a5f120182c07",
+        "slot_aad": "4348555200534c4f54004150504c452d4b4559434841494e0056311111111111111111111111111111111157575757575757575757575757575757030001000100000000000000010001",
+        "slot_aad_length": 74,
+        "slot_body": "0001ccccccccccccccccccccccccccccccccdddddddddddddddddddddddddddddddddddddddddddddddd829e8cb9cc770c14650d03e28b0cb9750d51129eab6d0a5d670367cda2f2c7974deb63381cc9d72e515a92ff47f2af7c"
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "keystore-slot-v1-sixteen-byte-alias",
+      "spec": "docs/format/KEY_SLOT_BODIES_V1.md",
+      "spec_section": "5",
+      "purpose": "The Android family's body framing and the AAD the platform cipher receives.",
+      "outcome": "accept",
+      "inputs": {
+        "alias": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "gcm_nonce": "0f0f0f0f0f0f0f0f0f0f0f0f",
+        "wrapped_root_secret": "010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101"
+      },
+      "expected": {
+        "slot_aad": "4348555200534c4f5400414e44524f49442d4b455953544f5245005631111111111111111111111111111111115858585858585858585858585858585802000100020000000000000001000100000010eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "slot_aad_length": 96,
+        "slot_body": "000100000010eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee0f0f0f0f0f0f0f0f0f0f0f0f010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101"
+      },
+      "notes": "The wrapped bytes are a fixed placeholder: this family's AEAD runs in the platform Keystore, so no Rust implementation reproduces them. TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "object-key-envelope-v1-epoch-one-generation-one",
+      "spec": "docs/format/OBJECT_KEY_ENVELOPE_V1.md",
+      "spec_section": "1",
+      "purpose": "An object key wrapped under the collection-derived envelope key for epoch 1, generation 1.",
+      "outcome": "accept",
+      "inputs": {
+        "collection_epoch": 1,
+        "collection_id": "22222222222222222222222222222222",
+        "envelope_generation": 1,
+        "nonce": "666666666666666666666666666666666666666666666666",
+        "object_id": "33333333333333333333333333333333",
+        "object_key": "7777777777777777777777777777777777777777777777777777777777777777",
+        "security_collection_key": "4444444444444444444444444444444444444444444444444444444444444444",
+        "vault_id": "11111111111111111111111111111111"
+      },
+      "expected": {
+        "aad": "43485552004f424a454354004b45592d454e56454c4f5045005631111111111111111111111111111111112222222222222222222222222222222200000000000000013333333333333333333333333333333300010000000000000001",
+        "aad_length": 93,
+        "envelope": "0001000100011111111111111111111111111111111122222222222222222222222222222222000000000000000133333333333333333333333333333333000000000000000166666666666666666666666666666666666666666666666646b63a9f9f721f60d726f79d8bc66f6d98da76f712ba805fc44e47e08b3ce76455d474e40db915b02bf8df61085bc6ae",
+        "envelope_length": 142,
+        "object_envelope_key": "b068a07e42868a317afcec5c7b14b940b2e4436d9b3ed492aeefcf1614de1db2"
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "object-key-envelope-v1-unsupported-suite",
+      "spec": "docs/format/OBJECT_KEY_ENVELOPE_V1.md",
+      "spec_section": "1",
+      "purpose": "An unsupported suite identifier is refused before the AEAD runs.",
+      "outcome": "reject",
+      "inputs": {
+        "envelope": "0001000100021111111111111111111111111111111122222222222222222222222222222222000000000000000133333333333333333333333333333333000000000000000166666666666666666666666666666666666666666666666646b63a9f9f721f60d726f79d8bc66f6d98da76f712ba805fc44e47e08b3ce76455d474e40db915b02bf8df61085bc6ae"
+      },
+      "error_code": "UNSUPPORTED_SUITE"
+    },
+    {
+      "vector_id": "object-v1-exact-multiple-of-chunk-size",
+      "spec": "docs/format/OBJECT_CONTAINER_V1.md",
+      "spec_section": "13",
+      "purpose": "An exact multiple of the chunk size writes no zero-length trailing record.",
+      "outcome": "accept",
+      "inputs": {
+        "chunk_size": 65536,
+        "commit_nonce": "373737373737373737373737373737373737373737373737",
+        "manifest_nonce": "363636363636363636363636363636363636363636363636",
+        "nonce_prefix": "35353535353535353535353535353535",
+        "object_id": "33333333333333333333333333333333",
+        "object_key": "7777777777777777777777777777777777777777777777777777777777777777",
+        "plaintext_length": 131072,
+        "plaintext_pattern": "byte i equals i modulo 251",
+        "stream_id": "34343434343434343434343434343434",
+        "stream_kind": 1,
+        "stream_revision": 1
+      },
+      "expected": {
+        "container": {
+          "file": "object-containers/object-v1-exact-multiple-of-chunk-size.bin"
+        },
+        "container_length": 131473,
+        "manifest_record_length": 125
+      },
+      "decoded": {
+        "chunk_count": 2,
+        "total_plaintext_length": 131072
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "object-v1-forged-chunk-plaintext-length",
+      "spec": "docs/format/OBJECT_CONTAINER_V1.md",
+      "spec_section": "8",
+      "purpose": "A chunk header whose ciphertext length is not the plaintext length plus one tag is rejected without a key.",
+      "outcome": "reject",
+      "inputs": {
+        "container": "434855524f424a3100010001000100000000001c0000007d00010000363636363636363636363636363636363636363636363636c5bb618b33c44278c641f941bd2c3a75c10375750a4e507a13d9727b664eaac8cd7cf423f5a61a86e8616e83e2a3e7f54ccf709b15a7989d1909c618c073c5e47ec3fe1e20e0c92a770b53f8f870d96b83d7689166d7e3861008a1e8b6c679b608847a634d01010000000000000000000000000063000003f8cb6837dcf83cf3528daba8c6b461ac943ddd5d9ceb2072f51a8fac8a04f4571b15f78254e7abdf3b28eb36fa2ca235ea2a6ace0a233f7c931f68b1c83eb377d4c976e6e5b3cb84b913b9fcd7a34e5f24e6189691cd4c4aa1381308a5211ad9c7e32e2839211b5fc2751041344c9ad04df5643f1a4159a493345d45b508a90a776beaf20a821781b99e87af4be1873147b6ea77ce268caa887bae504e6c562a740c99fc16c3eb5332ae637967f7d58f3e8974145fee840da1f61f09dc2bd5eb83070477f1006913694d9e10f5ddfd41845332218cbcb38ec20c9cfbfd245da90243662a0a120534dafb697a1556e929907cccb0b55e3fb7f2fe7754d396326d6bf25042f27f2552d577b1117783f38ac3dd1bfa233841325c8a4877466d13cdac7f54ad5082dba52d63bfafeb92bbe3c5c3a23ccc2b36ee320702d61e8beab7f3bbd783841ee026cbbf71f9fa02857d074e61192281b507fca31214efbb57e4c033a76974b55fbfb05855b8b022b4815aa11e462316a760a17c31573ce72b9fbfb4e3bf5a80b55da75b28a7c02921d5bde1563aacc27b2b47d3af22c39541c7b9620f2a49c0509a7dd3419bc9199b5f6a507e4f8aa9bb5776eed7ba4ba23fa1fc8025c80bc1b107aff8a6a35630d006a1032d700646d546ae1a954ac050c873912370e5831efc13bcd4541fe59beff4bda50ee4746c4d64fa0bca5b477b3b09c1bee410b9ff216cf389b6b4f151089ac09f568a8b327bf74f4b460e8258a109a5d0ccbbe28f2fea0a6a72e311c9db24aeed79448605228811187ba1f3d7812472c27807ed6c37beab227f2020024c84f557b2b8f681e4088a9a84a3c0f950d20f723982ba133c1943621cad6d1d2eb4b5bee2354b99f4a12647aaa17fe28978881ca543cff8547ea791e1c0052f063fff52230d86ba39c5422fe747e958943c5a58eb095f9480185d88d8dfab5c4e4e866a53bb0a5ba8eb8368b86011af2a59ce7b7d2d4128203b62fbcdf760f557d0046ad868ecc65fad28a979eefe3789b62e22d53ac34083c13ba1b72fb5f5591135fb8b6ab480542b2daa12b995c36859490a8b9b1ac95433248e24687f87cd97374a8a689294c4f6699abdc23c50c49e59159c9ff18a746a770191ed998b65b55a9fa46a8dac8b923b8fe474b32560ee1003c1ac8c0cea92aaa823b00f4d35c185b54f419bf7598ece835f2c5830981ced6e4c7d0c33c04f544e21490754da480cfc57f18627bbe52eadece1425f844724a2162493da1746cf23b3afd84fed6814a2334935e2b148344e00c220990f86c5eac4ca17056ffd36c34b8ffea5acc302a36477510c1e272e3d25a8f7db63e2f284422029dd715d34010c39d39e333b185c563c355fbd665c70bf6a335eaf870f2766518c5e2d1161b9597fbe352898aa361bb084f94eb4f90201000000000090373737373737373737373737373737373737373737373737870cc50eea90f4440707335f0632b4473b4971f286facb0c6eb44a55ad66e96408012e883ee6bd0999157322d69ab226722a8932b0279c22f11c8651c067dd51ad31ab3a04cb8aa70918b9cc5009b5f58d54f19a6f2f27a01ecc7b9f858e99ad5634a90238817ac5618165560368fc89d9fb89356bec8d6b17534c27557e129a6f5f452a35ed0d71ae2abc6a18f4a966"
+      },
+      "error_code": "OBJECT_CORRUPT"
+    },
+    {
+      "vector_id": "object-v1-missing-final-commit",
+      "spec": "docs/format/OBJECT_CONTAINER_V1.md",
+      "spec_section": "15",
+      "purpose": "A container whose chunk records authenticate but whose final commit is absent is incomplete, not corrupt.",
+      "outcome": "reject",
+      "inputs": {
+        "container": "434855524f424a3100010001000100000000001c0000007d00010000363636363636363636363636363636363636363636363636c5bb618b33c44278c641f941bd2c3a75c10375750a4e507a13d9727b664eaac8cd7cf423f5a61a86e8616e83e2a3e7f54ccf709b15a7989d1909c618c073c5e47ec3fe1e20e0c92a770b53f8f870d96b83d7689166d7e3861008a1e8b6c679b608847a634d010100000000000000000000000003e8000003f8cb6837dcf83cf3528daba8c6b461ac943ddd5d9ceb2072f51a8fac8a04f4571b15f78254e7abdf3b28eb36fa2ca235ea2a6ace0a233f7c931f68b1c83eb377d4c976e6e5b3cb84b913b9fcd7a34e5f24e6189691cd4c4aa1381308a5211ad9c7e32e2839211b5fc2751041344c9ad04df5643f1a4159a493345d45b508a90a776beaf20a821781b99e87af4be1873147b6ea77ce268caa887bae504e6c562a740c99fc16c3eb5332ae637967f7d58f3e8974145fee840da1f61f09dc2bd5eb83070477f1006913694d9e10f5ddfd41845332218cbcb38ec20c9cfbfd245da90243662a0a120534dafb697a1556e929907cccb0b55e3fb7f2fe7754d396326d6bf25042f27f2552d577b1117783f38ac3dd1bfa233841325c8a4877466d13cdac7f54ad5082dba52d63bfafeb92bbe3c5c3a23ccc2b36ee320702d61e8beab7f3bbd783841ee026cbbf71f9fa02857d074e61192281b507fca31214efbb57e4c033a76974b55fbfb05855b8b022b4815aa11e462316a760a17c31573ce72b9fbfb4e3bf5a80b55da75b28a7c02921d5bde1563aacc27b2b47d3af22c39541c7b9620f2a49c0509a7dd3419bc9199b5f6a507e4f8aa9bb5776eed7ba4ba23fa1fc8025c80bc1b107aff8a6a35630d006a1032d700646d546ae1a954ac050c873912370e5831efc13bcd4541fe59beff4bda50ee4746c4d64fa0bca5b477b3b09c1bee410b9ff216cf389b6b4f151089ac09f568a8b327bf74f4b460e8258a109a5d0ccbbe28f2fea0a6a72e311c9db24aeed79448605228811187ba1f3d7812472c27807ed6c37beab227f2020024c84f557b2b8f681e4088a9a84a3c0f950d20f723982ba133c1943621cad6d1d2eb4b5bee2354b99f4a12647aaa17fe28978881ca543cff8547ea791e1c0052f063fff52230d86ba39c5422fe747e958943c5a58eb095f9480185d88d8dfab5c4e4e866a53bb0a5ba8eb8368b86011af2a59ce7b7d2d4128203b62fbcdf760f557d0046ad868ecc65fad28a979eefe3789b62e22d53ac34083c13ba1b72fb5f5591135fb8b6ab480542b2daa12b995c36859490a8b9b1ac95433248e24687f87cd97374a8a689294c4f6699abdc23c50c49e59159c9ff18a746a770191ed998b65b55a9fa46a8dac8b923b8fe474b32560ee1003c1ac8c0cea92aaa823b00f4d35c185b54f419bf7598ece835f2c5830981ced6e4c7d0c33c04f544e21490754da480cfc57f18627bbe52eadece1425f844724a2162493da1746cf23b3afd84fed6814a2334935e2b148344e00c220990f86c5eac4ca17056ffd36c34b8ffea5acc302a36477510c1e272e3d25a8f7db63e2f284422029dd715d34010c39d39e333b185c563c355fbd665c70bf6a335eaf870f2766518c5e2d1161b9597fbe352898aa361bb084f94eb4f9",
+        "object_key": "7777777777777777777777777777777777777777777777777777777777777777"
+      },
+      "error_code": "OBJECT_INCOMPLETE",
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "object-v1-non-zero-preamble-reserved",
+      "spec": "docs/format/OBJECT_CONTAINER_V1.md",
+      "spec_section": "3",
+      "purpose": "A fixed preamble field holding any other value is OBJECT_CORRUPT and is never ignored.",
+      "outcome": "reject",
+      "inputs": {
+        "container": "434855524f424a3100010001000100000000001c0000007d00010100363636363636363636363636363636363636363636363636c5bb618b33c44278c641f941bd2c3a75c10375750a4e507a13d9727b664eaac8cd7cf423f5a61a86e8616e83e2a3e7f54ccf709b15a7989d1909c618c073c5e47ec3fe1e20e0c92a770b53f8f870d96b83d7689166d7e3861008a1e8b6c679b608847a634d010100000000000000000000000003e8000003f8cb6837dcf83cf3528daba8c6b461ac943ddd5d9ceb2072f51a8fac8a04f4571b15f78254e7abdf3b28eb36fa2ca235ea2a6ace0a233f7c931f68b1c83eb377d4c976e6e5b3cb84b913b9fcd7a34e5f24e6189691cd4c4aa1381308a5211ad9c7e32e2839211b5fc2751041344c9ad04df5643f1a4159a493345d45b508a90a776beaf20a821781b99e87af4be1873147b6ea77ce268caa887bae504e6c562a740c99fc16c3eb5332ae637967f7d58f3e8974145fee840da1f61f09dc2bd5eb83070477f1006913694d9e10f5ddfd41845332218cbcb38ec20c9cfbfd245da90243662a0a120534dafb697a1556e929907cccb0b55e3fb7f2fe7754d396326d6bf25042f27f2552d577b1117783f38ac3dd1bfa233841325c8a4877466d13cdac7f54ad5082dba52d63bfafeb92bbe3c5c3a23ccc2b36ee320702d61e8beab7f3bbd783841ee026cbbf71f9fa02857d074e61192281b507fca31214efbb57e4c033a76974b55fbfb05855b8b022b4815aa11e462316a760a17c31573ce72b9fbfb4e3bf5a80b55da75b28a7c02921d5bde1563aacc27b2b47d3af22c39541c7b9620f2a49c0509a7dd3419bc9199b5f6a507e4f8aa9bb5776eed7ba4ba23fa1fc8025c80bc1b107aff8a6a35630d006a1032d700646d546ae1a954ac050c873912370e5831efc13bcd4541fe59beff4bda50ee4746c4d64fa0bca5b477b3b09c1bee410b9ff216cf389b6b4f151089ac09f568a8b327bf74f4b460e8258a109a5d0ccbbe28f2fea0a6a72e311c9db24aeed79448605228811187ba1f3d7812472c27807ed6c37beab227f2020024c84f557b2b8f681e4088a9a84a3c0f950d20f723982ba133c1943621cad6d1d2eb4b5bee2354b99f4a12647aaa17fe28978881ca543cff8547ea791e1c0052f063fff52230d86ba39c5422fe747e958943c5a58eb095f9480185d88d8dfab5c4e4e866a53bb0a5ba8eb8368b86011af2a59ce7b7d2d4128203b62fbcdf760f557d0046ad868ecc65fad28a979eefe3789b62e22d53ac34083c13ba1b72fb5f5591135fb8b6ab480542b2daa12b995c36859490a8b9b1ac95433248e24687f87cd97374a8a689294c4f6699abdc23c50c49e59159c9ff18a746a770191ed998b65b55a9fa46a8dac8b923b8fe474b32560ee1003c1ac8c0cea92aaa823b00f4d35c185b54f419bf7598ece835f2c5830981ced6e4c7d0c33c04f544e21490754da480cfc57f18627bbe52eadece1425f844724a2162493da1746cf23b3afd84fed6814a2334935e2b148344e00c220990f86c5eac4ca17056ffd36c34b8ffea5acc302a36477510c1e272e3d25a8f7db63e2f284422029dd715d34010c39d39e333b185c563c355fbd665c70bf6a335eaf870f2766518c5e2d1161b9597fbe352898aa361bb084f94eb4f90201000000000090373737373737373737373737373737373737373737373737870cc50eea90f4440707335f0632b4473b4971f286facb0c6eb44a55ad66e96408012e883ee6bd0999157322d69ab226722a8932b0279c22f11c8651c067dd51ad31ab3a04cb8aa70918b9cc5009b5f58d54f19a6f2f27a01ecc7b9f858e99ad5634a90238817ac5618165560368fc89d9fb89356bec8d6b17534c27557e129a6f5f452a35ed0d71ae2abc6a18f4a966"
+      },
+      "error_code": "OBJECT_CORRUPT"
+    },
+    {
+      "vector_id": "object-v1-one-partial-chunk",
+      "spec": "docs/format/OBJECT_CONTAINER_V1.md",
+      "spec_section": "13",
+      "purpose": "One chunk shorter than the chunk size, which is therefore also the last chunk.",
+      "outcome": "accept",
+      "inputs": {
+        "chunk_size": 65536,
+        "commit_nonce": "373737373737373737373737373737373737373737373737",
+        "manifest_nonce": "363636363636363636363636363636363636363636363636",
+        "nonce_prefix": "35353535353535353535353535353535",
+        "object_id": "33333333333333333333333333333333",
+        "object_key": "7777777777777777777777777777777777777777777777777777777777777777",
+        "plaintext_length": 1000,
+        "plaintext_pattern": "byte i equals i modulo 251",
+        "stream_id": "34343434343434343434343434343434",
+        "stream_kind": 1,
+        "stream_revision": 1
+      },
+      "expected": {
+        "container": "434855524f424a3100010001000100000000001c0000007d00010000363636363636363636363636363636363636363636363636c5bb618b33c44278c641f941bd2c3a75c10375750a4e507a13d9727b664eaac8cd7cf423f5a61a86e8616e83e2a3e7f54ccf709b15a7989d1909c618c073c5e47ec3fe1e20e0c92a770b53f8f870d96b83d7689166d7e3861008a1e8b6c679b608847a634d010100000000000000000000000003e8000003f8cb6837dcf83cf3528daba8c6b461ac943ddd5d9ceb2072f51a8fac8a04f4571b15f78254e7abdf3b28eb36fa2ca235ea2a6ace0a233f7c931f68b1c83eb377d4c976e6e5b3cb84b913b9fcd7a34e5f24e6189691cd4c4aa1381308a5211ad9c7e32e2839211b5fc2751041344c9ad04df5643f1a4159a493345d45b508a90a776beaf20a821781b99e87af4be1873147b6ea77ce268caa887bae504e6c562a740c99fc16c3eb5332ae637967f7d58f3e8974145fee840da1f61f09dc2bd5eb83070477f1006913694d9e10f5ddfd41845332218cbcb38ec20c9cfbfd245da90243662a0a120534dafb697a1556e929907cccb0b55e3fb7f2fe7754d396326d6bf25042f27f2552d577b1117783f38ac3dd1bfa233841325c8a4877466d13cdac7f54ad5082dba52d63bfafeb92bbe3c5c3a23ccc2b36ee320702d61e8beab7f3bbd783841ee026cbbf71f9fa02857d074e61192281b507fca31214efbb57e4c033a76974b55fbfb05855b8b022b4815aa11e462316a760a17c31573ce72b9fbfb4e3bf5a80b55da75b28a7c02921d5bde1563aacc27b2b47d3af22c39541c7b9620f2a49c0509a7dd3419bc9199b5f6a507e4f8aa9bb5776eed7ba4ba23fa1fc8025c80bc1b107aff8a6a35630d006a1032d700646d546ae1a954ac050c873912370e5831efc13bcd4541fe59beff4bda50ee4746c4d64fa0bca5b477b3b09c1bee410b9ff216cf389b6b4f151089ac09f568a8b327bf74f4b460e8258a109a5d0ccbbe28f2fea0a6a72e311c9db24aeed79448605228811187ba1f3d7812472c27807ed6c37beab227f2020024c84f557b2b8f681e4088a9a84a3c0f950d20f723982ba133c1943621cad6d1d2eb4b5bee2354b99f4a12647aaa17fe28978881ca543cff8547ea791e1c0052f063fff52230d86ba39c5422fe747e958943c5a58eb095f9480185d88d8dfab5c4e4e866a53bb0a5ba8eb8368b86011af2a59ce7b7d2d4128203b62fbcdf760f557d0046ad868ecc65fad28a979eefe3789b62e22d53ac34083c13ba1b72fb5f5591135fb8b6ab480542b2daa12b995c36859490a8b9b1ac95433248e24687f87cd97374a8a689294c4f6699abdc23c50c49e59159c9ff18a746a770191ed998b65b55a9fa46a8dac8b923b8fe474b32560ee1003c1ac8c0cea92aaa823b00f4d35c185b54f419bf7598ece835f2c5830981ced6e4c7d0c33c04f544e21490754da480cfc57f18627bbe52eadece1425f844724a2162493da1746cf23b3afd84fed6814a2334935e2b148344e00c220990f86c5eac4ca17056ffd36c34b8ffea5acc302a36477510c1e272e3d25a8f7db63e2f284422029dd715d34010c39d39e333b185c563c355fbd665c70bf6a335eaf870f2766518c5e2d1161b9597fbe352898aa361bb084f94eb4f90201000000000090373737373737373737373737373737373737373737373737870cc50eea90f4440707335f0632b4473b4971f286facb0c6eb44a55ad66e96408012e883ee6bd0999157322d69ab226722a8932b0279c22f11c8651c067dd51ad31ab3a04cb8aa70918b9cc5009b5f58d54f19a6f2f27a01ecc7b9f858e99ad5634a90238817ac5618165560368fc89d9fb89356bec8d6b17534c27557e129a6f5f452a35ed0d71ae2abc6a18f4a966",
+        "container_length": 1365,
+        "manifest_record_length": 125
+      },
+      "decoded": {
+        "chunk_count": 1,
+        "total_plaintext_length": 1000
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "object-v1-trailing-byte-after-final-commit",
+      "spec": "docs/format/OBJECT_CONTAINER_V1.md",
+      "spec_section": "11",
+      "purpose": "No bytes may follow the final commit record.",
+      "outcome": "reject",
+      "inputs": {
+        "container": "434855524f424a3100010001000100000000001c0000007d00010000363636363636363636363636363636363636363636363636c5bb618b33c44278c641f941bd2c3a75c10375750a4e507a13d9727b664eaac8cd7cf423f5a61a86e8616e83e2a3e7f54ccf709b15a7989d1909c618c073c5e47ec3fe1e20e0c92a770b53f8f870d96b83d7689166d7e3861008a1e8b6c679b608847a634d010100000000000000000000000003e8000003f8cb6837dcf83cf3528daba8c6b461ac943ddd5d9ceb2072f51a8fac8a04f4571b15f78254e7abdf3b28eb36fa2ca235ea2a6ace0a233f7c931f68b1c83eb377d4c976e6e5b3cb84b913b9fcd7a34e5f24e6189691cd4c4aa1381308a5211ad9c7e32e2839211b5fc2751041344c9ad04df5643f1a4159a493345d45b508a90a776beaf20a821781b99e87af4be1873147b6ea77ce268caa887bae504e6c562a740c99fc16c3eb5332ae637967f7d58f3e8974145fee840da1f61f09dc2bd5eb83070477f1006913694d9e10f5ddfd41845332218cbcb38ec20c9cfbfd245da90243662a0a120534dafb697a1556e929907cccb0b55e3fb7f2fe7754d396326d6bf25042f27f2552d577b1117783f38ac3dd1bfa233841325c8a4877466d13cdac7f54ad5082dba52d63bfafeb92bbe3c5c3a23ccc2b36ee320702d61e8beab7f3bbd783841ee026cbbf71f9fa02857d074e61192281b507fca31214efbb57e4c033a76974b55fbfb05855b8b022b4815aa11e462316a760a17c31573ce72b9fbfb4e3bf5a80b55da75b28a7c02921d5bde1563aacc27b2b47d3af22c39541c7b9620f2a49c0509a7dd3419bc9199b5f6a507e4f8aa9bb5776eed7ba4ba23fa1fc8025c80bc1b107aff8a6a35630d006a1032d700646d546ae1a954ac050c873912370e5831efc13bcd4541fe59beff4bda50ee4746c4d64fa0bca5b477b3b09c1bee410b9ff216cf389b6b4f151089ac09f568a8b327bf74f4b460e8258a109a5d0ccbbe28f2fea0a6a72e311c9db24aeed79448605228811187ba1f3d7812472c27807ed6c37beab227f2020024c84f557b2b8f681e4088a9a84a3c0f950d20f723982ba133c1943621cad6d1d2eb4b5bee2354b99f4a12647aaa17fe28978881ca543cff8547ea791e1c0052f063fff52230d86ba39c5422fe747e958943c5a58eb095f9480185d88d8dfab5c4e4e866a53bb0a5ba8eb8368b86011af2a59ce7b7d2d4128203b62fbcdf760f557d0046ad868ecc65fad28a979eefe3789b62e22d53ac34083c13ba1b72fb5f5591135fb8b6ab480542b2daa12b995c36859490a8b9b1ac95433248e24687f87cd97374a8a689294c4f6699abdc23c50c49e59159c9ff18a746a770191ed998b65b55a9fa46a8dac8b923b8fe474b32560ee1003c1ac8c0cea92aaa823b00f4d35c185b54f419bf7598ece835f2c5830981ced6e4c7d0c33c04f544e21490754da480cfc57f18627bbe52eadece1425f844724a2162493da1746cf23b3afd84fed6814a2334935e2b148344e00c220990f86c5eac4ca17056ffd36c34b8ffea5acc302a36477510c1e272e3d25a8f7db63e2f284422029dd715d34010c39d39e333b185c563c355fbd665c70bf6a335eaf870f2766518c5e2d1161b9597fbe352898aa361bb084f94eb4f90201000000000090373737373737373737373737373737373737373737373737870cc50eea90f4440707335f0632b4473b4971f286facb0c6eb44a55ad66e96408012e883ee6bd0999157322d69ab226722a8932b0279c22f11c8651c067dd51ad31ab3a04cb8aa70918b9cc5009b5f58d54f19a6f2f27a01ecc7b9f858e99ad5634a90238817ac5618165560368fc89d9fb89356bec8d6b17534c27557e129a6f5f452a35ed0d71ae2abc6a18f4a96600"
+      },
+      "error_code": "OBJECT_CORRUPT"
+    },
+    {
+      "vector_id": "object-v1-two-chunks-partial-final",
+      "spec": "docs/format/OBJECT_CONTAINER_V1.md",
+      "spec_section": "8",
+      "purpose": "Two chunks and a short third, the canonical chunking every reader recomputes.",
+      "outcome": "accept",
+      "inputs": {
+        "chunk_size": 65536,
+        "commit_nonce": "373737373737373737373737373737373737373737373737",
+        "manifest_nonce": "363636363636363636363636363636363636363636363636",
+        "nonce_prefix": "35353535353535353535353535353535",
+        "object_id": "33333333333333333333333333333333",
+        "object_key": "7777777777777777777777777777777777777777777777777777777777777777",
+        "plaintext_length": 131089,
+        "plaintext_pattern": "byte i equals i modulo 251",
+        "stream_id": "34343434343434343434343434343434",
+        "stream_kind": 1,
+        "stream_revision": 1
+      },
+      "expected": {
+        "container": {
+          "file": "object-containers/object-v1-two-chunks-partial-final.bin"
+        },
+        "container_length": 131526,
+        "manifest_record_length": 125
+      },
+      "decoded": {
+        "chunk_count": 3,
+        "total_plaintext_length": 131089
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "object-v1-unsupported-suite",
+      "spec": "docs/format/OBJECT_CONTAINER_V1.md",
+      "spec_section": "3",
+      "purpose": "An unknown suite fails as UNSUPPORTED_SUITE rather than as corruption.",
+      "outcome": "reject",
+      "inputs": {
+        "container": "434855524f424a3100010001000200000000001c0000007d00010000363636363636363636363636363636363636363636363636c5bb618b33c44278c641f941bd2c3a75c10375750a4e507a13d9727b664eaac8cd7cf423f5a61a86e8616e83e2a3e7f54ccf709b15a7989d1909c618c073c5e47ec3fe1e20e0c92a770b53f8f870d96b83d7689166d7e3861008a1e8b6c679b608847a634d010100000000000000000000000003e8000003f8cb6837dcf83cf3528daba8c6b461ac943ddd5d9ceb2072f51a8fac8a04f4571b15f78254e7abdf3b28eb36fa2ca235ea2a6ace0a233f7c931f68b1c83eb377d4c976e6e5b3cb84b913b9fcd7a34e5f24e6189691cd4c4aa1381308a5211ad9c7e32e2839211b5fc2751041344c9ad04df5643f1a4159a493345d45b508a90a776beaf20a821781b99e87af4be1873147b6ea77ce268caa887bae504e6c562a740c99fc16c3eb5332ae637967f7d58f3e8974145fee840da1f61f09dc2bd5eb83070477f1006913694d9e10f5ddfd41845332218cbcb38ec20c9cfbfd245da90243662a0a120534dafb697a1556e929907cccb0b55e3fb7f2fe7754d396326d6bf25042f27f2552d577b1117783f38ac3dd1bfa233841325c8a4877466d13cdac7f54ad5082dba52d63bfafeb92bbe3c5c3a23ccc2b36ee320702d61e8beab7f3bbd783841ee026cbbf71f9fa02857d074e61192281b507fca31214efbb57e4c033a76974b55fbfb05855b8b022b4815aa11e462316a760a17c31573ce72b9fbfb4e3bf5a80b55da75b28a7c02921d5bde1563aacc27b2b47d3af22c39541c7b9620f2a49c0509a7dd3419bc9199b5f6a507e4f8aa9bb5776eed7ba4ba23fa1fc8025c80bc1b107aff8a6a35630d006a1032d700646d546ae1a954ac050c873912370e5831efc13bcd4541fe59beff4bda50ee4746c4d64fa0bca5b477b3b09c1bee410b9ff216cf389b6b4f151089ac09f568a8b327bf74f4b460e8258a109a5d0ccbbe28f2fea0a6a72e311c9db24aeed79448605228811187ba1f3d7812472c27807ed6c37beab227f2020024c84f557b2b8f681e4088a9a84a3c0f950d20f723982ba133c1943621cad6d1d2eb4b5bee2354b99f4a12647aaa17fe28978881ca543cff8547ea791e1c0052f063fff52230d86ba39c5422fe747e958943c5a58eb095f9480185d88d8dfab5c4e4e866a53bb0a5ba8eb8368b86011af2a59ce7b7d2d4128203b62fbcdf760f557d0046ad868ecc65fad28a979eefe3789b62e22d53ac34083c13ba1b72fb5f5591135fb8b6ab480542b2daa12b995c36859490a8b9b1ac95433248e24687f87cd97374a8a689294c4f6699abdc23c50c49e59159c9ff18a746a770191ed998b65b55a9fa46a8dac8b923b8fe474b32560ee1003c1ac8c0cea92aaa823b00f4d35c185b54f419bf7598ece835f2c5830981ced6e4c7d0c33c04f544e21490754da480cfc57f18627bbe52eadece1425f844724a2162493da1746cf23b3afd84fed6814a2334935e2b148344e00c220990f86c5eac4ca17056ffd36c34b8ffea5acc302a36477510c1e272e3d25a8f7db63e2f284422029dd715d34010c39d39e333b185c563c355fbd665c70bf6a335eaf870f2766518c5e2d1161b9597fbe352898aa361bb084f94eb4f90201000000000090373737373737373737373737373737373737373737373737870cc50eea90f4440707335f0632b4473b4971f286facb0c6eb44a55ad66e96408012e883ee6bd0999157322d69ab226722a8932b0279c22f11c8651c067dd51ad31ab3a04cb8aa70918b9cc5009b5f58d54f19a6f2f27a01ecc7b9f858e99ad5634a90238817ac5618165560368fc89d9fb89356bec8d6b17534c27557e129a6f5f452a35ed0d71ae2abc6a18f4a966"
+      },
+      "error_code": "UNSUPPORTED_SUITE"
+    },
+    {
+      "vector_id": "object-v1-zero-byte",
+      "spec": "docs/format/OBJECT_CONTAINER_V1.md",
+      "spec_section": "13",
+      "purpose": "A zero-byte stream: no chunk records, and the ordered commitment is the hash of its domain tag alone.",
+      "outcome": "accept",
+      "inputs": {
+        "chunk_size": 65536,
+        "commit_nonce": "373737373737373737373737373737373737373737373737",
+        "manifest_nonce": "363636363636363636363636363636363636363636363636",
+        "nonce_prefix": "35353535353535353535353535353535",
+        "object_id": "33333333333333333333333333333333",
+        "object_key": "7777777777777777777777777777777777777777777777777777777777777777",
+        "plaintext_length": 0,
+        "plaintext_pattern": "byte i equals i modulo 251",
+        "stream_id": "34343434343434343434343434343434",
+        "stream_kind": 1,
+        "stream_revision": 1
+      },
+      "expected": {
+        "container": "434855524f424a3100010001000100000000001c0000007d00010000363636363636363636363636363636363636363636363636c5bb618b33c44278c641f941bd2c3a75c10375750a4e507a13d9727b664eaac8cd7cf423f5a61a86e8616e83e2a3e7f54ccf709b15a7989d1909c618c073c5e47ec3fe1e20e0c92a770b53f8f870d96b83d7689166d7e3861008a1e8b6c679b608847a634d0201000000000090373737373737373737373737373737373737373737373737870cc50eea90f4440707335f0632b4473b4971f286facb0c6eb44a55ad66e96408012e883ee6bd0999157322d69ab226722a8932b0279c22f11c8651c067dd51ad31ab3a04cb8aa70918b9cd5009b5f58d54f2726f2f2448e0aafc20d211a2c4a94fcb47964e6870c692d7a5244064bad199d18c38426a4517534c27557e129a65168829f01b49b27cfa4960386f352c",
+        "container_length": 329,
+        "manifest_record_length": 125
+      },
+      "decoded": {
+        "chunk_count": 0,
+        "total_plaintext_length": 0
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "object-v1-zero-chunk-ordered-commitment",
+      "spec": "docs/format/OBJECT_CONTAINER_V1.md",
+      "spec_section": "10",
+      "purpose": "The ordered chunk commitment of a zero-chunk object is BLAKE3-256 of the domain tag alone.",
+      "outcome": "accept",
+      "inputs": {
+        "domain_tag": "43485552004f424a454354004f5244455245442d434f4d4d49544d454e54005631"
+      },
+      "expected": {
+        "ordered_chunk_commitment": "cc19f3a543c2c332a044d45b19ca89e67e35cf4c0159439d198d2ae10608ccae"
+      }
+    },
+    {
+      "vector_id": "password-slot-v1-frozen-floor-profile",
+      "spec": "docs/format/KEY_SLOT_BODIES_V1.md",
+      "spec_section": "3",
+      "purpose": "A password slot at the frozen Argon2id floor: 65536 KiB, 3 iterations, parallelism 1, 16-byte salt.",
+      "outcome": "accept",
+      "inputs": {
+        "iterations": 3,
+        "memory_kib": 65536,
+        "parallelism": 1,
+        "password": "correct horse battery staple",
+        "password_bytes": "636f727265637420686f727365206261747465727920737461706c65",
+        "salt": "77777777777777777777777777777777",
+        "slot_nonce": "888888888888888888888888888888888888888888888888",
+        "vault_root_secret": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+      },
+      "expected": {
+        "slot_aad": "4348555200534c4f540050415353574f5244005631111111111111111111111111111111115555555555555555555555555555555501000100010000000000000001000102130001000000000003000000010000001077777777777777777777777777777777",
+        "slot_aad_length": 102,
+        "slot_body": "000102130001000000000003000000010000001077777777777777777777777777777777888888888888888888888888888888888888888888888888599081d243b272864e86ef99e893fbc64b2870e74d47d3ba0876eddb3e410ef814eada9003fe4e2e4dde97d7ae852f0e",
+        "slot_body_length": 108
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "password-slot-v1-memory-below-the-floor",
+      "spec": "docs/format/KEY_SLOT_BODIES_V1.md",
+      "spec_section": "8",
+      "purpose": "A memory cost under the frozen floor is refused before Argon2 allocates anything.",
+      "outcome": "reject",
+      "inputs": {
+        "slot_body": "000102130000040000000003000000010000001077777777777777777777777777777777888888888888888888888888888888888888888888888888599081d243b272864e86ef99e893fbc64b2870e74d47d3ba0876eddb3e410ef814eada9003fe4e2e4dde97d7ae852f0e"
+      },
+      "error_code": "RESOURCE_LIMIT_EXCEEDED"
+    },
+    {
+      "vector_id": "password-slot-v1-trailing-byte",
+      "spec": "docs/format/KEY_SLOT_BODIES_V1.md",
+      "spec_section": "8",
+      "purpose": "A body length that exceeds what its own fields imply is rejected.",
+      "outcome": "reject",
+      "inputs": {
+        "slot_body": "000102130001000000000003000000010000001077777777777777777777777777777777888888888888888888888888888888888888888888888888599081d243b272864e86ef99e893fbc64b2870e74d47d3ba0876eddb3e410ef814eada9003fe4e2e4dde97d7ae852f0e00"
+      },
+      "error_code": "NON_CANONICAL_ENCODING"
+    },
+    {
+      "vector_id": "password-slot-v1-unicode-combining-no-normalization",
+      "spec": "docs/security/PASSWORD_PROFILE.md",
+      "spec_section": "3",
+      "purpose": "Profile 0x0001 applies no normalization, so U+00E9 and U+0065 U+0301 are different passwords.",
+      "outcome": "accept",
+      "inputs": {
+        "composed_password_bytes": "c3a9",
+        "decomposed_password_bytes": "65cc81",
+        "salt": "77777777777777777777777777777777"
+      },
+      "expected": {
+        "composed_password_kek": "e5cdbfd256521e9d0ddd9c5e17f611e30fa49344465d2d9ec60a76f58d56ffa7",
+        "decomposed_password_kek": "b7228c23b3b00e66279e6c387d8c4a46c056518536f276d030a8e79c806641b9",
+        "keys_differ": true
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "recovery-slot-v1-checksum-mismatch",
+      "spec": "docs/security/RECOVERY.md",
+      "spec_section": "2",
+      "purpose": "A phrase whose last word changes fails the BIP-39 checksum and no slot unwrap is attempted.",
+      "outcome": "reject",
+      "inputs": {
+        "phrase": "office smoke grid creek office smoke grid creek office smoke grid creek office smoke grid creek office smoke grid creek office smoke grid abandon"
+      },
+      "error_code": "INVALID_INPUT"
+    },
+    {
+      "vector_id": "recovery-slot-v1-generation-one",
+      "spec": "docs/format/KEY_SLOT_BODIES_V1.md",
+      "spec_section": "4",
+      "purpose": "A recovery slot: no salt, no password KDF, RecoveryKEK derived from the 32-byte secret.",
+      "outcome": "accept",
+      "inputs": {
+        "recovery_secret": "9999999999999999999999999999999999999999999999999999999999999999",
+        "slot_nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "vault_root_secret": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+      },
+      "expected": {
+        "slot_aad": "4348555200534c4f54005245434f564552590056311111111111111111111111111111111156565656565656565656565656565656040001000100000000000000010001",
+        "slot_aad_length": 68,
+        "slot_body": "0001aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab45d638dcfe282972a8e07276b5e3fe7da0e75c32ebd1986caf8f1d73ba9dc013da571c2a2151a3fecc7d04436179db",
+        "slot_body_length": 74
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "recovery-slot-v1-phrase-round-trip",
+      "spec": "docs/security/RECOVERY.md",
+      "spec_section": "2",
+      "purpose": "32 bytes to 24 BIP-39 English words and back, and one denormalized re-entry that normalizes to the same words.",
+      "outcome": "accept",
+      "inputs": {
+        "denormalized_re_entry": "  OFFICE  SMOKE  GRID  CREEK  OFFICE  SMOKE  GRID  CREEK  OFFICE  SMOKE  GRID  CREEK  OFFICE  SMOKE  GRID  CREEK  OFFICE  SMOKE  GRID  CREEK  OFFICE  SMOKE  GRID  CURIOUS  ",
+        "recovery_secret": "9999999999999999999999999999999999999999999999999999999999999999"
+      },
+      "expected": {
+        "normalized_re_entry": "office smoke grid creek office smoke grid creek office smoke grid creek office smoke grid creek office smoke grid creek office smoke grid curious",
+        "phrase": "office smoke grid creek office smoke grid creek office smoke grid creek office smoke grid creek office smoke grid creek office smoke grid curious",
+        "qr_payload": "chur-recovery-v1:office smoke grid creek office smoke grid creek office smoke grid creek office smoke grid creek office smoke grid creek office smoke grid curious",
+        "word_count": 24
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "recovery-slot-v1-twenty-three-words",
+      "spec": "docs/security/RECOVERY.md",
+      "spec_section": "2",
+      "purpose": "A v1 recovery phrase is exactly 24 words.",
+      "outcome": "reject",
+      "inputs": {
+        "phrase": "office smoke grid creek office smoke grid creek office smoke grid creek office smoke grid creek office smoke grid creek office smoke grid"
+      },
+      "error_code": "INVALID_INPUT"
+    },
+    {
+      "vector_id": "vault-descriptor-v1-migrating-state",
+      "spec": "docs/format/VAULT_DESCRIPTOR_V1.md",
+      "spec_section": "2.2",
+      "purpose": "MIGRATING carries the 32-byte migration descriptor, so the encoding is 33 bytes longer than the minimum.",
+      "outcome": "accept",
+      "inputs": {
+        "state": "MIGRATING",
+        "vault_root_secret": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+      },
+      "expected": {
+        "descriptor": "43485552564c5431000100010001000000000028000000fc111111111111111111111111111111110000000000000002030001000112121212121212121212121212121212000000000000000113131313131313131313131313131313131313131313131313131313131313130001141414141414141414141414141414140001000100010000000155555555555555555555555555555555010000010001000000000000000100000010aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa01000100010001000100000000000000011515151515151515151515151515151579306493aa74e935de45b713b2657c824db5a4275ea0d86bc701b5751f91d33e",
+        "descriptor_length": 252
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "vault-descriptor-v1-minimal-password-slot",
+      "spec": "docs/format/VAULT_DESCRIPTOR_V1.md",
+      "spec_section": "13",
+      "purpose": "The smallest v1 descriptor: the head, one password slot with a 16-byte body, no migration, and the tag.",
+      "outcome": "accept",
+      "inputs": {
+        "descriptor_generation": 1,
+        "state": "ACTIVE",
+        "vault_id": "11111111111111111111111111111111",
+        "vault_root_secret": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+      },
+      "expected": {
+        "descriptor": "43485552564c5431000100010001000000000028000000dc111111111111111111111111111111110000000000000001020001000112121212121212121212121212121212000000000000000113131313131313131313131313131313131313131313131313131313131313130001141414141414141414141414141414140001000100010000000155555555555555555555555555555555010000010001000000000000000100000010aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00b47b051dfdea5b3dd9dfe90fe7542d1e745707afde0c6d58f4347dd0b2aad099",
+        "descriptor_auth_tag": "b47b051dfdea5b3dd9dfe90fe7542d1e745707afde0c6d58f4347dd0b2aad099",
+        "descriptor_length": 220
+      },
+      "decoded": {
+        "key_slot_count": 1
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "vault-descriptor-v1-truncated-tag",
+      "spec": "docs/format/VAULT_DESCRIPTOR_V1.md",
+      "spec_section": "8",
+      "purpose": "A descriptor whose declared length does not match its bytes fails step 1.",
+      "outcome": "reject",
+      "inputs": {
+        "descriptor": "43485552564c5431000100010001000000000028000000dc111111111111111111111111111111110000000000000001020001000112121212121212121212121212121212000000000000000113131313131313131313131313131313131313131313131313131313131313130001141414141414141414141414141414140001000100010000000155555555555555555555555555555555010000010001000000000000000100000010aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00b47b051dfdea5b3dd9dfe90fe7542d1e745707afde0c6d58f4347dd0b2aad0"
+      },
+      "error_code": "VAULT_CORRUPT"
+    },
+    {
+      "vector_id": "vault-descriptor-v1-wrong-candidate-root",
+      "spec": "docs/format/VAULT_DESCRIPTOR_V1.md",
+      "spec_section": "8",
+      "purpose": "A structurally valid descriptor under a wrong root is AUTHENTICATION_FAILED, never VAULT_CORRUPT.",
+      "outcome": "reject",
+      "inputs": {
+        "candidate_root": "5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b",
+        "descriptor": "43485552564c5431000100010001000000000028000000dc111111111111111111111111111111110000000000000001020001000112121212121212121212121212121212000000000000000113131313131313131313131313131313131313131313131313131313131313130001141414141414141414141414141414140001000100010000000155555555555555555555555555555555010000010001000000000000000100000010aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00b47b051dfdea5b3dd9dfe90fe7542d1e745707afde0c6d58f4347dd0b2aad099"
+      },
+      "error_code": "AUTHENTICATION_FAILED",
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "vault-descriptor-v1-wrong-magic",
+      "spec": "docs/format/VAULT_DESCRIPTOR_V1.md",
+      "spec_section": "2.1",
+      "purpose": "A magic that differs in one byte is rejected before any credential is used.",
+      "outcome": "reject",
+      "inputs": {
+        "descriptor": "43485552584c5431000100010001000000000028000000dc111111111111111111111111111111110000000000000001020001000112121212121212121212121212121212000000000000000113131313131313131313131313131313131313131313131313131313131313130001141414141414141414141414141414140001000100010000000155555555555555555555555555555555010000010001000000000000000100000010aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00b47b051dfdea5b3dd9dfe90fe7542d1e745707afde0c6d58f4347dd0b2aad099"
+      },
+      "error_code": "VAULT_CORRUPT"
+    }
+  ]
+}

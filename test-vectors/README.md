@@ -1,8 +1,8 @@
 # Chur Test Vectors
 
-> **Status:** Proposed vector layout; no fixtures are committed yet
+> **Status:** v1 is generated and checked in; `chur-cli` produces it and `chur-cli vectors verify` rebuilds and compares it
 
-This directory will contain deterministic, machine-readable compatibility fixtures for Chur formats and protocols.
+This directory holds deterministic, machine-readable compatibility fixtures for Chur formats and protocols.
 
 Read [`docs/format/TEST_VECTORS.md`](../docs/format/TEST_VECTORS.md) for governance, required cases, and stability rules.
 
@@ -17,4 +17,4 @@ Read [`docs/format/TEST_VECTORS.md`](../docs/format/TEST_VECTORS.md) for governa
 
 ## Versions
 
-- [`v1/`](v1/README.md) — scaffold for the frozen v1 formats; no fixtures are committed yet.
+- [`v1/`](v1/README.md) — the frozen v1 formats: 62 vectors covering canonical encoding, every HKDF label, every key-slot family, both key envelopes, the vault descriptor, and the object container.

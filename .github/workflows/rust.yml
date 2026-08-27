@@ -65,6 +65,37 @@ jobs:
           key: test-${{ hashFiles('rust/Cargo.lock', 'rust/rust-toolchain.toml') }}
       - run: cargo test --workspace
 
+  vectors:
+    name: vector set
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: vectors-${{ hashFiles('rust/Cargo.lock', 'rust/rust-toolchain.toml') }}
+      # TEST_VECTORS.md section 8: a generator update must reproduce historical
+      # vectors byte for byte. `verify` rebuilds the whole set and compares it,
+      # so a change that alters one fails here rather than shipping.
+      - run: cargo run -p chur-cli -- vectors verify --dir ../test-vectors/v1
+      # The same section has release CI archive the vector-set digest. It is
+      # recorded on every run so a release evidence package can cite one.
+      - name: record the vector-set digest
+        working-directory: .
+        run: |
+          find test-vectors/v1 -type f -print0 \
+            | sort -z \
+            | xargs -0 sha256sum \
+            | sha256sum \
+            | tee vector-set-digest.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vector-set-digest
+          path: vector-set-digest.txt
+
   deny:
     name: cargo deny
     runs-on: ubuntu-latest

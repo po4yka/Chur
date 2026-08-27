@@ -12,8 +12,13 @@ path = "src/main.rs"
 
 [dependencies]
 chur-core.workspace = true
+chur-crypto.workspace = true
+chur-format.workspace = true
 
 clap.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true
