@@ -129,7 +129,7 @@ The complete platform documents are [`ANDROID.md`](ANDROID.md) and [`IOS.md`](IO
 ## Decisions
 
 - [`adr/README.md`](adr/README.md) — ADR format and index.
-- ADR-0001 through ADR-0017 record the foundational ownership, chunking, envelope, catalog, decoy, FFI, local-first, container-freeze, label-registry, canonical-tuple, descriptor-authentication, import-journal, constant-allocation, sync-causality, C-ABI-freeze, and supported-device decisions.
+- ADR-0001 through ADR-0024 record the foundational ownership, chunking, envelope, catalog, decoy, FFI, local-first, container-freeze, label-registry, canonical-tuple, descriptor-authentication, import-journal, constant-allocation, sync-causality, C-ABI, supported-device, backup-framing, record-layout, parser-limit, tie-break, chain-hash, checkpoint, and revocation decisions. Number 0015 was not used.
 
 ## Test vectors
 
