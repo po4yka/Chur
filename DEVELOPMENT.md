@@ -20,7 +20,7 @@ This document describes the intended development environment and workflow. The r
 
 Do not rely on globally mutable defaults for JDK, NDK, Rust target, Xcode, or code-generation versions.
 
-Only the Rust row is enforced today. The Gradle build and `gradle/libs.versions.toml` do not exist yet, so the JDK, Kotlin, Compose Multiplatform, Gradle, Android, Xcode, and Swift rows are planned targets; they become normative when the version catalog lands.
+Only the Rust row is enforced today, by the workflow of [`docs/assurance/RELEASE_GATES.md`](docs/assurance/RELEASE_GATES.md#enforcement). The Gradle build and `gradle/libs.versions.toml` do not exist yet, so the JDK, Kotlin, Compose Multiplatform, Gradle, Android, Xcode, and Swift rows are planned targets; they become normative when the version catalog lands.
 
 ## Planned repository layout
 
@@ -71,7 +71,7 @@ cargo clippy --workspace --all-targets --all-features
 cargo fmt --all --check
 ```
 
-Exact module paths may change during scaffolding. The workflow named in [`docs/assurance/RELEASE_GATES.md`](docs/assurance/RELEASE_GATES.md#enforcement) becomes the source of truth for supported commands when it lands; until then this list is, and no check is enforced.
+Exact module paths may change during scaffolding. The workflow named in [`docs/assurance/RELEASE_GATES.md`](docs/assurance/RELEASE_GATES.md#enforcement) is the source of truth for the supported Rust commands. It runs `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and `cargo deny check`. The Gradle commands above stay planned until that build exists.
 
 ## Native targets
 
