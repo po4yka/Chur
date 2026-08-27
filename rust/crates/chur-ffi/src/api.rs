@@ -39,6 +39,89 @@ pub type Status = i32;
 /// Success, which is `0` and is not an error code.
 const OK: Status = chur_core::CHUR_OK;
 
+/// Writes a 32-byte secret through a caller's buffer, §12.
+///
+/// It is the one place a secret crosses the boundary. The caller clears the
+/// buffer as soon as it is done with it and never converts it to a string.
+///
+/// # Safety
+///
+/// `out` points to at least 32 writable bytes.
+#[expect(unsafe_code, reason = "the caller's pointer contract is stated above")]
+pub(crate) unsafe fn write_secret(out: *mut u8, secret: &[u8; 32]) -> Result<()> {
+    if out.is_null() {
+        return Err(Error::new(
+            ChurStatus::InvalidInput,
+            "the secret out-parameter is null",
+        ));
+    }
+    // SAFETY: the caller guarantees 32 writable bytes that outlive the call.
+    let buffer = unsafe { core::slice::from_raw_parts_mut(out, 32) };
+    buffer.copy_from_slice(secret);
+    Ok(())
+}
+
+/// Writes a 16-byte identifier through a caller's buffer.
+///
+/// # Safety
+///
+/// `out` points to at least 16 writable bytes.
+#[expect(unsafe_code, reason = "the caller's pointer contract is stated above")]
+pub(crate) unsafe fn write_id(out: *mut u8, value: &Id) -> Result<()> {
+    if out.is_null() {
+        return Err(Error::new(
+            ChurStatus::InvalidInput,
+            "the identifier out-parameter is null",
+        ));
+    }
+    // SAFETY: the caller guarantees 16 writable bytes that outlive the call.
+    let buffer = unsafe { core::slice::from_raw_parts_mut(out, 16) };
+    buffer.copy_from_slice(value.as_bytes());
+    Ok(())
+}
+
+/// Borrows a caller's byte range that may hold media rather than a control
+/// value.
+///
+/// The bound is the derivative bound of `docs/interop/MEDIA_PIPELINE.md` §12
+/// rather than the control-plane bound, because a screen preview is larger than
+/// any argument [`borrow_bytes`] admits and is still bounded.
+///
+/// # Safety
+///
+/// As [`borrow_bytes`].
+#[expect(unsafe_code, reason = "the caller's pointer contract is stated above")]
+pub(crate) unsafe fn borrow_large<'a>(pointer: *const u8, length: u32) -> Result<&'a [u8]> {
+    const MAX_DERIVATIVE_LEN: u32 = 33_554_432;
+    if length == 0 {
+        return Ok(&[]);
+    }
+    if pointer.is_null() {
+        return Err(Error::new(
+            ChurStatus::InvalidInput,
+            "a length was given with a null pointer",
+        ));
+    }
+    if length > MAX_DERIVATIVE_LEN {
+        return Err(Error::new(
+            ChurStatus::ResourceLimitExceeded,
+            "the derivative exceeds the boundary bound",
+        ));
+    }
+    // SAFETY: `pointer` is non-null and the caller guarantees `length`
+    // initialized bytes that outlive the call.
+    Ok(unsafe { core::slice::from_raw_parts(pointer, length as usize) })
+}
+
+/// Deletes an object whole, `CATALOG_SCHEMA_V1.md` §14.1.
+pub(crate) fn delete_object(
+    session: &mut vault::Session,
+    object_id: &Id,
+    now_ms: u64,
+) -> Result<()> {
+    crate::product::run_deletion(session, object_id, now_ms)
+}
+
 /// The largest byte length any string argument may declare.
 ///
 /// It bounds every `*const u8` plus length pair before a slice is built from
@@ -58,7 +141,7 @@ const MAX_ARGUMENT_LEN: u32 = 65_536;
 /// stay valid and unwritten for the call. The header states this for every
 /// argument that reaches here.
 #[expect(unsafe_code, reason = "the caller's pointer contract is stated above")]
-unsafe fn borrow<'a>(pointer: *const u8, length: u32) -> Result<&'a [u8]> {
+pub(crate) unsafe fn borrow_bytes<'a>(pointer: *const u8, length: u32) -> Result<&'a [u8]> {
     if length == 0 {
         return Ok(&[]);
     }
@@ -89,7 +172,10 @@ unsafe fn borrow<'a>(pointer: *const u8, length: u32) -> Result<&'a [u8]> {
 ///
 /// As [`borrow`], and the range must be writable and not aliased.
 #[expect(unsafe_code, reason = "the caller's pointer contract is stated above")]
-unsafe fn borrow_mut<'a>(pointer: *mut u8, capacity: usize) -> Result<&'a mut [u8]> {
+pub(crate) unsafe fn borrow_bytes_mut<'a>(
+    pointer: *mut u8,
+    capacity: usize,
+) -> Result<&'a mut [u8]> {
     if capacity == 0 {
         return Ok(&mut []);
     }
@@ -114,7 +200,7 @@ unsafe fn borrow_mut<'a>(pointer: *mut u8, capacity: usize) -> Result<&'a mut [u
 ///
 /// `out` must be null or point to a writable, aligned `T`.
 #[expect(unsafe_code, reason = "the caller's pointer contract is stated above")]
-unsafe fn put<T>(out: *mut T, value: T) -> Result<()> {
+pub(crate) unsafe fn write_out<T>(out: *mut T, value: T) -> Result<()> {
     if out.is_null() {
         return Err(Error::new(
             ChurStatus::InvalidInput,
@@ -139,7 +225,7 @@ unsafe fn put<T>(out: *mut T, value: T) -> Result<()> {
 ///
 /// `pointer` must be null or point to a valid, aligned `T`.
 #[expect(unsafe_code, reason = "the caller's pointer contract is stated above")]
-unsafe fn read_ref<'a, T>(pointer: *const T) -> Result<&'a T> {
+pub(crate) unsafe fn read_request<'a, T>(pointer: *const T) -> Result<&'a T> {
     if pointer.is_null() {
         return Err(Error::new(
             ChurStatus::InvalidInput,
@@ -176,13 +262,13 @@ pub unsafe extern "C" fn chur_runtime_open(
 ) -> Status {
     guard_status(|| {
         // SAFETY: the caller guarantees the pointers above for the call.
-        let config = unsafe { read_ref(config)? };
-        let path = unsafe { borrow(config.root_path, config.root_path_length)? };
+        let config = unsafe { read_request(config)? };
+        let path = unsafe { borrow_bytes(config.root_path, config.root_path_length)? };
         let text = core::str::from_utf8(path)
             .map_err(|_| Error::new(ChurStatus::InvalidInput, "the storage root is not UTF-8"))?;
         let runtime = Runtime::open(std::path::PathBuf::from(text))?;
         let handle = registry::insert(Entry::Runtime(std::sync::Mutex::new(runtime)))?;
-        unsafe { put(out_runtime, handle) }
+        unsafe { write_out(out_runtime, handle) }
     })
 }
 
@@ -237,8 +323,8 @@ pub unsafe extern "C" fn chur_vault_unlock(
             ));
         };
         // SAFETY: the caller guarantees the pointers above for the call.
-        let request = unsafe { read_ref(request)? };
-        let secret = unsafe { borrow(request.secret, request.secret_length)? };
+        let request = unsafe { read_request(request)? };
+        let secret = unsafe { borrow_bytes(request.secret, request.secret_length)? };
         let root = {
             let guard = registry::lock(guarded);
             guard.root().clone()
@@ -273,7 +359,7 @@ pub unsafe extern "C" fn chur_vault_unlock(
             runtime,
             session: std::sync::Mutex::new(session),
         })?;
-        unsafe { put(out_session, handle) }
+        unsafe { write_out(out_session, handle) }
     })
 }
 
@@ -359,12 +445,12 @@ pub unsafe extern "C" fn chur_catalog_query(
         // §6.3's rule for a byte count applies here too: it is set on every
         // call, including every failure.
         // SAFETY: the caller guarantees `bytes_written` is writable.
-        let _ = unsafe { put(bytes_written, 0usize) };
+        let _ = unsafe { write_out(bytes_written, 0usize) };
         let entry = registry::get(session, Kind::Session)?;
         // SAFETY: the caller guarantees the pointers above for the call.
-        let request = unsafe { read_ref(query)? };
+        let request = unsafe { read_request(query)? };
         let terms = if request.scope == 5 {
-            Some(unsafe { borrow(request.terms, request.terms_length)? })
+            Some(unsafe { borrow_bytes(request.terms, request.terms_length)? })
         } else {
             None
         };
@@ -401,9 +487,9 @@ pub unsafe extern "C" fn chur_catalog_query(
             chur_catalog::query::page(guard.catalog_ref()?, &built)?
         };
         // SAFETY: the caller guarantees `destination` covers `capacity` bytes.
-        let buffer = unsafe { borrow_mut(destination, capacity)? };
+        let buffer = unsafe { borrow_bytes_mut(destination, capacity)? };
         let written = encode_page(&page, buffer)?;
-        unsafe { put(bytes_written, written) }
+        unsafe { write_out(bytes_written, written) }
     })
 }
 
@@ -435,16 +521,18 @@ pub unsafe extern "C" fn chur_import_begin(
     guard_status(|| {
         let entry = registry::get(session, Kind::Session)?;
         // SAFETY: the caller guarantees the pointers above for the call.
-        let request = unsafe { read_ref(request)? };
-        let content_type = unsafe { borrow(request.content_type, request.content_type_length)? };
+        let request = unsafe { read_request(request)? };
+        let content_type =
+            unsafe { borrow_bytes(request.content_type, request.content_type_length)? };
         let content_type = core::str::from_utf8(content_type)
             .map_err(|_| Error::new(ChurStatus::InvalidInput, "the content type is not UTF-8"))?
             .to_owned();
         let filename = if request.original_filename.is_null() {
             None
         } else {
-            let bytes =
-                unsafe { borrow(request.original_filename, request.original_filename_length)? };
+            let bytes = unsafe {
+                borrow_bytes(request.original_filename, request.original_filename_length)?
+            };
             Some(
                 core::str::from_utf8(bytes)
                     .map_err(|_| Error::new(ChurStatus::InvalidInput, "the filename is not UTF-8"))?
@@ -487,7 +575,7 @@ pub unsafe extern "C" fn chur_import_begin(
             )
         })?;
         let handle = registry::insert(Entry::Operation { session, operation })?;
-        unsafe { put(out_import, handle) }
+        unsafe { write_out(out_import, handle) }
     })
 }
 
@@ -510,7 +598,7 @@ pub unsafe extern "C" fn chur_export_begin(
     guard_status(|| {
         let entry = registry::get(session, Kind::Session)?;
         // SAFETY: the caller guarantees the pointers above for the call.
-        let object = unsafe { read_ref(object)? };
+        let object = unsafe { read_request(object)? };
         let object_id = Id::from_slice(&object.object_id)?;
         // SAFETY: the caller guarantees `destination_fd` is open and writable.
         let destination = unsafe { duplicate_descriptor(destination_fd)? };
@@ -518,7 +606,7 @@ pub unsafe extern "C" fn chur_export_begin(
             run_export(&entry, &object_id, destination, shared)
         })?;
         let handle = registry::insert(Entry::Operation { session, operation })?;
-        unsafe { put(out_export, handle) }
+        unsafe { write_out(out_export, handle) }
     })
 }
 
@@ -541,7 +629,7 @@ pub unsafe extern "C" fn chur_integrity_scan_begin(
     guard_status(|| {
         let entry = registry::get(session, Kind::Session)?;
         // SAFETY: the caller guarantees the pointers above for the call.
-        let request = unsafe { read_ref(request)? };
+        let request = unsafe { read_request(request)? };
         let single = match request.single_object {
             0 => None,
             1 => Some(Id::from_slice(&request.object_id)?),
@@ -557,7 +645,7 @@ pub unsafe extern "C" fn chur_integrity_scan_begin(
             run_scan(&entry, single, now, shared)
         })?;
         let handle = registry::insert(Entry::Operation { session, operation })?;
-        unsafe { put(out_scan, handle) }
+        unsafe { write_out(out_scan, handle) }
     })
 }
 
@@ -598,7 +686,7 @@ pub unsafe extern "C" fn chur_operation_poll(
             },
         };
         // SAFETY: the caller guarantees `out_progress` is writable.
-        unsafe { put(out_progress, record) }
+        unsafe { write_out(out_progress, record) }
     })
 }
 
@@ -668,7 +756,7 @@ pub unsafe extern "C" fn chur_object_reader_open(
     guard_status(|| {
         let entry = registry::get(session, Kind::Session)?;
         // SAFETY: the caller guarantees the pointers above for the call.
-        let object = unsafe { read_ref(object)? };
+        let object = unsafe { read_request(object)? };
         let object_id = Id::from_slice(&object.object_id)?;
         let kind = u8::try_from(stream_kind)
             .ok()
@@ -696,7 +784,7 @@ pub unsafe extern "C" fn chur_object_reader_open(
             session,
             reader: std::sync::Mutex::new(opened),
         })?;
-        unsafe { put(out_reader, handle) }
+        unsafe { write_out(out_reader, handle) }
     })
 }
 
@@ -724,7 +812,7 @@ pub unsafe extern "C" fn chur_object_reader_size(reader: Handle, out_size: *mut 
         };
         let size = registry::lock(guarded).size();
         // SAFETY: the caller guarantees `out_size` is writable.
-        unsafe { put(out_size, size) }
+        unsafe { write_out(out_size, size) }
     })
 }
 
@@ -772,7 +860,7 @@ pub unsafe extern "C" fn chur_object_reader_content_info(
             reserved: [0; 4],
         };
         // SAFETY: the caller guarantees `out_info` is writable.
-        unsafe { put(out_info, record) }
+        unsafe { write_out(out_info, record) }
     })
 }
 
@@ -799,7 +887,7 @@ pub unsafe extern "C" fn chur_object_reader_read_at(
 ) -> Status {
     guard_status(|| {
         // SAFETY: the caller guarantees `bytes_written` is writable.
-        let _ = unsafe { put(bytes_written, 0usize) };
+        let _ = unsafe { write_out(bytes_written, 0usize) };
         let entry = registry::get(reader, Kind::Reader)?;
         let Entry::Reader {
             reader: guarded, ..
@@ -811,9 +899,9 @@ pub unsafe extern "C" fn chur_object_reader_read_at(
             ));
         };
         // SAFETY: the caller guarantees `destination` covers `capacity` bytes.
-        let buffer = unsafe { borrow_mut(destination, capacity)? };
+        let buffer = unsafe { borrow_bytes_mut(destination, capacity)? };
         let written = registry::lock(guarded).read_at(offset, buffer)?;
-        unsafe { put(bytes_written, written) }
+        unsafe { write_out(bytes_written, written) }
     })
 }
 
@@ -847,7 +935,7 @@ pub unsafe extern "C" fn chur_object_reader_verify_complete(
         };
         let summary = registry::lock(guarded).verify_complete()?;
         // SAFETY: the caller guarantees `out_state` is writable.
-        unsafe { put(out_state, u32::from(summary.value())) }
+        unsafe { write_out(out_state, u32::from(summary.value())) }
     })
 }
 
@@ -1055,7 +1143,7 @@ unsafe fn duplicate_descriptor(fd: c_int) -> Result<std::fs::File> {
 ///
 /// A wrong device clock produces a wrong import time and Chur does not detect
 /// it. Nothing cryptographic depends on the value and it is not ordering proof.
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| {

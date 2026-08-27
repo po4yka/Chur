@@ -7,10 +7,12 @@
  * ADR-0016). A change here and a change in rust/crates/chur-ffi/src/lib.rs land
  * in the same commit.
  *
- * This header declares the frozen Phase-1 surface of FFI_CONTRACT.md section
- * 6.2: the ABI handshake of section 2, the status vocabulary of
- * docs/ERROR_MODEL.md, the control plane, and the data plane. Adding an export
- * raises the minor ABI version; changing or removing one raises the major.
+ * This header declares the Phase-1 surface: the ABI handshake of
+ * FFI_CONTRACT.md section 2, the status vocabulary of docs/ERROR_MODEL.md, the
+ * control plane and data plane of section 6.2, and the product surface of
+ * section 6.5. Adding an export raises the minor ABI version; changing or
+ * removing one raises the major. The library reports 1.1: section 6.5 is the
+ * addition that raised the minor from 0.
  */
 
 #ifndef CHUR_H
@@ -383,6 +385,85 @@ chur_status_t chur_object_reader_read_at(chur_handle_t reader, uint64_t offset,
 chur_status_t chur_object_reader_verify_complete(chur_handle_t reader,
                                                  uint32_t *out_state);
 chur_status_t chur_object_reader_close(chur_handle_t reader);
+
+/* -------------------------------------------------------------------------
+ * The Phase-1 product surface, ABI 1.1, FFI_CONTRACT.md section 6.5.
+ *
+ * Section 6.2 is the boundary a host needs to open a vault and read from it.
+ * These are the exports it needs to deliver Phase 1: without them no vault is
+ * ever created, so none is ever unlocked, and three of the four destinations of
+ * DESIGN.md section 10 have nothing to show.
+ *
+ * out_secret is 32 bytes and is the one place section 12's "allowed only when
+ * unavoidable for a key-slot operation" applies here: a recovery secret must
+ * reach the presentation of RECOVERY.md section 2, and a DeviceUnlockSecret
+ * must reach the platform keystore. The host clears the buffer as soon as it is
+ * done with it and never converts it to a string.
+ * ---------------------------------------------------------------------- */
+
+typedef struct ChurCreateRequestV1 {
+  const uint8_t *password;
+  uint32_t password_length;
+  uint32_t memory_kib;
+  uint32_t iterations;
+  uint32_t parallelism;
+} ChurCreateRequestV1;
+
+/* Length of the secret a slot operation hands back. */
+#define CHUR_SECRET_LEN 32
+
+chur_status_t chur_vault_present(chur_handle_t runtime, uint8_t *out_present);
+chur_status_t chur_vault_create_begin(chur_handle_t runtime,
+                                      const ChurCreateRequestV1 *request,
+                                      chur_handle_t *out_creation);
+chur_status_t chur_vault_creation_add_recovery_slot(chur_handle_t creation,
+                                                    uint8_t *out_secret);
+chur_status_t chur_vault_creation_activate(chur_handle_t creation,
+                                           chur_handle_t *out_session);
+chur_status_t chur_vault_creation_abandon(chur_handle_t creation);
+
+chur_status_t chur_vault_add_recovery_slot(chur_handle_t session,
+                                           uint8_t *out_secret);
+chur_status_t chur_vault_add_device_slot(chur_handle_t session,
+                                         const uint8_t *item_id,
+                                         uint8_t *out_secret);
+chur_status_t chur_vault_remove_slot(chur_handle_t session,
+                                     const uint8_t *slot_id);
+chur_status_t chur_vault_change_password(chur_handle_t session,
+                                         const ChurUnlockRequestV1 *request);
+chur_status_t chur_vault_slots(chur_handle_t session, uint8_t *destination,
+                               size_t capacity, size_t *bytes_written);
+
+chur_status_t chur_object_set_favorite(chur_handle_t session,
+                                       const ChurObjectRefV1 *object,
+                                       uint8_t favorite);
+chur_status_t chur_object_delete(chur_handle_t session,
+                                 const ChurObjectRefV1 *object);
+chur_status_t chur_object_metadata(chur_handle_t session,
+                                   const ChurObjectRefV1 *object,
+                                   uint8_t *destination, size_t capacity,
+                                   size_t *bytes_written);
+chur_status_t chur_album_create(chur_handle_t session, const uint8_t *name,
+                                uint32_t name_length, uint8_t *out_album_id);
+chur_status_t chur_album_set_membership(chur_handle_t session,
+                                        const uint8_t *album_id,
+                                        const ChurObjectRefV1 *object,
+                                        uint8_t member);
+chur_status_t chur_album_list(chur_handle_t session, uint8_t *destination,
+                              size_t capacity, size_t *bytes_written);
+chur_status_t chur_tag_create(chur_handle_t session, const uint8_t *name,
+                              uint32_t name_length, uint8_t *out_tag_id);
+chur_status_t chur_object_set_tag(chur_handle_t session, const uint8_t *tag_id,
+                                  const ChurObjectRefV1 *object, uint8_t tagged);
+
+chur_status_t chur_derived_put(chur_handle_t session,
+                               const ChurObjectRefV1 *object, uint32_t kind,
+                               uint32_t width, uint32_t height,
+                               const uint8_t *bytes, uint32_t length);
+chur_status_t chur_derived_read(chur_handle_t session,
+                                const ChurObjectRefV1 *object, uint32_t kind,
+                                uint8_t *destination, size_t capacity,
+                                size_t *bytes_written);
 
 #ifdef __cplusplus
 } /* extern "C" */

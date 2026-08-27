@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
+- native API version is the (major, minor) pair. v1 ships 1.1: the additions of §6.5 raised the minor from 0. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -143,6 +143,8 @@ Every exported symbol is `chur_` followed by lower snake case. An operation on a
 
 The Phase-1 surface is frozen. Adding an export raises the minor ABI version; changing or removing one raises the major version. `chur.h`, checked in with the first `chur-ffi` export, is the deliverable both platform teams build against, and every binding derives from it.
 
+The list below is the surface at ABI 1.0. §6.5 adds the exports Phase 1's own product scope requires and raises the minor version to 1; nothing in this list changed.
+
 ```c
 /* handshake: any thread, before initialization, cannot fail (§2) */
 uint32_t chur_abi_version_major(void);
@@ -188,6 +190,19 @@ chur_status_t chur_object_reader_verify_complete(chur_handle_t reader, uint32_t 
 chur_status_t chur_object_reader_close(chur_handle_t reader);
 ```
 
+### 6.3 Range reads
+
+`chur_object_reader_read_at` never mixes an error with a byte count: the status is the return value, the count is written through `bytes_written`.
+
+- `bytes_written` is set on every call, including every failure, where it is set to `0`;
+- on success `*bytes_written <= capacity`. A short read is permitted at any offset, not only near the end: the reader returns at most the authenticated bytes it already holds, so the caller must loop until it has the range it needs or observes `*bytes_written == 0`;
+- `*bytes_written == 0` with a success status means end of authenticated plaintext, and occurs only when `offset == size`;
+- `offset == size` returns success with `0` bytes;
+- `offset > size` returns `INVALID_INPUT`, never a zero-length success, so a seek past the end stays distinguishable from end of stream;
+- `capacity == 0` returns success with `0` bytes and touches nothing;
+- on any failure status the whole destination buffer holds unspecified bytes. The caller must not use any prefix of it, and must not treat bytes written by an earlier successful call into the same buffer as still valid;
+- `size` is the authenticated plaintext size from the final commit record, not a file length.
+
 ### 6.4 The catalog page encoding
 
 `chur_catalog_query` writes one page into the caller's buffer as canonical bytes rather than as a C structure. A structure would carry the padding and alignment of whichever compiler built the host, and [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §13 reserves the definition of persisted and boundary bytes for Rust; a page whose layout depended on the host's compiler would not be one definition.
@@ -225,18 +240,114 @@ ChurQueryV1
 
 The control plane uses these same symbols through a thin KMP `expect`/`actual` adapter. No binding generator is part of the boundary ([ADR-0016](../adr/0016-freeze-the-v1-c-abi.md)).
 
-### 6.3 Range reads
+### 6.5 The Phase-1 product surface, ABI 1.1
 
-`chur_object_reader_read_at` never mixes an error with a byte count: the status is the return value, the count is written through `bytes_written`.
+The list in §6.2 is the boundary a host needs to open a vault and read from it. It is not the boundary a host needs to *deliver* Phase 1, and the gap is not a matter of degree: with §6.2 alone an application cannot create a vault, so no vault ever exists to unlock; it cannot mark a favourite, create an album, delete an object, or read a thumbnail, so three of the four destinations of [`../../DESIGN.md`](../../DESIGN.md) §10 have nothing to show.
 
-- `bytes_written` is set on every call, including every failure, where it is set to `0`;
-- on success `*bytes_written <= capacity`. A short read is permitted at any offset, not only near the end: the reader returns at most the authenticated bytes it already holds, so the caller must loop until it has the range it needs or observes `*bytes_written == 0`;
-- `*bytes_written == 0` with a success status means end of authenticated plaintext, and occurs only when `offset == size`;
-- `offset == size` returns success with `0` bytes;
-- `offset > size` returns `INVALID_INPUT`, never a zero-length success, so a seek past the end stays distinguishable from end of stream;
-- `capacity == 0` returns success with `0` bytes and touches nothing;
-- on any failure status the whole destination buffer holds unspecified bytes. The caller must not use any prefix of it, and must not treat bytes written by an earlier successful call into the same buffer as still valid;
-- `size` is the authenticated plaintext size from the final commit record, not a file length.
+These exports close that gap. They are an addition, so they raise the minor ABI version to 1 and change nothing in §6.2. A host built against 1.0 still works: §2 negotiates a minor difference within explicitly compatible behaviour, and an export a host does not call costs it nothing.
+
+```c
+/* provisioning, PROVISIONING.md section 3 */
+chur_status_t chur_vault_present(chur_handle_t runtime, uint8_t *out_present);
+chur_status_t chur_vault_create_begin(chur_handle_t runtime,
+                                      const ChurCreateRequestV1 *request,
+                                      chur_handle_t *out_creation);
+chur_status_t chur_vault_creation_add_recovery_slot(chur_handle_t creation,
+                                                    uint8_t *out_secret);
+chur_status_t chur_vault_creation_activate(chur_handle_t creation,
+                                           chur_handle_t *out_session);
+chur_status_t chur_vault_creation_abandon(chur_handle_t creation);
+
+/* key slots, KEY_SLOTS.md section 9 */
+chur_status_t chur_vault_add_recovery_slot(chur_handle_t session, uint8_t *out_secret);
+chur_status_t chur_vault_add_device_slot(chur_handle_t session,
+                                         const uint8_t *item_id,
+                                         uint8_t *out_secret);
+chur_status_t chur_vault_remove_slot(chur_handle_t session, const uint8_t *slot_id);
+chur_status_t chur_vault_change_password(chur_handle_t session,
+                                         const ChurUnlockRequestV1 *request);
+chur_status_t chur_vault_slots(chur_handle_t session, uint8_t *destination,
+                               size_t capacity, size_t *bytes_written);
+
+/* library, DESIGN.md sections 11 to 13 */
+chur_status_t chur_object_set_favorite(chur_handle_t session,
+                                       const ChurObjectRefV1 *object,
+                                       uint8_t favorite);
+chur_status_t chur_object_delete(chur_handle_t session, const ChurObjectRefV1 *object);
+chur_status_t chur_object_metadata(chur_handle_t session,
+                                   const ChurObjectRefV1 *object,
+                                   uint8_t *destination, size_t capacity,
+                                   size_t *bytes_written);
+chur_status_t chur_album_create(chur_handle_t session, const uint8_t *name,
+                                uint32_t name_length, uint8_t *out_album_id);
+chur_status_t chur_album_set_membership(chur_handle_t session,
+                                        const uint8_t *album_id,
+                                        const ChurObjectRefV1 *object,
+                                        uint8_t member);
+chur_status_t chur_album_list(chur_handle_t session, uint8_t *destination,
+                              size_t capacity, size_t *bytes_written);
+chur_status_t chur_tag_create(chur_handle_t session, const uint8_t *name,
+                              uint32_t name_length, uint8_t *out_tag_id);
+chur_status_t chur_object_set_tag(chur_handle_t session, const uint8_t *tag_id,
+                                  const ChurObjectRefV1 *object, uint8_t tagged);
+
+/* derived assets, MEDIA_PIPELINE.md section 6 */
+chur_status_t chur_derived_put(chur_handle_t session, const ChurObjectRefV1 *object,
+                               uint32_t kind, uint32_t width, uint32_t height,
+                               const uint8_t *bytes, uint32_t length);
+chur_status_t chur_derived_read(chur_handle_t session, const ChurObjectRefV1 *object,
+                                uint32_t kind, uint8_t *destination, size_t capacity,
+                                size_t *bytes_written);
+```
+
+`ChurCreateRequestV1` is the password and the Argon2id profile a new vault is created with:
+
+```text
+ChurCreateRequestV1
+    password          const uint8_t *
+    password_length   uint32_t
+    memory_kib        uint32_t   0 for the frozen v1 floor
+    iterations        uint32_t   0 for the frozen v1 default
+    parallelism       uint32_t   0 for the frozen v1 default
+```
+
+A creation handle is a fourth handle type. It exists because [`../security/PROVISIONING.md`](../security/PROVISIONING.md) §3 has a middle: the recovery slot is offered at step 5, after the password slot is verified at step 4 and before the descriptor reaches `ACTIVE` at step 6. A single create call would have to skip the offer or take a callback, and §10 admits no callback. Closing a creation handle without activating it abandons the creation, which §9 of [`../format/VAULT_DESCRIPTOR_V1.md`](../format/VAULT_DESCRIPTOR_V1.md) requires to leave nothing openable.
+
+`out_secret` is 32 bytes and is the one place §12's "allowed only when unavoidable for a key-slot operation" applies in this surface: a recovery secret must reach the presentation of [`../security/RECOVERY.md`](../security/RECOVERY.md) §2, and a `DeviceUnlockSecret` must reach the platform keystore. The host clears the buffer as soon as it is done with it and never converts it to a string.
+
+Three list results are canonical bytes, for the reason §6.4 gives:
+
+```text
+ChurSlotListV1
+    count             u32
+    entries           count × { slot_id: bytes[16], slot_type: u8, slot_generation: u64 }
+
+ChurAlbumListV1
+    count             u32
+    entries           count × { album_id: bytes[16], member_count: u64,
+                                name_length: u16, name: bytes[name_length] }
+
+ChurObjectMetadataV1
+    capture_time_ms            u64
+    import_time_ms             u64
+    capture_time_substituted   u8
+    width                      u32
+    height                     u32
+    duration_ms                u64
+    plaintext_size             u64
+    content_type_length        u16
+    content_type               bytes
+    filename_length            u16
+    filename                   bytes
+    caption_length             u16
+    caption                    bytes
+    tag_count                  u16
+    tags                       tag_count × { tag_id: bytes[16], name_length: u16, name: bytes }
+```
+
+`ChurObjectMetadataV1` is the only record in this contract that carries free-form private text, and §16.1 of [`../format/CATALOG_SCHEMA_V1.md`](../format/CATALOG_SCHEMA_V1.md) is why: a page of 200 rows must never carry 200 filenames, so the projection carries none and a detail screen fetches them for one object. A caller that asked for this record per row would be defeating that rule rather than using this one.
+
+A buffer smaller than the record is `RESOURCE_LIMIT_EXCEEDED` and writes nothing, exactly as in §6.4.
 
 ## 7. Buffer ownership
 

@@ -62,6 +62,21 @@ pub struct ChurQueryV1 {
     pub terms_length: u32,
 }
 
+/// The password and profile a new vault is created with, §6.5.
+#[repr(C)]
+pub struct ChurCreateRequestV1 {
+    /// The password bytes, UTF-8, not NUL-terminated.
+    pub password: *const u8,
+    /// The length of `password` in bytes.
+    pub password_length: u32,
+    /// Argon2id memory cost in KiB, zero for the frozen v1 floor.
+    pub memory_kib: u32,
+    /// Argon2id iterations, zero for the frozen v1 default.
+    pub iterations: u32,
+    /// Argon2id parallelism, zero for the frozen v1 default.
+    pub parallelism: u32,
+}
+
 /// An opaque object reference.
 #[repr(C)]
 pub struct ChurObjectRefV1 {
@@ -308,4 +323,240 @@ pub fn decode_page(bytes: &[u8]) -> Result<DecodedPage> {
         next_cursor: cursor,
         objects,
     })
+}
+
+// ---------------------------------------------------------------------------
+// The §6.5 list records
+// ---------------------------------------------------------------------------
+
+/// Appends a `u16`-prefixed string, refusing one longer than the prefix holds.
+fn put_text(out: &mut Vec<u8>, text: &str) {
+    // Every string reaching here is already bounded by the catalog: an album or
+    // tag name by §21's label bounds, a content type by §6.1, and a filename or
+    // caption by §12 of the media pipeline. The saturating conversion is a
+    // belt on top of that, and it truncates the length rather than the bytes,
+    // which a decoder then rejects as short.
+    let length = u16::try_from(text.len()).unwrap_or(u16::MAX);
+    out.extend_from_slice(&length.to_be_bytes());
+    out.extend_from_slice(&text.as_bytes()[..length as usize]);
+}
+
+/// Encodes `ChurSlotListV1` of §6.5.
+#[must_use]
+pub fn encode_slot_list(slots: Vec<(Id, chur_format::constants::SlotType, u64)>) -> Vec<u8> {
+    let mut out = Vec::with_capacity(4 + slots.len() * 25);
+    out.extend_from_slice(&u32::try_from(slots.len()).unwrap_or(u32::MAX).to_be_bytes());
+    for (slot_id, slot_type, generation) in slots {
+        out.extend_from_slice(slot_id.as_bytes());
+        out.push(slot_type.value());
+        out.extend_from_slice(&generation.to_be_bytes());
+    }
+    out
+}
+
+/// Encodes `ChurAlbumListV1` of §6.5.
+#[must_use]
+pub fn encode_album_list(albums: &[(chur_catalog::model::Album, u64)]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(
+        &u32::try_from(albums.len())
+            .unwrap_or(u32::MAX)
+            .to_be_bytes(),
+    );
+    for (album, members) in albums {
+        out.extend_from_slice(album.album_id.as_bytes());
+        out.extend_from_slice(&members.to_be_bytes());
+        put_text(&mut out, &album.name);
+    }
+    out
+}
+
+/// Encodes `ChurObjectMetadataV1` of §6.5.
+#[must_use]
+pub fn encode_object_metadata(
+    object: &chur_catalog::model::Object,
+    metadata: &chur_catalog::model::MetadataRevision,
+    tags: &[chur_catalog::model::Tag],
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&object.capture_time_ms.to_be_bytes());
+    out.extend_from_slice(&object.import_time_ms.to_be_bytes());
+    out.push(u8::from(object.capture_time_substituted));
+    out.extend_from_slice(&object.width.to_be_bytes());
+    out.extend_from_slice(&object.height.to_be_bytes());
+    out.extend_from_slice(&object.duration_ms.to_be_bytes());
+    out.extend_from_slice(&object.plaintext_size.to_be_bytes());
+    put_text(&mut out, &metadata.content_type);
+    put_text(
+        &mut out,
+        metadata.original_filename.as_deref().unwrap_or(""),
+    );
+    put_text(&mut out, metadata.caption.as_deref().unwrap_or(""));
+    out.extend_from_slice(&u16::try_from(tags.len()).unwrap_or(u16::MAX).to_be_bytes());
+    for tag in tags.iter().take(usize::from(u16::MAX)) {
+        out.extend_from_slice(tag.tag_id.as_bytes());
+        put_text(&mut out, &tag.name);
+    }
+    out
+}
+
+/// One decoded album, for the CLI and the tests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodedAlbum {
+    /// The album identifier.
+    pub album_id: Id,
+    /// The number of listable members.
+    pub member_count: u64,
+    /// The album name.
+    pub name: String,
+}
+
+/// Decodes `ChurAlbumListV1`.
+pub fn decode_album_list(bytes: &[u8]) -> Result<Vec<DecodedAlbum>> {
+    let mut reader = RecordReader::new(bytes);
+    let count = reader.u32()?;
+    let mut albums = Vec::new();
+    for _ in 0..count {
+        albums.push(DecodedAlbum {
+            album_id: Id::from_slice(reader.take(16)?)?,
+            member_count: reader.u64()?,
+            name: reader.text()?,
+        });
+    }
+    reader.finish()?;
+    Ok(albums)
+}
+
+/// One decoded metadata record, for the CLI and the tests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodedMetadata {
+    /// Capture time in milliseconds.
+    pub capture_time_ms: u64,
+    /// Import time in milliseconds.
+    pub import_time_ms: u64,
+    /// Whether the capture time was substituted.
+    pub capture_time_substituted: bool,
+    /// Pixel width.
+    pub width: u32,
+    /// Pixel height.
+    pub height: u32,
+    /// Duration in milliseconds.
+    pub duration_ms: u64,
+    /// The authenticated plaintext size.
+    pub plaintext_size: u64,
+    /// The IANA media type.
+    pub content_type: String,
+    /// The provider's filename, empty when there was none.
+    pub filename: String,
+    /// The caption, empty when there is none.
+    pub caption: String,
+    /// The tags, in name order.
+    pub tags: Vec<(Id, String)>,
+}
+
+/// Decodes `ChurObjectMetadataV1`.
+pub fn decode_object_metadata(bytes: &[u8]) -> Result<DecodedMetadata> {
+    let mut reader = RecordReader::new(bytes);
+    let record = DecodedMetadata {
+        capture_time_ms: reader.u64()?,
+        import_time_ms: reader.u64()?,
+        capture_time_substituted: match reader.u8()? {
+            0 => false,
+            1 => true,
+            _ => {
+                return Err(Error::new(
+                    ChurStatus::NonCanonicalEncoding,
+                    "a boolean is neither 0x00 nor 0x01",
+                ));
+            }
+        },
+        width: reader.u32()?,
+        height: reader.u32()?,
+        duration_ms: reader.u64()?,
+        plaintext_size: reader.u64()?,
+        content_type: reader.text()?,
+        filename: reader.text()?,
+        caption: reader.text()?,
+        tags: {
+            let count = reader.u16()?;
+            let mut tags = Vec::new();
+            for _ in 0..count {
+                let id = Id::from_slice(reader.take(16)?)?;
+                tags.push((id, reader.text()?));
+            }
+            tags
+        },
+    };
+    reader.finish()?;
+    Ok(record)
+}
+
+/// A big-endian reader for the §6.5 records.
+///
+/// It is separate from `chur_format::codec::Reader`, which carries the
+/// truncation status of the format that owns it; these records are boundary
+/// bytes and their truncation is `INVALID_INPUT`.
+struct RecordReader<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+
+impl<'a> RecordReader<'a> {
+    const fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, at: 0 }
+    }
+
+    fn take(&mut self, length: usize) -> Result<&'a [u8]> {
+        let end = self.at.checked_add(length).ok_or_else(short)?;
+        let slice = self.bytes.get(self.at..end).ok_or_else(short)?;
+        self.at = end;
+        Ok(slice)
+    }
+
+    fn u8(&mut self) -> Result<u8> {
+        Ok(self.take(1)?[0])
+    }
+
+    fn u16(&mut self) -> Result<u16> {
+        let bytes = self.take(2)?;
+        Ok(u16::from_be_bytes([bytes[0], bytes[1]]))
+    }
+
+    fn u32(&mut self) -> Result<u32> {
+        let bytes = self.take(4)?;
+        Ok(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    }
+
+    fn u64(&mut self) -> Result<u64> {
+        let bytes = self.take(8)?;
+        let mut value = [0u8; 8];
+        value.copy_from_slice(bytes);
+        Ok(u64::from_be_bytes(value))
+    }
+
+    fn text(&mut self) -> Result<String> {
+        let length = usize::from(self.u16()?);
+        let bytes = self.take(length)?;
+        core::str::from_utf8(bytes).map(str::to_owned).map_err(|_| {
+            Error::new(
+                ChurStatus::NonCanonicalEncoding,
+                "a record string is not UTF-8",
+            )
+        })
+    }
+
+    /// Rejects trailing bytes, which `CANONICAL_ENCODING_V1.md` §3 requires of
+    /// every Chur decoder.
+    fn finish(&self) -> Result<()> {
+        ensure!(
+            self.at == self.bytes.len(),
+            NonCanonicalEncoding,
+            "the record carries trailing bytes"
+        );
+        Ok(())
+    }
+}
+
+fn short() -> Error {
+    Error::new(ChurStatus::InvalidInput, "the record ends inside a field")
 }

@@ -757,6 +757,78 @@ pub fn put_album(db: &mut CatalogDb, album: &Album) -> Result<()> {
     })
 }
 
+/// Every album, with its membership count, in name order, §9.
+pub fn albums(db: &CatalogDb) -> Result<Vec<(Album, u64)>> {
+    let connection = db.connection();
+    let mut statement = connection
+        .prepare(
+            "SELECT a.album_id, a.name, a.created_ms, a.revision,
+                    (SELECT count(*) FROM album_memberships m
+                      JOIN objects o ON o.object_id = m.object_id
+                     WHERE m.album_id = a.album_id AND o.state = 1)
+               FROM albums a ORDER BY a.name, a.album_id",
+        )
+        .map_err(|error| map_sqlite(error, "the album query could not be prepared"))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })
+        .map_err(|error| map_sqlite(error, "the albums could not be read"))?;
+    let mut albums = Vec::new();
+    for row in rows {
+        let (id, name, created, revision, members) =
+            row.map_err(|error| map_sqlite(error, "an album row could not be read"))?;
+        albums.push((
+            Album {
+                album_id: crate::row::id(&id, "the album id is malformed")?,
+                name,
+                created_ms: from_sqlite_integer(created, "the album time is negative")?,
+                revision: from_sqlite_integer(revision, "the album revision is negative")?,
+            },
+            from_sqlite_integer(members, "an album count is negative")?,
+        ));
+    }
+    Ok(albums)
+}
+
+/// The tags on one object, in name order, §9.
+pub fn object_tags(db: &CatalogDb, object_id: &Id) -> Result<Vec<Tag>> {
+    let connection = db.connection();
+    let mut statement = connection
+        .prepare(
+            "SELECT t.tag_id, t.name, t.created_ms
+               FROM object_tags o JOIN tags t ON t.tag_id = o.tag_id
+              WHERE o.object_id = ?1 ORDER BY t.name, t.tag_id",
+        )
+        .map_err(|error| map_sqlite(error, "the tag query could not be prepared"))?;
+    let rows = statement
+        .query_map([object_id.as_bytes().as_slice()], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(|error| map_sqlite(error, "the tags could not be read"))?;
+    let mut tags = Vec::new();
+    for row in rows {
+        let (id, name, created) =
+            row.map_err(|error| map_sqlite(error, "a tag row could not be read"))?;
+        tags.push(Tag {
+            tag_id: crate::row::id(&id, "the tag id is malformed")?,
+            name,
+            created_ms: from_sqlite_integer(created, "the tag time is negative")?,
+        });
+    }
+    Ok(tags)
+}
+
 /// Adds or removes an album membership, §9.
 pub fn set_album_membership(
     db: &mut CatalogDb,

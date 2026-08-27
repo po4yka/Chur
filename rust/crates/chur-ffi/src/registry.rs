@@ -66,6 +66,16 @@ pub enum Entry {
         /// The reader.
         reader: Mutex<chur_media::reader::ObjectReader>,
     },
+    /// A vault being created, `PROVISIONING.md` §3.
+    ///
+    /// The value is taken out on activation or abandonment, so a second call on
+    /// the same handle is `SESSION_EXPIRED` rather than a second activation.
+    Creation {
+        /// The runtime this creation belongs to.
+        runtime: Handle,
+        /// The creation in progress.
+        creation: Mutex<Option<chur_catalog::vault::VaultCreation>>,
+    },
     /// A long-running import, export, or integrity scan.
     Operation {
         /// The session this operation belongs to.
@@ -87,7 +97,7 @@ impl Entry {
     pub const fn owner(&self) -> Option<Handle> {
         match self {
             Entry::Runtime(_) => None,
-            Entry::Session { runtime, .. } => Some(*runtime),
+            Entry::Session { runtime, .. } | Entry::Creation { runtime, .. } => Some(*runtime),
             Entry::Reader { session, .. } | Entry::Operation { session, .. } => Some(*session),
         }
     }
@@ -99,6 +109,7 @@ impl Entry {
         match self {
             Entry::Runtime(_) => Kind::Runtime,
             Entry::Session { .. } => Kind::Session,
+            Entry::Creation { .. } => Kind::Creation,
             Entry::Reader { .. } => Kind::Reader,
             Entry::Operation { .. } => Kind::Operation,
         }
@@ -112,6 +123,8 @@ pub enum Kind {
     Runtime,
     /// `VaultSessionHandle`.
     Session,
+    /// A vault creation in progress, §6.5.
+    Creation,
     /// `ObjectReaderHandle`.
     Reader,
     /// `ImportHandle`, `ExportHandle`, or `IntegrityScanHandle`.

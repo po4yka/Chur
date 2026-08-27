@@ -119,6 +119,7 @@ fn header_statuses() -> BTreeMap<String, i32> {
                     | "CHUR_CURSOR_LEN"
                     | "CHUR_PROJECTION_LEN"
                     | "CHUR_PAGE_HEADER_LEN"
+                    | "CHUR_SECRET_LEN"
             )
         {
             continue;
@@ -295,7 +296,7 @@ fn every_declared_function_is_exported() {
         "chur_key_slot_format_max",
         "chur_build_flavor",
         "chur_status_is_known",
-        // §6.2, the frozen Phase-1 surface.
+        // §6.2, the surface at ABI 1.0.
         "chur_runtime_open",
         "chur_runtime_close",
         "chur_vault_unlock",
@@ -314,6 +315,27 @@ fn every_declared_function_is_exported() {
         "chur_object_reader_read_at",
         "chur_object_reader_verify_complete",
         "chur_object_reader_close",
+        // §6.5, the Phase-1 product surface added at ABI 1.1.
+        "chur_vault_present",
+        "chur_vault_create_begin",
+        "chur_vault_creation_add_recovery_slot",
+        "chur_vault_creation_activate",
+        "chur_vault_creation_abandon",
+        "chur_vault_add_recovery_slot",
+        "chur_vault_add_device_slot",
+        "chur_vault_remove_slot",
+        "chur_vault_change_password",
+        "chur_vault_slots",
+        "chur_object_set_favorite",
+        "chur_object_delete",
+        "chur_object_metadata",
+        "chur_album_create",
+        "chur_album_set_membership",
+        "chur_album_list",
+        "chur_tag_create",
+        "chur_object_set_tag",
+        "chur_derived_put",
+        "chur_derived_read",
     ]
     .iter()
     .map(|name| (*name).to_owned())
@@ -325,7 +347,7 @@ fn every_declared_function_is_exported() {
 
     // Calling each one proves the list above is not a stale copy.
     assert_eq!(chur_ffi::chur_abi_version_major(), 1);
-    assert_eq!(chur_ffi::chur_abi_version_minor(), 0);
+    assert_eq!(chur_ffi::chur_abi_version_minor(), 1);
     assert_eq!(
         chur_ffi::chur_capabilities(),
         chur_ffi::CHUR_CAP_OBJECT_READER
@@ -353,6 +375,7 @@ fn the_control_plane_vocabulary_matches_the_rust_side() {
             chur_core::limits::catalog::PROJECTION_LEN,
         ),
         ("CHUR_PAGE_HEADER_LEN", chur_ffi::records::PAGE_HEADER_LEN),
+        ("CHUR_SECRET_LEN", chur_ffi::product::SECRET_LEN),
     ] {
         assert_eq!(
             lengths

@@ -79,7 +79,20 @@ pub struct Session {
 /// reads the encoded slot back rather than reusing the value in memory, so it
 /// proves the bytes that were written are the bytes that open.
 pub fn create(root_dir: &VaultRoot, password: &[u8], now_ms: u64) -> Result<VaultCreation> {
-    let params = Argon2Params::v1_default();
+    create_with_params(root_dir, password, Argon2Params::v1_default(), now_ms)
+}
+
+/// Creates a vault under a calibrated Argon2id profile,
+/// `docs/security/PASSWORD_PROFILE.md` §6.
+///
+/// The profile is validated before any work, so a value below the frozen floor
+/// writes no slot.
+pub fn create_with_params(
+    root_dir: &VaultRoot,
+    password: &[u8],
+    params: Argon2Params,
+    now_ms: u64,
+) -> Result<VaultCreation> {
     // §6 of PASSWORD_PROFILE: a creation that cannot allocate the floor must
     // not write a slot.
     password::check_memory_available(params)?;
@@ -563,6 +576,20 @@ impl Session {
         // caller does immediately after locking. Overwriting it here would
         // leave a `Session` whose `root_secret` is a valid-looking zero key.
         Ok(())
+    }
+
+    /// The key slots this vault carries, for the settings screen.
+    ///
+    /// It returns only the public triple `KEY_SLOTS.md` §2 calls common: the
+    /// identity, the family, and the generation. A slot body carries the
+    /// wrapped root and never leaves this crate.
+    #[must_use]
+    pub fn slots(&self) -> Vec<(Id, SlotType, u64)> {
+        self.descriptor
+            .key_slots
+            .iter()
+            .map(|entry| (entry.slot_id, entry.slot_type, entry.slot_generation))
+            .collect()
     }
 
     /// Whether the session still holds an open catalog.
