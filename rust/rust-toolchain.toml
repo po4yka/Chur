@@ -1,5 +1,6 @@
-# Chur pins the Rust toolchain per DEVELOPMENT.md ("Do not rely on globally
-# mutable defaults"). The channel tracks repository-approved stable releases;
-# an exact version pin is recorded once the first CI matrix is configured.
+# Chur pins an exact Rust toolchain version per DEVELOPMENT.md ("Do not rely on
+# globally mutable defaults"). Raising this pin is a deliberate change reviewed
+# like a dependency upgrade, and it must not silently change persisted or wire
+# bytes. The supported floor is `rust-version` in Cargo.toml, which is lower.
 [toolchain]
-channel = "stable"
+channel = "1.97.0"

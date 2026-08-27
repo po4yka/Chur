@@ -13,10 +13,12 @@ This document describes the intended development environment and workflow. The r
 | Android | compile/target API 37; NDK pinned in version catalog |
 | Xcode | version supporting the selected iOS deployment target |
 | Swift | toolchain shipped with pinned Xcode |
-| Rust | stable toolchain pinned by `rust-toolchain.toml` |
+| Rust | exact version pinned by `rust/rust-toolchain.toml`; supported floor in `rust-version` |
 | Cargo tools | pinned or locked where reproducibility matters |
 
 Do not rely on globally mutable defaults for JDK, NDK, Rust target, Xcode, or code-generation versions.
+
+Only the Rust row is enforced today. The Gradle build and `gradle/libs.versions.toml` do not exist yet, so the JDK, Kotlin, Compose Multiplatform, Gradle, Android, Xcode, and Swift rows are planned targets; they become normative when the version catalog lands.
 
 ## Planned repository layout
 
