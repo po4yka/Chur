@@ -249,6 +249,10 @@ jobs:
       # well. This is that run, as a real Kotlin/Native binary.
       - run: ./gradlew --no-daemon iosSimulatorArm64Test
       - run: ./gradlew --no-daemon compileKotlinIosArm64
+      # The Compose Multiplatform shell links as an iOS framework. The Xcode
+      # project that embeds it lands with the Phase 1 shell; linking it here is
+      # what keeps the target from rotting until then.
+      - run: ./gradlew --no-daemon linkDebugFrameworkIosSimulatorArm64
 
   deny:
     name: cargo deny
