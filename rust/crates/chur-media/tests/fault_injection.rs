@@ -72,7 +72,10 @@ fn plaintext(length: usize) -> Vec<u8> {
 
 /// The ordered points of `PROVISIONING.md` §3 and `VAULT_DESCRIPTOR_V1.md` §9.
 // The prefix is the point: each variant names the step the process died after.
-#[expect(clippy::enum_variant_names, reason = "each variant names a step it follows")]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "each variant names a step it follows"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InitPoint {
     /// The temporary descriptor and the catalog exist; nothing is installed.
@@ -156,7 +159,10 @@ fn initialization_leaves_nothing_openable_until_it_commits() {
 // ---------------------------------------------------------------------------
 
 /// The ordered points of `OBJECT_CONTAINER_V1.md` §14.2.
-#[expect(clippy::enum_variant_names, reason = "each variant names a step it follows")]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "each variant names a step it follows"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ImportPoint {
     /// The manifest is durable, the index is reserved, the record is written.
