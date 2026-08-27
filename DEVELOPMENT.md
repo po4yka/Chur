@@ -244,6 +244,17 @@ environment facts change whether that build succeeds.
 - **Android needs an NDK and Apple needs Xcode**, exactly as
   [Native targets](#native-targets) already requires, and now for every build of
   the catalog crate rather than only for the mobile artifacts.
+- **The Android build needs the NDK's binutils on `PATH`.** The vendored
+  OpenSSL configures itself for Android and then invokes `${CROSS_COMPILE}ranlib`
+  through `make`, which resolves on `PATH` rather than through an environment
+  variable. `scripts/build-native-targets.sh` sets it; a hand-run `cargo build`
+  for an Android target needs it too, or the build fails at `install_dev` with
+  "ranlib: command not found".
+- **The Apple build needs `IPHONEOS_DEPLOYMENT_TARGET` pinned** to the version
+  [ADR-0017](docs/adr/0017-freeze-the-supported-device-set.md) supports. The
+  vendored C is compiled against the installed SDK, whose objects reference
+  symbols Rust's default iOS 10 link target does not provide, and the link fails
+  on `___chkstk_darwin`. The script and the Gradle tasks both set it.
 
 ## Troubleshooting principles
 

@@ -26,6 +26,14 @@ cd "$repository_root/rust"
 # The API level every Android artifact targets, frozen by ADR-0017.
 readonly ANDROID_API=29
 
+# The iOS deployment target, frozen by ADR-0017.
+#
+# It is exported rather than left to Rust's default. The vendored C of ADR-0038
+# is compiled against the installed SDK, whose objects reference symbols Rust's
+# default iOS 10 link target does not provide, and the link then fails on
+# `___chkstk_darwin`.
+export IPHONEOS_DEPLOYMENT_TARGET=18.0
+
 readonly ANDROID_TARGETS=(aarch64-linux-android x86_64-linux-android)
 readonly APPLE_TARGETS=(aarch64-apple-ios aarch64-apple-ios-sim)
 
@@ -109,17 +117,42 @@ check_symbols() {
     "$(basename "$artifact")" "${#REQUIRED_SYMBOLS[@]}"
 }
 
+target_directory() {
+  cargo metadata --format-version 1 --no-deps \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])'
+}
+
 build_target() {
   local target="$1"
-  local installed
+  local installed directory
   installed="$(rustup target list --installed)"
   grep -qxF "$target" <<<"$installed" \
     || die "target $target is not installed: rustup target add $target"
   log "building $target"
   cargo build -p chur-ffi --release --target "$target"
-  check_symbols "$(cargo metadata --format-version 1 --no-deps \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])'
-  )/$target/release/libchur_ffi.a"
+  directory="$(target_directory)"
+  check_symbols "$directory/$target/release/libchur_ffi.a"
+}
+
+# The Android JNI adapter of ADR-0040.
+#
+# It is a second artifact because FFI_CONTRACT.md section 6.2 forbids a `Java_*`
+# symbol in the Chur library. Its own symbol set is checked against the export
+# list it wraps by rust/crates/chur-jni/tests/surface.rs; what this checks is
+# that the shared library builds and exports the adapter at all, because an
+# artifact with no `Java_` symbol is one the JVM would load and then fail to
+# call.
+build_jni() {
+  local target="$1" directory artifact count
+  log "building the JNI adapter for $target"
+  cargo build -p chur-jni --release --target "$target"
+  directory="$(target_directory)"
+  artifact="$directory/$target/release/libchur_jni.so"
+  [[ -f "$artifact" ]] || die "no JNI adapter at $artifact"
+  count="$({ "$NM_TOOL" --defined-only "$artifact" 2>/dev/null || true; } \
+    | awk '{ print $NF }' | grep -c '^Java_dev_po4yka_chur_ffi_ChurJni_' || true)"
+  [[ "$count" -ge 40 ]] || die "$artifact exports $count JNI symbols, which is too few"
+  printf '   %s exports %s JNI symbols\n' "$(basename "$artifact")" "$count"
 }
 
 build_android() {
@@ -128,6 +161,13 @@ build_android() {
   prebuilt="$(ndk_prebuilt "$ndk")"
   log "NDK $ndk"
   export AR="$prebuilt/bin/llvm-ar"
+  # The vendored OpenSSL of ADR-0038 configures itself for Android and then
+  # invokes `${CROSS_COMPILE}ranlib` through make, which resolves on PATH rather
+  # than through an environment variable. Without the NDK's bin directory on
+  # PATH the build fails at `install_dev` with "ranlib: command not found",
+  # which names neither OpenSSL nor the NDK.
+  export PATH="$prebuilt/bin:$PATH"
+  export RANLIB="$prebuilt/bin/llvm-ranlib"
   NM_TOOL="$prebuilt/bin/llvm-nm"
   [[ -x "$NM_TOOL" ]] || die "no llvm-nm at $NM_TOOL"
   for target in "${ANDROID_TARGETS[@]}"; do
@@ -138,6 +178,7 @@ build_android() {
     # The `cc` crate reads these when a dependency has a build script.
     export CC="$clang" CXX="${clang}++"
     build_target "$target"
+    build_jni "$target"
   done
 }
 

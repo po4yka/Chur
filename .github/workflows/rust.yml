@@ -223,6 +223,10 @@ jobs:
             ~/.gradle/caches
             ~/.gradle/wrapper
           key: gradle-${{ hashFiles('gradle/libs.versions.toml', 'gradle/wrapper/gradle-wrapper.properties') }}
+      # The host tests load `libchur_jni`, which the root build compiles with
+      # Cargo (ADR-0040). The runner's rustup reads rust/rust-toolchain.toml, so
+      # no toolchain is installed by an action here either.
+      - run: rustup show
       # The JVM and Android host tests. The iOS target needs macOS and runs in
       # the kotlin-native job.
       - run: ./gradlew --no-daemon jvmTest testAndroidHostTest
@@ -246,13 +250,17 @@ jobs:
             ~/.gradle/wrapper
             ~/.konan
           key: konan-${{ hashFiles('gradle/libs.versions.toml', 'gradle/wrapper/gradle-wrapper.properties') }}
+      # cinterop links `libchur_ffi.a` for each Apple target, which the Gradle
+      # build compiles with Cargo, so both targets must be installed first.
+      - run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
       # TEST_VECTORS.md section 7 requires the vector suite to run on iOS as
       # well. This is that run, as a real Kotlin/Native binary.
       - run: ./gradlew --no-daemon iosSimulatorArm64Test
       - run: ./gradlew --no-daemon compileKotlinIosArm64
-      # The Compose Multiplatform shell links as an iOS framework. The Xcode
-      # project that embeds it lands with the Phase 1 shell; linking it here is
-      # what keeps the target from rotting until then.
+      # The Compose Multiplatform shell links as an iOS framework, statically
+      # against `libchur_ffi.a`. The Xcode project that embeds it is the host
+      # application's; linking here proves the framework and the static library
+      # agree on every symbol cinterop generated a binding for.
       - run: ./gradlew --no-daemon linkDebugFrameworkIosSimulatorArm64
 
   deny:
