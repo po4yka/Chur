@@ -875,7 +875,7 @@ Album card content:
 
 ### 12.2 Search
 
-Search is local and private.
+Search is local and private. Its data model is the bounded catalog query of [`docs/format/CATALOG_SCHEMA_V1.md`](docs/format/CATALOG_SCHEMA_V1.md) §16, which owns it; this section owns presentation only.
 
 Rules:
 

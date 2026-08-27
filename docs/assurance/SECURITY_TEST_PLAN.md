@@ -71,6 +71,7 @@ After restart, state must be safe, bounded, and reconcilable.
 - process death at private screens;
 - no private navigation restoration;
 - cache clearing;
+- search query text does not survive lock, process death, or navigation restoration, and reaches no catalog table;
 - panic lock latency;
 - simultaneous scenes/activities according to policy;
 - public shell remains isolated.

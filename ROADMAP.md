@@ -46,6 +46,7 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 - immutable encrypted originals;
 - encrypted metadata, thumbnails, and previews;
 - timeline, albums, favorites, viewer, and export;
+- catalog search as bounded by [`docs/format/CATALOG_SCHEMA_V1.md`](docs/format/CATALOG_SCHEMA_V1.md) §16, with no separate search index;
 - immediate, timed, background, and panic lock;
 - app-switcher privacy handling;
 - interrupted-import recovery and integrity inspection.
@@ -132,7 +133,7 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 - encrypted documents;
 - local OCR and captions;
 - encrypted semantic indexes and embeddings;
-- private multimodal search;
+- full-text and embedding search indexes, and private multimodal search, all beyond the bounded catalog query of [`docs/format/CATALOG_SCHEMA_V1.md`](docs/format/CATALOG_SCHEMA_V1.md) §16;
 - optional hybrid post-quantum recipients;
 - shared family or team vaults;
 - advanced padding and batching;
