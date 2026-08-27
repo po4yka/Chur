@@ -218,6 +218,25 @@ impl MediaClass {
 }
 
 discriminant_enum! {
+    /// §15.4: `state` of the catalog object row, the lifecycle enum of
+    /// `docs/format/CATALOG_SCHEMA_V1.md` §5.1.
+    ///
+    /// It is a second space from [`VaultState`] and shares no value with it,
+    /// which is what makes a reader that confused a vault with an object fail
+    /// rather than produce a plausible wrong answer.
+    ObjectState: u8 {
+        /// The container and final commit are durable and the object is listable.
+        Active = 0x01;
+        /// Deletion has started and the object is no longer listable, §14.1.
+        Deleting = 0x02;
+        /// Every object-key envelope is destroyed and a tombstone row exists.
+        Tombstoned = 0x03;
+        /// A check proved the object unusable and no repair path remains.
+        Corrupt = 0x04;
+    }
+}
+
+discriminant_enum! {
     /// §15.4: `integrity_summary` of the catalog object row.
     ///
     /// The same vocabulary is what `chur_object_reader_verify_complete` writes

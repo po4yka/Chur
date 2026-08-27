@@ -252,15 +252,18 @@ CREATE INDEX imports_by_stage ON import_transactions (stage);
 CREATE INDEX tombstones_by_authored ON tombstones (authored_ms);
 
 -- §16.4. The FTS5 table lives in the same database, so its pages carry the same
--- at-rest encryption. `content=''` makes it an external-content index the
--- catalog writes explicitly: the alternative, a contentless-delete table over
--- `metadata_revisions`, would re-tokenize a row this schema already rewrites in
--- the activating transaction.
+-- at-rest encryption. It is contentless: the catalog already holds the
+-- filename, the caption, and the tag names in ordinary columns, so a second
+-- copy inside the index would be a second source of truth for private text.
+-- `contentless_delete=1` is what makes a row replaceable by its rowid alone; a
+-- plain contentless table can only be appended to, and reindexing a revised
+-- object would leave the old terms matching for ever.
 CREATE VIRTUAL TABLE object_search USING fts5(
     filename,
     caption,
     tag_names,
     content='',
+    contentless_delete=1,
     tokenize='unicode61 remove_diacritics 2',
     prefix='2 3'
 );

@@ -15,6 +15,9 @@
 //! `docs/format/CANONICAL_ENCODING_V1.md` when a portable backup exports it.
 
 pub mod db;
+pub mod model;
+pub(crate) mod row;
 pub mod schema;
+pub mod store;
 
 pub use db::{CatalogDb, CatalogKey, CatalogLocation};
