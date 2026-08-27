@@ -55,6 +55,7 @@ No operations exist yet, so nothing migrates. `protocol_version` governs the rec
 
 ## Follow-up
 
-- freeze the deterministic tie-break key in `CONFLICT_RESOLUTION.md` §1;
-- specify the `previous_operation_hash` algorithm and its domain tag;
-- define the checkpoint structure, which commits to the same per-device heads.
+- the deterministic tie-break key was frozen by [`0021`](0021-freeze-conflict-tie-break-and-set-semantics.md), which reads the operation digest rather than `operation_id`;
+- the `previous_operation_hash` algorithm, its domain tag, and its genesis value were fixed by [`0022`](0022-freeze-operation-chain-hash-and-identifier.md);
+- the checkpoint structure, which commits to the same per-device heads with their digests, was defined by [`0023`](0023-define-signed-checkpoint-and-bootstrap-attestation.md);
+- the operation record's field widths and signing domain tag remain open, owned by `sync/OPERATION_LOG.md` §2.

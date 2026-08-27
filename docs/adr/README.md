@@ -75,6 +75,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0023](0023-define-signed-checkpoint-and-bootstrap-attestation.md) | Signed checkpoint record and new-device bootstrap attestation | Accepted |
 | [0024](0024-freeze-revocation-point-and-eager-rewrap.md) | Accepted revocation point and eager epoch rewrap | Accepted |
 | [0022](0022-freeze-operation-chain-hash-and-identifier.md) | Freeze the operation chain hash, identifier, and cleartext field set | Accepted |
+| [0021](0021-freeze-conflict-tie-break-and-set-semantics.md) | Freeze the conflict tie-break and set semantics | Accepted |
 
 ## Future ADR backlog
 
@@ -82,5 +83,4 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 - SQLCipher build/link/backup validation result;
 - Android Keystore and iOS Keychain exact policies;
 - device identity portability;
-- conflict-resolution data types;
 - post-quantum recipient profile.

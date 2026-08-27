@@ -17,15 +17,20 @@ operation_id
 
 Causality is preferred over wall-clock time. `observed_heads` is the signed vector of accepted per-device heads defined in [`OPERATION_LOG.md`](OPERATION_LOG.md) §4; it decides happens-before and concurrency for every rule below. Concurrent operations use a deterministic tie-breaker only where a single value is required.
 
-Proposed deterministic total tie-break key:
+The tie-break between two concurrent operations is one comparison:
 
 ```text
-causal class
-operation kind priority when specified
-lexicographic operation_id
+winner = the operation whose operation_digest is the greater value,
+         read as a 32-byte unsigned big-endian integer
 ```
 
-The causal input is fixed by [`../adr/0014-observed-heads-causality-vector.md`](../adr/0014-observed-heads-causality-vector.md); the tie-break key itself still requires an ADR. Timestamps alone are forbidden as authority.
+`operation_digest` is defined in [`OPERATION_LOG.md`](OPERATION_LOG.md) §4 and is the same value the author's next operation carries as `previous_operation_hash`, so every receiver already holds it. Two distinct operations have distinct digests under a collision-resistant hash, so the rule is total: every concurrent pair has exactly one winner and every device computes the same one.
+
+Two earlier terms are removed rather than defined. "Causal class" said only that happens-before is consulted first, which §4.2 of the operation log now states directly. "Operation kind priority" named a priority no kind ever carried; per-kind behaviour is stated by §3, §5, and §6 below. `operation_id` is not an input; it is a deduplication key, per [`OPERATION_LOG.md`](OPERATION_LOG.md) §5.
+
+An author can grind its own digest by re-signing, one signature per attempt. The tie-break decides which of two concurrent values a device displays and never what is authorized, and the same author could reach any outcome by issuing one later operation that observes both, so grinding buys nothing.
+
+The causal input is fixed by [`../adr/0014-observed-heads-causality-vector.md`](../adr/0014-observed-heads-causality-vector.md) and this key by [`../adr/0021-freeze-conflict-tie-break-and-set-semantics.md`](../adr/0021-freeze-conflict-tie-break-and-set-semantics.md). Timestamps alone are forbidden as authority.
 
 ## 2. Immutable objects
 
@@ -48,18 +53,19 @@ Album creation uses random album ID, so same-name concurrent albums remain separ
 
 ## 5. Membership, tags, favorites
 
-Use operation-based add/remove semantics with unique add tokens or causal remove context:
+Membership, tags, and favorites are observed-remove sets with unique add tokens. Causal remove context was rejected: evaluating a remove under it needs the element's causal history, while a token set travels inside the remove operation and is checkable from the two operations alone.
 
-- add is idempotent by operation/token;
-- remove removes observed adds;
-- concurrent unseen add may survive remove according to documented observed-remove set semantics;
-- explicit “remove all including future concurrent adds” is not representable without a later resolving operation.
+- an add carries an add token, and that token is the `operation_id` of the add operation. Tokens are unique because identifiers are 16 random bytes and an identifier is never reused;
+- an element is present when it holds at least one add token that no accepted remove lists;
+- a remove lists exactly the add tokens its author had observed for that element and removes those. A concurrent add the author had not seen survives, so an element re-added concurrently with a remove stays present;
+- add is idempotent by token, and a replayed remove removes the same tokens;
+- "remove all including future concurrent adds" is not representable; it takes a later operation that observes those adds.
 
-Simpler last-writer-wins sets require an ADR demonstrating acceptable deletion behavior.
+Last-writer-wins sets are not used. They drop a concurrent add with no conflict surface, which for an album membership means a photo the user added disappears silently.
 
 ## 6. Deletion
 
-Deletion creates a tombstone and normally dominates concurrent metadata edits for visibility. A concurrent object creation with same random object ID is invalid/improbable and rejected.
+Deletion creates a tombstone. A tombstone concurrent with a metadata edit of the same object wins for visibility: the object is not shown, and no tie-break is consulted. The concurrent edit is not discarded; it is applied to the object's retained state, so a later restore shows the edited value rather than a stale one. A concurrent object creation with same random object ID is invalid/improbable and rejected.
 
 Restoration, if supported, is an explicit operation that references the tombstone and creates a new active generation. Silent resurrection from stale device is forbidden.
 
