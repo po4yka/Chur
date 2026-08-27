@@ -569,22 +569,11 @@ PasswordKEK
 
 `PasswordKEK` wraps the random vault root secret with XChaCha20-Poly1305.
 
-### 18.2 Proposed mobile profile
+### 18.2 Mobile creation profile
 
-The first implementation SHOULD benchmark a profile centered on:
+The creation profile is frozen in [`security/PASSWORD_PROFILE.md`](security/PASSWORD_PROFILE.md) §4, which governs it under the authority hierarchy in [`README.md`](README.md): Argon2id version `0x13`, 65536 KiB of memory, 3 iterations, parallelism 1, a 16-byte random salt, and 32 bytes of output. That floor is also the v1 default. Calibration MAY raise memory or iterations inside the §18.3 bounds and MUST NOT lower any parameter.
 
-```text
-Argon2 variant: Argon2id
-Argon2 version: 0x13
-memory:         64 MiB
-iterations:     3
-parallelism:    1 initially; benchmark before freezing
-output:         32 bytes
-salt:           16–32 random bytes
-latency target: approximately 350–750 ms on supported devices
-```
-
-The exact creation profile is **Proposed**, not frozen. The final profile MUST be selected using the lowest supported Android/iOS hardware, foreground latency, memory-pressure behavior, battery impact, and denial-of-service limits.
+A device that cannot allocate the memory floor MUST NOT write a password slot and MUST NOT unlock one. It fails with `KDF_MEMORY_UNAVAILABLE`; v1 defines no reduced profile, so one password derives one key on every supported device. The rule and its rationale are `PASSWORD_PROFILE.md` §6.
 
 ### 18.3 Hard validation bounds
 
@@ -601,7 +590,7 @@ Before Argon2 execution, implementations MUST validate:
 
 Untrusted files and servers MUST NOT force arbitrary Argon2 resource consumption.
 
-Proposed parser safety bounds:
+Parser safety bounds, frozen for v1 and checked before Argon2 starts:
 
 ```text
 memory:      64 MiB minimum for newly created v1 slots
@@ -2417,8 +2406,8 @@ The following MUST be resolved before v1 production bytes are frozen:
 
 1. exact canonical binary encoding — resolved: the profile is defined in [`format/CANONICAL_ENCODING_V1.md`](format/CANONICAL_ENCODING_V1.md), and the sealed plaintext schemas of the manifest and the final commit are frozen in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §5 and §11;
 2. exact algorithm/suite numeric registry — resolved in [`format/CANONICAL_ENCODING_V1.md`](format/CANONICAL_ENCODING_V1.md) §15;
-3. final Argon2id mobile creation profile and latency target;
-4. final Argon2 parser hard bounds;
+3. final Argon2id mobile creation profile and latency target — resolved in [`security/PASSWORD_PROFILE.md`](security/PASSWORD_PROFILE.md) §4 and [ADR-0026](adr/0026-argon2id-memory-floor-and-candidate-set.md): the floor is also the v1 default and calibration may only raise a parameter;
+4. final Argon2 parser hard bounds — resolved in §18.3, which [`security/KEY_SLOTS.md`](security/KEY_SLOTS.md) §11 checks before any derivation runs;
 5. exact password input maximum;
 6. exact HKDF extract salt and canonical `info` bytes — resolved in §13: the extract salt is 32 zero bytes, and tuple bytes follow [`format/CANONICAL_ENCODING_V1.md`](format/CANONICAL_ENCODING_V1.md) §7.1;
 7. exact chunk-size defaults and limits — resolved in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §6 and §16;

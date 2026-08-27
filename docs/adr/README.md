@@ -81,7 +81,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 
 ## Future ADR backlog
 
-- password Unicode and Argon2id parameter profile;
+- password Unicode profile; the Argon2id parameter floor and default are [0026](0026-argon2id-memory-floor-and-candidate-set.md);
 - SQLCipher build/link/backup validation result;
 - Android Keystore and iOS Keychain exact policies;
 - device identity portability;

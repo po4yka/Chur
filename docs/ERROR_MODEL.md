@@ -27,6 +27,7 @@ This table is the sole registry of Chur error names and values. `ARCHITECTURE.md
 | 104 | `VAULT_LOCKED` | operation requires an unlocked session | Yes | unlock |
 | 105 | `SESSION_EXPIRED` | handle belongs to a locked/older generation | Yes | reopen after unlock |
 | 106 | `PROTECTED_DATA_UNAVAILABLE` | device-level protected storage is not accessible | Yes | unlock the device and retry |
+| 107 | `KDF_MEMORY_UNAVAILABLE` | the device cannot allocate the memory the approved Argon2id profile of `security/PASSWORD_PROFILE.md` §4 requires | Yes | free memory or return to the foreground and retry; never retry with reduced parameters |
 | 200 | `CANCELLED` | caller or lock transition cancelled work | Yes | retry intentionally |
 | 201 | `INVALID_INPUT` | argument, length, alignment, or range failed validation | No | correct the call |
 | 202 | `RESOURCE_LIMIT_EXCEEDED` | declared size, KDF parameter, or collection exceeds the parser limits of the owning format specification | No | reject input or use supported parameters |
@@ -139,6 +140,7 @@ A caller requesting playback may accept `VerifiedRange`; export, backup, or migr
 - resume incomplete immutable object transfer only after validating journal state;
 - re-open a session after `SESSION_EXPIRED` rather than reviving a handle;
 - do not retry `RESOURCE_LIMIT_EXCEEDED` with the same input;
+- retry `KDF_MEMORY_UNAVAILABLE` only on a new user action, and only with the same parameters; reducing them is forbidden by `security/PASSWORD_PROFILE.md` §6;
 - never retry `SYNC_CHAIN_FORK` or `SYNC_HEAD_ROLLBACK`. Both are security states that persist until the fork state of [`sync/ROLLBACK_PROTECTION.md`](sync/ROLLBACK_PROTECTION.md) §4 clears, and a retry loop against an equivocating server is the failure they exist to prevent.
 
 ## Logging severity

@@ -43,16 +43,18 @@ output length 32 bytes
 random salt at least 16 bytes
 ```
 
-Initial benchmark candidate:
+Frozen v1 floor, which is also the v1 default for a newly created slot:
 
 ```text
-memory: 64 MiB
+memory: 65536 KiB (64 MiB)
 iterations: 3
-parallelism: chosen conservatively for mobile, initially 1 unless benchmarks justify more
-interactive target: approximately 350–750 ms on the supported-device baseline
+parallelism: 1
+salt: 16 random bytes
+output: 32 bytes
+interactive target: approximately 350–750 ms per derivation on the floor device of ADR-0017
 ```
 
-These are proposals, not frozen constants. The final profile must define exact minimum, default, and maximum values.
+Calibration under §6 may raise memory or iterations inside the parser bounds of [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §18.3 when the benchmark on that device stays inside the interactive target. It may never lower memory, iterations, or parallelism. The floor is a security constant and the interactive target is a benchmark target: a latency miss is never a reason to reduce a parameter. [ADR-0017](../adr/0017-freeze-the-supported-device-set.md) and [`../assurance/PERFORMANCE_BUDGETS.md`](../assurance/PERFORMANCE_BUDGETS.md) §6 gate on this number.
 
 ## 5. Resource limits
 
@@ -73,13 +75,20 @@ Server- or backup-provided parameters are untrusted.
 Calibration for a new vault may:
 
 1. benchmark candidate parameters with synthetic input;
-2. keep memory at or above the approved minimum when possible;
+2. keep memory at or above the §4 floor of 65536 KiB, without exception;
 3. adjust iterations within approved bounds;
 4. target the supported interactive latency range;
 5. store exact parameters in the slot;
 6. never silently reduce below the compatibility/security floor.
 
-Calibration must not create device-specific parameters that another supported device cannot validate safely. A lower-memory compatibility profile requires an explicit product and threat-model decision.
+Calibration must not create device-specific parameters that another supported device cannot validate safely. v1 defines no lower-memory compatibility profile, and a device that cannot allocate the §4 memory floor fails closed:
+
+- a vault creation or password change that cannot allocate the floor must not write a slot; it fails with `KDF_MEMORY_UNAVAILABLE` of [`../ERROR_MODEL.md`](../ERROR_MODEL.md);
+- an unlock that cannot allocate the floor fails with the same code before the first candidate of [`KEY_SLOTS.md`](KEY_SLOTS.md) §8 runs, so no partial candidate set is attempted;
+- the code is a device-resource state, not an authentication result. It is decided before any credential is used and reveals nothing about which slots exist;
+- the caller may retry after freeing memory or returning to the foreground, and must never retry with reduced parameters.
+
+The same password must derive the same key on every supported device, so a reduced profile would need its own profile identifier in every slot and would hand an attacker who can induce memory pressure a weaker slot to attack. [ADR-0017](../adr/0017-freeze-the-supported-device-set.md) already makes a device that cannot run the floor unsupported rather than degraded, and [ADR-0026](../adr/0026-argon2id-memory-floor-and-candidate-set.md) records this closure.
 
 ## 7. Derivation and wrapping
 
