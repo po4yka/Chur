@@ -1013,23 +1013,23 @@ Crash attachments MUST exclude app-private files, databases, screenshots, and na
 
 ## 27. Error mapping
 
-Android platform errors map to stable domain codes:
+Android platform conditions map onto the stable codes registered in [`ERROR_MODEL.md`](ERROR_MODEL.md). This layer names conditions; it MUST NOT introduce a code of its own.
 
-```text
-AuthenticationCancelled
-AuthenticationUnavailable
-AuthenticationLockedOut
-PlatformKeyUnavailable
-PlatformKeyInvalidated
-SourcePermissionDenied
-SourceUnavailable
-SourceNotSeekable
-DestinationUnavailable
-OperationCancelled
-StorageUnavailable
-NativeApiIncompatible
-IoFailure
-```
+| Android condition | Stable code |
+| --- | --- |
+| user dismissed `BiometricPrompt`, or the caller cancelled | `CANCELLED` |
+| no enrolled biometric, no secure lock screen, or biometric lockout | `PLATFORM_KEY_UNAVAILABLE` |
+| `KeyPermanentlyInvalidatedException`, or an enrolment change invalidated the alias | `PLATFORM_KEY_INVALIDATED` |
+| `SecurityException` from a provider, or a revoked URI grant | `PERMISSION_DENIED` |
+| provider returned no descriptor, or the source disappeared | `NOT_FOUND` |
+| descriptor is a pipe or socket and the operation needs random access | `SOURCE_NOT_SEEKABLE` |
+| cloud-backed provider must download the item before it can be read | `SOURCE_DOWNLOAD_REQUIRED` |
+| destination is unwritable, or the volume is full | `STORAGE_UNAVAILABLE` |
+| direct-boot or device-locked file access denied | `PROTECTED_DATA_UNAVAILABLE` |
+| handshake rejection per §28.3 | `ABI_INCOMPATIBLE` |
+| any other `IOException` | `IO_FAILURE` |
+
+`SOURCE_NOT_SEEKABLE` and `SOURCE_DOWNLOAD_REQUIRED` are both derived from the source capability model in [`interop/MEDIA_PIPELINE.md`](interop/MEDIA_PIPELINE.md) §3, so the shared import use case branches identically on Android and iOS.
 
 Detailed platform exceptions remain in local debug diagnostics only when they contain no private values. User-visible messages MUST avoid revealing whether a real, decoy, absent, or damaged vault matched a credential.
 

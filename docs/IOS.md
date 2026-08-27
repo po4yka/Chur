@@ -1065,24 +1065,23 @@ Crash reports MUST exclude screenshots, app-private attachments, databases, obje
 
 ## 29. Error mapping
 
-Native failures map to stable domain codes:
+iOS platform conditions map onto the stable codes registered in [`ERROR_MODEL.md`](ERROR_MODEL.md). This layer names conditions; it MUST NOT introduce a code of its own.
 
-```text
-AuthenticationCancelled
-AuthenticationUnavailable
-AuthenticationLockedOut
-PlatformKeyUnavailable
-PlatformKeyInvalidated
-ProtectedDataUnavailable
-SourcePermissionDenied
-SourceUnavailable
-SourceRequiresDownload
-DestinationUnavailable
-OperationCancelled
-StorageUnavailable
-NativeApiIncompatible
-IoFailure
-```
+| iOS condition | Stable code |
+| --- | --- |
+| `LAError.userCancel`, `userFallback`, or a cancelled task | `CANCELLED` |
+| `LAError.biometryNotEnrolled`, `passcodeNotSet`, or `biometryLockout` | `PLATFORM_KEY_UNAVAILABLE` |
+| Keychain item lost, or `biometryCurrentSet` invalidated it | `PLATFORM_KEY_INVALIDATED` |
+| protected data unavailable while the device is locked | `PROTECTED_DATA_UNAVAILABLE` |
+| security-scoped access denied, or Photos authorization denied | `PERMISSION_DENIED` |
+| provider returned no file representation, or the asset disappeared | `NOT_FOUND` |
+| provider stream cannot seek, so a coordinated copy is required first | `SOURCE_NOT_SEEKABLE` |
+| iCloud-backed asset must download before it can be read | `SOURCE_DOWNLOAD_REQUIRED` |
+| destination is unwritable, or the volume is full | `STORAGE_UNAVAILABLE` |
+| handshake rejection per §30.5 | `ABI_INCOMPATIBLE` |
+| any other `NSError` from file or provider I/O | `IO_FAILURE` |
+
+`SOURCE_NOT_SEEKABLE` and `SOURCE_DOWNLOAD_REQUIRED` are both derived from the source capability model in [`interop/MEDIA_PIPELINE.md`](interop/MEDIA_PIPELINE.md) §3, so the shared import use case branches identically on iOS and Android.
 
 Internal details may appear in privacy-reviewed local diagnostics, but user-facing errors must not reveal whether a real, decoy, absent, or corrupted vault matched a credential.
 
