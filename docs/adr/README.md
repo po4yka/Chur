@@ -62,11 +62,12 @@ Rejected
 | [0005](0005-real-and-decoy-vault-isolation.md) | Real and decoy vault cryptographic isolation | Accepted |
 | [0006](0006-control-and-data-plane-ffi.md) | Split FFI control and data planes | Accepted |
 | [0007](0007-local-first-before-sync.md) | Stabilize local vault before sync/sharing | Accepted |
+| [0008](0008-freeze-object-container-v1-layout.md) | Freeze the object container v1 public layout | Accepted |
 
 ## Future ADR backlog
 
 - canonical encoding choice and frozen profile;
-- object-container constants and default chunk size;
+- object-container default chunk size and approved size range;
 - password Unicode and Argon2id parameter profile;
 - SQLCipher build/link/backup validation result;
 - Android Keystore and iOS Keychain exact policies;

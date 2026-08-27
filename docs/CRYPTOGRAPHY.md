@@ -2560,8 +2560,8 @@ The following MUST be resolved before v1 production bytes are frozen:
 5. exact password input maximum;
 6. exact HKDF extract salt and canonical `info` bytes;
 7. exact chunk-size defaults and limits;
-8. exact BLAKE3 ordered-commitment framing;
-9. whether object IDs appear in the public preamble or only encrypted records;
+8. exact BLAKE3 ordered-commitment framing — resolved in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §10;
+9. whether object IDs appear in the public preamble or only encrypted records — resolved in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §3: encrypted records only;
 10. SQLCipher versus an alternative Rust-owned encrypted catalog implementation;
 11. catalog field-level encryption policy inside SQLCipher;
 12. standard versus paranoid import verification default;
