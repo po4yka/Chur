@@ -18,7 +18,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use chur_core::{ChurStatus, Result};
+use chur_core::Result;
 
 /// What kind of work an operation handle drives, for the progress snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,8 +62,14 @@ pub struct Progress {
     pub stage: Stage,
     /// Whether the terminal result is set.
     pub terminal: bool,
-    /// The terminal status, meaningful only once `terminal` is set.
-    pub status: ChurStatus,
+    /// The terminal status as its ABI value, meaningful only once `terminal`
+    /// is set.
+    ///
+    /// It is the `int32_t` rather than a [`ChurStatus`] because success is `0`
+    /// and `0` is not a member of that enum: `docs/ERROR_MODEL.md` makes
+    /// success the absence of an error code, and folding it into the enum turns
+    /// every completed operation into `INTERNAL_FAILURE`.
+    pub status: i32,
 }
 
 impl Progress {
@@ -74,7 +80,7 @@ impl Progress {
             total,
             stage: Stage::Starting,
             terminal: false,
-            status: ChurStatus::InternalFailure,
+            status: chur_core::CHUR_OK,
         }
     }
 }
@@ -109,7 +115,7 @@ impl Shared {
     /// §9: exactly one terminal result is observable. A second call is ignored,
     /// so a worker that fails while unwinding cannot overwrite the status the
     /// caller already saw.
-    pub fn finish(&self, status: ChurStatus) {
+    pub fn finish(&self, status: i32) {
         let mut progress = crate::registry::lock(&self.progress);
         if progress.terminal {
             return;
@@ -150,13 +156,12 @@ impl Operation {
         let worker = std::thread::Builder::new()
             .name(String::from("chur-operation"))
             .spawn(move || {
+                // Success is `0`, which is not a member of `ChurStatus`, so the
+                // ABI value is carried rather than the enum.
                 let status = match body(&worker_state) {
-                    Ok(()) => ChurStatus::from_i32(0),
-                    Err(error) => error.status(),
+                    Ok(()) => chur_core::CHUR_OK,
+                    Err(error) => error.as_i32(),
                 };
-                // A success has no status of its own in the ABI, so the
-                // terminal snapshot records success as the sentinel the poll
-                // translates back into 0.
                 worker_state.finish(status);
             })
             .map_err(|_| chur_core::err!(InternalFailure, "an operation worker could not start"))?;

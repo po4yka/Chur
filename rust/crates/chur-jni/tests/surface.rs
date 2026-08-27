@@ -73,7 +73,7 @@ fn declared_exports() -> BTreeSet<String> {
 
 /// Every JNI method this adapter exports.
 fn adapter_methods() -> BTreeSet<String> {
-    const PREFIX: &str = "pub extern \"system\" fn Java_dev_po4yka_chur_ffi_ChurNative_";
+    const PREFIX: &str = "pub extern \"system\" fn Java_dev_po4yka_chur_ffi_ChurJni_";
     let mut out = BTreeSet::new();
     for line in ADAPTER.lines() {
         let Some(rest) = line.trim_start().strip_prefix(PREFIX) else {

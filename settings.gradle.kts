@@ -39,5 +39,7 @@ dependencyResolutionManagement {
 rootProject.name = "chur"
 
 include(":shared:app")
+include(":shared:core-ffi")
 include(":shared:core-model")
 include(":shared:core-platform-keys")
+include(":shared:feature-notes")

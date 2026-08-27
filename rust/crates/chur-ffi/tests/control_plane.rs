@@ -127,7 +127,7 @@ fn import(session: u64, bytes: &[u8]) -> [u8; 16] {
         OK
     );
     let terminal = drain(operation);
-    assert_eq!(status(terminal), status(OK), "the import failed");
+    assert_eq!(terminal, OK, "the import failed");
     assert_eq!(unsafe { chur_operation_close(operation) }, OK);
 
     let mut buffer = vec![0u8; 63 + 79 * 8];
@@ -149,7 +149,12 @@ fn import(session: u64, bytes: &[u8]) -> [u8; 16] {
     *page.objects.last().unwrap().object_id.as_bytes()
 }
 
-/// Polls an operation until it is terminal and returns its status.
+/// Polls an operation until it is terminal and returns its ABI status.
+///
+/// The value is the `int32_t` and not a `ChurStatus`: success is `0`, which is
+/// not a member of that enum, so folding it through `from_i32` would turn every
+/// completed operation into `INTERNAL_FAILURE` and make a comparison of two
+/// folded values pass.
 fn drain(operation: u64) -> i32 {
     loop {
         let mut progress = zeroed_progress();
@@ -487,6 +492,7 @@ fn polling_after_the_terminal_result_returns_the_same_result() {
         OK
     );
     let first = drain(operation);
+    assert_eq!(first, OK, "the import failed");
     // §9: exactly one terminal result is observable, and the snapshot freezes.
     for _ in 0..5 {
         let mut progress = zeroed_progress();
@@ -590,7 +596,7 @@ fn an_export_writes_the_original_through_a_descriptor() {
         },
         OK
     );
-    assert_eq!(status(drain(operation)), status(OK));
+    assert_eq!(drain(operation), OK);
     assert_eq!(unsafe { chur_operation_close(operation) }, OK);
 
     let mut written = destination;
@@ -620,7 +626,7 @@ fn an_integrity_scan_runs_over_every_object() {
         unsafe { chur_integrity_scan_begin(session, &request, &mut operation) },
         OK
     );
-    assert_eq!(status(drain(operation)), status(OK));
+    assert_eq!(drain(operation), OK);
     let mut progress = zeroed_progress();
     assert_eq!(unsafe { chur_operation_poll(operation, &mut progress) }, OK);
     assert_eq!(progress.kind, 3);

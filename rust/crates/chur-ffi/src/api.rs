@@ -680,7 +680,7 @@ pub unsafe extern "C" fn chur_operation_poll(
             terminal: u8::from(progress.terminal),
             reserved: [0; 3],
             status: if progress.terminal {
-                progress.status.as_i32()
+                progress.status
             } else {
                 OK
             },

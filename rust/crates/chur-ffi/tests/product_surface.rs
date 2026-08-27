@@ -123,7 +123,7 @@ fn import(session: u64, bytes: &[u8], filename: &[u8]) -> [u8; 16] {
         unsafe { chur_import_begin(session, descriptor(&file), &request, &mut operation) },
         OK
     );
-    assert_eq!(status(drain(operation)), status(OK));
+    assert_eq!(drain(operation), OK);
     assert_eq!(unsafe { chur_operation_close(operation) }, OK);
     latest_object(session)
 }

@@ -1,7 +1,7 @@
 //! One JNI function per `chur_*` export, ADR-0040.
 //!
 //! The Java side is `dev.po4yka.chur.ffi.ChurNative`, so every symbol here is
-//! `Java_dev_po4yka_chur_ffi_ChurNative_<method>`. The mapping is one to one
+//! `Java_dev_po4yka_chur_ffi_ChurJni_<method>`. The mapping is one to one
 //! and deliberately mechanical: a dispatcher on an opcode would hide which
 //! export a call reaches from every tool that reads symbols.
 //!
@@ -41,7 +41,7 @@ const CURSOR_LEN: usize = 42;
 
 /// `abiVersionMajor` of the handshake.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_abiVersionMajor(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_abiVersionMajor(
     _env: JNIEnv<'_>,
     _class: JClass<'_>,
 ) -> jint {
@@ -50,7 +50,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_abiVersionMajor(
 
 /// `abiVersionMinor` of the handshake.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_abiVersionMinor(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_abiVersionMinor(
     _env: JNIEnv<'_>,
     _class: JClass<'_>,
 ) -> jint {
@@ -59,7 +59,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_abiVersionMinor(
 
 /// `capabilities` of the handshake.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_capabilities(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_capabilities(
     _env: JNIEnv<'_>,
     _class: JClass<'_>,
 ) -> jlong {
@@ -68,7 +68,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_capabilities(
 
 /// `objectFormatMin` of the handshake.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_objectFormatMin(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectFormatMin(
     _env: JNIEnv<'_>,
     _class: JClass<'_>,
 ) -> jint {
@@ -77,7 +77,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_objectFormatMin(
 
 /// `objectFormatMax` of the handshake.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_objectFormatMax(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectFormatMax(
     _env: JNIEnv<'_>,
     _class: JClass<'_>,
 ) -> jint {
@@ -86,7 +86,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_objectFormatMax(
 
 /// `keySlotFormatMin` of the handshake.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_keySlotFormatMin(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_keySlotFormatMin(
     _env: JNIEnv<'_>,
     _class: JClass<'_>,
 ) -> jint {
@@ -95,7 +95,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_keySlotFormatMin(
 
 /// `keySlotFormatMax` of the handshake.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_keySlotFormatMax(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_keySlotFormatMax(
     _env: JNIEnv<'_>,
     _class: JClass<'_>,
 ) -> jint {
@@ -104,7 +104,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_keySlotFormatMax(
 
 /// `buildFlavor` of the handshake.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_buildFlavor(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_buildFlavor(
     _env: JNIEnv<'_>,
     _class: JClass<'_>,
 ) -> jint {
@@ -113,7 +113,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_buildFlavor(
 
 /// Whether a status value is one this build allocates.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_statusIsKnown(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_statusIsKnown(
     _env: JNIEnv<'_>,
     _class: JClass<'_>,
     value: jint,
@@ -127,7 +127,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_statusIsKnown(
 
 /// Opens the process runtime over a storage root.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_runtimeOpen<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_runtimeOpen<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     root: JString<'local>,
@@ -152,7 +152,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_runtimeOpen<'local>(
 
 /// Closes the runtime and every handle it owns.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_runtimeClose(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_runtimeClose(
     _env: JNIEnv<'_>,
     _class: JClass<'_>,
     runtime: jlong,
@@ -163,7 +163,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_runtimeClose(
 
 /// Whether the storage root holds a vault.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultPresent<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultPresent<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     runtime: jlong,
@@ -184,7 +184,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultPresent<'local>(
 
 /// Begins vault creation.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultCreateBegin<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultCreateBegin<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     runtime: jlong,
@@ -217,7 +217,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultCreateBegin<'loc
 
 /// Offers the recovery slot during creation.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultCreationAddRecoverySlot<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultCreationAddRecoverySlot<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     creation: jlong,
@@ -236,7 +236,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultCreationAddRecov
 
 /// Reaches `ACTIVE` and opens the session.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultCreationActivate<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultCreationActivate<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     creation: jlong,
@@ -252,7 +252,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultCreationActivate
 
 /// Abandons a creation.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultCreationAbandon(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultCreationAbandon(
     _env: JNIEnv<'_>,
     _class: JClass<'_>,
     creation: jlong,
@@ -263,7 +263,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultCreationAbandon(
 
 /// Unlocks a vault.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultUnlock<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultUnlock<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     runtime: jlong,
@@ -295,7 +295,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultUnlock<'local>(
 
 /// Locks a session.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultLock(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultLock(
     _env: JNIEnv<'_>,
     _class: JClass<'_>,
     session: jlong,
@@ -307,7 +307,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultLock(
 
 /// Closes a session handle.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_sessionClose(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sessionClose(
     _env: JNIEnv<'_>,
     _class: JClass<'_>,
     session: jlong,
@@ -322,7 +322,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_sessionClose(
 
 /// Writes one page into a direct buffer.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_catalogQuery<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_catalogQuery<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     session: jlong,
@@ -399,7 +399,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_catalogQuery<'local>(
 
 /// Starts an import from a descriptor.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_importBegin<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_importBegin<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     session: jlong,
@@ -463,7 +463,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_importBegin<'local>(
 
 /// Starts an export to a descriptor.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_exportBegin<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_exportBegin<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     session: jlong,
@@ -489,7 +489,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_exportBegin<'local>(
 
 /// Starts an integrity scan.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_integrityScanBegin<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_integrityScanBegin<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     session: jlong,
@@ -521,7 +521,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_integrityScanBegin<'l
 
 /// Copies an operation's progress snapshot.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_operationPoll<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_operationPoll<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     operation: jlong,
@@ -562,7 +562,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_operationPoll<'local>
 
 /// Cancels an operation.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_operationCancel(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_operationCancel(
     _env: JNIEnv<'_>,
     _class: JClass<'_>,
     operation: jlong,
@@ -573,7 +573,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_operationCancel(
 
 /// Closes an operation handle.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_operationClose(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_operationClose(
     _env: JNIEnv<'_>,
     _class: JClass<'_>,
     operation: jlong,
@@ -588,7 +588,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_operationClose(
 
 /// Opens a random-access reader.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_objectReaderOpen<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderOpen<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     session: jlong,
@@ -612,7 +612,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_objectReaderOpen<'loc
 
 /// Writes the authenticated plaintext size.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_objectReaderSize<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderSize<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     reader: jlong,
@@ -636,7 +636,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_objectReaderSize<'loc
 /// The C structure is decomposed here rather than copied whole, because its
 /// padding is the host compiler's and the JVM has no equivalent shape.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_objectReaderContentInfo<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderContentInfo<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     reader: jlong,
@@ -683,7 +683,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_objectReaderContentIn
 
 /// Reads a plaintext range into a direct buffer.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_objectReaderReadAt<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderReadAt<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     reader: jlong,
@@ -714,7 +714,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_objectReaderReadAt<'l
 
 /// Runs complete verification and writes the state it reached.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_objectReaderVerifyComplete<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderVerifyComplete<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     reader: jlong,
@@ -736,7 +736,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_objectReaderVerifyCom
 
 /// Closes a reader handle.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_objectReaderClose(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderClose(
     _env: JNIEnv<'_>,
     _class: JClass<'_>,
     reader: jlong,
@@ -826,7 +826,7 @@ fn finish_secret(
 
 /// Adds a recovery slot to an active vault.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultAddRecoverySlot<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultAddRecoverySlot<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     session: jlong,
@@ -843,7 +843,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultAddRecoverySlot<
 /// Adds the Apple Keychain slot. Android calls it for a decoy-free parity test
 /// only; the Android Keystore slot is a platform wrap and takes no secret here.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultAddDeviceSlot<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultAddDeviceSlot<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     session: jlong,
@@ -867,7 +867,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultAddDeviceSlot<'l
 
 /// Removes one slot.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultRemoveSlot<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultRemoveSlot<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     session: jlong,
@@ -882,7 +882,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultRemoveSlot<'loca
 
 /// Replaces the password slot.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultChangePassword<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultChangePassword<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     session: jlong,
@@ -906,7 +906,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultChangePassword<'
 
 /// Writes the slot list into a direct buffer.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultSlots<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultSlots<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     session: jlong,
@@ -926,7 +926,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_vaultSlots<'local>(
 
 /// Sets or clears the favourite flag.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_objectSetFavorite<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectSetFavorite<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     session: jlong,
@@ -948,7 +948,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_objectSetFavorite<'lo
 
 /// Deletes an object.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_objectDelete<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectDelete<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     session: jlong,
@@ -963,7 +963,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_objectDelete<'local>(
 
 /// Writes one object's metadata record into a direct buffer.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_objectMetadata<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectMetadata<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     session: jlong,
@@ -993,7 +993,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_objectMetadata<'local
 
 /// Creates an album.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_albumCreate<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumCreate<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     session: jlong,
@@ -1028,7 +1028,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_albumCreate<'local>(
 
 /// Adds or removes one album membership.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_albumSetMembership<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumSetMembership<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     session: jlong,
@@ -1055,7 +1055,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_albumSetMembership<'l
 
 /// Writes the album list into a direct buffer.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_albumList<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumList<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     session: jlong,
@@ -1075,7 +1075,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_albumList<'local>(
 
 /// Creates a tag.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_tagCreate<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_tagCreate<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     session: jlong,
@@ -1110,7 +1110,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_tagCreate<'local>(
 
 /// Applies or removes one tag on one object.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_objectSetTag<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectSetTag<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     session: jlong,
@@ -1137,7 +1137,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_objectSetTag<'local>(
 
 /// Encrypts and records one derived asset from a direct buffer.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_derivedPut<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_derivedPut<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     session: jlong,
@@ -1182,7 +1182,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_derivedPut<'local>(
 
 /// Reads one derived asset into a direct buffer.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurNative_derivedRead<'local>(
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_derivedRead<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     session: jlong,

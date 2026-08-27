@@ -1,0 +1,14 @@
+# The cinterop definition of the Chur C ABI.
+#
+# docs/interop/FFI_CONTRACT.md section 1 has Kotlin/Native reach the C ABI
+# directly: cinterop reads chur.h, which is hand-written and is the authority
+# for the C side, so nothing here generates a second definition of the boundary.
+#
+# iOS loads no JNI adapter. ADR-0040's adapter exists for Android only.
+
+headers = chur.h
+package = dev.po4yka.chur.native
+
+# The static library the framework links. It is built by Cargo for the target
+# triple; the library path is supplied by the Gradle task that builds it.
+staticLibraries = libchur_ffi.a
