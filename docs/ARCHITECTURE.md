@@ -2064,7 +2064,8 @@ Benchmarks cover:
 - `cargo fmt`, Clippy, tests, `cargo deny`, and fuzz jobs;
 - Android targets built through NDK tooling;
 - iOS static libraries/XCFramework packaging;
-- symbol and panic strategy defined per target;
+- exported symbols restricted to the frozen `chur_`-prefixed surface by a version script on Android and an exported-symbols list on Apple;
+- `panic = "unwind"` for every FFI artifact, with mandatory `catch_unwind` at every export per [`interop/FFI_CONTRACT.md`](interop/FFI_CONTRACT.md) §11;
 - no accidental export of internal Rust symbols beyond the FFI surface.
 
 ### 41.3 CI matrix

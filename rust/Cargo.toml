@@ -50,3 +50,7 @@ todo = "warn"
 
 [profile.release]
 overflow-checks = true
+# FFI panic containment: every `chur_*` export wraps its body in catch_unwind and
+# converts a panic into INTERNAL_FAILURE, which requires unwinding to be enabled.
+# See docs/interop/FFI_CONTRACT.md section 11 and docs/adr/0016-freeze-the-v1-c-abi.md.
+panic = "unwind"

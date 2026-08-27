@@ -249,7 +249,9 @@ A callback data plane would need a delivery-thread contract, a re-entrancy rule,
 
 Every exported function that can fail returns `chur_status_t`, the `int32_t` status registered in [`../ERROR_MODEL.md`](../ERROR_MODEL.md), which owns every error name and value. `0` is success. Results never share the status channel: a byte count, a handle, or a projection is written through an out-parameter. Error strings are diagnostic-only and redacted, and this contract adds no code of its own.
 
-Unknown codes map to `INTERNAL_FAILURE`; panics are contained with `catch_unwind` at safe boundaries where applicable and never unwind through foreign code.
+An unrecognized value maps to `INTERNAL_FAILURE`.
+
+The FFI artifacts build with `panic = "unwind"`; abort is not used. Every exported symbol wraps its whole body in `catch_unwind` and converts a caught panic into `INTERNAL_FAILURE`. This is unconditional: every export, no "where applicable" exemption, verified by panic injection at each symbol. The panic payload is dropped inside the boundary and no payload text crosses it, the handle that owned the call is invalidated so a later call on it also fails, and a panic hook records a synthetic-reproduction diagnostic with no private values. Abort is rejected because it converts a contained, redactable failure into a process kill that skips session zeroization and removes the public shell along with the vault ([ADR-0016](../adr/0016-freeze-the-v1-c-abi.md)).
 
 ## 12. Secrets across FFI
 
