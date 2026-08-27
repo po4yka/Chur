@@ -97,7 +97,7 @@ Follow [`docs/DEPENDENCY_POLICY.md`](docs/DEPENDENCY_POLICY.md). Security-sensit
 
 ## Rust expectations
 
-- keep `unsafe` isolated and justified;
+- keep `unsafe` isolated and justified; it is permitted only in `chur-ffi`, under the workspace lint exception recorded in [`docs/DEPENDENCY_POLICY.md`](docs/DEPENDENCY_POLICY.md#unsafe-code), and a pull request that widens the workspace lint instead is rejected;
 - deny or document unchecked integer conversions;
 - validate untrusted lengths before allocation;
 - prevent panics from crossing FFI;

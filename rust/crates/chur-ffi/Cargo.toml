@@ -12,5 +12,21 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 [dependencies]
 chur-core.workspace = true
 
-[lints]
-workspace = true
+# `chur-ffi` is the one crate permitted to contain `unsafe`. The workspace sets
+# `unsafe_code = "forbid"`, which no inner `allow` or `expect` can lift, and the
+# v1 C ABI of docs/interop/FFI_CONTRACT.md cannot be exported under it. This
+# crate therefore declares its own lint tables instead of inheriting and sets
+# `unsafe_code = "deny"`, which a block overrides with `#[expect(unsafe_code)]`
+# and an adjacent SAFETY comment. The exception and the rule that these levels
+# track `[workspace.lints]` are recorded in docs/DEPENDENCY_POLICY.md,
+# "Unsafe code".
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"
+panic = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+todo = "warn"

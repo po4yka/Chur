@@ -105,6 +105,10 @@ Cargo `build.rs`, Gradle plugins, KSP processors, and code generators execute wi
 
 ## Unsafe code
 
+`unsafe_code = "forbid"` in `[workspace.lints.rust]` is the default for every crate in `rust/`. `forbid` cannot be lifted by an inner `allow` or `expect`, so a crate that must contain `unsafe` cannot inherit it. `chur-ffi` is the only such crate: the v1 C ABI of [`interop/FFI_CONTRACT.md`](interop/FFI_CONTRACT.md) requires `#[unsafe(no_mangle)] pub extern "C"` exports and a caller-allocated raw-buffer data plane, and neither compiles under `forbid`. `rust/crates/chur-ffi/Cargo.toml` therefore declares its own `[lints.rust]` and `[lints.clippy]` tables instead of inheriting, and sets `unsafe_code = "deny"`; a block overrides that level with `#[expect(unsafe_code, reason = ...)]` and an adjacent SAFETY comment.
+
+Two consequences follow and are requirements, not notes. A crate-local lint table replaces inheritance rather than extending it, so it repeats every workspace level, and a change to `[workspace.lints]` must be applied to it in the same pull request. Adding a second crate to this exception requires an ADR; loosening the workspace lint instead of adding a crate-local table is a defect.
+
 New `unsafe` code must:
 
 - be isolated to a narrow module;
