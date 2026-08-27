@@ -85,6 +85,10 @@ ContentKey     = HKDF(ObjectKey, "chur/v1/object/content")
 FinalCommitKey = HKDF(ObjectKey, "chur/v1/object/final-commit")
 ```
 
+Each derivation binds the object, the stream, its kind, and its revision through the context registered for its label in [`../security/KEY_HIERARCHY.md`](../security/KEY_HIERARCHY.md) §3, and the manifest AAD of [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §32 binds the same four values.
+
+Those four fields are inside the sealed manifest, so a reader does not recover them from container bytes: it supplies them, from the catalog row and the object-key envelope that sent it to this file. That is a property rather than a limitation. A container substituted for another stream authenticates under neither the key nor the AAD of the stream the caller asked for, so a swap inside the object store fails at the first AEAD rather than at a later consistency check. A reader that has opened the manifest must still compare the four decoded fields against the four it supplied; equality is implied by the AEAD, and the comparison is what makes a future construction change fail loudly.
+
 Separate containers/assets may use additional domain keys. Derived keys are not persisted.
 
 ## 5. Encrypted manifest

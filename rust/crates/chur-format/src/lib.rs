@@ -17,4 +17,5 @@
 
 pub mod codec;
 pub mod constants;
+pub mod container;
 pub mod envelope;
