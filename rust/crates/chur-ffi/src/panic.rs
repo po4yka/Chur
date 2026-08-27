@@ -60,18 +60,13 @@ pub(crate) fn guard<T>(fallback: T, body: impl FnOnce() -> T) -> T {
 /// so the first status-returning export cannot land without it, and its tests
 /// are the panic injection §11 asks for on that path. The attribute is
 /// conditional because the tests below do use it.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the control plane lands in Phase 1; the guard is written with its contract"
-    )
-)]
-pub(crate) fn guard_status(body: impl FnOnce() -> ChurStatus) -> i32 {
+pub(crate) fn guard_status(body: impl FnOnce() -> chur_core::Result<()>) -> i32 {
     install_hook();
-    catch_unwind(AssertUnwindSafe(body))
-        .unwrap_or(ChurStatus::InternalFailure)
-        .as_i32()
+    match catch_unwind(AssertUnwindSafe(body)) {
+        Ok(Ok(())) => chur_core::CHUR_OK,
+        Ok(Err(error)) => error.as_i32(),
+        Err(_) => ChurStatus::InternalFailure.as_i32(),
+    }
 }
 
 #[cfg(test)]
@@ -113,9 +108,10 @@ mod tests {
             ChurStatus::InternalFailure.as_i32()
         );
         assert_eq!(
-            guard_status(|| ChurStatus::AuthenticationFailed),
+            guard_status(|| Err(chur_core::err!(AuthenticationFailed, "an ordinary refusal"))),
             ChurStatus::AuthenticationFailed.as_i32()
         );
+        assert_eq!(guard_status(|| Ok(())), chur_core::CHUR_OK);
     }
 
     #[test]

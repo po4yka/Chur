@@ -188,6 +188,39 @@ chur_status_t chur_object_reader_verify_complete(chur_handle_t reader, uint32_t 
 chur_status_t chur_object_reader_close(chur_handle_t reader);
 ```
 
+### 6.4 The catalog page encoding
+
+`chur_catalog_query` writes one page into the caller's buffer as canonical bytes rather than as a C structure. A structure would carry the padding and alignment of whichever compiler built the host, and [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §13 reserves the definition of persisted and boundary bytes for Rust; a page whose layout depended on the host's compiler would not be one definition.
+
+```text
+ChurPageV1
+    total_count           u64        rows the scope holds, not rows returned
+    catalog_generation    u64        the generation the page was read at
+    object_count          u32        projections that follow
+    next_cursor_present   u8         0x00 or 0x01
+    next_cursor           bytes[42]  the §16.2 cursor, zero bytes when absent
+    objects               object_count × ObjectProjectionV1, §16.1
+```
+
+The header is 63 bytes and a projection is 79, so a page of `n` rows is `63 + 79n` bytes and a caller sizes its buffer from the `limit` it asked for. A buffer smaller than the page is `RESOURCE_LIMIT_EXCEEDED` and writes nothing: a truncated page would be indistinguishable from a short one, and the caller would treat the scope as exhausted.
+
+`ChurQueryV1` is the request. It is a C structure because it is the caller's to build, and it carries no variable field except the search terms:
+
+```text
+ChurQueryV1
+    scope                 uint8_t    1 timeline, 2 album, 3 favorites, 4 tag, 5 search, 6 quarantine
+    sort                  uint8_t    1 capture_desc, 2 capture_asc, 3 import_desc
+    kinds                 uint16_t   the §16.2 media-kind mask
+    limit                 uint32_t   1 to 500, 0 for the default of 200
+    scope_id              uint8_t[16]  the album or tag, zero bytes otherwise
+    cursor_present        uint8_t    0 or 1
+    cursor                uint8_t[42]  the §16.2 cursor
+    terms                 const uint8_t *  UTF-8 search text, not NUL-terminated
+    terms_length          uint32_t
+```
+
+`terms` is read only when `scope` is `search`, and `terms_length` bounds it; the pointer is not retained after the call.
+
 `chur_object_reader_verify_complete` writes through `out_state`, on success only, the `integrity_summary` value the scan reached: the enum of [`../format/CATALOG_SCHEMA_V1.md`](../format/CATALOG_SCHEMA_V1.md) §5.1, whose byte values are allocated in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15.4. Proven corruption is a lifecycle change rather than a verification verdict, so it returns `OBJECT_CORRUPT` and writes no state.
 
 The control plane uses these same symbols through a thin KMP `expect`/`actual` adapter. No binding generator is part of the boundary ([ADR-0016](../adr/0016-freeze-the-v1-c-abi.md)).

@@ -7,6 +7,12 @@
  * with C linkage and the declared types rather than proving that Rust agrees
  * with Rust.
  *
+ * It then drives the control plane and the data plane of section 6.2 the way a
+ * host does: open a runtime, refuse a wrong credential, and prove that every
+ * exported symbol links. Creating a vault is not on the boundary, so a full
+ * round trip belongs to the Rust integration tests; what a C program can prove
+ * and a Rust test cannot is that these symbols exist with these signatures.
+ *
  * Build and run:
  *
  *   cargo build -p chur-ffi --release
@@ -16,6 +22,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "chur.h"
 
@@ -57,7 +64,15 @@ int main(void) {
           "key slot format range is 1..=1");
 
     uint64_t capabilities = chur_capabilities();
-    check(capabilities == 0, "no capability is declared before its surface exists");
+    check((capabilities & CHUR_CAP_OBJECT_READER) != 0,
+          "the random-access reader is declared");
+    check((capabilities & CHUR_CAP_SEQUENTIAL_READER) != 0,
+          "the sequential reader is declared");
+    check((capabilities & CHUR_CAP_INTEGRITY_SCAN) != 0,
+          "the integrity scan is declared");
+    check((capabilities & (CHUR_CAP_DECOY_VAULT | CHUR_CAP_BACKUP_PACKAGE |
+                           CHUR_CAP_SYNC | CHUR_CAP_CONCURRENT_READS)) == 0,
+          "no capability is declared before its surface exists");
     check((capabilities & ~(CHUR_CAP_DECOY_VAULT | CHUR_CAP_OBJECT_READER |
                             CHUR_CAP_SEQUENTIAL_READER | CHUR_CAP_INTEGRITY_SCAN |
                             CHUR_CAP_BACKUP_PACKAGE | CHUR_CAP_SYNC |
@@ -76,6 +91,86 @@ int main(void) {
     check(!chur_status_is_known(42), "an unallocated value is unknown");
     check(!chur_status_is_known(-1), "a negative value is unknown");
     check(!chur_status_is_known(700), "the reserved 700 block is unallocated");
+
+    /*
+     * The control plane, called through C. A runtime over a directory that
+     * holds no vault opens, refuses every credential with one external result,
+     * and closes idempotently.
+     */
+    {
+        const char *root = "./chur-abi-harness-root";
+        ChurRuntimeConfigV1 config;
+        chur_handle_t runtime = CHUR_NULL_HANDLE;
+        chur_handle_t session = CHUR_NULL_HANDLE;
+        ChurUnlockRequestV1 unlock;
+        const char *password = "correct horse battery staple";
+        ChurQueryV1 query;
+        uint8_t page[CHUR_PAGE_HEADER_LEN];
+        size_t written = 1;
+
+        config.root_path = (const uint8_t *)root;
+        config.root_path_length = (uint32_t)strlen(root);
+        check(chur_runtime_open(&config, &runtime) == CHUR_OK,
+              "the runtime opens over an empty root");
+        check(runtime != CHUR_NULL_HANDLE, "a live handle is never the null handle");
+
+        unlock.factor = CHUR_FACTOR_PASSWORD;
+        unlock.reserved[0] = 0;
+        unlock.reserved[1] = 0;
+        unlock.reserved[2] = 0;
+        unlock.secret = (const uint8_t *)password;
+        unlock.secret_length = (uint32_t)strlen(password);
+        check(chur_vault_unlock(runtime, &unlock, &session) ==
+                  CHUR_AUTHENTICATION_FAILED,
+              "an absent vault and a wrong credential are one external result");
+        check(session == CHUR_NULL_HANDLE, "a failed unlock wrote no handle");
+
+        /* A session handle that was never issued is refused, not dereferenced. */
+        memset(&query, 0, sizeof(query));
+        query.scope = CHUR_SCOPE_TIMELINE;
+        query.sort = CHUR_SORT_CAPTURE_DESC;
+        check(chur_catalog_query(CHUR_NULL_HANDLE, &query, page, sizeof(page),
+                                 &written) == CHUR_INVALID_INPUT,
+              "the null handle names nothing");
+        check(written == 0, "a byte count is set on every call, including a failure");
+
+        check(chur_runtime_close(runtime) == CHUR_OK, "the runtime closes");
+        check(chur_runtime_close(runtime) == CHUR_OK, "close is idempotent");
+        check(chur_runtime_close(CHUR_NULL_HANDLE) == CHUR_INVALID_INPUT,
+              "closing the null handle is invalid input");
+    }
+
+    /*
+     * Every remaining export is referenced so the link step proves it exists.
+     * Taking the address is enough and calls nothing, which keeps the harness
+     * a gate rather than a second integration suite.
+     */
+    {
+        const void *surface[] = {
+            (const void *)&chur_vault_lock,
+            (const void *)&chur_session_close,
+            (const void *)&chur_import_begin,
+            (const void *)&chur_export_begin,
+            (const void *)&chur_integrity_scan_begin,
+            (const void *)&chur_operation_poll,
+            (const void *)&chur_operation_cancel,
+            (const void *)&chur_operation_close,
+            (const void *)&chur_object_reader_open,
+            (const void *)&chur_object_reader_size,
+            (const void *)&chur_object_reader_content_info,
+            (const void *)&chur_object_reader_read_at,
+            (const void *)&chur_object_reader_verify_complete,
+            (const void *)&chur_object_reader_close,
+        };
+        size_t index;
+        int all_present = 1;
+        for (index = 0; index < sizeof(surface) / sizeof(surface[0]); index++) {
+            if (surface[index] == NULL) {
+                all_present = 0;
+            }
+        }
+        check(all_present, "every section 6.2 export links");
+    }
 
     if (failures != 0) {
         printf("\n%d check(s) failed\n", failures);

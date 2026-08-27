@@ -215,8 +215,12 @@ dependencies = [
 name = "chur-ffi"
 version = "0.1.0"
 dependencies = [
+ "chur-catalog",
  "chur-core",
+ "chur-crypto",
  "chur-format",
+ "chur-media",
+ "zeroize",
 ]
 
 [[package]]

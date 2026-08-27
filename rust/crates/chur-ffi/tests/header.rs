@@ -7,7 +7,9 @@
 //! - every `chur_status_t` value in the header is a registered status, and
 //!   every registered status appears in the header;
 //! - every capability, build-flavor, and integrity constant matches;
-//! - every function the header declares is exported by this crate.
+//! - every function the header declares is exported by this crate, and no
+//!   other, which is what freezes the §6.2 surface: an added export fails this
+//!   test until the header declares it and the list below names it.
 //!
 //! `docs/ERROR_MODEL.md` requires a code to be added to the table and to the
 //! FFI header in one change. A drift between them would otherwise surface as a
@@ -40,18 +42,45 @@ fn defines(prefix: &str) -> BTreeMap<String, String> {
 }
 
 /// The name of every function the header declares.
+///
+/// A declaration may span several lines, so the comments are stripped and the
+/// remainder is split on `;` rather than read line by line. A parser that only
+/// saw single-line declarations would silently pass a header that declared a
+/// wrapped function it did not export.
 fn declared_functions() -> BTreeSet<String> {
+    let mut source = String::with_capacity(HEADER.len());
+    let mut rest = HEADER;
+    while let Some(start) = rest.find("/*") {
+        source.push_str(&rest[..start]);
+        let Some(end) = rest[start..].find("*/") else {
+            break;
+        };
+        rest = &rest[start + end + 2..];
+    }
+    source.push_str(rest);
+
+    // Preprocessor lines are removed before the split, not skipped after it: a
+    // `#define` carries no `;`, so it would otherwise be glued to the
+    // declaration that follows it and hide it.
+    let source: String = source
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+
     let mut out = BTreeSet::new();
-    for line in HEADER.lines() {
-        let line = line.trim();
-        if !line.ends_with(");") {
+    for statement in source.split(';') {
+        let statement: String = statement.split_whitespace().collect::<Vec<_>>().join(" ");
+        if statement.starts_with("typedef") {
             continue;
         }
-        let Some(open) = line.find('(') else { continue };
-        let head = &line[..open];
-        let Some(name) = head.rsplit(char::is_whitespace).next() else {
+        let Some(open) = statement.find('(') else {
             continue;
         };
+        let Some(name) = statement[..open].rsplit(' ').next() else {
+            continue;
+        };
+        let name = name.trim_start_matches('*');
         if name.starts_with("chur_") {
             out.insert(name.to_owned());
         }
@@ -64,12 +93,33 @@ fn header_statuses() -> BTreeMap<String, i32> {
     let mut out = BTreeMap::new();
     for (name, value) in defines("CHUR_") {
         // Capability, flavor, and integrity constants are not statuses.
-        if name.starts_with("CHUR_CAP_")
-            || name.starts_with("CHUR_FLAVOR_")
-            || name.starts_with("CHUR_INTEGRITY_")
-            || name.starts_with("CHUR_PANIC_")
-            || name == "CHUR_H"
-            || name == "CHUR_OK"
+        // Everything that is not a status: the capability, flavor, integrity,
+        // and panic registries above, and the control-plane vocabulary of
+        // §6.2. A new prefix must be listed here deliberately, so a constant
+        // added without a decision fails this test rather than being read as a
+        // status value.
+        const NOT_STATUSES: &[&str] = &[
+            "CHUR_CAP_",
+            "CHUR_FLAVOR_",
+            "CHUR_INTEGRITY_",
+            "CHUR_PANIC_",
+            "CHUR_SCOPE_",
+            "CHUR_SORT_",
+            "CHUR_FACTOR_",
+            "CHUR_OPERATION_",
+            "CHUR_STAGE_",
+            "CHUR_LOCK_REASON_",
+        ];
+        if NOT_STATUSES.iter().any(|prefix| name.starts_with(prefix))
+            || matches!(
+                name.as_str(),
+                "CHUR_H"
+                    | "CHUR_OK"
+                    | "CHUR_NULL_HANDLE"
+                    | "CHUR_CURSOR_LEN"
+                    | "CHUR_PROJECTION_LEN"
+                    | "CHUR_PAGE_HEADER_LEN"
+            )
         {
             continue;
         }
@@ -235,6 +285,7 @@ fn the_panic_fallbacks_match() {
 fn every_declared_function_is_exported() {
     let declared = declared_functions();
     let exported: BTreeSet<String> = [
+        // §2, the handshake.
         "chur_abi_version_major",
         "chur_abi_version_minor",
         "chur_capabilities",
@@ -244,6 +295,25 @@ fn every_declared_function_is_exported() {
         "chur_key_slot_format_max",
         "chur_build_flavor",
         "chur_status_is_known",
+        // §6.2, the frozen Phase-1 surface.
+        "chur_runtime_open",
+        "chur_runtime_close",
+        "chur_vault_unlock",
+        "chur_vault_lock",
+        "chur_session_close",
+        "chur_catalog_query",
+        "chur_import_begin",
+        "chur_export_begin",
+        "chur_integrity_scan_begin",
+        "chur_operation_poll",
+        "chur_operation_cancel",
+        "chur_operation_close",
+        "chur_object_reader_open",
+        "chur_object_reader_size",
+        "chur_object_reader_content_info",
+        "chur_object_reader_read_at",
+        "chur_object_reader_verify_complete",
+        "chur_object_reader_close",
     ]
     .iter()
     .map(|name| (*name).to_owned())
@@ -256,11 +326,77 @@ fn every_declared_function_is_exported() {
     // Calling each one proves the list above is not a stale copy.
     assert_eq!(chur_ffi::chur_abi_version_major(), 1);
     assert_eq!(chur_ffi::chur_abi_version_minor(), 0);
-    assert_eq!(chur_ffi::chur_capabilities(), 0);
+    assert_eq!(
+        chur_ffi::chur_capabilities(),
+        chur_ffi::CHUR_CAP_OBJECT_READER
+            | chur_ffi::CHUR_CAP_SEQUENTIAL_READER
+            | chur_ffi::CHUR_CAP_INTEGRITY_SCAN
+    );
     assert_eq!(chur_ffi::chur_object_format_min(), 1);
     assert_eq!(chur_ffi::chur_object_format_max(), 1);
     assert_eq!(chur_ffi::chur_key_slot_format_min(), 1);
     assert_eq!(chur_ffi::chur_key_slot_format_max(), 1);
     assert_ne!(chur_ffi::chur_build_flavor(), 0);
     assert!(chur_ffi::chur_status_is_known(100));
+}
+
+#[test]
+fn the_control_plane_vocabulary_matches_the_rust_side() {
+    // §6.4 and §10 name these values, and a host reads them from the header.
+    // A drift would make a query ask for a scope the library does not
+    // implement, or a poll misread a stage.
+    let lengths = defines("CHUR_");
+    for (name, expected) in [
+        ("CHUR_CURSOR_LEN", chur_core::limits::catalog::CURSOR_LEN),
+        (
+            "CHUR_PROJECTION_LEN",
+            chur_core::limits::catalog::PROJECTION_LEN,
+        ),
+        ("CHUR_PAGE_HEADER_LEN", chur_ffi::records::PAGE_HEADER_LEN),
+    ] {
+        assert_eq!(
+            lengths
+                .get(name)
+                .and_then(|value| value.parse::<usize>().ok()),
+            Some(expected),
+            "{name} disagrees with the Rust constant"
+        );
+    }
+
+    // The scope and sort values are the ones records::query_from accepts. An
+    // unallocated value is INVALID_INPUT, so the loop below also proves the
+    // header declares no value the library refuses.
+    let scope_id = [0u8; 16];
+    for name in [
+        "CHUR_SCOPE_TIMELINE",
+        "CHUR_SCOPE_ALBUM",
+        "CHUR_SCOPE_FAVORITES",
+        "CHUR_SCOPE_TAG",
+        "CHUR_SCOPE_SEARCH",
+        "CHUR_SCOPE_QUARANTINE",
+    ] {
+        let value: u8 = defines(name)[name].parse().expect("a decimal scope");
+        // An album and a tag scope need a non-zero identifier, so those two are
+        // checked with one; the rest ignore it.
+        let id = if value == 2 || value == 4 {
+            [1u8; 16]
+        } else {
+            scope_id
+        };
+        chur_ffi::records::query_from(value, 1, 0, 0, &id, None, Some(b"x"))
+            .unwrap_or_else(|_| panic!("{name} is not a scope the library accepts"));
+    }
+    for name in [
+        "CHUR_SORT_CAPTURE_DESC",
+        "CHUR_SORT_CAPTURE_ASC",
+        "CHUR_SORT_IMPORT_DESC",
+    ] {
+        let value: u8 = defines(name)[name].parse().expect("a decimal sort");
+        chur_ffi::records::query_from(1, value, 0, 0, &scope_id, None, None)
+            .unwrap_or_else(|_| panic!("{name} is not a sort the library accepts"));
+    }
+    // A value outside each space is refused, which is what makes the two lists
+    // above exhaustive rather than merely correct.
+    assert!(chur_ffi::records::query_from(7, 1, 0, 0, &scope_id, None, None).is_err());
+    assert!(chur_ffi::records::query_from(1, 4, 0, 0, &scope_id, None, None).is_err());
 }

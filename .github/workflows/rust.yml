@@ -118,12 +118,16 @@ jobs:
       - name: build and run the handshake harness
         run: |
           set -euo pipefail
+          # The static library now carries vendored SQLCipher and OpenSSL
+          # (ADR-0038), so the link needs the C runtime libraries they use.
           cc -Wall -Wextra -Werror \
             -I crates/chur-ffi/include \
             crates/chur-ffi/tests/handshake.c \
             target/release/libchur_ffi.a \
+            -lpthread -ldl -lm \
             -o handshake
           ./handshake
+          rm -rf chur-abi-harness-root
 
   fuzz:
     name: fuzz smoke

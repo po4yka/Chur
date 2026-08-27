@@ -10,12 +10,11 @@
 //! and its payload is dropped inside. A handshake export has no status channel,
 //! so it returns a value the host refuses instead, per ADR-0037.
 //!
-//! What exists today is the ABI handshake of `docs/interop/FFI_CONTRACT.md` §2.
-//! Every function here is callable from any thread before runtime
+//! The handshake of §2 is here; the control plane and the data plane are in
+//! [`api`]. A handshake function is callable from any thread before runtime
 //! initialization and cannot fail, which is what a platform gate needs before
-//! it decides whether to load the library at all. The data-plane functions land
-//! with the media runtime; until then [`chur_capabilities`] reports the
-//! capabilities that actually exist, which is none.
+//! it decides whether to load the library at all. [`chur_capabilities`] reports
+//! the capabilities that actually exist and no others.
 //!
 //! Normative sources:
 //!
@@ -23,7 +22,23 @@
 //! - `docs/ERROR_MODEL.md` (`chur_status_t` and its values)
 //! - `docs/security/SECURITY_INVARIANTS.md` (SEC-050, SEC-051)
 
+pub mod api;
+
+/// The number of live handles in this process.
+///
+/// `docs/interop/FFI_CONTRACT.md` §15 asks for a leaked-handle test, and the
+/// registry is private, so the count is exposed here. It is a Rust function
+/// rather than an export: nothing outside this library needs it, and §6.2
+/// freezes the exported set.
+#[must_use]
+pub fn registry_live_handles() -> usize {
+    registry::live()
+}
+mod operation;
 mod panic;
+pub mod records;
+mod registry;
+mod runtime;
 
 use chur_core::ChurStatus;
 use chur_format::constants::{CONTAINER_VERSION_V1, SLOT_VERSION_V1};
@@ -93,9 +108,17 @@ const _: () = assert!(PANIC_BUILD_FLAVOR & CHUR_FLAVOR_DEBUG_ASSERTIONS == 0);
 /// A bit is set in the change that lands the surface it names, never before. A
 /// host that reads a set bit is entitled to call the functions behind it, so
 /// declaring a capability the data plane does not implement would be a false
-/// handshake rather than a harmless placeholder. Every bit is therefore clear
-/// in this build.
-const CAPABILITIES: u64 = 0;
+/// handshake rather than a harmless placeholder.
+///
+/// Four bits are clear and each for its own reason. `CHUR_CAP_DECOY_VAULT` is
+/// Phase 2 and the registry admits the second identity but no flow provisions
+/// it. `CHUR_CAP_BACKUP_PACKAGE` is Phase 2 and
+/// `docs/format/BACKUP_FORMAT_V1.md` is specified and not implemented.
+/// `CHUR_CAP_SYNC` is Phase 3. `CHUR_CAP_CONCURRENT_READS` requires benchmarks
+/// and correctness tests first, and until they exist every reader handle is
+/// serialized per `docs/interop/FFI_CONTRACT.md` §8.
+const CAPABILITIES: u64 =
+    CHUR_CAP_OBJECT_READER | CHUR_CAP_SEQUENTIAL_READER | CHUR_CAP_INTEGRITY_SCAN;
 
 /// The major ABI version.
 // SAFETY: the function takes no pointer, reads no caller memory, and returns a
@@ -259,10 +282,38 @@ mod tests {
 
     #[test]
     fn no_capability_is_declared_before_its_surface_exists() {
-        assert_eq!(chur_capabilities(), 0);
+        // A set bit entitles a host to call the functions behind it, so each
+        // one is asserted against the surface that implements it rather than
+        // against a copy of the constant.
+        let declared = chur_capabilities();
+        assert_ne!(declared & CHUR_CAP_OBJECT_READER, 0, "the reader exists");
+        assert_ne!(
+            declared & CHUR_CAP_SEQUENTIAL_READER,
+            0,
+            "sequential export exists"
+        );
+        assert_ne!(
+            declared & CHUR_CAP_INTEGRITY_SCAN,
+            0,
+            "the integrity scan exists"
+        );
+        for (bit, why) in [
+            (CHUR_CAP_DECOY_VAULT, "no flow provisions a decoy identity"),
+            (
+                CHUR_CAP_BACKUP_PACKAGE,
+                "the backup format is not implemented",
+            ),
+            (CHUR_CAP_SYNC, "sync is Phase 3"),
+            (
+                CHUR_CAP_CONCURRENT_READS,
+                "every reader handle is still serialized",
+            ),
+        ] {
+            assert_eq!(declared & bit, 0, "a capability is declared but {why}");
+        }
         for bit in 7..64 {
             assert_eq!(
-                chur_capabilities() & (1 << bit),
+                declared & (1 << bit),
                 0,
                 "bit {bit} is reserved and must be zero in v1"
             );

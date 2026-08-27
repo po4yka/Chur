@@ -7,15 +7,17 @@
  * ADR-0016). A change here and a change in rust/crates/chur-ffi/src/lib.rs land
  * in the same commit.
  *
- * What this header declares today is the ABI handshake of FFI_CONTRACT.md
- * section 2 and the status vocabulary of docs/ERROR_MODEL.md. The control-plane
- * and data-plane functions are declared as they land.
+ * This header declares the frozen Phase-1 surface of FFI_CONTRACT.md section
+ * 6.2: the ABI handshake of section 2, the status vocabulary of
+ * docs/ERROR_MODEL.md, the control plane, and the data plane. Adding an export
+ * raises the minor ABI version; changing or removing one raises the major.
  */
 
 #ifndef CHUR_H
 #define CHUR_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -165,6 +167,222 @@ uint32_t chur_build_flavor(void);
  * genuine CHUR_INTERNAL_FAILURE from an unknown code it must fold into one.
  */
 bool chur_status_is_known(int32_t value);
+
+/* -------------------------------------------------------------------------
+ * Handles
+ *
+ * chur_handle_t is uint64_t: the low 32 bits index a typed registry slot and
+ * the high 32 bits carry that slot's generation. It is never a pointer and
+ * never a business identifier. 0 is the null handle.
+ *
+ * Close is idempotent for every handle type: the first close releases the
+ * resources and every later close of the same value returns CHUR_OK. Closing a
+ * value this process never issued returns CHUR_INVALID_INPUT. A stale
+ * generation returns CHUR_SESSION_EXPIRED, and no handle revives after a lock.
+ * ---------------------------------------------------------------------- */
+
+typedef uint64_t chur_handle_t;
+typedef int32_t chur_status_t;
+
+#define CHUR_NULL_HANDLE (UINT64_C(0))
+
+/* Length of the page cursor of CATALOG_SCHEMA_V1.md section 16.2. */
+#define CHUR_CURSOR_LEN 42
+/* Length of ObjectProjectionV1 of CATALOG_SCHEMA_V1.md section 16.1. */
+#define CHUR_PROJECTION_LEN 79
+/* Length of the ChurPageV1 header of FFI_CONTRACT.md section 6.4. */
+#define CHUR_PAGE_HEADER_LEN 63
+
+/* Query scopes, CATALOG_SCHEMA_V1.md section 16.2. */
+#define CHUR_SCOPE_TIMELINE 1
+#define CHUR_SCOPE_ALBUM 2
+#define CHUR_SCOPE_FAVORITES 3
+#define CHUR_SCOPE_TAG 4
+#define CHUR_SCOPE_SEARCH 5
+#define CHUR_SCOPE_QUARANTINE 6
+
+/* Query sorts, CATALOG_SCHEMA_V1.md section 16.2. */
+#define CHUR_SORT_CAPTURE_DESC 1
+#define CHUR_SORT_CAPTURE_ASC 2
+#define CHUR_SORT_IMPORT_DESC 3
+
+/* Unlock factors, KEY_SLOTS.md section 1. */
+#define CHUR_FACTOR_PASSWORD 1
+#define CHUR_FACTOR_RECOVERY 2
+#define CHUR_FACTOR_APPLE_KEYCHAIN 3
+
+/* Operation kinds and stages, FFI_CONTRACT.md section 10. */
+#define CHUR_OPERATION_IMPORT 1
+#define CHUR_OPERATION_EXPORT 2
+#define CHUR_OPERATION_INTEGRITY_SCAN 3
+
+#define CHUR_STAGE_STARTING 1
+#define CHUR_STAGE_RUNNING 2
+#define CHUR_STAGE_COMMITTING 3
+#define CHUR_STAGE_TERMINAL 4
+
+/* Lock reasons, passed to chur_vault_lock and reported nowhere private. */
+#define CHUR_LOCK_REASON_USER 1
+#define CHUR_LOCK_REASON_TIMEOUT 2
+#define CHUR_LOCK_REASON_BACKGROUND 3
+#define CHUR_LOCK_REASON_PANIC 4
+
+/* -------------------------------------------------------------------------
+ * Control-plane records
+ *
+ * The caller allocates and owns every structure below. Rust reads them during
+ * the call and retains no pointer afterwards. A string field is UTF-8 and is
+ * not NUL-terminated; its length field bounds it.
+ * ---------------------------------------------------------------------- */
+
+typedef struct ChurRuntimeConfigV1 {
+  const uint8_t *root_path;
+  uint32_t root_path_length;
+} ChurRuntimeConfigV1;
+
+typedef struct ChurUnlockRequestV1 {
+  uint8_t factor;
+  uint8_t reserved[3];
+  const uint8_t *secret;
+  uint32_t secret_length;
+} ChurUnlockRequestV1;
+
+typedef struct ChurQueryV1 {
+  uint8_t scope;
+  uint8_t sort;
+  uint16_t kinds;
+  uint32_t limit;
+  uint8_t scope_id[16];
+  uint8_t cursor_present;
+  uint8_t cursor[CHUR_CURSOR_LEN];
+  const uint8_t *terms;
+  uint32_t terms_length;
+} ChurQueryV1;
+
+typedef struct ChurObjectRefV1 {
+  uint8_t object_id[16];
+} ChurObjectRefV1;
+
+typedef struct ChurImportRequestV1 {
+  uint8_t seekable;
+  uint8_t known_length_present;
+  uint8_t media_class;
+  uint8_t reserved;
+  uint32_t width;
+  uint32_t height;
+  uint64_t duration_ms;
+  uint64_t known_length;
+  uint64_t capture_time_ms;
+  uint8_t capture_time_present;
+  uint8_t reserved_two[7];
+  const uint8_t *content_type;
+  uint32_t content_type_length;
+  const uint8_t *original_filename;
+  uint32_t original_filename_length;
+} ChurImportRequestV1;
+
+typedef struct ChurScanRequestV1 {
+  uint8_t single_object;
+  uint8_t reserved[7];
+  uint8_t object_id[16];
+} ChurScanRequestV1;
+
+typedef struct ChurProgressV1 {
+  uint32_t kind;
+  uint32_t stage;
+  uint64_t processed;
+  uint64_t total;
+  uint8_t terminal;
+  uint8_t reserved[3];
+  int32_t status;
+} ChurProgressV1;
+
+typedef struct ChurContentInfoV1 {
+  uint64_t plaintext_size;
+  uint8_t content_type[64];
+  uint16_t media_kind;
+  uint8_t byte_range_supported;
+  uint8_t complete;
+  uint8_t reserved[4];
+} ChurContentInfoV1;
+
+/* -------------------------------------------------------------------------
+ * Runtime and session
+ * ---------------------------------------------------------------------- */
+
+chur_status_t chur_runtime_open(const ChurRuntimeConfigV1 *config,
+                                chur_handle_t *out_runtime);
+chur_status_t chur_runtime_close(chur_handle_t runtime);
+chur_status_t chur_vault_unlock(chur_handle_t runtime,
+                                const ChurUnlockRequestV1 *request,
+                                chur_handle_t *out_session);
+chur_status_t chur_vault_lock(chur_handle_t session, uint32_t reason);
+chur_status_t chur_session_close(chur_handle_t session);
+
+/* -------------------------------------------------------------------------
+ * Catalog queries
+ *
+ * The page is written into the caller's buffer as the canonical bytes of
+ * FFI_CONTRACT.md section 6.4. bytes_written is set on every call, including
+ * every failure, where it is set to 0. A buffer smaller than the page returns
+ * CHUR_RESOURCE_LIMIT_EXCEEDED and writes nothing.
+ * ---------------------------------------------------------------------- */
+
+chur_status_t chur_catalog_query(chur_handle_t session, const ChurQueryV1 *query,
+                                 uint8_t *destination, size_t capacity,
+                                 size_t *bytes_written);
+
+/* -------------------------------------------------------------------------
+ * Operations
+ *
+ * An operation runs on an internal worker and the caller polls its own handle.
+ * There is no callback, so there is no delivery thread and no re-entrancy rule.
+ * chur_operation_cancel and every close are callable from any thread at any
+ * time, including while another call on the same handle is in flight.
+ *
+ * Rust duplicates a descriptor it is given, so the caller closes its own on its
+ * own schedule.
+ * ---------------------------------------------------------------------- */
+
+chur_status_t chur_import_begin(chur_handle_t session, int32_t source_fd,
+                                const ChurImportRequestV1 *request,
+                                chur_handle_t *out_import);
+chur_status_t chur_export_begin(chur_handle_t session,
+                                const ChurObjectRefV1 *object,
+                                int32_t destination_fd,
+                                chur_handle_t *out_export);
+chur_status_t chur_integrity_scan_begin(chur_handle_t session,
+                                        const ChurScanRequestV1 *request,
+                                        chur_handle_t *out_scan);
+chur_status_t chur_operation_poll(chur_handle_t operation,
+                                  ChurProgressV1 *out_progress);
+chur_status_t chur_operation_cancel(chur_handle_t operation);
+chur_status_t chur_operation_close(chur_handle_t operation);
+
+/* -------------------------------------------------------------------------
+ * Object reader
+ *
+ * chur_object_reader_read_at never mixes an error with a byte count. A short
+ * read is permitted at any offset, so the caller loops until it has the range
+ * it needs or observes *bytes_written == 0, which with a success status means
+ * end of authenticated plaintext and occurs only when offset == size. An offset
+ * above size returns CHUR_INVALID_INPUT, never a zero-length success. On any
+ * failure the whole destination holds unspecified bytes.
+ * ---------------------------------------------------------------------- */
+
+chur_status_t chur_object_reader_open(chur_handle_t session,
+                                      const ChurObjectRefV1 *object,
+                                      uint32_t stream_kind,
+                                      chur_handle_t *out_reader);
+chur_status_t chur_object_reader_size(chur_handle_t reader, uint64_t *out_size);
+chur_status_t chur_object_reader_content_info(chur_handle_t reader,
+                                              ChurContentInfoV1 *out_info);
+chur_status_t chur_object_reader_read_at(chur_handle_t reader, uint64_t offset,
+                                         uint8_t *destination, size_t capacity,
+                                         size_t *bytes_written);
+chur_status_t chur_object_reader_verify_complete(chur_handle_t reader,
+                                                 uint32_t *out_state);
+chur_status_t chur_object_reader_close(chur_handle_t reader);
 
 #ifdef __cplusplus
 } /* extern "C" */
