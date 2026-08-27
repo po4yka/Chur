@@ -79,6 +79,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0025](0025-freeze-the-object-key-envelope-aad.md) | Freeze the object-key envelope AAD | Accepted |
 | [0026](0026-argon2id-memory-floor-and-candidate-set.md) | Argon2id memory floor and the constant password-candidate set | Accepted |
 | [0028](0028-freeze-the-catalog-query-surface.md) | Freeze the catalog query surface, index set, and v1 search | Accepted |
+| [0029](0029-freeze-the-recovery-secret-encoding.md) | Freeze the recovery-secret human encoding as BIP-39 English | Accepted |
 
 ## Future ADR backlog
 

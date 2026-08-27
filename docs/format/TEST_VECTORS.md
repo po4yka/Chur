@@ -84,6 +84,7 @@ Required:
 - every HKDF label in the registry in [`../security/KEY_HIERARCHY.md`](../security/KEY_HIERARCHY.md) §3;
 - valid object-key envelope;
 - zero-byte, one-chunk, multi-chunk, and partial-final object;
+- recovery-secret round trip: 32 bytes to 24 BIP-39 English words and back, including the checksum bits and one denormalized re-entry that must normalize to the same words;
 - catalog logical fixtures/migrations;
 - full backup and later incremental backup;
 - signed operation and collection grant when protocols exist.

@@ -2417,7 +2417,7 @@ The following MUST be resolved before v1 production bytes are frozen:
 11. catalog field-level encryption policy inside SQLCipher;
 12. standard versus paranoid import verification default;
 13. backup package encoding and optional age profile — resolved in [`format/BACKUP_FORMAT_V1.md`](format/BACKUP_FORMAT_V1.md) §2;
-14. recovery-secret mnemonic/checksum format;
+14. recovery-secret mnemonic/checksum format — resolved in [`security/RECOVERY.md`](security/RECOVERY.md) §2: 24 BIP-39 English words with the BIP-39 checksum, a `chur-recovery-v1` marker outside the mnemonic, and NFKD plus lowercase plus whitespace-collapse normalization on re-entry ([ADR-0029](adr/0029-freeze-the-recovery-secret-encoding.md));
 15. exact real/decoy password-slot candidate-discovery behavior — resolved in [`security/KEY_SLOTS.md`](security/KEY_SLOTS.md) §8 and [ADR-0026](adr/0026-argon2id-memory-floor-and-candidate-set.md): a constant two-candidate list padded with dummy derivations;
 16. HPKE library and canonical grant encoding;
 17. device-log consistency and malicious-server omission strategy;
