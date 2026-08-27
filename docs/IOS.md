@@ -712,7 +712,7 @@ requested plaintext range
 The adapter MUST:
 
 - bind to one session generation;
-- provide only the content information required by AVFoundation;
+- fill `contentInformationRequest` from the authenticated content information defined in [`interop/FFI_CONTRACT.md`](interop/FFI_CONTRACT.md) §6.1, and publish nothing for an object whose final commit has not validated;
 - validate offset and length before allocation;
 - service requests on a dedicated serial executor/queue or otherwise preserve ordering rules;
 - support request cancellation;

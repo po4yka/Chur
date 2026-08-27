@@ -115,9 +115,27 @@ Large data uses:
 - platform file descriptors/seekable handles when safe;
 - caller-provided direct/native buffers;
 - `read_at(offset, destination)`;
+- authenticated content information before the first range request;
 - bounded sequential import/export;
 - explicit byte counts;
 - no whole-file `ByteArray`, `NSData`, or generated-binding list.
+
+### 6.1 Content information
+
+A range reader must publish content information before it answers the first request: Media3 needs a length and AVFoundation needs `contentInformationRequest` filled in. `chur_object_reader_content_info` supplies it from authenticated canonical metadata, never from the provider hint that [`MEDIA_PIPELINE.md`](MEDIA_PIPELINE.md) §3 classifies as untrusted:
+
+```text
+ChurContentInfoV1
+    plaintext_size        u64        authenticated size from the final commit record
+    content_type          char[64]   NUL-terminated lowercase IANA media type
+    media_kind            u16        canonical metadata media-kind value
+    byte_range_supported  u8         1 for a committed immutable object
+    complete              u8         1 only after final-commit validation
+```
+
+- the content-type identifier space is IANA media types, at most 63 bytes plus the terminator, taken from the canonical metadata Rust validated at import. Android uses the value as the MIME type unchanged; iOS converts it with `UTType(mimeType:)`;
+- content information is publishable only when the final commit record validates. Until then the call returns `OBJECT_INCOMPLETE` and the adapter fails the open or loading request instead of publishing a size, because a player that has been given a length treats a later failure as a transport error and retries indefinitely;
+- a reader opened on an incomplete object may still serve `read_at` for resumable transfer and verification, but it must not be attached to a player.
 
 ### 6.2 Exported symbols
 

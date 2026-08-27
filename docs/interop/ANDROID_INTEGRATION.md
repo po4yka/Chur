@@ -88,6 +88,7 @@ Cloud-backed providers require progress, cancellation, and potentially unknown l
 
 A custom `DataSource` delegates range reads to `ObjectReaderHandle`:
 
+- publish length and MIME type from `chur_object_reader_content_info` before the first read, and fail the open with `OBJECT_INCOMPLETE` rather than report a length for an incomplete object, per [`FFI_CONTRACT.md`](FFI_CONTRACT.md) §6.1;
 - map requested position/length to Rust `read_at`;
 - authenticate affected chunks before returning bytes;
 - reuse bounded direct buffers;
