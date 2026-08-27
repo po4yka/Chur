@@ -364,6 +364,21 @@ An unallocated `record_type` is a parse failure, never an ignorable record.
 | `0x03` | audio |
 | `0x04` | opaque, no decodable media dimensions |
 
+`integrity_summary` of the catalog object row, [`CATALOG_SCHEMA_V1.md`](CATALOG_SCHEMA_V1.md) §5.1, in the order listed there:
+
+| Value | Summary |
+| --- | --- |
+| `0x01` | `UNVERIFIED` |
+| `0x02` | `VERIFYING` |
+| `0x03` | `RANGE_VERIFIED` |
+| `0x04` | `COMPLETE_VERIFIED` |
+| `0x05` | `INCOMPLETE` |
+| `0x06` | `QUARANTINED` |
+| `0x07` | `UNSUPPORTED` |
+| `0x08` | `MIGRATION_REQUIRED` |
+
+These are also the values `chur_object_reader_verify_complete` writes through `out_state`, [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md) §6.2, so the persisted column and the ABI return carry one vocabulary. Proven corruption is a lifecycle change rather than a verification verdict, so `CORRUPT` is a value of the object row's `state` and not of this space.
+
 ### 15.5 Domain tags
 
 A domain tag is a fixed ASCII byte constant written without a length prefix, per §3 and §7, of the form `CHUR\x00<AREA>\x00<PURPOSE>\x00V<n>`.

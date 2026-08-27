@@ -90,7 +90,8 @@ video poster frame
 animated preview (future)
 audio waveform
 OCR text (future)
-face/embedding records (future)
+face record (future)
+embedding record (future)
 ```
 
 Each derived asset binds to:

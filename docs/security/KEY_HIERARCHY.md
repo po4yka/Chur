@@ -63,6 +63,7 @@ This table is the only registry of HKDF domain labels. [`../CRYPTOGRAPHY.md`](..
 | `chur/v1/object/poster-frame` | `PosterFrameKey` | `ObjectKey` | 32 bytes |
 | `chur/v1/object/waveform` | `WaveformKey` | `ObjectKey` | 32 bytes |
 | `chur/v1/object/ocr` | `OcrKey` | `ObjectKey` | 32 bytes |
+| `chur/v1/object/face` | `FaceKey` | `ObjectKey` | 32 bytes |
 | `chur/v1/object/embedding` | `EmbeddingKey` | `ObjectKey` | 32 bytes |
 | `chur/v1/object/final-commit` | `FinalCommitKey` | `ObjectKey` | 32 bytes |
 | `chur/v1/recovery/root-envelope` | `RecoveryKEK` | `RecoverySecret` | 32 bytes |

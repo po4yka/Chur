@@ -120,17 +120,9 @@ Internal diagnostics may distinguish causes only in explicitly local, redacted d
 
 ## Integrity states versus errors
 
-Range verification and complete-object verification are domain states:
+Range verification and complete-object verification are domain states, not errors. The vocabulary is the `integrity_summary` enum of [`format/CATALOG_SCHEMA_V1.md`](format/CATALOG_SCHEMA_V1.md) §5.1, whose byte values are allocated in [`format/CANONICAL_ENCODING_V1.md`](format/CANONICAL_ENCODING_V1.md) §15.4 and which `chur_object_reader_verify_complete` returns through `out_state`. This document defines no integrity state of its own.
 
-```text
-VerifiedRange
-CompleteVerifiedObject
-Incomplete
-Corrupt
-Unsupported
-```
-
-A caller requesting playback may accept `VerifiedRange`; export, backup, or migration requires `CompleteVerifiedObject`.
+A caller requesting playback may accept `RANGE_VERIFIED`; export, backup, or migration requires `COMPLETE_VERIFIED`. Proven corruption is not a verification state: it sets the object's lifecycle `state` to `CORRUPT` and reaches the caller as `OBJECT_CORRUPT`.
 
 ## Retry policy
 

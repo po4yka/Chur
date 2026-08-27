@@ -188,6 +188,8 @@ chur_status_t chur_object_reader_verify_complete(chur_handle_t reader, uint32_t 
 chur_status_t chur_object_reader_close(chur_handle_t reader);
 ```
 
+`chur_object_reader_verify_complete` writes through `out_state`, on success only, the `integrity_summary` value the scan reached: the enum of [`../format/CATALOG_SCHEMA_V1.md`](../format/CATALOG_SCHEMA_V1.md) §5.1, whose byte values are allocated in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15.4. Proven corruption is a lifecycle change rather than a verification verdict, so it returns `OBJECT_CORRUPT` and writes no state.
+
 The control plane uses these same symbols through a thin KMP `expect`/`actual` adapter. No binding generator is part of the boundary ([ADR-0016](../adr/0016-freeze-the-v1-c-abi.md)).
 
 ### 6.3 Range reads
