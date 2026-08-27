@@ -44,22 +44,26 @@ Chur is driven by the following requirements, in priority order:
 
 ## 3. Core architectural decisions
 
-| ID | Decision | Status |
-| --- | --- | --- |
-| AD-001 | Rust is the canonical owner of all private-vault formats and cryptographic state transitions. | Accepted |
-| AD-002 | KMP owns use cases, UDF state, navigation, and platform orchestration, but not private persistence formats. | Accepted |
-| AD-003 | Android Keystore and iOS Keychain protect release or unwrapping of a short vault root secret; they do not encrypt media streams. | Accepted |
-| AD-004 | Media uses envelope encryption with random vault, security-collection, and per-object keys. | Accepted |
-| AD-005 | Large media uses independent XChaCha20-Poly1305 chunks and an authenticated final commit. | Accepted |
-| AD-006 | The immutable encrypted media container is separate from the mutable object-key envelope. | Accepted |
-| AD-007 | Public-shell persistence uses Room/DataStore; private persistence is Rust-owned. | Accepted |
-| AD-008 | Real and decoy vaults have independent roots, catalogs, object namespaces, caches, and sessions. | Accepted |
-| AD-009 | FFI is split into a structured control plane and a bounded streaming data plane. | Accepted |
-| AD-010 | Locking invalidates native handles independently of UI cleanup. | Accepted |
-| AD-011 | The initial product is a local recoverable vault without cloud sharing. | Accepted |
-| AD-012 | A Rust-owned SQLCipher catalog is the preferred private-catalog implementation, pending build-size and performance validation. | Proposed |
-| AD-013 | UniFFI/Gobley may generate control-plane bindings; a stable C ABI remains the data-plane boundary. | Proposed |
-| AD-014 | A portable `age`-compatible backup may complement, but never replace, the Chur vault format. | Proposed |
+The decision records are the files in [`adr/`](adr/) and the specifications they freeze. This section explains how those decisions fit together and states the architectural rules that no ADR carries. It is not a decision register: it assigns no identifiers and no statuses of its own, and where it disagrees with an ADR the [authority hierarchy](README.md#authority-hierarchy) gives the ADR precedence.
+
+Recorded as ADRs:
+
+- Rust is the canonical owner of all private-vault formats and cryptographic state transitions — [`ADR-0001`](adr/0001-rust-owns-private-vault.md).
+- Large media uses independent XChaCha20-Poly1305 chunks and an authenticated final commit — [`ADR-0002`](adr/0002-independent-aead-chunks.md), with the public container layout frozen by [`ADR-0008`](adr/0008-freeze-object-container-v1-layout.md).
+- The immutable encrypted media container is separate from the mutable object-key envelope — [`ADR-0003`](adr/0003-separate-object-key-envelope.md).
+- A Rust-owned SQLCipher catalog is the preferred private-catalog implementation — [`ADR-0004`](adr/0004-rust-owned-private-catalog.md), which remains Proposed until the build, linkage, WAL, migration, performance, and backup validation required by [`format/CATALOG_SCHEMA_V1.md`](format/CATALOG_SCHEMA_V1.md) §15 completes.
+- Real and decoy vaults have independent roots, catalogs, object namespaces, caches, and sessions — [`ADR-0005`](adr/0005-real-and-decoy-vault-isolation.md).
+- FFI is split into a structured control plane and a bounded streaming data plane — [`ADR-0006`](adr/0006-control-and-data-plane-ffi.md). Both planes use the hand-written C ABI frozen by [`ADR-0016`](adr/0016-freeze-the-v1-c-abi.md); v1 has no generated binding layer.
+- The initial product is a local recoverable vault without cloud sharing — [`ADR-0007`](adr/0007-local-first-before-sync.md).
+- A portable backup complements, and never replaces, the Chur vault format; its framing and its single optional `age` layer are frozen by [`ADR-0018`](adr/0018-freeze-backup-package-framing.md).
+
+Architectural rules this document owns, because no ADR states them:
+
+- KMP owns use cases, UDF state, navigation, and platform orchestration, but not private persistence formats.
+- Android Keystore and iOS Keychain protect release or unwrapping of a short vault root secret; they do not encrypt media streams. [`security/KEY_SLOTS.md`](security/KEY_SLOTS.md) owns the slot behavior.
+- Media uses envelope encryption with random vault, security-collection, and per-object keys, derived as [`security/KEY_HIERARCHY.md`](security/KEY_HIERARCHY.md) specifies.
+- Public-shell persistence uses Room/DataStore; private persistence is Rust-owned.
+- Locking invalidates native handles independently of UI cleanup, under [`security/PLAINTEXT_LIFECYCLE.md`](security/PLAINTEXT_LIFECYCLE.md).
 
 Rejected alternatives include:
 
