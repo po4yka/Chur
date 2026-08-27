@@ -76,7 +76,7 @@ Security-critical additions require a dedicated reviewer.
 
 `.agents/` and `.claude/` hold agent instruction files copied from third-party repositories. They are vendored content under this policy, not generated state: they are tracked, reviewed on update, and never run against a real vault, a production secret, or user media. They contribute no code to the Android, iOS, Rust, or CLI artifacts and are excluded from release evidence and from the SBOM.
 
-`skills-lock.json` is their manifest. Each entry records the upstream repository, the path within it, a content hash, and the upstream commit the content was taken from. The commit satisfies "record source revision for vendored code" above; a content hash alone proves integrity but not provenance, so it is not a substitute.
+`skills-lock.json` is their manifest. Each entry must record the upstream repository, the path within it, a content hash, and the upstream commit the content was taken from. The commit satisfies "record source revision for vendored code" above; a content hash alone proves integrity but not provenance, so it is not a substitute.
 
 Open item, owner: repository maintainer. The current entries predate this rule and carry no commit field. The field is populated at the next skill synchronization, before Gate 1.
 

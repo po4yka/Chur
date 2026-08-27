@@ -18,7 +18,7 @@ Performance is a security property when unbounded work, memory, lock latency, or
 
 | Operation | Initial candidate |
 | --- | --- |
-| password unlock | 350–750 ms per Argon2id derivation on baseline, and [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §8 runs two candidates per attempt, so the whole-attempt budget is twice that; Argon2 memory ≥ the floor of [`../security/PASSWORD_PROFILE.md`](../security/PASSWORD_PROFILE.md) §4 |
+| password unlock | 350–750 ms per Argon2id derivation on the floor device of [ADR-0017](../adr/0017-freeze-the-supported-device-set.md), and [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §8 runs two candidates per attempt, so the whole-attempt budget is twice that; Argon2 memory ≥ the floor of [`../security/PASSWORD_PROFILE.md`](../security/PASSWORD_PROFILE.md) §4 |
 | platform unlock after prompt authorization | <250 ms core unwrap/open target |
 | thumbnail decrypt/read | p95 <50 ms for warm local storage |
 | first private grid content | p95 <500 ms after session open for local catalog |
@@ -38,7 +38,7 @@ Measure:
 - backup copy throughput without plaintext;
 - catalog migration rows/s;
 - sync ciphertext upload/download overhead;
-- collection epoch rewrap in object-key envelopes per second, with an initial p95 completion candidate under 60 s for a 100,000-object collection on the baseline device. The rewrap is bounded by [`../sync/REVOCATION.md`](../sync/REVOCATION.md) §3.1, and the exposure window it defines ends only when the pass completes, so a regression here is a security regression.
+- collection epoch rewrap in object-key envelopes per second, with an initial p95 completion candidate under 60 s for a 100,000-object collection on the baseline device; under [ADR-0017](../adr/0017-freeze-the-supported-device-set.md) it becomes a gate only when the floor device also meets it. The rewrap is bounded by [`../sync/REVOCATION.md`](../sync/REVOCATION.md) §3.1, and the exposure window it defines ends only when the pass completes, so a regression here is a security regression.
 
 Target sustained crypto throughput should exceed the media player/source consumption rate with headroom on the supported baseline.
 
