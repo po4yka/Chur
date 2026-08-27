@@ -52,6 +52,20 @@ impl Nonce {
         Self(bytes)
     }
 
+    /// Draws a fresh nonce from the OS CSPRNG.
+    ///
+    /// It is the only construction for a record whose nonce is not derived from
+    /// a prefix and an index: a slot, an envelope, a manifest, or a final
+    /// commit. `docs/CRYPTOGRAPHY.md` §16 makes a random 192-bit nonce safe at
+    /// these volumes, which is why XChaCha20 rather than ChaCha20 is the suite.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of the OS random source.
+    pub fn random() -> Result<Self> {
+        Ok(Self(crate::random::array::<NONCE_LEN>()?))
+    }
+
     /// Reads a nonce from a slice.
     ///
     /// # Errors

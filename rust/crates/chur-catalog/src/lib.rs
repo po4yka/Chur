@@ -18,9 +18,11 @@ pub mod db;
 pub mod deletion;
 pub mod journal;
 pub mod model;
+pub mod paths;
 pub mod query;
 pub(crate) mod row;
 pub mod schema;
 pub mod store;
+pub mod vault;
 
 pub use db::{CatalogDb, CatalogKey, CatalogLocation};

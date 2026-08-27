@@ -46,6 +46,8 @@ pub mod tag {
     pub const OBJECT_FINAL_COMMIT_AAD: &[u8] = b"CHUR\0OBJECT\0FINAL-COMMIT-AAD\0V1";
     /// Vault-descriptor authentication tag.
     pub const VAULT_DESCRIPTOR_AUTH: &[u8] = b"CHUR\0VAULT\0DESCRIPTOR-AUTH\0V1";
+    /// §15.5: catalog header commitment, `VAULT_DESCRIPTOR_V1.md` §5.
+    pub const CATALOG_HEADER_COMMITMENT: &[u8] = b"CHUR\0CATALOG\0HEADER-COMMITMENT\0V1";
     /// Ordered backup inventory commitment.
     pub const BACKUP_INVENTORY_COMMITMENT: &[u8] = b"CHUR\0BACKUP\0INVENTORY-COMMITMENT\0V1";
     /// Operation digest and per-device chain hash.
@@ -70,6 +72,7 @@ pub mod tag {
         OBJECT_ORDERED_COMMITMENT,
         OBJECT_FINAL_COMMIT_AAD,
         VAULT_DESCRIPTOR_AUTH,
+        CATALOG_HEADER_COMMITMENT,
         BACKUP_INVENTORY_COMMITMENT,
         SYNC_OPERATION_CHAIN,
         SYNC_CHECKPOINT,

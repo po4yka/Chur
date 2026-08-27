@@ -137,6 +137,18 @@ offset  size  field                          v1 value
 
 The structure is exactly 60 bytes and carries no variable field. `catalog_format_version` must equal the value the catalog itself records, per [`CATALOG_SCHEMA_V1.md`](CATALOG_SCHEMA_V1.md) §2.
 
+`catalog_header_commitment` commits to the first 16 bytes of the catalog database file, [ADR-0039](../adr/0039-freeze-the-catalog-header-commitment.md):
+
+```text
+catalog_header_commitment = BLAKE3-256(
+    "CHUR\x00CATALOG\x00HEADER-COMMITMENT\x00V1" || catalog_file[0..16]
+)
+```
+
+Under the engine of [ADR-0038](../adr/0038-adopt-sqlcipher-as-the-v1-catalog-engine.md) those bytes are the database's per-file salt: written once when the database is created, never rewritten, and plaintext by construction. The value is therefore stable across every ordinary catalog write, so a catalog transaction does not require a new descriptor generation, and it is not secret, so a descriptor readable before any credential exists discloses nothing by carrying it.
+
+It is computed when the catalog is created and checked at every unlock, before the connection opens. It proves which file this descriptor belongs to; it does not prove the file's contents, which the engine's own per-page authentication covers, and it does not detect a rollback to an older copy of the same file, which `catalog_generation` above covers.
+
 The catalog key is derived after root validation. The descriptor does not contain plaintext schema or SQLCipher passphrase.
 
 ## 6. Object-store descriptor

@@ -79,6 +79,24 @@ unwrap_used = "deny"
 expect_used = "deny"
 todo = "warn"
 
+# Cryptographic primitives are optimized even in a debug build. Argon2id at the
+# frozen 64 MiB floor of PASSWORD_PROFILE.md section 4 takes seconds per
+# derivation when compiled without optimization, and an unlock runs two, so an
+# unoptimized suite spends minutes inside the primitive. Optimizing only these
+# packages keeps every Chur crate debuggable and changes no behaviour: the
+# output of a derivation does not depend on the optimization level.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake3]
+opt-level = 3
+
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.dev.package.chacha20poly1305]
+opt-level = 3
+
 [profile.release]
 overflow-checks = true
 # FFI panic containment: every `chur_*` export wraps its body in catch_unwind and

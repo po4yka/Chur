@@ -167,6 +167,12 @@ pub fn check_salt(salt: &[u8]) -> Result<()> {
 /// parameters.
 pub fn derive_kek(password: &[u8], salt: &[u8], params: Argon2Params) -> Result<Key> {
     check_salt(salt)?;
+    // `docs/interop/FFI_CONTRACT.md` §8.1: the Argon2id semaphore is 1 for the
+    // whole process. One evaluation is the largest allocation the runtime
+    // makes, and two at once on a low-memory device is the fastest way to be
+    // killed by the platform. The guard is taken here rather than at each call
+    // site so no caller can forget it.
+    let _permit = semaphore();
     let built = ParamsBuilder::new()
         .m_cost(params.memory_kib)
         .t_cost(params.iterations)
@@ -190,6 +196,57 @@ pub fn derive_kek(password: &[u8], salt: &[u8], params: Argon2Params) -> Result<
             )
         })?;
     Ok(derived)
+}
+
+/// The process-wide Argon2id permit.
+///
+/// A poisoned mutex is recovered rather than propagated: the lock protects no
+/// data, only the right to allocate, and refusing every later unlock because an
+/// earlier one panicked would turn one contained failure into a locked-out
+/// vault.
+fn semaphore() -> std::sync::MutexGuard<'static, ()> {
+    static SEMAPHORE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    SEMAPHORE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Checks that the device can allocate the profile, once, before any candidate.
+///
+/// `docs/security/PASSWORD_PROFILE.md` §6 requires this decision to be made
+/// before the first candidate of `docs/security/KEY_SLOTS.md` §8 runs, so no
+/// partial candidate set is attempted, and requires it to be a device-resource
+/// state that reveals nothing about which slots exist. It therefore allocates
+/// the profile's memory and frees it again, judging no credential.
+///
+/// # Errors
+///
+/// Returns [`ChurStatus::KdfMemoryUnavailable`] when the allocation fails. The
+/// caller may retry after freeing memory and must never retry with reduced
+/// parameters.
+pub fn check_memory_available(params: Argon2Params) -> Result<()> {
+    let blocks = usize::try_from(params.memory_kib).map_err(|_| {
+        Error::new(
+            ChurStatus::KdfMemoryUnavailable,
+            "the approved Argon2id profile does not fit this device's address space",
+        )
+    })?;
+    let bytes = blocks.checked_mul(1024).ok_or_else(|| {
+        Error::new(
+            ChurStatus::KdfMemoryUnavailable,
+            "the approved Argon2id profile does not fit this device's address space",
+        )
+    })?;
+    let _permit = semaphore();
+    let mut probe: Vec<u8> = Vec::new();
+    probe.try_reserve_exact(bytes).map_err(|_| {
+        Error::new(
+            ChurStatus::KdfMemoryUnavailable,
+            "the device could not allocate the approved Argon2id profile",
+        )
+    })?;
+    drop(probe);
+    Ok(())
 }
 
 const _: () = assert!(ARGON2_VERSION == 0x13);
