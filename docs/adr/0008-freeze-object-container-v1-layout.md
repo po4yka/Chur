@@ -81,7 +81,7 @@ No container bytes exist yet, so nothing migrates. `container_version`, `canonic
 ## Follow-up
 
 - the vault-descriptor and backup-package magics were allocated by [`0013`](0013-allocate-v1-format-constants.md) in `format/CANONICAL_ENCODING_V1.md` §15.1;
-- freeze the approved chunk-size range, the maximum supported plaintext size, and the maximum chunk count;
-- freeze the sealed plaintext schemas of the manifest and the final commit;
+- the approved chunk-size range, the maximum supported plaintext size, and the maximum chunk count were set by [`0020`](0020-set-the-v1-parser-limits.md) in `format/OBJECT_CONTAINER_V1.md` §16;
+- the sealed plaintext schemas of the manifest and the final commit were frozen by [`0019`](0019-freeze-remaining-v1-record-layouts.md) in `format/OBJECT_CONTAINER_V1.md` §5 and §11;
 - generate and publish the vectors listed under Validation;
 - reconcile the final-commit AAD in `CRYPTOGRAPHY.md` §38 with §3 of this specification, which binds `container_version` as well as `suite_id`.

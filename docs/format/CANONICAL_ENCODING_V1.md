@@ -338,6 +338,31 @@ An unallocated `record_type` is a parse failure, never an ignorable record.
 | `0x04` | `RecoverySlotV1` |
 | `0x05` | `PeerDeviceSlotV1`, allocated for the future family and not accepted as an unlock method in v1 |
 
+`stream_kind` of the object manifest, [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §5, over the derived-asset kinds of [`../interop/MEDIA_PIPELINE.md`](../interop/MEDIA_PIPELINE.md) §6:
+
+| Value | Stream |
+| --- | --- |
+| `0x01` | original, the imported bytes as received |
+| `0x02` | small thumbnail |
+| `0x03` | grid preview |
+| `0x04` | screen preview |
+| `0x05` | video poster frame |
+| `0x06` | audio waveform |
+| `0x07` | OCR text layer |
+| `0x08` | face record |
+| `0x09` | embedding record |
+
+`0x01` is the only kind whose `source_content_revision` is absent; every other kind is derived from an original. The animated preview of that section is future scope and takes the next free value in the change that freezes it.
+
+`media_class` of the manifest media properties, [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §5.1:
+
+| Value | Class |
+| --- | --- |
+| `0x01` | still image |
+| `0x02` | video |
+| `0x03` | audio |
+| `0x04` | opaque, no decodable media dimensions |
+
 ### 15.5 Domain tags
 
 A domain tag is a fixed ASCII byte constant written without a length prefix, per §3 and §7, of the form `CHUR\x00<AREA>\x00<PURPOSE>\x00V<n>`.

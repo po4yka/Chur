@@ -70,6 +70,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0016](0016-freeze-the-v1-c-abi.md) | Freeze the v1 C ABI: exports, handles, status type, and panic containment | Accepted |
 | [0017](0017-freeze-the-supported-device-set.md) | Freeze the supported device set and the benchmark baseline | Accepted |
 | [0018](0018-freeze-backup-package-framing.md) | Freeze the backup package framing and manifest key | Accepted |
+| [0019](0019-freeze-remaining-v1-record-layouts.md) | Freeze the remaining v1 record layouts | Accepted |
 
 ## Future ADR backlog
 

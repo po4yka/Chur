@@ -1,6 +1,6 @@
 # Chur Object Container v1
 
-> **Status:** Proposed normative format; the public byte layout, v1 constants, and commitment constructions in this document are frozen. Sealed-record plaintext schemas and deterministic vectors remain outstanding.
+> **Status:** Proposed normative format; the public byte layout, v1 constants, commitment constructions, and sealed-record plaintext schemas in this document are frozen. Deterministic vectors remain outstanding.
 
 `ChurObjectV1` stores one immutable encrypted stream, such as an original photo/video/audio file or an encrypted derived asset. The object key envelope is stored separately.
 
@@ -89,22 +89,39 @@ Separate containers/assets may use additional domain keys. Derived keys are not 
 
 ## 5. Encrypted manifest
 
-Manifest plaintext conceptually includes:
+`CanonicalManifest` is the sealed plaintext. Its fields are encoded in this order as a structure under [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §4:
 
 ```text
-object_id
-stream_id
-stream_kind
-stream_revision
-source_content_revision when derived
-chunk_size
-nonce_prefix[16]
-manifest_generation
-immutable media properties permitted by policy
-commitment_profile
+field                    type              size  notes
+object_id                bytes[16]           16  never all zero
+stream_id                bytes[16]           16  never all zero
+stream_kind              u8                   1  allocated in CANONICAL_ENCODING_V1.md §15.4
+stream_revision          u32                  4  starts at 1
+source_content_revision  optional<u32>     1or5  present exactly when stream_kind is not 0x01
+chunk_size               u32                  4  within the range in §16
+nonce_prefix             bytes[16]           16  the §7 prefix of this stream revision
+manifest_generation      u64                  8
+media_properties         MediaPropertiesV1   17  §5.1
+commitment_profile       u16                  2  0x0001
 ```
 
-Plaintext field widths and the schema of `immutable media properties permitted by policy` are not yet frozen. They are sealed bytes and do not affect the public layout below.
+The presence byte of `source_content_revision` is `0x00` absent and `0x01` present per [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §2, and the rule above makes it a function of `stream_kind`, so one logical stream has exactly one manifest encoding.
+
+`CanonicalManifest` is therefore exactly 85 bytes for an original stream and 89 bytes for a derived one, so `manifest_record_length` is 125 or 129 for suite `0x0001`. The 40 to 65536 bound in §3 is frozen and unchanged; a length inside it that is neither of these two values fails as a manifest AEAD failure rather than as a structural error.
+
+### 5.1 Immutable media properties
+
+`MediaPropertiesV1` is a closed 17-byte field list, not an extension block:
+
+```text
+field         type   size  notes
+media_class   u8        1  allocated in CANONICAL_ENCODING_V1.md §15.4
+pixel_width   u32       4  0 when media_class is not 0x01 or 0x02
+pixel_height  u32       4  0 when media_class is not 0x01 or 0x02
+duration_ms   u64       8  0 when media_class is not 0x02 or 0x03
+```
+
+These are the only properties fixed by the encoded bytes of this stream, and every value is bounded by [`../interop/MEDIA_PIPELINE.md`](../interop/MEDIA_PIPELINE.md) §12. Nothing else is permitted here. Filename, MIME type, codec name, capture time, EXIF, GPS, rating, caption, and album membership are mutable private metadata and belong to the metadata revisions of [`CATALOG_SCHEMA_V1.md`](CATALOG_SCHEMA_V1.md) §8, which are rewritten without a new container. A property that a later version must add takes a new `container_version`, per [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §12.
 
 `EncryptedManifestRecordV1` begins at offset `0x1C` and occupies `manifest_record_length` bytes:
 
@@ -248,21 +265,24 @@ offset  size                      field                         v1 value
 
 `commit_ciphertext_length` must be between 16 and 4096 inclusive. No bytes may follow the record.
 
-Final commit plaintext includes:
+`CanonicalFinalCommit` is the sealed plaintext. Its fields are encoded in this order as a structure under [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §4:
 
 ```text
-object_id
-stream_id
-stream_revision
-manifest_commitment
-chunk_count
-total_plaintext_length
-last_chunk_plaintext_length
-ordered_chunk_commitment
-commit_generation
+field                        type       size  notes
+object_id                    bytes[16]    16  equal to the manifest value
+stream_id                    bytes[16]    16  equal to the manifest value
+stream_revision              u32           4  equal to the manifest value
+manifest_commitment          bytes[32]    32  §5
+chunk_count                  u64           8  within the bound in §16
+total_plaintext_length       u64           8  within the bound in §16
+last_chunk_plaintext_length  u32           4  0 when chunk_count is 0
+ordered_chunk_commitment     bytes[32]    32  §10
+commit_generation            u64           8
 ```
 
-It is sealed under `FinalCommitKey` with fresh nonce and canonical AAD bound to container identity/version/suite. Plaintext field widths are not yet frozen. They are sealed bytes and do not affect the public layout above.
+There is no optional field, so `CanonicalFinalCommit` is exactly 128 bytes and `commit_ciphertext_length` is 144 for suite `0x0001`. The 16 to 4096 bound above is frozen and unchanged; a length inside it that is not 144 fails as a commit AEAD failure.
+
+It is sealed under `FinalCommitKey` with a fresh nonce and canonical AAD bound to container identity, version, and suite. After decryption the reader checks the three identity fields against the manifest and checks that `total_plaintext_length` equals `(chunk_count - 1) * chunk_size + last_chunk_plaintext_length` for a non-empty object, per the canonical chunking of §8. A disagreement is `OBJECT_CORRUPT`.
 
 Absence or invalidity means the object is incomplete or corrupt, never complete.
 

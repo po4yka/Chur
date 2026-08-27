@@ -1090,22 +1090,9 @@ A corrupted or unsupported preamble MUST NOT trigger large allocation, KDF work,
 
 The manifest describes the immutable cryptographic structure known before streaming begins.
 
-Candidate plaintext fields:
+Its sealed plaintext fields, their order, and their widths are frozen in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §5, which governs them under the authority hierarchy in [`README.md`](README.md). The immutable media properties it may carry are the closed list of §5.1 there.
 
-```text
-object_id
-object_format_version
-stream_id
-stream_kind
-stream_revision
-chunk_plaintext_size
-chunk_nonce_prefix
-content_semantics_version
-created_by_protocol_version
-optional immutable media-class hints
-```
-
-The manifest MUST NOT require `total_plaintext_size` or `chunk_count` when the source length may be unknown at import start. Those values belong in the final commit.
+The manifest MUST NOT carry `total_plaintext_length` or `chunk_count`, because the source length may be unknown at import start. Those values belong in the final commit.
 
 Manifest encryption:
 
@@ -1284,7 +1271,7 @@ The BLAKE3 value is not independently trusted. It becomes authenticated only bec
 
 The final commit proves that the producer completed the object and defines its total structure.
 
-Its sealed plaintext fields are listed in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §11. Their widths are not yet frozen.
+Its sealed plaintext fields, their order, and their widths are frozen in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §11, which governs them under the authority hierarchy in [`README.md`](README.md).
 
 Encryption:
 
@@ -2470,7 +2457,7 @@ Chur may use age as an outer backup layer but keeps its own catalog and object f
 
 The following MUST be resolved before v1 production bytes are frozen:
 
-1. exact canonical binary encoding — the profile is defined in [`format/CANONICAL_ENCODING_V1.md`](format/CANONICAL_ENCODING_V1.md); the sealed plaintext schemas of the manifest and the final commit are still open;
+1. exact canonical binary encoding — resolved: the profile is defined in [`format/CANONICAL_ENCODING_V1.md`](format/CANONICAL_ENCODING_V1.md), and the sealed plaintext schemas of the manifest and the final commit are frozen in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §5 and §11;
 2. exact algorithm/suite numeric registry — resolved in [`format/CANONICAL_ENCODING_V1.md`](format/CANONICAL_ENCODING_V1.md) §15;
 3. final Argon2id mobile creation profile and latency target;
 4. final Argon2 parser hard bounds;
