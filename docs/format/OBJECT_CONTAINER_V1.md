@@ -212,7 +212,7 @@ The last rule is the only one that needs the decrypted manifest; the rules above
 
 ## 9. Chunk AAD
 
-Canonical AAD binds:
+The AAD is the canonical tuple frozen in [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §35, which owns its element list and widths. It binds:
 
 ```text
 domain tag
@@ -224,6 +224,8 @@ manifest commitment
 chunk index
 plaintext length
 ```
+
+`container_version` and `suite_id` are the §3 preamble values, `chunk_index` and `plaintext_length` are this record's §8 header fields, and the rest are §5 manifest fields. The tuple is 109 bytes for every chunk of every container.
 
 Total object length/count are not required in each chunk AAD because they may be unknown at import start. They are authenticated in the final commit.
 

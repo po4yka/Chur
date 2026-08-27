@@ -1049,11 +1049,11 @@ Manifest encryption:
 manifest_nonce = random 24 bytes
 manifest_aad   = CanonicalTuple(
     "CHUR\x00OBJECT\x00MANIFEST-AAD\x00V1",
-    object_id,
-    stream_id,
-    stream_kind,
-    stream_revision,
-    suite_id
+    object_id:bytes[16],
+    stream_id:bytes[16],
+    stream_kind:u8,
+    stream_revision:u32,
+    suite_id:u16
 )
 
 manifest_ciphertext = XChaCha20Poly1305.Encrypt(
@@ -1063,6 +1063,8 @@ manifest_ciphertext = XChaCha20Poly1305.Encrypt(
     aad       = manifest_aad
 )
 ```
+
+This element list, in this order and at these widths, is the only manifest AAD. The tag is 27 bytes and the elements add 39, so `manifest_aad` is exactly 66 bytes. Every value is a field of `CanonicalManifest` in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §5 or of the preamble in §3 there, and each keeps the width that section gives it.
 
 `manifest_commitment` is frozen in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §5: BLAKE3-256 over a domain tag, `manifest_nonce`, and `manifest_ciphertext_and_tag`. It commits to the sealed record, not to `CanonicalManifest`.
 
@@ -1130,22 +1132,24 @@ The design does not rely on probabilistic random nonces for every chunk. It uses
 
 Each chunk is bound to its semantic position.
 
-Proposed AAD tuple:
+The AAD tuple:
 
 ```text
-CanonicalTuple(
+chunk_aad = CanonicalTuple(
     "CHUR\x00OBJECT\x00CHUNK-AAD\x00V1",
-    container_format_version,
-    suite_id,
-    object_id,
-    stream_id,
-    stream_kind,
-    stream_revision,
-    manifest_commitment,
-    chunk_index,
-    chunk_plaintext_length
+    container_version:u16,
+    suite_id:u16,
+    object_id:bytes[16],
+    stream_id:bytes[16],
+    stream_kind:u8,
+    stream_revision:u32,
+    manifest_commitment:bytes[32],
+    chunk_index:u64,
+    chunk_plaintext_length:u32
 )
 ```
+
+This element list, in this order and at these widths, is the only chunk AAD. The tag is 24 bytes and the elements add 85, so `chunk_aad` is exactly 109 bytes for every chunk. `container_version` and `suite_id` are the preamble fields of [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §3; `chunk_index` and `chunk_plaintext_length` are the `chunk_index` and `plaintext_length` of the chunk record header in §8 there; the rest are `CanonicalManifest` fields of §5.
 
 The AAD prevents silent:
 
@@ -1228,12 +1232,12 @@ Encryption:
 commit_nonce = random 24 bytes
 commit_aad   = CanonicalTuple(
     "CHUR\x00OBJECT\x00FINAL-COMMIT-AAD\x00V1",
-    object_id,
-    stream_id,
-    stream_kind,
-    stream_revision,
-    manifest_commitment,
-    suite_id
+    object_id:bytes[16],
+    stream_id:bytes[16],
+    stream_kind:u8,
+    stream_revision:u32,
+    manifest_commitment:bytes[32],
+    suite_id:u16
 )
 
 commit_ciphertext = XChaCha20Poly1305.Encrypt(
@@ -1243,6 +1247,8 @@ commit_ciphertext = XChaCha20Poly1305.Encrypt(
     aad       = commit_aad
 )
 ```
+
+This element list, in this order and at these widths, is the only final-commit AAD. The tag is 31 bytes and the elements add 71, so `commit_aad` is exactly 102 bytes. It is the manifest AAD of §32 with `manifest_commitment` inserted before `suite_id`, so the commit is bound to the exact manifest record the chunks are bound to.
 
 An object without a valid final commit is incomplete, even if every available chunk authenticates.
 

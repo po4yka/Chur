@@ -86,6 +86,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0032](0032-vault-creation-requires-a-password-slot.md) | Vault creation requires a verified password slot | Accepted |
 | [0033](0033-chur-operates-no-sync-service.md) | Chur operates no sync service; deployments are user-controlled | Accepted |
 | [0034](0034-freeze-the-hkdf-context-element-lists.md) | Freeze the HKDF context element list of every v1 label | Accepted |
+| [0035](0035-freeze-the-object-aad-tuple-widths.md) | Freeze the element widths of the three object AAD tuples | Accepted |
 
 Rows are ordered by ADR number. Number 0015 was not used; no ADR carries it and none will.
 
