@@ -1089,6 +1089,7 @@ The build SHOULD:
 - pin Rust toolchain and Android NDK versions;
 - use Cargo lockfiles;
 - produce deterministic ABI-specific libraries where practical;
+- link every ABI with 16 KiB page alignment (`-Wl,-z,max-page-size=16384`, the default from NDK r27) and verify the `p_align` of each `PT_LOAD` segment in the packaged `.so`; a device with a 16 KiB page size cannot load a 4 KiB-aligned library, and a target of API 37 requires the support;
 - fail when symbols or expected ABIs are missing;
 - restrict exported native symbols;
 - generate and verify headers/bindings;
@@ -1238,6 +1239,7 @@ At minimum:
 - multiple API levels within support range;
 - OEM launchers if alternate presentation is enabled;
 - large cloud-backed picker source;
+- a 16 KiB page-size device running Android 15 or later;
 - emulator for deterministic CI flows.
 
 ### 32.4 Security fault injection
@@ -1277,6 +1279,7 @@ secret/log leakage tests
 Release is blocked when:
 
 - a declared ABI lacks the native library;
+- a packaged native library is not 16 KiB page-aligned;
 - native and Kotlin API versions disagree;
 - debug symbols or debug logging ship incorrectly;
 - backup rules include prohibited paths;
