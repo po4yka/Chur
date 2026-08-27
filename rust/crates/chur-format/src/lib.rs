@@ -14,3 +14,6 @@
 //!
 //! Byte-exact codecs land one artifact at a time, each with positive and
 //! negative tests.
+
+pub mod codec;
+pub mod constants;
