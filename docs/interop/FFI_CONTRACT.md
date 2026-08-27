@@ -74,7 +74,8 @@ Requirements:
 - `chur_handle_t` is `uint64_t`: the low 32 bits index a typed registry slot, the high 32 bits carry that slot's generation counter. It is never a raw pointer and never a business ID; `0` is the null handle;
 - explicit owner runtime/session;
 - thread affinity and concurrency fixed per handle type by the table in §8, not per instance;
-- idempotent close where practical;
+- close is idempotent for every handle type without exception: the first close releases the resources, and every later close of the same value returns success and does nothing. Close never returns `NOT_FOUND` or `SESSION_EXPIRED`; closing a value this process never issued returns `INVALID_INPUT`, which the generation counter makes distinguishable from a re-close;
+- a handle value is never reissued: the generation counter of a slot increments on every allocation, so a stale value cannot alias a live handle for the life of the process;
 - stale generation returns `SESSION_EXPIRED`;
 - no handle revives after lock;
 - handle registry bounded against leaks/DoS.
