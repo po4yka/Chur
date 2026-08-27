@@ -757,7 +757,7 @@ chur/
     └── public Room database and public files
 ```
 
-The `registry/` directory is not illustrative: its entry naming, its cap of two entries, the order in which candidates are enumerated before unlock, and the resulting per-attempt key-derivation cost are normative in [`format/VAULT_DESCRIPTOR_V1.md`](format/VAULT_DESCRIPTOR_V1.md) §11 ([`ADR-0030`](adr/0030-freeze-the-vault-registry-and-discovery.md)).
+The `registry/` directory is not illustrative: its entry naming, its cap of two entries, and the order in which candidates are enumerated before unlock are normative in [`format/VAULT_DESCRIPTOR_V1.md`](format/VAULT_DESCRIPTOR_V1.md) §11 ([`ADR-0030`](adr/0030-freeze-the-vault-registry-and-discovery.md)). The per-attempt password-derivation count is fixed at two in [`security/KEY_SLOTS.md`](security/KEY_SLOTS.md) §8 ([`ADR-0026`](adr/0026-argon2id-memory-floor-and-candidate-set.md)) and does not follow the entry count.
 
 Directories MUST NOT be named `real`, `private`, `decoy`, `secret`, or `vault` in a way exposed outside the app sandbox. The remaining illustrative names above describe responsibilities, not necessarily final on-disk labels.
 

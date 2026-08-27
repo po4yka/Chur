@@ -1,6 +1,6 @@
 # ADR-0030: Freeze the Vault Registry Layout and Discovery Order
 
-- **Status:** Accepted, with the per-attempt password-derivation count deferred to [`0026`](0026-argon2id-memory-floor-and-candidate-set.md)
+- **Status:** Accepted
 - **Date:** 2026-08-27
 - **Decision owners:** @po4yka
 - **Related:** [`../format/VAULT_DESCRIPTOR_V1.md`](../format/VAULT_DESCRIPTOR_V1.md), [`../security/DECOY_VAULT.md`](../security/DECOY_VAULT.md), [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md), [`0005`](0005-real-and-decoy-vault-isolation.md), [`0011`](0011-freeze-vault-descriptor-authentication.md), [`0026`](0026-argon2id-memory-floor-and-candidate-set.md)
