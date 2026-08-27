@@ -50,19 +50,17 @@ Signed integers and floating-point values are forbidden in v1 cryptographic reco
 
 A structure is encoded as fields in the exact order listed by its owning versioned specification. Field names are not encoded unless the specification explicitly defines tagged extensibility.
 
-Example conceptual encoding:
+Example conceptual encoding, illustrative and not a registered record:
 
 ```text
-ObjectEnvelopeAADV1 =
-    domain_tag[fixed]
+ExampleRecordV1 =
     format_version:u16
     suite_id:u16
-    vault_id:bytes[16]
-    collection_id:bytes[16]
-    collection_epoch:u64
     object_id:bytes[16]
     envelope_generation:u64
 ```
+
+The element list of a registered authenticated structure is written by the specification that owns the record, never here. The object-key envelope AAD is [`OBJECT_KEY_ENVELOPE_V1.md`](OBJECT_KEY_ENVELOPE_V1.md) §3 and the collection-key envelope AAD is [`COLLECTION_KEY_ENVELOPE_V1.md`](COLLECTION_KEY_ENVELOPE_V1.md) §3.
 
 Concatenation without a schema is forbidden. The decoder must know the exact structure/version before parsing.
 

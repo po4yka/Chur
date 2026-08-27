@@ -76,6 +76,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0024](0024-freeze-revocation-point-and-eager-rewrap.md) | Accepted revocation point and eager epoch rewrap | Accepted |
 | [0022](0022-freeze-operation-chain-hash-and-identifier.md) | Freeze the operation chain hash, identifier, and cleartext field set | Accepted |
 | [0021](0021-freeze-conflict-tie-break-and-set-semantics.md) | Freeze the conflict tie-break and set semantics | Accepted |
+| [0025](0025-freeze-the-object-key-envelope-aad.md) | Freeze the object-key envelope AAD | Accepted |
 
 ## Future ADR backlog
 

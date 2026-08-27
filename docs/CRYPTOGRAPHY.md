@@ -931,34 +931,7 @@ The object-key envelope is separate from the immutable media container.
 
 This separation prevents a circular dependency and allows collection changes without modifying media ciphertext.
 
-Conceptually:
-
-```text
-ObjectEnvelopeKey = HKDF(
-    parent  = SecurityCollectionKey,
-    purpose = "chur/v1/collection/object-envelope",
-    context = collection_id || epoch || object_id
-)
-
-nonce = random 24 bytes
-
-aad = CanonicalTuple(
-    "CHUR\x00OBJECT\x00KEY-ENVELOPE\x00V1",
-    object_id,
-    collection_id,
-    epoch,
-    object_key_version,
-    envelope_generation,
-    suite_id
-)
-
-ciphertext = XChaCha20Poly1305.Encrypt(
-    key       = ObjectEnvelopeKey,
-    nonce     = nonce,
-    plaintext = ObjectKey,
-    aad       = aad
-)
-```
+The record layout, the wrapping-key derivation, the AAD tuple, the nonce placement, and the generation rules are frozen in [`format/OBJECT_KEY_ENVELOPE_V1.md`](format/OBJECT_KEY_ENVELOPE_V1.md), which governs them under the authority hierarchy in [`README.md`](README.md). The AAD binds `vault_id`, `collection_id`, `collection_epoch`, `object_id`, `suite_id`, and `envelope_generation` in that order; it does not bind `encoding_profile`, and no `object_key_version` field exists in v1.
 
 One object MAY have multiple envelopes when authorized in multiple security collections. Each envelope wraps the same object key under a different collection domain.
 

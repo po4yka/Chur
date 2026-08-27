@@ -21,7 +21,7 @@ nonce:bytes[24]
 wrapped_object_key:bytes[48]   # 32-byte key + 16-byte tag for XChaCha20-Poly1305
 ```
 
-Exact offsets are defined by canonical vectors. The AAD domain tag is `CHUR\x00OBJECT\x00KEY-ENVELOPE\x00V1`, allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.5. V1 values for `format_version`, `encoding_profile`, and `suite_id` are allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.
+The record is exactly 142 bytes in the field order above, as §10 requires; exact offsets are fixed by the canonical vectors. A reader compares `format_version`, `encoding_profile`, and `suite_id` against the supported values before the AEAD runs, so a modified identifier fails as `UNSUPPORTED_VERSION` or `UNSUPPORTED_SUITE` and can never select a different construction. `suite_id` is additionally inside the AAD of §3. The AAD domain tag is `CHUR\x00OBJECT\x00KEY-ENVELOPE\x00V1`, allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.5. V1 values for `format_version`, `encoding_profile`, and `suite_id` are allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.
 
 ## 2. Wrapping key
 
@@ -40,18 +40,21 @@ The collection key remains random; HKDF separates envelope use from other future
 
 ## 3. AAD
 
-AAD binds:
-
 ```text
-domain tag
-format/encoding/suite
-vault ID
-collection ID and epoch
-object ID
-envelope generation
+aad = CanonicalTuple(
+    "CHUR\x00OBJECT\x00KEY-ENVELOPE\x00V1",
+    vault_id:bytes[16],
+    collection_id:bytes[16],
+    collection_epoch:u64,
+    object_id:bytes[16],
+    suite_id:u16,
+    envelope_generation:u64
+)
 ```
 
-It does not include nonce or ciphertext twice unless the final construction explicitly requires it.
+This element list, in this order, is the only object-key-envelope AAD, and [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §28 defers to it. The tag is allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.5 and the tuple encoding is §7.1 there, so the AAD is exactly 93 bytes: a 27-byte tag, then 16, 16, 8, 16, 2, and 8. The order is that of [`COLLECTION_KEY_ENVELOPE_V1.md`](COLLECTION_KEY_ENVELOPE_V1.md) §3 with `object_id` inserted after the collection identifiers, so the two envelope tuples read the same way.
+
+`nonce` and `wrapped_object_key` are not in the AAD: the nonce is an AEAD input and the ciphertext is what the tag already covers. `format_version` and `encoding_profile` are not in the AAD either, because §1 compares them as constants before the AEAD runs. There is no `object_key_version` field in this record or in this tuple: a rewrap of the same object key is an `envelope_generation` increase under §5, and a new object key is a new object.
 
 Substituting an envelope across vaults, collections, epochs, objects, or generations must fail authentication.
 
