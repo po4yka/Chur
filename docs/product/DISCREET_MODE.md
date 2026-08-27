@@ -31,7 +31,19 @@ Public-shell requirements:
 - independent navigation graph and dependency graph;
 - usable after process restart without opening a vault;
 - no code path that treats public content as private encryption metadata;
-- backup policy documented independently from private-vault recovery.
+- backup policy as stated in "Public-shell disclosure and backup" below.
+
+### Public-shell disclosure and backup
+
+Public-shell content is not vault-protected. It is ordinary application data in public storage, readable by anyone holding the unlocked device, and it enters the platform backup. The product deliberately asks the user to keep real content there, because a shell that is not genuinely used is not a shell, so the application must say what that costs:
+
+- the first time the user writes public-shell content, the application states once that this content is not encrypted by Chur, and names the private vault as the protected alternative;
+- public-shell settings carry the same statement permanently, beside the entry that reaches the vault;
+- the copy must not present the disclosure as a security feature and must not imply that the public shell is private.
+
+Public-shell storage is included in the ordinary platform backup and private-vault storage is excluded from it without exception. Both halves are deliberate: a Notes surface that loses its content on device transfer is not functional, and an object store carried by a transport that chooses what to copy is not restorable. The two rules apply to disjoint directories and are implemented by [`../ANDROID.md`](../ANDROID.md) §13.4 and [`../IOS.md`](../IOS.md) §14.1. A change that places a vault path in a backup include set is a release blocker, and no public-shell backup rule may be widened to a path outside public storage.
+
+The settings statement carries both halves: public-shell content is backed up by the platform, and vault content is not and leaves the device only through the package of [`../format/BACKUP_FORMAT_V1.md`](../format/BACKUP_FORMAT_V1.md).
 
 ## Session gate
 
@@ -180,4 +192,6 @@ Marketing and store listings must not claim:
 - widgets/search/shortcuts expose no private metadata;
 - real and decoy sessions use separate stores and caches;
 - alternate presentation is user-controlled and reversible;
-- platform review can exercise all functionality.
+- platform review can exercise all functionality;
+- the public-shell disclosure appears on the first public write and is present in public-shell settings;
+- a real backup and restore run carries public-shell content and no vault path.
