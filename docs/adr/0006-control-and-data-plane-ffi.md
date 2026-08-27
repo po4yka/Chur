@@ -72,6 +72,6 @@ FFI ABI versions separately from persisted formats. Binding generator changes do
 
 ## Follow-up
 
-- decide UniFFI or Gobley versus a handwritten C ABI for the control plane; the choice is still in the ADR backlog and blocks the generated-binding tests;
-- assign the first FFI ABI version and the handshake constant, versioned independently of the vault formats;
+- the control-plane binding generator was decided by [`0016`](0016-freeze-the-v1-c-abi.md): one hand-written C ABI reached through a KMP `expect`/`actual` adapter, no UniFFI and no Gobley, so the generated-binding tests are withdrawn;
+- assign the value of the first FFI ABI version pair, versioned independently of the vault formats; [`0016`](0016-freeze-the-v1-c-abi.md) froze the handshake exports of `interop/FFI_CONTRACT.md` §2 without allocating one;
 - publish the invalid buffer, handle, and file-descriptor fuzz corpora listed under Validation.

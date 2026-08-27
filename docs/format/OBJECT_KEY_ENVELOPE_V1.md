@@ -6,7 +6,7 @@
 
 ## 1. Structure
 
-Conceptual canonical fields:
+Canonical fields:
 
 ```text
 format_version:u16

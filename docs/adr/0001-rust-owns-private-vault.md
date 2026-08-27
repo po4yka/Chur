@@ -72,4 +72,4 @@ Persisted bytes and migrations are independent from UI framework changes. FFI AB
 
 - none of the Validation evidence exists yet; it lands with the first `chur-core` and `chur-cli` implementations in Phase 0;
 - add the module dependency check that fails the build when a feature module imports FFI symbols or a platform key implementation directly;
-- assign the first FFI ABI version separately from the vault format versions, in [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md).
+- assign the first FFI ABI version separately from the vault format versions; [`0016`](0016-freeze-the-v1-c-abi.md) froze the handshake exports in [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md) §2 and allocated no `(major, minor)` value for them.

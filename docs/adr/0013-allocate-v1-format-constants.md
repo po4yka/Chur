@@ -59,5 +59,5 @@ No bytes exist yet for any of these formats, so nothing migrates. The version an
 ## Follow-up
 
 - allocate a domain tag for each authenticated record whose AAD is not yet frozen, starting with the sync operation record, in the change that freezes it;
-- freeze the backup package framing and confirm or retire the reserved record types;
+- the backup package framing was frozen by [`0018`](0018-freeze-backup-package-framing.md); of the backup record types in `format/CANONICAL_ENCODING_V1.md` §15.3 only `0x06`, the incremental operation segment, stays unconfirmed, because the incremental backup of `format/BACKUP_FORMAT_V1.md` §6 remains proposed;
 - allocate the password profile identifier with the Argon2id parameter profile.

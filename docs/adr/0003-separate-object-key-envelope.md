@@ -67,6 +67,6 @@ Envelope and container versions evolve independently. Backup packages must inclu
 
 ## Follow-up
 
-- freeze the envelope record layout and its AAD tuple in [`../format/OBJECT_KEY_ENVELOPE_V1.md`](../format/OBJECT_KEY_ENVELOPE_V1.md), whose fields are still described as conceptual, using the constants allocated by [`0013`](0013-allocate-v1-format-constants.md);
+- the envelope record layout and its AAD tuple were frozen by [`0025`](0025-freeze-the-object-key-envelope-aad.md) in [`../format/OBJECT_KEY_ENVELOPE_V1.md`](../format/OBJECT_KEY_ENVELOPE_V1.md) §1 and §3, over the constants allocated by [`0013`](0013-allocate-v1-format-constants.md);
 - define the catalog policy that rejects duplicate and stale active envelopes for one object;
 - publish the multiple-envelope and rewrap vectors listed under Validation.

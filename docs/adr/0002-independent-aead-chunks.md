@@ -70,6 +70,6 @@ Chunk framing, size range, nonce construction, and final commit are versioned fo
 
 ## Follow-up
 
-- freeze the default chunk size and the approved chunk-size range; [`0008`](0008-freeze-object-container-v1-layout.md) froze the framing but left the range open, and it is still in the ADR backlog;
+- the approved chunk-size range was set by [`0020`](0020-set-the-v1-parser-limits.md) in `format/OBJECT_CONTAINER_V1.md` §16; the default inside that range waits on the benchmark that [`0020`](0020-set-the-v1-parser-limits.md) §Follow-up requires over the candidates of §6 there;
 - publish the substitution, reorder, and truncation vectors listed under Validation;
 - record the mobile performance and energy benchmarks that justify the chosen default before Gate 2.

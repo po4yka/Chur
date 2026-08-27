@@ -66,5 +66,5 @@ No descriptors exist yet, so nothing migrates. Tag length, domain tag, and label
 
 ## Follow-up
 
-- freeze the descriptor field encoding and offsets; the descriptor magic `CHURVLT1` is allocated by [`0013`](0013-allocate-v1-format-constants.md) in `format/CANONICAL_ENCODING_V1.md` §15.1;
-- resolve `CRYPTOGRAPHY.md` §74 item 15, real/decoy candidate discovery, which this ADR constrains but does not define.
+- the descriptor field encoding and offsets were frozen by [`0019`](0019-freeze-remaining-v1-record-layouts.md) in `format/VAULT_DESCRIPTOR_V1.md` §2 and §5 to §7; the descriptor magic `CHURVLT1` is allocated by [`0013`](0013-allocate-v1-format-constants.md) in `format/CANONICAL_ENCODING_V1.md` §15.1;
+- `CRYPTOGRAPHY.md` §74 item 15, real/decoy candidate discovery, which this ADR constrains but does not define, was resolved by [`0026`](0026-argon2id-memory-floor-and-candidate-set.md) in `security/KEY_SLOTS.md` §8.
