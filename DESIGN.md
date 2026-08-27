@@ -10,6 +10,8 @@ platforms:
   - Compose Multiplatform
 status: proposed
 source_of_truth: DESIGN.md
+source_of_truth_scope: visual and interaction contracts only
+authority: rank 3 under the hierarchy in docs/README.md
 related_documents:
   - README.md
   - docs/ARCHITECTURE.md
@@ -345,7 +347,7 @@ The central visual rule is:
 - shared Compose component appearance;
 - public-shell, session-gate, private-vault, and decoy-vault presentation;
 - compact, medium, expanded, landscape, and foldable composition;
-- privacy-sensitive transition and error behavior;
+- the presentation of privacy-sensitive transitions and errors whose behavior other documents define;
 - accessibility, motion, content, and visual-regression expectations;
 - prompts and constraints used by design or coding agents.
 
@@ -356,6 +358,8 @@ It is not a substitute for:
 - byte-level protocols;
 - App Store or Google Play policy review;
 - user research or accessibility testing with assistive technology.
+
+`DESIGN.md` is rank 3 in the authority hierarchy of [`docs/README.md`](docs/README.md#authority-hierarchy) and is normative for presentation only. Privacy-sensitive transitions, lock behavior, and error semantics are owned by [`docs/product/DISCREET_MODE.md`](docs/product/DISCREET_MODE.md), [`docs/security/PLAINTEXT_LIFECYCLE.md`](docs/security/PLAINTEXT_LIFECYCLE.md), and [`docs/ERROR_MODEL.md`](docs/ERROR_MODEL.md); this document specifies only how their required states appear.
 
 When visual convenience conflicts with deterministic locking, non-oracular authentication, platform accessibility, or plaintext minimization, the security and accessibility invariant wins.
 

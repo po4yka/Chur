@@ -10,7 +10,7 @@ When documents conflict, use this order until the conflict is resolved:
 
 1. byte-exact versioned format or protocol specifications;
 2. accepted ADRs that explicitly supersede earlier decisions;
-3. focused normative security, interop, assurance, and sync specifications;
+3. focused normative security, interop, assurance, sync, and product specifications, and [`DESIGN.md`](../DESIGN.md) for visual and interaction contracts only;
 4. [`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md);
 5. [`ARCHITECTURE.md`](ARCHITECTURE.md);
 6. root [`README.md`](../README.md), roadmap, and explanatory material.
@@ -51,6 +51,15 @@ Document status describes a whole document. Individual statements inside a docum
 - **Non-goal** — a guarantee Chur does not claim.
 
 `CRYPTOGRAPHY.md`, `ARCHITECTURE.md`, `ANDROID.md`, and `IOS.md` use this classification. It is not a document status: a **Proposed** document may contain **Decision** statements.
+
+## Root documents
+
+- [`README.md`](../README.md) — product overview and explanatory material; rank 6.
+- [`ROADMAP.md`](../ROADMAP.md) — owns the phase definitions, their scope, exclusions, and exit criteria; `ARCHITECTURE.md` §44 and the root README point at it.
+- [`DESIGN.md`](../DESIGN.md) — visual and interaction contracts; rank 3 for presentation only. Privacy-sensitive transitions, lock behavior, and error semantics are owned by [`product/DISCREET_MODE.md`](product/DISCREET_MODE.md), [`security/PLAINTEXT_LIFECYCLE.md`](security/PLAINTEXT_LIFECYCLE.md), and [`ERROR_MODEL.md`](ERROR_MODEL.md).
+- [`CONTRIBUTING.md`](../CONTRIBUTING.md) — contribution process, reading order, and format-change requirements.
+- [`DEVELOPMENT.md`](../DEVELOPMENT.md) — development environment, pinned toolchains, and build workflow.
+- [`SECURITY.md`](../SECURITY.md) — vulnerability reporting and supported versions.
 
 ## Core documents
 
