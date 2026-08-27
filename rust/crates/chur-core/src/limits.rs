@@ -202,8 +202,12 @@ pub mod catalog {
     pub const QUERY_LIMIT_DEFAULT: u32 = 200;
     /// Exact length of `ObjectProjectionV1`, §16.1.
     pub const PROJECTION_LEN: usize = 16 + 16 + 2 + 8 + 8 + 1 + 8 + 4 + 4 + 8 + 1 + 1 + 1 + 1;
-    /// Exact length of an encoded page cursor: a sort value and an object ID, §16.2.
-    pub const CURSOR_LEN: usize = 8 + super::ID_LEN;
+    /// Exact length of an encoded page cursor, §16.2.
+    ///
+    /// It is the ordering key, a sort value and an object ID, plus the sort and
+    /// scope the cursor was issued under, which is what makes a cursor carried
+    /// into a different scope detectable rather than silently valid.
+    pub const CURSOR_LEN: usize = 8 + super::ID_LEN + 1 + 1 + super::ID_LEN;
 
     /// Longest album name the catalog accepts, in bytes.
     pub const ALBUM_NAME_MAX: usize = 512;
@@ -323,6 +327,7 @@ const _: () = assert!(90 >= slot::BODY_MIN);
 // shape the FFI page buffer of `docs/interop/FFI_CONTRACT.md` §6.2 is sized on,
 // and a full page fits a bounded buffer.
 const _: () = assert!(catalog::PROJECTION_LEN == 79);
+const _: () = assert!(catalog::CURSOR_LEN == 42);
 const _: () = assert!(catalog::QUERY_LIMIT_DEFAULT <= catalog::QUERY_LIMIT_MAX);
 const _: () = assert!(catalog::QUERY_LIMIT_MIN <= catalog::QUERY_LIMIT_DEFAULT);
 const _: () = assert!(catalog::QUERY_LIMIT_MAX as usize * catalog::PROJECTION_LEN == 39_500);

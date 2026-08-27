@@ -183,8 +183,8 @@ fn insert_object_row(transaction: &Transaction<'_>, object: &Object) -> Result<(
                  object_id, object_generation, collection_id, primary_stream_id, media_kind,
                  capture_time_ms, import_time_ms, capture_time_substituted, plaintext_size,
                  width, height, duration_ms, favorite, state, integrity_summary,
-                 thumbnail_ready, active_metadata_revision
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                 thumbnail_ready, active_metadata_revision, search_key
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 object.object_id.as_bytes().as_slice(),
                 as_sqlite_integer(
@@ -206,6 +206,7 @@ fn insert_object_row(transaction: &Transaction<'_>, object: &Object) -> Result<(
                 i64::from(object.integrity_summary.value()),
                 i64::from(object.thumbnail_ready),
                 i64::from(object.active_metadata_revision),
+                row_key(&object.object_id),
             ],
         )
         .map_err(|error| map_sqlite(error, "the object row could not be written"))?;
@@ -849,8 +850,11 @@ fn search_rowid(transaction: &Transaction<'_>, object_id: &Id) -> Result<Option<
 /// so a mapping is unavoidable. The first eight bytes of the identifier are
 /// used, big-endian, with the sign bit cleared so the value is positive. The
 /// identifier is CSPRNG output, so a collision needs about 2^31 objects in one
-/// vault by the birthday bound and the vault holds at most 10^6 under §21.
-fn row_key(object_id: &Id) -> i64 {
+/// vault by the birthday bound and the vault holds at most 10^6 under §21. The
+/// `objects.search_key` column carries the same value under a `UNIQUE`
+/// constraint, so the case the bound makes improbable is still refused rather
+/// than served as a wrong page.
+pub(crate) fn row_key(object_id: &Id) -> i64 {
     let bytes = object_id.as_bytes();
     let mut head = [0u8; 8];
     head.copy_from_slice(&bytes[..8]);

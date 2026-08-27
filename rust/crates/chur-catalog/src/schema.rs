@@ -87,7 +87,12 @@ CREATE TABLE objects (
     state                     INTEGER NOT NULL,
     integrity_summary         INTEGER NOT NULL,
     thumbnail_ready           INTEGER NOT NULL,
-    active_metadata_revision  INTEGER NOT NULL
+    active_metadata_revision  INTEGER NOT NULL,
+    -- The FTS5 rowid of this object. FTS5 keys on an INTEGER rowid and an
+    -- object is keyed on 16 opaque bytes, so a search hit could not be joined
+    -- back to its row without a column holding the mapping. UNIQUE is what
+    -- turns a collision into a refused insert rather than a wrong page.
+    search_key                INTEGER NOT NULL UNIQUE
 ) STRICT;
 
 -- §6. No active row points at a temporary uncommitted container, which the

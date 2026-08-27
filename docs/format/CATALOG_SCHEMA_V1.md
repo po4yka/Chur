@@ -290,7 +290,22 @@ ObjectQueryV1
     limit     1 to 500, default 200
 ```
 
+`kinds` is a bitmask over the `media_class` values of [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.4, where a value `v` occupies bit `v - 1`. The four allocated classes therefore occupy bits 0 to 3 and `0x000F` selects the same rows as `0`. A set bit above bit 3 selects nothing rather than being an error, which is what lets a newer caller ask a v1 build for a class it does not have without the request failing.
+
 A page returns the projections, a `total_count` for the scope, the `catalog_generation` the page was read at, and a `next_cursor` that is empty when the scope is exhausted. A `limit` above 500 is `RESOURCE_LIMIT_EXCEEDED`.
+
+The cursor is 42 bytes and opaque to the caller:
+
+```text
+CursorV1
+    sort_value    u64          the sort column of the last row returned
+    object_id     bytes[16]    that row's identifier
+    sort          u8           the ObjectQueryV1 sort this cursor was issued under
+    scope_kind    u8           1 timeline, 2 album, 3 favorites, 4 tag, 5 search, 6 quarantine
+    scope_id      bytes[16]    the album or tag identifier, 16 zero bytes for every other scope
+```
+
+The last three fields are what make "issued for a different scope or sort" detectable. Without them a cursor is an ordering key alone, and a caller that changed scope between pages would receive a page ordered correctly and drawn from the wrong set. A `search` cursor carries zero bytes in `scope_id` and binds no query text, so continuing a search whose terms changed returns rows from the new terms after the old cursor position; a caller that changes terms starts the scope again, exactly as it must after a `catalog_generation` change.
 
 Paging is keyset, never offset. The cursor is the sort value of the last row returned followed by its `object_id`, and the next page selects the rows ordered strictly after that pair. Every page therefore costs the same whatever its position, and a page boundary stays valid while rows are inserted and deleted. The consequence is stated rather than hidden: a row whose sort key changes between two pages may be returned twice or skipped, so a caller whose page carries a `catalog_generation` different from the previous page's restarts the scope instead of continuing the cursor. A cursor that does not parse, or that was issued for a different scope or sort, is `INVALID_INPUT`.
 

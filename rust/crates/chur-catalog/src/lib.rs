@@ -16,6 +16,7 @@
 
 pub mod db;
 pub mod model;
+pub mod query;
 pub(crate) mod row;
 pub mod schema;
 pub mod store;
