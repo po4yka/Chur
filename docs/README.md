@@ -15,6 +15,14 @@ When documents conflict, use this order until the conflict is resolved:
 
 Implementation behavior is not authoritative merely because it exists. A divergence from a normative specification is a defect unless a migration and specification change are approved.
 
+## Normative language
+
+The words must, must not, required, should, should not, and may are used as defined in [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119.html).
+
+Chur writes them in lowercase. In a normative document, lowercase must, must not, should, should not, and may carry their full RFC 2119 force and are not weaker than the same words in capitals. This is a deliberate departure from RFC 8174 §2, which reserves the meaning for the uppercase spelling: the focused format, security, interop, assurance, sync, and product specifications and the ADRs already state their requirements in lowercase, and converting them would change forty-one files to gain what this rule states once.
+
+`CRYPTOGRAPHY.md`, `ARCHITECTURE.md`, `ANDROID.md`, and `IOS.md` capitalize the keywords. The capitals are typography, not extra strength. A new document should use lowercase.
+
 ## Document status
 
 Each document should state one of:

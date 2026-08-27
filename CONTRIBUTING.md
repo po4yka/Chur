@@ -35,7 +35,7 @@ Android and iOS code may authorize platform key use, open file descriptors, run 
 
 ### Documentation and specifications
 
-Normative documents use **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** deliberately. Proposed constants and undecided mechanisms must be labelled as proposals rather than frozen requirements.
+Requirement strength follows the rule in [`docs/README.md`](docs/README.md#normative-language): in a normative document, lowercase must, must not, should, should not, and may carry full RFC 2119 force, and the four documents that capitalize them gain no extra strength by doing so. Use these words only for requirements. Proposed constants and undecided mechanisms must be labelled as proposals rather than frozen requirements.
 
 ## Pull-request requirements
 
