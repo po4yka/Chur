@@ -1065,7 +1065,7 @@ Rules:
 - each handle is typed and session-generation checked;
 - native methods remain coarse-grained;
 - large media is never returned as a complete `ByteArray`;
-- callbacks from arbitrary Rust threads are avoided in v1;
+- Rust never calls back into Kotlin; progress is polled per [`interop/FFI_CONTRACT.md`](interop/FFI_CONTRACT.md) §10 and republished on the main dispatcher;
 - cancellation is explicit;
 - close is idempotent.
 

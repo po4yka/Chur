@@ -1437,7 +1437,7 @@ interface ObjectReader : AutoCloseable {
 - Errors contain stable codes, retryability, and a diagnostic token, but no private inputs.
 - Native calls remain coarse-grained.
 - Kotlin coroutines wrap synchronous calls on bounded dispatchers.
-- Foreign callbacks from arbitrary Rust threads are avoided in v1.
+- Rust never calls foreign code in v1: progress is polled from the operation handle per [`interop/FFI_CONTRACT.md`](interop/FFI_CONTRACT.md) §10, and the polling caller owns the delivery thread.
 - The binding generator is replaceable; core crates do not expose binding-specific types.
 
 ### 27.5 Secret transfer

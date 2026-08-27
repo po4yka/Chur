@@ -1172,6 +1172,7 @@ Any rejection reports `ABI_INCOMPATIBLE` ([`ERROR_MODEL.md`](ERROR_MODEL.md)), f
 - Keychain and authentication callbacks are converted into cancellable structured operations.
 - Rust I/O and Argon2id never block the main thread.
 - AVAsset resource requests use a dedicated executor/queue.
+- Rust never calls back into Swift; operation progress is polled from the operation handle per [`interop/FFI_CONTRACT.md`](interop/FFI_CONTRACT.md) §10 and republished on the main actor.
 - Repeated native callbacks use bounded buffers and autorelease scopes where necessary.
 - Complete media never becomes one Swift `Data` or Kotlin `ByteArray`.
 - Password and device-secret buffers are mutable, bounded, and cleared best effort.

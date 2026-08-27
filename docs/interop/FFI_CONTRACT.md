@@ -209,25 +209,26 @@ Cancellation guarantees:
 
 - no new plaintext after cancellation observed;
 - partial ciphertext remains temp/journaled, not active;
-- callbacks cease after terminal completion;
+- no progress snapshot advances after the terminal flag is set;
 - exactly one terminal result;
 - cancellation maps to `CANCELLED`, not corruption.
 
-## 10. Progress callbacks
+## 10. Progress reporting
 
-Progress contains only bounded non-private numbers:
+v1 has no foreign callbacks. Rust never calls Kotlin, Swift, or Objective-C code, so there is no delivery thread, no re-entrancy rule, and no consumer-disappearance race to specify. The caller polls its own operation handle:
 
 ```text
-operation kind
-encrypted/plain bytes processed when safe
-total bytes if known
-stage code
-terminal flag
+chur_operation_poll(operation, out_progress) -> chur_status_t
 ```
 
-No filename, path, album, object ID, or real/decoy identity.
+- polling is synchronous and cheap: it takes the per-slot lock only long enough to copy a snapshot, and never waits on the operation;
+- the caller polls on its own dispatcher or queue, at a rate it chooses, and republishes to the UI on the platform's main thread. The delivery thread is therefore the caller's, by construction;
+- `ChurProgressV1` contains only bounded non-private numbers: operation kind, encrypted or plain bytes processed when safe, total bytes if known, stage code, terminal flag, and the terminal status;
+- once the terminal flag is set the snapshot is frozen; every later poll returns the same terminal result until the handle is closed, so exactly one terminal result is observable;
+- polling a stale-generation handle returns `SESSION_EXPIRED` rather than a partial snapshot;
+- no filename, path, album, object ID, or real/decoy identity appears in progress.
 
-Callbacks must not block Rust critical sections and must tolerate consumer disappearance.
+A callback data plane would need a delivery-thread contract, a re-entrancy rule, and a release race against a disappearing consumer. Adding callbacks later is a minor-version addition behind a capability bit.
 
 ## 11. Errors
 
@@ -271,7 +272,7 @@ Android loads ABI-specific native libraries through the application shell/JNI ad
 - double close and leaked handle cleanup;
 - lock during read/import/export/verify/migrate;
 - panic injection;
-- callback disappearance/reentrancy;
+- poll after the terminal result, after close, and after lock;
 - file descriptor closed early/non-seekable;
 - cancellation at every stage;
 - no secret values in errors/logs;
