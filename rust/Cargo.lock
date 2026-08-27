@@ -232,7 +232,11 @@ dependencies = [
 name = "chur-media"
 version = "0.1.0"
 dependencies = [
+ "chur-catalog",
  "chur-core",
+ "chur-crypto",
+ "chur-format",
+ "zeroize",
 ]
 
 [[package]]

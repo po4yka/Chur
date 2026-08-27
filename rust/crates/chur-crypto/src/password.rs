@@ -173,6 +173,7 @@ pub fn derive_kek(password: &[u8], salt: &[u8], params: Argon2Params) -> Result<
     // killed by the platform. The guard is taken here rather than at each call
     // site so no caller can forget it.
     let _permit = semaphore();
+    DERIVATIONS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     let built = ParamsBuilder::new()
         .m_cost(params.memory_kib)
         .t_cost(params.iterations)
@@ -196,6 +197,22 @@ pub fn derive_kek(password: &[u8], salt: &[u8], params: Argon2Params) -> Result<
             )
         })?;
     Ok(derived)
+}
+
+/// How many Argon2id derivations this process has performed.
+///
+/// `docs/security/KEY_SLOTS.md` §8 fixes the cost of one password attempt at
+/// exactly two derivations whatever the device holds, and a constant that
+/// cannot be observed cannot be enforced. The counter carries no secret: it
+/// says how often a primitive ran, not what it ran on, and it says nothing
+/// about which slots exist because the count is the same either way. That is
+/// the whole reason §8 fixes it.
+static DERIVATIONS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// The value of that counter.
+#[must_use]
+pub fn derivations_performed() -> u64 {
+    DERIVATIONS.load(core::sync::atomic::Ordering::Relaxed)
 }
 
 /// The process-wide Argon2id permit.

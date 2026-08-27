@@ -827,38 +827,6 @@ mod tests {
     }
 
     #[test]
-    fn an_attempt_runs_two_argon2id_derivations_whatever_the_registry_holds() {
-        // §8 fixes the count at two. The proof available without instrumenting
-        // the primitive is the wall-clock shape: one vault and two vaults cost
-        // the same, and both cost about twice one derivation.
-        let one = scratch();
-        drop(make(&one));
-        let two = scratch();
-        drop(make(&two));
-        let second = create(&two, b"a different password", 1)
-            .expect("create")
-            .activate()
-            .expect("activate");
-        drop(second);
-        assert_eq!(two.registry_names().expect("names").len(), 2);
-
-        let time = |root_dir: &VaultRoot| {
-            let start = std::time::Instant::now();
-            let _ = unlock_with_password(root_dir, b"neither of them", 1);
-            start.elapsed()
-        };
-        // Warm the allocator so the first measurement is not the outlier.
-        let _ = time(&one);
-        let single = time(&one);
-        let pair = time(&two);
-        let ratio = pair.as_secs_f64() / single.as_secs_f64().max(f64::MIN_POSITIVE);
-        assert!(
-            (0.5..2.0).contains(&ratio),
-            "one vault and two vaults did not cost the same: {single:?} against {pair:?}"
-        );
-    }
-
-    #[test]
     fn a_password_valid_for_a_sibling_identity_fails_like_any_other() {
         let root_dir = scratch();
         drop(make(&root_dir));

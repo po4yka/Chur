@@ -4,10 +4,15 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Streaming import/export, random-access readers, derived assets."
+description = "Streaming import and export, random-access authenticated reads."
 
 [dependencies]
 chur-core.workspace = true
+chur-crypto.workspace = true
+chur-format.workspace = true
+chur-catalog.workspace = true
+
+zeroize.workspace = true
 
 [lints]
 workspace = true

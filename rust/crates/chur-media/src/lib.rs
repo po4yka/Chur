@@ -10,5 +10,11 @@
 //! - `docs/interop/MEDIA_PIPELINE.md`
 //! - `docs/format/OBJECT_CONTAINER_V1.md` (random access, verification states)
 //! - `docs/security/PLAINTEXT_LIFECYCLE.md` (import, viewing, scratch policy)
-//!
-//! Modules land with their owning specifications; none exist yet.
+
+pub mod derived;
+pub mod export;
+pub mod import;
+pub mod integrity;
+pub mod keys;
+pub mod reader;
+pub mod store;

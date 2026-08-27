@@ -89,6 +89,113 @@ pub fn put_collection(db: &mut CatalogDb, collection: &Collection) -> Result<()>
     })
 }
 
+/// Writes a collection and its first key envelope in one transaction, §4 and §17.
+pub fn put_collection_with_envelope(
+    db: &mut CatalogDb,
+    collection: &Collection,
+    envelope_generation: u64,
+    envelope: &[u8],
+) -> Result<()> {
+    put_collection(db, collection)?;
+    let epoch = as_sqlite_integer(
+        collection.current_epoch,
+        "the collection epoch is too large",
+    )?;
+    let generation =
+        as_sqlite_integer(envelope_generation, "the envelope generation is too large")?;
+    db.transaction(|transaction| {
+        let active: i64 = transaction
+            .query_row(
+                "SELECT count(*) FROM collection_key_envelopes
+                  WHERE collection_id = ?1 AND collection_epoch = ?2 AND status = 1",
+                params![collection.collection_id.as_bytes().as_slice(), epoch],
+                |row| row.get(0),
+            )
+            .map_err(|error| map_sqlite(error, "the collection envelopes could not be counted"))?;
+        let active = from_sqlite_integer(active, "a catalog count is negative")?;
+        ensure!(
+            active < u64::from(limits::COLLECTION_ENVELOPES_ACTIVE_MAX),
+            ResourceLimitExceeded,
+            "the epoch holds the §21 maximum of active collection envelopes"
+        );
+        transaction
+            .execute(
+                "INSERT INTO collection_key_envelopes
+                     (collection_id, collection_epoch, generation, status, body)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(collection_id, collection_epoch, generation) DO NOTHING",
+                params![
+                    collection.collection_id.as_bytes().as_slice(),
+                    epoch,
+                    generation,
+                    i64::from(ENVELOPE_STATUS_ACTIVE),
+                    envelope,
+                ],
+            )
+            .map_err(|error| map_sqlite(error, "the collection envelope could not be written"))?;
+        Ok(())
+    })
+}
+
+/// The active key envelope of one collection epoch, §4.
+pub fn active_collection_envelope(
+    db: &CatalogDb,
+    collection_id: &Id,
+    epoch: u64,
+) -> Result<Vec<u8>> {
+    db.connection()
+        .query_row(
+            "SELECT body FROM collection_key_envelopes
+              WHERE collection_id = ?1 AND collection_epoch = ?2 AND status = ?3
+              ORDER BY generation DESC LIMIT 1",
+            params![
+                collection_id.as_bytes().as_slice(),
+                as_sqlite_integer(epoch, "the collection epoch is too large")?,
+                i64::from(ENVELOPE_STATUS_ACTIVE),
+            ],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .map_err(|error| map_sqlite(error, "the collection envelope could not be read"))
+}
+
+/// The collection a single-vault install seals every object under, §3.
+///
+/// It returns `None` rather than failing when the vault has none yet, because
+/// a vault created but never imported into is a legitimate state.
+pub fn default_collection(db: &CatalogDb) -> Result<Option<Id>> {
+    let bytes: Option<Vec<u8>> = db
+        .connection()
+        .query_row(
+            "SELECT collection_id FROM collections
+              WHERE policy_type = ?1 AND status = ?2
+              ORDER BY created_revision, collection_id LIMIT 1",
+            params![
+                i64::from(crate::model::COLLECTION_POLICY_VAULT_DEFAULT),
+                i64::from(crate::model::COLLECTION_STATUS_ACTIVE),
+            ],
+            |row| row.get(0),
+        )
+        .optional_row()?;
+    bytes
+        .map(|value| crate::row::id(&value, "the collection id is malformed"))
+        .transpose()
+}
+
+/// Turns "no rows" into `None` rather than an error.
+trait OptionalRow<T> {
+    fn optional_row(self) -> Result<Option<T>>;
+}
+
+impl<T> OptionalRow<T> for rusqlite::Result<T> {
+    fn optional_row(self) -> Result<Option<T>> {
+        match self {
+            Ok(value) => Ok(Some(value)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(map_sqlite(error, "a catalog row could not be read")),
+        }
+    }
+}
+
 /// Reads one collection.
 pub fn collection(db: &CatalogDb, collection_id: &Id) -> Result<Collection> {
     db.connection()

@@ -292,6 +292,17 @@ impl CanonicalManifest {
     /// Encoded length of a manifest for a derived stream.
     pub const LEN_DERIVED: usize = bounds::CANONICAL_MANIFEST_DERIVED_LEN;
 
+    /// The length of the manifest record a manifest of this shape produces.
+    ///
+    /// It is the 24-byte nonce, the sealed plaintext, and the 16-byte tag. The
+    /// import journal records this value when the transaction opens, and
+    /// §14.1's journaled-length formula reads it back, so it must be derivable
+    /// before the record is written.
+    #[must_use]
+    pub const fn record_length(&self) -> u32 {
+        (NONCE_LEN + self.len() + TAG_LEN) as u32
+    }
+
     /// Builds a manifest.
     ///
     /// The four identity fields arrive as one [`StreamIdentity`], which is the
@@ -892,6 +903,43 @@ impl<W: Write> ContainerWriter<W> {
         })
     }
 
+    /// Takes the sink back without finishing the container.
+    ///
+    /// It is the abandonment path of §14.4: the transaction is dead, so the
+    /// bytes written so far are discarded rather than committed, and the caller
+    /// needs the handle to delete them.
+    pub fn into_sink(self) -> W {
+        self.sink
+    }
+
+    /// The sink, so a caller that owns durability can act between records.
+    ///
+    /// `docs/format/OBJECT_CONTAINER_V1.md` §14.2 requires an fsync of the
+    /// container between chunk records, and the writer cannot perform it: a
+    /// `Write` sink has no durability operation. The importer therefore reaches
+    /// the sink here rather than reimplementing the record encoders.
+    pub fn sink_mut(&mut self) -> &mut W {
+        &mut self.sink
+    }
+
+    /// The number of chunk records written so far.
+    #[must_use]
+    pub const fn chunk_count(&self) -> u64 {
+        self.chunk_count
+    }
+
+    /// The plaintext length written so far.
+    #[must_use]
+    pub const fn total_plaintext_length(&self) -> u64 {
+        self.total_plaintext_length
+    }
+
+    /// The length of the last chunk written, zero before the first.
+    #[must_use]
+    pub const fn last_chunk_plaintext_length(&self) -> u32 {
+        self.last_chunk_plaintext_length
+    }
+
     /// Seals and writes one chunk.
     ///
     /// Every chunk except the last carries exactly `chunk_size` plaintext, so
@@ -1426,42 +1474,7 @@ impl<'a> ContainerReader<'a> {
         );
         let plaintext = aead::open(&self.keys.final_commit, &nonce, body, &aad)?;
         let commit = CanonicalFinalCommit::decode(&plaintext)?;
-
-        ensure!(
-            commit.object_id == *self.manifest.object_id()
-                && commit.stream_id == *self.manifest.stream_id()
-                && commit.stream_revision == self.manifest.stream_revision(),
-            ObjectCorrupt,
-            "final commit identity fields disagree with the manifest"
-        );
-        ensure!(
-            commit.manifest_commitment == self.manifest_commitment,
-            ObjectCorrupt,
-            "final commit names another manifest record"
-        );
-        if commit.chunk_count == 0 {
-            ensure!(
-                commit.total_plaintext_length == 0 && commit.last_chunk_plaintext_length == 0,
-                ObjectCorrupt,
-                "an empty object declares a non-zero length"
-            );
-        } else {
-            ensure!(
-                commit.last_chunk_plaintext_length >= 1
-                    && commit.last_chunk_plaintext_length <= self.manifest.chunk_size(),
-                ObjectCorrupt,
-                "last chunk plaintext length is outside the canonical chunking"
-            );
-            let expected = (commit.chunk_count - 1)
-                .checked_mul(u64::from(self.manifest.chunk_size()))
-                .and_then(|full| full.checked_add(u64::from(commit.last_chunk_plaintext_length)))
-                .ok_or_else(|| corrupt("total plaintext length overflows u64"))?;
-            ensure!(
-                expected == commit.total_plaintext_length,
-                ObjectCorrupt,
-                "total plaintext length disagrees with the canonical chunking"
-            );
-        }
+        check_final_commit(&commit, &self.manifest, &self.manifest_commitment)?;
         Ok(commit)
     }
 
@@ -1577,6 +1590,128 @@ fn slice_at(bytes: &[u8], start: u64, end: u64) -> Result<&[u8]> {
         .ok_or_else(|| corrupt("container ended inside a record"))
 }
 
+/// The §11 rules a final commit must satisfy against its own manifest.
+///
+/// Both readers apply it, so a container that one accepts and the other refuses
+/// is impossible by construction rather than by review.
+fn check_final_commit(
+    commit: &CanonicalFinalCommit,
+    manifest: &CanonicalManifest,
+    manifest_commitment: &Commitment,
+) -> Result<()> {
+    ensure!(
+        commit.object_id == *manifest.object_id()
+            && commit.stream_id == *manifest.stream_id()
+            && commit.stream_revision == manifest.stream_revision(),
+        ObjectCorrupt,
+        "final commit identity fields disagree with the manifest"
+    );
+    ensure!(
+        commit.manifest_commitment == *manifest_commitment,
+        ObjectCorrupt,
+        "final commit names another manifest record"
+    );
+    if commit.chunk_count == 0 {
+        ensure!(
+            commit.total_plaintext_length == 0 && commit.last_chunk_plaintext_length == 0,
+            ObjectCorrupt,
+            "an empty object declares a non-zero length"
+        );
+    } else {
+        ensure!(
+            commit.last_chunk_plaintext_length >= 1
+                && commit.last_chunk_plaintext_length <= manifest.chunk_size(),
+            ObjectCorrupt,
+            "last chunk plaintext length is outside the canonical chunking"
+        );
+        let expected = (commit.chunk_count - 1)
+            .checked_mul(u64::from(manifest.chunk_size()))
+            .and_then(|full| full.checked_add(u64::from(commit.last_chunk_plaintext_length)))
+            .ok_or_else(|| corrupt("total plaintext length overflows u64"))?;
+        ensure!(
+            expected == commit.total_plaintext_length,
+            ObjectCorrupt,
+            "total plaintext length disagrees with the canonical chunking"
+        );
+    }
+    Ok(())
+}
+
+/// Decodes a chunk record header from exactly its 20 bytes.
+fn decode_chunk_header(bytes: &[u8], expected_index: u64) -> Result<ChunkHeader> {
+    let mut reader = Reader::new(bytes, ChurStatus::ObjectCorrupt);
+    ensure!(
+        reader.u8()? == ContainerRecordType::Chunk.value(),
+        ObjectCorrupt,
+        "record type is not a chunk record"
+    );
+    ensure!(
+        reader.u8()? == RECORD_VERSION_V1,
+        ObjectCorrupt,
+        "chunk record version is not the v1 value"
+    );
+    ensure!(
+        reader.u16()? == RESERVED_V1,
+        ObjectCorrupt,
+        "chunk record reserved field is not zero"
+    );
+    let chunk_index = reader.u64()?;
+    let plaintext_length = reader.u32()?;
+    let ciphertext_length = reader.u32()?;
+    ensure!(
+        chunk_index == expected_index,
+        ObjectCorrupt,
+        "the chunk record carries another index"
+    );
+    ensure!(
+        plaintext_length >= 1,
+        ObjectCorrupt,
+        "a chunk record carries at least one plaintext byte"
+    );
+    ensure!(
+        u64::from(ciphertext_length) == u64::from(plaintext_length) + TAG_LEN as u64,
+        ObjectCorrupt,
+        "chunk ciphertext length is not the plaintext length plus one tag"
+    );
+    Ok(ChunkHeader {
+        chunk_index,
+        plaintext_length,
+        ciphertext_length,
+    })
+}
+
+/// Decodes a final commit record header from exactly its 32 bytes.
+fn decode_final_commit_header(bytes: &[u8]) -> Result<FinalCommitHeader> {
+    let mut reader = Reader::new(bytes, ChurStatus::ObjectCorrupt);
+    ensure!(
+        reader.u8()? == ContainerRecordType::FinalCommit.value(),
+        ObjectCorrupt,
+        "record type is not a final commit record"
+    );
+    ensure!(
+        reader.u8()? == RECORD_VERSION_V1,
+        ObjectCorrupt,
+        "final commit record version is not the v1 value"
+    );
+    ensure!(
+        reader.u16()? == RESERVED_V1,
+        ObjectCorrupt,
+        "final commit reserved field is not zero"
+    );
+    let commit_ciphertext_length = reader.u32()?;
+    ensure!(
+        (bounds::COMMIT_CIPHERTEXT_MIN..=bounds::COMMIT_CIPHERTEXT_MAX)
+            .contains(&commit_ciphertext_length),
+        ObjectCorrupt,
+        "final commit ciphertext length is outside the v1 bounds"
+    );
+    let commit_nonce = Nonce::new(reader.fixed::<NONCE_LEN>()?);
+    Ok(FinalCommitHeader {
+        commit_ciphertext_length,
+        commit_nonce,
+    })
+}
+
 fn read_chunk_header(bytes: &[u8], offset: u64, expected_index: u64) -> Result<ChunkHeader> {
     let header = slice_at(bytes, offset, offset + ChunkHeader::LEN as u64)?;
     let mut reader = Reader::new(header, ChurStatus::ObjectCorrupt);
@@ -1663,6 +1798,431 @@ const _: () = assert!(ChunkHeader::LEN == 1 + 1 + 2 + 8 + 4 + 4);
 const _: () = assert!(FinalCommitHeader::LEN == 1 + 1 + 2 + 4 + NONCE_LEN);
 const _: () = assert!(CanonicalFinalCommit::LEN == 16 + 16 + 4 + 32 + 8 + 8 + 4 + 32 + 8);
 const _: () = assert!(ID_LEN == 16);
+
+// ---------------------------------------------------------------------------
+// Random-access reader over a source that is not in memory
+// ---------------------------------------------------------------------------
+
+/// A source that can read a byte range without loading the whole file.
+pub trait ReadAt {
+    /// The byte length of the source.
+    fn length(&self) -> u64;
+
+    /// Reads exactly `buffer.len()` bytes at `offset`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ChurStatus::ObjectIncomplete`] when the source ends before the
+    /// range, and [`ChurStatus::IoFailure`] otherwise.
+    fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> Result<()>;
+}
+
+/// The record length of a v1 final commit.
+///
+/// §11 fixes `CanonicalFinalCommit` at exactly 128 bytes, so its sealed length
+/// is exactly 144 and the record is exactly 176 bytes in every v1 container.
+/// Locating the record from the file length depends on that, and the assertions
+/// below are what make the dependence checked rather than assumed.
+pub const FINAL_COMMIT_RECORD_LEN: u64 =
+    bounds::COMMIT_HEADER_LEN as u64 + bounds::CANONICAL_FINAL_COMMIT_LEN as u64 + TAG_LEN as u64;
+
+const _: () = assert!(FINAL_COMMIT_RECORD_LEN == 176);
+const _: () =
+    assert!((bounds::CANONICAL_FINAL_COMMIT_LEN + TAG_LEN) as u32 >= bounds::COMMIT_CIPHERTEXT_MIN);
+const _: () =
+    assert!((bounds::CANONICAL_FINAL_COMMIT_LEN + TAG_LEN) as u32 <= bounds::COMMIT_CIPHERTEXT_MAX);
+
+/// The record layout of one container, computed rather than walked.
+///
+/// §12 makes the computation possible: every non-final chunk carries exactly
+/// `chunk_size` plaintext, so the whole layout follows from the file length,
+/// the manifest record length, and the chunk size. [`Layout`] walks instead,
+/// which suits a container already in memory; this suits one that is not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Geometry {
+    first_chunk_offset: u64,
+    chunk_size: u32,
+    chunk_count: u64,
+    last_chunk_plaintext_length: u32,
+    total_plaintext_length: u64,
+    final_commit_offset: u64,
+}
+
+impl Geometry {
+    /// Derives the layout from the file length and the manifest.
+    ///
+    /// With `H` the first chunk offset, `C` the full chunk record stride, `F`
+    /// the final commit record length, `n` the chunk count, and `last` the last
+    /// chunk's plaintext length in `1..=chunk_size`:
+    ///
+    /// ```text
+    /// file_length = H + (n - 1) * C + (36 + last) + F
+    /// ```
+    ///
+    /// so with `body = file_length - H - F`, `body - 37 = (n - 1) * C + (last - 1)`
+    /// and `last - 1` lies in `0..C`, which makes `n - 1` exactly `(body - 37) / C`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ChurStatus::ObjectIncomplete`] when the file is shorter than
+    /// one record sequence and [`ChurStatus::ObjectCorrupt`] when its length is
+    /// not a whole one.
+    pub fn derive(file_length: u64, manifest_record_length: u32, chunk_size: u32) -> Result<Self> {
+        check_chunk_size(chunk_size)?;
+        let first_chunk_offset = AFTER_PREAMBLE + u64::from(manifest_record_length);
+        let overhead = ChunkHeader::LEN as u64 + TAG_LEN as u64;
+        let stride = u64::from(chunk_size) + overhead;
+        let body = file_length
+            .checked_sub(first_chunk_offset)
+            .and_then(|value| value.checked_sub(FINAL_COMMIT_RECORD_LEN))
+            .ok_or_else(|| {
+                Error::new(
+                    ChurStatus::ObjectIncomplete,
+                    "the container is shorter than one record sequence",
+                )
+            })?;
+        ensure!(
+            body > overhead,
+            ObjectIncomplete,
+            "the container holds no chunk record"
+        );
+        let chunk_count = (body - overhead - 1) / stride + 1;
+        let last = body - (chunk_count - 1) * stride - overhead;
+        ensure!(
+            last >= 1 && last <= u64::from(chunk_size),
+            ObjectCorrupt,
+            "the container length is not a whole record sequence"
+        );
+        let last_chunk_plaintext_length =
+            u32::try_from(last).map_err(|_| corrupt("the last chunk exceeds a u32"))?;
+        let total_plaintext_length = (chunk_count - 1)
+            .checked_mul(u64::from(chunk_size))
+            .and_then(|value| value.checked_add(last))
+            .ok_or_else(|| corrupt("the plaintext length overflows u64"))?;
+        ensure!(
+            chunk_count <= bounds::CHUNK_COUNT_MAX,
+            ResourceLimitExceeded,
+            "the chunk count exceeds the §16 bound"
+        );
+        ensure!(
+            total_plaintext_length <= bounds::TOTAL_PLAINTEXT_MAX,
+            ResourceLimitExceeded,
+            "the plaintext length exceeds the §16 bound"
+        );
+        Ok(Self {
+            first_chunk_offset,
+            chunk_size,
+            chunk_count,
+            last_chunk_plaintext_length,
+            total_plaintext_length,
+            final_commit_offset: file_length - FINAL_COMMIT_RECORD_LEN,
+        })
+    }
+
+    /// The number of chunk records.
+    #[must_use]
+    pub const fn chunk_count(&self) -> u64 {
+        self.chunk_count
+    }
+
+    /// The plaintext length the layout implies.
+    ///
+    /// It is a computation over the file length, so it stays a claim until the
+    /// final commit record authenticates the same value.
+    #[must_use]
+    pub const fn total_plaintext_length(&self) -> u64 {
+        self.total_plaintext_length
+    }
+
+    /// The plaintext length of chunk `index`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ChurStatus::InvalidInput`] for an index past the container.
+    pub fn chunk_plaintext_length(&self, index: u64) -> Result<u32> {
+        ensure!(
+            index < self.chunk_count,
+            InvalidInput,
+            "the chunk index is past the container"
+        );
+        Ok(if index + 1 == self.chunk_count {
+            self.last_chunk_plaintext_length
+        } else {
+            self.chunk_size
+        })
+    }
+
+    /// The offset of chunk record `index`, by the §12 formula.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ChurStatus::InvalidInput`] for an index past the container.
+    pub fn chunk_record_offset(&self, index: u64) -> Result<u64> {
+        ensure!(
+            index < self.chunk_count,
+            InvalidInput,
+            "the chunk index is past the container"
+        );
+        index
+            .checked_mul(u64::from(self.chunk_size) + ChunkHeader::LEN as u64 + TAG_LEN as u64)
+            .and_then(|skip| self.first_chunk_offset.checked_add(skip))
+            .ok_or_else(|| corrupt("the record offset overflows u64"))
+    }
+
+    /// The byte length of chunk record `index`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ChurStatus::InvalidInput`] for an index past the container.
+    pub fn chunk_record_length(&self, index: u64) -> Result<usize> {
+        Ok(ChunkHeader::LEN + self.chunk_plaintext_length(index)? as usize + TAG_LEN)
+    }
+}
+
+/// A reader over a container held in a source rather than in memory.
+///
+/// It holds one chunk at a time, so complete verification of a 1 TiB object
+/// costs one chunk of memory rather than a terabyte.
+pub struct StreamReader<R: ReadAt> {
+    source: R,
+    manifest: CanonicalManifest,
+    manifest_commitment: Commitment,
+    keys: StreamKeys,
+    identity: StreamIdentity,
+    geometry: Geometry,
+    size: u64,
+}
+
+impl<R: ReadAt> StreamReader<R> {
+    /// Opens a container, authenticating its manifest and its final commit.
+    ///
+    /// `identity` is what the catalog says the file holds, which §4 requires.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ChurStatus::ObjectCorrupt`] when a record does not
+    /// authenticate or the final commit disagrees with the layout, and
+    /// [`ChurStatus::ObjectIncomplete`] when a record is absent.
+    pub fn open(mut source: R, object_key: &Key, identity: &StreamIdentity) -> Result<Self> {
+        let mut preamble_bytes = [0u8; PublicPreamble::LEN];
+        source.read_at(0, &mut preamble_bytes)?;
+        let preamble = PublicPreamble::decode(&preamble_bytes)?;
+        let manifest_record_length = preamble.manifest_record_length();
+
+        let mut manifest_record = vec![0u8; manifest_record_length as usize];
+        source.read_at(AFTER_PREAMBLE, &mut manifest_record)?;
+        let manifest_nonce = Nonce::from_slice(
+            manifest_record
+                .get(..NONCE_LEN)
+                .ok_or_else(|| corrupt("manifest record is shorter than its nonce"))?,
+        )?;
+        let sealed = &manifest_record[NONCE_LEN..];
+        let manifest_commitment = manifest_commitment(&manifest_nonce, sealed);
+        let manifest_key =
+            kdf::derive_from(object_key, Label::ObjectManifest, &identity.key_context())?;
+        let plaintext = aead::open(
+            &manifest_key,
+            &manifest_nonce,
+            sealed,
+            &identity.manifest_aad(),
+        )?;
+        let manifest = CanonicalManifest::decode(&plaintext)?;
+        ensure!(
+            StreamIdentity::of(&manifest) == *identity,
+            ObjectCorrupt,
+            "the sealed manifest contradicts the identity it was opened under"
+        );
+        let keys = StreamKeys::derive(object_key, &manifest)?;
+        let geometry = Geometry::derive(
+            source.length(),
+            manifest_record_length,
+            manifest.chunk_size(),
+        )?;
+
+        let mut reader = Self {
+            source,
+            manifest,
+            manifest_commitment,
+            keys,
+            identity: *identity,
+            geometry,
+            size: 0,
+        };
+        // The final commit is authenticated here, so a reader that exists has a
+        // size that came from a verified record rather than from the file
+        // length that suggested it.
+        let commit = reader.read_final_commit()?;
+        ensure!(
+            commit.total_plaintext_length == geometry.total_plaintext_length
+                && commit.chunk_count == geometry.chunk_count,
+            ObjectCorrupt,
+            "the final commit disagrees with the container layout"
+        );
+        reader.size = commit.total_plaintext_length;
+        Ok(reader)
+    }
+
+    /// The authenticated plaintext size.
+    #[must_use]
+    pub const fn size(&self) -> u64 {
+        self.size
+    }
+
+    /// The computed layout.
+    #[must_use]
+    pub const fn geometry(&self) -> &Geometry {
+        &self.geometry
+    }
+
+    /// The identity this container was opened under.
+    #[must_use]
+    pub const fn identity(&self) -> &StreamIdentity {
+        &self.identity
+    }
+
+    /// The authenticated manifest.
+    #[must_use]
+    pub const fn manifest(&self) -> &CanonicalManifest {
+        &self.manifest
+    }
+
+    /// Reads and authenticates one chunk.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ChurStatus::ObjectCorrupt`] when the record does not verify
+    /// and [`ChurStatus::ObjectIncomplete`] when it is absent or short.
+    pub fn read_chunk(&mut self, index: u64) -> Result<Zeroizing<Vec<u8>>> {
+        let offset = self.geometry.chunk_record_offset(index)?;
+        let length = self.geometry.chunk_record_length(index)?;
+        let mut record = vec![0u8; length];
+        self.source.read_at(offset, &mut record)?;
+        self.open_record(&record, index)
+    }
+
+    /// Reads and authenticates the final commit record.
+    ///
+    /// # Errors
+    ///
+    /// As [`ContainerReader::read_final_commit`].
+    pub fn read_final_commit(&mut self) -> Result<CanonicalFinalCommit> {
+        let mut record = vec![0u8; FINAL_COMMIT_RECORD_LEN as usize];
+        self.source
+            .read_at(self.geometry.final_commit_offset, &mut record)?;
+        let header = decode_final_commit_header(&record[..FinalCommitHeader::LEN])?;
+        ensure!(
+            u64::from(header.commit_ciphertext_length)
+                == FINAL_COMMIT_RECORD_LEN - FinalCommitHeader::LEN as u64,
+            ObjectCorrupt,
+            "the final commit record declares another ciphertext length"
+        );
+        let aad = final_commit_aad(
+            self.manifest.object_id(),
+            self.manifest.stream_id(),
+            self.manifest.stream_kind(),
+            self.manifest.stream_revision(),
+            &self.manifest_commitment,
+        );
+        let plaintext = aead::open(
+            &self.keys.final_commit,
+            &header.commit_nonce,
+            &record[FinalCommitHeader::LEN..],
+            &aad,
+        )?;
+        let commit = CanonicalFinalCommit::decode(&plaintext)?;
+        check_final_commit(&commit, &self.manifest, &self.manifest_commitment)?;
+        Ok(commit)
+    }
+
+    /// Reads a plaintext range, loading one chunk at a time.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ChurStatus::InvalidInput`] when the range is past the
+    /// authenticated plaintext, and the record errors otherwise.
+    pub fn read_range(&mut self, offset: u64, length: u64) -> Result<Zeroizing<Vec<u8>>> {
+        ensure!(
+            offset
+                .checked_add(length)
+                .is_some_and(|end| end <= self.size),
+            InvalidInput,
+            "the range is past the authenticated plaintext"
+        );
+        let capacity = usize::try_from(length)
+            .map_err(|_| Error::new(ChurStatus::ResourceLimitExceeded, "range exceeds a usize"))?;
+        let mut out = Zeroizing::new(Vec::with_capacity(capacity));
+        let chunk_size = u64::from(self.manifest.chunk_size());
+        let mut position = offset;
+        while out.len() < capacity {
+            let index = position / chunk_size;
+            let within = usize::try_from(position % chunk_size)
+                .map_err(|_| corrupt("a chunk offset exceeds a usize"))?;
+            let chunk = self.read_chunk(index)?;
+            let take = (chunk.len() - within).min(capacity - out.len());
+            out.extend_from_slice(&chunk[within..within + take]);
+            position += take as u64;
+        }
+        Ok(out)
+    }
+
+    /// Authenticates every record and the ordered commitment, §13.
+    ///
+    /// # Errors
+    ///
+    /// As [`ContainerReader::verify_complete`].
+    pub fn verify_complete(&mut self) -> Result<u64> {
+        let mut committer = Committer::new(tag::OBJECT_ORDERED_COMMITMENT);
+        for index in 0..self.geometry.chunk_count {
+            let offset = self.geometry.chunk_record_offset(index)?;
+            let length = self.geometry.chunk_record_length(index)?;
+            let mut record = vec![0u8; length];
+            self.source.read_at(offset, &mut record)?;
+            // Authenticating before committing is the point: the commitment
+            // must cover records that verify, not whatever bytes are at the
+            // offsets.
+            let _ = self.open_record(&record, index)?;
+            committer.update(&record);
+        }
+        let commit = self.read_final_commit()?;
+        ensure!(
+            chur_crypto::secret::constant_time_eq(
+                &committer.finish(),
+                &commit.ordered_chunk_commitment
+            ),
+            ObjectCorrupt,
+            "the ordered chunk commitment does not match the final commit"
+        );
+        Ok(commit.total_plaintext_length)
+    }
+
+    fn open_record(&self, record: &[u8], index: u64) -> Result<Zeroizing<Vec<u8>>> {
+        let header = decode_chunk_header(
+            record
+                .get(..ChunkHeader::LEN)
+                .ok_or_else(|| corrupt("chunk record is shorter than its header"))?,
+            index,
+        )?;
+        let expected = self.geometry.chunk_plaintext_length(index)?;
+        ensure!(
+            header.plaintext_length() == expected,
+            ObjectCorrupt,
+            "the chunk record contradicts the canonical chunking"
+        );
+        let aad = chunk_aad(
+            &self.manifest,
+            &self.manifest_commitment,
+            index,
+            header.plaintext_length(),
+        );
+        let nonce = Nonce::chunk(self.manifest.nonce_prefix(), index);
+        aead::open(
+            &self.keys.content,
+            &nonce,
+            &record[ChunkHeader::LEN..],
+            &aad,
+        )
+    }
+}
 
 #[cfg(test)]
 mod tests {
