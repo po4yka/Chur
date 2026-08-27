@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-26
+- **Decision owners:** @po4yka
 - **Related:** [`../ARCHITECTURE.md`](../ARCHITECTURE.md), [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md)
 
 ## Context
@@ -66,3 +67,9 @@ Persisted bytes and migrations are independent from UI framework changes. FFI AB
 - module dependency checks;
 - storage inspection proving no private Room/DataStore mirror;
 - CLI opens/verifies mobile-created vaults.
+
+## Follow-up
+
+- none of the Validation evidence exists yet; it lands with the first `chur-core` and `chur-cli` implementations in Phase 0;
+- add the module dependency check that fails the build when a feature module imports FFI symbols or a platform key implementation directly;
+- assign the first FFI ABI version separately from the vault format versions, in [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md).

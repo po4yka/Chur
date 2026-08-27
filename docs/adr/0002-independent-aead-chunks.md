@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-26
+- **Decision owners:** @po4yka
 - **Related:** [`../format/OBJECT_CONTAINER_V1.md`](../format/OBJECT_CONTAINER_V1.md)
 
 ## Context
@@ -66,3 +67,9 @@ Chunk framing, size range, nonce construction, and final commit are versioned fo
 - random-seek tests across boundaries;
 - interrupted import/resume without prefix reuse;
 - mobile performance/energy benchmarks.
+
+## Follow-up
+
+- freeze the default chunk size and the approved chunk-size range; [`0008`](0008-freeze-object-container-v1-layout.md) froze the framing but left the range open, and it is still in the ADR backlog;
+- publish the substitution, reorder, and truncation vectors listed under Validation;
+- record the mobile performance and energy benchmarks that justify the chosen default before Gate 2.

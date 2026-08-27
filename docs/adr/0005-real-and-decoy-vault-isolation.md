@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-26
+- **Decision owners:** @po4yka
 - **Related:** [`../security/DECOY_VAULT.md`](../security/DECOY_VAULT.md)
 
 ## Context
@@ -64,3 +65,9 @@ Each identity has its own descriptor and version/migration path. Combined backup
 - timing/error review;
 - process-death and lock tests;
 - no semantic `real`/`decoy` physical labels.
+
+## Follow-up
+
+- specify in [`../security/DECOY_VAULT.md`](../security/DECOY_VAULT.md) the timing and error behavior that makes an external credential failure indistinguishable, as SEC-038 requires;
+- publish the isolation tests listed under Validation across storage, aliases, caches, logs, navigation, backup, and migration;
+- review the product copy that states the forensic limitation before Gate 2, so SEC-039 is not violated by marketing wording.

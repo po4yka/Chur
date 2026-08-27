@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-27
+- **Decision owners:** @po4yka
 - **Related:** [`../format/OBJECT_CONTAINER_V1.md`](../format/OBJECT_CONTAINER_V1.md), [`0002`](0002-independent-aead-chunks.md), [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md)
 
 ## Context

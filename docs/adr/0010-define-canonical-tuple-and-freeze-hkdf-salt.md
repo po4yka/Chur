@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-27
+- **Decision owners:** @po4yka
 - **Related:** [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md), [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md), [`0008`](0008-freeze-object-container-v1-layout.md)
 
 ## Context

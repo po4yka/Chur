@@ -2,6 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-08-26
+- **Decision owners:** @po4yka
 - **Related:** [`../format/CATALOG_SCHEMA_V1.md`](../format/CATALOG_SCHEMA_V1.md)
 
 ## Context
@@ -64,3 +65,9 @@ Logical catalog schema is normative; physical engine can change through migratio
 - crash/migration tests;
 - dependency/license/update review;
 - comparison with custom encrypted-store alternative.
+
+## Follow-up
+
+- this ADR stays Proposed until the evidence above exists; the SQLCipher build, link, and backup validation result is the blocking item and is tracked in the ADR backlog;
+- if SQLCipher is rejected, supersede this ADR with a new one rather than editing the decision;
+- the logical schema in [`../format/CATALOG_SCHEMA_V1.md`](../format/CATALOG_SCHEMA_V1.md) is normative regardless of the engine chosen, so it may be frozen before this ADR is accepted.

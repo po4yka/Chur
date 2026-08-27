@@ -32,16 +32,18 @@ Rejected
 
 ### Positive
 
-### Negative / tradeoffs
+### Tradeoffs
 
-## Security and privacy impact
+## Security impact
 
-## Compatibility and migration impact
+## Compatibility impact
 
 ## Validation
 
 ## Follow-up
 ```
+
+`Security impact` covers privacy impact and names the affected `SEC-` identifiers from [`../security/SECURITY_INVARIANTS.md`](../security/SECURITY_INVARIANTS.md). `Compatibility impact` covers migration and downgrade behavior. A Proposed ADR may title its validation section `Validation required before acceptance`.
 
 ## Process
 

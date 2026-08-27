@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-27
+- **Decision owners:** @po4yka
 - **Related:** [`../format/VAULT_DESCRIPTOR_V1.md`](../format/VAULT_DESCRIPTOR_V1.md), [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md), [`../security/KEY_HIERARCHY.md`](../security/KEY_HIERARCHY.md), [`0005`](0005-real-and-decoy-vault-isolation.md)
 
 ## Context

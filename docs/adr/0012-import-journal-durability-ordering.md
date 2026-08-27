@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-27
+- **Decision owners:** @po4yka
 - **Related:** [`../format/OBJECT_CONTAINER_V1.md`](../format/OBJECT_CONTAINER_V1.md), [`../format/CATALOG_SCHEMA_V1.md`](../format/CATALOG_SCHEMA_V1.md), [`0002`](0002-independent-aead-chunks.md), [`0008`](0008-freeze-object-container-v1-layout.md)
 
 ## Context

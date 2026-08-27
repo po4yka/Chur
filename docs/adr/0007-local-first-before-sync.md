@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-26
+- **Decision owners:** @po4yka
 - **Related:** [`../../ROADMAP.md`](../../ROADMAP.md), [`../sync/SYNC_PROTOCOL_V1.md`](../sync/SYNC_PROTOCOL_V1.md)
 
 ## Context
@@ -63,3 +64,9 @@ Local object/container/catalog versions are designed with future opaque transfer
 - portable backup cross-platform proof;
 - sync threat model/protocol/vectors/malicious-server tests before implementation release;
 - sharing audit before multi-user availability.
+
+## Follow-up
+
+- Gate 3 in [`../assurance/RELEASE_GATES.md`](../assurance/RELEASE_GATES.md) must complete before any sync or sharing implementation is released;
+- publish the cross-platform portable-backup restore proof that Gate 4 requires;
+- keep every sync and sharing specification Proposed until its own gate has evidence, so an unreviewed protocol cannot become normative by being written down.

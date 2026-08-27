@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-26
+- **Decision owners:** @po4yka
 - **Related:** [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md)
 
 ## Context
@@ -68,3 +69,9 @@ FFI ABI versions separately from persisted formats. Binding generator changes do
 - lock/cancel races;
 - performance/copy-count benchmarks;
 - Android/iOS packaging and symbol verification.
+
+## Follow-up
+
+- decide UniFFI or Gobley versus a handwritten C ABI for the control plane; the choice is still in the ADR backlog and blocks the generated-binding tests;
+- assign the first FFI ABI version and the handshake constant, versioned independently of the vault formats;
+- publish the invalid buffer, handle, and file-descriptor fuzz corpora listed under Validation.

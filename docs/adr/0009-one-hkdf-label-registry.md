@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-27
+- **Decision owners:** @po4yka
 - **Related:** [`../security/KEY_HIERARCHY.md`](../security/KEY_HIERARCHY.md), [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md), [`../format/TEST_VECTORS.md`](../format/TEST_VECTORS.md)
 
 ## Context
@@ -57,3 +58,9 @@ No vault bytes exist, so nothing migrates and the discarded spellings were never
 
 - a positive vector for every registry row;
 - a repository check that fails when a `chur/v1/` label string appears outside the registry and does not match the registry row it names.
+
+## Follow-up
+
+- generate the positive vector for every registry row;
+- add the repository check described under Validation, which is the only mechanism preventing the four lists from reappearing;
+- keep `CRYPTOGRAPHY.md`, `ARCHITECTURE.md`, and the root `README.md` pointing at the registry whenever a label is added.

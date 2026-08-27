@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-27
+- **Decision owners:** @po4yka
 - **Related:** [`../sync/OPERATION_LOG.md`](../sync/OPERATION_LOG.md), [`../sync/CONFLICT_RESOLUTION.md`](../sync/CONFLICT_RESOLUTION.md), [`../sync/REVOCATION.md`](../sync/REVOCATION.md), [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md)
 
 ## Context

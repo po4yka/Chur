@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-26
+- **Decision owners:** @po4yka
 - **Related:** [`../format/OBJECT_KEY_ENVELOPE_V1.md`](../format/OBJECT_KEY_ENVELOPE_V1.md), [`../format/OBJECT_CONTAINER_V1.md`](../format/OBJECT_CONTAINER_V1.md)
 
 ## Context
@@ -63,3 +64,9 @@ Envelope and container versions evolve independently. Backup packages must inclu
 - multiple-envelope vectors;
 - dangling/missing/duplicate envelope reconciliation;
 - no media-byte changes during collection rotation.
+
+## Follow-up
+
+- freeze the envelope record layout and its AAD tuple in [`../format/OBJECT_KEY_ENVELOPE_V1.md`](../format/OBJECT_KEY_ENVELOPE_V1.md), whose fields are still described as conceptual, using the constants allocated by [`0013`](0013-allocate-v1-format-constants.md);
+- define the catalog policy that rejects duplicate and stale active envelopes for one object;
+- publish the multiple-envelope and rewrap vectors listed under Validation.
