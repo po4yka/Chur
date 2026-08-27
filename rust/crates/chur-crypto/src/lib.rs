@@ -19,6 +19,7 @@ pub mod commit;
 pub mod kdf;
 pub mod password;
 pub mod random;
+pub mod recovery;
 pub mod secret;
 pub mod tuple;
 

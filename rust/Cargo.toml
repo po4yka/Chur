@@ -36,6 +36,9 @@ hkdf = "0.12"
 sha2 = { version = "0.10", default-features = false }
 subtle = { version = "2", default-features = false }
 zeroize = { version = "1", default-features = false, features = ["alloc"] }
+# NFKD for recovery-phrase re-entry, which ADR-0029 requires. Data tables only,
+# no unsafe, no build script, no transitive dependency.
+unicode-normalization = { version = "0.1", default-features = false }
 
 # Errors and CLI.
 thiserror = "2"
