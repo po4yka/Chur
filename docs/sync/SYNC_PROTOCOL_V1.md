@@ -81,6 +81,13 @@ Server-supplied state never sets the floor. The enrolling device's signature ove
 
 While locked, clients may transfer already committed ciphertext and signed opaque records. They must not decrypt payloads, open private catalog, resolve conflicts, or generate derivatives. Decrypted application occurs after explicit unlock.
 
+A locked device cannot check an inbound record against membership or head state, because both live in the encrypted catalog it may not open. Inbound records are staged, not accepted:
+
+- the staging area holds ciphertext and signed bytes only. It is app-private, excluded from platform backup, and separate from the catalog, per SEC-034;
+- it is bounded at 4096 records, 64 MiB per vault, and 7 days per record, whichever bound is reached first. Past a bound the oldest record is dropped. Dropping is safe because nothing is acknowledged while locked, so a dropped record is fetched again;
+- staged records advance no accepted head, no membership generation, and no epoch. A locked device's freshness state is exactly what it was at lock;
+- at unlock every staged record is validated from the start under [`OPERATION_LOG.md`](OPERATION_LOG.md) §9: signature, sequence, previous hash, membership at its generation, and observed heads. Staging is not partial validation and grants a record nothing.
+
 ## 8. Conflict resolution
 
 Defined in [`CONFLICT_RESOLUTION.md`](CONFLICT_RESOLUTION.md). The server never chooses semantic winner. Clients must converge from the same valid operation set.
