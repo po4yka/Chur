@@ -51,6 +51,20 @@ This table is the sole registry of Chur error names and values. `ARCHITECTURE.md
 | 600 | `NETWORK_FAILURE` | transport failed | Yes | retry with backoff |
 | 900 | `INTERNAL_FAILURE` | redacted unexpected implementation failure | Sometimes | retry; collect safe diagnostics |
 
+## Numeric encoding and the C ABI
+
+- the ABI representation of an error is `int32_t` (`i32` in Rust), named `chur_status_t`;
+- `0` is success (`CHUR_OK`) and is not an error code;
+- every defined value is positive; a negative value is never emitted and must be treated as unknown;
+- `1`-`99` are permanently unallocated, so a caller that returns a boolean or a POSIX `errno` in the status channel cannot land on a defined code;
+- values are allocated in blocks of 100 by domain; an unallocated value inside an allocated block is reserved for that domain;
+- `700`-`899` and `1000`-`2147483647` are reserved for future allocation by this document;
+- allocation is append-only: a retired code keeps its value and is never reused for another meaning;
+- an unrecognized value maps to `INTERNAL_FAILURE` and must never be treated as success, retryable, or benign;
+- a code is added by editing the table above in the same change that adds it to the FFI header. No other document allocates a value.
+
+Error codes are ABI, not persisted bytes: a value never appears inside an encrypted record unless a versioned format explicitly stores an integrity state.
+
 ## Layer mapping
 
 ```text

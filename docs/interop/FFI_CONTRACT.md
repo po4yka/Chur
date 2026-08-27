@@ -153,7 +153,7 @@ Callbacks must not block Rust critical sections and must tolerate consumer disap
 
 ## 11. Errors
 
-Native result uses stable numeric category plus bounded safe metadata. Error strings are diagnostic-only and redacted. See [`../ERROR_MODEL.md`](../ERROR_MODEL.md).
+Every exported function that can fail returns `chur_status_t`, the `int32_t` status registered in [`../ERROR_MODEL.md`](../ERROR_MODEL.md), which owns every error name and value. `0` is success. Results never share the status channel: a byte count, a handle, or a projection is written through an out-parameter. Error strings are diagnostic-only and redacted, and this contract adds no code of its own.
 
 Unknown codes map to `INTERNAL_FAILURE`; panics are contained with `catch_unwind` at safe boundaries where applicable and never unwind through foreign code.
 
