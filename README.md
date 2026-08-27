@@ -866,7 +866,7 @@ The data plane uses:
 - opaque native handles;
 - platform file descriptors where appropriate;
 - direct/native buffers;
-- `read_at(offset, length)`;
+- `read_at(offset, destination)`;
 - bounded streaming operations;
 - explicit close and cancellation.
 
