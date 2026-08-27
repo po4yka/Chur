@@ -56,7 +56,7 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 
 ### Exit criteria
 
-- fault-injection matrix passes;
+- initialization, import, key-slot, and migration fault injection passes, matching Gate 2; the complete matrix, including media, large-file, and decoy paths, is a Phase 2 exit criterion;
 - no private data persists in public storage or navigation state;
 - platform-key invalidation and recovery work on supported devices;
 - local format and Rust core receive independent review before production use.
@@ -92,7 +92,8 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 - replay, rollback, and fork detection;
 - deterministic conflict resolution;
 - tombstones and garbage collection;
-- multi-device recovery.
+- multi-device recovery;
+- device revocation, and the collection-epoch rotation and rewrap it forces.
 
 ### Exit criteria
 
