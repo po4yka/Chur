@@ -896,7 +896,7 @@ Requirements:
 - error behavior MUST NOT reveal which part of the slot failed;
 - password bytes MUST follow one cross-platform procedure and golden vectors.
 
-The provisional password encoding is Unicode NFC followed by UTF-8. This must become an explicit ADR before implementation because changing it later can make recovery credentials incompatible.
+The canonical password-byte procedure is defined in [`security/PASSWORD_PROFILE.md`](security/PASSWORD_PROFILE.md): the exact Unicode scalar sequence entered by the user, encoded as strict UTF-8, with no normalization, no trimming, and no case folding. Implementations MUST NOT apply NFC, NFKC, NFD, or NFKD, because normalization changes the Argon2id input bytes for an unchanged password and surfaces as `AuthenticationFailed`, indistinguishable from a wrong password. A later normalization decision requires a new password-encoding profile identifier and MUST NOT reinterpret existing slots.
 
 ### 16.2 Android platform slot
 
@@ -2230,7 +2230,7 @@ The following decisions require dedicated ADRs:
 | --- | --- | --- |
 | ADR-001 | Private catalog implementation | Rust-owned SQLCipher, benchmark before final acceptance |
 | ADR-002 | Canonical encrypted-record encoding | fixed preamble plus deterministic bounded structured encoding |
-| ADR-003 | Password Unicode procedure | NFC + UTF-8, pending compatibility vectors |
+| ADR-003 | Password-encoding profile freeze | no normalization, strict UTF-8 per `security/PASSWORD_PROFILE.md`; ADR freezes the profile identifier and vectors |
 | ADR-004 | Exact Argon2id calibration policy | bounded device calibration with portable minimum |
 | ADR-005 | Initial chunk-size policy | 256 KiB small media, 1 MiB large media, benchmark-driven |
 | ADR-006 | iOS platform slot representation | protected DeviceKEK versus direct root-secret Keychain item |

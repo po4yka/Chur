@@ -560,6 +560,8 @@ Deletion or rollback of slots by an attacker may cause denial of service. Confid
 
 Password-to-byte conversion MUST be stable across Android, iOS, CLI, and future clients.
 
+The normative profile is [`security/PASSWORD_PROFILE.md`](security/PASSWORD_PROFILE.md) §3, which governs on conflict.
+
 Chur v1 direction:
 
 - capture the exact Unicode scalar sequence entered by the user;
