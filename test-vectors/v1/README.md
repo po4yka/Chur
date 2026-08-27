@@ -1,6 +1,6 @@
 # Chur v1 Vector Scaffold
 
-> **Status:** Empty scaffold; v1 bytes are not frozen
+> **Status:** Proposed — empty scaffold; v1 bytes are not frozen
 
 Planned fixture groups:
 

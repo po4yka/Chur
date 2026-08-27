@@ -1,16 +1,12 @@
 # Architecture Decision Records
 
+> **Status:** Accepted ADR process, template, and index
+
 ADRs record durable architectural choices, alternatives, consequences, and security impact. They explain **why** a decision exists; normative format and behavior remain in focused specifications.
 
 ## Status values
 
-```text
-Proposed
-Accepted
-Deprecated
-Superseded by ADR-NNNN
-Rejected
-```
+An ADR uses the document-status vocabulary defined once in [`../README.md`](../README.md#document-status): **Proposed**, **Accepted**, **Experimental**, **Deprecated**, **Superseded**, or **Rejected**. An ADR spells the superseded label `Superseded by ADR-NNNN` so the metadata line names the replacement.
 
 ## Template
 

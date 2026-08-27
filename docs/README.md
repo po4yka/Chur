@@ -1,5 +1,7 @@
 # Chur Documentation
 
+> **Status:** Accepted documentation index, authority hierarchy, and change process
+
 This directory contains the normative and supporting design documents for Chur.
 
 ## Authority hierarchy
@@ -25,15 +27,30 @@ Chur writes them in lowercase. In a normative document, lowercase must, must not
 
 ## Document status
 
-Each document should state one of:
+This is the project's only document-status vocabulary. Every document under `docs/` and under `test-vectors/`, and the root `README.md`, `ROADMAP.md`, `DESIGN.md`, `CONTRIBUTING.md`, `DEVELOPMENT.md`, and `SECURITY.md`, must state one of these labels in its header. Agent and tooling configuration such as `AGENTS.md` is out of scope.
 
 - **Proposed** — direction under review; not compatibility-stable.
-- **Accepted** — implementation requirement, subject to versioning rules.
+- **Accepted** — in force; changes follow the change process below and the versioning rules.
 - **Experimental** — prototype used to collect evidence.
-- **Deprecated** — readable/migratable but not used for new data.
-- **Superseded** — replaced by a named document or ADR.
+- **Deprecated** — readable and migratable but not used for new data.
+- **Superseded** — replaced by a named document or ADR. An ADR spells this `Superseded by ADR-NNNN` so the replacement is named.
+- **Rejected** — considered and not adopted; kept for the record.
+
+Explanatory prose may follow the label, but the label itself comes from this list.
 
 Byte-exact v1 documents remain proposed until constants, encoding, vectors, and cross-platform implementations are frozen.
+
+## Statement classification
+
+Document status describes a whole document. Individual statements inside a document are classified as:
+
+- **Decision** — accepted direction for the implementation.
+- **Invariant** — a property every implementation and migration preserves.
+- **Proposal** — preferred direction that still requires a benchmark, prototype, or ADR.
+- **Deferred** — intentionally excluded from the current phase.
+- **Non-goal** — a guarantee Chur does not claim.
+
+`CRYPTOGRAPHY.md`, `ARCHITECTURE.md`, `ANDROID.md`, and `IOS.md` use this classification. It is not a document status: a **Proposed** document may contain **Decision** statements.
 
 ## Core documents
 

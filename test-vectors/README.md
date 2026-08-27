@@ -1,5 +1,7 @@
 # Chur Test Vectors
 
+> **Status:** Proposed vector layout; no fixtures are committed yet
+
 This directory will contain deterministic, machine-readable compatibility fixtures for Chur formats and protocols.
 
 Read [`docs/format/TEST_VECTORS.md`](../docs/format/TEST_VECTORS.md) for governance, required cases, and stability rules.

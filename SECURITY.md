@@ -1,5 +1,7 @@
 # Security Policy
 
+> **Status:** Accepted security and vulnerability-reporting policy
+
 Chur is currently in the architecture and protocol-design stage. It has not received an independent security audit and is **not yet suitable for storing irreplaceable or high-risk data**.
 
 ## Supported versions

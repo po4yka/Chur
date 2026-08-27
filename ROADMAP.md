@@ -1,5 +1,7 @@
 # Chur Roadmap
 
+> **Status:** Proposed delivery plan; this document owns the phase definitions
+
 Chur is developed in security-gated phases. Dates are intentionally omitted until implementation velocity and review capacity are known. Advancement depends on evidence, not feature count.
 
 ## Current status

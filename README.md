@@ -2,7 +2,7 @@
 
 > A local-first, cross-platform private media vault for Android and iOS, built with Kotlin Multiplatform, Compose Multiplatform, and a Rust-owned cryptographic storage engine.
 
-**Project status:** architecture and protocol design. Chur is not yet suitable for storing irreplaceable data, has not received an independent security audit, and does not currently make production security guarantees.
+**Status:** Proposed — architecture and protocol design. Chur is not yet suitable for storing irreplaceable data, has not received an independent security audit, and does not currently make production security guarantees.
 
 Chur is designed for protected storage of photos, videos, audio, and eventually documents. The application can present a real, functional public interface—such as notes, a journal, or a calculator—while keeping the encrypted archive behind a separate authenticated session.
 

@@ -1,5 +1,7 @@
 # Chur Development Guide
 
+> **Status:** Proposed development environment and workflow
+
 This document describes the intended development environment and workflow. The repository is still being scaffolded; commands marked **planned** become normative only after the corresponding build files exist.
 
 ## Target toolchain

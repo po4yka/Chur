@@ -17,12 +17,7 @@ Chur is currently in the architecture and protocol-design stage. Nothing in this
 
 The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT**, and **MAY** describe architectural requirements.
 
-This document distinguishes four kinds of statements:
-
-- **Decision** — accepted direction for the implementation.
-- **Invariant** — a property that every implementation and migration must preserve.
-- **Proposal** — preferred direction that still requires a benchmark, prototype, or ADR.
-- **Non-goal** — explicitly excluded behavior or guarantee.
+Individual statements are classified as **Decision**, **Invariant**, **Proposal**, **Deferred**, or **Non-goal**, defined once in [`README.md`](README.md#statement-classification). The status of this document as a whole is in its header and uses the document-status vocabulary of the same file.
 
 The architecture is intentionally split from the future binary-format specification. This document defines the system model and required properties; byte-exact layouts, constants, encodings, and test vectors must be finalized in dedicated specifications before production data is stored.
 

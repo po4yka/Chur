@@ -1,5 +1,7 @@
 # Contributing to Chur
 
+> **Status:** Accepted contribution process
+
 Chur welcomes architecture review, security analysis, Rust and Kotlin implementation work, platform integration, testing, and documentation improvements. The project is pre-release; correctness and explicit design decisions take priority over API stability or feature breadth.
 
 ## Before contributing

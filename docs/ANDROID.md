@@ -17,12 +17,7 @@ Chur is currently in architecture and protocol design. Nothing in this document 
 
 The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT**, and **MAY** describe platform requirements.
 
-Statements are classified as:
-
-- **Decision** — accepted implementation direction.
-- **Invariant** — property every Android implementation must preserve.
-- **Proposal** — preferred direction requiring a prototype, benchmark, or ADR.
-- **Non-goal** — behavior or guarantee intentionally excluded.
+Individual statements are classified as **Decision**, **Invariant**, **Proposal**, **Deferred**, or **Non-goal**, defined once in [`README.md`](README.md#statement-classification). An **Invariant** here is a property every Android implementation preserves. The status of this document as a whole is in its header and uses the document-status vocabulary of the same file.
 
 Byte-exact cryptographic behavior belongs to dedicated Rust format specifications. Android owns platform policy and transport to the Rust boundary, not vault bytes.
 

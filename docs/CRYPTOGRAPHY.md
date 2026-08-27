@@ -19,12 +19,7 @@ Chur is currently in the architecture and protocol-design stage. The design has 
 
 The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT**, and **MAY** describe requirements for any implementation that claims compatibility with this design.
 
-This document uses the following classifications:
-
-- **Accepted** — the implementation direction is fixed unless replaced by an ADR and migration plan.
-- **Proposed** — the direction is preferred but still requires benchmarks, prototypes, or review.
-- **Deferred** — intentionally excluded from the initial local vault.
-- **Non-goal** — a guarantee Chur does not claim.
+Individual statements are classified as **Decision**, **Invariant**, **Proposal**, **Deferred**, or **Non-goal**, defined once in [`README.md`](README.md#statement-classification). A **Decision** here is fixed unless replaced by an ADR and a migration plan, and **Deferred** means excluded from the initial local vault. The status of this document as a whole is in its header and uses the document-status vocabulary of the same file.
 
 This file is normative for cryptographic responsibilities and security properties. It is not yet a byte-level interoperability specification. Dedicated format specifications will define exact canonical encodings for:
 
