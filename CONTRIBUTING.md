@@ -6,13 +6,14 @@ Chur welcomes architecture review, security analysis, Rust and Kotlin implementa
 
 Read, in order:
 
-1. [`README.md`](README.md)
-2. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-3. [`docs/CRYPTOGRAPHY.md`](docs/CRYPTOGRAPHY.md)
-4. [`docs/README.md`](docs/README.md)
-5. the focused specification for the area being changed
+1. [`docs/README.md`](docs/README.md) — the authority hierarchy, the document index, the normative-language rule, and the status vocabulary
+2. the focused specification for the area being changed, found in that index
+3. [`docs/CRYPTOGRAPHY.md`](docs/CRYPTOGRAPHY.md) — the cryptographic responsibilities behind those specifications
+4. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — component, trust, and lifecycle boundaries
+5. [`README.md`](README.md) — product context; it is the lowest rank and states nothing normatively
+6. [`DESIGN.md`](DESIGN.md) for user-interface work, and [`SECURITY.md`](SECURITY.md) before reporting a suspected vulnerability
 
-The authority hierarchy is described in `docs/README.md`. A pull request must not silently contradict a more authoritative normative document.
+The order matches the authority hierarchy in `docs/README.md`: the specifications that bind bytes come first and the explanatory documents come last. A pull request must not silently contradict a more authoritative normative document.
 
 ## Contribution categories
 

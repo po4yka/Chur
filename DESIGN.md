@@ -1584,7 +1584,13 @@ Use the following as a baseline for design or coding agents:
 ```text
 Implement this Chur screen in Kotlin Multiplatform and Compose Multiplatform.
 
-Use DESIGN.md as the design source of truth and docs/ARCHITECTURE.md as the ownership and lifecycle source of truth.
+Use DESIGN.md as the source of truth for presentation only. Resolve every other conflict with the authority hierarchy in docs/README.md: byte-exact format specifications first, then accepted ADRs, then the focused security, interop, assurance, sync, and product specifications, then docs/CRYPTOGRAPHY.md, then docs/ARCHITECTURE.md.
+
+Behavior this screen must present but does not define is owned by:
+- docs/product/DISCREET_MODE.md — public shell, session gate, and external surfaces;
+- docs/security/PLAINTEXT_LIFECYCLE.md — when plaintext may exist and when it is destroyed;
+- docs/ERROR_MODEL.md — stable error identities, redaction, and retry behavior;
+- docs/ARCHITECTURE.md — ownership, sessions, and lock lifecycle.
 
 Constraints:
 - KMP/CMP owns shared UI and state presentation.
