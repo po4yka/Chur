@@ -11,11 +11,11 @@ Each operation carries:
 ```text
 device_id
 device_sequence
-causal references / observed heads
+observed_heads
 operation_id
 ```
 
-Causality is preferred over wall-clock time. Concurrent operations use a deterministic tie-breaker only where a single value is required.
+Causality is preferred over wall-clock time. `observed_heads` is the signed vector of accepted per-device heads defined in [`OPERATION_LOG.md`](OPERATION_LOG.md) §4; it decides happens-before and concurrency for every rule below. Concurrent operations use a deterministic tie-breaker only where a single value is required.
 
 Proposed deterministic total tie-break key:
 
@@ -25,7 +25,7 @@ operation kind priority when specified
 lexicographic operation_id
 ```
 
-The final rule requires vectors and ADR; timestamps alone are forbidden as authority.
+The causal input is fixed by [`../adr/0014-observed-heads-causality-vector.md`](../adr/0014-observed-heads-causality-vector.md); the tie-break key itself still requires an ADR. Timestamps alone are forbidden as authority.
 
 ## 2. Immutable objects
 

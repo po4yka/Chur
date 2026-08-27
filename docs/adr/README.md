@@ -68,6 +68,7 @@ Rejected
 | [0011](0011-freeze-vault-descriptor-authentication.md) | Freeze vault-descriptor authentication | Accepted |
 | [0012](0012-import-journal-durability-ordering.md) | Reserve chunk indexes in the import journal before use | Accepted |
 | [0013](0013-allocate-v1-format-constants.md) | Allocate the v1 format constants in one registry | Accepted |
+| [0014](0014-observed-heads-causality-vector.md) | Observed-heads causality vector in the operation record | Accepted |
 
 ## Future ADR backlog
 

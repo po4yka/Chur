@@ -1727,22 +1727,7 @@ A server-side partial upload is not a committed object.
 
 ### 34.3 Authenticated operation log
 
-Mutable state uses signed per-device operations:
-
-```text
-Operation
-├── protocol_version
-├── operation_id
-├── vault_id
-├── security_collection_id
-├── collection_epoch
-├── device_id
-├── device_sequence
-├── previous_operation_hash
-├── operation_type
-├── encrypted_payload
-└── device signature
-```
+Mutable state uses signed per-device operations. The record fields, including the `observed_heads` vector that orders operations across devices, are defined in [sync/OPERATION_LOG.md](sync/OPERATION_LOG.md) §2 and §4.
 
 Clients track accepted sequence/head state. This detects many replay, rollback, and fork conditions. It does not by itself prove that a malicious server has not omitted an entire unseen branch; stronger transparency or device-gossip mechanisms may be added later.
 

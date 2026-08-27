@@ -61,7 +61,7 @@ Devices exchange:
 - membership/checkpoint state;
 - opaque pagination tokens not trusted as completeness proof.
 
-Clients verify each device chain independently before applying operations.
+Clients verify each device chain independently before applying operations, and apply an operation only when the heads it observes are already held; otherwise it is buffered under [`OPERATION_LOG.md`](OPERATION_LOG.md) §4.3.
 
 ## 6. Bootstrap new device
 

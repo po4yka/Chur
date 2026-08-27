@@ -82,7 +82,7 @@ Backups are authentic but can be stale. Restore compares embedded heads/generati
 
 ## 9. Server omission
 
-Per-device chains detect gaps after a known later sequence, but server may hide an entire unknown device/branch or all operations after the client's last checkpoint. Cross-device gossip or transparency is required for stronger global completeness.
+Per-device chains detect gaps after a known later sequence. The `observed_heads` vector defined in [`OPERATION_LOG.md`](OPERATION_LOG.md) §4 extends detection across devices: any accepted operation that observed a hidden operation names its head, so the receiver buffers instead of applying state that is missing a known cause. To hide a branch the server must also hide every operation that observed it. It may still hide an entire device whose operations no other device has observed, or all operations after the client's last checkpoint. Cross-device gossip or transparency is required for stronger global completeness.
 
 ## 10. Time
 

@@ -1730,24 +1730,6 @@ AEAD alone does not prevent replay or rollback of previously valid ciphertext.
 
 A future synchronized vault requires signed device operations.
 
-Candidate operation fields:
-
-```text
-operation_version
-operation_id
-vault_id
-collection_id
-device_id
-device_sequence
-previous_operation_hash
-operation_type
-encrypted_payload
-collection_epoch
-created_at or logical time
-signature_suite
-device_signature
-```
-
 Requirements:
 
 - every device has a distinct signing key;
@@ -1760,7 +1742,7 @@ Requirements:
 - the server cannot forge operations without a device key;
 - server omission remains possible and requires transparency/out-of-band consistency for stronger guarantees.
 
-Device-log details are deferred to `docs/sync/OPERATION_LOG.md`.
+The signed record's fields, including the `observed_heads` causality vector that carries cross-device ordering, are defined by [`sync/OPERATION_LOG.md`](sync/OPERATION_LOG.md) §2 and §4.
 
 ---
 
