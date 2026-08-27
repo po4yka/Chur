@@ -28,7 +28,7 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 - no unresolved circular key dependencies;
 - parser limits specified and tested;
 - Android, iOS, and CLI consume identical vectors;
-- security invariants mapped to tests;
+- security invariants mapped to tests, through the per-invariant table in [`docs/assurance/SECURITY_TEST_PLAN.md`](docs/assurance/SECURITY_TEST_PLAN.md) §13, with every audit-only row named rather than implied;
 - release gates and review scope approved.
 
 ## Phase 1 — local recoverable photo vault

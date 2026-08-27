@@ -164,4 +164,70 @@ Release evidence includes:
 
 ## 13. Coverage mapping
 
-Each `SEC-*` invariant has at least one named automated test or audit procedure. Missing mapping blocks the release gate for the affected feature.
+Every `SEC-*` invariant of [`../security/SECURITY_INVARIANTS.md`](../security/SECURITY_INVARIANTS.md) maps below to the procedure that produces its evidence: a section of this plan, a named harness, or an explicit audit-only marker. A bare section number is a section of this plan. A concrete test target replaces the section reference in a row when it lands, and a row carries at most one, so the mapping stays readable in both directions. Missing mapping blocks the release gate for the affected feature.
+
+A row states what would produce the evidence, not that it runs today. Whether it runs is governed by [`RELEASE_GATES.md`](RELEASE_GATES.md#enforcement): until a job executes the procedure, the row is unenforced whatever it names.
+
+| Invariant | Evidence procedure |
+| --- | --- |
+| SEC-001 | §2 |
+| SEC-002 | §2; §6 |
+| SEC-003 | §2 |
+| SEC-004 | §2 |
+| SEC-005 | §2 |
+| SEC-006 | §2; §4 |
+| SEC-007 | §3; §11 |
+| SEC-008 | §4 |
+| SEC-009 | §4 |
+| SEC-010 | compile-fail test: formatting a secret-bearing type with `{:?}` does not compile; §6 |
+| SEC-011 | §2 |
+| SEC-012 | §2 |
+| SEC-013 | §3 |
+| SEC-014 | §2; §3 substitution cases |
+| SEC-015 | §3 |
+| SEC-016 | §3 |
+| SEC-017 | §3 |
+| SEC-018 | §3; [`FUZZING.md`](FUZZING.md) §2 |
+| SEC-019 | audit-only; becomes a build-graph assertion when the Gradle build exists |
+| SEC-020 | §6 |
+| SEC-021 | §3 |
+| SEC-022 | §4 |
+| SEC-023 | §4 |
+| SEC-024 | §4 |
+| SEC-025 | §4; §10 |
+| SEC-026 | §4; §10 |
+| SEC-027 | §6 |
+| SEC-028 | §5 |
+| SEC-029 | §5 |
+| SEC-030 | §5 |
+| SEC-031 | §5 |
+| SEC-032 | audit-only; §5 covers only what the runtime makes observable |
+| SEC-033 | §6 |
+| SEC-034 | §6; §8; §9, asserted against the caps in [`../security/PLAINTEXT_LIFECYCLE.md`](../security/PLAINTEXT_LIFECYCLE.md) §5 |
+| SEC-035 | §7 |
+| SEC-036 | §7 |
+| SEC-037 | audit-only; API review of the surface in [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md) at each change |
+| SEC-038 | §7 |
+| SEC-039 | repository check: no forbidden claim listed in [`../security/DECOY_VAULT.md`](../security/DECOY_VAULT.md) §10 or [`../product/DISCREET_MODE.md`](../product/DISCREET_MODE.md) "Forbidden claims" appears in `docs/`, `DESIGN.md`, `README.md`, or a localized string resource |
+| SEC-040 | [`../sync/SERVER_TRUST_MODEL.md`](../sync/SERVER_TRUST_MODEL.md) §10 harness |
+| SEC-041 | §2; SERVER_TRUST_MODEL §10 harness |
+| SEC-042 | SERVER_TRUST_MODEL §10 harness |
+| SEC-043 | §2 |
+| SEC-044 | §2 |
+| SEC-045 | SERVER_TRUST_MODEL §10 harness for the behaviour; audit-only for the claim wording |
+| SEC-046 | audit-only; design review of any deduplication proposal |
+| SEC-047 | [`FUZZING.md`](FUZZING.md) §6 |
+| SEC-048 | §3 |
+| SEC-049 | §3 |
+| SEC-050 | [`FUZZING.md`](FUZZING.md) §8 |
+| SEC-051 | §10 |
+| SEC-052 | §10 |
+| SEC-053 | §2; §8; §9 |
+| SEC-054 | audit-only; key-domain review at each catalog schema change |
+| SEC-055 | §4; [`../security/RECOVERY.md`](../security/RECOVERY.md) §11 |
+| SEC-056 | §3; policy review |
+| SEC-057 | §3 |
+| SEC-058 | §3 |
+| SEC-059 | §5; §8; §9 |
+
+SEC-019, SEC-032, SEC-037, SEC-046, SEC-054, and the claim half of SEC-045 have no automated evidence. That is a stated gap, carried into the evidence package of every gated release under [`RELEASE_GATES.md`](RELEASE_GATES.md#enforcement), and not a claim of coverage. Adding or changing an invariant adds or changes its row here in the same pull request.
