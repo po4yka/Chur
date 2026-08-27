@@ -22,8 +22,8 @@ These have different scopes and must not share ambiguous UI language.
 
 A signed membership operation removes the device. Clients then:
 
-- record the revoked device's final accepted `device_sequence` in the `RevokeDevice` operation, so later operations may omit it from `observed_heads` per [`OPERATION_LOG.md`](OPERATION_LOG.md) §4.4;
-- reject later operations signed by it beyond accepted revocation point;
+- record the accepted revocation point defined in [`DEVICE_IDENTITY.md`](DEVICE_IDENTITY.md) §9 in the `RevokeDevice` operation, so later operations may omit the device from `observed_heads` per [`OPERATION_LOG.md`](OPERATION_LOG.md) §4.4;
+- reject every operation signed by it above the accepted revocation point, unconditionally and regardless of when the server delivers it;
 - stop issuing root/collection envelopes;
 - rotate affected collection epochs according to policy;
 - revoke server auth tokens;
@@ -69,7 +69,14 @@ Changing `MANAGE_MEMBERS` to `READ` affects operation authorization after accept
 
 ## 7. Offline/stale devices
 
-A stale device may return with old keys and operations. It must first obtain and verify current membership. Operations authored after its revocation are rejected. Operations created before revocation but unseen require causal policy and may need explicit reconciliation.
+A stale device may return with old keys and operations. It must first obtain and verify current membership.
+
+Acceptance is decided by the revocation point of [`DEVICE_IDENTITY.md`](DEVICE_IDENTITY.md) §9, never by arrival time:
+
+- `device_sequence` above `final_accepted_device_sequence`: rejected unconditionally. No later delivery, no server claim, and no clock makes it acceptable;
+- `device_sequence` equal to it with any other `operation_digest`: a fork under [`ROLLBACK_PROTECTION.md`](ROLLBACK_PROTECTION.md) §4;
+- `device_sequence` at or below it: accepted only when the operation chains through `previous_operation_hash` to an operation of that device the receiver has already accepted, and when the chain running forward from it reaches `final_accepted_operation_digest`. A receiver that cannot obtain the intervening operations does not accept it. The point pins one branch, so a revoked device cannot substitute a pre-revocation history the issuer never saw;
+- an accepted below-point operation then applies under the ordinary rules of [`CONFLICT_RESOLUTION.md`](CONFLICT_RESOLUTION.md), with no special reconciliation, because its causal position is signed in `observed_heads`.
 
 ## 8. Backups
 

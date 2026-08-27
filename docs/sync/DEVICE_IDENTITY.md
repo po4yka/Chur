@@ -113,10 +113,26 @@ Key rotation creates a signed replacement record:
 
 ## 9. Revocation
 
-Revocation is a signed membership operation. After acceptance:
+Revocation is a signed membership operation. `RevokeDeviceRecordV1` is the payload of the `RevokeDevice` kind:
+
+```text
+protocol_version
+account/vault identity binding
+revoked_device_id
+final_accepted_device_sequence
+final_accepted_operation_digest
+membership_generation
+issuer_device_id
+previous_membership_commitment
+issuer_signature
+```
+
+The pair (`final_accepted_device_sequence`, `final_accepted_operation_digest`) is the accepted revocation point. The sequence is the highest the issuer had accepted from the revoked device; the digest is that operation's `operation_digest` per [`OPERATION_LOG.md`](OPERATION_LOG.md) §4, so the point names one branch and not merely a length, and `membership_generation` fixes which membership state the point belongs to. Canonical encoding and signature domain are versioned with the enrollment record of §4. Acceptance of operations against this point is normative in [`REVOCATION.md`](REVOCATION.md) §7.
+
+After acceptance:
 
 - future root/collection envelopes are not issued to device;
-- collection keys rotate according to policy;
+- collection keys rotate per [`REVOCATION.md`](REVOCATION.md) §3;
 - server tokens are revoked;
 - old signatures remain verifiable;
 - previously downloaded keys/plaintext remain outside enforceable deletion.
