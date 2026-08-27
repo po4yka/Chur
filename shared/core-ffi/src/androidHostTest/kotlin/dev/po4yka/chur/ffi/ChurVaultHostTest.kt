@@ -140,9 +140,8 @@ class ChurVaultHostTest {
     fun the_recovery_slot_offered_during_creation_unlocks_the_vault() {
         val runtime = openRuntime()
         val creation = ChurVault.beginCreation(runtime, PASSWORD.encodeToByteArray())
-        val secret = ChurVault.creationAddRecoverySlot(creation)
-        assertEquals(SECRET_LENGTH, secret.size)
-        assertFalse(secret.all { it.toInt() == 0 }, "the secret was written")
+        val phrase = ChurVault.creationAddRecoverySlot(creation)
+        assertEquals(24, phrase.split(" ").size, "RECOVERY.md §2 shows a 24-word phrase")
         val session = ChurVault.activateCreation(creation)
         val slots = ChurVault.slots(session)
         assertEquals(2, slots.size)

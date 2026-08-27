@@ -179,13 +179,21 @@ fn the_whole_product_flow_runs_through_the_boundary() {
         unsafe { chur_vault_create_begin(runtime, &request, &mut creation) },
         OK
     );
-    let mut secret = [0u8; SECRET_LEN];
+    let mut phrase_bytes = vec![0u8; RECOVERY_PHRASE_MAX];
+    let mut written = 0usize;
     assert_eq!(
-        unsafe { chur_vault_creation_add_recovery_slot(creation, secret.as_mut_ptr()) },
+        unsafe {
+            chur_vault_creation_add_recovery_slot(
+                creation,
+                phrase_bytes.as_mut_ptr(),
+                phrase_bytes.len(),
+                &mut written,
+            )
+        },
         OK
     );
-    assert_ne!(secret, [0u8; SECRET_LEN], "the recovery secret was written");
-    let phrase = chur_crypto::recovery::to_phrase(&chur_crypto::Key::new(secret));
+    let phrase = String::from_utf8(phrase_bytes[..written].to_vec()).expect("UTF-8");
+    assert_eq!(phrase.split_whitespace().count(), 24, "a 24-word phrase");
     let mut session = 0u64;
     assert_eq!(
         unsafe { chur_vault_creation_activate(creation, &mut session) },
@@ -196,7 +204,6 @@ fn the_whole_product_flow_runs_through_the_boundary() {
 
     // §6.5: the slot list carries the two slots and no body.
     let mut slots = vec![0u8; 1_024];
-    let mut written = 0usize;
     assert_eq!(
         unsafe { chur_vault_slots(session, slots.as_mut_ptr(), slots.len(), &mut written) },
         OK
@@ -443,9 +450,11 @@ fn the_last_portable_slot_cannot_be_removed_through_the_boundary() {
     );
 
     // With a recovery slot present it becomes removable.
-    let mut secret = [0u8; SECRET_LEN];
+    let mut phrase = vec![0u8; RECOVERY_PHRASE_MAX];
     assert_eq!(
-        unsafe { chur_vault_add_recovery_slot(session, secret.as_mut_ptr()) },
+        unsafe {
+            chur_vault_add_recovery_slot(session, phrase.as_mut_ptr(), phrase.len(), &mut written)
+        },
         OK
     );
     assert_eq!(

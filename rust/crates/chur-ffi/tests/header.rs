@@ -120,6 +120,7 @@ fn header_statuses() -> BTreeMap<String, i32> {
                     | "CHUR_PROJECTION_LEN"
                     | "CHUR_PAGE_HEADER_LEN"
                     | "CHUR_SECRET_LEN"
+                    | "CHUR_RECOVERY_PHRASE_MAX"
             )
         {
             continue;
@@ -376,6 +377,10 @@ fn the_control_plane_vocabulary_matches_the_rust_side() {
         ),
         ("CHUR_PAGE_HEADER_LEN", chur_ffi::records::PAGE_HEADER_LEN),
         ("CHUR_SECRET_LEN", chur_ffi::product::SECRET_LEN),
+        (
+            "CHUR_RECOVERY_PHRASE_MAX",
+            chur_ffi::product::RECOVERY_PHRASE_MAX,
+        ),
     ] {
         assert_eq!(
             lengths

@@ -221,17 +221,23 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultCreationAddRecovery
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     creation: jlong,
-    out_secret: JByteArray<'local>,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
 ) -> jint {
-    let mut secret = [0u8; SECRET_LEN];
-    // SAFETY: `secret` is a live 32-byte local.
+    let Some((address, capacity)) = direct_buffer(&env, &destination) else {
+        return INVALID_INPUT;
+    };
+    let mut written = 0usize;
+    // SAFETY: `written` is a live local and the buffer is direct.
     let status = unsafe {
         chur_ffi::product::chur_vault_creation_add_recovery_slot(
             handle_of(creation),
-            secret.as_mut_ptr(),
+            address,
+            capacity,
+            &mut written,
         )
     };
-    finish_secret(&mut env, status, &out_secret, &mut secret)
+    finish_written(&mut env, status, &out_written, written)
 }
 
 /// Reaches `ACTIVE` and opens the session.
@@ -830,14 +836,23 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultAddRecoverySlot<'lo
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     session: jlong,
-    out_secret: JByteArray<'local>,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
 ) -> jint {
-    let mut secret = [0u8; SECRET_LEN];
-    // SAFETY: `secret` is a live 32-byte local.
-    let status = unsafe {
-        chur_ffi::product::chur_vault_add_recovery_slot(handle_of(session), secret.as_mut_ptr())
+    let Some((address, capacity)) = direct_buffer(&env, &destination) else {
+        return INVALID_INPUT;
     };
-    finish_secret(&mut env, status, &out_secret, &mut secret)
+    let mut written = 0usize;
+    // SAFETY: `written` is a live local and the buffer is direct.
+    let status = unsafe {
+        chur_ffi::product::chur_vault_add_recovery_slot(
+            handle_of(session),
+            address,
+            capacity,
+            &mut written,
+        )
+    };
+    finish_written(&mut env, status, &out_written, written)
 }
 
 /// Adds the Apple Keychain slot. Android calls it for a decoy-free parity test

@@ -48,7 +48,7 @@ internal object ChurJni {
 
     external fun vaultCreateBegin(runtime: Long, password: ByteArray, memoryKib: Int, iterations: Int, parallelism: Int, outCreation: LongArray): Int
 
-    external fun vaultCreationAddRecoverySlot(creation: Long, outSecret: ByteArray): Int
+    external fun vaultCreationAddRecoverySlot(creation: Long, destination: ByteBuffer, outWritten: IntArray): Int
 
     external fun vaultCreationActivate(creation: Long, outSession: LongArray): Int
 
@@ -86,7 +86,7 @@ internal object ChurJni {
 
     external fun objectReaderClose(reader: Long): Int
 
-    external fun vaultAddRecoverySlot(session: Long, outSecret: ByteArray): Int
+    external fun vaultAddRecoverySlot(session: Long, destination: ByteBuffer, outWritten: IntArray): Int
 
     external fun vaultAddDeviceSlot(session: Long, itemId: ByteArray, outSecret: ByteArray): Int
 

@@ -409,21 +409,35 @@ typedef struct ChurCreateRequestV1 {
   uint32_t parallelism;
 } ChurCreateRequestV1;
 
-/* Length of the secret a slot operation hands back. */
+/* Length of the device secret a slot operation hands back. */
 #define CHUR_SECRET_LEN 32
+
+/* The largest recovery phrase: 24 words of at most 8 characters, separated. */
+#define CHUR_RECOVERY_PHRASE_MAX 216
 
 chur_status_t chur_vault_present(chur_handle_t runtime, uint8_t *out_present);
 chur_status_t chur_vault_create_begin(chur_handle_t runtime,
                                       const ChurCreateRequestV1 *request,
                                       chur_handle_t *out_creation);
+/*
+ * The recovery slot writes the phrase, not the 32 canonical bytes: the phrase
+ * is a presentation encoding (RECOVERY.md section 2) and
+ * CANONICAL_ENCODING_V1.md section 13 reserves every encoding for Rust, so a
+ * host that received the bytes would have to implement BIP-39 twice. The bytes
+ * are UTF-8 and are not NUL-terminated; the host clears the buffer once the
+ * user has seen the phrase.
+ */
 chur_status_t chur_vault_creation_add_recovery_slot(chur_handle_t creation,
-                                                    uint8_t *out_secret);
+                                                    uint8_t *destination,
+                                                    size_t capacity,
+                                                    size_t *bytes_written);
 chur_status_t chur_vault_creation_activate(chur_handle_t creation,
                                            chur_handle_t *out_session);
 chur_status_t chur_vault_creation_abandon(chur_handle_t creation);
 
 chur_status_t chur_vault_add_recovery_slot(chur_handle_t session,
-                                           uint8_t *out_secret);
+                                           uint8_t *destination, size_t capacity,
+                                           size_t *bytes_written);
 chur_status_t chur_vault_add_device_slot(chur_handle_t session,
                                          const uint8_t *item_id,
                                          uint8_t *out_secret);

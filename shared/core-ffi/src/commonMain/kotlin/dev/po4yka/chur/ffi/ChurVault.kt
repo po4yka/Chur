@@ -67,14 +67,15 @@ object ChurVault {
         }
 
     /**
-     * Offers the recovery slot, step 5.
+     * Offers the recovery slot, step 5, and returns the phrase.
      *
-     * The 32 bytes are the caller's to present and clear. §12 permits them here
-     * because `docs/security/RECOVERY.md` §2 needs the user to see the phrase,
-     * and nothing keeps a copy.
+     * The phrase is the caller's to present and clear. `RECOVERY.md` §2 shows
+     * it exactly once, and nothing here keeps a copy: a user who loses it
+     * rotates the slot under §8 there rather than asking for it again.
      */
-    fun creationAddRecoverySlot(creation: Long): ByteArray = secretOf("creation recovery slot") { out ->
-        ChurNative.vaultCreationAddRecoverySlot(creation, out)
+    fun creationAddRecoverySlot(creation: Long): String = phraseOf("creation recovery slot") {
+        buffer, written ->
+        ChurNative.vaultCreationAddRecoverySlot(creation, buffer, written)
     }
 
     /** Reaches `ACTIVE` and opens the session, step 6. */
@@ -117,9 +118,9 @@ object ChurVault {
     // Key slots
     // -----------------------------------------------------------------------
 
-    /** Adds a recovery slot to an active vault, `RECOVERY.md` §8. */
-    fun addRecoverySlot(session: Long): ByteArray = secretOf("add recovery slot") { out ->
-        ChurNative.vaultAddRecoverySlot(session, out)
+    /** Adds a recovery slot to an active vault and returns the phrase, §8. */
+    fun addRecoverySlot(session: Long): String = phraseOf("add recovery slot") { buffer, written ->
+        ChurNative.vaultAddRecoverySlot(session, buffer, written)
     }
 
     /** Adds the Apple Keychain slot, `KEY_SLOTS.md` §5. */
@@ -418,6 +419,20 @@ object ChurVault {
         ChurFailure.check(body(out), where)
         return out[0]
     }
+
+    /**
+     * Runs a call whose result is a recovery phrase.
+     *
+     * The buffer is cleared before it is released, so the phrase exists in
+     * native memory only for the call and in the returned string until the
+     * caller drops it.
+     */
+    private inline fun phraseOf(where: String, body: (ChurBuffer, IntArray) -> Int): String =
+        withChurBuffer(RECOVERY_PHRASE_MAX) { buffer ->
+            val written = IntArray(1)
+            ChurFailure.check(body(buffer, written), where)
+            buffer.copyOut(written[0]).decodeToString()
+        }
 
     private inline fun secretOf(where: String, body: (ByteArray) -> Int): ByteArray {
         val out = ByteArray(SECRET_LENGTH)

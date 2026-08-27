@@ -157,10 +157,20 @@ internal actual object ChurNative {
         }
     }
 
-    actual fun vaultCreationAddRecoverySlot(creation: Long, outSecret: ByteArray): Int =
-        secretCall(outSecret) { pointer ->
-            chur_vault_creation_add_recovery_slot(creation.toULong(), pointer)
+    actual fun vaultCreationAddRecoverySlot(
+        creation: Long,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int = memScoped {
+        writtenCall(outWritten) { written ->
+            chur_vault_creation_add_recovery_slot(
+                creation.toULong(),
+                destination.pointer,
+                destination.size.toULong(),
+                written,
+            )
         }
+    }
 
     actual fun vaultCreationActivate(creation: Long, outSession: LongArray): Int = memScoped {
         handleCall(outSession) { out -> chur_vault_creation_activate(creation.toULong(), out) }
@@ -385,10 +395,20 @@ internal actual object ChurNative {
     // The §6.5 product surface
     // -----------------------------------------------------------------------
 
-    actual fun vaultAddRecoverySlot(session: Long, outSecret: ByteArray): Int =
-        secretCall(outSecret) { pointer ->
-            chur_vault_add_recovery_slot(session.toULong(), pointer)
+    actual fun vaultAddRecoverySlot(
+        session: Long,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int = memScoped {
+        writtenCall(outWritten) { written ->
+            chur_vault_add_recovery_slot(
+                session.toULong(),
+                destination.pointer,
+                destination.size.toULong(),
+                written,
+            )
         }
+    }
 
     actual fun vaultAddDeviceSlot(session: Long, itemId: ByteArray, outSecret: ByteArray): Int =
         itemId.pinnedPointer { item ->

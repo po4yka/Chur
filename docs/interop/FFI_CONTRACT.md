@@ -253,13 +253,16 @@ chur_status_t chur_vault_create_begin(chur_handle_t runtime,
                                       const ChurCreateRequestV1 *request,
                                       chur_handle_t *out_creation);
 chur_status_t chur_vault_creation_add_recovery_slot(chur_handle_t creation,
-                                                    uint8_t *out_secret);
+                                                    uint8_t *destination,
+                                                    size_t capacity,
+                                                    size_t *bytes_written);
 chur_status_t chur_vault_creation_activate(chur_handle_t creation,
                                            chur_handle_t *out_session);
 chur_status_t chur_vault_creation_abandon(chur_handle_t creation);
 
 /* key slots, KEY_SLOTS.md section 9 */
-chur_status_t chur_vault_add_recovery_slot(chur_handle_t session, uint8_t *out_secret);
+chur_status_t chur_vault_add_recovery_slot(chur_handle_t session, uint8_t *destination,
+                                           size_t capacity, size_t *bytes_written);
 chur_status_t chur_vault_add_device_slot(chur_handle_t session,
                                          const uint8_t *item_id,
                                          uint8_t *out_secret);
@@ -313,7 +316,11 @@ ChurCreateRequestV1
 
 A creation handle is a fourth handle type. It exists because [`../security/PROVISIONING.md`](../security/PROVISIONING.md) §3 has a middle: the recovery slot is offered at step 5, after the password slot is verified at step 4 and before the descriptor reaches `ACTIVE` at step 6. A single create call would have to skip the offer or take a callback, and §10 admits no callback. Closing a creation handle without activating it abandons the creation, which §9 of [`../format/VAULT_DESCRIPTOR_V1.md`](../format/VAULT_DESCRIPTOR_V1.md) requires to leave nothing openable.
 
-`out_secret` is 32 bytes and is the one place §12's "allowed only when unavoidable for a key-slot operation" applies in this surface: a recovery secret must reach the presentation of [`../security/RECOVERY.md`](../security/RECOVERY.md) §2, and a `DeviceUnlockSecret` must reach the platform keystore. The host clears the buffer as soon as it is done with it and never converts it to a string.
+Two things cross that §12 would otherwise keep inside, and they cross differently.
+
+`out_secret` is 32 bytes and is the `DeviceUnlockSecret` of [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §5. It must reach the platform keystore, which is exactly §12's "unavoidable for a key-slot operation", and it never reaches a screen: the host stores it and clears the buffer.
+
+The recovery slot writes the *phrase* rather than the 32 canonical bytes. [`../security/RECOVERY.md`](../security/RECOVERY.md) §2 requires the user to see it, and the phrase is a presentation encoding, which [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §13 reserves for Rust; a host given the bytes would have to implement BIP-39 twice, once per platform, to show anything. It crosses as bounded UTF-8 bytes in a caller buffer, which is the same shape §12 already permits for a password entering Rust, and the host clears the buffer once the user has seen it. `CHUR_RECOVERY_PHRASE_MAX` is 216: twenty-four words of the English list, whose longest entry is eight characters, plus the separators.
 
 Three list results are canonical bytes, for the reason §6.4 gives:
 

@@ -5,11 +5,11 @@
 // adapter of ADR-0040 and iOS through cinterop, so the two actuals differ in
 // mechanism and in nothing else.
 //
-// The native libraries are built by Cargo, not by this build. A Gradle task
-// invokes it, because a developer who edits a Rust export and runs a Kotlin
-// test must not get a stale library: a library that no longer matches the
-// header fails at a symbol lookup, which is the least informative failure
-// available.
+// The Apple static libraries are built by Cargo, not by this build, because a
+// developer who edits a Rust export and runs a Kotlin test must not get a stale
+// library: one that no longer matches the header fails at a symbol lookup,
+// which is the least informative failure available. The host library the JVM
+// tests load is the root build's, because every module's tests need it.
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
@@ -19,20 +19,6 @@ plugins {
 val rustDirectory = rootProject.layout.projectDirectory.dir("rust")
 val cargoTargetDirectory = rustDirectory.dir("target")
 val iosDeploymentTarget = libs.versions.iosDeploymentTarget.get()
-
-/** The host triple, which the JVM host tests load. */
-val hostTarget: String = run {
-    val architecture = when (System.getProperty("os.arch")) {
-        "aarch64", "arm64" -> "aarch64"
-        else -> "x86_64"
-    }
-    val system = System.getProperty("os.name")
-    when {
-        system.startsWith("Mac") -> "$architecture-apple-darwin"
-        system.startsWith("Linux") -> "$architecture-unknown-linux-gnu"
-        else -> error("Chur builds its native libraries on macOS and Linux only")
-    }
-}
 
 /**
  * Registers a Cargo build.
@@ -61,13 +47,6 @@ fun registerCargo(name: String, crate: String, triple: String, artifact: String)
         inputs.file(rustDirectory.file("Cargo.toml"))
         outputs.file(cargoTargetDirectory.file("$triple/debug/$artifact"))
     }
-
-val cargoBuildHostJni = registerCargo(
-    name = "cargoBuildHostJni",
-    crate = "chur-jni",
-    triple = hostTarget,
-    artifact = if (hostTarget.contains("apple")) "libchur_jni.dylib" else "libchur_jni.so",
-)
 
 val appleTriples = mapOf(
     "iosArm64" to "aarch64-apple-ios",
@@ -108,7 +87,7 @@ kotlin {
 
     sourceSets {
         commonMain.dependencies {
-            implementation(project(":shared:core-model"))
+            api(project(":shared:core-model"))
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
@@ -120,12 +99,4 @@ appleTriples.keys.forEach { name ->
     tasks.named("cinteropChur${name.replaceFirstChar { it.uppercase() }}") {
         dependsOn(cargoBuildApple.getValue(name))
     }
-}
-
-tasks.withType<Test>().configureEach {
-    dependsOn(cargoBuildHostJni)
-    systemProperty(
-        "java.library.path",
-        cargoTargetDirectory.dir("$hostTarget/debug").asFile.absolutePath,
-    )
 }

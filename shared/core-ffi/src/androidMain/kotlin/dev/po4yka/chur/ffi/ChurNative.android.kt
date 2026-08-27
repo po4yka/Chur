@@ -35,7 +35,8 @@ internal actual object ChurNative {
 
     actual fun vaultCreateBegin(runtime: Long, password: ByteArray, memoryKib: Int, iterations: Int, parallelism: Int, outCreation: LongArray): Int = ChurJni.vaultCreateBegin(runtime, password, memoryKib, iterations, parallelism, outCreation)
 
-    actual fun vaultCreationAddRecoverySlot(creation: Long, outSecret: ByteArray): Int = ChurJni.vaultCreationAddRecoverySlot(creation, outSecret)
+    actual fun vaultCreationAddRecoverySlot(creation: Long, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.vaultCreationAddRecoverySlot(creation, destination.buffer, outWritten)
 
     actual fun vaultCreationActivate(creation: Long, outSession: LongArray): Int = ChurJni.vaultCreationActivate(creation, outSession)
 
@@ -73,7 +74,8 @@ internal actual object ChurNative {
 
     actual fun objectReaderClose(reader: Long): Int = ChurJni.objectReaderClose(reader)
 
-    actual fun vaultAddRecoverySlot(session: Long, outSecret: ByteArray): Int = ChurJni.vaultAddRecoverySlot(session, outSecret)
+    actual fun vaultAddRecoverySlot(session: Long, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.vaultAddRecoverySlot(session, destination.buffer, outWritten)
 
     actual fun vaultAddDeviceSlot(session: Long, itemId: ByteArray, outSecret: ByteArray): Int = ChurJni.vaultAddDeviceSlot(session, itemId, outSecret)
 

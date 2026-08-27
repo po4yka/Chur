@@ -23,8 +23,15 @@ use crate::panic::guard_status;
 use crate::records::{ChurCreateRequestV1, ChurObjectRefV1, ChurUnlockRequestV1};
 use crate::registry::{self, Entry, Handle, Kind};
 
-/// The length of a secret this surface hands back, §12.
+/// The length of a device secret this surface hands back, §12.
 pub const SECRET_LEN: usize = 32;
+
+/// The largest recovery phrase, §6.5.
+///
+/// Twenty-four words of the BIP-39 English list, whose longest entry is eight
+/// characters, plus the separators. The bound is stated rather than derived at
+/// run time so a caller can size a buffer before it calls.
+pub const RECOVERY_PHRASE_MAX: usize = 24 * 9;
 
 // ---------------------------------------------------------------------------
 // Provisioning
@@ -122,9 +129,20 @@ pub unsafe extern "C" fn chur_vault_create_begin(
 
 /// Offers the recovery slot of `PROVISIONING.md` §4, step 5 of §3.
 ///
+/// It writes the recovery phrase rather than the 32 canonical bytes. The phrase
+/// is a presentation encoding, `docs/security/RECOVERY.md` §2, and
+/// `docs/format/CANONICAL_ENCODING_V1.md` §13 reserves every encoding for Rust:
+/// a host that received the bytes would have to implement BIP-39 twice, once
+/// per platform, to show the user anything.
+///
+/// The bytes are UTF-8 and are not NUL-terminated. §12 permits them as a
+/// bounded buffer, and the host clears it as soon as the user has seen the
+/// phrase.
+///
 /// # Safety
 ///
-/// `out_secret` points to 32 writable bytes.
+/// `destination` covers `capacity` writable bytes and `bytes_written` points to
+/// a writable `size_t`.
 #[unsafe(no_mangle)]
 #[expect(
     unsafe_code,
@@ -132,9 +150,13 @@ pub unsafe extern "C" fn chur_vault_create_begin(
 )]
 pub unsafe extern "C" fn chur_vault_creation_add_recovery_slot(
     creation: Handle,
-    out_secret: *mut u8,
+    destination: *mut u8,
+    capacity: usize,
+    bytes_written: *mut usize,
 ) -> Status {
     guard_status(|| {
+        // SAFETY: the caller guarantees `bytes_written` is writable.
+        let _ = unsafe { crate::api::write_out(bytes_written, 0usize) };
         let entry = registry::get(creation, Kind::Creation)?;
         let Entry::Creation { creation, .. } = entry.as_ref() else {
             return Err(wrong_type());
@@ -149,8 +171,10 @@ pub unsafe extern "C" fn chur_vault_creation_add_recovery_slot(
             };
             pending.add_recovery_slot()?
         };
-        // SAFETY: the caller guarantees 32 writable bytes.
-        unsafe { crate::api::write_secret(out_secret, secret.expose()) }
+        let phrase = chur_crypto::recovery::to_phrase(&secret);
+        // SAFETY: the caller guarantees `destination` covers `capacity` bytes.
+        let buffer = unsafe { crate::api::borrow_bytes_mut(destination, capacity)? };
+        write_record(phrase.as_bytes(), buffer, bytes_written)
     })
 }
 
@@ -227,9 +251,12 @@ pub unsafe extern "C" fn chur_vault_creation_abandon(creation: Handle) -> Status
 
 /// Adds a recovery slot to an active vault, `RECOVERY.md` §8.
 ///
+/// It writes the phrase, for the reason
+/// [`chur_vault_creation_add_recovery_slot`] gives.
+///
 /// # Safety
 ///
-/// `out_secret` points to 32 writable bytes.
+/// As [`chur_vault_slots`].
 #[unsafe(no_mangle)]
 #[expect(
     unsafe_code,
@@ -237,13 +264,19 @@ pub unsafe extern "C" fn chur_vault_creation_abandon(creation: Handle) -> Status
 )]
 pub unsafe extern "C" fn chur_vault_add_recovery_slot(
     session: Handle,
-    out_secret: *mut u8,
+    destination: *mut u8,
+    capacity: usize,
+    bytes_written: *mut usize,
 ) -> Status {
     guard_status(|| {
+        // SAFETY: the caller guarantees `bytes_written` is writable.
+        let _ = unsafe { crate::api::write_out(bytes_written, 0usize) };
         let entry = registry::get(session, Kind::Session)?;
         let secret = with_session_mut(&entry, Session::add_recovery_slot)?;
-        // SAFETY: the caller guarantees 32 writable bytes.
-        unsafe { crate::api::write_secret(out_secret, secret.expose()) }
+        let phrase = chur_crypto::recovery::to_phrase(&secret);
+        // SAFETY: the caller guarantees `destination` covers `capacity` bytes.
+        let buffer = unsafe { crate::api::borrow_bytes_mut(destination, capacity)? };
+        write_record(phrase.as_bytes(), buffer, bytes_written)
     })
 }
 

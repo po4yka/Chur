@@ -28,8 +28,16 @@ const val PROJECTION_LENGTH: Int = 79
 /** Length of the `ChurPageV1` header of `FFI_CONTRACT.md` §6.4. */
 const val PAGE_HEADER_LENGTH: Int = 63
 
-/** Length of the secret a slot operation hands back, §6.5. */
+/** Length of the device secret a slot operation hands back, §6.5. */
 const val SECRET_LENGTH: Int = 32
+
+/**
+ * The largest recovery phrase, §6.5.
+ *
+ * Twenty-four words of the BIP-39 English list, whose longest entry is eight
+ * characters, plus the separators.
+ */
+const val RECOVERY_PHRASE_MAX: Int = 24 * 9
 
 /** One row of a library page, §16.1. */
 data class ObjectProjection(

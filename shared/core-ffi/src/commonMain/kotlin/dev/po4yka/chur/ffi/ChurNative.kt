@@ -32,7 +32,7 @@ internal expect object ChurNative {
     fun runtimeClose(runtime: Long): Int
     fun vaultPresent(runtime: Long, outPresent: ByteArray): Int
     fun vaultCreateBegin(runtime: Long, password: ByteArray, memoryKib: Int, iterations: Int, parallelism: Int, outCreation: LongArray): Int
-    fun vaultCreationAddRecoverySlot(creation: Long, outSecret: ByteArray): Int
+    fun vaultCreationAddRecoverySlot(creation: Long, destination: ChurBuffer, outWritten: IntArray): Int
     fun vaultCreationActivate(creation: Long, outSession: LongArray): Int
     fun vaultCreationAbandon(creation: Long): Int
     fun vaultUnlock(runtime: Long, factor: Int, secret: ByteArray, outSession: LongArray): Int
@@ -51,7 +51,7 @@ internal expect object ChurNative {
     fun objectReaderReadAt(reader: Long, offset: Long, destination: ChurBuffer, outWritten: IntArray): Int
     fun objectReaderVerifyComplete(reader: Long, outState: IntArray): Int
     fun objectReaderClose(reader: Long): Int
-    fun vaultAddRecoverySlot(session: Long, outSecret: ByteArray): Int
+    fun vaultAddRecoverySlot(session: Long, destination: ChurBuffer, outWritten: IntArray): Int
     fun vaultAddDeviceSlot(session: Long, itemId: ByteArray, outSecret: ByteArray): Int
     fun vaultRemoveSlot(session: Long, slotId: ByteArray): Int
     fun vaultChangePassword(session: Long, password: ByteArray): Int
