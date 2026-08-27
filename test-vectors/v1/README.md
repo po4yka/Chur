@@ -1,6 +1,6 @@
 # Chur v1 Vector Scaffold
 
-> **Status:** Empty scaffold; the v1 constants, domain tags, and record layouts are frozen and the fixtures are outstanding
+> **Status:** Proposed — empty scaffold; the v1 constants, domain tags, and record layouts are frozen and the fixtures are outstanding
 
 Planned fixture groups:
 

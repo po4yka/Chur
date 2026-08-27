@@ -1,6 +1,6 @@
 # Object Key Envelope v1
 
-> **Status:** Proposed normative format
+> **Status:** Proposed normative format; the 142-byte record layout of §1 is frozen by [ADR-0025](../adr/0025-freeze-the-object-key-envelope-aad.md) and [ADR-0019](../adr/0019-freeze-remaining-v1-record-layouts.md). Deterministic vectors are outstanding.
 
 `ObjectKeyEnvelopeV1` wraps one random `ObjectKey` under a Security Collection key. It is mutable and stored separately from the immutable media container so collection changes and sharing can rewrap keys without re-encrypting media.
 
@@ -23,7 +23,7 @@ offset  size  field                      v1 value
 0x8E          end of record
 ```
 
-The field order is the one §10 requires.
+This offset table is the authority for the field order; §10 bounds the widths and the 142-byte total.
 
 A reader compares `format_version`, `encoding_profile`, and `suite_id` against the supported values before the AEAD runs, so a modified identifier fails as `UNSUPPORTED_VERSION` or `UNSUPPORTED_SUITE` and can never select a different construction. `suite_id` is additionally inside the AAD of §3. The AAD domain tag is `CHUR\x00OBJECT\x00KEY-ENVELOPE\x00V1`, allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.5. V1 values for `format_version`, `encoding_profile`, and `suite_id` are allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15; the registry records the allocation and this section is the authority for these envelope bytes.
 
