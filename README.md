@@ -1094,19 +1094,7 @@ Media containers remain immutable. Favorites, captions, logical albums, tags, an
 
 AEAD alone does not prevent a malicious or broken server from replaying an older, valid ciphertext. The future sync protocol therefore requires signed, chained device operations:
 
-```text
-Operation
-├── operation_id
-├── vault_id
-├── key_domain_id
-├── collection_epoch
-├── device_id
-├── device_sequence
-├── previous_operation_hash
-├── operation_type
-├── encrypted_payload
-└── device_signature
-```
+The signed record's fields, the cleartext set, and the chain hash are defined in [`docs/sync/OPERATION_LOG.md`](docs/sync/OPERATION_LOG.md) §2, §4, and §6, and are not repeated here.
 
 Clients track accepted device heads and detect replay, rollback, and log forks where possible. Server omission remains a separate consistency problem and must be documented honestly.
 

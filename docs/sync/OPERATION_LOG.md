@@ -15,7 +15,7 @@ The operation log represents private catalog changes as canonical encrypted and 
 
 ## 2. Operation structure
 
-Conceptual outer record:
+This section owns the operation record: the field order below is the order of the signed bytes. [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §52, [`../ARCHITECTURE.md`](../ARCHITECTURE.md) §34.3, and the root [`README.md`](../../README.md) point here and do not restate it. Field widths and the record's signing domain tag are the remaining open part; they are frozen by the Gate 5 sync work, with the tag allocated in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15.5, and this document owns them.
 
 ```text
 OperationV1
