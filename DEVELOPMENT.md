@@ -204,6 +204,21 @@ PLATFORM_KEY_INVALIDATED
 
 Generated code must be reproducible from checked-in schemas/configuration. A pull request changing generated output must also change its source and state the generator version. Generated FFI bindings must not become the canonical protocol definition.
 
+## Native catalog build
+
+`chur-catalog` compiles vendored SQLCipher and OpenSSL through `rusqlite`
+([ADR-0038](docs/adr/0038-adopt-sqlcipher-as-the-v1-catalog-engine.md)). Two
+environment facts change whether that build succeeds.
+
+- **A compiler cache breaks the OpenSSL build.** The `cc` crate treats a
+  `RUSTC_WRAPPER` naming `sccache` as a C compiler wrapper as well, and
+  `openssl-sys` probes its headers with `cc -E`, which `sccache` refuses.
+  Setting `CC` explicitly, for example `CC=/usr/bin/cc cargo test`, keeps the
+  wrapper off the probe. The Rust side still caches.
+- **Android needs an NDK and Apple needs Xcode**, exactly as
+  [Native targets](#native-targets) already requires, and now for every build of
+  the catalog crate rather than only for the mobile artifacts.
+
 ## Troubleshooting principles
 
 - fail rather than silently downgrade cryptographic behavior;

@@ -1,9 +1,9 @@
 # ADR-0004: Use a Rust-Owned Private Catalog
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-26
 - **Decision owners:** @po4yka
-- **Related:** [`../format/CATALOG_SCHEMA_V1.md`](../format/CATALOG_SCHEMA_V1.md)
+- **Related:** [`../format/CATALOG_SCHEMA_V1.md`](../format/CATALOG_SCHEMA_V1.md), [`0038`](0038-adopt-sqlcipher-as-the-v1-catalog-engine.md)
 
 ## Context
 
@@ -68,8 +68,9 @@ Logical catalog schema is normative; physical engine can change through migratio
 - dependency/license/update review;
 - comparison with custom encrypted-store alternative.
 
+[ADR-0038](0038-adopt-sqlcipher-as-the-v1-catalog-engine.md) records the result of each item and the two it leaves open, and it is what moved this ADR to Accepted.
+
 ## Follow-up
 
-- this ADR stays Proposed until the evidence above exists; the SQLCipher build, link, and backup validation result is the blocking item and is tracked in the ADR backlog;
-- if SQLCipher is rejected, supersede this ADR with a new one rather than editing the decision;
+- the engine decision is recorded in [ADR-0038](0038-adopt-sqlcipher-as-the-v1-catalog-engine.md); if SQLCipher is later rejected, supersede that ADR rather than editing this decision;
 - the logical schema in [`../format/CATALOG_SCHEMA_V1.md`](../format/CATALOG_SCHEMA_V1.md) is normative regardless of the engine chosen, so it may be frozen before this ADR is accepted.

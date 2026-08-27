@@ -26,6 +26,8 @@ repository = "https://github.com/po4yka/Chur"
 chur-core = { path = "crates/chur-core", version = "0.1.0" }
 chur-crypto = { path = "crates/chur-crypto", version = "0.1.0" }
 chur-format = { path = "crates/chur-format", version = "0.1.0" }
+chur-catalog = { path = "crates/chur-catalog", version = "0.1.0" }
+chur-media = { path = "crates/chur-media", version = "0.1.0" }
 
 # Cryptography. Narrow, well-reviewed libraries only (DEPENDENCY_POLICY.md).
 argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
@@ -39,6 +41,17 @@ zeroize = { version = "1", default-features = false, features = ["alloc"] }
 # NFKD for recovery-phrase re-entry, which ADR-0029 requires. Data tables only,
 # no unsafe, no build script, no transitive dependency.
 unicode-normalization = { version = "0.1", default-features = false }
+
+# The private catalog engine. ADR-0004 names SQLCipher accessed directly from
+# Rust as the physical implementation, and CATALOG_SCHEMA_V1.md section 16.4
+# requires the FTS5 module the same SQLite build already carries. Default
+# features are off: they add a WebAssembly VFS and its wasm-bindgen graph that
+# no Chur target uses.
+rusqlite = { version = "0.40", default-features = false, features = [
+    "bundled-sqlcipher-vendored-openssl",
+    "column_decltype",
+    "limits",
+] }
 
 # Errors and CLI.
 thiserror = "2"

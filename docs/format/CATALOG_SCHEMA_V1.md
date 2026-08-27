@@ -1,6 +1,6 @@
 # Private Catalog Schema v1
 
-> **Status:** Proposed normative logical schema. The v1 catalog has two representations and no third: a physical SQLCipher schema for the live local database, and the canonical serialization of [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) when exported into a portable backup. SQLCipher build, linkage, WAL, migration, and performance validation remain outstanding.
+> **Status:** Proposed normative logical schema. The v1 catalog has two representations and no third: a physical SQLCipher schema for the live local database, and the canonical serialization of [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) when exported into a portable backup. The engine is decided in [ADR-0038](../adr/0038-adopt-sqlcipher-as-the-v1-catalog-engine.md), which records the build, linkage, WAL, and migration evidence; performance on a device from [ADR-0017](../adr/0017-freeze-the-supported-device-set.md) and backup correctness remain outstanding.
 
 The private catalog is Rust-owned. It stores queryable private metadata, object and collection relationships, key envelopes, journals, integrity state, and future sync projections. Room and DataStore never open or mirror it.
 
@@ -222,7 +222,7 @@ Recovery of a half-deleted object rolls forward and never back, because rolling 
 
 Proposed:
 
-- Rust opens SQLCipher directly;
+- Rust opens SQLCipher directly, through `rusqlite` with vendored SQLCipher and OpenSSL ([ADR-0038](../adr/0038-adopt-sqlcipher-as-the-v1-catalog-engine.md));
 - key derived from root catalog domain;
 - WAL/journal uses encrypted database configuration;
 - file placed in private protected storage;
@@ -230,7 +230,11 @@ Proposed:
 - no Room schema or DAO for private data;
 - a portable backup carries the canonical catalog export named in [`BACKUP_FORMAT_V1.md`](BACKUP_FORMAT_V1.md) §2, and never raw SQLCipher pages, WAL segments, or a file copy of the live database. Raw pages are a local storage detail: they carry one client's page format and SQLCipher build options into the package, and no other platform build is required to read them.
 
-Prototype must validate Android/iOS build size, linkage, WAL behavior, migration, performance, and backup correctness.
+The catalog key reaches SQLCipher through the raw-key pragma. It is already a full-entropy HKDF output under `chur/v1/root/catalog-database`, so SQLCipher's own password KDF is not run over it: a second KDF would add cost without adding entropy and would put a second profile into the at-rest format.
+
+`synchronous` is `FULL` and `journal_mode` is `WAL`. The pair is required rather than preferred, because §11 makes a journal reservation durable only under a mode that survives power loss, and `NORMAL` in WAL mode returns from a commit once the write reaches the operating system.
+
+[ADR-0038](../adr/0038-adopt-sqlcipher-as-the-v1-catalog-engine.md) records the build, size, linkage, WAL, licensing, and migration evidence. Performance and energy on a device from [ADR-0017](../adr/0017-freeze-the-supported-device-set.md), and backup correctness, are still outstanding.
 
 ## 16. Query surface, indexes, and leakage
 

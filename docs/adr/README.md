@@ -89,6 +89,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0035](0035-freeze-the-object-aad-tuple-widths.md) | Freeze the element widths of the three object AAD tuples | Accepted |
 | [0036](0036-freeze-the-v1-key-slot-bodies.md) | Freeze the four v1 key-slot bodies and their AAD tuples | Accepted |
 | [0037](0037-contain-panics-in-channel-less-exports.md) | Contain panics in exports that have no status channel | Accepted |
+| [0038](0038-adopt-sqlcipher-as-the-v1-catalog-engine.md) | Adopt SQLCipher as the v1 catalog engine | Accepted |
 
 Rows are ordered by ADR number. Number 0015 was not used; no ADR carries it and none will.
 
@@ -97,7 +98,6 @@ Rows are ordered by ADR number. Number 0015 was not used; no ADR carries it and 
 This list registers the decisions that still require an ADR. [`../ARCHITECTURE.md`](../ARCHITECTURE.md) §43 points here and keeps no list of its own. [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §74 is the second register: it tracks every open cryptographic decision item by item and annotates each one as it is resolved, and an item there is copied here only when it needs an ADR of its own. An entry leaves this list only when an accepted ADR, or a specification of rank 1 to rank 3 in the [authority hierarchy](../README.md#authority-hierarchy), records the decision.
 
 - the exact password input maximum, [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §74 item 5, which [`../security/PASSWORD_PROFILE.md`](../security/PASSWORD_PROFILE.md) §3 proposes as 1024 encoded bytes and does not freeze; the rest of that profile is decided, the Unicode rules in §3 there, the Argon2id floor and default in §4 and [`0026`](0026-argon2id-memory-floor-and-candidate-set.md), and the Argon2 parser bounds in [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §18.3;
-- SQLCipher build, linkage, WAL, migration, performance, and backup validation result required by [`../format/CATALOG_SCHEMA_V1.md`](../format/CATALOG_SCHEMA_V1.md) §15, which decides whether [`0004`](0004-rust-owned-private-catalog.md) is accepted or replaced;
 - Android Keystore and iOS Keychain exact policies, including the Apple slot representation that [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §5 leaves open between a protected `DeviceUnlockSecret` and wrapped root bytes held directly as the Keychain secret;
 - device identity portability, including whether the optional Secure Enclave or Android hardware identity keys of [`../sync/DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md) §6 become a second suite;
 - post-quantum recipient profile per [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §56 and [`../sync/COLLECTION_GRANTS.md`](../sync/COLLECTION_GRANTS.md) §11.
