@@ -34,7 +34,7 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 | parser limits specified and tested | met. `chur-core::limits` gathers every bound beside the section that owns it and checks their consistency at compile time; ten fuzz targets and the corruption harness exercise them |
 | Android, iOS, and CLI consume identical vectors | met at the index level. One generated source embeds `test-vectors/v1`, and the same suite runs in `jvmTest`, `testAndroidHostTest`, and `iosSimulatorArm64Test`. Decoding a private record on a platform is not in scope: [`docs/format/CANONICAL_ENCODING_V1.md`](docs/format/CANONICAL_ENCODING_V1.md) §13 reserves that for Rust, so the platform side checks the index and the FFI handshake |
 | security invariants mapped to tests | met. Eighteen rows of [`docs/assurance/SECURITY_TEST_PLAN.md`](docs/assurance/SECURITY_TEST_PLAN.md) §13 name a running test target; every other row names a procedure no job executes, and the six audit-only rows are named as such |
-| release gates and review scope approved | **outstanding.** This is a decision, not an artifact |
+| release gates and review scope approved | **outstanding.** Both are decisions, not artifacts. [`docs/assurance/EVIDENCE_PHASE_0.md`](docs/assurance/EVIDENCE_PHASE_0.md) §8 states what each one accepts and §5 states its cost |
 | the minimum job set of ADR-0031 runs on every pull request | met. The four minimum jobs run, and the vector, C ABI, fuzz, Gradle, and Kotlin/Native jobs joined them as their subjects landed |
 
 Gate 1 may be declared once the two approvals are recorded.

@@ -99,6 +99,12 @@ enum VectorAction {
         #[arg(long, default_value = DEFAULT_VECTOR_DIR)]
         dir: PathBuf,
     },
+    /// Print the digest of the vector set for a release evidence package.
+    Digest {
+        /// Directory to read, default `test-vectors/v1`.
+        #[arg(long, default_value = DEFAULT_VECTOR_DIR)]
+        dir: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -129,6 +135,7 @@ fn run() -> Result<(), String> {
                 force,
             } => generate(&dir, spec_commit.as_deref(), force),
             VectorAction::Verify { dir } => verify(&dir),
+            VectorAction::Digest { dir } => digest(&dir),
         },
         Command::Object { action } => match action {
             ObjectAction::Inspect { path } => inspect(&path),
@@ -459,6 +466,63 @@ fn verify(dir: &Path) -> Result<(), String> {
         dir.display()
     );
     Ok(())
+}
+
+/// Prints the digest `TEST_VECTORS.md` §8 has release CI archive.
+///
+/// The formula is fixed here rather than in a shell pipeline, so the value does
+/// not depend on how a platform's `find` orders entries or how its checksum
+/// tool formats a line:
+///
+/// SHA-256 over every file under the directory, in ascending order of its path
+/// relative to that directory, feeding for each file the relative path as UTF-8
+/// with `/` separators, then the file bytes.
+fn digest(dir: &Path) -> Result<(), String> {
+    let mut hasher = Sha256Digest::new();
+    let mut count = 0usize;
+    for path in walk(dir)? {
+        let relative = path
+            .strip_prefix(dir)
+            .map_err(|_| "a fixture path escaped the vector directory".to_owned())?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let bytes =
+            std::fs::read(&path).map_err(|error| format!("reading {}: {error}", path.display()))?;
+        hasher.update(relative.as_bytes());
+        hasher.update(&bytes);
+        count += 1;
+    }
+    println!(
+        "{}  {count} files  {}",
+        hex::encode(hasher.finalize()),
+        dir.display()
+    );
+    Ok(())
+}
+
+/// A SHA-256 accumulator over the dependency the workspace already carries.
+///
+/// The digest is SHA-256 rather than the BLAKE3-256 of suite `0x0001`: it is
+/// release metadata for a human to compare, not a protocol commitment, and
+/// `TEST_VECTORS.md` §2 keeps the manifest outside the canonical encoding for
+/// the same reason.
+struct Sha256Digest(sha2::Sha256);
+
+impl Sha256Digest {
+    fn new() -> Self {
+        use sha2::Digest as _;
+        Self(sha2::Sha256::new())
+    }
+
+    fn update(&mut self, bytes: &[u8]) {
+        use sha2::Digest as _;
+        self.0.update(bytes);
+    }
+
+    fn finalize(self) -> [u8; 32] {
+        use sha2::Digest as _;
+        self.0.finalize().into()
+    }
 }
 
 fn walk(dir: &Path) -> Result<Vec<PathBuf>, String> {

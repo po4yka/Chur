@@ -86,16 +86,13 @@ jobs:
       # vectors byte for byte. `verify` rebuilds the whole set and compares it,
       # so a change that alters one fails here rather than shipping.
       - run: cargo run -p chur-cli -- vectors verify --dir ../test-vectors/v1
-      # The same section has release CI archive the vector-set digest. It is
-      # recorded on every run so a release evidence package can cite one.
+      # The same section has release CI archive the vector-set digest. The
+      # formula lives in chur-cli rather than in a shell pipeline, so the value
+      # does not depend on how a platform orders `find` or formats a checksum
+      # line.
       - name: record the vector-set digest
-        working-directory: .
-        run: |
-          find test-vectors/v1 -type f -print0 \
-            | sort -z \
-            | xargs -0 sha256sum \
-            | sha256sum \
-            | tee vector-set-digest.txt
+        run: cargo run -p chur-cli -- vectors digest --dir ../test-vectors/v1
+          | tee ../vector-set-digest.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: vector-set-digest

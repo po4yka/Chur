@@ -115,6 +115,7 @@ The complete platform documents are [`ANDROID.md`](ANDROID.md) and [`IOS.md`](IO
 - [`assurance/MIGRATION_POLICY.md`](assurance/MIGRATION_POLICY.md)
 - [`assurance/PERFORMANCE_BUDGETS.md`](assurance/PERFORMANCE_BUDGETS.md)
 - [`assurance/RELEASE_GATES.md`](assurance/RELEASE_GATES.md)
+- [`assurance/EVIDENCE_PHASE_0.md`](assurance/EVIDENCE_PHASE_0.md) — what the Gate 0 and Gate 1 items are met by today, and which have no enforcing job
 - [`assurance/SECURITY_REVIEW_SCOPE.md`](assurance/SECURITY_REVIEW_SCOPE.md)
 
 ## Sync and sharing

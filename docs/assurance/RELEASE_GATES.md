@@ -124,6 +124,8 @@ Severity labels do not override direct violation of a mandatory invariant.
 
 ## Evidence package
 
+[`EVIDENCE_PHASE_0.md`](EVIDENCE_PHASE_0.md) is this record for Phase 0. It states what is met, what is not, and every item with no enforcing job.
+
 Each gated release records:
 
 ```text

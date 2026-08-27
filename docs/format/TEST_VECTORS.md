@@ -144,7 +144,7 @@ Once a format/protocol version is accepted:
 - correcting a mistaken spec requires new version/vector IDs;
 - negative vectors may expand but not silently change expected classification;
 - generator updates must reproduce historical vectors byte-for-byte;
-- release CI archives the vector-set digest.
+- release CI archives the vector-set digest, which `chur-cli vectors digest` computes: SHA-256 over every file under `test-vectors/v1`, in ascending order of the file's path relative to that directory, feeding for each file the relative path as UTF-8 with `/` separators and then the file bytes. The formula is fixed in the tool rather than in a shell pipeline, so the value does not depend on how a platform orders a directory listing or formats a checksum line.
 
 ## 9. Naming
 
