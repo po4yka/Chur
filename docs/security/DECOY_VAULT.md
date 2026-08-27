@@ -44,6 +44,7 @@ Decoy provisioning occurs from an already authenticated real session or a dedica
 - fresh independent root and slots;
 - user confirms the decoy credential is distinct;
 - initial plausible content is user-controlled or synthetic and clearly explained;
+- the limitation in §10 is stated before the decoy is created: the feature is publicly documented, so a coercer may know to keep demanding credentials;
 - no automatic copying of real media or metadata;
 - recovery semantics explained separately;
 - setup can be disabled without destroying the real vault.
@@ -123,6 +124,18 @@ Disallowed without a new proven design:
 - impossible to prove another vault exists;
 - forensic-proof.
 
+### Assumed adversary knowledge
+
+The existence of this feature is public by design. [`../product/DISCREET_MODE.md`](../product/DISCREET_MODE.md) requires the store listing to describe the discreet interfaces, and [`../IOS.md`](../IOS.md) §37 requires review notes to describe how real and decoy sessions behave. A coercer may therefore know that a second credential can exist before demanding anything, and this specification does not assume otherwise.
+
+What remains is indistinguishability, not concealment: the defence holds only where the coercer cannot tell an opened decoy from a vault that has no sibling. Therefore:
+
+- a decoy session must not prove or disprove the existence of a sibling identity from inside the application. No count, setting, notification, backup state, error, timing class, or management surface reachable from a decoy session may differ according to whether a real vault exists;
+- the same must hold in a real session with no decoy provisioned, so that "no decoy exists" and "the decoy was not opened" are one observation rather than two;
+- §3 provisioning must state this limitation before the user creates a decoy.
+
+This bounds the claim: Decoy Vault raises the cost of a demand to open the vault. It does not defeat a coercer who knows the feature exists and keeps demanding credentials.
+
 ## 11. Test matrix
 
 - correct real credential opens only real data;
@@ -134,4 +147,5 @@ Disallowed without a new proven design:
 - process death returns to public locked state;
 - storage/log/notification inspection finds no semantic real/decoy label;
 - lock invalidates readers from both identities;
-- migration can process one vault without opening the sibling.
+- migration can process one vault without opening the sibling;
+- a decoy session and a real session with no decoy provisioned are indistinguishable from inside the application across counts, settings, notifications, backup state, and error copy.

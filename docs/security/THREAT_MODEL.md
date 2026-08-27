@@ -94,6 +94,8 @@ Supplies malformed media, containers, backups, catalogs, key slots, sync records
 
 Can demand that the user unlock the application and inspect visible content. Decoy Vault reduces disclosure but does not provide an undetectable hidden volume.
 
+This adversary is assumed to know that the decoy feature exists: the store listing and the platform review notes describe it, by requirement. The control therefore rests on indistinguishability rather than on surprise, and its limits are stated in [`DECOY_VAULT.md`](DECOY_VAULT.md) §10. Under the convenient device-slot policy described in A2, this adversary also does not need any credential from the user if they know the device unlock code, and the decoy is irrelevant in that case.
+
 ### A9 — Previously authorized recipient
 
 Possesses collection keys or plaintext obtained legitimately and may retain it after revocation.
