@@ -1409,7 +1409,7 @@ If SQLCipher size, cross-compilation, or performance is unacceptable, the altern
 
 Search indexes, OCR indexes, face embeddings, and semantic embeddings are private.
 
-They MAY be stored inside the encrypted catalog or as encrypted index segments under `SearchKey`-derived subkeys.
+The v1 text search index is stored inside the encrypted catalog, as the FTS5 table of [`format/CATALOG_SCHEMA_V1.md`](format/CATALOG_SCHEMA_V1.md) §16.4, and derives no key of its own. OCR, face, and semantic-embedding indexes, which are not v1, are stored as encrypted index segments under `SearchKey`-derived subkeys.
 
 Global deduplication through an unkeyed plaintext hash is forbidden because it reveals equality and allows confirmation attacks.
 

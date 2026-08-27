@@ -1422,6 +1422,8 @@ interface ObjectReader : AutoCloseable {
 }
 ```
 
+`ObjectQuery`, `ObjectProjection`, and `Page` are the Kotlin spellings of `ObjectQueryV1`, `ObjectProjectionV1`, and the page result of [`format/CATALOG_SCHEMA_V1.md`](format/CATALOG_SCHEMA_V1.md) §16.1 and §16.2, which own their fields, the sort keys, the keyset-cursor contract, and the page-size bound. This document MUST NOT define them.
+
 ### 27.4 Safety rules
 
 - Rust panics MUST NOT unwind across FFI.

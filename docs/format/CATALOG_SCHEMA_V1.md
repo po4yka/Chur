@@ -195,9 +195,79 @@ Proposed:
 
 Prototype must validate Android/iOS build size, linkage, WAL behavior, migration, performance, and backup correctness.
 
-## 16. Indexes and leakage
+## 16. Query surface, indexes, and leakage
 
-Within an unlocked encrypted DB, indexes may support timeline, albums, tags, and metadata search. Persisted database/page sizes still leak approximate scale. Index names/schema should avoid user labels but schema itself is not assumed secret after binary analysis.
+### 16.1 Object projection
+
+One projection serves the timeline, album, favourite, tag, and search screens. It is the only object shape a page returns, it is fixed-width so it fits the caller buffer of [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md) §6.2, and it carries no free-form user text:
+
+```text
+ObjectProjectionV1
+    object_id                  16 bytes, opaque
+    primary_stream_id          16 bytes, opaque
+    media_kind                 u16
+    capture_time_ms            u64
+    import_time_ms             u64
+    capture_time_substituted   u8    §8.1
+    plaintext_size             u64
+    width                      u32   0 when not applicable
+    height                     u32   0 when not applicable
+    duration_ms                u64   0 for a still
+    favorite                   u8
+    state                      u8    §5.1
+    integrity_summary          u8    §5.1
+    thumbnail_ready            u8
+```
+
+Filename, caption, EXIF, GPS, album names, and tag names are not in the projection. A detail screen fetches them for one object, so a page of 200 rows never carries 200 filenames across the boundary.
+
+### 16.2 Query and paging
+
+```text
+ObjectQueryV1
+    scope     timeline | album(album_id) | favorites | tag(tag_id) | search(terms) | quarantine
+    kinds     u16 bitmask of media kinds, 0 for every kind
+    sort      capture_desc (default) | capture_asc | import_desc
+    cursor    opaque, empty for the first page
+    limit     1 to 500, default 200
+```
+
+A page returns the projections, a `total_count` for the scope, and a `next_cursor` that is empty when the scope is exhausted. A `limit` above 500 is `RESOURCE_LIMIT_EXCEEDED`.
+
+Paging is keyset, never offset. The cursor is the sort value of the last row returned followed by its `object_id`, and the next page selects the rows ordered strictly after that pair. Every page therefore costs the same whatever its position, and a page boundary stays valid while rows are inserted and deleted. The consequence is stated rather than hidden: a row whose sort key changes between two pages may be returned twice or skipped, so a caller that observes a change in `catalog_generation` restarts the scope instead of continuing the cursor. A cursor that does not parse, or that was issued for a different scope or sort, is `INVALID_INPUT`.
+
+Rows with `state` `DELETING` or `TOMBSTONED` are never returned. A row with `integrity_summary` `QUARANTINED` is returned only in the `quarantine` scope, which is what keeps it out of the ordinary library under [`../../DESIGN.md`](../../DESIGN.md) §20.3.
+
+### 16.3 Required indexes
+
+Each one covers a scope under a sort, so a page is a range scan and never a sort:
+
+- `objects(state, capture_time_ms, object_id)` and `objects(state, import_time_ms, object_id)`;
+- `album_memberships(album_id, capture_time_ms, object_id)`;
+- `favorites(capture_time_ms, object_id)`;
+- `object_tags(tag_id, capture_time_ms, object_id)`;
+- `object_streams(object_id, stream_kind)`;
+- `derived_assets(object_id, kind, source_content_revision)`;
+- `object_key_envelopes(object_id, status)`;
+- `import_transactions(stage)`;
+- `tombstones(authored_ms)`.
+
+`capture_time_ms` is duplicated into the album-membership and favourite rows so those scopes do not join before sorting. The copy is rewritten in the same transaction that activates a metadata revision changing the capture time, per §8.1, so it cannot drift.
+
+### 16.4 Search
+
+v1 search is a SQLite FTS5 table inside the same SQLCipher database. It is not `LIKE` scanning and not a separate index file. `LIKE '%term%'` cannot use any index, so it is a full scan of every metadata revision and misses the first-content budget of [`../assurance/PERFORMANCE_BUDGETS.md`](../assurance/PERFORMANCE_BUDGETS.md) at the object limit of §21; FTS5 is a compile-time module of the SQLite that SQLCipher already builds, so it adds no dependency and its pages get the same at-rest encryption as every other page.
+
+- the indexed columns are the original filename, the caption, and the object's tag names; nothing else is tokenized;
+- the tokenizer is `unicode61` with `remove_diacritics 2`, and a prefix index of 2 and 3 characters serves as-you-type queries;
+- a row is reindexed in the transaction that activates a metadata revision or changes a tag, so the index never outlives the revision it describes;
+- the `SearchKey` of [`../security/KEY_HIERARCHY.md`](../security/KEY_HIERARCHY.md) §3 is not used in v1. It stays reserved for the separate encrypted index segments that OCR, face, and embedding indexes will need.
+
+### 16.5 Leakage
+
+An FTS index stores tokenized terms and their postings inside the database, so it is readable by whoever already holds the unlocked database key and by nobody else; it adds no capability to an attacker without that key. Term count changes the database size, which is part of the same signal as everything below.
+
+Persisted database and page sizes leak approximate scale. Index names and schema should avoid user labels, but the schema itself is not assumed secret after binary analysis.
 
 ## 17. Transactions
 
