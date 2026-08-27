@@ -10,6 +10,7 @@
 //! generate and verify the deterministic vector set, inspect a container
 //! structurally with no key, and answer the ABI handshake.
 
+mod bench;
 mod manifest;
 mod vectors;
 
@@ -52,6 +53,30 @@ enum Command {
     },
     /// Print the ABI handshake this build answers.
     Abi,
+    /// Measure a Phase 0 candidate set.
+    Bench {
+        #[command(subcommand)]
+        action: BenchAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum BenchAction {
+    /// Time the object-container chunk-size candidates.
+    ChunkSizes {
+        /// Object plaintext length in bytes.
+        #[arg(long, default_value_t = 16 * 1024 * 1024)]
+        object_bytes: usize,
+        /// Samples per candidate.
+        #[arg(long, default_value_t = 8)]
+        samples: usize,
+    },
+    /// Time the Argon2id profiles against the interactive target.
+    Argon2 {
+        /// Samples per profile.
+        #[arg(long, default_value_t = 8)]
+        samples: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -112,6 +137,16 @@ fn run() -> Result<(), String> {
             abi();
             Ok(())
         }
+        Command::Bench { action } => match action {
+            BenchAction::ChunkSizes {
+                object_bytes,
+                samples,
+            } => bench::chunk_sizes(object_bytes, samples)
+                .map_err(|error| format!("chunk-size benchmark: {error}")),
+            BenchAction::Argon2 { samples } => {
+                bench::argon2(samples).map_err(|error| format!("Argon2id benchmark: {error}"))
+            }
+        },
     }
 }
 

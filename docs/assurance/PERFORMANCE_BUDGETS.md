@@ -119,3 +119,50 @@ Waivers state owner, reason, affected devices, mitigation, and expiry.
 ## 10. Benchmark artifacts
 
 Store scripts/configuration and anonymized aggregate results, never private media. Synthetic corpora should include small photos, large photos, long audio, short/long 4K video, random seeks, and pathological metadata within approved limits.
+
+The two Phase 0 measurements run through `chur-cli`, so an Android device, an iPhone, and a workstation execute the same code path:
+
+```text
+chur-cli bench chunk-sizes --object-bytes 16777216 --samples 8
+chur-cli bench argon2 --samples 8
+```
+
+They are not a benchmark framework and add no dependency. They report p50, p95, and p99 with the sample size, per §1.
+
+## 11. First recorded measurements
+
+These are the first numbers the benchmarks produced. They rank candidates and approve none: §1 requires a release-like build on a device from [ADR-0017](../adr/0017-freeze-the-supported-device-set.md), and the host below is none of them.
+
+- **Host:** Apple silicon workstation, macOS, release profile, Rust 1.97.0.
+- **Sample size:** 5 per candidate.
+- **Object:** 16 MiB of synthetic plaintext.
+
+Chunk-size candidates, milliseconds, p50 unless stated:
+
+| `chunk_size` | Chunks | Whole-object write | Complete verify | One-byte read | One-byte read p95 |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 65536 | 256 | 33.7 | 41.6 | 0.13 | 0.14 |
+| 262144 | 64 | 33.5 | 40.9 | 0.52 | 0.53 |
+| 1048576 | 16 | 34.0 | 41.1 | 2.10 | 2.18 |
+| 4194304 | 4 | 33.2 | 40.8 | 8.47 | 8.79 |
+| 8388608 | 2 | 34.4 | 41.2 | 16.85 | 17.34 |
+
+Two things the table settles. Sequential cost is flat across the whole approved range, so a larger chunk buys nothing for import or for a complete verify. Seek cost is linear in `chunk_size`, because a one-byte read authenticates one whole chunk. The [§6](../format/OBJECT_CONTAINER_V1.md) candidates of the container specification, 256 KiB for photos and derived streams and 1 MiB for video and large audio, sit where seek cost is still under a frame at 60 Hz, and 8 MiB is a ceiling for the parser rather than a candidate for a writer.
+
+Argon2id candidates, milliseconds per derivation, with the whole-attempt cost of two candidates:
+
+| Memory KiB | Iterations | Lanes | p50 | p95 | Attempt p50 |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 65536 | 3 | 1 | 71.6 | 74.6 | 143.2 |
+| 65536 | 4 | 1 | 96.1 | 96.9 | 192.2 |
+| 65536 | 6 | 1 | 138.2 | 141.6 | 276.4 |
+| 131072 | 3 | 1 | 151.1 | 153.8 | 302.2 |
+| 131072 | 4 | 1 | 197.5 | 204.3 | 395.0 |
+| 262144 | 3 | 1 | 321.5 | 333.8 | 643.1 |
+| 524288 | 3 | 1 | 673.5 | 719.9 | 1347.0 |
+| 65536 | 3 | 2 | 70.3 | 71.2 | 140.6 |
+| 65536 | 3 | 4 | 72.8 | 82.8 | 145.7 |
+
+The frozen floor costs 72 ms per derivation on this host, well under the 350 to 750 ms interactive target, which is the expected shape: the target is set on the floor device of ADR-0017, and a workstation is several times faster. Raising memory is the effective lever and raising lanes is not, which matches Argon2's cost model. Calibration under §6 may therefore raise memory on a device that measures far under the target, and may never lower it. The 524288 KiB parser ceiling already exceeds the target on this host, so it is a bound rather than a candidate.
+
+A measurement on the ADR-0017 device set replaces this section; until then no candidate above the floor is approved.
