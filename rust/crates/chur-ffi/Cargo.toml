@@ -11,6 +11,7 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
 chur-core.workspace = true
+chur-format.workspace = true
 
 # `chur-ffi` is the one crate permitted to contain `unsafe`. The workspace sets
 # `unsafe_code = "forbid"`, which no inner `allow` or `expect` can lift, and the

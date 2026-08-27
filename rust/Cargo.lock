@@ -199,6 +199,7 @@ name = "chur-ffi"
 version = "0.1.0"
 dependencies = [
  "chur-core",
+ "chur-format",
 ]
 
 [[package]]
