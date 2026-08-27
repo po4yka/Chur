@@ -20,6 +20,7 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 - implement `chur-cli` foundations;
 - publish deterministic positive and negative vectors;
 - add fuzzing, corruption, migration, and FFI harnesses;
+- land the continuous-integration workflow that enforces the release gates, per [ADR-0031](docs/adr/0031-continuous-integration-owns-gate-enforcement.md);
 - prototype Android Keystore and iOS Keychain slots;
 - benchmark candidate chunk sizes and Argon2id profiles.
 
@@ -29,7 +30,8 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 - parser limits specified and tested;
 - Android, iOS, and CLI consume identical vectors;
 - security invariants mapped to tests, through the per-invariant table in [`docs/assurance/SECURITY_TEST_PLAN.md`](docs/assurance/SECURITY_TEST_PLAN.md) §13, with every audit-only row named rather than implied;
-- release gates and review scope approved.
+- release gates and review scope approved;
+- the minimum job set of [ADR-0031](docs/adr/0031-continuous-integration-owns-gate-enforcement.md) runs on every pull request, and every gate item that no job covers is recorded as unenforced.
 
 ## Phase 1 — local recoverable photo vault
 

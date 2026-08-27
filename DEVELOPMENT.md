@@ -71,7 +71,7 @@ cargo clippy --workspace --all-targets --all-features
 cargo fmt --all --check
 ```
 
-Exact module paths may change during scaffolding. CI is the source of truth for supported commands.
+Exact module paths may change during scaffolding. The workflow named in [`docs/assurance/RELEASE_GATES.md`](docs/assurance/RELEASE_GATES.md#enforcement) becomes the source of truth for supported commands when it lands; until then this list is, and no check is enforced.
 
 ## Native targets
 

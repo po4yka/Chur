@@ -4,6 +4,12 @@
 
 Features advance only when the evidence for their threat surface is complete. A successful build or feature demo is not a security release gate.
 
+## Enforcement
+
+A gate item is enforced by continuous integration, by a named review procedure, or by nothing. `.github/workflows/rust.yml` is the enforcing workflow; the repository maintainer owns it, creating it is Phase 0 scope in [`../../ROADMAP.md`](../../ROADMAP.md), and [ADR-0031](../adr/0031-continuous-integration-owns-gate-enforcement.md) fixes its v1 minimum job set: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and `cargo deny check`, run against `rust/` with every action pinned to an immutable commit SHA per [`../DEPENDENCY_POLICY.md`](../DEPENDENCY_POLICY.md#version-policy). Fuzz, vector-digest, benchmark, Gradle, and Xcode jobs join that set when their subject exists; a document may not name a job that does not.
+
+Until the workflow exists, no gate item is enforced by anything. A contributor may run the equivalent command locally and attach its output to a pull request; that attachment is evidence for that pull request and is never recorded as a passed gate. Gate 1 may not be declared while the workflow is absent, and every gated release records which of its items had no enforcing job.
+
 ## Gate 0 — design prototype
 
 Permitted:
@@ -126,6 +132,7 @@ format/protocol versions
 vector-set digest
 toolchains/dependency locks
 CI/test matrix
+gate items with no enforcing job
 fuzz campaign summary
 performance/resource results
 migration/backup evidence

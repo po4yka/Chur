@@ -129,6 +129,8 @@ Language-level integration tests supplement native fuzz harnesses.
 
 ## 10. CI cadence
 
+The enforcing workflow, its owner, and the rule that applies until it exists are stated once in [`RELEASE_GATES.md`](RELEASE_GATES.md#enforcement). The cadence below is unenforced until a fuzz job joins that workflow, which happens with the first fuzz target.
+
 - short deterministic smoke fuzz on every PR touching target code;
 - longer scheduled runs on default branch;
 - release-candidate campaign with recorded duration/configuration;

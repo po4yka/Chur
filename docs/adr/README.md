@@ -84,6 +84,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0032](0032-vault-creation-requires-a-password-slot.md) | Vault creation requires a verified password slot | Accepted |
 | [0033](0033-chur-operates-no-sync-service.md) | Chur operates no sync service; deployments are user-controlled | Accepted |
 | [0027](0027-freeze-the-deletion-transaction.md) | Freeze the deletion transaction and the crypto-erasure point | Accepted |
+| [0031](0031-continuous-integration-owns-gate-enforcement.md) | Continuous integration owns release-gate enforcement | Accepted |
 
 ## Future ADR backlog
 
