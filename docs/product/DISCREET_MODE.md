@@ -165,7 +165,7 @@ Both stores receive the same facts. These answers are owned here; `ANDROID.md` �
 - private media, metadata, and vault identity are never used for tracking or advertising, and are not linked to an account in v1;
 - photo access is selection-only wherever the platform picker suffices;
 - the vault, decoy vault, discreet presentation, alternate icon, and recovery flows are documented to review and reachable by a reviewer;
-- the app uses standard cryptography as listed in `CRYPTOGRAPHY.md` §15.1, and answers export-compliance questions on that basis;
+- the app uses standard cryptography as listed in `CRYPTOGRAPHY.md` §6, and answers export-compliance questions on that basis;
 - deletion removes the encrypted object and its catalog rows, and no server copy exists in v1.
 
 A change that makes any answer false is a release blocker, not a form update afterwards.

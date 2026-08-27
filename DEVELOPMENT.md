@@ -153,7 +153,7 @@ The FFI contract is versioned in [`docs/interop/FFI_CONTRACT.md`](docs/interop/F
 - define allocator ownership explicitly;
 - contain panics inside Rust;
 - test lock during every long-running operation;
-- verify that stale handles return `SessionExpired`.
+- verify that stale handles return `SESSION_EXPIRED`.
 
 ## Logging
 

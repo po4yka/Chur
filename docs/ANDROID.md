@@ -1422,7 +1422,7 @@ Every declared permission MUST have a documented product need in §24 and MUST b
 
 ### 37.4 Encryption export compliance
 
-The release process answers Google Play's US export-compliance question on the basis of the suite in [`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md) §15.1. Legal classification and any filing are release tasks rather than cryptographic design decisions, and the answer MUST match the one given to Apple in [`IOS.md`](IOS.md) §37.3.
+The release process answers Google Play's US export-compliance question on the basis of the suite in [`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md) §6. Legal classification, the storefront and jurisdiction list, and any filing belong to the compliance record in [`assurance/RELEASE_GATES.md`](assurance/RELEASE_GATES.md#compliance), which is owned by the repository maintainer and blocks Gate 3. They are release tasks rather than cryptographic design decisions, and the answer MUST match the one given to Apple in [`IOS.md`](IOS.md) §37.3.
 
 ### 37.5 Deceptive-behaviour policy and the alternate icon
 

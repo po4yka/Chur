@@ -944,7 +944,7 @@ On lock:
 1. increment the generation;
 2. cancel active operations;
 3. zeroize session secrets in place;
-4. invalidate every old handle with `SessionExpired`;
+4. invalidate every old handle with `SESSION_EXPIRED`;
 5. close the private catalog;
 6. destroy private projections and caches;
 7. return the UI to the public graph.

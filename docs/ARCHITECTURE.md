@@ -886,7 +886,7 @@ Requirements:
 - error behavior MUST NOT reveal which part of the slot failed;
 - password bytes MUST follow one cross-platform procedure and golden vectors.
 
-The canonical password-byte procedure is defined in [`security/PASSWORD_PROFILE.md`](security/PASSWORD_PROFILE.md): the exact Unicode scalar sequence entered by the user, encoded as strict UTF-8, with no normalization, no trimming, and no case folding. Implementations MUST NOT apply NFC, NFKC, NFD, or NFKD, because normalization changes the Argon2id input bytes for an unchanged password and surfaces as `AuthenticationFailed`, indistinguishable from a wrong password. A later normalization decision requires a new password-encoding profile identifier and MUST NOT reinterpret existing slots.
+The canonical password-byte procedure is defined in [`security/PASSWORD_PROFILE.md`](security/PASSWORD_PROFILE.md): the exact Unicode scalar sequence entered by the user, encoded as strict UTF-8, with no normalization, no trimming, and no case folding. Implementations MUST NOT apply NFC, NFKC, NFD, or NFKD, because normalization changes the Argon2id input bytes for an unchanged password and surfaces as `AUTHENTICATION_FAILED`, indistinguishable from a wrong password. A later normalization decision requires a new password-encoding profile identifier and MUST NOT reinterpret existing slots.
 
 ### 16.2 Android platform slot
 
@@ -2120,44 +2120,7 @@ An ADR number identifies exactly one decision. A new ADR takes the next unused n
 
 ## 45. Required follow-up specifications
 
-This architecture document should be decomposed into normative artifacts before implementation reaches production data:
-
-```text
-docs/
-├── security/
-│   ├── THREAT_MODEL.md
-│   ├── SECURITY_INVARIANTS.md
-│   ├── KEY_HIERARCHY.md
-│   ├── KEY_SLOTS.md
-│   ├── PLAINTEXT_LIFECYCLE.md
-│   ├── DECOY_VAULT.md
-│   └── RECOVERY.md
-│
-├── format/
-│   ├── VAULT_DESCRIPTOR_V1.md
-│   ├── OBJECT_CONTAINER_V1.md
-│   ├── OBJECT_KEY_ENVELOPE_V1.md
-│   ├── CATALOG_SCHEMA_V1.md
-│   └── TEST_VECTORS.md
-│
-├── interop/
-│   ├── FFI_CONTRACT.md
-│   ├── ANDROID_INTEGRATION.md
-│   ├── IOS_INTEGRATION.md
-│   └── MEDIA_PIPELINE.md
-│
-├── sync/
-│   ├── OPERATION_LOG.md
-│   ├── DEVICE_IDENTITY.md
-│   ├── COLLECTION_GRANTS.md
-│   └── ROLLBACK_PROTECTION.md
-│
-└── assurance/
-    ├── FUZZING.md
-    ├── MIGRATION_POLICY.md
-    ├── RELEASE_GATES.md
-    └── SECURITY_REVIEW_SCOPE.md
-```
+The decomposition is complete. [`README.md`](README.md) indexes every normative document this file defers to, and the decisions that still require a specification are the backlog in [`adr/README.md`](adr/README.md).
 
 ---
 

@@ -2437,41 +2437,7 @@ Each resolved item SHOULD produce an ADR or dedicated specification rather than 
 
 ## 75. Required follow-up specifications
 
-```text
-docs/
-├── security/
-│   ├── THREAT_MODEL.md
-│   ├── SECURITY_INVARIANTS.md
-│   ├── KEY_HIERARCHY.md
-│   ├── KEY_SLOTS.md
-│   ├── PASSWORD_PROFILE.md
-│   ├── PLAINTEXT_LIFECYCLE.md
-│   ├── DECOY_VAULT.md
-│   └── RECOVERY.md
-│
-├── format/
-│   ├── CANONICAL_ENCODING_V1.md
-│   ├── VAULT_DESCRIPTOR_V1.md
-│   ├── COLLECTION_KEY_ENVELOPE_V1.md
-│   ├── OBJECT_KEY_ENVELOPE_V1.md
-│   ├── OBJECT_CONTAINER_V1.md
-│   ├── CATALOG_SCHEMA_V1.md
-│   ├── BACKUP_MANIFEST_V1.md
-│   └── TEST_VECTORS.md
-│
-├── sync/
-│   ├── DEVICE_IDENTITY.md
-│   ├── OPERATION_LOG.md
-│   ├── COLLECTION_GRANTS.md
-│   ├── REVOCATION.md
-│   └── ROLLBACK_PROTECTION.md
-│
-└── assurance/
-    ├── FUZZING.md
-    ├── MIGRATION_POLICY.md
-    ├── CRYPTO_REVIEW_SCOPE.md
-    └── RELEASE_GATES.md
-```
+The decomposition is complete. [`README.md`](README.md) indexes every normative document this file defers to, and the decisions that still require a specification are the backlog in [`adr/README.md`](adr/README.md).
 
 ---
 
