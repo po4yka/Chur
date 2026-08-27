@@ -12,6 +12,7 @@
 
 mod bench;
 mod manifest;
+mod vault;
 mod vectors;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -58,6 +59,100 @@ enum Command {
         #[command(subcommand)]
         action: BenchAction,
     },
+    /// Create, unlock, and operate a vault.
+    ///
+    /// A password is read from `CHUR_PASSWORD` or `--password-file`, never from
+    /// an argument: an argument is in `/proc`, in the shell history, and in
+    /// `ps` output for every user on the machine.
+    Vault {
+        /// The storage root.
+        #[arg(long, global = true)]
+        root: Option<PathBuf>,
+        /// A file holding the password, when `CHUR_PASSWORD` is not set.
+        #[arg(long, global = true)]
+        password_file: Option<PathBuf>,
+        #[command(subcommand)]
+        action: VaultAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum VaultAction {
+    /// Create a vault, `docs/security/PROVISIONING.md` §3.
+    Create {
+        /// Offer the recovery slot and print the phrase once.
+        #[arg(long)]
+        recovery: bool,
+    },
+    /// Report whether the root holds a vault.
+    Status,
+    /// Import one file.
+    Import {
+        /// The file to import.
+        path: PathBuf,
+        /// The IANA media type to record.
+        #[arg(long, default_value = "application/octet-stream")]
+        content_type: String,
+    },
+    /// List one query scope, `docs/format/CATALOG_SCHEMA_V1.md` §16.2.
+    List {
+        /// timeline, favorites, quarantine, album, tag, or search.
+        #[arg(long, default_value = "timeline")]
+        scope: String,
+        /// The album or tag identifier, for those scopes.
+        #[arg(long)]
+        id: Option<String>,
+        /// The search terms, for the search scope.
+        #[arg(long)]
+        terms: Option<String>,
+        /// capture-desc, capture-asc, or import-desc.
+        #[arg(long, default_value = "capture-desc")]
+        sort: String,
+        /// The page size, 1 to 500.
+        #[arg(long, default_value_t = 0)]
+        limit: u32,
+    },
+    /// Print one object's detail record.
+    Show {
+        /// The object identifier.
+        object: String,
+    },
+    /// Write one object's plaintext to a file.
+    Export {
+        /// The object identifier.
+        object: String,
+        /// The destination path.
+        destination: PathBuf,
+    },
+    /// Write a plaintext range to standard output.
+    Read {
+        /// The object identifier.
+        object: String,
+        /// The offset in bytes.
+        #[arg(long, default_value_t = 0)]
+        offset: u64,
+        /// The length in bytes.
+        #[arg(long)]
+        length: u64,
+    },
+    /// Set or clear the favourite flag.
+    Favorite {
+        /// The object identifier.
+        object: String,
+        /// Clear the flag instead of setting it.
+        #[arg(long)]
+        clear: bool,
+    },
+    /// Delete one object, `docs/format/CATALOG_SCHEMA_V1.md` §14.1.
+    Delete {
+        /// The object identifier.
+        object: String,
+    },
+    /// Scan every object and report its verdict.
+    Verify,
+    /// Unlock with the recovery phrase in `CHUR_RECOVERY_PHRASE` and set a new
+    /// password, `docs/security/RECOVERY.md`.
+    Recover,
 }
 
 #[derive(Subcommand)]
@@ -116,6 +211,97 @@ enum ObjectAction {
     },
 }
 
+/// Runs one vault subcommand.
+///
+/// Every command but `create` and `status` unlocks first, which also runs the
+/// reconciliation of `OBJECT_CONTAINER_V1.md` §14.4 and the garbage collection
+/// of `CATALOG_SCHEMA_V1.md` §14.1, exactly as a session on a device does.
+fn run_vault(
+    root: Option<PathBuf>,
+    password_file: Option<&Path>,
+    action: VaultAction,
+) -> chur_core::Result<()> {
+    let root = vault::root_of(root);
+    if let VaultAction::Status = action {
+        let directory = chur_catalog::paths::VaultRoot::new(root.clone());
+        let entries = directory.registry_names()?;
+        println!(
+            "{} at {}: {} vault identit{}",
+            if entries.is_empty() {
+                "no vault"
+            } else {
+                "vault"
+            },
+            root.display(),
+            entries.len(),
+            if entries.len() == 1 { "y" } else { "ies" }
+        );
+        return Ok(());
+    }
+
+    let password = vault::read_password(password_file)?;
+    if let VaultAction::Create { recovery } = action {
+        return vault::create(&root, &password, recovery);
+    }
+    if let VaultAction::Recover = action {
+        // §9 of KEY_SLOTS: the replacement is created and verified before the
+        // old slot goes, which `replace_password` does in one descriptor
+        // generation.
+        let mut session = vault::unlock_with_recovery(&root)?;
+        session.replace_password(&password, chur_crypto::password::Argon2Params::v1_default())?;
+        println!("vault {} recovered", session.vault_id().to_hex());
+        return Ok(());
+    }
+
+    let mut session = vault::unlock(&root, &password)?;
+    match action {
+        VaultAction::Create { .. } | VaultAction::Status | VaultAction::Recover => {
+            // Handled above, before the password unlock.
+            Ok(())
+        }
+        VaultAction::Import { path, content_type } => {
+            let object_id = vault::import_file(&mut session, &path, &content_type)?;
+            println!("{}", object_id.to_hex());
+            Ok(())
+        }
+        VaultAction::List {
+            scope,
+            id,
+            terms,
+            sort,
+            limit,
+        } => {
+            let scope = vault::parse_scope(&scope, id.as_deref(), terms.as_deref())?;
+            vault::list(&session, scope, vault::parse_sort(&sort)?, limit)
+        }
+        VaultAction::Show { object } => vault::inspect_object(&session, &vault::parse_id(&object)?),
+        VaultAction::Export {
+            object,
+            destination,
+        } => {
+            let written = vault::export_object(&session, &vault::parse_id(&object)?, &destination)?;
+            println!("{written} bytes written to {}", destination.display());
+            Ok(())
+        }
+        VaultAction::Read {
+            object,
+            offset,
+            length,
+        } => vault::read_range(&session, &vault::parse_id(&object)?, offset, length),
+        VaultAction::Favorite { object, clear } => {
+            let object_id = vault::parse_id(&object)?;
+            chur_catalog::store::set_favorite(
+                session.catalog()?,
+                &object_id,
+                !clear,
+                vault::now_ms(),
+            )
+        }
+        VaultAction::Delete { object } => vault::delete(&mut session, &vault::parse_id(&object)?),
+        VaultAction::Verify => vault::verify(&mut session),
+    }
+}
+
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -144,6 +330,12 @@ fn run() -> Result<(), String> {
             abi();
             Ok(())
         }
+        Command::Vault {
+            root,
+            password_file,
+            action,
+        } => run_vault(root, password_file.as_deref(), action)
+            .map_err(|error| format!("vault: {error}")),
         Command::Bench { action } => match action {
             BenchAction::ChunkSizes {
                 object_bytes,

@@ -204,6 +204,32 @@ PLATFORM_KEY_INVALIDATED
 
 Generated code must be reproducible from checked-in schemas/configuration. A pull request changing generated output must also change its source and state the generator version. Generated FFI bindings must not become the canonical protocol definition.
 
+## Driving a vault from the command line
+
+`chur-cli vault` is the whole Phase 1 flow without a device
+([`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §9). A password reaches the
+process through `CHUR_PASSWORD` or `--password-file`, never through an
+argument: an argument is in `/proc`, in the shell history, and in `ps` output
+for every user on the machine.
+
+```sh
+export CHUR_PASSWORD='...'
+chur-cli vault --root ./v create --recovery   # prints the phrase once
+chur-cli vault --root ./v import photo.jpg --content-type image/jpeg
+chur-cli vault --root ./v list
+chur-cli vault --root ./v show <object>
+chur-cli vault --root ./v export <object> out.jpg
+chur-cli vault --root ./v verify
+CHUR_RECOVERY_PHRASE='...' chur-cli vault --root ./v recover
+```
+
+Every command but `create` and `status` unlocks first, and an unlock runs the
+journal reconciliation of
+[`docs/format/OBJECT_CONTAINER_V1.md`](docs/format/OBJECT_CONTAINER_V1.md) §14.4
+and the garbage collection of
+[`docs/format/CATALOG_SCHEMA_V1.md`](docs/format/CATALOG_SCHEMA_V1.md) §14.1,
+exactly as a session on a device does.
+
 ## Native catalog build
 
 `chur-catalog` compiles vendored SQLCipher and OpenSSL through `rusqlite`

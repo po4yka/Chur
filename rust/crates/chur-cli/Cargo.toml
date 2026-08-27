@@ -14,12 +14,15 @@ path = "src/main.rs"
 chur-core.workspace = true
 chur-crypto.workspace = true
 chur-format.workspace = true
+chur-catalog.workspace = true
+chur-media.workspace = true
 
 clap.workspace = true
 hex.workspace = true
 sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true

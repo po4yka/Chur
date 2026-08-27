@@ -178,14 +178,17 @@ dependencies = [
 name = "chur-cli"
 version = "0.1.0"
 dependencies = [
+ "chur-catalog",
  "chur-core",
  "chur-crypto",
  "chur-format",
+ "chur-media",
  "clap",
  "hex",
  "serde",
  "serde_json",
  "sha2",
+ "zeroize",
 ]
 
 [[package]]
