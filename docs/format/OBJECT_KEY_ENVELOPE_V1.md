@@ -27,10 +27,14 @@ Exact offsets are defined by canonical vectors. The AAD domain tag is `CHUR\x00O
 
 ```text
 ObjectEnvelopeKey = HKDF-SHA-256(
-    SecurityCollectionKey[epoch],
-    info = canonical collection/object-envelope context
+    IKM     = SecurityCollectionKey[epoch],
+    label   = "chur/v1/collection/object-envelope",
+    context = collection_id:bytes[16], collection_epoch:u64, object_id:bytes[16],
+    length  = 32
 )
 ```
+
+The label is registered in [`../security/KEY_HIERARCHY.md`](../security/KEY_HIERARCHY.md) §3; the extract and expand construction and the `info` tuple are [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §13. The collection key that this derivation consumes is itself unwrapped from [`COLLECTION_KEY_ENVELOPE_V1.md`](COLLECTION_KEY_ENVELOPE_V1.md).
 
 The collection key remains random; HKDF separates envelope use from other future collection-key purposes.
 

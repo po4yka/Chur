@@ -277,6 +277,7 @@ Each format version field has its own namespace:
 | `record_version` | `0x01` | container chunk and final-commit records | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §8, §11 |
 | `descriptor_version` | `0x0001` | `VaultDescriptorV1` | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §2 |
 | `format_version` | `0x0001` | `ObjectKeyEnvelopeV1` | [`OBJECT_KEY_ENVELOPE_V1.md`](OBJECT_KEY_ENVELOPE_V1.md) §1 |
+| `format_version` | `0x0001` | `CollectionKeyEnvelopeV1` | [`COLLECTION_KEY_ENVELOPE_V1.md`](COLLECTION_KEY_ENVELOPE_V1.md) §1 |
 | `backup_version` | `0x0001` | `BackupPackageV1` | [`BACKUP_FORMAT_V1.md`](BACKUP_FORMAT_V1.md) §4 |
 | `catalog_format_version` | `0x0001` | private catalog schema v1 | [`CATALOG_SCHEMA_V1.md`](CATALOG_SCHEMA_V1.md) |
 | `object_store_format_version` | `0x0001` | object store layout v1 | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §6 |
@@ -373,7 +374,7 @@ A domain tag is a fixed ASCII byte constant written without a length prefix, per
 | --- | --- | --- |
 | `CHUR\x00KDF\x00INFO\x00V1` | HKDF `info` tuple for every derivation | [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §13 |
 | `CHUR\x00SLOT\x00PASSWORD\x00V1` | password key-slot AAD | [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §18 |
-| `CHUR\x00COLLECTION\x00KEY-ENVELOPE\x00V1` | collection-key envelope AAD | [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §25 |
+| `CHUR\x00COLLECTION\x00KEY-ENVELOPE\x00V1` | collection-key envelope AAD | [`COLLECTION_KEY_ENVELOPE_V1.md`](COLLECTION_KEY_ENVELOPE_V1.md) §3 |
 | `CHUR\x00OBJECT\x00KEY-ENVELOPE\x00V1` | object-key envelope AAD | [`OBJECT_KEY_ENVELOPE_V1.md`](OBJECT_KEY_ENVELOPE_V1.md) §3 |
 | `CHUR\x00OBJECT\x00MANIFEST-AAD\x00V1` | encrypted manifest AAD | [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §32 |
 | `CHUR\x00OBJECT\x00MANIFEST-COMMITMENT\x00V1` | manifest commitment | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §5 |

@@ -868,33 +868,7 @@ Each security collection receives a random 32-byte key and a monotonic or otherw
 
 A collection key is random and wrapped by a root-derived envelope key.
 
-Conceptually:
-
-```text
-CollectionEnvelopeKey = HKDF(
-    parent  = VaultRootSecret,
-    purpose = "chur/v1/root/collection-envelope",
-    context = vault_id || collection_id || epoch
-)
-
-nonce = random 24 bytes
-
-aad = CanonicalTuple(
-    "CHUR\x00COLLECTION\x00KEY-ENVELOPE\x00V1",
-    vault_id,
-    collection_id,
-    epoch,
-    suite_id,
-    envelope_generation
-)
-
-ciphertext = XChaCha20Poly1305.Encrypt(
-    key       = CollectionEnvelopeKey,
-    nonce     = nonce,
-    plaintext = SecurityCollectionKey,
-    aad       = aad
-)
-```
+The record layout, the wrapping-key derivation, the AAD tuple, the nonce placement, and the generation rules are frozen in [`format/COLLECTION_KEY_ENVELOPE_V1.md`](format/COLLECTION_KEY_ENVELOPE_V1.md), which governs them under the authority hierarchy in [`README.md`](README.md).
 
 Collection keys MUST NOT be deterministically derived from the root. Random collection keys can be shared, rotated, and rewrapped independently.
 
