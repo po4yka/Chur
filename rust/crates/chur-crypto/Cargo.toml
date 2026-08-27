@@ -10,6 +10,7 @@ description = "AEAD, KDFs, key derivation, wrapping, secret types, zeroization."
 chur-core.workspace = true
 
 argon2.workspace = true
+blake3.workspace = true
 chacha20poly1305.workspace = true
 getrandom.workspace = true
 hkdf.workspace = true

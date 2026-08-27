@@ -1,0 +1,304 @@
+//! Domain tags and the canonical tuple encoder.
+//!
+//! `docs/format/CANONICAL_ENCODING_V1.md` §7 makes a domain tag a bare ASCII
+//! byte constant with no length prefix, no terminator, and no trailing NUL, and
+//! §7.1 makes `CanonicalTuple(tag, element, ...)` a §4 structure whose first
+//! field is that tag and which adds no framing of its own: no element count, no
+//! schema-version field, no separator, and no terminator.
+//!
+//! Tuple bytes are produced, never parsed. They are AEAD additional
+//! authenticated data, HKDF `info`, or hash input, so a mismatch surfaces as an
+//! authentication failure rather than as a decode error. There is deliberately
+//! no reader in this module.
+
+use chur_core::Id;
+use chur_core::status::ChurStatus;
+use chur_core::{Error, Result};
+
+/// A registered domain tag, as its exact bytes.
+///
+/// Every value is allocated in `docs/format/CANONICAL_ENCODING_V1.md` §15.5.
+/// The `\0` bytes are separators inside the constant itself.
+pub mod tag {
+    /// HKDF `info` tuple for every derivation.
+    pub const KDF_INFO: &[u8] = b"CHUR\0KDF\0INFO\0V1";
+    /// Password key-slot AAD.
+    pub const SLOT_PASSWORD: &[u8] = b"CHUR\0SLOT\0PASSWORD\0V1";
+    /// Recovery key-slot AAD.
+    pub const SLOT_RECOVERY: &[u8] = b"CHUR\0SLOT\0RECOVERY\0V1";
+    /// Android Keystore key-slot AAD.
+    pub const SLOT_ANDROID_KEYSTORE: &[u8] = b"CHUR\0SLOT\0ANDROID-KEYSTORE\0V1";
+    /// Apple Keychain key-slot AAD.
+    pub const SLOT_APPLE_KEYCHAIN: &[u8] = b"CHUR\0SLOT\0APPLE-KEYCHAIN\0V1";
+    /// Collection-key envelope AAD.
+    pub const COLLECTION_KEY_ENVELOPE: &[u8] = b"CHUR\0COLLECTION\0KEY-ENVELOPE\0V1";
+    /// Object-key envelope AAD.
+    pub const OBJECT_KEY_ENVELOPE: &[u8] = b"CHUR\0OBJECT\0KEY-ENVELOPE\0V1";
+    /// Encrypted manifest AAD.
+    pub const OBJECT_MANIFEST_AAD: &[u8] = b"CHUR\0OBJECT\0MANIFEST-AAD\0V1";
+    /// Manifest commitment.
+    pub const OBJECT_MANIFEST_COMMITMENT: &[u8] = b"CHUR\0OBJECT\0MANIFEST-COMMITMENT\0V1";
+    /// Chunk AAD.
+    pub const OBJECT_CHUNK_AAD: &[u8] = b"CHUR\0OBJECT\0CHUNK-AAD\0V1";
+    /// Ordered chunk commitment.
+    pub const OBJECT_ORDERED_COMMITMENT: &[u8] = b"CHUR\0OBJECT\0ORDERED-COMMITMENT\0V1";
+    /// Final-commit AAD.
+    pub const OBJECT_FINAL_COMMIT_AAD: &[u8] = b"CHUR\0OBJECT\0FINAL-COMMIT-AAD\0V1";
+    /// Vault-descriptor authentication tag.
+    pub const VAULT_DESCRIPTOR_AUTH: &[u8] = b"CHUR\0VAULT\0DESCRIPTOR-AUTH\0V1";
+    /// Ordered backup inventory commitment.
+    pub const BACKUP_INVENTORY_COMMITMENT: &[u8] = b"CHUR\0BACKUP\0INVENTORY-COMMITMENT\0V1";
+    /// Operation digest and per-device chain hash.
+    pub const SYNC_OPERATION_CHAIN: &[u8] = b"CHUR\0SYNC\0OPERATION-CHAIN\0V1";
+    /// Checkpoint record signature.
+    pub const SYNC_CHECKPOINT: &[u8] = b"CHUR\0SYNC\0CHECKPOINT\0V1";
+    /// Device verification fingerprint.
+    pub const IDENTITY_FINGERPRINT: &[u8] = b"CHUR\0IDENTITY\0FINGERPRINT\0V1";
+
+    /// Every tag this build allocates, for the prefix-free check of §7.
+    pub const ALL: &[&[u8]] = &[
+        KDF_INFO,
+        SLOT_PASSWORD,
+        SLOT_RECOVERY,
+        SLOT_ANDROID_KEYSTORE,
+        SLOT_APPLE_KEYCHAIN,
+        COLLECTION_KEY_ENVELOPE,
+        OBJECT_KEY_ENVELOPE,
+        OBJECT_MANIFEST_AAD,
+        OBJECT_MANIFEST_COMMITMENT,
+        OBJECT_CHUNK_AAD,
+        OBJECT_ORDERED_COMMITMENT,
+        OBJECT_FINAL_COMMIT_AAD,
+        VAULT_DESCRIPTOR_AUTH,
+        BACKUP_INVENTORY_COMMITMENT,
+        SYNC_OPERATION_CHAIN,
+        SYNC_CHECKPOINT,
+        IDENTITY_FINGERPRINT,
+    ];
+}
+
+/// Builds the bytes of one canonical tuple.
+///
+/// Construction takes the domain tag, and every method appends one element by
+/// the rule its declared type carries in
+/// `docs/format/CANONICAL_ENCODING_V1.md` §2. A fixed-length element carries no
+/// prefix; a variable-length element carries its own `u32` length.
+#[derive(Clone)]
+pub struct Tuple {
+    bytes: Vec<u8>,
+}
+
+impl Tuple {
+    /// Starts a tuple with its registered domain tag.
+    ///
+    /// The tag is written as its exact bytes: no length prefix, no terminator.
+    #[must_use]
+    pub fn new(tag: &'static [u8]) -> Self {
+        let mut bytes = Vec::with_capacity(tag.len() + 64);
+        bytes.extend_from_slice(tag);
+        Self { bytes }
+    }
+
+    /// Appends a `u8`.
+    #[must_use]
+    pub fn u8(mut self, value: u8) -> Self {
+        self.bytes.push(value);
+        self
+    }
+
+    /// Appends a big-endian `u16`.
+    #[must_use]
+    pub fn u16(mut self, value: u16) -> Self {
+        self.bytes.extend_from_slice(&value.to_be_bytes());
+        self
+    }
+
+    /// Appends a big-endian `u32`.
+    #[must_use]
+    pub fn u32(mut self, value: u32) -> Self {
+        self.bytes.extend_from_slice(&value.to_be_bytes());
+        self
+    }
+
+    /// Appends a big-endian `u64`.
+    #[must_use]
+    pub fn u64(mut self, value: u64) -> Self {
+        self.bytes.extend_from_slice(&value.to_be_bytes());
+        self
+    }
+
+    /// Appends a boolean as `0x00` or `0x01`.
+    #[must_use]
+    pub fn bool(self, value: bool) -> Self {
+        self.u8(u8::from(value))
+    }
+
+    /// Appends a fixed-length byte element, with no length prefix.
+    ///
+    /// The element's width is fixed by the owning specification, so the caller
+    /// passes exactly that many bytes.
+    #[must_use]
+    pub fn fixed(mut self, value: &[u8]) -> Self {
+        self.bytes.extend_from_slice(value);
+        self
+    }
+
+    /// Appends an opaque 16-byte identifier as a fixed-length element.
+    #[must_use]
+    pub fn id(self, value: &Id) -> Self {
+        self.fixed(value.as_bytes())
+    }
+
+    /// Appends a variable-length byte element: a `u32` length then the bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ChurStatus::ResourceLimitExceeded`] when the value is longer
+    /// than a `u32` can express, which no v1 element is.
+    pub fn variable(mut self, value: &[u8]) -> Result<Self> {
+        let length = u32::try_from(value.len()).map_err(|_| {
+            Error::new(
+                ChurStatus::ResourceLimitExceeded,
+                "variable tuple element exceeds the u32 length prefix",
+            )
+        })?;
+        self.bytes.extend_from_slice(&length.to_be_bytes());
+        self.bytes.extend_from_slice(value);
+        Ok(self)
+    }
+
+    /// Appends a UTF-8 string element: a `u32` byte length then the bytes.
+    ///
+    /// The length counts encoded bytes, not characters, and no normalization is
+    /// applied, per `docs/format/CANONICAL_ENCODING_V1.md` §3.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ChurStatus::ResourceLimitExceeded`] when the encoded string is
+    /// longer than a `u32` can express.
+    pub fn string(self, value: &str) -> Result<Self> {
+        self.variable(value.as_bytes())
+    }
+
+    /// The encoded tuple.
+    #[must_use]
+    pub fn finish(self) -> Vec<u8> {
+        self.bytes
+    }
+
+    /// The number of bytes written so far.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    /// Whether nothing has been written, which no tuple with a tag satisfies.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::panic, clippy::expect_used)]
+
+    use super::*;
+
+    #[test]
+    fn every_tag_has_the_registered_shape() {
+        for entry in tag::ALL {
+            assert!(entry.starts_with(b"CHUR\0"), "tag does not start with CHUR");
+            assert!(entry.ends_with(b"\0V1"), "tag does not end with a version");
+            assert!(!entry.ends_with(b"\0"), "tag carries a trailing NUL");
+            assert_eq!(
+                entry.iter().filter(|byte| **byte == 0).count(),
+                3,
+                "a tag has exactly three separators"
+            );
+            assert!(entry.iter().all(u8::is_ascii), "tag is not ASCII");
+        }
+    }
+
+    #[test]
+    fn no_tag_is_a_byte_prefix_of_another() {
+        for (index, left) in tag::ALL.iter().enumerate() {
+            for (other, right) in tag::ALL.iter().enumerate() {
+                if index == other {
+                    continue;
+                }
+                assert!(
+                    !right.starts_with(left),
+                    "one allocated tag is a prefix of another"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_documented_tag_lengths_hold() {
+        // Every length a specification states in prose, asserted against bytes.
+        assert_eq!(tag::KDF_INFO.len(), 16);
+        assert_eq!(tag::SLOT_PASSWORD.len(), 21);
+        assert_eq!(tag::SLOT_RECOVERY.len(), 21);
+        assert_eq!(tag::SLOT_ANDROID_KEYSTORE.len(), 29);
+        assert_eq!(tag::SLOT_APPLE_KEYCHAIN.len(), 27);
+        assert_eq!(tag::COLLECTION_KEY_ENVELOPE.len(), 31);
+        assert_eq!(tag::OBJECT_KEY_ENVELOPE.len(), 27);
+        assert_eq!(tag::OBJECT_MANIFEST_AAD.len(), 27);
+        assert_eq!(tag::OBJECT_MANIFEST_COMMITMENT.len(), 34);
+        assert_eq!(tag::OBJECT_CHUNK_AAD.len(), 24);
+        assert_eq!(tag::OBJECT_ORDERED_COMMITMENT.len(), 33);
+        assert_eq!(tag::OBJECT_FINAL_COMMIT_AAD.len(), 31);
+    }
+
+    #[test]
+    fn a_tuple_adds_no_framing_of_its_own() {
+        let encoded = Tuple::new(tag::OBJECT_CHUNK_AAD).u16(1).u16(1).finish();
+        let mut expected = tag::OBJECT_CHUNK_AAD.to_vec();
+        expected.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn the_illustrative_tuple_of_the_encoding_profile_encodes_as_documented() {
+        // CANONICAL_ENCODING_V1.md §7.1 works one example through: a 21-byte
+        // tag, a u16, a 16-byte fixed element, then a u32-prefixed string.
+        let object_id = Id::new([0xaa; 16]).unwrap();
+        let encoded = Tuple::new(b"CHUR\0EXAMPLE\0TUPLE\0V1")
+            .u16(0x0001)
+            .id(&object_id)
+            .string("label")
+            .unwrap()
+            .finish();
+        assert_eq!(encoded.len(), 21 + 2 + 16 + 4 + 5);
+        assert_eq!(&encoded[..21], b"CHUR\0EXAMPLE\0TUPLE\0V1");
+        assert_eq!(&encoded[21..23], &[0x00, 0x01]);
+        assert_eq!(&encoded[39..43], &[0x00, 0x00, 0x00, 0x05]);
+        assert_eq!(&encoded[43..], b"label");
+    }
+
+    #[test]
+    fn a_variable_element_carries_its_own_length() {
+        let encoded = Tuple::new(tag::SLOT_PASSWORD)
+            .variable(&[0xde, 0xad])
+            .unwrap()
+            .finish();
+        assert_eq!(
+            &encoded[tag::SLOT_PASSWORD.len()..],
+            &[0, 0, 0, 2, 0xde, 0xad]
+        );
+    }
+
+    #[test]
+    fn a_boolean_is_one_byte() {
+        assert_eq!(
+            Tuple::new(tag::KDF_INFO).bool(true).finish().last(),
+            Some(&1)
+        );
+        assert_eq!(
+            Tuple::new(tag::KDF_INFO).bool(false).finish().last(),
+            Some(&0)
+        );
+    }
+}
