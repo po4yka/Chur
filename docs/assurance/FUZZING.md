@@ -15,6 +15,8 @@ Fuzzing targets every parser, decoder boundary, state machine, and FFI entry tha
 
 ## 2. Initial Rust targets
 
+Ten targets exist in `rust/fuzz/fuzz_targets/`, one per parser whose subject is implemented:
+
 ```text
 parse_canonical_value
 parse_vault_descriptor
@@ -26,11 +28,18 @@ parse_manifest_record
 parse_chunk_record
 parse_final_commit
 read_plaintext_range
+```
+
+Four more are named by this section and do not exist, because their parsers do not:
+
+```text
 parse_catalog_snapshot
 apply_catalog_migration
 parse_backup_package
 validate_ffi_input
 ```
+
+A target lands with its parser. `rust/fuzz` is its own Cargo workspace: libFuzzer needs a nightly toolchain and sanitizer flags that must not reach the library build, and a fuzz binary must not enter the release dependency graph.
 
 Future:
 
@@ -129,9 +138,9 @@ Language-level integration tests supplement native fuzz harnesses.
 
 ## 10. CI cadence
 
-The enforcing workflow, its owner, and the rule that applies until it exists are stated once in [`RELEASE_GATES.md`](RELEASE_GATES.md#enforcement). The cadence below is unenforced until a fuzz job joins that workflow, which happens with the first fuzz target. The workflow itself exists; the fuzz job does not yet.
+The enforcing workflow, its owner, and the rule that applies until it exists are stated once in [`RELEASE_GATES.md`](RELEASE_GATES.md#enforcement). The `fuzz` job of that workflow runs the smoke pass below on every pull request. The three cadences under it are still unenforced: no scheduled run, no release-candidate campaign, and no external fuzzing service is configured.
 
-- short deterministic smoke fuzz on every PR touching target code;
+- short deterministic smoke fuzz on every PR touching target code, enforced;
 - longer scheduled runs on default branch;
 - release-candidate campaign with recorded duration/configuration;
 - continuous external fuzzing when eligible;

@@ -1,0 +1,102 @@
+# Fuzz targets for the Chur parsers.
+#
+# `docs/assurance/FUZZING.md` §2 lists the initial Rust targets. A target lands
+# here when its subject exists; the catalog, backup, and sync targets named
+# there are absent because their parsers are.
+#
+# This is its own workspace on purpose. libFuzzer needs a nightly toolchain and
+# sanitizer flags that must not reach the library build, and the fuzz binaries
+# must not enter the release dependency graph.
+
+[package]
+name = "chur-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "BSD-3-Clause"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+chur-core = { path = "../crates/chur-core" }
+chur-crypto = { path = "../crates/chur-crypto" }
+chur-format = { path = "../crates/chur-format" }
+
+[[bin]]
+name = "parse_canonical_value"
+path = "fuzz_targets/parse_canonical_value.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_object_preamble"
+path = "fuzz_targets/parse_object_preamble.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_manifest_record"
+path = "fuzz_targets/parse_manifest_record.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_chunk_record"
+path = "fuzz_targets/parse_chunk_record.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_final_commit"
+path = "fuzz_targets/parse_final_commit.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_object_key_envelope"
+path = "fuzz_targets/parse_object_key_envelope.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_vault_descriptor"
+path = "fuzz_targets/parse_vault_descriptor.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_key_slot"
+path = "fuzz_targets/parse_key_slot.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "password_parameter_validation"
+path = "fuzz_targets/password_parameter_validation.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "read_plaintext_range"
+path = "fuzz_targets/read_plaintext_range.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = true
+overflow-checks = true
+
+[workspace]

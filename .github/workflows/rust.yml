@@ -96,6 +96,35 @@ jobs:
           name: vector-set-digest
           path: vector-set-digest.txt
 
+  fuzz:
+    name: fuzz smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            rust/fuzz/target
+          key: fuzz-${{ hashFiles('rust/fuzz/Cargo.toml', 'rust/Cargo.lock') }}
+      # libFuzzer needs a nightly toolchain and sanitizer flags that must not
+      # reach the library build, which is why rust/fuzz is its own workspace.
+      # The pinned stable toolchain still runs every other job.
+      - run: rustup toolchain install nightly --profile minimal --component rust-src
+      - run: cargo install --locked cargo-fuzz
+      # FUZZING.md section 10: a short deterministic smoke fuzz on every pull
+      # request that touches target code. A longer scheduled campaign is not
+      # this job and is still unenforced.
+      - name: smoke fuzz every target
+        run: |
+          set -euo pipefail
+          for target in $(cargo +nightly fuzz list); do
+            echo "== $target"
+            cargo +nightly fuzz run "$target" -- -runs=20000 -max_total_time=30
+          done
+
   deny:
     name: cargo deny
     runs-on: ubuntu-latest
