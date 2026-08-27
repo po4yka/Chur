@@ -234,6 +234,18 @@ Thread affinity is a property of the handle type, not of the creating thread. No
 
 `chur_operation_cancel` and every `*_close` are exempt: they are callable from any thread at any time, including while another call on the same handle is in flight, and they never wait on that call. The registry lock is therefore per slot and is never held across user work, so a Media3 loader thread and an `AVAssetResourceLoader` queue may both drive a reader they did not create.
 
+### 8.1 Vault-level concurrency
+
+The table above bounds calls on one handle. These rules bound a vault, and no other document restates them:
+
+- one process opens a vault. The runtime takes an exclusive advisory lock on the descriptor file for the life of the session; a second process that cannot take it returns `CONFLICT` and attempts no slot unwrap, so a split Android process or a second launch cannot corrupt the catalog;
+- one runtime per process (§14), so a second iOS scene or a second Android task shares the one session rather than opening its own. There is no per-scene vault state;
+- catalog writes are serialized by one writer mutex per session. Reads run on the writer's connection in v1, which is why every reader handle is serialized in the table above. A read pool is a later change gated on `CHUR_CAP_CONCURRENT_READS` and does not alter this contract, because callers must already tolerate serialized reads;
+- at most one unlock is in flight per runtime. A `chur_vault_unlock` arriving while another is running returns `CONFLICT` before deriving anything, so a double-tapped unlock button never starts two derivations;
+- the Argon2id semaphore is 1 for the whole process. No two Argon2id evaluations ever run at once, whatever requested them: one evaluation is the largest allocation the runtime makes, and two at once on a low-memory device is the fastest way to be killed by the platform;
+- several import, export, and scan operations may run at once. The bound is the concurrent `ImportTransaction` limit of [`../format/CATALOG_SCHEMA_V1.md`](../format/CATALOG_SCHEMA_V1.md) §21;
+- `ObjectReaderHandle` is therefore safe to call from a Media3 loader thread and from an `AVAssetResourceLoader` queue, including a thread that did not create it, with no lock added by the caller.
+
 ## 9. Cancellation
 
 Long operations accept a cancellation handle/token or expose cancel functions. Lock cancellation has higher priority than ordinary caller cancellation.

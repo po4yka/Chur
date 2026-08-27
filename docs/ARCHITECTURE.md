@@ -637,13 +637,9 @@ Initial Rust APIs SHOULD remain synchronous. KMP dispatches blocking native work
 
 The core SHOULD avoid embedding a permanent async runtime across FFI until required. This reduces lifecycle complexity and foreign-thread callbacks.
 
-Per vault:
+Per-vault concurrency is owned by [`interop/FFI_CONTRACT.md`](interop/FFI_CONTRACT.md) §8 and §8.1, which fix one process per vault, one runtime per process, one writer mutex per session, reads serialized per handle, at most one unlock in flight, and a process-wide Argon2id semaphore of 1. This document MUST NOT restate them.
 
-- catalog writes are serialized;
-- multiple authenticated readers MAY coexist;
-- imports use bounded concurrency;
-- Argon2id operations are concurrency-limited because each operation intentionally consumes significant memory;
-- lock establishes a barrier that cancels new work, waits for or aborts active operations according to policy, zeroizes secrets, and closes the catalog.
+Lock establishes a barrier that cancels new work, waits for or aborts active operations according to policy, zeroizes secrets, and closes the catalog.
 
 No operation may outlive the session whose generation authorized it.
 
