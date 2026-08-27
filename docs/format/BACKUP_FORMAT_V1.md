@@ -28,6 +28,8 @@ BackupPackageV1
 └── AuthenticatedFinalBackupCommit
 ```
 
+`PublicBackupPreamble` begins at offset 0 with the eight-byte package magic followed by `backup_version`. That magic, the version, and the package record types are allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.
+
 The physical outer framing may be a Chur-native archive. An optional `age` envelope may wrap the native package but does not replace its internal inventory/completeness semantics.
 
 ## 3. Portable slots

@@ -1,6 +1,6 @@
 # Canonical Encoding v1
 
-> **Status:** Proposed normative binary profile; exact numeric tags remain provisional until test vectors freeze
+> **Status:** Proposed normative binary profile; §15 allocates the v1 constant values, and domain tags for records whose AAD is not yet frozen remain outstanding
 
 Canonical encoding ensures that authenticated, signed, hashed, or key-derived structures have exactly one byte representation. General serializer defaults are not protocol definitions.
 
@@ -112,7 +112,7 @@ CHUR\x00SYNC\x00OPERATION\x00V1
 
 A domain tag is a bare ASCII byte constant. It is encoded as its exact registered bytes, with no length prefix, no terminator, and no trailing NUL. It is a fixed-bytes value under §2, not a UTF-8 string under §3; the `\x00` bytes shown above are separators inside the constant itself.
 
-Exact tags are registry-controlled and included in test vectors. A tag must never be reused for a different structure, and no registered tag may be a byte prefix of another registered tag. A version suffix past `V9` must not extend an existing tag, because `V1` is a byte prefix of `V10`.
+Exact tags are allocated in §15.5 and included in test vectors. A tag must never be reused for a different structure, and no registered tag may be a byte prefix of another registered tag. A version suffix past `V9` must not extend an existing tag, because `V1` is a byte prefix of `V10`.
 
 ### 7.1 Canonical tuples
 
@@ -192,7 +192,7 @@ A decoder for authenticated bytes must reject:
 
 ## 12. Versioning
 
-Encoding profile ID is carried by the containing artifact. V1 bytes never change. A new rule requires a new profile/version and migration or dual-reader policy.
+Encoding profile ID is carried by the containing artifact and holds `0x0001` for this profile, per §15. V1 bytes never change. A new rule requires a new profile/version and migration or dual-reader policy.
 
 Do not add a field to a fixed v1 structure while retaining its version number.
 
@@ -220,3 +220,147 @@ Kotlin and Swift consume Rust-produced records or vectors; they do not define al
 - all-zero/maximum identifiers;
 - cross-platform examples for every owning format;
 - non-canonical encodings that must be rejected.
+
+## 15. Constant registry
+
+This section allocates the constant values shared across Chur formats: file magics, version numbers, encoding profile and policy identifiers, suite identifiers, record types, and enumerated discriminants. It records which value is taken and by which format. The owning specification stays authoritative for layout and meaning, and where a byte-exact specification has already frozen a value, that document governs a conflict.
+
+A constant that is local to one record and allocated from no shared namespace stays in its owning specification only. The object container's `flags`, `reserved`, and `public_header_length` are such constants and are not repeated here.
+
+Widths are uniform across v1: format-level version, profile, policy, and suite identifiers are `u16`; per-record type and version bytes, and enumerated discriminants, are `u8`. All are unsigned big-endian per §2. One namespace is then validated the same way in every format.
+
+### 15.1 File magics
+
+A Chur file format begins at offset 0 with an eight-byte ASCII magic whose first four bytes are `CHUR`. The eighth byte is a generation digit that belongs to the magic; it does not replace the typed version field.
+
+| Magic | Bytes | Format | Owner |
+| --- | --- | --- | --- |
+| `CHUROBJ1` | `43 48 55 52 4F 42 4A 31` | `ChurObjectV1` container | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §3 |
+| `CHURVLT1` | `43 48 55 52 56 4C 54 31` | `VaultDescriptorV1` | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §2 |
+| `CHURBAK1` | `43 48 55 52 42 41 4B 31` | `BackupPackageV1` | [`BACKUP_FORMAT_V1.md`](BACKUP_FORMAT_V1.md) §2 |
+
+Pairwise distinctness rule: two magics are distinct when they differ in at least one of their eight byte positions. Every magic is exactly eight bytes, so no magic is a prefix of another, and eight bytes read from offset 0 either identify the format or reject the file. A candidate that differs from an allocated magic only in its generation digit is not allocated, because that digit marks a later generation of the same artifact rather than a different artifact.
+
+The three allocated magics satisfy the rule. They share bytes 0 to 3 and byte 7, and differ at every one of bytes 4, 5, and 6:
+
+| Offset | `CHUROBJ1` | `CHURVLT1` | `CHURBAK1` |
+| --- | --- | --- | --- |
+| 4 | `4F` | `56` | `42` |
+| 5 | `42` | `4C` | `41` |
+| 6 | `4A` | `54` | `4B` |
+
+Each of the three pairs differs in three byte positions, and byte 4 alone separates all three.
+
+### 15.2 Versions, profiles, and suites
+
+`suite_id`, `catalog_crypto_suite`, and `wrap_suite_id` share one namespace:
+
+| Value | Meaning |
+| --- | --- |
+| `0x0001` | XChaCha20-Poly1305 for AEAD, BLAKE3-256 for commitments, HKDF-SHA-256 for key derivation |
+
+`canonical_encoding_profile` and `encoding_profile` share one namespace:
+
+| Value | Meaning |
+| --- | --- |
+| `0x0001` | canonical encoding v1, §2 to §12 of this document |
+
+Each format version field has its own namespace:
+
+| Field | Value | Format | Owner |
+| --- | --- | --- | --- |
+| `container_version` | `0x0001` | `ChurObjectV1` | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §3 |
+| `record_version` | `0x01` | container chunk and final-commit records | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §8, §11 |
+| `descriptor_version` | `0x0001` | `VaultDescriptorV1` | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §2 |
+| `format_version` | `0x0001` | `ObjectKeyEnvelopeV1` | [`OBJECT_KEY_ENVELOPE_V1.md`](OBJECT_KEY_ENVELOPE_V1.md) §1 |
+| `backup_version` | `0x0001` | `BackupPackageV1` | [`BACKUP_FORMAT_V1.md`](BACKUP_FORMAT_V1.md) §4 |
+| `catalog_format_version` | `0x0001` | private catalog schema v1 | [`CATALOG_SCHEMA_V1.md`](CATALOG_SCHEMA_V1.md) |
+| `object_store_format_version` | `0x0001` | object store layout v1 | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §6 |
+| `slot_version` | `0x0001` | v1 key-slot families | [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §1 |
+
+`container_version_floor` and `container_version_ceiling` carry values of the `container_version` namespace; a vault that supports only v1 containers records `0x0001` in both.
+
+Profile and policy identifiers:
+
+| Field | Value | Meaning | Owner |
+| --- | --- | --- | --- |
+| `chunk_record_profile` | `0x0001` | chunk record framing of container §8 | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §8 |
+| `commitment_profile` | `0x0001` | manifest and ordered chunk commitments of container §5 and §10 | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §5, §10 |
+| `crypto_policy_id` | `0x0001` | v1 vault policy: suite `0x0001` for every vault-level record | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §2 |
+| `naming_profile_id` | `0x0001` | opaque random store identifiers, no user-derived path names | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §6 |
+
+### 15.3 Record types
+
+`record_type` is scoped to the format that carries it. The same value names different records in different files, and the magic selects the namespace.
+
+Object container, `ChurObjectV1`:
+
+| Value | Record |
+| --- | --- |
+| `0x01` | `ChunkRecordV1` |
+| `0x02` | `FinalCommitRecordV1` |
+
+Backup package, `BackupPackageV1`, over the components of its package model:
+
+| Value | Record |
+| --- | --- |
+| `0x01` | encrypted backup manifest |
+| `0x02` | portable vault descriptor |
+| `0x03` | encrypted catalog snapshot |
+| `0x04` | object container entry |
+| `0x05` | object-key or collection-key envelope entry |
+| `0x06` | incremental operation segment |
+| `0x07` | final backup commit |
+
+An unallocated `record_type` is a parse failure, never an ignorable record.
+
+### 15.4 Enumerated discriminants
+
+`state` of the vault descriptor, in the order listed by [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §4:
+
+| Value | State |
+| --- | --- |
+| `0x01` | `INITIALIZING` |
+| `0x02` | `ACTIVE` |
+| `0x03` | `MIGRATING` |
+| `0x04` | `RECOVERING` |
+| `0x05` | `DELETING` |
+
+`slot_type`, in the order listed by [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §1:
+
+| Value | Slot family |
+| --- | --- |
+| `0x01` | `PasswordSlotV1` |
+| `0x02` | `AndroidKeystoreSlotV1` |
+| `0x03` | `AppleKeychainSlotV1` |
+| `0x04` | `RecoverySlotV1` |
+| `0x05` | `PeerDeviceSlotV1`, allocated for the future family and not accepted as an unlock method in v1 |
+
+### 15.5 Domain tags
+
+A domain tag is a fixed ASCII byte constant written without a length prefix, per §3 and §7, of the form `CHUR\x00<AREA>\x00<PURPOSE>\x00V<n>`.
+
+| Tag | Use | Owner |
+| --- | --- | --- |
+| `CHUR\x00KDF\x00INFO\x00V1` | HKDF `info` tuple for every derivation | [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §13 |
+| `CHUR\x00SLOT\x00PASSWORD\x00V1` | password key-slot AAD | [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §18 |
+| `CHUR\x00COLLECTION\x00KEY-ENVELOPE\x00V1` | collection-key envelope AAD | [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §25 |
+| `CHUR\x00OBJECT\x00KEY-ENVELOPE\x00V1` | object-key envelope AAD | [`OBJECT_KEY_ENVELOPE_V1.md`](OBJECT_KEY_ENVELOPE_V1.md) §3 |
+| `CHUR\x00OBJECT\x00MANIFEST-AAD\x00V1` | encrypted manifest AAD | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §5 |
+| `CHUR\x00OBJECT\x00MANIFEST-COMMITMENT\x00V1` | manifest commitment | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §5 |
+| `CHUR\x00OBJECT\x00CHUNK-AAD\x00V1` | chunk AAD | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §9 |
+| `CHUR\x00OBJECT\x00ORDERED-COMMITMENT\x00V1` | ordered chunk commitment | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §10 |
+| `CHUR\x00OBJECT\x00FINAL-COMMIT-AAD\x00V1` | final-commit AAD | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §11 |
+| `CHUR\x00VAULT\x00DESCRIPTOR-AUTH\x00V1` | vault-descriptor authentication tag | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §8 |
+
+No allocated tag is a byte prefix of another, as §7 requires; the ten above were checked pairwise. The `CHUR\x00SYNC\x00OPERATION\x00V1` tag shown as an example in §7 is not allocated: the sync operation record is not frozen. A tag for an authenticated record whose AAD is not yet frozen is allocated by a row here in the same change that freezes that record.
+
+### 15.6 Allocation rule
+
+- the change that freezes a record allocates the values it needs and adds the rows here in the same change; a value that reaches persisted or wire bytes also requires an ADR, per [`../adr/README.md`](../adr/README.md);
+- allocate the lowest free value of the namespace;
+- `0x0000` and `0x00` are never allocated and are invalid in every namespace, consistent with §8;
+- `0xFF00` to `0xFFFF` and `0xF0` to `0xFF` are reserved for local experiments and never appear in a released build or a published vector;
+- every other unallocated value is unsupported: a reader rejects it and does not ignore or forward it unless the owning specification defines safe forwarding;
+- an allocated value is never reused for a different meaning, including after the format that used it is deprecated, superseded, or never shipped;
+- correcting a mistaken allocation takes a new value; it never redefines an allocated one.

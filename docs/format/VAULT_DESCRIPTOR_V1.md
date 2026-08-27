@@ -32,7 +32,7 @@ VaultDescriptorV1
 └── descriptor_authentication
 ```
 
-Exact offsets/tags are frozen in vectors before production use.
+Exact offsets/tags are frozen in vectors before production use. V1 values for `magic`, `descriptor_version`, `canonical_encoding_profile`, `crypto_policy_id`, and the `state` discriminants of §4 are allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.
 
 ## 3. Public fields
 

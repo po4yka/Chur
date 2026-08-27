@@ -55,5 +55,5 @@ No vault bytes exist yet, so nothing migrates. A change to any tag, any element 
 
 ## Follow-up
 
-- publish the complete domain tag registry with exact bytes per record, and decide its home;
+- publish vectors for every tag allocated in `format/CANONICAL_ENCODING_V1.md` §15.5, giving the exact bytes of each tuple per record;
 - freeze the element list of every tuple, including the Argon2 parameter expansion in the password-slot AAD.

@@ -54,7 +54,7 @@ offset  size  field                           v1 value
 0x1C          end of preamble
 ```
 
-`suite_id` `0x0001` denotes XChaCha20-Poly1305 for AEAD, BLAKE3-256 for commitments, and HKDF-SHA-256 for key derivation. `chunk_record_profile` `0x0001` denotes the chunk record framing in §8. The eight magic bytes are reserved to this format and must not be reused by another Chur file format.
+`suite_id` `0x0001` denotes XChaCha20-Poly1305 for AEAD, BLAKE3-256 for commitments, and HKDF-SHA-256 for key derivation. `chunk_record_profile` `0x0001` denotes the chunk record framing in §8. The eight magic bytes are reserved to this format and must not be reused by another Chur file format. These values are also listed in the constant registry, [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15, which allocates the magic, version, profile, suite, and record-type namespaces across formats; the registry records the allocation, and this section remains the authority for these container bytes.
 
 A v1 reader must reject the container unless:
 

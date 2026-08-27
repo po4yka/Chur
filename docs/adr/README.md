@@ -67,6 +67,7 @@ Rejected
 | [0010](0010-define-canonical-tuple-and-freeze-hkdf-salt.md) | Define the canonical tuple encoding and freeze the HKDF extract salt | Accepted |
 | [0011](0011-freeze-vault-descriptor-authentication.md) | Freeze vault-descriptor authentication | Accepted |
 | [0012](0012-import-journal-durability-ordering.md) | Reserve chunk indexes in the import journal before use | Accepted |
+| [0013](0013-allocate-v1-format-constants.md) | Allocate the v1 format constants in one registry | Accepted |
 
 ## Future ADR backlog
 

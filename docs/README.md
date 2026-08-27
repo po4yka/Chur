@@ -53,7 +53,7 @@ Byte-exact v1 documents remain proposed until constants, encoding, vectors, and 
 
 ## Formats
 
-- [`format/CANONICAL_ENCODING_V1.md`](format/CANONICAL_ENCODING_V1.md)
+- [`format/CANONICAL_ENCODING_V1.md`](format/CANONICAL_ENCODING_V1.md) — encoding rules and the [v1 constant registry](format/CANONICAL_ENCODING_V1.md#15-constant-registry) of magics, versions, profiles, suites, record types, and discriminants
 - [`format/VAULT_DESCRIPTOR_V1.md`](format/VAULT_DESCRIPTOR_V1.md)
 - [`format/OBJECT_KEY_ENVELOPE_V1.md`](format/OBJECT_KEY_ENVELOPE_V1.md)
 - [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md)
@@ -105,7 +105,7 @@ A normative change should:
 
 1. identify affected security invariants;
 2. update or add an ADR;
-3. update byte-exact specifications;
+3. update byte-exact specifications and allocate any new constant in the registry;
 4. add vectors and negative tests;
 5. define migration and downgrade behavior;
 6. update platform and FFI contracts;
