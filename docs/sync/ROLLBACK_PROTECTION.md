@@ -74,7 +74,9 @@ If all local accepted heads are lost, a malicious server may present an older au
 - future transparency/witness service;
 - user-visible backup/checkpoint date after authentication.
 
-V1 must state the residual risk rather than claim perfect rollback protection.
+A device enrolling for the first time starts from the same empty state but is not the same case: an authorized device is present. Its signed enrollment record carries `membership_generation` and `bootstrap_checkpoint_commitment` per [`DEVICE_IDENTITY.md`](DEVICE_IDENTITY.md) §4, and the new device sets its initial floor from the checkpoint that commitment names before it accepts any operation. Membership, epoch, or head state below that floor is rejected as rollback, so first enrollment does not begin at a null high-water mark and a server colluding with a revoked device cannot present a pre-revocation membership to it.
+
+Reinstall with no backup and no reachable peer keeps the residual risk. V1 must state that residual risk rather than claim perfect rollback protection.
 
 ## 8. Offline backups
 
@@ -97,6 +99,7 @@ Wall-clock timestamps are not rollback proof. They may aid UX after decryption b
 - forked device branches;
 - stale membership/collection epoch/grant;
 - reinstall with and without trusted backup/peer;
+- first enrollment where the server offers membership, collection epochs, or per-device heads below the attested bootstrap checkpoint;
 - equivocation between two devices;
 - intentional old-backup restore;
 - checkpoint signature/commitment corruption;

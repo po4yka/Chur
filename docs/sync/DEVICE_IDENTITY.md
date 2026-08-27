@@ -54,11 +54,15 @@ key_versions
 capabilities
 created_sequence
 issuer_device_id
+membership_generation
 previous_membership_commitment
+bootstrap_checkpoint_commitment
 issuer_signature
 ```
 
 Canonical encoding and signature domain are versioned.
+
+`bootstrap_checkpoint_commitment` is BLAKE3-256 over the issuing device's current `CheckpointV1`, defined in [`ROLLBACK_PROTECTION.md`](ROLLBACK_PROTECTION.md) §6. Together with `membership_generation` it is the enrolling device's signed statement of what the vault's history was at enrollment, and it is what gives the new device a freshness floor before it has one of its own. It is 32 bytes, so it also fits the out-of-band payload of §5; the checkpoint record itself is fetched through the server and accepted only when it hashes to this value.
 
 ## 5. Verification
 

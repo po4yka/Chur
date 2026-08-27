@@ -66,14 +66,16 @@ Clients verify each device chain independently before applying operations, and a
 ## 6. Bootstrap new device
 
 1. authenticate account transport;
-2. generate/verify device identity;
-3. obtain signed membership and encrypted root/collection state;
+2. generate/verify device identity, including the fingerprint comparison [`SERVER_TRUST_MODEL.md`](SERVER_TRUST_MODEL.md) §7 requires for own-device enrollment;
+3. obtain the signed enrollment record and take its `membership_generation` and `bootstrap_checkpoint_commitment` as the initial freshness floor, per [`DEVICE_IDENTITY.md`](DEVICE_IDENTITY.md) §4;
 4. authenticate recovery/enrollment path;
-5. fetch checkpoint and operation chains;
-6. verify signatures/heads/forks;
+5. fetch the checkpoint that commitment names, reject it unless it hashes to the commitment, then fetch operation chains from its heads;
+6. verify signatures/heads/forks, and reject any membership generation, collection epoch, or per-device head the server offers below the attested checkpoint;
 7. build temporary catalog;
 8. fetch ciphertext objects lazily/eagerly by policy;
 9. commit local vault and platform slot.
+
+Server-supplied state never sets the floor. The enrolling device's signature over the enrollment record is what makes the floor trustworthy at the one moment when the new device holds no accepted head of its own; see [`ROLLBACK_PROTECTION.md`](ROLLBACK_PROTECTION.md) §7.
 
 ## 7. Background mode
 
