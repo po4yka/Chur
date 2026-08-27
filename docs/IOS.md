@@ -439,6 +439,7 @@ Suggested placement:
 Library/Application Support/Chur/
 ├── public/                         public shared data as designed
 ├── device/                         device-only references and local identity state
+├── registry/                       vault descriptors, at most two entries
 └── vaults/
     ├── <opaque-vault-id>/
     │   ├── catalog.db + WAL        encrypted catalog
@@ -455,7 +456,7 @@ tmp/
 └── short-lived system-operation files where unavoidable
 ```
 
-The shape inside `<opaque-vault-id>/` is owned by [`ARCHITECTURE.md`](ARCHITECTURE.md) §14.4; this section maps it onto iOS roots and MUST NOT diverge from it. In-flight import ciphertext MUST stay in `incoming/` under the vault directory: `Library/Caches` is reclaimable by the system under storage pressure, and the final commit is an atomic rename into `objects/` on the same volume.
+The shape inside `<opaque-vault-id>/` is owned by [`ARCHITECTURE.md`](ARCHITECTURE.md) §14.4; this section maps it onto iOS roots and MUST NOT diverge from it. `registry/` is the discovery directory of that section: its entry naming and its cap of two entries are normative in [`format/VAULT_DESCRIPTOR_V1.md`](format/VAULT_DESCRIPTOR_V1.md) §11. In-flight import ciphertext MUST stay in `incoming/` under the vault directory: `Library/Caches` is reclaimable by the system under storage pressure, and the final commit is an atomic rename into `objects/` on the same volume.
 
 Chur SHOULD NOT store private vault data in the user-visible Documents directory.
 
@@ -522,6 +523,7 @@ Exclusion is per path and MUST be applied at directory creation, before the firs
 
 | Path | Reason |
 | --- | --- |
+| `Library/Application Support/Chur/registry/` | vault descriptors leave the device only through the backup package |
 | `Library/Application Support/Chur/vaults/` | vault ciphertext leaves the device only through the backup package |
 | `Library/Application Support/Chur/device/` | device-bound references cannot work after restore |
 | `Library/Caches/Chur/` | disposable ciphertext copies and scratch |

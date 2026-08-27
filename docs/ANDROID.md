@@ -441,6 +441,7 @@ Suggested platform placement:
 ```text
 filesDir/
 ├── public/                         public Room-owned state as designed
+├── registry/                       vault descriptors, at most two entries
 └── vaults/
     ├── <opaque-vault-id>/
     │   ├── catalog.db + WAL        encrypted catalog
@@ -460,7 +461,7 @@ cacheDir/
 └── plaintext-scratch/              allowed only by explicit policy
 ```
 
-The shape inside `<opaque-vault-id>/` is owned by [`ARCHITECTURE.md`](ARCHITECTURE.md) §14.4; this section maps it onto Android roots and MUST NOT diverge from it. In-flight import ciphertext MUST stay in `incoming/` under the vault directory: `cacheDir` is reclaimable by the platform in the middle of a transaction, and the final commit is an atomic rename into `objects/`, which requires the same volume.
+The shape inside `<opaque-vault-id>/` is owned by [`ARCHITECTURE.md`](ARCHITECTURE.md) §14.4; this section maps it onto Android roots and MUST NOT diverge from it. `registry/` is the discovery directory of that section: its entry naming and its cap of two entries are normative in [`format/VAULT_DESCRIPTOR_V1.md`](format/VAULT_DESCRIPTOR_V1.md) §11. In-flight import ciphertext MUST stay in `incoming/` under the vault directory: `cacheDir` is reclaimable by the platform in the middle of a transaction, and the final commit is an atomic rename into `objects/`, which requires the same volume.
 
 Directory names MUST NOT reveal real/decoy identity, media type, album, filename, account, or object count beyond unavoidable filesystem metadata.
 
@@ -550,9 +551,9 @@ The rules are per path and checked into the application. An `<include>` set make
 
 Consequences:
 
-- `filesDir/vaults/`, including `incoming/` and `quarantine/`, never enters an archive;
+- `filesDir/vaults/`, including `incoming/` and `quarantine/`, never enters an archive, and neither does `filesDir/registry/`;
 - `noBackupFilesDir/` and `cacheDir/` are excluded by the platform as well, so the device slot and the scratch directory are excluded twice;
-- release MUST fail when either file names a path under `vaults/`, or declares `<include domain="root">` or `<include domain="external">`;
+- release MUST fail when either file names a path under `vaults/` or `registry/`, or declares `<include domain="root">` or `<include domain="external">`;
 - the exclusion MUST be proved by an actual backup and restore run, not by reading the XML.
 
 ---
