@@ -311,13 +311,17 @@ Chur/
 ├── build-logic/
 │   └── convention/
 │
-└── docs/
-    ├── ARCHITECTURE.md
-    ├── security/
-    ├── format/
-    ├── interop/
-    ├── sync/
-    └── adr/
+├── docs/
+│   ├── ARCHITECTURE.md
+│   ├── adr/
+│   ├── security/
+│   ├── format/
+│   ├── interop/
+│   ├── sync/
+│   ├── assurance/
+│   └── product/
+│
+└── test-vectors/
 ```
 
 Module boundaries MUST prevent feature modules from importing platform-native key implementations or Rust FFI symbols directly. Features depend on KMP interfaces; only the composition root and adapter modules bind implementations.
