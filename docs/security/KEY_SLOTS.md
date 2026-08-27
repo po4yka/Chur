@@ -85,7 +85,7 @@ Preferred design:
 - random `DeviceUnlockSecret` stored as a `ThisDeviceOnly` Keychain item;
 - access controlled by `userPresence` in convenient mode, which biometry or the device passcode satisfies, so the device passcode opens this slot;
 - `biometryCurrentSet` in strict mode, which excludes the passcode and invalidates when the biometric set changes;
-- Rust derives `AppleDeviceKEK` from the Keychain secret under the label `chur/v1/slot/apple-device-kek`, registered in [`KEY_HIERARCHY.md`](KEY_HIERARCHY.md) §3, with the context `vault_id:bytes[16], slot_id:bytes[16], slot_generation:u64` in that order, so a copied or superseded slot derives a different KEK;
+- Rust derives `AppleDeviceKEK` from the Keychain secret under the label `chur/v1/slot/apple-device-kek`, registered in [`KEY_HIERARCHY.md`](KEY_HIERARCHY.md) §3, with the context registered for that label in [`KEY_HIERARCHY.md`](KEY_HIERARCHY.md) §3, `vault_id:bytes[16], slot_id:bytes[16], slot_generation:u64` in that order, so a copied or superseded slot derives a different KEK;
 - Rust wraps/unwraps the root using the approved local AEAD;
 - Keychain item identifier is opaque and separate for each vault identity.
 

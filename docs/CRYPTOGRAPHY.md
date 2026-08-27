@@ -428,9 +428,9 @@ DerivedKey = HKDF-Expand(
 )
 ```
 
-The extract salt is exactly 32 bytes of `0x00`, the RFC 5869 default for HKDF-SHA-256 when no salt is supplied. It is the same value for every vault, platform, profile, and derivation, and it MUST NOT vary; all domain separation is carried by `info`. In the `info` tuple, `purpose_label` is one of the labels registered in [`security/KEY_HIERARCHY.md`](security/KEY_HIERARCHY.md) §3, encoded as a UTF-8 string, and `context_fields` expands to one element per value listed by the specification that owns the derivation. Tuple bytes follow [`format/CANONICAL_ENCODING_V1.md`](format/CANONICAL_ENCODING_V1.md) §7.1.
+The extract salt is exactly 32 bytes of `0x00`, the RFC 5869 default for HKDF-SHA-256 when no salt is supplied. It is the same value for every vault, platform, profile, and derivation, and it MUST NOT vary; all domain separation is carried by `info`. In the `info` tuple, `purpose_label` is one of the labels registered in [`security/KEY_HIERARCHY.md`](security/KEY_HIERARCHY.md) §3, encoded as a UTF-8 string, and `context_fields` expands to one element per value listed for that label in the context registry of §3 there, which is the only definition of a context element list. Tuple bytes follow [`format/CANONICAL_ENCODING_V1.md`](format/CANONICAL_ENCODING_V1.md) §7.1.
 
-Every domain label, the key it derives, its input key, and its output length are registered in [`security/KEY_HIERARCHY.md`](security/KEY_HIERARCHY.md) §3. That table is the only definition of a label string. Where this document writes out a derivation, it may restate the label that derivation consumes; the strings must then be identical to the registry.
+Every domain label, the key it derives, its input key, its output length, and its context element list are registered in [`security/KEY_HIERARCHY.md`](security/KEY_HIERARCHY.md) §3. That table is the only definition of a label string. Where this document writes out a derivation, it may restate the label that derivation consumes; the strings must then be identical to the registry.
 
 Requirements:
 
@@ -750,7 +750,7 @@ RecoverySecret = random 32 bytes
 RecoveryKEK    = HKDF-SHA-256(
     parent  = RecoverySecret,
     purpose = "chur/v1/recovery/root-envelope",
-    context = vault_id || identity_id || slot_id
+    context = vault_id:bytes[16], slot_id:bytes[16], slot_generation:u64
 )
 ```
 
@@ -966,6 +966,8 @@ object_id
 stream_kind
 stream_revision
 ```
+
+The exact element list of every object-domain label is frozen in the context registry of [`security/KEY_HIERARCHY.md`](security/KEY_HIERARCHY.md) §3, which governs it under the authority hierarchy in [`README.md`](README.md).
 
 A new revision of metadata, preview, thumbnail, waveform, or other mutable stream MUST derive a revision-scoped key or at minimum receive a fresh nonce prefix under a context-bound key. The preferred design includes the revision in HKDF context and also uses fresh nonces.
 

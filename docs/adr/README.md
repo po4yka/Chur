@@ -85,6 +85,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0031](0031-continuous-integration-owns-gate-enforcement.md) | Continuous integration owns release-gate enforcement | Accepted |
 | [0032](0032-vault-creation-requires-a-password-slot.md) | Vault creation requires a verified password slot | Accepted |
 | [0033](0033-chur-operates-no-sync-service.md) | Chur operates no sync service; deployments are user-controlled | Accepted |
+| [0034](0034-freeze-the-hkdf-context-element-lists.md) | Freeze the HKDF context element list of every v1 label | Accepted |
 
 Rows are ordered by ADR number. Number 0015 was not used; no ADR carries it and none will.
 

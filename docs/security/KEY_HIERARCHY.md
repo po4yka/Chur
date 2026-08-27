@@ -71,6 +71,49 @@ This table is the only registry of HKDF domain labels. [`../CRYPTOGRAPHY.md`](..
 
 Labels are ASCII protocol constants and every row is covered by test vectors. The label alone does not fix the key: each derivation also binds the context fields required by [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §13, so `CollectionEnvelopeKey` is per vault, collection, and epoch, and an object-domain key is per object.
 
+### Context elements
+
+[`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §13 makes the HKDF `info` value the tuple `CanonicalTuple("CHUR\x00KDF\x00INFO\x00V1", purpose_label, context_fields)` and delegates the element list after the label to the specification that owns the derivation. The table below is that list for every label above, so one label always selects one element list. Element types and widths are those of [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §2, and the elements follow the `u32`-prefixed label string in the order shown, with no separator.
+
+A context binds the scope over which the derived key must be unique. Every root label therefore carries `vault_id`, every collection label carries the collection identity and its epoch, and every object label carries the object identity and the revision of the stream it protects.
+
+| Label | Context elements, in order |
+| --- | --- |
+| `chur/v1/root/collection-envelope` | `vault_id:bytes[16]`, `collection_id:bytes[16]`, `collection_epoch:u64` |
+| `chur/v1/root/catalog-database` | `vault_id:bytes[16]` |
+| `chur/v1/root/catalog-records` | `vault_id:bytes[16]` |
+| `chur/v1/root/search` | `vault_id:bytes[16]` |
+| `chur/v1/root/identifiers` | `vault_id:bytes[16]` |
+| `chur/v1/root/local-fingerprint` | `vault_id:bytes[16]` |
+| `chur/v1/root/private-settings` | `vault_id:bytes[16]` |
+| `chur/v1/root/device-identity-wrap` | `vault_id:bytes[16]` |
+| `chur/v1/root/backup-manifest` | `vault_id:bytes[16]` |
+| `chur/v1/root/descriptor-auth` | `vault_id:bytes[16]` |
+| `chur/v1/collection/object-envelope` | `collection_id:bytes[16]`, `collection_epoch:u64`, `object_id:bytes[16]` |
+| `chur/v1/collection/metadata` | `collection_id:bytes[16]`, `collection_epoch:u64` |
+| `chur/v1/object/manifest` | `object_id:bytes[16]`, `stream_id:bytes[16]`, `stream_kind:u8`, `stream_revision:u32` |
+| `chur/v1/object/content` | `object_id:bytes[16]`, `stream_id:bytes[16]`, `stream_kind:u8`, `stream_revision:u32` |
+| `chur/v1/object/final-commit` | `object_id:bytes[16]`, `stream_id:bytes[16]`, `stream_kind:u8`, `stream_revision:u32` |
+| `chur/v1/object/metadata` | `object_id:bytes[16]`, `metadata_revision:u32` |
+| `chur/v1/object/thumbnail` | `object_id:bytes[16]`, `stream_kind:u8`, `source_content_revision:u32`, `stream_revision:u32` |
+| `chur/v1/object/preview` | `object_id:bytes[16]`, `stream_kind:u8`, `source_content_revision:u32`, `stream_revision:u32` |
+| `chur/v1/object/poster-frame` | `object_id:bytes[16]`, `stream_kind:u8`, `source_content_revision:u32`, `stream_revision:u32` |
+| `chur/v1/object/waveform` | `object_id:bytes[16]`, `stream_kind:u8`, `source_content_revision:u32`, `stream_revision:u32` |
+| `chur/v1/object/ocr` | `object_id:bytes[16]`, `stream_kind:u8`, `source_content_revision:u32`, `stream_revision:u32` |
+| `chur/v1/object/face` | `object_id:bytes[16]`, `stream_kind:u8`, `source_content_revision:u32`, `stream_revision:u32` |
+| `chur/v1/object/embedding` | `object_id:bytes[16]`, `stream_kind:u8`, `source_content_revision:u32`, `stream_revision:u32` |
+| `chur/v1/recovery/root-envelope` | `vault_id:bytes[16]`, `slot_id:bytes[16]`, `slot_generation:u64` |
+| `chur/v1/slot/apple-device-kek` | `vault_id:bytes[16]`, `slot_id:bytes[16]`, `slot_generation:u64` |
+
+Four rules read out of the table:
+
+- **the three container labels carry `stream_id`.** [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §29 requires at least the object identity, the stream kind, and the stream revision. `ManifestKey`, `ContentKey`, and `FinalCommitKey` protect the records of one container, which carries `stream_id` in its manifest, so they bind that identifier as well and one container's keys never open another;
+- **the derived-asset labels protect a single-record asset.** [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §41 permits a derived asset to use either the chunk container or a smaller single-record AEAD format. A derived asset stored as a container derives its record keys from `ObjectKey` under the three container labels, with that stream's `stream_kind` and `stream_revision`; a derived asset stored as one record uses its own kind label here. Both bind the object, the kind, and the revision, so neither accepts an asset of another object or another kind;
+- **a slot label carries `slot_generation`.** A replaced slot is a new generation under [`KEY_SLOTS.md`](KEY_SLOTS.md) §9, so a copied or superseded slot derives a different KEK and cannot unwrap the current root;
+- **`identity_id` is not a context element.** Real and decoy identities hold independent root secrets and independent `vault_id` values under §11, so the vault identifier already names the identity and a second element would add no separation.
+
+A change to any element list is a new label plus the migration the change rule below requires. Adding an element to a frozen list silently changes key bytes and is a defect.
+
 ### Label rules
 
 - a label is lowercase ASCII with the segments `chur` / protocol version / tier / purpose, separated by `/`;
