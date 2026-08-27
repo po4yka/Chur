@@ -325,7 +325,7 @@ components:
 
 # Chur Design System
 
-> **Status:** proposed design direction  
+> **Status:** Proposed design direction  
 > **Audience:** product design, KMP/CMP, Android, iOS, QA, accessibility, security, and agentic implementation contributors  
 > **Related:** [README](README.md) · [Architecture](docs/ARCHITECTURE.md) · [Cryptography](docs/CRYPTOGRAPHY.md) · [Android](docs/ANDROID.md) · [iOS](docs/IOS.md)
 

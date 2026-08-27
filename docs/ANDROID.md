@@ -1,6 +1,6 @@
 # Chur Android Platform Architecture
 
-> **Status:** proposed platform architecture for implementation  
+> **Status:** Proposed platform architecture for implementation  
 > **Audience:** Android, KMP, Rust, security, QA, and release-engineering contributors  
 > **Last updated:** 2026-08-26  
 > **Related:** [Project README](../README.md) · [System architecture](ARCHITECTURE.md) · [iOS architecture](IOS.md)

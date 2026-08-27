@@ -1,6 +1,6 @@
 # Chur iOS Platform Architecture
 
-> **Status:** proposed platform architecture for implementation  
+> **Status:** Proposed platform architecture for implementation  
 > **Audience:** iOS, KMP, Rust, security, QA, and release-engineering contributors  
 > **Last updated:** 2026-08-26  
 > **Related:** [Project README](../README.md) · [System architecture](ARCHITECTURE.md) · [Android architecture](ANDROID.md)

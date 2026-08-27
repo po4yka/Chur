@@ -1,6 +1,6 @@
 # Chur Architecture
 
-> **Status:** proposed architecture for implementation  
+> **Status:** Proposed architecture for implementation  
 > **Audience:** application, mobile-platform, Rust, security, and infrastructure contributors  
 > **Last updated:** 2026-08-26  
 > **Related:** [README](../README.md)

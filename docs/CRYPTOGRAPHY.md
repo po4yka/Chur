@@ -1,6 +1,6 @@
 # Chur Cryptography
 
-> **Status:** proposed normative cryptographic design  
+> **Status:** Proposed normative cryptographic design  
 > **Audience:** Rust, mobile-platform, application, security, protocol, and audit contributors  
 > **Last updated:** 2026-08-26  
 > **Related:** [README](../README.md) · [Architecture](ARCHITECTURE.md)

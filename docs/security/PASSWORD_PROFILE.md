@@ -1,6 +1,6 @@
 # Chur Password Profile
 
-> **Status:** Proposed normative password-to-KEK profile; numerical parameters require target-device benchmarking before v1 freeze
+> **Status:** Proposed normative password-to-KEK profile; the Argon2id floor of §4 is frozen and is also the v1 default, and calibration may only raise a parameter. The exact password input maximum is outstanding.
 
 ## 1. Purpose
 

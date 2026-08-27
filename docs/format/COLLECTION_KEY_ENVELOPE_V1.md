@@ -1,6 +1,6 @@
 # Collection Key Envelope v1
 
-> **Status:** Proposed normative format
+> **Status:** Proposed normative format; the 126-byte record layout of §1 is frozen by [ADR-0019](../adr/0019-freeze-remaining-v1-record-layouts.md). Deterministic vectors are outstanding.
 
 `CollectionKeyEnvelopeV1` wraps one random `SecurityCollectionKey[epoch]` under a root-derived envelope key. It is the second link of the wrapping chain root to `CollectionEnvelopeKey` to `SecurityCollectionKey` to `ObjectEnvelopeKey` to `ObjectKey`, so every object key in a vault is reachable only through one of these records.
 
