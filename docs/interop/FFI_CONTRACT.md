@@ -73,7 +73,7 @@ Requirements:
 
 - `chur_handle_t` is `uint64_t`: the low 32 bits index a typed registry slot, the high 32 bits carry that slot's generation counter. It is never a raw pointer and never a business ID; `0` is the null handle;
 - explicit owner runtime/session;
-- thread-safety documented per handle type;
+- thread affinity and concurrency fixed per handle type by the table in §8, not per instance;
 - idempotent close where practical;
 - stale generation returns `SESSION_EXPIRED`;
 - no handle revives after lock;
@@ -188,7 +188,18 @@ Default data-plane policy: caller allocates a bounded mutable buffer, Rust write
 
 Native FFI calls are synchronous unless explicitly callback-based. KMP wraps blocking work on a dedicated I/O dispatcher. Rust may use internal workers but must not call arbitrary Kotlin/Swift code while holding secret locks.
 
-A handle documents whether concurrent operations are serialized or rejected. Readers may support independent concurrent reads only after benchmarks and correctness tests.
+Thread affinity is a property of the handle type, not of the creating thread. No handle is bound to the thread that created it:
+
+| Handle | Callable from | Concurrent calls on one handle |
+| --- | --- | --- |
+| `RuntimeHandle` | any thread | serialized inside Rust |
+| `VaultSessionHandle` | any thread | serialized per session |
+| `ObjectReaderHandle` | any thread, explicitly including a thread other than its creator | serialized per reader in v1; parallel only when `CHUR_CAP_CONCURRENT_READS` is set, which requires benchmarks and correctness tests first |
+| `ImportHandle` | any thread | one call at a time; a second concurrent call returns `CONFLICT` |
+| `ExportHandle` | any thread | one call at a time; a second concurrent call returns `CONFLICT` |
+| `IntegrityScanHandle` | any thread | one call at a time; a second concurrent call returns `CONFLICT` |
+
+`chur_operation_cancel` and every `*_close` are exempt: they are callable from any thread at any time, including while another call on the same handle is in flight, and they never wait on that call. The registry lock is therefore per slot and is never held across user work, so a Media3 loader thread and an `AVAssetResourceLoader` queue may both drive a reader they did not create.
 
 ## 9. Cancellation
 
