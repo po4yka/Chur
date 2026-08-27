@@ -160,6 +160,111 @@ pub mod password {
     pub const OUTPUT_LEN: usize = 32;
 }
 
+/// Catalog policy bounds, `docs/format/CATALOG_SCHEMA_V1.md` §21.
+///
+/// These are catalog policy rather than encoded field widths, so raising one is
+/// a `catalog_format_version` change only when it changes a stored width.
+pub mod catalog {
+    /// Largest number of media objects in one vault.
+    pub const OBJECTS_MAX: u64 = 1_000_000;
+    /// Largest number of streams on one object: one original and 15 derived.
+    pub const STREAMS_PER_OBJECT_MAX: u32 = 16;
+    /// Largest number of derived streams on one object.
+    pub const DERIVED_STREAMS_PER_OBJECT_MAX: u32 = STREAMS_PER_OBJECT_MAX - 1;
+    /// Largest number of security collections in one vault.
+    pub const COLLECTIONS_MAX: u64 = 1_024;
+    /// Largest number of object-key envelopes on one object.
+    pub const OBJECT_ENVELOPES_MAX: u32 = 64;
+    /// Largest number of object-key envelopes active at once on one object.
+    pub const OBJECT_ENVELOPES_ACTIVE_MAX: u32 = 4;
+    /// Largest number of collection-key envelopes in one collection epoch.
+    pub const COLLECTION_ENVELOPES_MAX: u32 = 8;
+    /// Largest number of collection-key envelopes active at once in one epoch.
+    pub const COLLECTION_ENVELOPES_ACTIVE_MAX: u32 = 1;
+    /// Largest number of albums in one vault.
+    pub const ALBUMS_MAX: u64 = 10_000;
+    /// Largest number of memberships in one album.
+    pub const ALBUM_MEMBERSHIPS_MAX: u64 = 100_000;
+    /// Largest number of tags in one vault.
+    pub const TAGS_MAX: u64 = 10_000;
+    /// Largest number of tags on one object.
+    pub const TAGS_PER_OBJECT_MAX: u32 = 128;
+    /// Largest number of metadata revisions on one object.
+    pub const METADATA_REVISIONS_MAX: u32 = 1_024;
+    /// Largest number of concurrent import transactions.
+    pub const IMPORT_TRANSACTIONS_MAX: u32 = 128;
+
+    /// Smallest accepted page `limit`, `docs/format/CATALOG_SCHEMA_V1.md` §16.2.
+    pub const QUERY_LIMIT_MIN: u32 = 1;
+    /// Largest accepted page `limit`, §16.2.
+    pub const QUERY_LIMIT_MAX: u32 = 500;
+    /// Page `limit` a caller that names none receives, §16.2.
+    pub const QUERY_LIMIT_DEFAULT: u32 = 200;
+    /// Exact length of `ObjectProjectionV1`, §16.1.
+    pub const PROJECTION_LEN: usize = 16 + 16 + 2 + 8 + 8 + 1 + 8 + 4 + 4 + 8 + 1 + 1 + 1 + 1;
+    /// Exact length of an encoded page cursor: a sort value and an object ID, §16.2.
+    pub const CURSOR_LEN: usize = 8 + super::ID_LEN;
+
+    /// Longest album name the catalog accepts, in bytes.
+    pub const ALBUM_NAME_MAX: usize = 512;
+    /// Longest tag name the catalog accepts, in bytes.
+    pub const TAG_NAME_MAX: usize = 256;
+    /// Longest search query the catalog accepts, in bytes.
+    pub const SEARCH_TERMS_MAX: usize = 512;
+}
+
+/// Media pipeline bounds, `docs/interop/MEDIA_PIPELINE.md` §12.
+pub mod media {
+    /// Largest accepted still-image edge, in pixels.
+    pub const IMAGE_EDGE_MAX: u32 = 16_384;
+    /// Largest accepted still-image area, in pixels.
+    pub const IMAGE_AREA_MAX: u64 = 67_108_864;
+    /// Largest accepted video width, in pixels.
+    pub const VIDEO_WIDTH_MAX: u32 = 7_680;
+    /// Largest accepted video height, in pixels.
+    pub const VIDEO_HEIGHT_MAX: u32 = 4_320;
+    /// Largest accepted track count in one video.
+    pub const VIDEO_TRACKS_MAX: u32 = 8;
+    /// Largest accepted duration, four hours in milliseconds.
+    pub const DURATION_MS_MAX: u64 = 14_400_000;
+    /// Largest number of fields in one metadata revision.
+    pub const METADATA_FIELDS_MAX: u32 = 128;
+    /// Largest single metadata field value, in bytes.
+    pub const METADATA_FIELD_VALUE_MAX: usize = 8_192;
+    /// Largest whole metadata revision, in bytes.
+    pub const METADATA_REVISION_MAX: usize = 65_536;
+    /// Long-edge target of the small thumbnail, in pixels.
+    pub const THUMBNAIL_SMALL_EDGE: u32 = 320;
+    /// Long-edge target of the grid preview, in pixels.
+    pub const GRID_PREVIEW_EDGE: u32 = 640;
+    /// Long-edge target of the screen preview, in pixels.
+    pub const SCREEN_PREVIEW_EDGE: u32 = 2_048;
+    /// Long-edge target of the video poster frame, in pixels.
+    pub const VIDEO_POSTER_EDGE: u32 = 2_048;
+    /// Largest total decode and import buffer in flight per import, 256 MiB.
+    pub const IMPORT_BUFFER_MAX: u64 = 268_435_456;
+    /// Wall-clock budget of one derivative generation, in milliseconds.
+    pub const DERIVATIVE_TIMEOUT_MS: u64 = 30_000;
+    /// Longest IANA media type the content-info record carries, without the
+    /// terminator, `docs/interop/FFI_CONTRACT.md` §6.1.
+    pub const CONTENT_TYPE_MAX: usize = 63;
+}
+
+/// Plaintext scratch caps, `docs/security/PLAINTEXT_LIFECYCLE.md` §5.
+///
+/// Every cap is checked before the first plaintext byte is written. Exceeding
+/// one fails the operation; nothing is truncated and no entry is evicted.
+pub mod scratch {
+    /// Largest single scratch entry, 4 GiB.
+    pub const ENTRY_MAX: u64 = 4 * 1_073_741_824;
+    /// Largest number of scratch entries alive at once.
+    pub const ENTRIES_MAX: u32 = 4;
+    /// Largest total scratch directory, 8 GiB.
+    pub const DIRECTORY_MAX: u64 = 8 * 1_073_741_824;
+    /// Longest an entry survives while a consumer holds it, 30 minutes.
+    pub const HOLD_MS_MAX: u64 = 1_800_000;
+}
+
 // Compile-time consistency checks. A limit that contradicts another limit is a
 // defect in this module, not a runtime condition, so it fails the build.
 
@@ -213,3 +318,35 @@ const _: () = assert!(92 + slot::SALT_MAX <= slot::BODY_MAX);
 const _: () = assert!(66 + slot::ALIAS_MAX <= slot::BODY_MAX);
 const _: () = assert!(74 >= slot::BODY_MIN);
 const _: () = assert!(90 >= slot::BODY_MIN);
+
+// `docs/format/CATALOG_SCHEMA_V1.md` §16.1: the projection is the fixed 79-byte
+// shape the FFI page buffer of `docs/interop/FFI_CONTRACT.md` §6.2 is sized on,
+// and a full page fits a bounded buffer.
+const _: () = assert!(catalog::PROJECTION_LEN == 79);
+const _: () = assert!(catalog::QUERY_LIMIT_DEFAULT <= catalog::QUERY_LIMIT_MAX);
+const _: () = assert!(catalog::QUERY_LIMIT_MIN <= catalog::QUERY_LIMIT_DEFAULT);
+const _: () = assert!(catalog::QUERY_LIMIT_MAX as usize * catalog::PROJECTION_LEN == 39_500);
+
+// §21: one original plus the derived streams is the whole per-object budget, and
+// the nine derived-asset kinds of §15.4 fit inside it.
+const _: () =
+    assert!(catalog::DERIVED_STREAMS_PER_OBJECT_MAX + 1 == catalog::STREAMS_PER_OBJECT_MAX);
+const _: () = assert!(catalog::OBJECT_ENVELOPES_ACTIVE_MAX <= catalog::OBJECT_ENVELOPES_MAX);
+const _: () =
+    assert!(catalog::COLLECTION_ENVELOPES_ACTIVE_MAX <= catalog::COLLECTION_ENVELOPES_MAX);
+
+// `docs/interop/MEDIA_PIPELINE.md` §12: the derivative long edges are ordered,
+// and the largest still image a decoder is offered fits the area bound.
+const _: () = assert!(media::THUMBNAIL_SMALL_EDGE < media::GRID_PREVIEW_EDGE);
+const _: () = assert!(media::GRID_PREVIEW_EDGE < media::SCREEN_PREVIEW_EDGE);
+const _: () = assert!(media::SCREEN_PREVIEW_EDGE <= media::IMAGE_EDGE_MAX);
+const _: () =
+    assert!(media::IMAGE_EDGE_MAX as u64 * media::IMAGE_EDGE_MAX as u64 > media::IMAGE_AREA_MAX);
+const _: () = assert!(media::METADATA_REVISION_MAX <= container::MANIFEST_RECORD_MAX as usize);
+
+// `docs/security/PLAINTEXT_LIFECYCLE.md` §5: the whole directory holds the
+// maximum number of maximum-size entries, and one entry sits far below the
+// 1 TiB object bound of `docs/format/OBJECT_CONTAINER_V1.md` §16, which is why
+// a large object has no scratch path at all.
+const _: () = assert!(scratch::ENTRY_MAX * scratch::ENTRIES_MAX as u64 >= scratch::DIRECTORY_MAX);
+const _: () = assert!(scratch::ENTRY_MAX < container::TOTAL_PLAINTEXT_MAX);
