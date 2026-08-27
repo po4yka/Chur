@@ -17,3 +17,4 @@
 
 pub mod codec;
 pub mod constants;
+pub mod envelope;
