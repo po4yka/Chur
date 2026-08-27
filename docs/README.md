@@ -97,7 +97,9 @@ The complete platform documents are `ANDROID.md` and `IOS.md`; these focused con
 
 ## Test vectors
 
-The repository-level [`test-vectors/`](../test-vectors/README.md) directory contains deterministic compatibility fixtures. Vector files, not examples embedded in prose, are the machine-readable interoperability authority.
+The repository-level [`test-vectors/`](../test-vectors/README.md) directory will contain deterministic compatibility fixtures. Vector files, not examples embedded in prose, are the machine-readable interoperability authority.
+
+It currently holds only the two scaffold READMEs. The `manifest.json` and the fixture groups diagrammed in [`format/TEST_VECTORS.md`](format/TEST_VECTORS.md) §1 land with the first `chur-cli` vector generator, which is a Phase 0 deliverable. Until then no document may cite a vector file as settled evidence.
 
 ## Change process
 
