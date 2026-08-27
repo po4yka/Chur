@@ -889,7 +889,7 @@ On membership change or compromise:
 1. generate a new random collection key;
 2. increment the epoch;
 3. use the new epoch for new object envelopes;
-4. rewrap existing object keys as policy requires;
+4. rewrap every active object key of the collection to the new epoch; ownership, resumption, and the completion bound are normative in [`sync/REVOCATION.md`](sync/REVOCATION.md) §3.1, and rewrap MUST complete before the revocation is presented as complete;
 5. distribute only the new epoch to current members;
 6. record the change in the signed operation log when sync exists.
 
@@ -1795,7 +1795,7 @@ On member/device removal:
 
 1. create a new collection epoch and random key;
 2. stop issuing new envelopes/grants to the removed identity;
-3. rewrap object keys for current members according to policy;
+3. rewrap object keys for current members eagerly, per [`sync/REVOCATION.md`](sync/REVOCATION.md) §3.1;
 4. encrypt future metadata and operations under the new epoch;
 5. record the membership change in the signed operation log;
 6. optionally re-encrypt especially sensitive object content if the policy demands forward secrecy from cached old object keys.

@@ -37,12 +37,25 @@ Forward-looking procedure:
 1. authenticate membership change;
 2. create `SecurityCollectionKey[epoch+1]`;
 3. issue grants to remaining verified devices;
-4. rewrap active object keys to new epoch;
+4. rewrap every active object key of the collection to the new epoch, per §3.1;
 5. use new epoch for future objects/operations;
-6. retire old key from active sessions after migration;
+6. retire old key from active sessions after the rewrap of §3.1 completes;
 7. retain enough historical context to verify old operations.
 
 Media bytes do not need re-encryption unless object key itself is suspected compromised.
+
+### 3.1 Rewrap ownership, resumption, and completion
+
+Rewrap is eager, and the device that signed the membership change owns it. Lazy rewrap was rejected: an object whose envelope is still under the old epoch stays readable by the member just removed, so a lazy policy is an exposure window whose length is a storage detail rather than a decision.
+
+- step 2 takes effect immediately, so every object created after it is already under the new epoch and is never rewrapped;
+- the owning device walks the collection's object-key envelopes in ascending `object_id` order, committing each rewrapped envelope in a catalog transaction. The resume cursor is derived state, not stored state: it is the highest `object_id` whose envelope is already at the target epoch, which any device computes from its own catalog. An interrupted rewrap resumes there and never restarts;
+- rewrap is idempotent per object. An envelope already at the target epoch is skipped, so a resumed, retried, or duplicated pass converges to the same result;
+- the revocation is presented to the user as complete only when the walk reaches the end. Until then the interface states that rotation is in progress and that objects not yet rewrapped remain readable by the removed member;
+- if the owning device has not finished within 24 hours of the accepted membership change, any other device holding `MANAGE_MEMBERS` for the collection continues from the derived cursor. Takeover is a resume, not a restart, and two devices running concurrently is safe because the step is idempotent;
+- an envelope that cannot be rewrapped, because its object key is unavailable to the rewrapping device, is reported to the user and never silently skipped.
+
+Throughput and completion targets are in [`../assurance/PERFORMANCE_BUDGETS.md`](../assurance/PERFORMANCE_BUDGETS.md) §3.
 
 ## 4. Previously obtained data
 

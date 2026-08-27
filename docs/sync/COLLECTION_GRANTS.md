@@ -101,7 +101,7 @@ Removing member:
 
 - sign revocation;
 - create new collection epoch;
-- rewrap active object keys under new epoch;
+- rewrap active object keys under new epoch, eagerly and to completion per [`REVOCATION.md`](REVOCATION.md) §3.1;
 - issue new grants to remaining members;
 - prevent future operations/grants from removed device;
 - accept that old epoch data previously downloaded remains accessible.

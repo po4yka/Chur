@@ -37,7 +37,8 @@ Measure:
 - range-read throughput at 256 KiB/1 MiB chunk candidates;
 - backup copy throughput without plaintext;
 - catalog migration rows/s;
-- sync ciphertext upload/download overhead.
+- sync ciphertext upload/download overhead;
+- collection epoch rewrap in object-key envelopes per second, with an initial p95 completion candidate under 60 s for a 100,000-object collection on the baseline device. The rewrap is bounded by [`../sync/REVOCATION.md`](../sync/REVOCATION.md) §3.1, and the exposure window it defines ends only when the pass completes, so a regression here is a security regression.
 
 Target sustained crypto throughput should exceed the media player/source consumption rate with headroom on the supported baseline.
 
