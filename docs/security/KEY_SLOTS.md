@@ -16,6 +16,13 @@ PeerDeviceSlotV1      future
 
 A recoverable consumer vault should have at least one portable slot (password or recovery) and may have one or more device-bound slots.
 
+Two device-slot policies exist and the product mode selects one:
+
+- **convenient**, the default: the device slot accepts biometry or the device credential. The device unlock code is consequently a working vault credential, which [`THREAT_MODEL.md`](THREAT_MODEL.md) §4 records under A2 and A8;
+- **strict**: the device slot accepts biometry only and invalidates when the biometric set changes. It is the only configuration that resists an adversary who knows the device unlock code.
+
+The policy is a per-vault setting shown at device-slot creation, and neither mode removes the portable-slot requirement above. §4 and §5 give each platform's mechanism.
+
 ## 2. Common fields
 
 Conceptual common fields:
@@ -62,7 +69,7 @@ Requirements:
 Preferred design:
 
 - non-exportable AES-256-GCM wrapping key in Android Keystore;
-- user authentication required according to configured policy;
+- user authentication required according to the configured policy: convenient mode accepts biometry or a device credential, so the device unlock code opens this slot; strict mode accepts biometry only and invalidates on biometric enrollment change;
 - TEE-backed by default when available;
 - StrongBox optional with explicit fallback;
 - root wrapped with fresh 96-bit GCM nonce;
@@ -76,8 +83,8 @@ Invalidation, missing key, or device restore must lead to portable recovery rath
 Preferred design:
 
 - random `DeviceUnlockSecret` stored as a `ThisDeviceOnly` Keychain item;
-- access controlled by `userPresence` by default;
-- optional stricter `biometryCurrentSet` mode;
+- access controlled by `userPresence` in convenient mode, which biometry or the device passcode satisfies, so the device passcode opens this slot;
+- `biometryCurrentSet` in strict mode, which excludes the passcode and invalidates when the biometric set changes;
 - Rust derives `AppleDeviceKEK` from the Keychain secret under the label `chur/v1/slot/apple-device-kek`, registered in [`KEY_HIERARCHY.md`](KEY_HIERARCHY.md) §3, with the context `vault_id:bytes[16], slot_id:bytes[16], slot_generation:u64` in that order, so a copied or superseded slot derives a different KEK;
 - Rust wraps/unwraps the root using the approved local AEAD;
 - Keychain item identifier is opaque and separate for each vault identity.

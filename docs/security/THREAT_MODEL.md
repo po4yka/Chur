@@ -68,6 +68,8 @@ Can see the launcher, notifications, recents, public shell, and unlocked screen 
 
 Can open applications and interact with Chur but does not know the private credential. May attempt screenshots, search, deep links, accessibility exploration, or public-shell inspection.
 
+Under the default device-slot policy this adversary may already hold a working vault credential. Convenient mode, defined in [`KEY_SLOTS.md`](KEY_SLOTS.md) §1, is satisfied by the device unlock code as well as by biometry on both platforms: `userPresence` accepts the passcode on iOS, and the Android policy accepts a device credential. A person who knows the phone's passcode, PIN, or pattern therefore opens the vault through the device slot without knowing the password or the recovery secret, and that person is usually a partner, a family member, or anyone who has watched the code being typed. Resisting A2 and A8 requires strict mode, or an unlock that asks for the vault password independently of the device credential; nothing else in this model substitutes for it.
+
 ### A3 — Thief with a locked device
 
 Controls the physical device and can attempt offline extraction, reboot, backup recovery, or OS authentication attacks without a valid credential.
@@ -103,6 +105,7 @@ Attempts to compromise dependencies, build scripts, CI actions, signing, generat
 ## 5. Security assumptions
 
 - the user chooses a password with sufficient entropy or safely stores a recovery secret;
+- under the default convenient device-slot policy, anyone the user has trusted with the device unlock code is trusted with the vault; a user who cannot make that assumption chooses strict mode or no device slot;
 - OS random generation is functioning;
 - approved cryptographic libraries implement their documented algorithms correctly;
 - the locked device's platform security is not fully bypassed;

@@ -1027,13 +1027,16 @@ The iOS application remains thin and owns:
 
 A recoverable default can use a `ThisDeviceOnly` Keychain item protected through `SecAccessControl`, while retaining an independent password or recovery envelope.
 
-Potential policies include:
+Authentication policy and accessibility class are separate settings and are chosen separately.
 
-- `userPresence` for flexible device authentication;
-- `biometryCurrentSet` for a stricter policy that invalidates access when the biometric set changes;
-- a passcode-required accessibility class for maximum local protection.
+Authentication policy controls which factor opens the item:
 
-Policy selection must explicitly balance lockout risk, backup behavior, and recovery.
+- `userPresence` accepts biometry or the device passcode, so under it the device passcode is a working vault credential;
+- `biometryCurrentSet` accepts biometry only and invalidates access when the biometric set changes.
+
+Accessibility class controls when the item is readable at all. A passcode-required class gives the strongest local protection and does not by itself restrict which factor authenticates the read.
+
+Policy selection balances lockout risk, backup behavior, and recovery. [`docs/security/KEY_SLOTS.md`](docs/security/KEY_SLOTS.md) §1 owns the choice and names the two product modes; this section is explanatory.
 
 Secure Enclave is not used as a streaming video cipher. It may later protect asymmetric device-identity keys, while symmetric root-key release remains a Keychain access-control operation.
 
