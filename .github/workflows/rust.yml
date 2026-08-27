@@ -157,6 +157,38 @@ jobs:
             cargo +nightly fuzz run "$target" -- -runs=20000 -max_total_time=30
           done
 
+  native-targets:
+    name: native targets (${{ matrix.kind }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - kind: android
+            os: ubuntu-latest
+            targets: aarch64-linux-android x86_64-linux-android
+          - kind: apple
+            os: macos-latest
+            targets: aarch64-apple-ios aarch64-apple-ios-sim
+    # The script finds the repository root itself.
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: native-${{ matrix.kind }}-${{ hashFiles('rust/Cargo.lock', 'rust/rust-toolchain.toml') }}
+      - run: rustup target add ${{ matrix.targets }}
+      # DEVELOPMENT.md "Native targets" requires these four, and an artifact
+      # that exports no `chur_` symbol is one a host would load and fail to
+      # call, so the script checks the handshake in every archive it produces.
+      - run: scripts/build-native-targets.sh ${{ matrix.kind }}
+
   gradle:
     name: gradle check
     runs-on: ubuntu-latest

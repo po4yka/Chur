@@ -90,17 +90,27 @@ An application module, and with it a `./gradlew build` that assembles one, lands
 
 ## Native targets
 
-The build must support, at minimum:
+The build supports these four, and the `native-targets` job of the enforcing workflow builds every one on every pull request:
 
 ```text
 Android:
   aarch64-linux-android
-  x86_64-linux-android for emulator/testing when supported
+  x86_64-linux-android for emulator and testing
 
 iOS:
   aarch64-apple-ios
   aarch64-apple-ios-sim
 ```
+
+```text
+scripts/build-native-targets.sh android
+scripts/build-native-targets.sh apple
+scripts/build-native-targets.sh all
+```
+
+The script builds `chur-ffi` for each target and then checks that the archive exports the nine handshake symbols of [`docs/interop/FFI_CONTRACT.md`](docs/interop/FFI_CONTRACT.md) §2. An archive with no `chur_` symbol is one a host loads and then fails to call, so the symbol check is the point rather than an extra.
+
+Android needs an NDK. The script reads `ANDROID_NDK_HOME`, then `ANDROID_NDK_ROOT`, then the newest NDK under `ANDROID_HOME/ndk`, and passes the linker to Cargo through a per-target environment variable, so no machine-specific path enters a checked-in `.cargo/config.toml`. The API level is 29, the floor [ADR-0017](docs/adr/0017-freeze-the-supported-device-set.md) freezes. The Apple targets need Xcode and build on macOS only.
 
 Additional ABIs require an explicit support and testing decision. Release artifacts must contain only intended architectures.
 
