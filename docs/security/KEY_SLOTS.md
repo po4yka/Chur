@@ -66,7 +66,7 @@ Preferred design:
 - TEE-backed by default when available;
 - StrongBox optional with explicit fallback;
 - root wrapped with fresh 96-bit GCM nonce;
-- slot AAD binds vault and slot generation;
+- slot AAD binds the §2 field set on every wrap and unwrap: slot type and version, `vault_id`, `slot_generation`, `wrap_suite_id`, and the public parameters;
 - alias is opaque and does not reveal real/decoy identity.
 
 Invalidation, missing key, or device restore must lead to portable recovery rather than silent vault deletion.

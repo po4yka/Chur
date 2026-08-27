@@ -680,7 +680,7 @@ Requirements:
 - prefer hardware-backed TEE support;
 - offer StrongBox only as an optional stricter profile with explicit fallback handling;
 - use a fresh 96-bit GCM nonce for every new root envelope;
-- bind slot metadata as GCM AAD where supported by the adapter;
+- bind the slot AAD required by [`security/KEY_SLOTS.md`](security/KEY_SLOTS.md) §2 through `Cipher.updateAAD` on every wrap and every unwrap, so a superseded slot generation cannot be replayed under the same Keystore key. The binding is not optional; an adapter that cannot carry AAD MUST move the binding into an authenticated enclosing record under §8 rule 7 rather than omit it;
 - store only the ciphertext, nonce, key alias/reference, generation, and public policy metadata outside Keystore;
 - never use the Keystore key for media chunks;
 - treat biometric authentication as authorization to use the key, not as key material;
