@@ -70,6 +70,7 @@ Security-scoped URLs are acquired only for operation lifetime unless explicit pe
 `AVAssetResourceLoaderDelegate` or an equivalent custom resource path maps byte-range requests to Rust `read_at`:
 
 - authenticate chunks before responding;
+- accumulate short reads with `respond(with:)` and call `finishLoading()` only when the requested range is satisfied or `read_at` reports end of stream at `offset == size`; call `finishLoading(with:)` on any failure status, per [`FFI_CONTRACT.md`](FFI_CONTRACT.md) §6.3;
 - provide correct content information after manifest/final-commit validation;
 - use bounded buffers;
 - cancel pending requests on lock;

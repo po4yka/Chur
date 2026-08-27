@@ -89,7 +89,8 @@ A custom `DataSource` delegates range reads to `ObjectReaderHandle`:
 - map requested position/length to Rust `read_at`;
 - authenticate affected chunks before returning bytes;
 - reuse bounded direct buffers;
-- propagate EOF only from authenticated size/final commit;
+- return a short read to ExoPlayer unchanged, because `DataSource.read` is allowed to return fewer bytes than requested;
+- return `C.RESULT_END_OF_INPUT` only for the end-of-stream result at `offset == size`, never for a short read and never for an error, per [`FFI_CONTRACT.md`](FFI_CONTRACT.md) §6.3;
 - stop and close on lock/session expiry;
 - avoid disk plaintext cache;
 - map corruption separately from transient I/O.

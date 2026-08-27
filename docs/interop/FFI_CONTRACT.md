@@ -172,6 +172,19 @@ chur_status_t chur_object_reader_close(chur_handle_t reader);
 
 The control plane uses these same symbols through a thin KMP `expect`/`actual` adapter. No binding generator is part of the boundary ([ADR-0016](../adr/0016-freeze-the-v1-c-abi.md)).
 
+### 6.3 Range reads
+
+`chur_object_reader_read_at` never mixes an error with a byte count: the status is the return value, the count is written through `bytes_written`.
+
+- `bytes_written` is set on every call, including every failure, where it is set to `0`;
+- on success `*bytes_written <= capacity`. A short read is permitted at any offset, not only near the end: the reader returns at most the authenticated bytes it already holds, so the caller must loop until it has the range it needs or observes `*bytes_written == 0`;
+- `*bytes_written == 0` with a success status means end of authenticated plaintext, and occurs only when `offset == size`;
+- `offset == size` returns success with `0` bytes;
+- `offset > size` returns `INVALID_INPUT`, never a zero-length success, so a seek past the end stays distinguishable from end of stream;
+- `capacity == 0` returns success with `0` bytes and touches nothing;
+- on any failure status the whole destination buffer holds unspecified bytes. The caller must not use any prefix of it, and must not treat bytes written by an earlier successful call into the same buffer as still valid;
+- `size` is the authenticated plaintext size from the final commit record, not a file length.
+
 ## 7. Buffer ownership
 
 Each function specifies:
