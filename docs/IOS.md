@@ -438,17 +438,24 @@ Suggested placement:
 ```text
 Library/Application Support/Chur/
 ├── public/                         public shared data as designed
+├── device/                         device-only references and local identity state
 └── vaults/
-    ├── <opaque-vault-id>/          encrypted catalog, objects, temporary import state
+    ├── <opaque-vault-id>/
+    │   ├── catalog.db + WAL        encrypted catalog
+    │   ├── objects/                committed immutable containers
+    │   ├── incoming/               in-flight import and download ciphertext
+    │   └── quarantine/             ciphertext that failed validation
     └── <opaque-vault-id>/
 
 Library/Caches/Chur/
-├── encrypted-transfer-cache/
+├── encrypted-transfer-cache/       disposable copies only
 └── plaintext-scratch/              explicit policy only
 
 tmp/
 └── short-lived system-operation files where unavoidable
 ```
+
+The shape inside `<opaque-vault-id>/` is owned by [`ARCHITECTURE.md`](ARCHITECTURE.md) §14.4; this section maps it onto iOS roots and MUST NOT diverge from it. In-flight import ciphertext MUST stay in `incoming/` under the vault directory: `Library/Caches` is reclaimable by the system under storage pressure, and the final commit is an atomic rename into `objects/` on the same volume.
 
 Chur SHOULD NOT store private vault data in the user-visible Documents directory.
 
@@ -511,11 +518,23 @@ The following MUST be excluded from backup:
 - Keychain assumptions that cannot survive restore;
 - temporary import containers, so a restored vault finds no resumable import transaction and marks each open one dead per [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §14.4.
 
+Exclusion is per path and MUST be applied at directory creation, before the first byte is written, by setting `URLResourceValues.isExcludedFromBackup` to `true` on:
+
+| Path | Reason |
+| --- | --- |
+| `Library/Application Support/Chur/vaults/` | vault ciphertext leaves the device only through the backup package |
+| `Library/Application Support/Chur/device/` | device-bound references cannot work after restore |
+| `Library/Caches/Chur/` | disposable ciphertext copies and scratch |
+
+`tmp/` is not backed up by the system. `Library/Application Support/Chur/public/` is the only Chur directory that enters a backup.
+
+The flag MUST be re-asserted on every launch for each path above, because a directory recreated by a restore or by a migration does not inherit it.
+
 ### 14.2 Portable encrypted state
 
-Encrypted catalog and object containers MAY be backed up only when the vault has an independent password or recovery slot that can open the restored data on another device.
+Vault ciphertext MUST be excluded from iCloud Backup, encrypted local backup, and device transfer without exception. The portable path is the explicit user-initiated package in [`format/BACKUP_FORMAT_V1.md`](format/BACKUP_FORMAT_V1.md).
 
-A Keychain item marked `ThisDeviceOnly` does not migrate. Restored ciphertext without a portable slot is not recoverable.
+A backup transport that chooses what to copy cannot carry an object store: a partially copied vault is indistinguishable on restore from a truncated one. A Keychain item marked `ThisDeviceOnly` does not migrate either, so restored ciphertext without a portable slot would not be recoverable even if it were copied whole.
 
 ### 14.3 Restore flow
 

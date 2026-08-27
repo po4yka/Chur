@@ -442,7 +442,11 @@ Suggested platform placement:
 filesDir/
 ├── public/                         public Room-owned state as designed
 └── vaults/
-    ├── <opaque-vault-id>/          encrypted catalog, objects, temporary import state
+    ├── <opaque-vault-id>/
+    │   ├── catalog.db + WAL        encrypted catalog
+    │   ├── objects/                committed immutable containers
+    │   ├── incoming/               in-flight import and download ciphertext
+    │   └── quarantine/             ciphertext that failed validation
     └── <opaque-vault-id>/
 
 noBackupFilesDir/
@@ -452,9 +456,11 @@ noBackupFilesDir/
     └── recovery-independent device metadata
 
 cacheDir/
-├── encrypted-transfer-cache/
+├── encrypted-transfer-cache/       disposable copies only
 └── plaintext-scratch/              allowed only by explicit policy
 ```
+
+The shape inside `<opaque-vault-id>/` is owned by [`ARCHITECTURE.md`](ARCHITECTURE.md) §14.4; this section maps it onto Android roots and MUST NOT diverge from it. In-flight import ciphertext MUST stay in `incoming/` under the vault directory: `cacheDir` is reclaimable by the platform in the middle of a transaction, and the final commit is an atomic rename into `objects/`, which requires the same volume.
 
 Directory names MUST NOT reveal real/decoy identity, media type, album, filename, account, or object count beyond unavoidable filesystem metadata.
 
@@ -499,9 +505,9 @@ The following MUST be excluded:
 
 ### 13.2 Portable encrypted state
 
-Encrypted catalog and object containers MAY be included only when the vault also has an independent portable recovery path, such as a password or recovery slot.
+Vault ciphertext MUST be excluded from Android Auto Backup and device-to-device transfer without exception. The portable path is the explicit user-initiated package in [`format/BACKUP_FORMAT_V1.md`](format/BACKUP_FORMAT_V1.md).
 
-Restoring ciphertext without a usable key slot is not recovery.
+Auto Backup is the wrong transport for a media vault: the per-app quota is a fraction of one vault, the platform chooses what to drop, and a partially copied object store is indistinguishable on restore from a truncated one. Restoring ciphertext without a usable key slot is not recovery either, so the two failure modes compound.
 
 ### 13.3 Required restore behavior
 
@@ -513,6 +519,41 @@ After restore on a new device:
 4. let Rust verify and migrate the vault;
 5. enroll a new Android platform slot;
 6. preserve old ciphertext until the new slot commits.
+
+---
+
+### 13.4 Backup rule files
+
+The rules are per path and checked into the application. An `<include>` set makes everything else excluded, so a missing rule fails closed:
+
+```xml
+<!-- res/xml/data_extraction_rules.xml, android:dataExtractionRules -->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="file" path="public/" />
+        <include domain="sharedpref" path="public_shell.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="file" path="public/" />
+        <include domain="sharedpref" path="public_shell.xml" />
+    </device-transfer>
+</data-extraction-rules>
+```
+
+```xml
+<!-- res/xml/backup_rules.xml, android:fullBackupContent, API 30 and below -->
+<full-backup-content>
+    <include domain="file" path="public/" />
+    <include domain="sharedpref" path="public_shell.xml" />
+</full-backup-content>
+```
+
+Consequences:
+
+- `filesDir/vaults/`, including `incoming/` and `quarantine/`, never enters an archive;
+- `noBackupFilesDir/` and `cacheDir/` are excluded by the platform as well, so the device slot and the scratch directory are excluded twice;
+- release MUST fail when either file names a path under `vaults/`, or declares `<include domain="root">` or `<include domain="external">`;
+- the exclusion MUST be proved by an actual backup and restore run, not by reading the XML.
 
 ---
 

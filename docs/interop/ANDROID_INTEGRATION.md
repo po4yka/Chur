@@ -58,12 +58,14 @@ Biometric/credential authorizes a Keystore operation. It does not derive a key. 
 Proposed:
 
 ```text
-filesDir/             encrypted catalog and committed object store
-noBackupFilesDir/     device-only alias references/local identity state
-cacheDir/             disposable ciphertext and controlled plaintext scratch
+filesDir/vaults/<id>/   encrypted catalog, objects/, incoming/, quarantine/
+noBackupFilesDir/       device-only alias references/local identity state
+cacheDir/               disposable ciphertext copies and controlled plaintext scratch
 ```
 
-All paths are app-private and opaque. Backup/data-extraction rules explicitly include portable ciphertext only when password/recovery restoration is possible.
+The layout inside a vault directory is owned by [`../ARCHITECTURE.md`](../ARCHITECTURE.md) §14.4 and mapped onto Android roots by [`../ANDROID.md`](../ANDROID.md) §12; this document repeats neither. In-flight import ciphertext belongs in `incoming/` under the vault directory and never in `cacheDir`, which the platform may reclaim mid-transaction and which may not share a volume with the atomic rename target.
+
+All paths are app-private and opaque. Backup and data-extraction rules exclude every vault path; the portable path is the explicit backup package. The rule files are in [`../ANDROID.md`](../ANDROID.md) §13.4.
 
 ## 5. Import
 
