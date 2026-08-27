@@ -2111,24 +2111,11 @@ A feature is not complete until its privacy and lifecycle behavior is specified.
 
 ## 43. Architecture decision backlog
 
-The following decisions require dedicated ADRs:
+[`adr/README.md`](adr/README.md) holds the project's only backlog of decisions that still require an ADR. This section keeps no list of its own.
 
-| ADR | Question | Current direction |
-| --- | --- | --- |
-| ADR-001 | Private catalog implementation | Rust-owned SQLCipher, benchmark before final acceptance |
-| ADR-002 | Canonical encrypted-record encoding | fixed preamble plus deterministic bounded structured encoding |
-| ADR-003 | Password-encoding profile freeze | no normalization, strict UTF-8 per `security/PASSWORD_PROFILE.md`; ADR freezes the profile identifier and vectors |
-| ADR-004 | Exact Argon2id calibration policy | bounded device calibration with portable minimum |
-| ADR-005 | Initial chunk-size policy | 256 KiB small media, 1 MiB large media, benchmark-driven |
-| ADR-006 | iOS platform slot representation | protected DeviceKEK versus direct root-secret Keychain item |
-| ADR-007 | Control-plane binding generator | resolved by [ADR-0016](adr/0016-freeze-the-v1-c-abi.md): hand-written C ABI and checked-in header, no generator |
-| ADR-008 | SQLCipher WAL and backup configuration | prototype and document platform behavior |
-| ADR-009 | Portable backup format | Chur package with optional `age` outer envelope |
-| ADR-010 | Metadata/derived-asset transaction visibility | original commit independent from retryable derivatives |
-| ADR-011 | Future sync conflict model | signed operation log plus deterministic metadata semantics |
-| ADR-012 | Optional size-padding policy | deferred beyond v1 |
+The decisions this section previously listed as open are now recorded: the canonical encrypted-record encoding in [`ADR-0010`](adr/0010-define-canonical-tuple-and-freeze-hkdf-salt.md) and [`ADR-0013`](adr/0013-allocate-v1-format-constants.md); the chunk-size policy in [`ADR-0008`](adr/0008-freeze-object-container-v1-layout.md); the control-plane binding generator in [`ADR-0016`](adr/0016-freeze-the-v1-c-abi.md); the portable backup format in [`ADR-0018`](adr/0018-freeze-backup-package-framing.md); the sync conflict model in [`ADR-0014`](adr/0014-observed-heads-causality-vector.md), [`ADR-0021`](adr/0021-freeze-conflict-tie-break-and-set-semantics.md), and [`ADR-0022`](adr/0022-freeze-operation-chain-hash-and-identifier.md); the metadata and derived-asset transaction boundary in §22.2 and [`format/CATALOG_SCHEMA_V1.md`](format/CATALOG_SCHEMA_V1.md) §10; and optional size padding in [`sync/SYNC_PROTOCOL_V1.md`](sync/SYNC_PROTOCOL_V1.md) §11, which defers it to a later versioned transport profile.
 
-No open ADR may be resolved implicitly through a library default.
+An ADR number identifies exactly one decision. A new ADR takes the next unused number in [`adr/`](adr/), and no number is reused for a second subject. No open decision may be resolved implicitly through a library default.
 
 ---
 
