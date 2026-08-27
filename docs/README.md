@@ -157,3 +157,24 @@ A normative change should:
 - avoid security marketing language;
 - link requirements to tests and owners;
 - never include real secrets or private user data.
+
+## Generation counters
+
+Ten counters are spelled "generation" and they are not one concept. The naming rule is: a counter that reaches persisted or wire bytes is named `<artifact>_generation`, is a `u64` under [`format/CANONICAL_ENCODING_V1.md`](format/CANONICAL_ENCODING_V1.md) §2, and is compared by a reader to reject stale state. The session counter is the only in-memory one; it is never encoded and never compared across processes.
+
+| Counter | Defined in | Counts | Persisted | Compared for staleness |
+| --- | --- | --- | --- | --- |
+| `descriptor_generation` | [`format/VAULT_DESCRIPTOR_V1.md`](format/VAULT_DESCRIPTOR_V1.md) §2 | rewrites of one vault descriptor | yes | yes, §10 there |
+| `catalog_generation` | [`format/VAULT_DESCRIPTOR_V1.md`](format/VAULT_DESCRIPTOR_V1.md) §5 and [`format/CATALOG_SCHEMA_V1.md`](format/CATALOG_SCHEMA_V1.md) §2 | committed catalog states | yes | yes |
+| `slot_generation` | [`security/KEY_SLOTS.md`](security/KEY_SLOTS.md) §2 and [`format/VAULT_DESCRIPTOR_V1.md`](format/VAULT_DESCRIPTOR_V1.md) §7 | replacements of one key slot | yes | yes |
+| `envelope_generation` | [`format/COLLECTION_KEY_ENVELOPE_V1.md`](format/COLLECTION_KEY_ENVELOPE_V1.md) §5 and [`format/OBJECT_KEY_ENVELOPE_V1.md`](format/OBJECT_KEY_ENVELOPE_V1.md) §5 | rewraps of one key envelope | yes | yes |
+| `manifest_generation` | [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §5 | sealed manifests of one stream revision | yes, sealed | yes |
+| `commit_generation` | [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §11 | final commits of one stream revision | yes, sealed | yes |
+| `object_generation` | [`format/CATALOG_SCHEMA_V1.md`](format/CATALOG_SCHEMA_V1.md) §5 | catalog-row states of one media object | yes, catalog only | locally only |
+| `membership_generation` | [`sync/COLLECTION_GRANTS.md`](sync/COLLECTION_GRANTS.md) §2 | accepted membership sets of one collection | yes, and on the wire | yes |
+| grant generation | [`sync/ROLLBACK_PROTECTION.md`](sync/ROLLBACK_PROTECTION.md) §2 | grants issued to one recipient | yes, and on the wire | yes |
+| session generation | [`interop/FFI_CONTRACT.md`](interop/FFI_CONTRACT.md) §4 | unlock-to-lock cycles inside one process | no, in-memory only | no, handle validity only |
+
+"Handle generation" in prose is the session counter of the last row, and `session_generation` in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §12 is the same value. The "global/materialized state generation" of [`sync/ROLLBACK_PROTECTION.md`](sync/ROLLBACK_PROTECTION.md) §2 is not defined in v1 and takes a row here in the change that defines it. The generation digit of a file magic, [`format/CANONICAL_ENCODING_V1.md`](format/CANONICAL_ENCODING_V1.md) §15.1, is not a counter; it is the eighth byte of the magic.
+
+A specification that adds a counter adds a row here in the same change.
