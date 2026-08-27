@@ -169,7 +169,7 @@ Every `SEC-*` invariant of [`../security/SECURITY_INVARIANTS.md`](../security/SE
 
 A row states what would produce the evidence, not that it runs today. Whether it runs is governed by [`RELEASE_GATES.md`](RELEASE_GATES.md#enforcement): until a job executes the procedure, the row is unenforced whatever it names.
 
-Twenty-six rows now name a test target rather than a section of this plan. Each one runs in the `test`, `gradle`, `kotlin-native`, or `fuzz` job of that workflow, so all twenty-six are enforced. Every remaining row names a procedure that no job executes.
+Twenty-seven rows now name a test target rather than a section of this plan. Each one runs in the `test`, `gradle`, `kotlin-native`, or `fuzz` job of that workflow, so all twenty-seven are enforced. Every remaining row names a procedure that no job executes.
 
 | Invariant | Evidence procedure |
 | --- | --- |
@@ -181,7 +181,7 @@ Twenty-six rows now name a test target rather than a section of this plan. Each 
 | SEC-006 | `chur-format` `slot::tests::a_recovery_slot_and_a_password_slot_unwrap_the_same_root` |
 | SEC-007 | `chur-crypto` `password::tests::parameters_below_the_floor_are_refused` |
 | SEC-008 | §4 |
-| SEC-009 | §4 |
+| SEC-009 | `chur-media` `tests/fault_injection.rs::a_slot_change_never_leaves_a_vault_nobody_can_open` |
 | SEC-010 | `chur-crypto` compile-fail doctests on `secret::Secret` |
 | SEC-011 | `chur-crypto` `aead::tests::two_chunk_indexes_never_share_a_nonce` |
 | SEC-012 | §2 |

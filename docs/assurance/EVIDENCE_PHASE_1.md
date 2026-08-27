@@ -28,7 +28,7 @@ The three capability bits are `CHUR_CAP_OBJECT_READER`, `CHUR_CAP_SEQUENTIAL_REA
 
 | Suite | Count | Command |
 | --- | --- | --- |
-| Rust | 376 tests, 0 failed | `cd rust && cargo test --workspace` |
+| Rust | 380 tests, 0 failed | `cd rust && cargo test --workspace` |
 | Kotlin | 189 tests, 0 failed | `./gradlew build -x lint` |
 | Formatting | clean | `cd rust && cargo fmt --all --check` |
 | Lints | clean at `-D warnings` | `cd rust && cargo clippy --workspace --all-targets -- -D warnings` |
@@ -55,7 +55,7 @@ The state column of [`../../ROADMAP.md`](../../ROADMAP.md) is the summary. This 
 | catalog search | `query::tests::search_matches_a_filename_a_caption_and_a_tag`, `a_search_query_carrying_fts_syntax_is_matched_literally`, `a_search_query_above_its_bound_is_refused` |
 | lock | `:shared:core-vault` `VaultStateTest` and `VaultRepositoryHostTest`, including `the_idle_timer_locks_only_once_the_timeout_has_passed` and `a_call_refreshes_the_idle_clock`; `chur-ffi` `tests/control_plane.rs::locking_invalidates_every_handle_the_session_owns` |
 | app-switcher privacy | `FLAG_SECURE` and a cover on Android, a cover on iOS. Neither is under test: no job runs an instrumented device |
-| interrupted-import recovery | `chur-catalog` `journal::tests`, sixteen tests over the ordering of [`../format/OBJECT_CONTAINER_V1.md`](../format/OBJECT_CONTAINER_V1.md) §14.2; `tests/pipeline.rs::reconciliation_kills_an_import_a_crash_left_behind` |
+| interrupted-import recovery | `chur-catalog` `journal::tests`, sixteen tests over the ordering of [`../format/OBJECT_CONTAINER_V1.md`](../format/OBJECT_CONTAINER_V1.md) §14.2; `chur-media` `tests/fault_injection.rs::an_interrupted_import_is_recoverable_and_exposes_no_partial_object`, which walks every point of that ordering |
 | integrity inspection | `tests/pipeline.rs::an_integrity_scan_confirms_an_intact_object`, `an_absent_container_is_quarantined_rather_than_corrupt`, `a_flipped_ciphertext_bit_is_proven_corruption` |
 
 ## 4. The boundary
@@ -80,7 +80,7 @@ The C harness of the `abi` job links the real static library, so the symbols are
 
 | Criterion | State |
 | --- | --- |
-| fault injection matching Gate 2 | **outstanding.** Interrupted creation, interrupted import, a wrong password, a substituted catalog, a corrupt container, an absent container, and an unknown format version each have a test. No harness drives them as a matrix, so what exists is a set of cases rather than the pass this criterion names |
+| fault injection matching Gate 2 | met for the four flows Gate 2 names. `chur-media` `tests/fault_injection.rs` declares the ordered interruption points of initialization, import, key-slot change, and an unreadable vault, and walks every one: an interrupted creation is never openable and is swept, an interrupted import appears in no scope and the next unlock reclaims it, every observable state around a slot change opens with exactly the credentials that should open it, and a catalog from the future is `MIGRATION_REQUIRED` rather than corruption. The media, large-file, and decoy paths are Phase 2 |
 | no private data in public storage or navigation state | met by construction: the public shell's module declares no dependency on a private module and `churPublicShellIsolation` enforces it; the routes of `AppRoute` carry no object identifier; both hosts disable backup for the directories Chur writes into |
 | platform-key invalidation and recovery on supported devices | **outstanding.** No job runs on a device from [ADR-0017](../adr/0017-freeze-the-supported-device-set.md), and the Android side has no unlock factor to invalidate |
 | independent review | **outstanding.** [`SECURITY_REVIEW_SCOPE.md`](SECURITY_REVIEW_SCOPE.md) defines it and none has been commissioned |
