@@ -56,4 +56,4 @@ No vault bytes exist, so nothing migrates and the discarded spellings were never
 ## Validation
 
 - a positive vector for every registry row;
-- a repository check that fails when a `chur/v1/` label string appears outside the registry and the format specifications that consume it.
+- a repository check that fails when a `chur/v1/` label string appears outside the registry and does not match the registry row it names.

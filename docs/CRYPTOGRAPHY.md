@@ -433,9 +433,9 @@ DerivedKey = HKDF-Expand(
 )
 ```
 
-The extract salt is exactly 32 bytes of `0x00`, the RFC 5869 default for HKDF-SHA-256 when no salt is supplied. It is the same value for every vault, platform, profile, and derivation, and it MUST NOT vary; all domain separation is carried by `info`. In the `info` tuple, `purpose_label` is one of the labels below encoded as a UTF-8 string, and `context_fields` expands to one element per value listed by the specification that owns the derivation. Tuple bytes follow [`format/CANONICAL_ENCODING_V1.md`](format/CANONICAL_ENCODING_V1.md) §7.1.
+The extract salt is exactly 32 bytes of `0x00`, the RFC 5869 default for HKDF-SHA-256 when no salt is supplied. It is the same value for every vault, platform, profile, and derivation, and it MUST NOT vary; all domain separation is carried by `info`. In the `info` tuple, `purpose_label` is one of the labels registered in [`security/KEY_HIERARCHY.md`](security/KEY_HIERARCHY.md) §3, encoded as a UTF-8 string, and `context_fields` expands to one element per value listed by the specification that owns the derivation. Tuple bytes follow [`format/CANONICAL_ENCODING_V1.md`](format/CANONICAL_ENCODING_V1.md) §7.1.
 
-Every domain label, the key it derives, its input key, and its output length are registered in [`security/KEY_HIERARCHY.md`](security/KEY_HIERARCHY.md) §3. That table is the only definition of a label string; this document does not restate it.
+Every domain label, the key it derives, its input key, and its output length are registered in [`security/KEY_HIERARCHY.md`](security/KEY_HIERARCHY.md) §3. That table is the only definition of a label string. Where this document writes out a derivation, it may restate the label that derivation consumes; the strings must then be identical to the registry.
 
 Requirements:
 
@@ -1008,11 +1008,14 @@ ObjectKey
 ├── MetadataKey
 ├── ThumbnailKey
 ├── PreviewKey
-├── VideoPosterKey
+├── PosterFrameKey
 ├── WaveformKey
-├── FinalCommitKey
-└── LocalFingerprintKey
+├── OcrKey
+├── EmbeddingKey
+└── FinalCommitKey
 ```
+
+`LocalFingerprintKey` is not an object-domain key. It is root-derived under `chur/v1/root/local-fingerprint`, because a fingerprint computed under a per-object random key can never match two objects with identical content, which is the only purpose the key has. See [`security/KEY_HIERARCHY.md`](security/KEY_HIERARCHY.md) §3.
 
 Context MUST include at least:
 
@@ -1489,7 +1492,7 @@ Acceptable deduplication directions:
 
 ```text
 fingerprint = BLAKE3-keyed(
-    key  = ObjectLocalFingerprintKey,
+    key  = LocalFingerprintKey,
     data = canonical plaintext bytes
 )
 ```

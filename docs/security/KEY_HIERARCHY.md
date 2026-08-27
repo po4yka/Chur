@@ -76,7 +76,7 @@ Labels are ASCII protocol constants and every row is covered by test vectors. Th
 - the purpose segment is plural when the key covers a class of records (`catalog-records`, `identifiers`, `private-settings`) and singular when it covers one named artifact or stream (`catalog-database`, `backup-manifest`, `manifest`, `content`);
 - the purpose segment names the protected artifact, not the media type it comes from: `poster-frame` and `waveform`, not `video-poster` or `audio-waveform`;
 - a label enters this table before it is implemented, and no derivation uses a label that is absent from it;
-- a byte-exact format specification may restate a label it consumes; the strings must then be identical, and a divergence is a defect.
+- a specification that writes out a derivation may restate the label that derivation consumes; the strings must then be identical, and a divergence is a defect.
 
 ### Changing a label
 

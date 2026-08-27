@@ -21,7 +21,7 @@ nonce:bytes[24]
 wrapped_object_key:bytes[48]   # 32-byte key + 16-byte tag for XChaCha20-Poly1305
 ```
 
-Exact domain tag and offsets are defined by canonical vectors. V1 values for `format_version`, `encoding_profile`, and `suite_id` are allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.
+Exact offsets are defined by canonical vectors. The AAD domain tag is `CHUR\x00OBJECT\x00KEY-ENVELOPE\x00V1`, allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.5. V1 values for `format_version`, `encoding_profile`, and `suite_id` are allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.
 
 ## 2. Wrapping key
 
