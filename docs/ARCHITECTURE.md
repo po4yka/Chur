@@ -752,7 +752,6 @@ chur/
 │   │   ├── catalog.db-shm
 │   │   ├── objects/
 │   │   ├── incoming/
-│   │   ├── journals/
 │   │   └── quarantine/
 │   └── <random-vault-dir-B>/
 │       └── ...
@@ -1175,6 +1174,8 @@ Required ordering:
 9. Mark derived assets pending or committed.
 10. Report success to UI.
 11. Offer deletion of the source only after success.
+
+Within step 3, each chunk index MUST be reserved durably in the import journal before it is encrypted, and a resumed or abandoned transaction MUST follow the ordering, resume, and abandonment rules in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §14.2 to §14.4. The journal is a private-catalog table per [`format/CATALOG_SCHEMA_V1.md`](format/CATALOG_SCHEMA_V1.md) §11; there is no separate journal directory.
 
 ### 22.2 Essential and derived work
 
@@ -1999,7 +2000,8 @@ Parsers impose hard limits before allocation.
 Durable operations are interrupted after every write boundary:
 
 - before and after temporary object creation;
-- after each chunk;
+- between a durable chunk-index reservation and the chunk record write;
+- between a chunk record write and the next reservation;
 - before/after final commit;
 - before/after fsync;
 - before/after rename;

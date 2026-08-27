@@ -119,20 +119,9 @@ Asset kinds include thumbnail, preview, poster frame, waveform, OCR, faces, and 
 
 ## 11. Import journal
 
-An import transaction records opaque state:
+The import journal is a catalog table, not a separate file or directory. An `ImportTransaction` row is the journal record of [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §14.1, and §14.2 to §14.4 govern its durability ordering, resume, and abandonment. A row may also carry a source capability summary without a private path, and the expected source length when it is known.
 
-```text
-transaction_id
-source capability summary without private path when possible
-temp object path ID
-object/stream IDs
-nonce-prefix reservation/progress
-last committed chunk
-expected/known source length when available
-stage
-```
-
-Journal state must prevent nonce-prefix reuse after resume or abandonment.
+The journal shares the catalog transaction domain, so a chunk-index reservation and the catalog state that activates the object cannot disagree after a crash. A reservation is durable when its catalog transaction commits under a synchronization mode that survives power loss, not only process loss; a mode that only flushes to the operating system does not satisfy §14.2 step 2.
 
 ## 12. Scratch journal
 

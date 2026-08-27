@@ -1186,8 +1186,7 @@ Requirements:
 - indexes MUST NOT repeat or be reordered in the canonical object;
 - index arithmetic MUST reject overflow;
 - a new stream revision MUST use a fresh prefix even if its key derivation context already changes;
-- resumed imports MUST recover the original transaction state and next index rather than restart a counter under the same prefix/key;
-- abandoned temporary objects MUST never donate their key/prefix pair to another object.
+- every chunk index MUST be durably reserved in the import journal before it is encrypted, and resumed or abandoned imports MUST follow [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §14.2 to §14.4, which fixes the ordering, the resume check, and the retirement of a dead transaction's key and prefix.
 
 The design does not rely on probabilistic random nonces for every chunk. It uses one random prefix plus a deterministic index under a unique object/revision key context.
 

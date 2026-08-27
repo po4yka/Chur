@@ -445,7 +445,7 @@ Suggested platform placement:
 filesDir/
 ├── public/                         public Room-owned state as designed
 └── vaults/
-    ├── <opaque-vault-id>/          encrypted catalog, objects, journals
+    ├── <opaque-vault-id>/          encrypted catalog, objects, temporary import state
     └── <opaque-vault-id>/
 
 noBackupFilesDir/
@@ -498,7 +498,7 @@ The following MUST be excluded:
 - nonportable device identity private state;
 - plaintext scratch;
 - decrypted caches;
-- active operation journals that are unsafe to resume elsewhere.
+- temporary import containers, so a restored vault finds no resumable import transaction and marks each open one dead per [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §14.4.
 
 ### 13.2 Portable encrypted state
 

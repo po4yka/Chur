@@ -444,7 +444,7 @@ Suggested placement:
 Library/Application Support/Chur/
 ├── public/                         public shared data as designed
 └── vaults/
-    ├── <opaque-vault-id>/          encrypted catalog, objects, journals
+    ├── <opaque-vault-id>/          encrypted catalog, objects, temporary import state
     └── <opaque-vault-id>/
 
 Library/Caches/Chur/
