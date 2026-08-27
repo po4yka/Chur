@@ -20,22 +20,26 @@ This document describes the intended development environment and workflow. The r
 
 Do not rely on globally mutable defaults for JDK, NDK, Rust target, Xcode, or code-generation versions.
 
-Only the Rust row is enforced today, by the workflow of [`docs/assurance/RELEASE_GATES.md`](docs/assurance/RELEASE_GATES.md#enforcement). The Gradle build and `gradle/libs.versions.toml` do not exist yet, so the JDK, Kotlin, Compose Multiplatform, Gradle, Android, Xcode, and Swift rows are planned targets; they become normative when the version catalog lands.
+Every row except Xcode and Swift is enforced today by the workflow of [`docs/assurance/RELEASE_GATES.md`](docs/assurance/RELEASE_GATES.md#enforcement). The Xcode and Swift rows stay planned until an iOS application target exists; the Kotlin/Native iOS targets already build and test in that workflow. The version catalog is [`gradle/libs.versions.toml`](gradle/libs.versions.toml) and it pins the JDK, Kotlin, Compose Multiplatform, Gradle, and Android rows exactly. The Gradle wrapper records the distribution SHA-256, so the pinned Gradle version is the one that runs. The Xcode and Swift rows stay planned until an iOS application target exists.
 
-## Planned repository layout
+## Repository layout
+
+Modules marked *planned* do not exist yet and land with the phase that needs them.
 
 ```text
-apps/
-  androidApp/
-  iosApp/
+apps/                planned
+  androidApp/        planned
+  iosApp/            planned
 shared/
-  app/
-  core-*/
-  feature-*/
+  app/               planned
+  core-model/        error taxonomy and vector contract
+  core-platform-keys/ Android Keystore and Apple Keychain slots
+  feature-*/         planned
 rust/
   crates/
+  fuzz/
   Cargo.toml
-build-logic/
+build-logic/         planned
   convention/
 docs/
 test-vectors/
@@ -55,23 +59,34 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for module ownership.
 
 The project must eventually provide bootstrap scripts that validate versions instead of silently accepting incompatible tools.
 
-## Planned build commands
+## Build commands
 
-Once the project scaffold exists, the following task families should be available:
+The workflow named in [`docs/assurance/RELEASE_GATES.md`](docs/assurance/RELEASE_GATES.md#enforcement) is the source of truth. It runs exactly these, and each is runnable locally:
 
 ```text
-./gradlew build
-./gradlew check
-./gradlew :apps:androidApp:assembleDebug
-./gradlew :shared:allTests
+./gradlew jvmTest
+./gradlew testAndroidHostTest
+./gradlew iosSimulatorArm64Test
+./gradlew compileKotlinIosArm64
 
-cargo build --workspace
-cargo test --workspace
-cargo clippy --workspace --all-targets --all-features
 cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo deny check
+cargo run -p chur-cli -- vectors verify --dir ../test-vectors/v1
+cargo +nightly fuzz run <target> -- -runs=20000
 ```
 
-Exact module paths may change during scaffolding. The workflow named in [`docs/assurance/RELEASE_GATES.md`](docs/assurance/RELEASE_GATES.md#enforcement) is the source of truth for the supported Rust commands. It runs `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and `cargo deny check`. The Gradle commands above stay planned until that build exists.
+The `cargo` commands run in `rust/`; the `./gradlew` commands run at the repository root. The C ABI harness is built and run by the `abi` job and locally with:
+
+```text
+cargo build -p chur-ffi --release
+cc -Wall -Wextra -Werror -I crates/chur-ffi/include \
+   crates/chur-ffi/tests/handshake.c target/release/libchur_ffi.a -o handshake
+./handshake
+```
+
+An application module, and with it a `./gradlew build` that assembles one, lands with the Phase 1 shell. Exact module paths may still change while the feature modules are added.
 
 ## Native targets
 
