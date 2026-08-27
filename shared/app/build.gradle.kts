@@ -1,13 +1,14 @@
 // The Compose Multiplatform shell.
 //
-// ROADMAP Phase 0 scopes the CMP workspace; the Notes public shell and every
-// private screen are Phase 1. What lives here is the one screen Phase 0 owns:
-// the ABI gate of `docs/interop/FFI_CONTRACT.md` §2, which a host evaluates
-// before a vault can be opened at all.
+// It holds the design system of `DESIGN.md` §6 to §9, the public Notes shell,
+// and the four vault destinations of §10.1. Every screen is a pure function of
+// a state value: nothing here reads a repository, so a screenshot test renders
+// any state without a vault and a lock transition cannot leave a half-rendered
+// screen behind, which §10.3 requires.
 //
-// The module holds no private data and calls no vault API. It cannot: the
-// control plane does not exist yet, and `docs/ARCHITECTURE.md` keeps every
-// private byte behind Rust.
+// It holds no private data of its own. `docs/ARCHITECTURE.md` keeps every
+// private byte behind Rust, and what reaches a composable is a projection the
+// boundary produced.
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
@@ -41,6 +42,8 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             implementation(project(":shared:core-model"))
+            implementation(project(":shared:core-vault"))
+            implementation(project(":shared:feature-notes"))
             implementation(libs.compose.runtime)
             implementation(libs.compose.foundation)
             implementation(libs.compose.material3)
