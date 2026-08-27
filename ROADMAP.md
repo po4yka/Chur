@@ -81,7 +81,7 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 - real/decoy isolation tests pass;
 - backup restore succeeds across Android, iOS, and CLI.
 
-## Phase 3 — encrypted backup and synchronization
+## Phase 3 — encrypted synchronization
 
 ### Scope
 
