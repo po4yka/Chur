@@ -354,8 +354,9 @@ A domain tag is a fixed ASCII byte constant written without a length prefix, per
 | `CHUR\x00OBJECT\x00ORDERED-COMMITMENT\x00V1` | ordered chunk commitment | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §10 |
 | `CHUR\x00OBJECT\x00FINAL-COMMIT-AAD\x00V1` | final-commit AAD | [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §38 |
 | `CHUR\x00VAULT\x00DESCRIPTOR-AUTH\x00V1` | vault-descriptor authentication tag | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §8 |
+| `CHUR\x00BACKUP\x00INVENTORY-COMMITMENT\x00V1` | ordered backup inventory commitment | [`BACKUP_FORMAT_V1.md`](BACKUP_FORMAT_V1.md) §7.2 |
 
-No allocated tag is a byte prefix of another, as §7 requires; the ten above were checked pairwise. The `CHUR\x00SYNC\x00OPERATION\x00V1` tag shown as an example in §7 is not allocated: the sync operation record is not frozen. A tag for an authenticated record whose AAD is not yet frozen is allocated by a row here in the same change that freezes that record.
+No allocated tag is a byte prefix of another, as §7 requires; the eleven above were checked pairwise. The `CHUR\x00SYNC\x00OPERATION\x00V1` tag shown as an example in §7 is not allocated: the sync operation record is not frozen. A tag for an authenticated record whose AAD is not yet frozen is allocated by a row here in the same change that freezes that record.
 
 ### 15.6 Allocation rule
 

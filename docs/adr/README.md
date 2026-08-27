@@ -69,6 +69,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0014](0014-observed-heads-causality-vector.md) | Observed-heads causality vector in the operation record | Accepted |
 | [0016](0016-freeze-the-v1-c-abi.md) | Freeze the v1 C ABI: exports, handles, status type, and panic containment | Accepted |
 | [0017](0017-freeze-the-supported-device-set.md) | Freeze the supported device set and the benchmark baseline | Accepted |
+| [0018](0018-freeze-backup-package-framing.md) | Freeze the backup package framing and manifest key | Accepted |
 
 ## Future ADR backlog
 
@@ -77,7 +78,6 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 - password Unicode and Argon2id parameter profile;
 - SQLCipher build/link/backup validation result;
 - Android Keystore and iOS Keychain exact policies;
-- backup outer framing and optional age integration;
 - device identity portability;
 - conflict-resolution data types;
 - post-quantum recipient profile.

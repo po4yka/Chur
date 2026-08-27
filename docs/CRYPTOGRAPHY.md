@@ -1681,7 +1681,7 @@ portable file or stream
 - real/decoy topology;
 - sync operation history.
 
-The exact outer backup profile is **Proposed**. It requires interoperability tests, recipient/recovery UX, package-size analysis, and license/dependency review.
+The outer framing and its detection are defined in [`format/BACKUP_FORMAT_V1.md`](format/BACKUP_FORMAT_V1.md) §2.3, which governs them under the authority hierarchy in [`README.md`](README.md): an unwrapped package begins with `CHURBAK1`, and exactly zero or one `age` layer MAY wrap it. Interoperability tests, recipient and recovery UX, package-size analysis, and license and dependency review remain outstanding.
 
 ---
 
@@ -2482,7 +2482,7 @@ The following MUST be resolved before v1 production bytes are frozen:
 10. SQLCipher versus an alternative Rust-owned encrypted catalog implementation;
 11. catalog field-level encryption policy inside SQLCipher;
 12. standard versus paranoid import verification default;
-13. backup package encoding and optional age profile;
+13. backup package encoding and optional age profile — resolved in [`format/BACKUP_FORMAT_V1.md`](format/BACKUP_FORMAT_V1.md) §2;
 14. recovery-secret mnemonic/checksum format;
 15. exact real/decoy password-slot candidate-discovery behavior;
 16. HPKE library and canonical grant encoding;
