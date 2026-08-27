@@ -1,9 +1,9 @@
 # ADR-0030: Freeze the Vault Registry Layout and Discovery Order
 
-- **Status:** Accepted
+- **Status:** Accepted, with the per-attempt password-derivation count deferred to [`0026`](0026-argon2id-memory-floor-and-candidate-set.md)
 - **Date:** 2026-08-27
 - **Decision owners:** @po4yka
-- **Related:** [`../format/VAULT_DESCRIPTOR_V1.md`](../format/VAULT_DESCRIPTOR_V1.md), [`../security/DECOY_VAULT.md`](../security/DECOY_VAULT.md), [`0005`](0005-real-and-decoy-vault-isolation.md), [`0011`](0011-freeze-vault-descriptor-authentication.md)
+- **Related:** [`../format/VAULT_DESCRIPTOR_V1.md`](../format/VAULT_DESCRIPTOR_V1.md), [`../security/DECOY_VAULT.md`](../security/DECOY_VAULT.md), [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md), [`0005`](0005-real-and-decoy-vault-isolation.md), [`0011`](0011-freeze-vault-descriptor-authentication.md), [`0026`](0026-argon2id-memory-floor-and-candidate-set.md)
 
 ## Context
 
@@ -19,7 +19,7 @@ Define discovery in `VAULT_DESCRIPTOR_V1.md` §11:
 - at most 2 entries, a third being `RESOURCE_LIMIT_EXCEEDED`; two is the product maximum of one real identity plus one decoy;
 - the candidate set is every entry, enumerated by filename bytes ascending;
 - an entry failing the §13 parser limits is skipped before any credential is used and its failure is attributed to no credential;
-- an attempt evaluates every candidate before returning, so its cost is exactly one key-derivation evaluation per entry whatever the outcome.
+- an attempt evaluates every candidate before returning, whatever the outcome. This ADR fixes the enumeration, not the cost: the per-attempt password-derivation count is the constant two of [`0026`](0026-argon2id-memory-floor-and-candidate-set.md), padded with dummy derivations, and does not follow the entry count.
 
 ## Alternatives considered
 
@@ -37,7 +37,7 @@ Rejected. Directory order follows creation order on common filesystems, which re
 
 ### Always keep two entries, padding with an indistinguishable filler
 
-Rejected for v1. It would hold the per-attempt cost constant whether or not a decoy exists, but it doubles password-unlock latency for every user to hide a signal `DECOY_VAULT.md` §5 already declines to promise is hidden, and Phase 1 excludes the decoy entirely.
+Rejected as a registry rule: the registry holds only the entries that exist, so no filler file is written and no filler descriptor has to be kept authentic. [`0026`](0026-argon2id-memory-floor-and-candidate-set.md) then took the cost question the other way and holds the per-attempt count constant at two by padding the password-candidate list with dummy derivations, which needs no second entry; that decision governs, and the latency signal this alternative was rejected for leaving open is closed.
 
 ## Consequences
 
@@ -49,8 +49,7 @@ Rejected for v1. It would hold the per-attempt cost constant whether or not a de
 
 ### Tradeoffs
 
-- a vault with a decoy costs two Argon2id evaluations per password attempt, so it misses the single-evaluation unlock budget by roughly a factor of two, and Phase 2 revisits that budget;
-- the entry count is observable as unlock latency, recorded in `DECOY_VAULT.md` §5;
+- every password attempt pays the constant two Argon2id derivations of [`0026`](0026-argon2id-memory-floor-and-candidate-set.md), whatever the entry count, so the whole-attempt budget is twice the per-derivation budget of `assurance/PERFORMANCE_BUDGETS.md`;
 - two identities is a hard product ceiling until a new descriptor version raises it.
 
 ## Security impact
@@ -72,5 +71,4 @@ No registry exists, so nothing migrates. The entry cap and the naming rule are d
 
 ## Follow-up
 
-- the decoy-creation flow that writes the second entry lands with Phase 2;
-- the Phase-2 password-unlock budget for a two-entry registry is set in `assurance/PERFORMANCE_BUDGETS.md`.
+- the decoy-creation flow that writes the second entry lands with Phase 2.

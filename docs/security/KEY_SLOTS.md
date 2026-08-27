@@ -138,7 +138,7 @@ A failed unwrap at step 4 still performs the step 5 derivation and tag computati
 
 An unlock attempt that uses a password runs exactly two Argon2id derivations, whatever the device holds. Argon2id output is salt-bound and §3 gives every slot its own random salt, so one derivation can never be tried against a second slot; a constant candidate count, not a reused derivation, is what removes the cost signal.
 
-- the candidate list holds the highest `slot_generation` of each `PasswordSlotV1` reachable from the descriptors present, in ascending `slot_id` order;
+- the candidate list holds the highest `slot_generation` of each `PasswordSlotV1` reachable from the descriptors present, in the registry enumeration order of [`../format/VAULT_DESCRIPTOR_V1.md`](../format/VAULT_DESCRIPTOR_V1.md) §11, which is ascending filename bytes;
 - v1 provisions at most two password-unlockable vault identities on one device, a vault and the optional decoy of [`DECOY_VAULT.md`](DECOY_VAULT.md), and §11 admits at most one `PasswordSlotV1` identity per descriptor, so the list never holds more than two real entries;
 - a list shorter than two is padded to two with dummy candidates. A dummy candidate runs the parameters of the first real candidate over a fresh random 16-byte salt and discards the output;
 - candidates run one at a time and every candidate, real or dummy, runs to completion before any result is used, so peak Argon2 memory is one profile allocation and the attempt costs two derivations whether it succeeds, fails, or matches a sibling identity;

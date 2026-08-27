@@ -274,7 +274,7 @@ Descriptors are found through the registry, which is the first thing the applica
 - the registry holds at most 2 entries; a third is `RESOURCE_LIMIT_EXCEEDED`. Two is the product maximum: one real identity and one decoy;
 - the candidate set is every entry in the directory, ordered by filename bytes ascending. This is the fixed enumeration order §8 requires, and it depends on neither creation time, nor modification time, nor which candidate is real;
 - an entry that fails the parser limits of §13 is skipped before any credential is used and its failure is attributed to no credential; it still counts toward the cap;
-- one credential attempt evaluates every candidate before it returns, so an attempt costs exactly one key-derivation evaluation per entry whatever the outcome. With one entry a password unlock costs one Argon2id evaluation and meets the budget of [`../assurance/PERFORMANCE_BUDGETS.md`](../assurance/PERFORMANCE_BUDGETS.md); with two it costs two, so enabling a decoy doubles password-unlock latency.
+- one credential attempt evaluates every candidate before it returns, whatever the outcome. This section fixes which entries are enumerated and in what order; the password-candidate list and its cost belong to [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §8, which fixes every password attempt at two Argon2id derivations, padded with dummy derivations, whatever the registry holds, so the cost of an attempt never counts the entries.
 
 An ordinary failure must not reveal which candidate matched, which the per-candidate constant-work rules of §8 already require.
 
