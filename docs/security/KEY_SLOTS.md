@@ -1,6 +1,6 @@
 # Chur Key Slots
 
-> **Status:** Proposed normative slot model; byte-exact encoding remains defined by the format specifications
+> **Status:** Proposed normative slot model; the byte-exact `slot_body` of every family is [`../format/KEY_SLOT_BODIES_V1.md`](../format/KEY_SLOT_BODIES_V1.md)
 
 A key slot is an authenticated envelope that allows one factor to recover the same random `VaultRootSecret`. Slots protect a short root secret; they never encrypt media directly.
 
@@ -42,7 +42,7 @@ authentication tag or platform-authenticated result
 created_at policy metadata when allowed
 ```
 
-AAD must bind slot type/version, vault identity, generation, suite, and public parameters. Unknown slot types are preserved only when the enclosing format explicitly supports safe forwarding; they are never treated as valid unlock methods.
+AAD must bind slot type/version, vault identity, generation, suite, and public parameters. [`../format/KEY_SLOT_BODIES_V1.md`](../format/KEY_SLOT_BODIES_V1.md) §1 encodes that requirement as six binding elements every family repeats, and §3 to §6 there fix each family's bytes and its AAD tuple. Unknown slot types are preserved only when the enclosing format explicitly supports safe forwarding; they are never treated as valid unlock methods.
 
 ## 3. Password slot
 

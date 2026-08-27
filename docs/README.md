@@ -91,6 +91,7 @@ Document status describes a whole document. Individual statements inside a docum
 
 - [`format/CANONICAL_ENCODING_V1.md`](format/CANONICAL_ENCODING_V1.md) — encoding rules and the [v1 constant registry](format/CANONICAL_ENCODING_V1.md#15-constant-registry) of magics, versions, profiles, suites, record types, and discriminants
 - [`format/VAULT_DESCRIPTOR_V1.md`](format/VAULT_DESCRIPTOR_V1.md)
+- [`format/KEY_SLOT_BODIES_V1.md`](format/KEY_SLOT_BODIES_V1.md)
 - [`format/COLLECTION_KEY_ENVELOPE_V1.md`](format/COLLECTION_KEY_ENVELOPE_V1.md)
 - [`format/OBJECT_KEY_ENVELOPE_V1.md`](format/OBJECT_KEY_ENVELOPE_V1.md)
 - [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md)

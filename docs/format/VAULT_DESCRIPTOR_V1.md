@@ -173,7 +173,7 @@ offset  size             field                v1 value
 0x22     slot_body_length slot_body
 ```
 
-`slot_body` carries both the public parameters and the wrapped-root payload or the platform envelope reference for that family. They are not alternatives at this level: one length-prefixed body always holds whichever of them the family defines. Its internal schema is selected by `slot_type` and owned by [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md), so the descriptor parser bounds and steps over a body it does not interpret without guessing its shape.
+`slot_body` carries both the public parameters and the wrapped-root payload or the platform envelope reference for that family. They are not alternatives at this level: one length-prefixed body always holds whichever of them the family defines. Its internal schema is selected by `slot_type` and owned by [`KEY_SLOT_BODIES_V1.md`](KEY_SLOT_BODIES_V1.md), so the descriptor parser bounds and steps over a body it does not interpret without guessing its shape. [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) stays authoritative for slot behaviour and policy.
 
 A `slot_type` that §15.4 does not allocate is rejected. V1 defines no safe forwarding for an unknown slot family, so an unknown value is never carried through a descriptor rewrite. `0x05` parses as an allocated family and is never attempted as an unlock method in v1.
 

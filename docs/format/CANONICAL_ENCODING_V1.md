@@ -291,6 +291,12 @@ Profile and policy identifiers:
 | `commitment_profile` | `0x0001` | manifest and ordered chunk commitments of container §5 and §10 | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §5, §10 |
 | `crypto_policy_id` | `0x0001` | v1 vault policy: suite `0x0001` for every vault-level record | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §2 |
 | `naming_profile_id` | `0x0001` | opaque random store identifiers, no user-derived path names | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §6 |
+| `password_profile_id` | `0x0001` | canonical password bytes: strict UTF-8, no normalization | [`../security/PASSWORD_PROFILE.md`](../security/PASSWORD_PROFILE.md) §3 |
+| `recovery_profile_id` | `0x0001` | 32-byte recovery secret presented as 24 BIP-39 English words | [`KEY_SLOT_BODIES_V1.md`](KEY_SLOT_BODIES_V1.md) §4 |
+| `keystore_profile_id` | `0x0001` | non-exportable AES-256-GCM Android Keystore wrapping key | [`KEY_SLOT_BODIES_V1.md`](KEY_SLOT_BODIES_V1.md) §5 |
+| `keychain_profile_id` | `0x0001` | Keychain-held `DeviceUnlockSecret`, AEAD performed in Rust | [`KEY_SLOT_BODIES_V1.md`](KEY_SLOT_BODIES_V1.md) §6 |
+
+Each profile identifier above has its own namespace, and each is `u16` per the width rule of §15.
 
 ### 15.3 Record types
 
@@ -386,7 +392,10 @@ A domain tag is a fixed ASCII byte constant written without a length prefix, per
 | Tag | Use | Owner |
 | --- | --- | --- |
 | `CHUR\x00KDF\x00INFO\x00V1` | HKDF `info` tuple for every derivation | [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §13 |
-| `CHUR\x00SLOT\x00PASSWORD\x00V1` | password key-slot AAD | [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §18 |
+| `CHUR\x00SLOT\x00PASSWORD\x00V1` | password key-slot AAD | [`KEY_SLOT_BODIES_V1.md`](KEY_SLOT_BODIES_V1.md) §3 |
+| `CHUR\x00SLOT\x00RECOVERY\x00V1` | recovery key-slot AAD | [`KEY_SLOT_BODIES_V1.md`](KEY_SLOT_BODIES_V1.md) §4 |
+| `CHUR\x00SLOT\x00ANDROID-KEYSTORE\x00V1` | Android Keystore key-slot AAD | [`KEY_SLOT_BODIES_V1.md`](KEY_SLOT_BODIES_V1.md) §5 |
+| `CHUR\x00SLOT\x00APPLE-KEYCHAIN\x00V1` | Apple Keychain key-slot AAD | [`KEY_SLOT_BODIES_V1.md`](KEY_SLOT_BODIES_V1.md) §6 |
 | `CHUR\x00COLLECTION\x00KEY-ENVELOPE\x00V1` | collection-key envelope AAD | [`COLLECTION_KEY_ENVELOPE_V1.md`](COLLECTION_KEY_ENVELOPE_V1.md) §3 |
 | `CHUR\x00OBJECT\x00KEY-ENVELOPE\x00V1` | object-key envelope AAD | [`OBJECT_KEY_ENVELOPE_V1.md`](OBJECT_KEY_ENVELOPE_V1.md) §3 |
 | `CHUR\x00OBJECT\x00MANIFEST-AAD\x00V1` | encrypted manifest AAD | [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §32 |
@@ -400,7 +409,7 @@ A domain tag is a fixed ASCII byte constant written without a length prefix, per
 | `CHUR\x00SYNC\x00CHECKPOINT\x00V1` | checkpoint record signature | [`../sync/ROLLBACK_PROTECTION.md`](../sync/ROLLBACK_PROTECTION.md) §6 |
 | `CHUR\x00IDENTITY\x00FINGERPRINT\x00V1` | device verification fingerprint | [`../sync/DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md) §5 |
 
-No allocated tag is a byte prefix of another, as §7 requires; the fourteen above were checked pairwise. The two sync tags differ at the first byte after `CHUR\x00SYNC\x00`, and `CHUR\x00IDENTITY\x00FINGERPRINT\x00V1` differs from every other allocated tag at byte 5.
+No allocated tag is a byte prefix of another, as §7 requires; the seventeen above were checked pairwise. The two sync tags differ at the first byte after `CHUR\x00SYNC\x00`, and `CHUR\x00IDENTITY\x00FINGERPRINT\x00V1` differs from every other allocated tag at byte 5. The four slot tags share `CHUR\x00SLOT\x00` and differ at byte 11, `P`, `R`, `A`, and `A`, with the two `A` tags differing at byte 12, `N` against `P`. `CHUR\x00SLOT\x00` and `CHUR\x00SYNC\x00` differ at byte 6, `L` against `Y`.
 
 The `CHUR\x00SYNC\x00OPERATION\x00V1` tag shown as an example in §7 remains unallocated: the operation record's field widths and signing domain are not frozen. The chain and checkpoint tags are allocated ahead of it because the constructions that consume them are frozen by [`../adr/0022-freeze-operation-chain-hash-and-identifier.md`](../adr/0022-freeze-operation-chain-hash-and-identifier.md) and [`../adr/0023-define-signed-checkpoint-and-bootstrap-attestation.md`](../adr/0023-define-signed-checkpoint-and-bootstrap-attestation.md), and their input is the record's exact wire bytes however those widths are later fixed. The fingerprint tag reaches no persisted or wire bytes; it is the input to a string a person reads, so the ADR requirement of §15.6 does not apply to it. A tag for an authenticated record whose AAD is not yet frozen is otherwise allocated by a row here in the same change that freezes that record.
 
