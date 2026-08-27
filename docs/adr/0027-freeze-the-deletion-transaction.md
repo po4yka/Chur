@@ -21,7 +21,7 @@ The second transaction is the erasure moment. Steps 1 and 2 are the atomic bound
 
 ### Unlink the container first, then destroy the envelope
 
-Rejected. It reverses the security order: the visible artifact disappears while the key that opens every remaining copy — WAL pages, backup snapshots, queued operations — survives. Destroying the envelope first makes all of those undecryptable in one commit.
+Rejected. It reverses the security order: the visible artifact disappears while the key that opens every remaining copy — WAL pages and queued operations — survives. Destroying the envelope first makes all of those undecryptable in one commit. Neither order reaches a backup package written earlier, which carries its own envelope and its own portable slot.
 
 ### One transaction spanning the catalog and the filesystem
 
@@ -57,7 +57,7 @@ No deletion has run against persisted data, so nothing migrates. No lifecycle va
 ## Validation
 
 - crash injection at each of the six steps, asserting roll-forward and no `ACTIVE` resurrection;
-- assert that no object-key envelope for a `TOMBSTONED` object exists in the catalog, its WAL, or a local backup manifest;
+- assert that no object-key envelope for a `TOMBSTONED` object exists in the catalog or its WAL, and that a backup package written before the deletion still opens the object, which is the documented limit of the claim;
 - garbage collection resuming a `DELETING` row and a `TOMBSTONED` row with containers present;
 - a committed container with no object row and no `ImportTransaction` row is deleted.
 

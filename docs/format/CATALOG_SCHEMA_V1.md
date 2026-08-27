@@ -201,7 +201,7 @@ Retention: in a vault with no enrolled peer device a tombstone may be discarded 
 Deletion runs in this order and no other:
 
 1. one catalog transaction sets the object row's `state` to `DELETING`; the object stops being listable from this point;
-2. one catalog transaction destroys every object-key envelope for the object, writes the tombstone row, and sets `state` to `TOMBSTONED`. This transaction is the erasure moment: once it commits durably the `ContentKey` is unrecoverable and every remaining copy of the container, including WAL pages, local backup manifests, and queued sync operations, is ciphertext no reachable key opens;
+2. one catalog transaction destroys every object-key envelope for the object, writes the tombstone row, and sets `state` to `TOMBSTONED`. This transaction is the erasure moment: once it commits durably the `ContentKey` is unrecoverable from this vault's live state, and every copy of the container that state reaches, including WAL pages and queued sync operations, is ciphertext no reachable key opens. A backup package written before this commit is not reached: it carries its own object-key envelope, [`BACKUP_FORMAT_V1.md`](BACKUP_FORMAT_V1.md) §2, and its own portable slot, §12 there, so the object stays openable from that package until the package is destroyed, per [`../security/KEY_HIERARCHY.md`](../security/KEY_HIERARCHY.md) §10;
 3. unlink the derived-asset containers of §10;
 4. unlink the original container;
 5. delete the scratch entries of §12 that the object owns;

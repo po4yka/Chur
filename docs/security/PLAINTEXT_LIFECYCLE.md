@@ -133,7 +133,7 @@ It must not:
 5. close private catalog;
 6. zeroize root/collection/object keys;
 7. clear decoded caches and feature projections;
-8. delete or quarantine scratch according to operation policy;
+8. delete every scratch entry;
 9. show public/neutral UI.
 
 Lock completion should be measurable and covered by performance budgets.
