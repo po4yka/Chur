@@ -135,9 +135,9 @@ impl CatalogDb {
     pub fn open(location: &CatalogLocation<'_>, key: &CatalogKey) -> Result<Self> {
         let connection = match location {
             CatalogLocation::File(path) => Connection::open(path)
-                .map_err(|_| err!(IoFailure, "the catalog database could not be opened"))?,
+                .map_err(|error| map_sqlite(error, "the catalog database could not be opened"))?,
             CatalogLocation::Memory => Connection::open_in_memory()
-                .map_err(|_| err!(IoFailure, "an in-memory catalog could not be created"))?,
+                .map_err(|error| map_sqlite(error, "an in-memory catalog could not be created"))?,
         };
         let db = Self { connection };
         db.apply_batch(PRE_KEY_PRAGMAS, "a catalog memory pragma was refused")?;
@@ -154,10 +154,17 @@ impl CatalogDb {
             .map_err(|_| err!(InternalFailure, "the catalog key pragma was refused"))
     }
 
+    /// Runs one pragma batch, keeping SQLite's classification of the failure.
+    ///
+    /// The classification matters more than it looks: a full or detached volume
+    /// fails a pragma the same way a refused setting does, and collapsing both
+    /// into `INTERNAL_FAILURE` turns "the disk is full" into an unexplained
+    /// defect. `docs/ERROR_MODEL.md` still keeps the message out; only the code
+    /// survives.
     fn apply_batch(&self, batch: &str, context: &'static str) -> Result<()> {
         self.connection
             .execute_batch(batch)
-            .map_err(|_| Error::new(ChurStatus::InternalFailure, context))
+            .map_err(|error| map_sqlite(error, context))
     }
 
     /// Reads one page, which is where a wrong key is detected.
@@ -198,7 +205,7 @@ impl CatalogDb {
         let value = body(&transaction)?;
         transaction
             .commit()
-            .map_err(|_| err!(IoFailure, "the catalog transaction did not commit"))?;
+            .map_err(|error| map_sqlite(error, "the catalog transaction did not commit"))?;
         Ok(value)
     }
 
@@ -210,7 +217,7 @@ impl CatalogDb {
     pub fn close(self) -> Result<()> {
         self.connection
             .close()
-            .map_err(|_| err!(IoFailure, "the catalog connection did not close"))
+            .map_err(|(_, error)| map_sqlite(error, "the catalog connection did not close"))
     }
 }
 
