@@ -71,6 +71,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0017](0017-freeze-the-supported-device-set.md) | Freeze the supported device set and the benchmark baseline | Accepted |
 | [0018](0018-freeze-backup-package-framing.md) | Freeze the backup package framing and manifest key | Accepted |
 | [0019](0019-freeze-remaining-v1-record-layouts.md) | Freeze the remaining v1 record layouts | Accepted |
+| [0020](0020-set-the-v1-parser-limits.md) | Set the v1 parser limits | Accepted |
 
 ## Future ADR backlog
 

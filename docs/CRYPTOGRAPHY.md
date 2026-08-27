@@ -2463,7 +2463,7 @@ The following MUST be resolved before v1 production bytes are frozen:
 4. final Argon2 parser hard bounds;
 5. exact password input maximum;
 6. exact HKDF extract salt and canonical `info` bytes — resolved in §13: the extract salt is 32 zero bytes, and tuple bytes follow [`format/CANONICAL_ENCODING_V1.md`](format/CANONICAL_ENCODING_V1.md) §7.1;
-7. exact chunk-size defaults and limits;
+7. exact chunk-size defaults and limits — resolved in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §6 and §16;
 8. exact BLAKE3 ordered-commitment framing — resolved in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §10;
 9. whether object IDs appear in the public preamble or only encrypted records — resolved in [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §3: encrypted records only;
 10. SQLCipher versus an alternative Rust-owned encrypted catalog implementation;

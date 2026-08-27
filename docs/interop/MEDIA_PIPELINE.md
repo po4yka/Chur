@@ -147,12 +147,14 @@ Pixel-identical cross-platform thumbnails may be impractical; cryptographic bind
 
 ## 12. Limits
 
-- maximum dimensions/pixel count;
-- maximum duration/track count;
-- metadata field/count/size limits;
-- derivative target sizes;
-- bounded decode/import buffers;
-- timeout/cancellation policy;
+- still image at most 16384 px in either dimension and at most 67108864 px in total; a source above either bound is rejected before decode;
+- video at most 7680 by 4320 px per track, at most 8 tracks;
+- video or audio duration at most 14400000 ms (4 hours);
+- metadata revision at most 128 fields, each field value at most 8192 bytes, whole revision at most 65536 bytes;
+- derivative long-edge targets: small thumbnail 320 px, grid preview 640 px, screen preview 2048 px, video poster frame 2048 px;
+- derivative codec: baseline JPEG with 4:2:0 chroma, quality 80 for the small thumbnail, 82 for the grid preview, and 85 for the screen preview and poster frame. JPEG is the v1 derivative codec because Android and iOS both encode and decode it without an added native dependency; a different codec takes a new generator profile under §11 rather than a silent change;
+- decode and import buffers at most 268435456 bytes (256 MiB) in flight per import;
+- one derivative generation is cancelled after 30 seconds of wall-clock work, and cancellation reports `CANCELLED`, never corruption;
 - no recursive archive/container expansion without separate parser policy.
 
 ## 13. Failure behavior

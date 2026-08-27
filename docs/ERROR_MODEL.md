@@ -29,7 +29,7 @@ This table is the sole registry of Chur error names and values. `ARCHITECTURE.md
 | 106 | `PROTECTED_DATA_UNAVAILABLE` | device-level protected storage is not accessible | Yes | unlock the device and retry |
 | 200 | `CANCELLED` | caller or lock transition cancelled work | Yes | retry intentionally |
 | 201 | `INVALID_INPUT` | argument, length, alignment, or range failed validation | No | correct the call |
-| 202 | `RESOURCE_LIMIT_EXCEEDED` | declared size/KDF/collection exceeds policy | No | reject input or use supported parameters |
+| 202 | `RESOURCE_LIMIT_EXCEEDED` | declared size, KDF parameter, or collection exceeds the parser limits of the owning format specification | No | reject input or use supported parameters |
 | 203 | `PERMISSION_DENIED` | platform denied requested resource | Yes | grant/select resource |
 | 204 | `NOT_FOUND` | opaque requested entity is absent | Sometimes | refresh state |
 | 205 | `CONFLICT` | operation conflicts with current revision | Yes | refresh and merge |

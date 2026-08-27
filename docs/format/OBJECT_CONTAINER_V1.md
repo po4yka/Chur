@@ -314,7 +314,7 @@ The frozen layout defines:
 - **one partial chunk** — one record whose `plaintext_length` is less than `chunk_size`; it is also the last chunk, so `last_chunk_plaintext_length` equals that value;
 - **exact multiple of chunk size** — every record carries `plaintext_length` equal to `chunk_size`, the last one included, so `last_chunk_plaintext_length` equals `chunk_size` and no zero-length trailing record is written.
 
-Open, and listed under Follow-up in [`../adr/0008-freeze-object-container-v1-layout.md`](../adr/0008-freeze-object-container-v1-layout.md): the approved chunk-size range, the maximum supported plaintext size, and the maximum chunk count. All offset and index arithmetic is checked `u64`.
+The approved chunk-size range, the maximum supported plaintext size, and the maximum chunk count are fixed in §16. All offset and index arithmetic is checked `u64`.
 
 These cases require vectors.
 
@@ -410,13 +410,16 @@ The `(ObjectKey, nonce_prefix)` pair of a dead transaction is retired and is nev
 ## 16. Parser limits
 
 - preamble exactly 28 bytes, manifest record 40 to 65536 bytes, final-commit ciphertext 16 to 4096 bytes;
-- approved chunk-size range;
-- checked offsets and additions;
+- `chunk_size` between 65536 (64 KiB) and 8388608 (8 MiB) inclusive and a whole multiple of 4096; the §6 candidates 262144 and 1048576 are inside that range;
+- `chunk_count` at most 1048576;
+- `total_plaintext_length` at most 1099511627776 (1 TiB). A writer picks a `chunk_size` that keeps both bounds: at the 1 MiB candidate, 1048576 chunks cover the whole 1 TiB range exactly;
+- offsets and additions checked in `u64`; the largest legal container is under 2^44 bytes, so no offset arithmetic approaches the `u64` range;
 - ciphertext length exactly consistent with suite;
 - no duplicate/out-of-order chunk index in complete scan;
 - no trailing records after final commit;
 - no decompression in core container v1 unless separately specified;
-- bounded read buffers.
+- read buffers bounded at one chunk plaintext plus one chunk ciphertext, so the peak container buffer is `2 * chunk_size + 16` bytes and never exceeds 16777232;
+- nesting depth is 1: v1 defines no record inside a record, so a parser needs no depth counter.
 
 ## 17. Test matrix
 

@@ -202,3 +202,19 @@ Raw SQLCipher pages are not synced. Rust emits canonical encrypted operations fr
 - SQLCipher WAL/backup inspection;
 - migration matrix and corruption cases;
 - public storage contains no mirrored private rows.
+
+## 21. Limits
+
+Catalog policy bounds, enforced on insert and re-checked on restore:
+
+- at most 1000000 media objects per vault;
+- at most 16 streams per object: one original and at most 15 derived;
+- at most 1024 security collections per vault;
+- at most 64 object-key envelopes per object, of which at most 4 are active at once;
+- at most 8 collection-key envelopes per collection epoch, of which at most 1 is active;
+- at most 10000 albums per vault and at most 100000 memberships per album;
+- at most 10000 tags per vault and at most 128 tags per object;
+- at most 1024 metadata revisions per object;
+- at most 128 concurrent `ImportTransaction` rows.
+
+A value above any bound is `RESOURCE_LIMIT_EXCEEDED`. These are catalog policy, not encoded field widths, so raising one is a `catalog_format_version` change only when it changes a stored width.

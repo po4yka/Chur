@@ -224,14 +224,16 @@ Old backups retain old portable slots. Rotating a password or recovery secret do
 
 ## 13. Limits
 
-- package and manifest version policy;
-- maximum inventory entries and manifest bytes;
-- maximum object/container size and record count;
-- checked aggregate sizes;
-- nesting/extension limits;
-- no decompression bombs;
-- KDF limits before work;
-- temporary disk-space checks.
+- only `backup_version` `0x0001`, `canonical_encoding_profile` `0x0001`, and `suite_id` `0x0001` are accepted;
+- `record_count` between 2 and 1048576; a package holds at least the encrypted backup manifest and the final backup commit;
+- at most 1048576 stream inventory entries and at most 16 slot inventory entries;
+- backup manifest record payload at most 16777216 bytes (16 MiB);
+- an object container entry payload is bounded by the container limits in [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §16;
+- `payload_length` and every running offset use checked `u64`, and the 32-byte preamble plus every record header and payload must total the package length exactly;
+- nesting: a native record never contains a native record, and §2.3 permits exactly zero or one `age` layer;
+- v1 defines no compression inside the package, so no declared output size can exceed its input and no decompression bomb is representable;
+- the key-slot and Argon2 bounds of [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §11 are validated before any derivation runs;
+- restore refuses to begin unless free space at the destination is at least the package length plus 67108864 bytes (64 MiB).
 
 ## 14. Test vectors
 

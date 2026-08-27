@@ -156,15 +156,14 @@ At least one verified recovery path must remain throughout a recoverable-vault u
 
 ## 11. Limits
 
-The parser must cap:
+The parser must enforce, before any derivation runs:
 
-- total slot count;
-- parameter byte lengths;
-- salt and nonce lengths;
-- wrapped payload size;
-- Argon2 memory, iterations, and parallelism;
-- unknown extension count;
-- duplicate slot IDs/generations.
+- at most 16 slots in one descriptor, matching [`../format/VAULT_DESCRIPTOR_V1.md`](../format/VAULT_DESCRIPTOR_V1.md) §13;
+- `slot_body` between 16 and 4096 bytes, and the sum of all slot bodies at most 16384 bytes;
+- nonce exactly 24 bytes, and `wrapped_root_secret` exactly 48 bytes: a 32-byte root plus a 16-byte tag;
+- Argon2id salt length, memory, iterations, parallelism, and output length exactly as bounded in [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §18.3, which the parser checks before Argon2 starts; a value outside any bound is `RESOURCE_LIMIT_EXCEEDED` and no derivation runs;
+- zero unknown extension records: v1 defines none and rejects any;
+- duplicate `slot_id` values, and duplicate `(slot_id, slot_generation)` pairs.
 
 ## 12. Test requirements
 

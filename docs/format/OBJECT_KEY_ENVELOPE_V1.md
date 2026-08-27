@@ -110,12 +110,12 @@ Deleting the active envelope contributes to crypto-erasure only when no other re
 
 ## 10. Parser limits
 
-- exact fixed identifier/key/nonce/ciphertext lengths;
+- identifiers exactly 16 bytes, nonce exactly 24 bytes, `wrapped_object_key` exactly 48 bytes, whole record exactly 142 bytes;
 - supported suite/version only;
-- checked generation/epoch arithmetic;
+- generation and epoch arithmetic checked in `u64`, with `0xFFFFFFFFFFFFFFFF` rejected so an increment always exists;
 - no trailing bytes;
 - canonical encoding required;
-- bounded number of envelopes per object enforced by catalog policy.
+- at most 64 envelopes per object, of which at most 4 are active at once, enforced by the catalog limits in [`CATALOG_SCHEMA_V1.md`](CATALOG_SCHEMA_V1.md) §21.
 
 ## 11. Failure behavior
 

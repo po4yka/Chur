@@ -280,14 +280,14 @@ Restore writes a new local platform slot after authenticating a portable slot.
 
 ## 13. Parser limits
 
-At minimum cap:
-
-- descriptor total size;
-- slot count and slot bytes;
-- path/identifier lengths;
-- migration extension count/size;
-- supported version and suite ranges;
-- generation arithmetic.
+- `descriptor_length` between 220 and 65536 inclusive. 220 is the smallest v1 descriptor: the 40-byte head of §2.1, a 148-byte body holding one key-slot descriptor whose body is the 16-byte minimum and an absent migration descriptor, and the 32-byte tag. §8 step 1 rejects anything shorter;
+- `key_slot_descriptors` count between 1 and 16;
+- `slot_body_length` between 16 and 4096, and the sum of all slot bodies at most 16384;
+- every identifier is exactly 16 bytes and v1 carries no variable-length path or name, so no string length remains to cap;
+- `migration_descriptor` exactly 32 bytes when present, and v1 defines no migration extension records;
+- only `descriptor_version` `0x0001`, `canonical_encoding_profile` `0x0001`, `crypto_policy_id` `0x0001`, `catalog_format_version` `0x0001`, `catalog_crypto_suite` `0x0001`, `object_store_format_version` `0x0001`, `naming_profile_id` `0x0001`, `slot_version` `0x0001`, and `wrap_suite_id` `0x0001` are accepted;
+- generation arithmetic checked in `u64`, with `0xFFFFFFFFFFFFFFFF` rejected in every generation field so an increment always exists;
+- nesting depth is 2, the head followed by one level of sub-descriptors, and v1 defines no deeper structure.
 
 Reject trailing bytes and non-canonical encoding.
 
