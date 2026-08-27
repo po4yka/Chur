@@ -41,7 +41,9 @@ macro_rules! chur_status {
         /// Values are ABI, not persisted bytes. A value never appears inside an
         /// encrypted record unless a versioned format explicitly stores an
         /// integrity state, which no v1 format does.
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        /// The derived ordering is the numeric one: variants are declared in
+        /// ascending value order and a test asserts that they stay that way.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
         #[non_exhaustive]
         #[repr(i32)]
         pub enum ChurStatus {
@@ -237,6 +239,14 @@ mod tests {
         }
         assert!(!ChurStatus::is_allocated(700));
         assert!(!ChurStatus::is_allocated(899));
+    }
+
+    #[test]
+    fn the_derived_ordering_is_the_numeric_ordering() {
+        let mut sorted = ChurStatus::ALL.to_vec();
+        sorted.sort_unstable();
+        assert_eq!(sorted, ChurStatus::ALL);
+        assert!(ChurStatus::AuthenticationFailed < ChurStatus::InternalFailure);
     }
 
     #[test]
