@@ -10,6 +10,8 @@ The public shell is a privacy feature, not the security boundary. The actual bou
 
 The name **Chur** evokes a boundary around what belongs to the user: a private space with an explicit access boundary.
 
+This README is explanatory and ranks last when documents disagree. The normative specifications are indexed in [`docs/README.md`](docs/README.md), which also defines the [authority hierarchy](docs/README.md#authority-hierarchy), the [normative-language rule](docs/README.md#normative-language), and the [document-status vocabulary](docs/README.md#document-status). Start there before implementing anything described below. Suspected vulnerabilities go through [`SECURITY.md`](SECURITY.md).
+
 ---
 
 ## Table of contents
@@ -37,6 +39,7 @@ The name **Chur** evokes a boundary around what belongs to the user: a private s
 - [Testing and assurance](#testing-and-assurance)
 - [Roadmap](#roadmap)
 - [Design references](#design-references)
+- [Security and contribution status](#security-and-contribution-status)
 - [License](#license)
 
 ---
@@ -307,12 +310,17 @@ Chur/
 ├── build-logic/
 │   └── convention/
 │
-└── docs/
-    ├── architecture/
-    ├── security/
-    ├── interop/
-    ├── sync/
-    └── assurance/
+├── docs/
+│   ├── ARCHITECTURE.md
+│   ├── adr/
+│   ├── security/
+│   ├── format/
+│   ├── interop/
+│   ├── sync/
+│   ├── assurance/
+│   └── product/
+│
+└── test-vectors/
 ```
 
 ### Rust crate responsibilities
@@ -1371,7 +1379,9 @@ Licenses of reference projects must be reviewed before reusing code. Architectur
 
 Chur is currently in its design stage. Architectural review, protocol critique, test-vector design, fuzzing strategy, and platform-security analysis are especially valuable.
 
-Until a dedicated `SECURITY.md` and private vulnerability-reporting process are added, do not use this repository as a production vault and do not assume that an architectural proposal has been implemented or audited.
+Report a suspected vulnerability through [`SECURITY.md`](SECURITY.md), never in a public issue, discussion, pull request, or post. GitHub Private Vulnerability Reporting is not yet enabled for this repository; `SECURITY.md` gives the interim private-contact procedure and the report contents.
+
+Do not use this repository as a production vault, and do not assume that an architectural proposal has been implemented or audited.
 
 The expected application ID is:
 
