@@ -16,30 +16,40 @@ Chur errors must be actionable for code, safe for users, stable across FFI, and 
 
 ## Stable categories
 
-| Code | Meaning | Retryable | User action |
-| --- | --- | ---: | --- |
-| `AUTHENTICATION_FAILED` | Credential or wrapped-root validation failed | Yes | retry credential or recovery |
-| `PLATFORM_KEY_INVALIDATED` | Keystore/Keychain factor can no longer unwrap | No | use password/recovery and re-enroll |
-| `RECOVERY_REQUIRED` | no usable daily-unlock slot remains | No | begin recovery flow |
-| `SESSION_EXPIRED` | handle belongs to a locked/older generation | Yes | reopen after unlock |
-| `CANCELLED` | caller or lock transition cancelled work | Yes | retry intentionally |
-| `RESOURCE_LIMIT_EXCEEDED` | declared size/KDF/collection exceeds policy | No | reject input or use supported parameters |
-| `UNSUPPORTED_VERSION` | recognized artifact has unsupported version | No | upgrade or migrate |
-| `UNSUPPORTED_SUITE` | algorithm suite is not permitted | No | migrate with supported client |
-| `NON_CANONICAL_ENCODING` | record has multiple or invalid encodings | No | reject source |
-| `VAULT_INCOMPLETE` | initialization or transaction did not commit | Sometimes | recover or resume |
-| `VAULT_CORRUPT` | authenticated vault structure is inconsistent | No | restore or repair |
-| `OBJECT_INCOMPLETE` | final commit or required records are missing | Sometimes | resume transfer/import |
-| `OBJECT_CORRUPT` | tag, commitment, or structural check failed | No | restore object |
-| `CATALOG_CORRUPT` | catalog integrity or schema state failed | No | repair/restore |
-| `MIGRATION_REQUIRED` | readable data must migrate before use | Yes | run migration |
-| `MIGRATION_FAILED` | migration could not commit safely | Sometimes | preserve checkpoint; diagnose |
-| `CONFLICT` | operation conflicts with current revision | Yes | refresh and merge |
-| `IO_FAILURE` | local I/O failed without proving corruption | Sometimes | retry or free storage |
-| `NETWORK_FAILURE` | transport failed | Yes | retry with backoff |
-| `PERMISSION_DENIED` | platform denied requested resource | Yes | grant/select resource |
-| `NOT_FOUND` | opaque requested entity is absent | Sometimes | refresh state |
-| `INTERNAL_FAILURE` | redacted unexpected implementation failure | Sometimes | retry; collect safe diagnostics |
+This table is the sole registry of Chur error names and values. `ARCHITECTURE.md`, `CRYPTOGRAPHY.md`, `ANDROID.md`, `IOS.md`, and the interop contracts map their conditions onto these codes and must not define a code of their own. The numeric value is the C ABI representation defined in the next section.
+
+| Value | Code | Meaning | Retryable | User action |
+| ---: | --- | --- | ---: | --- |
+| 100 | `AUTHENTICATION_FAILED` | Credential or wrapped-root validation failed | Yes | retry credential or recovery |
+| 101 | `PLATFORM_KEY_UNAVAILABLE` | Keystore/Keychain factor is absent, unenrolled, or locked out | Yes | authenticate again or use password/recovery |
+| 102 | `PLATFORM_KEY_INVALIDATED` | Keystore/Keychain factor can no longer unwrap | No | use password/recovery and re-enroll |
+| 103 | `RECOVERY_REQUIRED` | no usable daily-unlock slot remains | No | begin recovery flow |
+| 104 | `VAULT_LOCKED` | operation requires an unlocked session | Yes | unlock |
+| 105 | `SESSION_EXPIRED` | handle belongs to a locked/older generation | Yes | reopen after unlock |
+| 106 | `PROTECTED_DATA_UNAVAILABLE` | device-level protected storage is not accessible | Yes | unlock the device and retry |
+| 200 | `CANCELLED` | caller or lock transition cancelled work | Yes | retry intentionally |
+| 201 | `INVALID_INPUT` | argument, length, alignment, or range failed validation | No | correct the call |
+| 202 | `RESOURCE_LIMIT_EXCEEDED` | declared size/KDF/collection exceeds policy | No | reject input or use supported parameters |
+| 203 | `PERMISSION_DENIED` | platform denied requested resource | Yes | grant/select resource |
+| 204 | `NOT_FOUND` | opaque requested entity is absent | Sometimes | refresh state |
+| 205 | `CONFLICT` | operation conflicts with current revision | Yes | refresh and merge |
+| 300 | `UNSUPPORTED_VERSION` | recognized artifact has unsupported version | No | upgrade or migrate |
+| 301 | `UNSUPPORTED_SUITE` | algorithm suite is not permitted | No | migrate with supported client |
+| 302 | `NON_CANONICAL_ENCODING` | record has multiple or invalid encodings | No | reject source |
+| 303 | `ABI_INCOMPATIBLE` | native library failed the handshake in `interop/FFI_CONTRACT.md` §2 | No | update the application |
+| 304 | `MIGRATION_REQUIRED` | readable data must migrate before use | Yes | run migration |
+| 305 | `MIGRATION_FAILED` | migration could not commit safely | Sometimes | preserve checkpoint; diagnose |
+| 400 | `VAULT_INCOMPLETE` | initialization or transaction did not commit | Sometimes | recover or resume |
+| 401 | `VAULT_CORRUPT` | authenticated vault structure is inconsistent | No | restore or repair |
+| 402 | `OBJECT_INCOMPLETE` | final commit or required records are missing | Sometimes | resume transfer/import |
+| 403 | `OBJECT_CORRUPT` | tag, commitment, or structural check failed | No | restore object |
+| 404 | `CATALOG_CORRUPT` | catalog integrity or schema state failed | No | repair/restore |
+| 500 | `IO_FAILURE` | local I/O failed without proving corruption | Sometimes | retry or free storage |
+| 501 | `STORAGE_UNAVAILABLE` | target volume is full, detached, or unwritable | Sometimes | free space or choose another destination |
+| 502 | `SOURCE_NOT_SEEKABLE` | import source cannot satisfy the required access pattern | No | copy the source or choose another |
+| 503 | `SOURCE_DOWNLOAD_REQUIRED` | provider-backed source is not materialized locally | Yes | allow the provider download and retry |
+| 600 | `NETWORK_FAILURE` | transport failed | Yes | retry with backoff |
+| 900 | `INTERNAL_FAILURE` | redacted unexpected implementation failure | Sometimes | retry; collect safe diagnostics |
 
 ## Layer mapping
 
