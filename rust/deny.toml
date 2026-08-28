@@ -38,9 +38,14 @@ multiple-versions = "warn"
 wildcards = "deny"
 # A second implementation of a primitive Chur already depends on is a second
 # thing to review and a way for persisted bytes to change by accident.
+#
+# ADR-0038 vendors OpenSSL as SQLCipher's crypto provider, so `openssl-sys`
+# reaches the graph through `libsqlite3-sys` and only through it. The wrapper
+# list is that one reviewed path: any other crate that pulls OpenSSL in, and
+# the high-level `openssl` crate on any path at all, still fails this check.
 deny = [
     { name = "openssl" },
-    { name = "openssl-sys" },
+    { name = "openssl-sys", wrappers = ["libsqlite3-sys"] },
     { name = "ring" },
 ]
 

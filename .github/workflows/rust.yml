@@ -146,7 +146,9 @@ jobs:
       # reach the library build, which is why rust/fuzz is its own workspace.
       # The pinned stable toolchain still runs every other job.
       - run: rustup toolchain install nightly --profile minimal --component rust-src
-      - run: cargo install --locked cargo-fuzz
+      # `~/.cargo/bin` is inside the cache, so a restored cache already carries
+      # the binary and a plain `cargo install` stops with "already exists".
+      - run: command -v cargo-fuzz || cargo install --locked cargo-fuzz
       # FUZZING.md section 10: a short deterministic smoke fuzz on every pull
       # request that touches target code. A longer scheduled campaign is not
       # this job and is still unenforced.
@@ -214,7 +216,12 @@ jobs:
             ~/.cargo/git
             rust/target
           key: native-${{ matrix.kind }}-${{ hashFiles('rust/Cargo.lock', 'rust/rust-toolchain.toml') }}
-      - run: rustup target add ${{ matrix.targets }}
+      # rustup adds a target to the active toolchain. This step must run where
+      # rust-toolchain.toml applies, or the targets land on the runner's default
+      # toolchain and the pinned one builds without them.
+      - name: add the targets to the pinned toolchain
+        working-directory: rust
+        run: rustup target add ${{ matrix.targets }}
       # DEVELOPMENT.md "Native targets" requires these four, and an artifact
       # that exports no `chur_` symbol is one a host would load and fail to
       # call, so the script checks the handshake in every archive it produces.
@@ -242,7 +249,9 @@ jobs:
       # The host tests load `libchur_jni`, which the root build compiles with
       # Cargo (ADR-0040). The runner's rustup reads rust/rust-toolchain.toml, so
       # no toolchain is installed by an action here either.
-      - run: rustup show
+      - name: install the pinned toolchain
+        working-directory: rust
+        run: rustup show
       # The JVM and Android host tests. The iOS target needs macOS and runs in
       # the kotlin-native job.
       #
@@ -273,7 +282,9 @@ jobs:
           key: konan-${{ hashFiles('gradle/libs.versions.toml', 'gradle/wrapper/gradle-wrapper.properties') }}
       # cinterop links `libchur_ffi.a` for each Apple target, which the Gradle
       # build compiles with Cargo, so both targets must be installed first.
-      - run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+      - name: add the targets to the pinned toolchain
+        working-directory: rust
+        run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
       # TEST_VECTORS.md section 7 requires the vector suite to run on iOS as
       # well. This is that run, as a real Kotlin/Native binary.
       - run: ./gradlew --no-daemon iosSimulatorArm64Test
@@ -293,5 +304,6 @@ jobs:
         with:
           path: ~/.cargo
           key: deny-${{ hashFiles('rust/Cargo.lock') }}
-      - run: cargo install --locked cargo-deny
+      # The cache holds all of `~/.cargo`, the installed binary with it.
+      - run: command -v cargo-deny || cargo install --locked cargo-deny
       - run: cargo deny check
