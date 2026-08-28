@@ -169,7 +169,7 @@ Every `SEC-*` invariant of [`../security/SECURITY_INVARIANTS.md`](../security/SE
 
 A row states what would produce the evidence, not that it runs today. Whether it runs is governed by [`RELEASE_GATES.md`](RELEASE_GATES.md#enforcement): until a job executes the procedure, the row is unenforced whatever it names.
 
-Twenty-seven rows now name a test target rather than a section of this plan. Each one runs in the `test`, `gradle`, `kotlin-native`, or `fuzz` job of that workflow, so all twenty-seven are enforced. Every remaining row names a procedure that no job executes.
+Thirty-one rows now name a test target rather than a section of this plan: nineteen at the end of Phase 0, seven more in Phase 1, and four in Phase 2 — SEC-031, SEC-034, SEC-035, and SEC-036. Each one runs in the `test`, `gradle`, `kotlin-native`, `backup-rules`, or `fuzz` job of that workflow, so all thirty-one are enforced. Every remaining row names a procedure that no job executes.
 
 | Invariant | Evidence procedure |
 | --- | --- |
@@ -203,12 +203,12 @@ Twenty-seven rows now name a test target rather than a section of this plan. Eac
 | SEC-028 | `chur-ffi` `tests/control_plane.rs::locking_invalidates_every_handle_the_session_owns` |
 | SEC-029 | §5 |
 | SEC-030 | §5 |
-| SEC-031 | §5 |
+| SEC-031 | `chur-media` `tests/pipeline.rs::an_export_stops_where_it_is_cancelled_rather_than_at_the_end`; `chur-media` `tests/pipeline.rs::a_cancelled_import_activates_nothing_and_leaves_no_live_transaction`; `chur-media` `tests/pipeline.rs::a_cancelled_scan_records_no_verdict` |
 | SEC-032 | audit-only; §5 covers only what the runtime makes observable |
 | SEC-033 | §6 |
-| SEC-034 | §6; §8; §9, asserted against the caps in [`../security/PLAINTEXT_LIFECYCLE.md`](../security/PLAINTEXT_LIFECYCLE.md) §5 |
-| SEC-035 | §7 |
-| SEC-036 | §7 |
+| SEC-034 | `scripts/check-backup-rules.py` for the backup-exclusion half; §6; §8; §9 for the rest, asserted against the caps in [`../security/PLAINTEXT_LIFECYCLE.md`](../security/PLAINTEXT_LIFECYCLE.md) §5 |
+| SEC-035 | `chur-catalog` `tests/decoy_isolation.rs::the_two_identities_share_no_key_and_no_namespace` |
+| SEC-036 | `chur-catalog` `tests/decoy_isolation.rs::a_credential_opens_only_its_own_content` |
 | SEC-037 | audit-only; API review of the surface in [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md) at each change |
 | SEC-038 | `chur-format` `descriptor::tests::a_failed_slot_unwrap_still_returns_the_authentication_failure` |
 | SEC-039 | repository check: no forbidden claim listed in [`../security/DECOY_VAULT.md`](../security/DECOY_VAULT.md) §10 or [`../product/DISCREET_MODE.md`](../product/DISCREET_MODE.md) "Forbidden claims" appears in `docs/`, `DESIGN.md`, `README.md`, or a localized string resource |
@@ -232,5 +232,7 @@ Twenty-seven rows now name a test target rather than a section of this plan. Eac
 | SEC-057 | §3 |
 | SEC-058 | `chur-catalog` `model::tests::only_an_original_has_no_source_content_revision` |
 | SEC-059 | §5; §8; §9 |
+
+Phase 2 gave four rows a target. SEC-031 gained the three cancellation tests that made the guarantee real rather than declared: an export used to check its flag once before it started and then run to the end, and a scan checked only between objects. SEC-035 and SEC-036 gained the isolation harness of [`../security/DECOY_VAULT.md`](../security/DECOY_VAULT.md) §11, which had never had one. SEC-034 gained the backup-exclusion half, which is now a checked-in rule file and a job that fails on a path under `vaults/` or `registry/`; the scratch caps of §5 there remain a procedure.
 
 SEC-019, SEC-032, SEC-037, SEC-046, SEC-054, and the claim half of SEC-045 have no automated evidence. That is a stated gap, carried into the evidence package of every gated release under [`RELEASE_GATES.md`](RELEASE_GATES.md#enforcement), and not a claim of coverage. Adding or changing an invariant adds or changes its row here in the same pull request.

@@ -1,13 +1,239 @@
 {
   "manifest_version": 1,
-  "spec_commit": "eb24a4c5fe548c7ef7488c0c657b046e9f394aec",
+  "spec_commit": "6b0886f488f9bc806c8976b1b1c8af17f861f333",
   "generator": {
     "name": "chur-cli",
     "version": "0.1.0",
-    "commit": "eb24a4c5fe548c7ef7488c0c657b046e9f394aec",
+    "commit": "6b0886f488f9bc806c8976b1b1c8af17f861f333",
     "toolchain": "1.97.0-aarch64-apple-darwin"
   },
   "vectors": [
+    {
+      "vector_id": "backup-v1-empty-inventory-commitment",
+      "spec": "docs/format/BACKUP_FORMAT_V1.md",
+      "spec_section": "7.2",
+      "purpose": "For an empty inventory the commitment is BLAKE3-256 of the domain tag alone.",
+      "outcome": "accept",
+      "inputs": {
+        "domain_tag": "43485552004241434b555000494e56454e544f52592d434f4d4d49544d454e54005631"
+      },
+      "expected": {
+        "inventory_commitment": "d1434ebf1639cdd3a09451094a94a409289dc94a72c34e479163490b6f458132"
+      }
+    },
+    {
+      "vector_id": "backup-v1-final-commit",
+      "spec": "docs/format/BACKUP_FORMAT_V1.md",
+      "spec_section": "7",
+      "purpose": "The final backup commit, sealed under the manifest key and a different domain tag, so neither record opens as the other.",
+      "outcome": "accept",
+      "inputs": {
+        "backup_id": "22222222222222222222222222222222",
+        "commit_nonce": "323232323232323232323232323232323232323232323232",
+        "record_count": 6,
+        "root_secret": "6161616161616161616161616161616161616161616161616161616161616161",
+        "vault_id": "11111111111111111111111111111111"
+      },
+      "expected": {
+        "commit_plaintext": "2222222222222222222222222222222200000000000000060000000100000001fd4313da5e9d64fccc3753ce03699dbc313a4494163823f148b02f762dd43423",
+        "commit_plaintext_length": 64,
+        "commit_record": "3232323232323232323232323232323232323232323232320c8e9f6f993582e8158873cdd3b5a93a4c0d78f7f26db9455e0e01a5cfa1cfae6f1b053b70eba773d1978912bb17e53f34a649dd765f073bffc9852ece814051749435f0cd684954a8a436d3352bde2c"
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "backup-v1-final-commit-does-not-open-as-a-manifest",
+      "spec": "docs/format/BACKUP_FORMAT_V1.md",
+      "spec_section": "4",
+      "purpose": "Two records of one package share a key and differ only in their domain tag, so neither opens as the other.",
+      "outcome": "reject",
+      "inputs": {
+        "manifest_key": "6b3260500d15b44c8b10101073a82e0b423a818601f20e0929f7bb2f9a31f28c",
+        "record": "3232323232323232323232323232323232323232323232320c8e9f6f993582e8158873cdd3b5a93a4c0d78f7f26db9455e0e01a5cfa1cfae6f1b053b70eba773d1978912bb17e53f34a649dd765f073bffc9852ece814051749435f0cd684954a8a436d3352bde2c",
+        "vault_id": "11111111111111111111111111111111"
+      },
+      "error_code": "VAULT_CORRUPT",
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "backup-v1-inventory-commitment",
+      "spec": "docs/format/BACKUP_FORMAT_V1.md",
+      "spec_section": "7.2",
+      "purpose": "The ordered inventory commitment over one stream entry then one slot entry, with no count prefix and no separator.",
+      "outcome": "accept",
+      "inputs": {
+        "domain_tag": "43485552004241434b555000494e56454e544f52592d434f4d4d49544d454e54005631",
+        "slot_entry": "45454545454545454545454545454545010000000000000001",
+        "stream_entry": "41414141414141414141414141414141424242424242424242424242424242420100000001000000000004000043434343434343434343434343434343434343434343434343434343434343434444444444444444444444444444444444444444444444444444444444444444"
+      },
+      "expected": {
+        "inventory_commitment": "fd4313da5e9d64fccc3753ce03699dbc313a4494163823f148b02f762dd43423"
+      }
+    },
+    {
+      "vector_id": "backup-v1-inventory-entries",
+      "spec": "docs/format/BACKUP_FORMAT_V1.md",
+      "spec_section": "7.1",
+      "purpose": "One stream inventory entry and one slot inventory entry, at their canonical lengths.",
+      "outcome": "accept",
+      "inputs": {
+        "ciphertext_length": 262144,
+        "manifest_commitment": "4343434343434343434343434343434343434343434343434343434343434343",
+        "object_id": "41414141414141414141414141414141",
+        "ordered_chunk_commitment": "4444444444444444444444444444444444444444444444444444444444444444",
+        "slot_generation": 1,
+        "slot_id": "45454545454545454545454545454545",
+        "slot_type": 1,
+        "stream_id": "42424242424242424242424242424242",
+        "stream_kind": 1,
+        "stream_revision": 1
+      },
+      "expected": {
+        "slot_entry": "45454545454545454545454545454545010000000000000001",
+        "slot_entry_length": 25,
+        "stream_entry": "41414141414141414141414141414141424242424242424242424242424242420100000001000000000004000043434343434343434343434343434343434343434343434343434343434343434444444444444444444444444444444444444444444444444444444444444444",
+        "stream_entry_length": 109
+      }
+    },
+    {
+      "vector_id": "backup-v1-manifest",
+      "spec": "docs/format/BACKUP_FORMAT_V1.md",
+      "spec_section": "4",
+      "purpose": "The manifest plaintext and the sealed record, under a key derived from the root and the vault identity alone.",
+      "outcome": "accept",
+      "inputs": {
+        "backup_id": "22222222222222222222222222222222",
+        "catalog_generation": 7,
+        "created_time_ms": 1700000000000,
+        "manifest_nonce": "313131313131313131313131313131313131313131313131",
+        "root_secret": "6161616161616161616161616161616161616161616161616161616161616161",
+        "vault_id": "11111111111111111111111111111111"
+      },
+      "expected": {
+        "backup_manifest_key": "6b3260500d15b44c8b10101073a82e0b423a818601f20e0929f7bb2f9a31f28c",
+        "manifest_plaintext": "222222222222222222222222222222220001111111111111111111111111111111110000018bcfe568000000000000000000000000000000000000000000000000000700010000000100000001fd4313da5e9d64fccc3753ce03699dbc313a4494163823f148b02f762dd434230000000004040000",
+        "manifest_plaintext_length": 117,
+        "manifest_record": "313131313131313131313131313131313131313131313131ef085181839fd4a75ded751cb2f2e41b64d3a591867d300773e640ca7dab9b46f61a6b68d1562c58ab7c69fd011b4ec09029acbdfb0dbdf67e4de20722cbff0008e1c654b2a919cd9954bc936261f4ec0d264f79e3cbed878203b3e386db3f031bc541281b4ff703796d6a67e27eed5cab7aa1b0c2867999fea1c7fa60a69e196ac3b1c6e5"
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "backup-v1-manifest-contradicts-the-preamble",
+      "spec": "docs/format/BACKUP_FORMAT_V1.md",
+      "spec_section": "4",
+      "purpose": "The manifest repeats the public preamble's backup version; a restore rejects a package where the two differ.",
+      "outcome": "reject",
+      "inputs": {
+        "manifest_plaintext": "222222222222222222222222222222220002111111111111111111111111111111110000018bcfe568000000000000000000000000000000000000000000000000000700010000000100000001fd4313da5e9d64fccc3753ce03699dbc313a4494163823f148b02f762dd434230000000004040000"
+      },
+      "error_code": "VAULT_CORRUPT"
+    },
+    {
+      "vector_id": "backup-v1-non-zero-reserved",
+      "spec": "docs/format/BACKUP_FORMAT_V1.md",
+      "spec_section": "2.1",
+      "purpose": "A fixed preamble field holding any other value is VAULT_CORRUPT and is never ignored.",
+      "outcome": "reject",
+      "inputs": {
+        "preamble": "4348555242414b31000100010001000000000020000000010000000000000006"
+      },
+      "error_code": "VAULT_CORRUPT"
+    },
+    {
+      "vector_id": "backup-v1-public-preamble",
+      "spec": "docs/format/BACKUP_FORMAT_V1.md",
+      "spec_section": "2.1",
+      "purpose": "The 32-byte public preamble, whose only variable field is the record count.",
+      "outcome": "accept",
+      "inputs": {
+        "record_count": 6
+      },
+      "expected": {
+        "preamble": "4348555242414b31000100010001000000000020000000000000000000000006",
+        "preamble_length": 32
+      }
+    },
+    {
+      "vector_id": "backup-v1-record-count-below-minimum",
+      "spec": "docs/format/BACKUP_FORMAT_V1.md",
+      "spec_section": "13",
+      "purpose": "A package holds at least the encrypted backup manifest and the final backup commit.",
+      "outcome": "reject",
+      "inputs": {
+        "record_count": 1
+      },
+      "error_code": "RESOURCE_LIMIT_EXCEEDED"
+    },
+    {
+      "vector_id": "backup-v1-record-header",
+      "spec": "docs/format/BACKUP_FORMAT_V1.md",
+      "spec_section": "2.2",
+      "purpose": "One package record header: type, version, reserved, and a u64 payload length.",
+      "outcome": "accept",
+      "inputs": {
+        "payload_length": 262253,
+        "record_type": 4
+      },
+      "expected": {
+        "header": "04010000000000000004006d",
+        "header_length": 12
+      }
+    },
+    {
+      "vector_id": "backup-v1-unallocated-record-type",
+      "spec": "docs/format/BACKUP_FORMAT_V1.md",
+      "spec_section": "2.2",
+      "purpose": "An unallocated record type is a parse failure, never an ignorable record.",
+      "outcome": "reject",
+      "inputs": {
+        "header": "08010000000000000004006d"
+      },
+      "error_code": "VAULT_CORRUPT"
+    },
+    {
+      "vector_id": "backup-v1-unsupported-record-version",
+      "spec": "docs/format/BACKUP_FORMAT_V1.md",
+      "spec_section": "2.2",
+      "purpose": "Every v1 package record carries record_version 0x01.",
+      "outcome": "reject",
+      "inputs": {
+        "header": "04020000000000000004006d"
+      },
+      "error_code": "VAULT_CORRUPT"
+    },
+    {
+      "vector_id": "backup-v1-unsupported-suite",
+      "spec": "docs/format/BACKUP_FORMAT_V1.md",
+      "spec_section": "2.1",
+      "purpose": "Suite 0x0002 is the Android Keystore wrap and is invalid as a package suite.",
+      "outcome": "reject",
+      "inputs": {
+        "preamble": "4348555242414b31000100010002000000000020000000000000000000000006"
+      },
+      "error_code": "UNSUPPORTED_SUITE"
+    },
+    {
+      "vector_id": "backup-v1-unsupported-version",
+      "spec": "docs/format/BACKUP_FORMAT_V1.md",
+      "spec_section": "2.1",
+      "purpose": "An unknown backup version fails as UNSUPPORTED_VERSION rather than as corruption.",
+      "outcome": "reject",
+      "inputs": {
+        "preamble": "4348555242414b31000200010001000000000020000000000000000000000006"
+      },
+      "error_code": "UNSUPPORTED_VERSION"
+    },
+    {
+      "vector_id": "backup-v1-wrong-magic",
+      "spec": "docs/format/BACKUP_FORMAT_V1.md",
+      "spec_section": "2.3",
+      "purpose": "Eight bytes that are neither CHURBAK1 nor an age header are not a Chur backup.",
+      "outcome": "reject",
+      "inputs": {
+        "preamble": "4348555242414b32000100010001000000000020000000000000000000000006"
+      },
+      "error_code": "VAULT_CORRUPT"
+    },
     {
       "vector_id": "canonical-encoding-v1-all-zero-identifier",
       "spec": "docs/format/CANONICAL_ENCODING_V1.md",

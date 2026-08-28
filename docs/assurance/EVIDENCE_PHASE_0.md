@@ -27,7 +27,7 @@ Regenerate every number below with the commands each row names. Nothing here is 
 | --- | --- | --- |
 | ownership boundaries documented | met | [`../ARCHITECTURE.md`](../ARCHITECTURE.md), [ADR-0001](../adr/0001-rust-owns-private-vault.md), [ADR-0006](../adr/0006-control-and-data-plane-ffi.md) |
 | no committed production secrets | met | every key, salt, nonce, password, and recovery secret in the repository is a fixed constant under `test-vectors/`, marked `TEST-ONLY — NEVER USE FOR REAL VAULTS`; no production build can select deterministic randomness |
-| major design decisions tracked by ADR | met | 41 ADRs, indexed in [`../adr/README.md`](../adr/README.md) |
+| major design decisions tracked by ADR | met | 43 ADRs, indexed in [`../adr/README.md`](../adr/README.md) |
 
 Gate 0 is satisfiable on this evidence.
 
@@ -41,7 +41,7 @@ Gate 0 is satisfiable on this evidence.
 | Rust unit, property, and corruption tests | **partly met** | `test` — unit and corruption tests run; there is no property-based test framework, and the round-trip properties are asserted per format rather than over generated inputs |
 | FFI contract and platform prototype tests | met | `abi`, `gradle`, `kotlin-native` — the C harness links the real static library; the Keystore and Keychain prototypes compile for Android and both iOS targets |
 | recovery and process-death flows | met in Phase 1 | the import journal, the descriptor transaction, and resumption after process death are implemented and tested; [`EVIDENCE_PHASE_1.md`](EVIDENCE_PHASE_1.md) §3 names the tests |
-| security invariants mapped to tests | met | 26 of 59 rows of [`SECURITY_TEST_PLAN.md`](SECURITY_TEST_PLAN.md) §13 name a running target, 19 at the end of Phase 0 and 7 more in Phase 1; every other row names a procedure no job executes, and 5 are audit-only |
+| security invariants mapped to tests | met | 31 of 59 rows of [`SECURITY_TEST_PLAN.md`](SECURITY_TEST_PLAN.md) §13 name a running target: 19 at the end of Phase 0, 7 more in Phase 1, and 4 in Phase 2. Every other row names a procedure no job executes, and 5 are audit-only. This row read 26 before Phase 2 and the count was wrong then: SEC-019's build-graph half had already landed, which §13 of that plan recorded and this line did not |
 
 Gate 1 is **not** satisfiable yet. One item above is the reason: there is still no property-based test framework in the workspace, and the round-trip properties are asserted per format rather than over generated inputs. The recovery row was the other one and Phase 1 met it.
 
@@ -68,7 +68,7 @@ Gate 1 is **not** satisfiable yet. One item above is the reason: there is still 
 This is the list [`RELEASE_GATES.md`](RELEASE_GATES.md) requires by name.
 
 - **the five audit-only invariants** of [`SECURITY_TEST_PLAN.md`](SECURITY_TEST_PLAN.md) §13: SEC-032, SEC-037, SEC-046, SEC-054, and the claim half of SEC-045. SEC-019 left this list in Phase 1: the half of it a build graph can see is now a task the `gradle` job runs, and the rest is still review;
-- **the thirty-three invariant rows** of that section that still name a procedure of the plan rather than a test target;
+- **the twenty-eight invariant rows** of that section that still name a procedure of the plan rather than a test target;
 - **every Gate 2 and later item**, none of which has a subject yet: the media pipeline, the decoy vault, backup, sync, and sharing;
 - **the scheduled, release-candidate, and external fuzz cadences** of [`FUZZING.md`](FUZZING.md) §10. Only the per-pull-request smoke pass runs;
 - **performance budgets.** [`PERFORMANCE_BUDGETS.md`](PERFORMANCE_BUDGETS.md) §11 records a first measurement on a workstation. No budget is a gate, because §1 requires a device from [ADR-0017](../adr/0017-freeze-the-supported-device-set.md) and none has been measured;

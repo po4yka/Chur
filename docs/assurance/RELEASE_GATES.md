@@ -81,6 +81,12 @@ Additional requirements:
 - old password/recovery rotation semantics documented;
 - external review of backup manifest/completeness construction.
 
+Phase 2 met four of the six and left two. The format exists and is exercised by `chur-format` `backup::tests`, `chur-media` `tests/backup_flow.rs`, and `chur-cli` `tests/backup_flow.rs`; the complete, truncated, tampered, reordered, and wrong-credential cases are among them; `a_device_bound_slot_does_not_travel` is the exclusion proof; and the rotation semantics of [`../format/BACKUP_FORMAT_V1.md`](../format/BACKUP_FORMAT_V1.md) §12 are stated in the product surface beside the action that writes a package.
+
+The vectors are partly there. Sixteen vectors under the `backup` format word carry every deterministic structure the format defines — the public preamble, the record header, the two inventory entries, the ordered inventory commitment, and the two sealed records — with the negative cases §5 of [`../format/TEST_VECTORS.md`](../format/TEST_VECTORS.md) requires. A *whole package* is not among them and cannot be: §2 has it carry the encrypted catalog, which is a SQLCipher file with a random salt, so two runs over one vault produce two packages that differ in bytes and mean the same thing. The eleven cases §14 of the backup format lists are covered by `chur-media` `tests/backup_flow.rs` as round trips instead.
+
+One requirement remains open. **Cross-platform restore** is met for the CLI only: one implementation serves all three, and no job runs either host. [`EVIDENCE_PHASE_2.md`](EVIDENCE_PHASE_2.md) §5 carries it.
+
 ## Gate 5 — synchronization
 
 Additional requirements:

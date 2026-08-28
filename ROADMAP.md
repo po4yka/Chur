@@ -6,7 +6,7 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 
 ## Current status
 
-**Phase 1 implementation.** The vault exists and runs: Rust owns the catalog, the containers, the key slots, and the import journal; the C ABI carries a product surface as well as a control plane; and both hosts build an installable application over it. What Phase 1 still owes is the independent review, which is an engagement rather than code, and the fault-injection matrix of Gate 2. Phase 0 owes the same two approvals it owed before, which are decisions rather than code.
+**Phase 2 implementation.** Video and audio play from the vault on both hosts, the portable backup package is implemented and restores through the CLI, the second vault identity is provisionable and has an isolation harness, and both of Discreet Mode's open specification items are decided. What Phase 2 owes is what a workstation cannot give it: no job runs on a device, so every player, every device slot, and the energy measurement of [`docs/assurance/PERFORMANCE_BUDGETS.md`](docs/assurance/PERFORMANCE_BUDGETS.md) §8 is unproved. Phase 1 still owes the independent review, which is an engagement rather than code, and Phase 0 owes the same two approvals, which are decisions rather than code.
 
 ## Phase 0 — specification and repository foundation
 
@@ -15,7 +15,7 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 | Item | State |
 | --- | --- |
 | complete the normative documentation set | done |
-| create architecture decision records | done, 36 |
+| create architecture decision records | done, 43 |
 | scaffold KMP/CMP and Rust workspaces | done. `:shared:app` is a Compose Multiplatform module holding the one screen Phase 0 owns, the ABI gate; the Notes public shell and every private screen are Phase 1 |
 | pin toolchains and dependencies | done: `rust-toolchain.toml`, `gradle/libs.versions.toml`, a wrapper distribution SHA-256, `Cargo.lock`, and the four mobile Rust targets built and symbol-checked on every pull request |
 | establish canonical encoding and byte-exact v1 formats | done |
@@ -33,7 +33,7 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 | no unresolved circular key dependencies | met. The one circle the implementation found is recorded and broken: the manifest key and AAD bind fields sealed inside the manifest, so a reader supplies the stream identity from the catalog, per [`docs/format/OBJECT_CONTAINER_V1.md`](docs/format/OBJECT_CONTAINER_V1.md) §4 |
 | parser limits specified and tested | met. `chur-core::limits` gathers every bound beside the section that owns it and checks their consistency at compile time; ten fuzz targets and the corruption harness exercise them |
 | Android, iOS, and CLI consume identical vectors | met at the index level. One generated source embeds `test-vectors/v1`, and the same suite runs in `jvmTest`, `testAndroidHostTest`, and `iosSimulatorArm64Test`. Decoding a private record on a platform is not in scope: [`docs/format/CANONICAL_ENCODING_V1.md`](docs/format/CANONICAL_ENCODING_V1.md) §13 reserves that for Rust, so the platform side checks the index and the FFI handshake |
-| security invariants mapped to tests | met. Twenty-seven rows of [`docs/assurance/SECURITY_TEST_PLAN.md`](docs/assurance/SECURITY_TEST_PLAN.md) §13 name a running test target, nineteen of them at the end of Phase 0 and seven more in Phase 1; every other row names a procedure no job executes, and the audit-only rows are named as such |
+| security invariants mapped to tests | met. Thirty-one rows of [`docs/assurance/SECURITY_TEST_PLAN.md`](docs/assurance/SECURITY_TEST_PLAN.md) §13 name a running test target, nineteen of them at the end of Phase 0, seven more in Phase 1, and four in Phase 2; every other row names a procedure no job executes, and the audit-only rows are named as such |
 | release gates and review scope approved | **outstanding.** Both are decisions, not artifacts. [`docs/assurance/EVIDENCE_PHASE_0.md`](docs/assurance/EVIDENCE_PHASE_0.md) §8 states what each one accepts and §5 states its cost |
 | the minimum job set of ADR-0031 runs on every pull request | met. The four minimum jobs run, and the vector, C ABI, fuzz, Gradle, and Kotlin/Native jobs joined them as their subjects landed |
 
@@ -85,21 +85,25 @@ None of these is started, which is the intent:
 
 ### Scope
 
-- Media3 and AVFoundation range readers;
-- seekable video and audio playback;
-- encrypted poster frames and waveforms;
-- large-file import/export and cancellation;
-- independent decoy vault identity;
-- stronger discreet-mode policies;
-- native portable encrypted backup;
-- performance and energy tuning.
+| Item | State |
+| --- | --- |
+| Media3 and AVFoundation range readers | done. `ChurDataSource` and `ChurResourceLoader` both hold one reader lease and call `chur_object_reader_read_at`; neither sees a container, a key, or a path, so a codec is downstream of every cryptographic check |
+| seekable video and audio playback | done in code, unproved on a device. `VaultPlayer` links and compiles for both hosts and the seam is one `expect` function; no job runs a player, because no job runs on a device |
+| encrypted poster frames and waveforms | done. [`docs/interop/MEDIA_PIPELINE.md`](docs/interop/MEDIA_PIPELINE.md) §6.1 fixes the waveform record, which the kind had never had, and [ADR-0042](docs/adr/0042-freeze-the-audio-waveform-record.md) argues it. `derived::needs` decides both kinds by media class, which is what made a poster reachable for a 1080p video at all |
+| large-file import/export and cancellation | done. The import's commit no longer reads the whole container to verify it, video takes the 1 MiB chunk that makes the 1 TiB bound reachable, and one refill loop serves every caller. Export, materialization, and the integrity scan observe cancellation per chunk rather than per object |
+| independent decoy vault identity | done. The registry always admitted two and no flow provisioned the second; the settings entry does, `CHUR_CAP_DECOY_VAULT` is set, and `vault::create` refuses a credential that already opens an identity here. `tests/decoy_isolation.rs` is the [`docs/security/DECOY_VAULT.md`](docs/security/DECOY_VAULT.md) §11 matrix |
+| stronger discreet-mode policies | done. Both of that document's open items are decided in it: the session gate is a documented visible route and no secret gesture, and panic is a long press on the lock control with a matching accessibility action. The public-shell disclosure is implemented in all five parts, and the Android backup policy is split per [`docs/ANDROID.md`](docs/ANDROID.md) §13.4 with a job that fails on a vault path |
+| native portable encrypted backup | done. [`docs/format/BACKUP_FORMAT_V1.md`](docs/format/BACKUP_FORMAT_V1.md) is implemented end to end, [ADR-0043](docs/adr/0043-the-backup-manifest-carries-a-commitment-not-an-inventory.md) settles the two decisions it left open, and the §13 free-space preflight is the one part deliberately not implemented |
+| performance and energy tuning | **partly done.** The two budget rows Phase 2's exit criteria name are measured and recorded in [`docs/assurance/PERFORMANCE_BUDGETS.md`](docs/assurance/PERFORMANCE_BUDGETS.md) §12. Energy is not: §8 there asks for battery and thermal measurement of long import, backup, integrity scan, and migration, and that needs a device |
 
 ### Exit criteria
 
-- multi-gigabyte objects remain bounded in memory;
-- random seek and lock invalidation meet budgets;
-- real/decoy isolation tests pass;
-- backup restore succeeds across Android, iOS, and CLI.
+| Criterion | State |
+| --- | --- |
+| multi-gigabyte objects remain bounded in memory | met. `chur-media` `tests/bounded_memory.rs` measures the property rather than asserting it: a metered `ReadAt` records the largest single request, and a container 64 times longer does not change it. The backup path holds one inventory entry and one buffer whatever the vault's size |
+| random seek and lock invalidation meet budgets | **partly met.** Both are measured and both are far inside the §2 candidates on this host, and §1 there requires a release-like build on a device from [ADR-0017](docs/adr/0017-freeze-the-supported-device-set.md), which this is not. The benchmark runs through the binary both platforms build, so the device measurement needs a device and no new code |
+| real/decoy isolation tests pass | met. Nine tests over the §11 matrix: independent roots, catalogs, namespaces, and slots; a sibling credential failing exactly as a wrong one does, and a root holding one identity failing the same way; no path naming which identity it belongs to; locking, recovery, migration, and device-slot removal each touching one identity only |
+| backup restore succeeds across Android, iOS, and CLI | **partly met.** One implementation serves all three, and the CLI runs it end to end in `chur-cli` `tests/backup_flow.rs`. The two hosts reach it through §6.7 and the same `VaultRepository` call, and neither has been run on a device |
 
 ## Phase 3 — encrypted synchronization
 

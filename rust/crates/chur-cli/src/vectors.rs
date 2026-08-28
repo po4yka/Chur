@@ -84,6 +84,7 @@ pub fn build_all() -> Result<Vec<Vector>> {
     collection_envelopes(&mut vectors)?;
     object_key_envelopes(&mut vectors)?;
     object_containers(&mut vectors)?;
+    backup_packages(&mut vectors)?;
     vectors.sort_by(|left, right| left.entry.vector_id.cmp(&right.entry.vector_id));
     Ok(vectors)
 }
@@ -96,6 +97,7 @@ const HIERARCHY_SPEC: &str = "docs/security/KEY_HIERARCHY.md";
 const COLLECTION_ENVELOPE_SPEC: &str = "docs/format/COLLECTION_KEY_ENVELOPE_V1.md";
 const OBJECT_ENVELOPE_SPEC: &str = "docs/format/OBJECT_KEY_ENVELOPE_V1.md";
 const RECOVERY_SPEC: &str = "docs/security/RECOVERY.md";
+const BACKUP_SPEC: &str = "docs/format/BACKUP_FORMAT_V1.md";
 
 // ---------------------------------------------------------------------------
 // Canonical encoding
@@ -973,6 +975,344 @@ fn object_containers(out: &mut Vec<Vector>) -> Result<()> {
             "UNSUPPORTED_SUITE",
         )
         .input_bytes("container", &wrong_suite)
+        .build(),
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Backup package
+// ---------------------------------------------------------------------------
+
+/// The deterministic structures of `BACKUP_FORMAT_V1.md`.
+///
+/// A whole package is not a vector and cannot be. §2 has it carry the encrypted
+/// catalog, which is a SQLCipher file with a random salt, so two runs over one
+/// vault produce two packages that differ in bytes and mean the same thing.
+/// What is deterministic is every structure the format defines itself: the
+/// public preamble, the record header, the two inventory entries, the ordered
+/// inventory commitment, and the two sealed records under a fixed key and
+/// nonce. Those are the bytes a second implementation has to reproduce, and
+/// they are what these vectors carry.
+fn backup_packages(out: &mut Vec<Vector>) -> Result<()> {
+    use chur_format::backup::{
+        BackupManifest, FinalBackupCommit, InventoryCommitter, PublicPreamble as BackupPreamble,
+        RecordHeader, RecordType, SlotInventoryEntry, StreamInventoryEntry, manifest_key,
+    };
+
+    let vault_id = id(0x11)?;
+    let backup_id = id(0x22)?;
+    let root = key(0x61);
+    let manifest_key = manifest_key(&root, &vault_id)?;
+
+    let preamble = BackupPreamble::new(6)?;
+    out.push(
+        VectorBuilder::accept(
+            "backup",
+            "backup-v1-public-preamble",
+            BACKUP_SPEC,
+            "2.1",
+            "The 32-byte public preamble, whose only variable field is the record count.",
+        )
+        .input("record_count", number(6))
+        .expect_bytes("preamble", &preamble.encode())
+        .expect("preamble_length", number(32))
+        .build(),
+    );
+
+    let header = RecordHeader {
+        record_type: RecordType::Container,
+        payload_length: 262_253,
+    };
+    out.push(
+        VectorBuilder::accept(
+            "backup",
+            "backup-v1-record-header",
+            BACKUP_SPEC,
+            "2.2",
+            "One package record header: type, version, reserved, and a u64 payload length.",
+        )
+        .input("record_type", json!(RecordType::Container as u8))
+        .input("payload_length", number(262_253))
+        .expect_bytes("header", &header.encode())
+        .expect("header_length", number(12))
+        .build(),
+    );
+
+    let stream_entry = StreamInventoryEntry {
+        object_id: id(0x41)?,
+        stream_id: id(0x42)?,
+        stream_kind: StreamKind::Original,
+        stream_revision: 1,
+        ciphertext_length: 262_144,
+        manifest_commitment: [0x43; 32],
+        ordered_chunk_commitment: [0x44; 32],
+    };
+    let slot_entry = SlotInventoryEntry {
+        slot_id: id(0x45)?,
+        slot_type: 0x01,
+        slot_generation: 1,
+    };
+    out.push(
+        VectorBuilder::accept(
+            "backup",
+            "backup-v1-inventory-entries",
+            BACKUP_SPEC,
+            "7.1",
+            "One stream inventory entry and one slot inventory entry, at their canonical lengths.",
+        )
+        .input_bytes("object_id", id(0x41)?.as_bytes())
+        .input_bytes("stream_id", id(0x42)?.as_bytes())
+        .input("stream_kind", json!(StreamKind::Original.value()))
+        .input("stream_revision", json!(1))
+        .input("ciphertext_length", number(262_144))
+        .input_bytes("manifest_commitment", &[0x43; 32])
+        .input_bytes("ordered_chunk_commitment", &[0x44; 32])
+        .input_bytes("slot_id", id(0x45)?.as_bytes())
+        .input("slot_type", json!(1))
+        .input("slot_generation", json!(1))
+        .expect_bytes("stream_entry", &stream_entry.encode())
+        .expect("stream_entry_length", number(109))
+        .expect_bytes("slot_entry", &slot_entry.encode())
+        .expect("slot_entry_length", number(25))
+        .build(),
+    );
+
+    let mut committer = InventoryCommitter::new();
+    committer.add_stream(&stream_entry)?;
+    committer.add_slot(&slot_entry)?;
+    let inventory_commitment = committer.finish();
+    out.push(
+        VectorBuilder::accept(
+            "backup",
+            "backup-v1-inventory-commitment",
+            BACKUP_SPEC,
+            "7.2",
+            "The ordered inventory commitment over one stream entry then one slot entry, with no count prefix and no separator.",
+        )
+        .input("domain_tag", json!(hex_of(tag::BACKUP_INVENTORY_COMMITMENT)))
+        .input_bytes("stream_entry", &stream_entry.encode())
+        .input_bytes("slot_entry", &slot_entry.encode())
+        .expect_bytes("inventory_commitment", &inventory_commitment)
+        .build(),
+    );
+
+    let empty = InventoryCommitter::new();
+    out.push(
+        VectorBuilder::accept(
+            "backup",
+            "backup-v1-empty-inventory-commitment",
+            BACKUP_SPEC,
+            "7.2",
+            "For an empty inventory the commitment is BLAKE3-256 of the domain tag alone.",
+        )
+        .input(
+            "domain_tag",
+            json!(hex_of(tag::BACKUP_INVENTORY_COMMITMENT)),
+        )
+        .expect_bytes("inventory_commitment", &empty.finish())
+        .build(),
+    );
+
+    let manifest = BackupManifest {
+        backup_id,
+        vault_id,
+        created_time_ms: 1_700_000_000_000,
+        base_backup_id: None,
+        catalog_generation: 7,
+        catalog_format_version: 1,
+        stream_entry_count: 1,
+        slot_entry_count: 1,
+        inventory_commitment,
+        free_space_required: 67_371_008,
+    };
+    let manifest_record = manifest.seal(&manifest_key, &nonce(0x31))?;
+    out.push(
+        VectorBuilder::accept(
+            "backup",
+            "backup-v1-manifest",
+            BACKUP_SPEC,
+            "4",
+            "The manifest plaintext and the sealed record, under a key derived from the root and the vault identity alone.",
+        )
+        .input_bytes("root_secret", root.expose())
+        .input_bytes("vault_id", vault_id.as_bytes())
+        .input_bytes("backup_id", backup_id.as_bytes())
+        .input_bytes("manifest_nonce", nonce(0x31).as_bytes())
+        .input("created_time_ms", number(1_700_000_000_000))
+        .input("catalog_generation", number(7))
+        .expect_bytes("backup_manifest_key", manifest_key.expose())
+        .expect_bytes("manifest_plaintext", &manifest.encode())
+        .expect("manifest_plaintext_length", number(117))
+        .expect_bytes("manifest_record", &manifest_record)
+        .note(TEST_ONLY)
+        .build(),
+    );
+
+    let commit = FinalBackupCommit {
+        backup_id,
+        record_count: 6,
+        stream_entry_count: 1,
+        slot_entry_count: 1,
+        inventory_commitment,
+    };
+    let commit_record = commit.seal(&manifest_key, &vault_id, &nonce(0x32))?;
+    out.push(
+        VectorBuilder::accept(
+            "backup",
+            "backup-v1-final-commit",
+            BACKUP_SPEC,
+            "7",
+            "The final backup commit, sealed under the manifest key and a different domain tag, so neither record opens as the other.",
+        )
+        .input_bytes("root_secret", root.expose())
+        .input_bytes("vault_id", vault_id.as_bytes())
+        .input_bytes("backup_id", backup_id.as_bytes())
+        .input_bytes("commit_nonce", nonce(0x32).as_bytes())
+        .input("record_count", number(6))
+        .expect_bytes("commit_plaintext", &commit.encode())
+        .expect("commit_plaintext_length", number(64))
+        .expect_bytes("commit_record", &commit_record)
+        .note(TEST_ONLY)
+        .build(),
+    );
+
+    // Negative vectors, §5: every fixed field is checked rather than ignored.
+    let mut wrong_magic = preamble.encode();
+    wrong_magic[7] = b'2';
+    out.push(
+        VectorBuilder::reject(
+            "backup",
+            "backup-v1-wrong-magic",
+            BACKUP_SPEC,
+            "2.3",
+            "Eight bytes that are neither CHURBAK1 nor an age header are not a Chur backup.",
+            "VAULT_CORRUPT",
+        )
+        .input_bytes("preamble", &wrong_magic)
+        .build(),
+    );
+
+    let mut wrong_version = preamble.encode();
+    wrong_version[9] = 0x02;
+    out.push(
+        VectorBuilder::reject(
+            "backup",
+            "backup-v1-unsupported-version",
+            BACKUP_SPEC,
+            "2.1",
+            "An unknown backup version fails as UNSUPPORTED_VERSION rather than as corruption.",
+            "UNSUPPORTED_VERSION",
+        )
+        .input_bytes("preamble", &wrong_version)
+        .build(),
+    );
+
+    let mut wrong_suite = preamble.encode();
+    wrong_suite[13] = 0x02;
+    out.push(
+        VectorBuilder::reject(
+            "backup",
+            "backup-v1-unsupported-suite",
+            BACKUP_SPEC,
+            "2.1",
+            "Suite 0x0002 is the Android Keystore wrap and is invalid as a package suite.",
+            "UNSUPPORTED_SUITE",
+        )
+        .input_bytes("preamble", &wrong_suite)
+        .build(),
+    );
+
+    let mut non_zero_reserved = preamble.encode();
+    non_zero_reserved[23] = 0x01;
+    out.push(
+        VectorBuilder::reject(
+            "backup",
+            "backup-v1-non-zero-reserved",
+            BACKUP_SPEC,
+            "2.1",
+            "A fixed preamble field holding any other value is VAULT_CORRUPT and is never ignored.",
+            "VAULT_CORRUPT",
+        )
+        .input_bytes("preamble", &non_zero_reserved)
+        .build(),
+    );
+
+    out.push(
+        VectorBuilder::reject(
+            "backup",
+            "backup-v1-record-count-below-minimum",
+            BACKUP_SPEC,
+            "13",
+            "A package holds at least the encrypted backup manifest and the final backup commit.",
+            "RESOURCE_LIMIT_EXCEEDED",
+        )
+        .input("record_count", number(1))
+        .build(),
+    );
+
+    let mut unallocated = header.encode();
+    unallocated[0] = 0x08;
+    out.push(
+        VectorBuilder::reject(
+            "backup",
+            "backup-v1-unallocated-record-type",
+            BACKUP_SPEC,
+            "2.2",
+            "An unallocated record type is a parse failure, never an ignorable record.",
+            "VAULT_CORRUPT",
+        )
+        .input_bytes("header", &unallocated)
+        .build(),
+    );
+
+    let mut wrong_record_version = header.encode();
+    wrong_record_version[1] = 0x02;
+    out.push(
+        VectorBuilder::reject(
+            "backup",
+            "backup-v1-unsupported-record-version",
+            BACKUP_SPEC,
+            "2.2",
+            "Every v1 package record carries record_version 0x01.",
+            "VAULT_CORRUPT",
+        )
+        .input_bytes("header", &wrong_record_version)
+        .build(),
+    );
+
+    // §4: the manifest repeats the preamble's backup version, and a restore
+    // rejects the package when the two differ.
+    let mut contradicts = manifest.encode();
+    contradicts[17] = 0x02;
+    out.push(
+        VectorBuilder::reject(
+            "backup",
+            "backup-v1-manifest-contradicts-the-preamble",
+            BACKUP_SPEC,
+            "4",
+            "The manifest repeats the public preamble's backup version; a restore rejects a package where the two differ.",
+            "VAULT_CORRUPT",
+        )
+        .input_bytes("manifest_plaintext", &contradicts)
+        .build(),
+    );
+
+    // The final commit is sealed under the same key and a different tag, so it
+    // does not open as a manifest.
+    out.push(
+        VectorBuilder::reject(
+            "backup",
+            "backup-v1-final-commit-does-not-open-as-a-manifest",
+            BACKUP_SPEC,
+            "4",
+            "Two records of one package share a key and differ only in their domain tag, so neither opens as the other.",
+            "VAULT_CORRUPT",
+        )
+        .input_bytes("manifest_key", manifest_key.expose())
+        .input_bytes("vault_id", vault_id.as_bytes())
+        .input_bytes("record", &commit_record)
+        .note(TEST_ONLY)
         .build(),
     );
     Ok(())
