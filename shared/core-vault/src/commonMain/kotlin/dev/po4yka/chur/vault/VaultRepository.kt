@@ -48,16 +48,6 @@ class VaultRepository(
     private var generation = 0L
     private var lastUsedMs = 0L
 
-    /**
-     * Reader handles a player holds, so a lock can close them.
-     *
-     * `PLAINTEXT_LIFECYCLE.md` §8 step 2 invalidates every session handle on
-     * lock, and Rust does that already: a reader is registered as owned by its
-     * session and `chur_vault_lock` drains it. This set exists so the Kotlin
-     * side stops calling handles that are already dead, which would otherwise
-     * surface to a player as a transport error it retries.
-     */
-    private val leases = mutableSetOf<Long>()
 
     /** What the application should show. */
     val state: StateFlow<VaultState> = _state.asStateFlow()
@@ -131,13 +121,6 @@ class VaultRepository(
      * product expects rather than the case it forbids.
      */
     suspend fun lock(reason: LockReason) = mutex.withLock {
-        // Leases go first. Rust invalidates them anyway when the session locks,
-        // and closing them here is what stops a player from calling a dead
-        // handle and reading the failure as a transport error to retry.
-        for (reader in leases.toList()) {
-            runCatching { ChurVault.closeReader(reader) }
-        }
-        leases.clear()
         if (session != 0L) {
             runCatching { ChurVault.lock(session, reason) }
             runCatching { ChurVault.closeSession(session) }
@@ -167,7 +150,6 @@ class VaultRepository(
 
     /** Closes everything, which a process shutdown does. */
     suspend fun shutdown() = mutex.withLock {
-        leases.clear()
         if (runtime != 0L) {
             runCatching { ChurVault.closeRuntime(runtime) }
             runtime = 0L
@@ -309,15 +291,16 @@ class VaultRepository(
      * and it names "a Media3 loader thread and an `AVAssetResourceLoader`
      * queue" as the callers it has in mind.
      *
-     * The caller must [releaseReader] the lease. [lock] closes every
-     * outstanding one, so a lease never outlives the session it came from.
+     * A lease never outlives the session it came from, and this class does not
+     * arrange that: `PLAINTEXT_LIFECYCLE.md` §8 step 2 invalidates every session
+     * handle on lock, and `chur_vault_lock` does it by draining every handle the
+     * session owns, of which a reader is one. Tracking the leases here as well
+     * would add a second owner of the same fact and a set mutated from a player
+     * thread and a lock at once; the caller [releaseReader]s what it took, and a
+     * call on a handle the lock already closed is `SESSION_EXPIRED`.
      */
     suspend fun leaseReader(objectId: ByteArray, kind: StreamKind = StreamKind.ORIGINAL): Long =
-        withSession { current ->
-            val reader = ChurVault.openReader(current, objectId, kind)
-            leases.add(reader)
-            reader
-        }
+        withSession { current -> ChurVault.openReader(current, objectId, kind) }
 
     /**
      * The content information a player needs before its first range request.
@@ -338,11 +321,17 @@ class VaultRepository(
     fun readLeased(reader: Long, offset: Long, length: Int): ByteArray =
         ChurVault.readRange(reader, offset, length)
 
-    /** Closes one lease. Idempotent, because a player may release twice. */
+    /**
+     * Closes one lease.
+     *
+     * It takes no lock and swallows the failure, because both of the things
+     * that can go wrong here are ordinary: closing a handle twice is idempotent
+     * inside Rust, and closing one a lock already invalidated is
+     * `SESSION_EXPIRED`. A player releases on a thread of its own choosing and
+     * must not block behind a catalog query to do it.
+     */
     fun releaseReader(reader: Long) {
-        if (leases.remove(reader)) {
-            runCatching { ChurVault.closeReader(reader) }
-        }
+        runCatching { ChurVault.closeReader(reader) }
     }
 
     /** Starts an import from a descriptor the platform opened. */

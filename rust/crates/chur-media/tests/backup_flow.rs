@@ -438,3 +438,76 @@ fn a_container_travels_as_its_own_ciphertext() {
         "the package does not carry the container's own bytes"
     );
 }
+
+/// A caller that cancels after the first progress report.
+///
+/// `chur_vault_lock` drains and joins every operation before it takes the
+/// session, so an operation that cannot stop is a lock that cannot complete.
+/// A vault can hold one object of a terabyte, and a copy that checked its flag
+/// only between files would make the lock wait for that whole copy.
+struct CancelAtOnce {
+    cancelled: std::cell::Cell<bool>,
+}
+
+impl chur_media::progress::Progress for CancelAtOnce {
+    fn cancelled(&self) -> bool {
+        let seen = self.cancelled.get();
+        self.cancelled.set(true);
+        seen
+    }
+
+    fn advance(&mut self, _processed: u64) {}
+}
+
+#[test]
+fn a_backup_stops_inside_a_container_rather_than_between_files() {
+    let (_root, mut session) = new_vault();
+    // Several buffers' worth, so a copy that only checked between files would
+    // run to the end of this one.
+    import_one(&mut session, 262_144 * 4, "big.jpg", 0x7777);
+
+    let mut package = Cursor::new(Vec::new());
+    let mut progress = CancelAtOnce {
+        cancelled: std::cell::Cell::new(false),
+    };
+    assert_eq!(
+        rejection(backup::create(
+            &mut session,
+            &mut package,
+            NOW,
+            &mut progress
+        )),
+        ChurStatus::Cancelled
+    );
+    assert!(
+        (package.into_inner().len() as u64) < 262_144 * 4,
+        "a cancelled backup wrote the whole object"
+    );
+}
+
+/// The same for the restore half: a package with one large object must stop
+/// inside it, not after it.
+#[test]
+fn a_restore_stops_inside_a_container_rather_than_between_files() {
+    let (_root, mut session) = new_vault();
+    import_one(&mut session, 262_144 * 4, "big.jpg", 0x8888);
+    let mut package = Cursor::new(Vec::new());
+    backup::create(&mut session, &mut package, NOW, &mut Uninterrupted).expect("create");
+    session.lock().expect("lock");
+
+    let destination = scratch_root();
+    let mut progress = CancelAtOnce {
+        cancelled: std::cell::Cell::new(false),
+    };
+    assert_eq!(
+        rejection(backup::restore(
+            &destination,
+            &mut package,
+            PASSWORD,
+            NOW,
+            &mut progress,
+        )),
+        ChurStatus::Cancelled
+    );
+    assert!(destination.registry_names().unwrap().is_empty());
+}

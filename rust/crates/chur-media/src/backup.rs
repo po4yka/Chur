@@ -225,6 +225,7 @@ pub fn create(
         RecordType::CatalogExport,
         &catalog_path,
         catalog_length,
+        progress,
     )?;
 
     // Pass two: the containers, in the same order the commitment was taken in.
@@ -243,7 +244,7 @@ pub fn create(
         };
         copied += write_all(destination, &header.encode())?;
         copied += write_all(destination, &entry_bytes)?;
-        copied += copy_file(destination, &path, entry.ciphertext_length)?;
+        copied += copy_file(destination, &path, entry.ciphertext_length, progress)?;
         progress.advance(copied);
         Ok(())
     })?;
@@ -364,23 +365,39 @@ fn write_streamed_record(
     record_type: RecordType,
     path: &Path,
     length: u64,
+    progress: &impl Progress,
 ) -> Result<u64> {
     let header = RecordHeader {
         record_type,
         payload_length: length,
     };
     let mut written = write_all(destination, &header.encode())?;
-    written += copy_file(destination, path, length)?;
+    written += copy_file(destination, path, length, progress)?;
     Ok(written)
 }
 
 /// Copies exactly `length` bytes of a file into the package.
-fn copy_file(destination: &mut impl Write, path: &Path, length: u64) -> Result<u64> {
+///
+/// The probe is read once per buffer rather than once per file. A vault can
+/// hold one object of a terabyte, and a copy that checked only between files
+/// would make `chur_vault_lock` wait for that whole copy: the lock drains and
+/// joins every operation before it takes the session, so an operation that
+/// cannot stop is a lock that cannot complete, against a p95 budget of 100 ms
+/// in `docs/assurance/PERFORMANCE_BUDGETS.md` §2.
+fn copy_file(
+    destination: &mut impl Write,
+    path: &Path,
+    length: u64,
+    progress: &impl Progress,
+) -> Result<u64> {
     let mut file = std::fs::File::open(path)
         .map_err(|_| chur_core::err!(NotFound, "a file the package needs is absent"))?;
     let mut buffer = vec![0u8; COPY_BUFFER];
     let mut remaining = length;
     while remaining > 0 {
+        if progress.cancelled() {
+            return Err(progress::cancelled("the backup was cancelled"));
+        }
         let take = usize::try_from(remaining.min(COPY_BUFFER as u64))
             .map_err(|_| chur_core::err!(InternalFailure, "a copy step exceeds a usize"))?;
         file.read_exact(&mut buffer[..take]).map_err(|_| {
@@ -507,7 +524,7 @@ pub fn restore(
         // describes it, not only that an entry is present — a package whose
         // ciphertext was altered would otherwise install and fail at the first
         // read, after the vault existed.
-        verify_container(source, slot, &entry)?;
+        verify_container(source, slot, &entry, progress)?;
         committer.add_stream(&entry)?;
         entries.push((entry, slot.offset));
     }
@@ -536,6 +553,7 @@ pub fn restore(
             source,
             find(&slots, RecordType::CatalogExport)?,
             &catalog_path,
+            progress,
         )?;
         // `VAULT_DESCRIPTOR_V1.md` §5: the descriptor commits to the catalog it
         // names. Checking it here rather than at the next unlock is the
@@ -585,6 +603,7 @@ pub fn restore(
                 offset + head,
                 entry.ciphertext_length,
                 &root_dir.container(&store_id, &stream.container_path_id),
+                progress,
             )?;
             index += 1;
             done += entry.ciphertext_length;
@@ -771,6 +790,7 @@ fn verify_container(
     source: &mut (impl Read + Seek),
     slot: &RecordSlot,
     entry: &StreamInventoryEntry,
+    progress: &impl Progress,
 ) -> Result<()> {
     let content =
         slot.offset + RECORD_HEADER_LEN as u64 + chur_format::backup::STREAM_ENTRY_LEN as u64;
@@ -814,6 +834,7 @@ fn verify_container(
         content + first_chunk,
         chunks_end - first_chunk,
         &mut committer,
+        progress,
     )?;
     ensure!(
         committer.finish() == entry.ordered_chunk_commitment,
@@ -839,6 +860,7 @@ fn hash_range(
     offset: u64,
     length: u64,
     committer: &mut chur_crypto::commit::Committer,
+    progress: &impl Progress,
 ) -> Result<()> {
     source
         .seek(SeekFrom::Start(offset))
@@ -846,6 +868,9 @@ fn hash_range(
     let mut buffer = vec![0u8; COPY_BUFFER];
     let mut remaining = length;
     while remaining > 0 {
+        if progress.cancelled() {
+            return Err(progress::cancelled("the restore was cancelled"));
+        }
         let take = usize::try_from(remaining.min(COPY_BUFFER as u64))
             .map_err(|_| chur_core::err!(InternalFailure, "a hash step exceeds a usize"))?;
         source
@@ -858,12 +883,18 @@ fn hash_range(
 }
 
 /// Writes one record's payload out to a file.
-fn extract(source: &mut (impl Read + Seek), slot: &RecordSlot, path: &Path) -> Result<()> {
+fn extract(
+    source: &mut (impl Read + Seek),
+    slot: &RecordSlot,
+    path: &Path,
+    progress: &impl Progress,
+) -> Result<()> {
     extract_range(
         source,
         slot.offset + RECORD_HEADER_LEN as u64,
         slot.payload_length,
         path,
+        progress,
     )
 }
 
@@ -873,6 +904,7 @@ fn extract_range(
     offset: u64,
     length: u64,
     path: &Path,
+    progress: &impl Progress,
 ) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -886,6 +918,9 @@ fn extract_range(
     let mut buffer = vec![0u8; COPY_BUFFER];
     let mut remaining = length;
     while remaining > 0 {
+        if progress.cancelled() {
+            return Err(progress::cancelled("the restore was cancelled"));
+        }
         let take = usize::try_from(remaining.min(COPY_BUFFER as u64))
             .map_err(|_| chur_core::err!(InternalFailure, "a copy step exceeds a usize"))?;
         source
