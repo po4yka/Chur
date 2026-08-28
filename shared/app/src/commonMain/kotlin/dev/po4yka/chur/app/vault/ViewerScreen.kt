@@ -54,6 +54,7 @@ fun ViewerScreen(
     onDelete: () -> Unit,
     onToggleDetail: () -> Unit,
     player: (@Composable (Modifier) -> Unit)? = null,
+    waveform: ByteArray? = null,
 ) {
     Box(modifier = Modifier.fillMaxSize().background(ViewerColors.canvas)) {
         if (player != null) {
@@ -62,6 +63,18 @@ fun ViewerScreen(
             // screen that reads a repository, and this file's rule is that a
             // screen is a pure function of a state value.
             player(Modifier.fillMaxSize())
+            // A recording has nothing to look at, so the waveform is what the
+            // screen shows: `MEDIA_PIPELINE.md` §6.1 makes it a peak envelope
+            // rather than a picture, which is why it can be drawn in the
+            // viewer's own palette rather than baked into a second derivative.
+            if (waveform != null) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    WaveformStrip(record = waveform, color = ViewerColors.content)
+                }
+            }
         } else if (preview != null) {
             Image(
                 bitmap = preview,

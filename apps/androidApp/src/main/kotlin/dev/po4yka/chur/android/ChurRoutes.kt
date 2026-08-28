@@ -33,6 +33,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.graphics.ImageBitmap
+import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
+import dev.po4yka.chur.app.vault.MEDIA_CLASS_VIDEO
 import dev.po4yka.chur.app.vault.VaultPlayer
 import dev.po4yka.chur.app.vault.ViewerScreen
 import dev.po4yka.chur.app.vault.playbackFor
@@ -361,15 +363,24 @@ private fun ViewerRoute(
     var detail by remember(projection.id) { mutableStateOf<ObjectDetail?>(null) }
     var preview by remember(projection.id) { mutableStateOf<ImageBitmap?>(null) }
     var showDetail by remember(projection.id) { mutableStateOf(false) }
+    var waveform by remember(projection.id) { mutableStateOf<ByteArray?>(null) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(projection.id, generation) {
+        // A video's still is its poster frame, which `MEDIA_PIPELINE.md` §6
+        // generates for every video; a photograph's is its screen preview. Both
+        // fall back to the thumbnail, which every object has.
+        val first = if (projection.mediaKind == MEDIA_CLASS_VIDEO) {
+            StreamKind.VIDEO_POSTER
+        } else {
+            StreamKind.SCREEN_PREVIEW
+        }
         preview = cache.load(
             repository = controller.vault,
             generation = generation,
             objectId = projection.objectId,
             id = projection.id,
-            kind = StreamKind.SCREEN_PREVIEW,
+            kind = first,
         ) ?: cache.load(
             repository = controller.vault,
             generation = generation,
@@ -377,6 +388,9 @@ private fun ViewerRoute(
             id = projection.id,
             kind = StreamKind.THUMBNAIL,
         )
+        if (projection.mediaKind == MEDIA_CLASS_AUDIO) {
+            waveform = controller.derivativeOf(projection.objectId, StreamKind.AUDIO_WAVEFORM)
+        }
         detail = controller.detailOf(projection.objectId)
     }
 
@@ -407,6 +421,7 @@ private fun ViewerRoute(
         player = playback?.let { source ->
             { modifier -> VaultPlayer(source, modifier) }
         },
+        waveform = waveform,
     )
 }
 

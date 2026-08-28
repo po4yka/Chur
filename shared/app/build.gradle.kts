@@ -45,6 +45,10 @@ kotlin {
             implementation(project(":shared:core-model"))
             api(project(":shared:core-vault"))
             api(project(":shared:feature-notes"))
+            // The waveform record of `MEDIA_PIPELINE.md` §6.1 is written by the
+            // import pipeline and drawn here, so the reader that parses it and
+            // the accumulator that produces it stay in one module.
+            implementation(project(":shared:feature-import"))
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.compose.runtime)
             implementation(libs.compose.foundation)

@@ -9,6 +9,7 @@ import dev.po4yka.chur.ffi.ObjectPage
 import dev.po4yka.chur.ffi.ObjectQuery
 import dev.po4yka.chur.ffi.QueryScope
 import dev.po4yka.chur.ffi.SlotSummary
+import dev.po4yka.chur.ffi.StreamKind
 import dev.po4yka.chur.notes.InMemoryNoteStore
 import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.notes.NoteStore
@@ -201,6 +202,20 @@ class ChurController(
 
     /** Whether the public-shell disclosure is owed to the user right now. */
     val disclosureDue: StateFlow<Boolean> = _disclosureDue.asStateFlow()
+
+    /**
+     * Reads one derived asset, or `null` when the object carries none.
+     *
+     * A derivative that is absent is an ordinary state rather than a failure:
+     * `MEDIA_PIPELINE.md` §13 says a codec failure must not commit a catalog
+     * entry claiming a derivative exists, so an object imported when the codec
+     * could not read it simply has none, and the surface shows what it has.
+     */
+    suspend fun derivativeOf(objectId: ByteArray, kind: StreamKind): ByteArray? = try {
+        withContext(Dispatchers.Default) { repository.readDerived(objectId, kind) }
+    } catch (_: ChurFailure) {
+        null
+    }
 
     /** Locks now, `DESIGN.md` §14.3. */
     fun lock(reason: LockReason = LockReason.USER) = guarded {

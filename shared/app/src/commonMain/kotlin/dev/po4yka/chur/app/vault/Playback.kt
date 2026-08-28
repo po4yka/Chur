@@ -74,7 +74,7 @@ fun playbackFor(
 }
 
 /** `media_class` of a video, `CANONICAL_ENCODING_V1.md` §15.4. */
-private const val MEDIA_CLASS_VIDEO = 2
+const val MEDIA_CLASS_VIDEO = 2
 
 /** `media_class` of audio, §15.4. */
-private const val MEDIA_CLASS_AUDIO = 3
+const val MEDIA_CLASS_AUDIO = 3
