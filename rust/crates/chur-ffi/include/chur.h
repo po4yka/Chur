@@ -10,10 +10,10 @@
  * This header declares the Phase-1 surface: the ABI handshake of
  * FFI_CONTRACT.md section 2, the status vocabulary of docs/ERROR_MODEL.md, the
  * control plane and data plane of section 6.2, the product surface of section
- * 6.5, and the Android Keystore surface of section 6.6. Adding an export raises
- * the minor ABI version; changing or removing one raises the major. The library
- * reports 1.2: section 6.5 raised the minor from 0 and section 6.6 raised it
- * again.
+ * 6.5, the Android Keystore surface of section 6.6, and the portable backup
+ * surface of section 6.7. Adding an export raises the minor ABI version;
+ * changing or removing one raises the major. The library reports 1.3: sections
+ * 6.5, 6.6, and 6.7 each raised the minor from 0.
  */
 
 #ifndef CHUR_H
@@ -221,6 +221,8 @@ typedef int32_t chur_status_t;
 #define CHUR_OPERATION_IMPORT 1
 #define CHUR_OPERATION_EXPORT 2
 #define CHUR_OPERATION_INTEGRITY_SCAN 3
+#define CHUR_OPERATION_BACKUP 4
+#define CHUR_OPERATION_RESTORE 5
 
 #define CHUR_STAGE_STARTING 1
 #define CHUR_STAGE_RUNNING 2
@@ -512,6 +514,31 @@ chur_status_t chur_derived_read(chur_handle_t session,
                                 const ChurObjectRefV1 *object, uint32_t kind,
                                 uint8_t *destination, size_t capacity,
                                 size_t *bytes_written);
+
+/* -------------------------------------------------------------------------
+ * The portable backup surface, ABI 1.3
+ *
+ * FFI_CONTRACT.md section 6.7. Both calls return an operation handle and are
+ * driven with chur_operation_poll, _cancel, and _close, exactly as an import
+ * or an export is.
+ *
+ * Both descriptors must be seekable. BACKUP_FORMAT_V1.md section 7 writes the
+ * public preamble before the records and learns the record count only after
+ * the inventory pass, and section 8 seeks over record headers before it reads
+ * a payload, so a pipe is neither a destination nor a source.
+ *
+ * chur_backup_restore takes the runtime rather than a session: a restore
+ * installs an identity, so at the moment it runs there may be no session and
+ * no vault at all, and the credential comes from the package's own portable
+ * descriptor.
+ * ---------------------------------------------------------------------- */
+
+chur_status_t chur_backup_create(chur_handle_t session, int32_t destination_fd,
+                                 chur_handle_t *out_operation);
+chur_status_t chur_backup_restore(chur_handle_t runtime, int32_t source_fd,
+                                  const uint8_t *password,
+                                  uint32_t password_length,
+                                  chur_handle_t *out_operation);
 
 #ifdef __cplusplus
 } /* extern "C" */

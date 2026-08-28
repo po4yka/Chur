@@ -41,6 +41,8 @@ internal expect object ChurNative {
     fun catalogQuery(session: Long, scope: Int, sort: Int, kinds: Int, limit: Int, scopeId: ByteArray, cursor: ByteArray?, terms: ByteArray?, destination: ChurBuffer, outWritten: IntArray): Int
     fun importBegin(session: Long, sourceFd: Int, mediaClass: Int, width: Int, height: Int, durationMs: Long, knownLength: Long, captureTimeMs: Long, contentType: String, originalFilename: String?, outImport: LongArray): Int
     fun exportBegin(session: Long, objectId: ByteArray, destinationFd: Int, outExport: LongArray): Int
+    fun backupCreate(session: Long, destinationFd: Int, outOperation: LongArray): Int
+    fun backupRestore(runtime: Long, sourceFd: Int, password: ByteArray, outOperation: LongArray): Int
     fun integrityScanBegin(session: Long, objectId: ByteArray?, outScan: LongArray): Int
     fun operationPoll(operation: Long, outCounts: LongArray, outStates: IntArray): Int
     fun operationCancel(operation: Long): Int

@@ -992,3 +992,130 @@ pub(crate) fn run_deletion(session: &mut Session, object_id: &Id, now_ms: u64) -
     // collection has completed, and v1 enrols no peer.
     deletion::discard_tombstone(session.catalog()?, object_id)
 }
+
+// ---------------------------------------------------------------------------
+// §6.7 The portable backup surface, ABI 1.3
+// ---------------------------------------------------------------------------
+
+/// Writes a full backup package to a descriptor, `BACKUP_FORMAT_V1.md` §7.
+///
+/// The descriptor must be writable and seekable, because §7 writes the public
+/// preamble before the records and the record count is known only after the
+/// inventory pass. A pipe is therefore not a destination: an application that
+/// must upload a package writes it to a file and uploads that.
+///
+/// The call returns immediately with an operation handle. §9 makes the work
+/// cancellable and §10 makes progress polled rather than pushed, exactly as an
+/// import or an export is.
+///
+/// # Safety
+///
+/// `destination_fd` is open, writable, and seekable for the duration of the
+/// call, and `out_operation` points to a writable handle. §13 has Rust
+/// duplicate the descriptor, so the caller closes its own on its own schedule.
+#[unsafe(no_mangle)]
+#[expect(
+    unsafe_code,
+    reason = "ADR-0016: the v1 C ABI requires an exported symbol"
+)]
+pub unsafe extern "C" fn chur_backup_create(
+    session: Handle,
+    destination_fd: i32,
+    out_operation: *mut Handle,
+) -> Status {
+    guard_status(|| {
+        let entry = registry::get(session, Kind::Session)?;
+        let Entry::Session { .. } = entry.as_ref() else {
+            return Err(wrong_type());
+        };
+        // SAFETY: the caller guarantees the descriptor for the duration of the
+        // call; the duplicate is Rust's from here on.
+        let mut destination = unsafe { crate::api::duplicate_descriptor(destination_fd)? };
+        let now = crate::api::now_ms();
+        let operation = crate::operation::Operation::spawn(
+            crate::operation::OperationKind::Backup,
+            0,
+            move |shared| {
+                let Entry::Session { session, .. } = entry.as_ref() else {
+                    return Err(wrong_type());
+                };
+                let mut guard = registry::lock(session);
+                let mut progress =
+                    crate::operation::SharedProgress::new(shared, crate::operation::Stage::Running);
+                chur_media::backup::create(&mut guard, &mut destination, now, &mut progress)
+                    .map(|_| ())
+            },
+        )?;
+        let handle = registry::insert(Entry::Operation {
+            owner: session,
+            operation,
+        })?;
+        // SAFETY: the caller guarantees `out_operation` is writable.
+        unsafe { crate::api::write_out(out_operation, handle) }
+    })
+}
+
+/// Restores a package into the runtime's storage root, §8.
+///
+/// It takes the runtime rather than a session, and deliberately: a restore
+/// installs an identity, so at the moment it runs there may be no session and
+/// no vault at all. §8 step 2 obtains the credential from the package's own
+/// portable descriptor.
+///
+/// The operation belongs to the runtime, so closing the runtime tears it down
+/// and locking an unrelated session does not.
+///
+/// # Safety
+///
+/// `source_fd` is open, readable, and seekable for the duration of the call,
+/// `password` points to `password_length` readable bytes, and `out_operation`
+/// points to a writable handle. The password is not retained after the call
+/// returns.
+#[unsafe(no_mangle)]
+#[expect(
+    unsafe_code,
+    reason = "ADR-0016: the v1 C ABI requires an exported symbol"
+)]
+pub unsafe extern "C" fn chur_backup_restore(
+    runtime: Handle,
+    source_fd: i32,
+    password: *const u8,
+    password_length: u32,
+    out_operation: *mut Handle,
+) -> Status {
+    guard_status(|| {
+        let entry = registry::get(runtime, Kind::Runtime)?;
+        let Entry::Runtime(guarded) = entry.as_ref() else {
+            return Err(wrong_type());
+        };
+        // SAFETY: the caller guarantees the pointer above for the call. §12
+        // keeps the credential inside Rust: it is copied into a zeroizing
+        // buffer here and the caller's pointer is not retained.
+        let secret = zeroize::Zeroizing::new(
+            unsafe { crate::api::borrow_bytes(password, password_length)? }.to_vec(),
+        );
+        let root = {
+            let guard = registry::lock(guarded);
+            guard.root().clone()
+        };
+        // SAFETY: as above for the descriptor.
+        let mut source = unsafe { crate::api::duplicate_descriptor(source_fd)? };
+        let now = crate::api::now_ms();
+        let operation = crate::operation::Operation::spawn(
+            crate::operation::OperationKind::Restore,
+            0,
+            move |shared| {
+                let mut progress =
+                    crate::operation::SharedProgress::new(shared, crate::operation::Stage::Running);
+                chur_media::backup::restore(&root, &mut source, &secret, now, &mut progress)
+                    .map(|_| ())
+            },
+        )?;
+        let handle = registry::insert(Entry::Operation {
+            owner: runtime,
+            operation,
+        })?;
+        // SAFETY: the caller guarantees `out_operation` is writable.
+        unsafe { crate::api::write_out(out_operation, handle) }
+    })
+}

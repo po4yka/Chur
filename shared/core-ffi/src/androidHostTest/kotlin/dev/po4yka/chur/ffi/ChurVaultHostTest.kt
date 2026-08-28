@@ -197,10 +197,18 @@ class ChurVaultHostTest {
     fun the_handshake_matches_the_frozen_abi() {
         val handshake = ChurVault.handshake()
         assertEquals(1, handshake.major)
-        assertEquals(2, handshake.minor, "§6.5 and §6.6 each raised the minor")
+        assertEquals(3, handshake.minor, "§6.5, §6.6, and §6.7 each raised the minor")
         assertEquals(1, handshake.objectFormatMin)
         assertEquals(1, handshake.objectFormatMax)
         assertTrue(handshake.capabilities and 0b0000_0010L != 0L, "the reader is declared")
+        assertTrue(
+            handshake.capabilities and 0b0001_0000L != 0L,
+            "the portable backup surface is declared",
+        )
+        assertTrue(
+            handshake.capabilities and 0b0000_0001L != 0L,
+            "the independent decoy identity is declared",
+        )
         assertTrue(ChurVault.statusIsKnown(ChurStatus.AUTHENTICATION_FAILED.value))
         assertFalse(ChurVault.statusIsKnown(42))
     }

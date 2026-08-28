@@ -76,10 +76,16 @@ pub enum Entry {
         /// The creation in progress.
         creation: Mutex<Option<chur_catalog::vault::VaultCreation>>,
     },
-    /// A long-running import, export, or integrity scan.
+    /// A long-running import, export, integrity scan, backup, or restore.
     Operation {
-        /// The session this operation belongs to.
-        session: Handle,
+        /// The handle this operation belongs to.
+        ///
+        /// It is a session for every operation that reads or writes vault
+        /// content, and the runtime for a restore, which runs before any
+        /// session exists. §4 invalidates a session's handles on lock and §14
+        /// makes closing the runtime stronger still, so a restore is torn down
+        /// by the second and not by the first.
+        owner: Handle,
         /// The operation.
         operation: crate::operation::Operation,
     },
@@ -98,7 +104,8 @@ impl Entry {
         match self {
             Entry::Runtime(_) => None,
             Entry::Session { runtime, .. } | Entry::Creation { runtime, .. } => Some(*runtime),
-            Entry::Reader { session, .. } | Entry::Operation { session, .. } => Some(*session),
+            Entry::Reader { session, .. } => Some(*session),
+            Entry::Operation { owner, .. } => Some(*owner),
         }
     }
 }

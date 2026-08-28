@@ -423,6 +423,33 @@ object ChurVault {
             ChurNative.exportBegin(session, objectId, destinationFd, out)
         }
 
+    /**
+     * Starts writing a backup package to a descriptor, `FFI_CONTRACT.md` §6.7.
+     *
+     * The descriptor must be writable and seekable:
+     * `docs/format/BACKUP_FORMAT_V1.md` §7 writes the public preamble before
+     * the records and learns the record count only after the inventory pass, so
+     * a pipe is not a destination. An application that uploads a package writes
+     * it to a file and uploads that.
+     */
+    fun beginBackup(session: Long, destinationFd: Int): Long =
+        handleOf("backup create") { out ->
+            ChurNative.backupCreate(session, destinationFd, out)
+        }
+
+    /**
+     * Starts restoring a backup package, §6.7.
+     *
+     * It takes the runtime rather than a session, because a restore installs an
+     * identity: at the moment it runs there may be no session and no vault at
+     * all, and §8 obtains the credential from the package's own portable
+     * descriptor.
+     */
+    fun beginRestore(runtime: Long, sourceFd: Int, password: ByteArray): Long =
+        handleOf("backup restore") { out ->
+            ChurNative.backupRestore(runtime, sourceFd, password, out)
+        }
+
     /** Starts an integrity scan; a null identifier scans every object. */
     fun beginIntegrityScan(session: Long, objectId: ByteArray?): Long =
         handleOf("scan begin") { out ->

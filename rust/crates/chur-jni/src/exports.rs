@@ -1308,3 +1308,50 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_derivedRead<'local>(
     };
     finish_written(&mut env, status, &out_written, written)
 }
+
+/// Starts a backup package write, `FFI_CONTRACT.md` §6.7.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_backupCreate<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    destination_fd: jint,
+    out_operation: JLongArray<'local>,
+) -> jint {
+    let mut handle = 0u64;
+    // SAFETY: `handle` is a live local.
+    let status = unsafe {
+        chur_ffi::product::chur_backup_create(handle_of(session), destination_fd, &mut handle)
+    };
+    finish_handle(&mut env, status, &out_operation, handle)
+}
+
+/// Starts a restore from a backup package, §6.7.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_backupRestore<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    runtime: jlong,
+    source_fd: jint,
+    password: JByteArray<'local>,
+    out_operation: JLongArray<'local>,
+) -> jint {
+    let Some(secret) = byte_array(&mut env, &password) else {
+        return INVALID_INPUT;
+    };
+    let Ok(length) = u32::try_from(secret.len()) else {
+        return INVALID_INPUT;
+    };
+    let mut handle = 0u64;
+    // SAFETY: `secret` and `handle` are live locals.
+    let status = unsafe {
+        chur_ffi::product::chur_backup_restore(
+            handle_of(runtime),
+            source_fd,
+            secret.as_ptr(),
+            length,
+            &mut handle,
+        )
+    };
+    finish_handle(&mut env, status, &out_operation, handle)
+}

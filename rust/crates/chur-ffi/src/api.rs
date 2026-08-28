@@ -585,7 +585,10 @@ pub unsafe extern "C" fn chur_import_begin(
                 shared,
             )
         })?;
-        let handle = registry::insert(Entry::Operation { session, operation })?;
+        let handle = registry::insert(Entry::Operation {
+            owner: session,
+            operation,
+        })?;
         unsafe { write_out(out_import, handle) }
     })
 }
@@ -616,7 +619,10 @@ pub unsafe extern "C" fn chur_export_begin(
         let operation = Operation::spawn(OperationKind::Export, 0, move |shared| {
             run_export(&entry, &object_id, destination, shared)
         })?;
-        let handle = registry::insert(Entry::Operation { session, operation })?;
+        let handle = registry::insert(Entry::Operation {
+            owner: session,
+            operation,
+        })?;
         unsafe { write_out(out_export, handle) }
     })
 }
@@ -655,7 +661,10 @@ pub unsafe extern "C" fn chur_integrity_scan_begin(
         let operation = Operation::spawn(OperationKind::IntegrityScan, 0, move |shared| {
             run_scan(&entry, single, now, shared)
         })?;
-        let handle = registry::insert(Entry::Operation { session, operation })?;
+        let handle = registry::insert(Entry::Operation {
+            owner: session,
+            operation,
+        })?;
         unsafe { write_out(out_scan, handle) }
     })
 }
@@ -1079,7 +1088,7 @@ fn run_scan(
 /// `fd` is an open descriptor for the duration of the call.
 #[cfg(unix)]
 #[expect(unsafe_code, reason = "the caller's pointer contract is stated above")]
-unsafe fn duplicate_descriptor(fd: c_int) -> Result<std::fs::File> {
+pub(crate) unsafe fn duplicate_descriptor(fd: c_int) -> Result<std::fs::File> {
     use std::os::fd::{BorrowedFd, FromRawFd, IntoRawFd};
 
     if fd < 0 {

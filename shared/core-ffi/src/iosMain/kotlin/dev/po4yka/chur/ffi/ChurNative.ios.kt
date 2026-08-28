@@ -21,6 +21,8 @@ import dev.po4yka.chur.native.chur_capabilities
 import dev.po4yka.chur.native.chur_catalog_query
 import dev.po4yka.chur.native.chur_derived_put
 import dev.po4yka.chur.native.chur_derived_read
+import dev.po4yka.chur.native.chur_backup_create
+import dev.po4yka.chur.native.chur_backup_restore
 import dev.po4yka.chur.native.chur_export_begin
 import dev.po4yka.chur.native.chur_handle_tVar
 import dev.po4yka.chur.native.chur_import_begin
@@ -293,6 +295,32 @@ internal actual object ChurNative {
         val reference = objectReference(objectId)
         handleCall(outExport) { out ->
             chur_export_begin(session.toULong(), reference.ptr, destinationFd, out)
+        }
+    }
+
+    actual fun backupCreate(session: Long, destinationFd: Int, outOperation: LongArray): Int =
+        memScoped {
+            handleCall(outOperation) { out ->
+                chur_backup_create(session.toULong(), destinationFd, out)
+            }
+        }
+
+    actual fun backupRestore(
+        runtime: Long,
+        sourceFd: Int,
+        password: ByteArray,
+        outOperation: LongArray,
+    ): Int = memScoped {
+        password.pinnedPointer { pointer ->
+            handleCall(outOperation) { out ->
+                chur_backup_restore(
+                    runtime.toULong(),
+                    sourceFd,
+                    pointer,
+                    password.size.toUInt(),
+                    out,
+                )
+            }
         }
     }
 

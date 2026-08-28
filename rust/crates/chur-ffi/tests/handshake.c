@@ -52,8 +52,8 @@ int main(void) {
           "neither format range is the empty panic fallback");
 
     check(chur_abi_version_major() == 1, "major ABI version is 1");
-    check(chur_abi_version_minor() == 2,
-          "minor ABI version is 2, the section 6.5 and 6.6 additions");
+    check(chur_abi_version_minor() == 3,
+          "minor ABI version is 3, the section 6.5, 6.6, and 6.7 additions");
 
     check(chur_object_format_min() <= chur_object_format_max(),
           "object format range is ordered");
@@ -71,8 +71,11 @@ int main(void) {
           "the sequential reader is declared");
     check((capabilities & CHUR_CAP_INTEGRITY_SCAN) != 0,
           "the integrity scan is declared");
-    check((capabilities & (CHUR_CAP_DECOY_VAULT | CHUR_CAP_BACKUP_PACKAGE |
-                           CHUR_CAP_SYNC | CHUR_CAP_CONCURRENT_READS)) == 0,
+    check((capabilities & CHUR_CAP_BACKUP_PACKAGE) != 0,
+          "the portable backup surface is declared");
+    check((capabilities & CHUR_CAP_DECOY_VAULT) != 0,
+          "the independent decoy identity is declared");
+    check((capabilities & (CHUR_CAP_SYNC | CHUR_CAP_CONCURRENT_READS)) == 0,
           "no capability is declared before its surface exists");
     check((capabilities & ~(CHUR_CAP_DECOY_VAULT | CHUR_CAP_OBJECT_READER |
                             CHUR_CAP_SEQUENTIAL_READER | CHUR_CAP_INTEGRITY_SCAN |

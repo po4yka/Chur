@@ -53,6 +53,8 @@ internal actual object ChurNative {
     actual fun importBegin(session: Long, sourceFd: Int, mediaClass: Int, width: Int, height: Int, durationMs: Long, knownLength: Long, captureTimeMs: Long, contentType: String, originalFilename: String?, outImport: LongArray): Int = ChurJni.importBegin(session, sourceFd, mediaClass, width, height, durationMs, knownLength, captureTimeMs, contentType, originalFilename, outImport)
 
     actual fun exportBegin(session: Long, objectId: ByteArray, destinationFd: Int, outExport: LongArray): Int = ChurJni.exportBegin(session, objectId, destinationFd, outExport)
+    actual fun backupCreate(session: Long, destinationFd: Int, outOperation: LongArray): Int = ChurJni.backupCreate(session, destinationFd, outOperation)
+    actual fun backupRestore(runtime: Long, sourceFd: Int, password: ByteArray, outOperation: LongArray): Int = ChurJni.backupRestore(runtime, sourceFd, password, outOperation)
 
     actual fun integrityScanBegin(session: Long, objectId: ByteArray?, outScan: LongArray): Int = ChurJni.integrityScanBegin(session, objectId, outScan)
 

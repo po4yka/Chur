@@ -57,12 +57,12 @@ pub const ABI_VERSION_MAJOR: u32 = 1;
 /// A minor difference is negotiated only within explicitly compatible
 /// behaviour; it never selects a cryptographic suite from untrusted input.
 ///
-/// It is 2 rather than 0 because `docs/interop/FFI_CONTRACT.md` §6.5 adds the
-/// exports Phase 1's product scope requires and §6.6 adds the Android Keystore
-/// surface, and §6.2 makes an addition a minor bump. Nothing in the §6.2 list
-/// changed, so a host built against 1.0 still works: an export it does not call
-/// costs it nothing.
-pub const ABI_VERSION_MINOR: u32 = 2;
+/// It is 3 rather than 0 because `docs/interop/FFI_CONTRACT.md` §6.5 adds the
+/// exports Phase 1's product scope requires, §6.6 adds the Android Keystore
+/// surface, and §6.7 adds the portable backup surface, and §6.2 makes an
+/// addition a minor bump. Nothing in the §6.2 list changed, so a host built
+/// against 1.0 still works: an export it does not call costs it nothing.
+pub const ABI_VERSION_MINOR: u32 = 3;
 
 /// Capability bit: independent decoy identity supported.
 pub const CHUR_CAP_DECOY_VAULT: u64 = 1 << 0;
@@ -117,15 +117,28 @@ const _: () = assert!(PANIC_BUILD_FLAVOR & CHUR_FLAVOR_DEBUG_ASSERTIONS == 0);
 /// declaring a capability the data plane does not implement would be a false
 /// handshake rather than a harmless placeholder.
 ///
-/// Four bits are clear and each for its own reason. `CHUR_CAP_DECOY_VAULT` is
-/// Phase 2 and the registry admits the second identity but no flow provisions
-/// it. `CHUR_CAP_BACKUP_PACKAGE` is Phase 2 and
-/// `docs/format/BACKUP_FORMAT_V1.md` is specified and not implemented.
-/// `CHUR_CAP_SYNC` is Phase 3. `CHUR_CAP_CONCURRENT_READS` requires benchmarks
-/// and correctness tests first, and until they exist every reader handle is
-/// serialized per `docs/interop/FFI_CONTRACT.md` §8.
-const CAPABILITIES: u64 =
-    CHUR_CAP_OBJECT_READER | CHUR_CAP_SEQUENTIAL_READER | CHUR_CAP_INTEGRITY_SCAN;
+/// `CHUR_CAP_BACKUP_PACKAGE` joined the set with the §6.7 surface: a host that
+/// reads it may call `chur_backup_create` and `chur_backup_restore`, and both
+/// exist.
+///
+/// Two bits are clear and each for its own reason. `CHUR_CAP_SYNC` is Phase 3.
+/// `CHUR_CAP_CONCURRENT_READS` requires benchmarks and correctness tests first,
+/// and until they exist every reader handle is serialized per
+/// `docs/interop/FFI_CONTRACT.md` §8.
+///
+/// `CHUR_CAP_DECOY_VAULT` is set because a second identity is now reachable end
+/// to end: the registry admits it, `chur_vault_create_begin` provisions it from
+/// a runtime an authenticated session already holds, and `chur_vault_unlock`
+/// resolves a credential to whichever identity it opens without naming which.
+/// The bit says a decoy is supported, not that one exists;
+/// `docs/security/DECOY_VAULT.md` §10 requires that no surface tell a caller
+/// whether a sibling is present, and `chur_vault_present` answers a boolean for
+/// exactly that reason.
+const CAPABILITIES: u64 = CHUR_CAP_DECOY_VAULT
+    | CHUR_CAP_OBJECT_READER
+    | CHUR_CAP_SEQUENTIAL_READER
+    | CHUR_CAP_INTEGRITY_SCAN
+    | CHUR_CAP_BACKUP_PACKAGE;
 
 /// The major ABI version.
 // SAFETY: the function takes no pointer, reads no caller memory, and returns a
@@ -274,7 +287,7 @@ mod tests {
     #[test]
     fn the_handshake_answers_every_documented_fact() {
         assert_eq!(chur_abi_version_major(), 1);
-        assert_eq!(chur_abi_version_minor(), 2);
+        assert_eq!(chur_abi_version_minor(), 3);
         assert_eq!(chur_object_format_min(), 1);
         assert_eq!(chur_object_format_max(), 1);
         assert_eq!(chur_key_slot_format_min(), 1);
@@ -304,12 +317,17 @@ mod tests {
             0,
             "the integrity scan exists"
         );
+        assert_ne!(
+            declared & CHUR_CAP_BACKUP_PACKAGE,
+            0,
+            "the §6.7 backup surface exists"
+        );
+        assert_ne!(
+            declared & CHUR_CAP_DECOY_VAULT,
+            0,
+            "a second identity is provisionable and openable"
+        );
         for (bit, why) in [
-            (CHUR_CAP_DECOY_VAULT, "no flow provisions a decoy identity"),
-            (
-                CHUR_CAP_BACKUP_PACKAGE,
-                "the backup format is not implemented",
-            ),
             (CHUR_CAP_SYNC, "sync is Phase 3"),
             (
                 CHUR_CAP_CONCURRENT_READS,

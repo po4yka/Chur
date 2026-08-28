@@ -65,6 +65,8 @@ internal object ChurJni {
     external fun importBegin(session: Long, sourceFd: Int, mediaClass: Int, width: Int, height: Int, durationMs: Long, knownLength: Long, captureTimeMs: Long, contentType: String, originalFilename: String?, outImport: LongArray): Int
 
     external fun exportBegin(session: Long, objectId: ByteArray, destinationFd: Int, outExport: LongArray): Int
+    external fun backupCreate(session: Long, destinationFd: Int, outOperation: LongArray): Int
+    external fun backupRestore(runtime: Long, sourceFd: Int, password: ByteArray, outOperation: LongArray): Int
 
     external fun integrityScanBegin(session: Long, objectId: ByteArray?, outScan: LongArray): Int
 

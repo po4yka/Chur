@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. v1 ships 1.2: the additions of §6.5 raised the minor from 0 and those of §6.6 raised it again. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
+- native API version is the (major, minor) pair. v1 ships 1.3: the additions of §6.5 raised the minor from 0, those of §6.6 raised it again, and those of §6.7 again after that. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -403,6 +403,30 @@ ChurKeystoreMaterialV1
 ```
 
 `root_secret` is the one field in this contract that carries a vault root, and every holder clears it: Rust zeroizes the encoded record, and the caller overwrites the buffer as soon as the wrap returns. The same rule applies to the secret passed to `chur_vault_unlock` under factor `4`. A host that will not accept that window has a supported answer, which is not to enroll the slot: [`../security/PROVISIONING.md`](../security/PROVISIONING.md) §5 already makes a device slot never the only slot.
+
+### 6.7 The portable backup surface, ABI 1.3
+
+[`../format/BACKUP_FORMAT_V1.md`](../format/BACKUP_FORMAT_V1.md) §1 makes the package portable across Android, iOS, and the CLI, and its §7 and §8 are long-running work over the whole vault. Two exports carry them, and both return an operation handle driven by `chur_operation_poll`, `_cancel`, and `_close`, exactly as an import or an export is:
+
+```c
+chur_status_t chur_backup_create(chur_handle_t session, int32_t destination_fd,
+                                 chur_handle_t *out_operation);
+chur_status_t chur_backup_restore(chur_handle_t runtime, int32_t source_fd,
+                                  const uint8_t *password, uint32_t password_length,
+                                  chur_handle_t *out_operation);
+```
+
+`ChurProgressV1` gains two `kind` values, `4` for a backup and `5` for a restore. §10's rule is unchanged: a snapshot carries bounded non-private numbers, and a byte count is one.
+
+Three things differ from the §6.2 operations and each follows from the format.
+
+Both descriptors must be **seekable** as well as open. §7 writes the public preamble before the records and learns the record count only after the inventory pass, and §8 walks record headers before it reads a payload. A pipe is therefore neither a destination nor a source, and an application that uploads a package writes it to a file and uploads that file.
+
+`chur_backup_restore` takes the **runtime** rather than a session. A restore installs an identity, so at the moment it runs there may be no session and no vault at all; §8 step 2 obtains the credential from the package's own portable descriptor. The operation belongs to the runtime, so §14's runtime close tears it down and §4's session lock does not, because there is no session to lock.
+
+The password crosses the boundary as bytes and is **not retained**. §12 keeps credentials inside Rust: the bytes are copied into a zeroizing buffer before the call returns and the caller's pointer is not held.
+
+A restore refuses when the registry already holds the two identities [`../format/VAULT_DESCRIPTOR_V1.md`](../format/VAULT_DESCRIPTOR_V1.md) §11 admits, and it installs nothing until the package authenticates whole.
 
 ## 7. Buffer ownership
 

@@ -155,6 +155,26 @@ pub fn create_with_params(
         "the registry already holds the two identities §11 admits"
     );
 
+    // `docs/security/DECOY_VAULT.md` §3 has the user confirm that the second
+    // identity's credential is distinct. This is the mechanical half of that,
+    // and it is a correctness rule rather than a policy: `KEY_SLOTS.md` §8
+    // returns the first candidate a password opens, so a second identity
+    // created under a password that already opens the first would be
+    // unreachable forever. One extra derivation at creation is the price, and
+    // creation is not the constant-cost path §8 protects.
+    for name in &existing {
+        let bytes = read_entry(root_dir, name)?;
+        let Ok(descriptor) = VaultDescriptor::parse(&bytes) else {
+            continue;
+        };
+        if open_password_slot(&descriptor, &canonical).is_ok() {
+            bail!(
+                Conflict,
+                "that credential already opens an identity in this root"
+            );
+        }
+    }
+
     // §9 step 1: a random vault identity and root secret.
     let vault_id = random::id()?;
     let root_secret: Key = random::secret::<32>()?;

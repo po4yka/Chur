@@ -30,6 +30,10 @@ pub enum OperationKind {
     Export = 2,
     /// An integrity scan.
     IntegrityScan = 3,
+    /// A backup package being written, `BACKUP_FORMAT_V1.md` §7.
+    Backup = 4,
+    /// A backup package being restored, §8.
+    Restore = 5,
 }
 
 /// The stage an operation reports, a bounded non-private number.
