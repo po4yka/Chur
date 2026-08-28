@@ -93,6 +93,8 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0039](0039-freeze-the-catalog-header-commitment.md) | Freeze the catalog header commitment | Accepted |
 | [0040](0040-add-a-rust-jni-adapter-crate.md) | Add a Rust JNI adapter crate for the Android boundary | Accepted |
 | [0041](0041-the-android-keystore-slot-exchanges-root-bytes.md) | The Android Keystore slot exchanges root bytes with the host | Accepted |
+| [0042](0042-freeze-the-audio-waveform-record.md) | Freeze the audio waveform as a peak-envelope record | Accepted |
+| [0043](0043-the-backup-manifest-carries-a-commitment-not-an-inventory.md) | The backup manifest carries the inventory's commitment, not its entries | Accepted |
 
 Rows are ordered by ADR number. Number 0015 was not used; no ADR carries it and none will.
 

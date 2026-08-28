@@ -117,7 +117,21 @@ required free-space/restore policy metadata
 
 `backup_version` here repeats the public preamble field of §2.1, which is the authority for the value and the copy the §13 limit bounds. A restore rejects the package as `VAULT_CORRUPT` when the two differ.
 
-The manifest is sealed under `BackupManifestKey`, derived by HKDF-SHA-256 from `VaultRootSecret` under the label `chur/v1/root/backup-manifest` registered in [`../security/KEY_HIERARCHY.md`](../security/KEY_HIERARCHY.md) §3, with `vault_id:bytes[16]` and `backup_id:bytes[16]` as its context fields.
+The manifest carries the ordered inventory commitment of §7.2 and the two entry counts rather than the entries themselves. At the §13 bound of 1048576 stream entries the list would be about 109 MB, which exceeds the §13 manifest payload cap of 16 MiB, and a restore would have to hold the whole inventory before reading a byte of content. Each entry travels instead in the head of the record it describes, and a reader recomputes the commitment as it walks the package, so completeness is authenticated with one entry in memory at a time.
+
+The manifest is sealed under `BackupManifestKey`, derived by HKDF-SHA-256 from `VaultRootSecret` under the label `chur/v1/root/backup-manifest` registered in [`../security/KEY_HIERARCHY.md`](../security/KEY_HIERARCHY.md) §3. That label's context element list is `vault_id:bytes[16]` alone, frozen by [ADR-0034](../adr/0034-freeze-the-hkdf-context-element-lists.md); an earlier version of this section named `backup_id` as a second element, which was never true of the registry and is corrected here.
+
+The AAD binds the backup instead:
+
+```text
+manifest_aad = CanonicalTuple(
+      "CHUR\x00BACKUP\x00MANIFEST-AAD\x00V1",
+      backup_version:u16, suite_id:u16, vault_id:bytes[16])
+```
+
+It binds the vault and not the backup, and deliberately: a restore must open the manifest before it can learn which backup it is reading, because the identifier is inside the sealed plaintext and §2.1 leaves no room for it in the public preamble. The identifier is checked rather than bound — the manifest and the final backup commit must name the same backup, and both are sealed under a key only a holder of the root can derive. The residual case a bound identifier would have caught is a whole authentic older package of the same vault, which is the rollback §10 already declines to detect.
+
+The final backup commit of §7 is sealed under the same key and differs only in its domain tag, `CHUR\x00BACKUP\x00FINAL-COMMIT-AAD\x00V1`, so neither record opens as the other.
 
 This is the only manifest-key source in v1. A password slot and a recovery slot both restore the same `VaultRootSecret`, so there is no separate portable content key and no key-source discriminant in the preamble; §8 step 3 has one deterministic input.
 

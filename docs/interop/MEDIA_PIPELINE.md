@@ -106,6 +106,41 @@ generator_profile/version
 
 Stale assets are never shown as current after original replacement.
 
+The first four kinds are pictures and §12 gives each a long edge and a JPEG
+quality. The audio waveform is not a picture, and §6.1 gives it its bytes; the
+remaining kinds are future scope and have neither.
+
+### 6.1 The audio waveform record
+
+A waveform is a peak envelope over equal slices of a recording, not an image of
+one. A drawing resamples it to whatever width it has, and it is drawn by shared
+code that runs on both hosts, so one host must write what the other reads. The
+record is therefore fixed here rather than left to each platform:
+
+```text
+offset  size          field                v1 value
+0x00     1            record_version:u8    0x01
+0x01     1            reserved:u8          0x00
+0x02     2            bucket_count:u16     1 to 4096
+0x04     4            duration_ms:u32      0 to 14400000
+0x08     bucket_count peaks:u8[]           linear amplitude, 0 to 255
+```
+
+Integers are unsigned big-endian per
+[`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §2.
+A reader rejects a record whose `record_version` is not `0x01`, whose `reserved`
+byte is not zero, or whose length is not `8 + bucket_count`; a record with
+trailing bytes is rejected rather than truncated, as §8 there requires of every
+canonical decoder. A record is at most 4104 bytes, which is the §12 bound.
+
+Peaks are normalized against the loudest bucket, so a quiet recording draws at
+full height and a silent one draws flat. The bucket count is the generator's
+choice inside the bound, not a format constant: v1 generators produce 512.
+
+§11 applies unchanged. Two decoders of one recording may produce different peak
+values, and the declared generator profile is what makes that a known difference
+rather than a silent one. What may not differ is the record that carries them.
+
 ## 7. Compound media
 
 Live Photos, spatial media, RAW+JPEG pairs, sidecar metadata, and similar items are represented as one logical object with multiple immutable streams/relationships when supported. Missing parts produce an explicit incomplete/unsupported state, not silent flattening.
@@ -152,7 +187,7 @@ Pixel-identical cross-platform thumbnails may be impractical; cryptographic bind
 - video at most 7680 by 4320 px per track, at most 8 tracks;
 - video or audio duration at most 14400000 ms (4 hours);
 - metadata revision at most 128 fields, each field value at most 8192 bytes, whole revision at most 65536 bytes;
-- derivative long-edge targets: small thumbnail 320 px, grid preview 640 px, screen preview 2048 px, video poster frame 2048 px;
+- derivative long-edge targets: small thumbnail 320 px, grid preview 640 px, screen preview 2048 px, video poster frame 2048 px. The audio waveform has no long edge, because §6.1 makes it a data record rather than a picture; it is bounded instead at 4096 buckets and 4104 bytes for the whole record;
 - derivative codec: baseline JPEG with 4:2:0 chroma, quality 80 for the small thumbnail, 82 for the grid preview, and 85 for the screen preview and poster frame. JPEG is the v1 derivative codec because Android and iOS both encode and decode it without an added native dependency; a different codec takes a new generator profile under §11 rather than a silent change;
 - decode and import buffers at most 268435456 bytes (256 MiB) in flight per import;
 - one derivative generation is cancelled after 30 seconds of wall-clock work, and cancellation reports `CANCELLED`, never corruption;
