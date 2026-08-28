@@ -89,6 +89,22 @@ Two hashes are recorded, and they are not interchangeable:
 
 A skill synchronisation updates both hashes and the commit, and the checker is what proves it did.
 
+## Recorded additions
+
+### `androidx.media3`, Android only
+
+- **Capability:** playing a video or a recording from a vault-backed byte source. [`interop/MEDIA_PIPELINE.md`](interop/MEDIA_PIPELINE.md) §1 puts codec probing and decoding on the platform, and §9 has the player ask for plaintext ranges; Media3 is the platform's player on Android and the only one whose `DataSource` interface accepts a source that is neither a file nor a URL.
+- **Alternatives:** the framework `MediaPlayer` accepts a `FileDescriptor` or a `Uri` and no custom source, so it would need either a plaintext file on disk — which [`security/PLAINTEXT_LIFECYCLE.md`](security/PLAINTEXT_LIFECYCLE.md) §5 bounds to the cases where a platform API accepts nothing else — or a local socket, which is a second boundary with no authentication of its own. Neither is smaller than adding the library.
+- **Owner and maintenance:** Google, as part of AndroidX. Actively released.
+- **License:** Apache 2.0, with the notice obligation the other AndroidX artifacts already carry.
+- **Native footprint:** the artifacts used here are Java and Kotlin. `media3-exoplayer` loads the platform's own codecs through `MediaCodec` and this build adds no software decoder extension.
+- **Build scripts and network:** none beyond the ordinary Maven resolution the Gradle lockfile pins.
+- **Reach:** it never sees a container, a key, or a path. It receives plaintext ranges from `ChurDataSource`, which holds one reader lease and calls `chur_object_reader_read_at`, so every byte it decodes is downstream of an authenticated chunk. A codec failure is a decode failure and cannot reach ciphertext.
+- **Telemetry:** none is enabled. The artifacts used are `media3-exoplayer`, `media3-datasource`, and `media3-ui`; no analytics or cast artifact is added.
+- **Removal plan:** the seam is `VaultPlayer`, an `expect` function with one Android implementation. Replacing the player replaces that file.
+
+iOS adds nothing: `AVFoundation` is part of the platform, and the resource-loader delegate that feeds it is written in Kotlin/Native beside the Android data source.
+
 ## Cargo features
 
 Disable default features unless they are understood. Features that add platform key access, network clients, file-system traversal, dynamic loading, serialization formats, or native libraries require review.

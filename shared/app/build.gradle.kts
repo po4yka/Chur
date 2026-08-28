@@ -51,6 +51,14 @@ kotlin {
             implementation(libs.compose.material3)
             implementation(libs.compose.ui)
         }
+        androidMain.dependencies {
+            // The player of `MEDIA_PIPELINE.md` §9. It receives plaintext ranges
+            // from a vault-backed `DataSource` and never sees a container, a
+            // key, or a path, which is the split §1 fixes.
+            implementation(libs.androidx.media3.exoplayer)
+            implementation(libs.androidx.media3.datasource)
+            implementation(libs.androidx.media3.ui)
+        }
         commonTest.dependencies {
             implementation(kotlin("test"))
         }

@@ -4,6 +4,7 @@ import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.AlbumSummary
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.ChurVault
+import dev.po4yka.chur.ffi.ContentInfo
 import dev.po4yka.chur.ffi.ImportRequest
 import dev.po4yka.chur.ffi.KeystoreMaterial
 import dev.po4yka.chur.ffi.LockReason
@@ -46,6 +47,17 @@ class VaultRepository(
     private var session = 0L
     private var generation = 0L
     private var lastUsedMs = 0L
+
+    /**
+     * Reader handles a player holds, so a lock can close them.
+     *
+     * `PLAINTEXT_LIFECYCLE.md` §8 step 2 invalidates every session handle on
+     * lock, and Rust does that already: a reader is registered as owned by its
+     * session and `chur_vault_lock` drains it. This set exists so the Kotlin
+     * side stops calling handles that are already dead, which would otherwise
+     * surface to a player as a transport error it retries.
+     */
+    private val leases = mutableSetOf<Long>()
 
     /** What the application should show. */
     val state: StateFlow<VaultState> = _state.asStateFlow()
@@ -119,6 +131,13 @@ class VaultRepository(
      * product expects rather than the case it forbids.
      */
     suspend fun lock(reason: LockReason) = mutex.withLock {
+        // Leases go first. Rust invalidates them anyway when the session locks,
+        // and closing them here is what stops a player from calling a dead
+        // handle and reading the failure as a transport error to retry.
+        for (reader in leases.toList()) {
+            runCatching { ChurVault.closeReader(reader) }
+        }
+        leases.clear()
         if (session != 0L) {
             runCatching { ChurVault.lock(session, reason) }
             runCatching { ChurVault.closeSession(session) }
@@ -148,6 +167,7 @@ class VaultRepository(
 
     /** Closes everything, which a process shutdown does. */
     suspend fun shutdown() = mutex.withLock {
+        leases.clear()
         if (runtime != 0L) {
             runCatching { ChurVault.closeRuntime(runtime) }
             runtime = 0L
@@ -271,6 +291,60 @@ class VaultRepository(
             }
         }
 
+    // -----------------------------------------------------------------------
+    // Reader leases, for a player
+    // -----------------------------------------------------------------------
+
+    /**
+     * Opens a reader a player holds across many seeks, `FFI_CONTRACT.md` §6.3.
+     *
+     * [readRange] opens and closes one reader per call, which suits a single
+     * range and is the wrong shape for playback: a player seeks continuously,
+     * and re-authenticating the manifest on every range would serialize every
+     * seek against every catalog query on this class's one mutex.
+     *
+     * A lease is taken under the mutex, because it needs the session handle,
+     * and is then used without it. §8's table permits exactly that: a reader
+     * handle is callable from any thread including one other than its creator,
+     * and it names "a Media3 loader thread and an `AVAssetResourceLoader`
+     * queue" as the callers it has in mind.
+     *
+     * The caller must [releaseReader] the lease. [lock] closes every
+     * outstanding one, so a lease never outlives the session it came from.
+     */
+    suspend fun leaseReader(objectId: ByteArray, kind: StreamKind = StreamKind.ORIGINAL): Long =
+        withSession { current ->
+            val reader = ChurVault.openReader(current, objectId, kind)
+            leases.add(reader)
+            reader
+        }
+
+    /**
+     * The content information a player needs before its first range request.
+     *
+     * `FFI_CONTRACT.md` §6.1 forbids attaching a reader on an incomplete object
+     * to a player, because a player that has been given a length treats a later
+     * failure as a transport error and retries indefinitely. The caller checks
+     * [ContentInfo.complete] before it does.
+     */
+    fun readerContentInfo(reader: Long): ContentInfo = ChurVault.readerContentInfo(reader)
+
+    /**
+     * Reads a range through a leased reader, off the mutex.
+     *
+     * §6.3 permits a short read at any offset, and [ChurVault.readRange]
+     * already loops until it has the range or observes zero.
+     */
+    fun readLeased(reader: Long, offset: Long, length: Int): ByteArray =
+        ChurVault.readRange(reader, offset, length)
+
+    /** Closes one lease. Idempotent, because a player may release twice. */
+    fun releaseReader(reader: Long) {
+        if (leases.remove(reader)) {
+            runCatching { ChurVault.closeReader(reader) }
+        }
+    }
+
     /** Starts an import from a descriptor the platform opened. */
     suspend fun beginImport(sourceFd: Int, request: ImportRequest): Long =
         withSession { ChurVault.beginImport(it, sourceFd, request) }
@@ -282,6 +356,24 @@ class VaultRepository(
     /** Starts an integrity scan; a null identifier scans every object. */
     suspend fun beginIntegrityScan(objectId: ByteArray?): Long =
         withSession { ChurVault.beginIntegrityScan(it, objectId) }
+
+    /**
+     * Starts writing a backup package to a descriptor the platform opened,
+     * `BACKUP_FORMAT_V1.md` §7.
+     */
+    suspend fun beginBackup(destinationFd: Int): Long =
+        withSession { ChurVault.beginBackup(it, destinationFd) }
+
+    /**
+     * Starts restoring a package, §8.
+     *
+     * It takes no session: a restore installs an identity, so it runs from the
+     * runtime and the credential comes from the package's own descriptor.
+     */
+    suspend fun beginRestore(sourceFd: Int, password: ByteArray): Long = mutex.withLock {
+        requireRuntime()
+        ChurVault.beginRestore(runtime, sourceFd, password)
+    }
 
     /**
      * One progress snapshot, §10.

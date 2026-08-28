@@ -32,7 +32,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.graphics.ImageBitmap
+import dev.po4yka.chur.app.vault.VaultPlayer
 import dev.po4yka.chur.app.vault.ViewerScreen
+import dev.po4yka.chur.app.vault.playbackFor
 import dev.po4yka.chur.ffi.AlbumSummary
 import dev.po4yka.chur.ffi.ObjectDetail
 import dev.po4yka.chur.ffi.ObjectPage
@@ -368,6 +370,13 @@ private fun ViewerRoute(
         detail = controller.detailOf(projection.objectId)
     }
 
+    val playback = playbackFor(
+        vault = controller.vault,
+        objectId = projection.objectId,
+        mediaKind = projection.mediaKind,
+        detail = detail,
+    )
+
     ViewerScreen(
         projection = projection,
         detail = detail,
@@ -385,6 +394,9 @@ private fun ViewerRoute(
             }
         },
         onToggleDetail = { showDetail = !showDetail },
+        player = playback?.let { source ->
+            { modifier -> VaultPlayer(source, modifier) }
+        },
     )
 }
 

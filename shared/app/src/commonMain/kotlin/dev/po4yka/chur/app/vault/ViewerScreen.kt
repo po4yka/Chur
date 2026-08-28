@@ -53,9 +53,16 @@ fun ViewerScreen(
     onExport: () -> Unit,
     onDelete: () -> Unit,
     onToggleDetail: () -> Unit,
+    player: (@Composable (Modifier) -> Unit)? = null,
 ) {
     Box(modifier = Modifier.fillMaxSize().background(ViewerColors.canvas)) {
-        if (preview != null) {
+        if (player != null) {
+            // A video or a recording is played rather than shown. The player is
+            // a slot rather than a call, because it is the one part of this
+            // screen that reads a repository, and this file's rule is that a
+            // screen is a pure function of a state value.
+            player(Modifier.fillMaxSize())
+        } else if (preview != null) {
             Image(
                 bitmap = preview,
                 contentDescription = null,

@@ -20,11 +20,17 @@ import dev.po4yka.chur.app.vault.UnlockScreen
 import dev.po4yka.chur.app.vault.VaultActions
 import dev.po4yka.chur.app.vault.VaultDestination
 import dev.po4yka.chur.app.vault.VaultShell
+import dev.po4yka.chur.app.vault.VaultPlayer
 import dev.po4yka.chur.app.vault.VaultUiState
+import dev.po4yka.chur.app.vault.ViewerScreen
+import dev.po4yka.chur.app.vault.playbackFor
 import dev.po4yka.chur.ffi.AlbumSummary
+import dev.po4yka.chur.ffi.ObjectDetail
 import dev.po4yka.chur.ffi.ObjectPage
+import dev.po4yka.chur.ffi.ObjectProjection
 import dev.po4yka.chur.ffi.ObjectQuery
 import dev.po4yka.chur.ffi.QueryScope
+import dev.po4yka.chur.ffi.StreamKind
 import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.vault.VaultState
 import kotlinx.coroutines.launch
@@ -115,6 +121,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     var terms by remember { mutableStateOf("") }
     var openAlbum by remember { mutableStateOf<AlbumSummary?>(null) }
     var selection by remember { mutableStateOf(setOf<String>()) }
+    var viewing by remember { mutableStateOf<ObjectProjection?>(null) }
 
     LaunchedEffect(destination, openAlbum) {
         when {
@@ -178,13 +185,10 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 selection = emptySet()
                 destination = it
             },
-            onOpen = { projection ->
-                selection = if (projection.id in selection) {
-                    selection - projection.id
-                } else {
-                    selection + projection.id
-                }
-            },
+            // Opening is opening. Before the viewer existed on this host it
+            // toggled selection, which made a video unreachable and a tap on a
+            // photograph mean two things.
+            onOpen = { projection -> viewing = projection },
             onToggleSelection = { projection ->
                 selection = if (projection.id in selection) {
                     selection - projection.id
@@ -227,6 +231,86 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 selection = emptySet()
             },
         ),
+    )
+
+    viewing?.let { projection ->
+        IosViewerRoute(
+            controller = controller,
+            cache = cache,
+            generation = generation,
+            projection = projection,
+            onBack = { viewing = null },
+            onDeleted = { viewing = null },
+        )
+    }
+}
+
+/**
+ * The viewer over one object, with the platform player when it has one.
+ *
+ * `MEDIA_PIPELINE.md` §8 has the timeline read derivatives and the viewer
+ * decrypt more only for detailed viewing, which is why the preview is loaded
+ * here rather than in the grid, and §9 has a video ask for ranges rather than
+ * for a decoded file.
+ */
+@Composable
+private fun IosViewerRoute(
+    controller: ChurController,
+    cache: ThumbnailCache,
+    generation: Long,
+    projection: ObjectProjection,
+    onBack: () -> Unit,
+    onDeleted: () -> Unit,
+) {
+    var detail by remember(projection.id) { mutableStateOf<ObjectDetail?>(null) }
+    var preview by remember(projection.id) { mutableStateOf<ImageBitmap?>(null) }
+    var showDetail by remember(projection.id) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(projection.id, generation) {
+        preview = cache.load(
+            repository = controller.vault,
+            generation = generation,
+            objectId = projection.objectId,
+            id = projection.id,
+            kind = StreamKind.SCREEN_PREVIEW,
+        ) ?: cache.load(
+            repository = controller.vault,
+            generation = generation,
+            objectId = projection.objectId,
+            id = projection.id,
+            kind = StreamKind.THUMBNAIL,
+        )
+        detail = controller.detailOf(projection.objectId)
+    }
+
+    val playback = playbackFor(
+        vault = controller.vault,
+        objectId = projection.objectId,
+        mediaKind = projection.mediaKind,
+        detail = detail,
+    )
+
+    ViewerScreen(
+        projection = projection,
+        detail = detail,
+        preview = preview,
+        showDetail = showDetail,
+        onBack = onBack,
+        onToggleFavorite = {
+            controller.setFavorite(projection.objectId, !projection.favorite)
+        },
+        onExport = { controller.export(projection.objectId) },
+        onDelete = {
+            scope.launch {
+                controller.delete(projection.objectId)
+                onDeleted()
+            }
+        },
+        onToggleDetail = { showDetail = !showDetail },
+        player = playback?.let { source ->
+            { modifier -> VaultPlayer(source, modifier) }
+        },
     )
 }
 
