@@ -228,6 +228,8 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             },
             onVerifyAll = { controller.verifyEverything() },
             onAddRecoverySlot = controller::addRecoverySlot,
+            onCreateBackup = controller::createBackup,
+            onCreateSecondIdentity = controller::createSecondIdentity,
             onSelectAll = { selection = page.objects.map { it.id }.toSet() },
             onClearSelection = { selection = emptySet() },
             onExportSelection = {

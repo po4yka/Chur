@@ -382,6 +382,57 @@ class ChurController(
         objectIds.forEach { export(it) }
     }
 
+    /**
+     * Writes a backup package, `BACKUP_FORMAT_V1.md` §5 and §7.
+     *
+     * The destination is the host's, exactly as an export's is: the picker and
+     * the provider are the platform's and this asks for a descriptor. The
+     * package is published only on a terminal success, so an interrupted write
+     * leaves nothing that looks complete — §7's "incomplete state remains
+     * explicitly marked and is never advertised as complete".
+     *
+     * The message carries counts and no identity. §9 already tells anyone
+     * holding the file its size and its creation time; it does not tell them
+     * whose vault it is, and neither does this.
+     */
+    fun createBackup() = guarded {
+        val destination = exports.create("chur-backup", "application/octet-stream")
+            ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the backup destination")
+        try {
+            val operation = withContext(Dispatchers.Default) {
+                repository.beginBackup(destination.descriptor)
+            }
+            val terminal = drain(operation)
+            withContext(Dispatchers.Default) { repository.closeOperation(operation) }
+            if (terminal != 0) {
+                destination.discard()
+                throw ChurFailure(ChurStatus.fromValue(terminal), "the backup")
+            }
+            destination.publish()
+            _message.value =
+                "Backup written. It opens with the password or phrase you use now."
+        } finally {
+            destination.close()
+        }
+    }
+
+    /**
+     * Provisions a second vault identity, `DECOY_VAULT.md` §3.
+     *
+     * It routes to the ordinary creation screen. There is no separate decoy
+     * flow, and that is the design rather than an omission: §2 gives feature
+     * code an opaque session and no durable `isDecoy`, so a second identity is
+     * created the way the first one was, with its own root, its own slots, and
+     * its own credential.
+     *
+     * `vault::create` refuses a credential that already opens an identity here,
+     * which is §3's distinct-credential rule and also the reason a second
+     * identity under a shared password would be unreachable forever.
+     */
+    fun createSecondIdentity() {
+        _route.value = AppRoute.CreateVault
+    }
+
     fun verifyEverything() = guarded {
         val operation = withContext(Dispatchers.Default) { repository.beginIntegrityScan(null) }
         try {

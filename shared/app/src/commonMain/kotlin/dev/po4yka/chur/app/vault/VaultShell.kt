@@ -122,6 +122,10 @@ data class VaultActions(
     val onVerifyAll: () -> Unit,
     /** Add a recovery slot. */
     val onAddRecoverySlot: () -> Unit,
+    /** Write a backup package, `BACKUP_FORMAT_V1.md` §7. */
+    val onCreateBackup: () -> Unit = {},
+    /** Provision a second vault identity, `DECOY_VAULT.md` §3. */
+    val onCreateSecondIdentity: () -> Unit = {},
     /** Enroll this device's platform key slot. */
     val onAddDeviceSlot: () -> Unit = {},
     /** Select every tile the current scope shows. */
@@ -429,10 +433,57 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
             }
         }
         item {
+            Text("Backup", style = MaterialTheme.typography.titleMedium)
+        }
+        item {
+            SettingsAction("Write a backup file", actions.onCreateBackup)
+        }
+        item {
+            // `BACKUP_FORMAT_V1.md` §12: rotating a password does not revoke an
+            // old package, and a user who does not know that keeps a file that
+            // an old credential still opens. §9 is the other half: the outer
+            // package reveals its size and its creation time to anyone holding
+            // it, whatever it is stored on.
+            Text(
+                "A backup file is opened by the password or recovery phrase it " +
+                    "was written with. Changing either does not close an old file.",
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.inkMuted,
+                modifier = Modifier.padding(horizontal = ChurSpacing.three),
+            )
+        }
+        item {
             Text("Integrity", style = MaterialTheme.typography.titleMedium)
         }
         item {
             SettingsAction("Verify every object", actions.onVerifyAll)
+        }
+        // The entry is always here, and never conditional on whether a second
+        // identity already exists. `DECOY_VAULT.md` §10 forbids a setting that
+        // differs according to whether a sibling is present: an entry that
+        // disappeared once the registry was full would answer, from inside
+        // either identity, the one question the design refuses to answer. An
+        // attempt on a full registry reports a bounded message instead.
+        item {
+            Text("Another vault", style = MaterialTheme.typography.titleMedium)
+        }
+        item {
+            SettingsAction("Set up a second vault", actions.onCreateSecondIdentity)
+        }
+        item {
+            // `DECOY_VAULT.md` §3 requires the §10 limitation to be stated
+            // before the identity is created, and §10 fixes what may be
+            // claimed: the feature is public by design, so a coercer may know a
+            // second credential can exist before demanding anything.
+            Text(
+                "A second vault has its own password, its own recovery, and " +
+                    "nothing in common with this one. This feature is described " +
+                    "in the store listing, so someone demanding your password may " +
+                    "already know a second vault can exist.",
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.inkMuted,
+                modifier = Modifier.padding(horizontal = ChurSpacing.three),
+            )
         }
     }
 }
