@@ -20,7 +20,7 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 | pin toolchains and dependencies | done: `rust-toolchain.toml`, `gradle/libs.versions.toml`, a wrapper distribution SHA-256, `Cargo.lock`, and the four mobile Rust targets built and symbol-checked on every pull request |
 | establish canonical encoding and byte-exact v1 formats | done |
 | implement `chur-cli` foundations | done: vector generation and verification, container inspection, the two benchmarks, the ABI handshake |
-| publish deterministic positive and negative vectors | done, 62 |
+| publish deterministic positive and negative vectors | done, 78. It was 62 at the end of Phase 0; Phase 2 added the backup structures its own format needed |
 | add fuzzing, corruption, migration, and FFI harnesses | done: ten fuzz targets, a bitwise corruption sweep, a version-domain migration harness, a header-consistency harness, and a C ABI harness |
 | land the continuous-integration workflow that enforces the release gates | done, [ADR-0031](docs/adr/0031-continuous-integration-owns-gate-enforcement.md) |
 | prototype Android Keystore and iOS Keychain slots | done |

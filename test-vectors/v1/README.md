@@ -33,6 +33,9 @@ Group directories follow the §9 format-word table. A vector whose `outcome` is 
 | `collection-envelope` | 2 | the 126-byte record and a foreign vault identity |
 | `object-key-envelope` | 2 | the 142-byte record and an unsupported suite |
 | `object` | 10 | the three §13 shapes, a partial final chunk, and six rejections |
+| `backup` | 16 | the public preamble, the record header, both inventory entries, the ordered commitment and its empty case, the sealed manifest and final commit, and eight rejections |
+
+A whole backup package is not among them and cannot be: [`../../docs/format/BACKUP_FORMAT_V1.md`](../../docs/format/BACKUP_FORMAT_V1.md) §2 has it carry the encrypted catalog, which is a SQLCipher file with a random salt, so two runs over one vault produce two packages that differ in bytes and mean the same thing. What is deterministic is every structure the format defines itself, and that is what the sixteen fix. The round trips live in `chur-media` `tests/backup_flow.rs`.
 
 The Android vector carries no wrapped bytes a Rust implementation could reproduce: that family's AEAD runs in the platform Keystore, so the vector fixes the body framing and the AAD and stops there.
 

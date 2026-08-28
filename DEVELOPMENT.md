@@ -73,6 +73,7 @@ The workflow named in [`docs/assurance/RELEASE_GATES.md`](docs/assurance/RELEASE
 
 scripts/build-native-targets.sh all
 python3 scripts/check-vendored-skills.py
+python3 scripts/check-backup-rules.py
 
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
@@ -229,6 +230,40 @@ journal reconciliation of
 and the garbage collection of
 [`docs/format/CATALOG_SCHEMA_V1.md`](docs/format/CATALOG_SCHEMA_V1.md) §14.1,
 exactly as a session on a device does.
+
+`chur-cli backup` is the portable package of
+[`docs/format/BACKUP_FORMAT_V1.md`](docs/format/BACKUP_FORMAT_V1.md), and the
+same implementation both hosts call:
+
+```sh
+chur-cli backup --root ./v create vault.churbak
+chur-cli backup inspect vault.churbak          # no credential, public bytes only
+chur-cli backup --root ./restored restore vault.churbak
+```
+
+`restore` does not unlock the destination first. A restore installs an identity
+rather than operating one, and §8 there obtains the credential from the
+package's own portable descriptor, so restoring into an empty root is the
+ordinary case. `inspect` reads the 32-byte public preamble and stops: §10
+requires decrypted metadata to appear only after authentication, so it prints
+the record count and the length and nothing a credential would have unsealed.
+
+## Measuring
+
+Four benchmarks run through the same binary Android and iOS build, so the
+device measurement [`docs/assurance/PERFORMANCE_BUDGETS.md`](docs/assurance/PERFORMANCE_BUDGETS.md)
+§1 requires needs a device and no new code:
+
+```sh
+chur-cli bench chunk-sizes --object-bytes 16777216 --samples 8
+chur-cli bench argon2 --samples 8
+chur-cli bench random-seek --object-bytes 16777216 --samples 32
+chur-cli bench lock-invalidation --samples 8
+```
+
+Each one closes by stating what its numbers do and do not settle. That is a
+convention rather than decoration: §1 of the budgets forbids treating a host
+number as a gate.
 
 ## Native catalog build
 

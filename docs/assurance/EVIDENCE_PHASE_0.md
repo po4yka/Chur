@@ -37,7 +37,7 @@ Gate 0 is satisfiable on this evidence.
 | --- | --- | --- |
 | canonical encoding and v1 draft formats | met | `test` — the codec, the container, both envelopes, the descriptor, and the four slot bodies encode, decode, and round-trip |
 | key-slot and password profile | met | `test` — all four families, the frozen Argon2id floor, and the no-normalization rule |
-| deterministic positive and negative vectors | met | `vectors` — 62 vectors, 44 accepted and 18 rejected, rebuilt and compared byte for byte |
+| deterministic positive and negative vectors | met | `vectors` — 78 vectors, 51 accepted and 27 rejected, rebuilt and compared byte for byte. It was 62 at the end of Phase 0 and Phase 2 added the backup structures |
 | Rust unit, property, and corruption tests | **partly met** | `test` — unit and corruption tests run; there is no property-based test framework, and the round-trip properties are asserted per format rather than over generated inputs |
 | FFI contract and platform prototype tests | met | `abi`, `gradle`, `kotlin-native` — the C harness links the real static library; the Keystore and Keychain prototypes compile for Android and both iOS targets |
 | recovery and process-death flows | met in Phase 1 | the import journal, the descriptor transaction, and resumption after process death are implemented and tested; [`EVIDENCE_PHASE_1.md`](EVIDENCE_PHASE_1.md) §3 names the tests |

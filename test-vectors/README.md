@@ -17,4 +17,4 @@ Read [`docs/format/TEST_VECTORS.md`](../docs/format/TEST_VECTORS.md) for governa
 
 ## Versions
 
-- [`v1/`](v1/README.md) — the frozen v1 formats: 62 vectors covering canonical encoding, every HKDF label, every key-slot family, both key envelopes, the vault descriptor, and the object container.
+- [`v1/`](v1/README.md) — the frozen v1 formats: 78 vectors covering canonical encoding, every HKDF label, every key-slot family, both key envelopes, the vault descriptor, the object container, and the backup package.
