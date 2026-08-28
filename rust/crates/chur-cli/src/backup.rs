@@ -71,13 +71,7 @@ pub fn restore(root: &Path, package: &Path, password: &[u8]) -> Result<()> {
     let directory = VaultRoot::new(root.to_path_buf());
     let mut file = std::fs::File::open(package)
         .map_err(|_| chur_core::err!(NotFound, "the package could not be opened"))?;
-    let summary = backup::restore(
-        &directory,
-        &mut file,
-        password,
-        now_ms(),
-        &mut Uninterrupted,
-    )?;
+    let summary = backup::restore(&directory, &mut file, password, &mut Uninterrupted)?;
     println!(
         "restored vault {} from backup {}",
         summary.vault_id.to_hex(),

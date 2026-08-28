@@ -56,6 +56,15 @@ object Waveform {
         private var frames = 0L
 
         /**
+         * Samples per bucket, for a recording whose length was not reported.
+         *
+         * It starts at one and doubles whenever the samples outgrow the
+         * buckets, which is what keeps the slices equal without knowing the
+         * length in advance.
+         */
+        private var scale = 1L
+
+        /**
          * Adds one 16-bit signed sample.
          *
          * `Short.MIN_VALUE` has no positive counterpart in a `Short`, so the
@@ -84,13 +93,45 @@ object Waveform {
          * The bucket a frame falls in.
          *
          * A decoder often yields a few more or fewer frames than the container
-         * declared, so the index is clamped rather than trusted. A recording
-         * whose length was not reported at all still fills buckets in order.
+         * declared, so the index is clamped rather than trusted.
+         *
+         * A recording whose length the container did not report is the case
+         * that needs care. Both hosts report a duration of zero when the
+         * metadata is absent, and a rule that wrapped the index modulo the
+         * bucket count would fold the second pass over a recording onto the
+         * first: §6.1 calls the record "a peak envelope over equal slices of a
+         * recording", and a wrapped envelope is a superposition of several. The
+         * accumulator grows its slice instead, doubling [scale] each time the
+         * samples run past the buckets, and folding what it already holds in
+         * half. That keeps the slices equal, keeps the memory one bucket array,
+         * and costs only resolution: a recording of unknown length ends at
+         * between half and all of the buckets it would have used.
          */
         private fun bucketOf(frame: Long): Int {
-            if (expectedFrames <= 0) return ((frame / 1_024L) % buckets).toInt()
-            val index = frame * buckets / expectedFrames
-            return index.coerceIn(0L, (buckets - 1).toLong()).toInt()
+            if (expectedFrames > 0) {
+                val index = frame * buckets / expectedFrames
+                return index.coerceIn(0L, (buckets - 1).toLong()).toInt()
+            }
+            while (frame / scale >= buckets) {
+                halve()
+            }
+            return (frame / scale).toInt()
+        }
+
+        /**
+         * Doubles the slice, folding each pair of buckets into one.
+         *
+         * The fold takes the louder of the pair, because a peak envelope's
+         * value over a wider slice is the peak over that slice.
+         */
+        private fun halve() {
+            for (index in 0 until buckets / 2) {
+                peaks[index] = maxOf(peaks[index * 2], peaks[index * 2 + 1])
+            }
+            for (index in buckets / 2 until buckets) {
+                peaks[index] = 0
+            }
+            scale *= 2
         }
 
         /** How many samples have been folded in. */

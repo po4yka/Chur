@@ -1042,8 +1042,15 @@ pub unsafe extern "C" fn chur_backup_create(
                 let mut guard = registry::lock(session);
                 let mut progress =
                     crate::operation::SharedProgress::new(shared, crate::operation::Stage::Running);
-                chur_media::backup::create(&mut guard, &mut destination, now, &mut progress)
-                    .map(|_| ())
+                chur_media::backup::create(&mut guard, &mut destination, now, &mut progress)?;
+                // §7's "fsync destination". `create` writes through a `Write`
+                // sink, which has no durability operation, so the owner of the
+                // file performs the step — here, and in `chur-cli` for its own
+                // path. A package that is not durable is a package a power loss
+                // turns into a file that parses and is missing its tail.
+                destination.sync_all().map_err(|_| {
+                    chur_core::err!(IoFailure, "the package could not be made durable")
+                })
             },
         )?;
         let handle = registry::insert(Entry::Operation {
@@ -1100,15 +1107,13 @@ pub unsafe extern "C" fn chur_backup_restore(
         };
         // SAFETY: as above for the descriptor.
         let mut source = unsafe { crate::api::duplicate_descriptor(source_fd)? };
-        let now = crate::api::now_ms();
         let operation = crate::operation::Operation::spawn(
             crate::operation::OperationKind::Restore,
             0,
             move |shared| {
                 let mut progress =
                     crate::operation::SharedProgress::new(shared, crate::operation::Stage::Running);
-                chur_media::backup::restore(&root, &mut source, &secret, now, &mut progress)
-                    .map(|_| ())
+                chur_media::backup::restore(&root, &mut source, &secret, &mut progress).map(|_| ())
             },
         )?;
         let handle = registry::insert(Entry::Operation {

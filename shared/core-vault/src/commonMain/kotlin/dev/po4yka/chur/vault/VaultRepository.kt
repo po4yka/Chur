@@ -73,6 +73,19 @@ class VaultRepository(
     suspend fun create(password: ByteArray, offerRecovery: Boolean): String? =
         mutex.withLock {
             requireRuntime()
+            // A second identity is created from an authenticated session,
+            // `DECOY_VAULT.md` §3, so a session can be open when this runs. It
+            // must not survive: this method replaces `session`, and a handle
+            // nothing holds any more is a vault Rust still has unlocked, with
+            // its root, its collection keys, and its catalog connection live.
+            // §8 of `PLAINTEXT_LIFECYCLE.md` is the transition that ends that,
+            // and it runs here rather than being skipped because the caller is
+            // busy creating something else.
+            if (session != 0L) {
+                runCatching { ChurVault.lock(session, LockReason.USER) }
+                runCatching { ChurVault.closeSession(session) }
+                session = 0L
+            }
             _state.value = VaultState.Creating
             var creation = 0L
             try {

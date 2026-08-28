@@ -133,6 +133,27 @@ fn portable_descriptor(live: &VaultDescriptor) -> Result<VaultDescriptor> {
     })
 }
 
+/// The slot inventory entries of §7.1, in the order that section fixes.
+///
+/// "Slot entries follow, sorted by ascending `slot_id` byte order." A
+/// descriptor stores its slots in the order they were enrolled and nothing
+/// sorts them, so a writer that walked the descriptor would produce a
+/// commitment that depended on enrolment history. §7.1's whole purpose is that
+/// two conforming writers over the same content emit the same sequence.
+fn slot_entries(descriptor: &VaultDescriptor) -> Vec<SlotInventoryEntry> {
+    let mut entries: Vec<SlotInventoryEntry> = descriptor
+        .key_slots
+        .iter()
+        .map(|slot| SlotInventoryEntry {
+            slot_id: slot.slot_id,
+            slot_type: slot.slot_type.value(),
+            slot_generation: slot.slot_generation,
+        })
+        .collect();
+    entries.sort_unstable_by_key(|entry| *entry.slot_id.as_bytes());
+    entries
+}
+
 // ---------------------------------------------------------------------------
 // §7 Streaming creation
 // ---------------------------------------------------------------------------
@@ -179,12 +200,8 @@ pub fn create(
         content_length = content_length.saturating_add(entry.ciphertext_length);
         committer.add_stream(&entry)
     })?;
-    for slot in &descriptor.key_slots {
-        committer.add_slot(&SlotInventoryEntry {
-            slot_id: slot.slot_id,
-            slot_type: slot.slot_type.value(),
-            slot_generation: slot.slot_generation,
-        })?;
+    for entry in slot_entries(&descriptor) {
+        committer.add_slot(&entry)?;
     }
     let stream_count = committer.stream_count();
     let slot_count = committer.slot_count();
@@ -435,6 +452,10 @@ struct RecordSlot {
 /// creation. A restore interrupted at any earlier point leaves no openable
 /// vault, exactly as an abandoned creation does.
 ///
+/// It takes no clock. A restore installs bytes the package already fixed and
+/// records no time of its own: the manifest carries the creation time and the
+/// catalog carries every row's, so there is nothing here for a clock to stamp.
+///
 /// # Errors
 ///
 /// Returns [`ChurStatus::VaultCorrupt`] for a package that does not parse or
@@ -454,7 +475,6 @@ pub fn restore(
     root_dir: &VaultRoot,
     source: &mut (impl Read + Seek),
     password: &[u8],
-    now_ms: u64,
     progress: &mut impl Progress,
 ) -> Result<RestoreSummary> {
     // §11 and `VAULT_DESCRIPTOR_V1.md` §11: the registry holds two identities.
@@ -528,12 +548,8 @@ pub fn restore(
         committer.add_stream(&entry)?;
         entries.push((entry, slot.offset));
     }
-    for slot in &descriptor.key_slots {
-        committer.add_slot(&SlotInventoryEntry {
-            slot_id: slot.slot_id,
-            slot_type: slot.slot_type.value(),
-            slot_generation: slot.slot_generation,
-        })?;
+    for entry in slot_entries(&descriptor) {
+        committer.add_slot(&entry)?;
     }
     ensure!(
         committer.stream_count() == commit.stream_entry_count
@@ -545,9 +561,26 @@ pub fn restore(
 
     // §8 steps 5 to 9. Everything below writes into the vault namespace, and
     // the descriptor rename at the end is what makes any of it openable.
-    let store_id = descriptor.object_store.opaque_root_path_id;
+    //
+    // The local path identifiers are drawn fresh rather than taken from the
+    // package. `VAULT_DESCRIPTOR_V1.md` §6 makes them opaque random names of
+    // this device's storage layout, not of the identity, and reusing the source
+    // device's would collide with whatever already occupies that name here —
+    // including, when a package is restored beside the vault it came from,
+    // that very vault. The descriptor is re-sealed under the root the package's
+    // own slot returned, which is the same operation a creation performs.
+    let store_id = random::id()?;
+    let catalog_path_id = random::id()?;
+    let local = VaultDescriptor {
+        catalog: chur_format::descriptor::CatalogDescriptor {
+            opaque_catalog_path_id: catalog_path_id,
+            ..descriptor.catalog
+        },
+        object_store: chur_format::descriptor::ObjectStoreDescriptor::v1(store_id),
+        ..descriptor.clone()
+    };
     root_dir.prepare(&store_id)?;
-    let catalog_path = root_dir.catalog(&store_id, &descriptor.catalog.opaque_catalog_path_id);
+    let catalog_path = root_dir.catalog(&store_id, &catalog_path_id);
     let installed = (|| -> Result<()> {
         extract(
             source,
@@ -562,7 +595,7 @@ pub fn restore(
         ensure!(
             chur_crypto::secret::constant_time_eq(
                 &vault::catalog_header_commitment(&catalog_path)?,
-                &descriptor.catalog.catalog_header_commitment
+                &local.catalog.catalog_header_commitment
             ),
             VaultCorrupt,
             "the package's catalog is not the one its descriptor commits to"
@@ -572,7 +605,7 @@ pub fn restore(
         // walk is in the §7.1 order the container records were written in, so
         // the k-th record is the k-th row and the two are compared rather than
         // assumed.
-        let catalog_key = chur_catalog::db::CatalogKey::derive(&root_secret, &descriptor.vault_id)?;
+        let catalog_key = chur_catalog::db::CatalogKey::derive(&root_secret, &local.vault_id)?;
         let catalog = chur_catalog::db::CatalogDb::open(
             &chur_catalog::db::CatalogLocation::File(&catalog_path),
             &catalog_key,
@@ -620,22 +653,45 @@ pub fn restore(
     if let Err(error) = installed {
         // Nothing openable was created, so removal is the whole recovery — the
         // same rule `VAULT_DESCRIPTOR_V1.md` §9 applies to an abandoned
-        // creation.
+        // creation. The directory is this restore's own, because its name was
+        // drawn above, so removing it can reach nothing else.
         let _ = std::fs::remove_dir_all(root_dir.vault(&store_id));
         return Err(error);
     }
 
-    // §8 step 9. The descriptor is authenticated again from the bytes that were
-    // written, then installed by the atomic rename of §9's last step.
+    // §8 step 9. The descriptor is installed by the atomic rename of §9's last
+    // step, then authenticated from the bytes that were written rather than
+    // from the value still in memory — the same read-back a creation performs.
+    //
+    // It is not verified by unlocking. An unlock resolves a credential across
+    // the whole registry and returns the first identity it opens, so a device
+    // that already holds an identity with this password would hand back that
+    // one, and the check would fail on a restore that had in fact succeeded.
+    // The root is already here; authenticating with it asks the question this
+    // step actually has.
     let entry_name = RegistryName::random()?;
-    vault::install_descriptor(root_dir, &entry_name, &descriptor_bytes)?;
-    let mut session = vault::unlock_with_password(root_dir, password, now_ms)?;
-    ensure!(
-        session.vault_id() == descriptor.vault_id,
-        VaultCorrupt,
-        "the restored descriptor did not open as the identity the package named"
-    );
-    session.lock()?;
+    let local_bytes = local.encode(&root_secret)?;
+    vault::install_descriptor(root_dir, &entry_name, &local_bytes)?;
+    let confirmed = (|| -> Result<()> {
+        let written = std::fs::read(root_dir.registry_entry(&entry_name))
+            .map_err(|_| chur_core::err!(IoFailure, "the descriptor could not be read back"))?;
+        let parsed = VaultDescriptor::authenticate(&written, Some(&root_secret))?;
+        ensure!(
+            parsed.vault_id == descriptor.vault_id
+                && parsed.object_store.opaque_root_path_id == store_id,
+            VaultCorrupt,
+            "the installed descriptor is not the one this restore wrote"
+        );
+        Ok(())
+    })();
+    if let Err(error) = confirmed {
+        // The entry is installed at this point, so the recovery has to remove
+        // it as well. Leaving it would consume one of the two identities §11
+        // admits, permanently and with nothing able to open it.
+        let _ = std::fs::remove_file(root_dir.registry_entry(&entry_name));
+        let _ = std::fs::remove_dir_all(root_dir.vault(&store_id));
+        return Err(error);
+    }
 
     Ok(RestoreSummary {
         backup_id: manifest.backup_id,

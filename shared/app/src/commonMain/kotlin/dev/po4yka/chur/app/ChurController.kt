@@ -130,6 +130,18 @@ class ChurController(
         val bytes = password.encodeToByteArray()
         val phrase = try {
             withContext(Dispatchers.Default) { repository.create(bytes, offerRecovery) }
+        } catch (failure: ChurFailure) {
+            // One sentence for every reason a creation is refused.
+            // `DECOY_VAULT.md` §10 forbids a surface that differs by whether a
+            // sibling exists, and the two statuses that reach here differ by
+            // exactly that: `RESOURCE_LIMIT_EXCEEDED` means the registry
+            // already holds the two identities §11 admits, and `CONFLICT`
+            // means this credential already opens one. A message naming either
+            // would answer, from inside a decoy session, the question the
+            // design refuses to answer. The residual signal that a creation
+            // failed at all is structural and is recorded in §5 there.
+            _message.value = "This vault could not be created. Try a different password."
+            return@guarded
         } finally {
             bytes.fill(0)
         }

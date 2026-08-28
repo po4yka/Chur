@@ -137,6 +137,15 @@ Peaks are normalized against the loudest bucket, so a quiet recording draws at
 full height and a silent one draws flat. The bucket count is the generator's
 choice inside the bound, not a format constant: v1 generators produce 512.
 
+The slices are equal, which is the one thing a generator must get right when it
+does not know the recording's length in advance — a container that reports no
+duration is ordinary. A generator that wrapped its index at the bucket count
+would fold a later passage onto an earlier one and produce a superposition of
+envelopes rather than one; v1 generators widen the slice instead, halving the
+resolution each time the samples outgrow the buckets, so a recording of unknown
+length ends at between half and all of the buckets it would otherwise have
+used.
+
 §11 applies unchanged. Two decoders of one recording may produce different peak
 values, and the declared generator profile is what makes that a known difference
 rather than a silent one. What may not differ is the record that carries them.

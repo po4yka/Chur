@@ -120,14 +120,8 @@ fn a_package_restores_a_vault_whose_objects_export_the_original_bytes() {
     session.lock().expect("lock");
 
     let destination = scratch_root();
-    let restored = backup::restore(
-        &destination,
-        &mut package,
-        PASSWORD,
-        NOW + 1_000,
-        &mut Uninterrupted,
-    )
-    .expect("restore");
+    let restored =
+        backup::restore(&destination, &mut package, PASSWORD, &mut Uninterrupted).expect("restore");
     assert_eq!(restored.vault_id, source_vault);
     assert_eq!(restored.backup_id, summary.backup_id);
     assert_eq!(restored.stream_count, 2);
@@ -153,14 +147,7 @@ fn an_empty_vault_makes_a_package_that_restores_to_an_empty_vault() {
     session.lock().expect("lock");
 
     let destination = scratch_root();
-    backup::restore(
-        &destination,
-        &mut package,
-        PASSWORD,
-        NOW + 1_000,
-        &mut Uninterrupted,
-    )
-    .expect("restore");
+    backup::restore(&destination, &mut package, PASSWORD, &mut Uninterrupted).expect("restore");
     let opened = vault::unlock_with_password(&destination, PASSWORD, NOW + 2_000).expect("unlock");
     let listed = page(opened.catalog_ref().unwrap(), &ObjectQuery::timeline()).expect("page");
     assert_eq!(listed.total_count, 0);
@@ -187,7 +174,6 @@ fn a_damaged_package_installs_nothing() {
             &destination,
             &mut Cursor::new(truncated),
             PASSWORD,
-            NOW,
             &mut Uninterrupted,
         )),
         ChurStatus::VaultCorrupt
@@ -206,7 +192,6 @@ fn a_damaged_package_installs_nothing() {
         &destination,
         &mut Cursor::new(flipped),
         PASSWORD,
-        NOW,
         &mut Uninterrupted,
     ));
     assert_eq!(status, ChurStatus::VaultCorrupt);
@@ -224,7 +209,6 @@ fn a_damaged_package_installs_nothing() {
             &destination,
             &mut Cursor::new(catalog),
             PASSWORD,
-            NOW,
             &mut Uninterrupted,
         )),
         ChurStatus::VaultCorrupt
@@ -240,7 +224,6 @@ fn a_damaged_package_installs_nothing() {
             &destination,
             &mut Cursor::new(extended),
             PASSWORD,
-            NOW,
             &mut Uninterrupted,
         )),
         ChurStatus::VaultCorrupt
@@ -294,7 +277,6 @@ fn a_wrong_credential_restores_nothing() {
             &destination,
             &mut package,
             b"not the password",
-            NOW,
             &mut Uninterrupted,
         )),
         ChurStatus::AuthenticationFailed
@@ -323,14 +305,7 @@ fn a_device_bound_slot_does_not_travel() {
     session.lock().expect("lock");
 
     let destination = scratch_root();
-    backup::restore(
-        &destination,
-        &mut package,
-        PASSWORD,
-        NOW + 1_000,
-        &mut Uninterrupted,
-    )
-    .expect("restore");
+    backup::restore(&destination, &mut package, PASSWORD, &mut Uninterrupted).expect("restore");
     let opened = vault::unlock_with_password(&destination, PASSWORD, NOW + 2_000).expect("unlock");
     assert_eq!(opened.slots().len(), 2);
     assert!(
@@ -371,7 +346,6 @@ fn a_restore_into_a_full_registry_is_refused() {
             &destination,
             &mut package,
             PASSWORD,
-            NOW,
             &mut Uninterrupted,
         )),
         ChurStatus::Conflict
@@ -390,7 +364,6 @@ fn an_age_wrapped_package_is_named_as_wrapped() {
             &destination,
             &mut wrapped,
             PASSWORD,
-            NOW,
             &mut Uninterrupted,
         )),
         ChurStatus::UnsupportedVersion
@@ -402,7 +375,6 @@ fn an_age_wrapped_package_is_named_as_wrapped() {
             &destination,
             &mut foreign,
             PASSWORD,
-            NOW,
             &mut Uninterrupted,
         )),
         ChurStatus::VaultCorrupt
@@ -504,10 +476,69 @@ fn a_restore_stops_inside_a_container_rather_than_between_files() {
             &destination,
             &mut package,
             PASSWORD,
-            NOW,
             &mut progress,
         )),
         ChurStatus::Cancelled
     );
     assert!(destination.registry_names().unwrap().is_empty());
+}
+
+/// A package restored beside the vault it came from must not touch that vault.
+///
+/// The local path identifiers of `VAULT_DESCRIPTOR_V1.md` §6 name this device's
+/// storage layout, not the identity, so a restore draws its own rather than
+/// reusing the source device's. Before that, restoring a package next to its
+/// own vault wrote into that vault's directory, and a failure on the way
+/// removed it.
+#[test]
+fn a_restore_beside_its_source_leaves_the_source_alone() {
+    let (root, mut session) = new_vault();
+    let (object_id, bytes) = import_one(&mut session, 40_000, "a.jpg", 0x9999);
+    let source_store = session.object_store_id();
+    let source_vault_id = session.vault_id();
+
+    let mut package = Cursor::new(Vec::new());
+    backup::create(&mut session, &mut package, NOW, &mut Uninterrupted).expect("create");
+    session.lock().expect("lock");
+
+    // The same root, which already holds the identity this package carries.
+    let restored =
+        backup::restore(&root, &mut package, PASSWORD, &mut Uninterrupted).expect("restore");
+    assert_eq!(restored.vault_id, source_vault_id);
+    assert_eq!(root.registry_names().unwrap().len(), 2);
+
+    // The source directory is untouched and still opens its own objects.
+    assert!(
+        root.vault(&source_store).exists(),
+        "the restore removed the vault it was taken from"
+    );
+    let reopened = vault::unlock_with_password(&root, PASSWORD, NOW + 2_000).expect("unlock");
+    assert_eq!(reopened.vault_id(), source_vault_id);
+    assert_eq!(exported(&reopened, &object_id), bytes);
+}
+
+/// §7.1 orders slot entries by ascending `slot_id`, not by the order a
+/// descriptor happens to store them in. Two writers over one vault must emit
+/// one sequence, so a package's commitment may not depend on enrolment order.
+#[test]
+fn the_slot_inventory_order_does_not_depend_on_enrolment_order() {
+    // Enrolling a second slot appends it to the descriptor, so at least one of
+    // these two vaults has a descriptor whose slots are not in ascending
+    // identifier order. Both must still restore, which is what proves the
+    // commitment was taken in the sorted order rather than the stored one.
+    for _ in 0..8 {
+        let (_root, mut session) = new_vault();
+        session.add_recovery_slot().expect("recovery");
+        session
+            .add_apple_keychain_slot(random::id().unwrap())
+            .expect("keychain");
+        let mut package = Cursor::new(Vec::new());
+        let summary =
+            backup::create(&mut session, &mut package, NOW, &mut Uninterrupted).expect("create");
+        assert_eq!(summary.slot_count, 2);
+        session.lock().expect("lock");
+
+        let destination = scratch_root();
+        backup::restore(&destination, &mut package, PASSWORD, &mut Uninterrupted).expect("restore");
+    }
 }

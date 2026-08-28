@@ -74,6 +74,10 @@ Unlock latency is the one signal that is bounded. [`KEY_SLOTS.md`](KEY_SLOTS.md)
 - the Argon2id parameters of a password slot are public descriptor bytes, so identities calibrated to different parameters differ in both the published parameters and the cost of one derivation. Provision every identity on one device with the same profile, as [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §23 requires;
 - a device holding one identity still pays two derivations, and a device that cannot allocate the memory floor fails before the first one under [`PASSWORD_PROFILE.md`](PASSWORD_PROFILE.md) §6. Both are constants of the unlock procedure, readable from these documents, and neither counts identities.
 
+A third residual signal is structural and is accepted here rather than in §10, which otherwise forbids it. [`../format/VAULT_DESCRIPTOR_V1.md`](../format/VAULT_DESCRIPTOR_V1.md) §11 caps the registry at two identities, and §3 above provisions the second one from an authenticated session. So "can another identity be created here" and "are there already two" are the same question, and a session that asks it learns the answer whichever identity it is. The application refuses every creation with one sentence that names no reason, so the *kind* of refusal reveals nothing further; that a refusal happened at all is what remains, and no arrangement of the surface removes it while the cap is two and provisioning is reachable from a session.
+
+What that costs is bounded. A coercer inside a decoy session who provokes the refusal learns that two identities exist, which is the fact §10 protects. They learn nothing about the second one: not its credential, not its size, not its content, and not whether it is the real one — §11's storage rule and §2's session routing still hold. And they must already know the feature exists to try, which the "Assumed adversary knowledge" section below states they may.
+
 ## 6. Public and decoy UI
 
 The public shell remains separate from the decoy vault. A decoy session should behave as a complete private vault:
@@ -129,7 +133,7 @@ The existence of this feature is public by design. [`../product/DISCREET_MODE.md
 
 What remains is indistinguishability, not concealment: the defence holds only where the coercer cannot tell an opened decoy from a vault that has no sibling. Therefore:
 
-- a decoy session must not prove or disprove the existence of a sibling identity from inside the application. No count, setting, notification, backup state, error, timing class, or management surface reachable from a decoy session may differ according to whether a real vault exists;
+- a decoy session must not prove or disprove the existence of a sibling identity from inside the application. No count, setting, notification, backup state, error, timing class, or management surface reachable from a decoy session may differ according to whether a real vault exists. The one exception is the provisioning refusal of §5, which the registry cap of two makes structural; it is stated there rather than hidden here;
 - the same must hold in a real session with no decoy provisioned, so that "no decoy exists" and "the decoy was not opened" are one observation rather than two;
 - §3 provisioning must state this limitation before the user creates a decoy.
 

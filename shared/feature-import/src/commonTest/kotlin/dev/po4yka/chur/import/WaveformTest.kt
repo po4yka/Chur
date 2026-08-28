@@ -86,6 +86,42 @@ class WaveformTest {
     }
 
     /**
+     * A container that reports no duration is ordinary: Android returns zero
+     * when `METADATA_KEY_DURATION` is absent and iOS maps a NaN duration to
+     * zero. §6.1 calls the record "a peak envelope over equal slices of a
+     * recording", so an envelope that wrapped and folded a later passage onto
+     * an earlier one would be a superposition of several rather than one.
+     */
+    @Test
+    fun a_recording_of_unknown_length_produces_one_envelope_and_not_several() {
+        val buckets = 8
+        val accumulator = Waveform.Accumulator(expectedFrames = 0, buckets = buckets)
+        // Forty times past one pass over the buckets, rising monotonically. An
+        // envelope that wrapped would put a late, loud passage in an early
+        // bucket and the result would not be monotonic; one that widens its
+        // slice stays monotonic and simply uses fewer buckets.
+        val total = buckets * 40
+        repeat(total) { index -> accumulator.add((index + 1).toShort()) }
+        val peaks = assertNotNull(Waveform.peaksOf(accumulator.encode(0)))
+            .map { it.toInt() and 0xff }
+        assertEquals(buckets, peaks.size)
+
+        val used = peaks.indexOfLast { it > 0 } + 1
+        assertTrue(
+            used >= buckets / 2,
+            "widening the slice left only $used of $buckets buckets, below the stated floor",
+        )
+        assertEquals(255, peaks[used - 1], "the loudest sample is not in the last used bucket")
+        for (index in 1 until used) {
+            assertTrue(
+                peaks[index] >= peaks[index - 1],
+                "bucket $index is quieter than the one before it, so a later passage folded back",
+            )
+        }
+        assertTrue(peaks.drop(used).all { it == 0 }, "a bucket past the recording is not empty")
+    }
+
+    /**
      * §6 lists the waveform beside the data records rather than the pictures,
      * and §12 gives it no long edge. A generator that asked for one would be
      * asking the wrong question.

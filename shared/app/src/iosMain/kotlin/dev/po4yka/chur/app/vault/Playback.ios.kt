@@ -32,7 +32,7 @@ import platform.Foundation.NSURL
 import platform.Foundation.create
 import platform.UIKit.UIView
 import platform.darwin.NSObject
-import platform.darwin.dispatch_get_main_queue
+import platform.darwin.dispatch_queue_create
 
 /**
  * The AVFoundation half of `MEDIA_PIPELINE.md` §9.
@@ -53,7 +53,14 @@ actual fun VaultPlayer(source: PlaybackSource, modifier: Modifier) {
     val loader = remember(source.objectId, source.plaintextSize) { ChurResourceLoader(source) }
     val player = remember(loader) {
         val asset = AVURLAsset(NSURL(string = "chur://vault/object"), options = null)
-        asset.resourceLoader.setDelegate(loader, dispatch_get_main_queue())
+        // A serial queue of its own, never the main queue. The delegate answers
+        // synchronously and its first answer takes the repository's mutex and
+        // then a native read; on the main queue that is the user interface
+        // waiting on a catalog query, which is the shape of an unresponsive
+        // application rather than a slow one. Serial is what AVFoundation
+        // expects and is also what the reader needs: `FFI_CONTRACT.md` §8
+        // serializes calls per reader handle in v1.
+        asset.resourceLoader.setDelegate(loader, loaderQueue)
         AVPlayer().apply { replaceCurrentItemWithPlayerItem(AVPlayerItem(asset as AVAsset)) }
     }
     DisposableEffect(player) {
@@ -186,6 +193,15 @@ private fun utTypeOf(contentType: String): String? = when {
     contentType.startsWith("audio/") -> "public.audio"
     else -> null
 }
+
+/**
+ * The queue the resource loader answers on.
+ *
+ * One serial queue for the process. A second player replaces the first on this
+ * surface, so two loaders are never live at once, and sharing the queue keeps
+ * the ordering AVFoundation and `FFI_CONTRACT.md` §8 both want.
+ */
+private val loaderQueue = dispatch_queue_create("dev.po4yka.chur.resource-loader", null)
 
 /** Copies a Kotlin array into an `NSData` AVFoundation can hold. */
 private fun ByteArray.toNSData(): NSData = usePinned { pinned ->

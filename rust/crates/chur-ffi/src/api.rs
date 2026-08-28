@@ -414,6 +414,14 @@ pub unsafe extern "C" fn chur_vault_lock(session: Handle, reason: u32) -> Status
 
 /// Closes a session handle.
 ///
+/// Everything the session owns goes first. §4 makes a session's handles
+/// invalid once the session is, and `drain_owned_by` reaches them by walking
+/// from a slot that still holds its entry — so emptying this slot before
+/// draining would leave a reader or an operation with no owner to reach it,
+/// and an operation worker running against a session nothing can lock any
+/// more. Dropping an operation cancels and joins it, so this returns only once
+/// no worker of this session is running.
+///
 /// # Safety
 ///
 /// The handle is a value this process issued, or zero.
@@ -424,6 +432,8 @@ pub unsafe extern "C" fn chur_vault_lock(session: Handle, reason: u32) -> Status
 )]
 pub unsafe extern "C" fn chur_session_close(session: Handle) -> Status {
     guard_status(|| {
+        let owned = registry::drain_owned_by(session);
+        drop(owned);
         let taken = registry::close(session)?;
         drop(taken);
         Ok(())
