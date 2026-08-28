@@ -127,6 +127,13 @@ chur-cli bench chunk-sizes --object-bytes 16777216 --samples 8
 chur-cli bench argon2 --samples 8
 ```
 
+Phase 2 adds the two its exit criteria name, through the same binary:
+
+```text
+chur-cli bench random-seek --object-bytes 16777216 --samples 32
+chur-cli bench lock-invalidation --samples 8
+```
+
 They are not a benchmark framework and add no dependency. They report p50, p95, and p99 with the sample size, per §1.
 
 ## 11. First recorded measurements
@@ -166,3 +173,30 @@ Argon2id candidates, milliseconds per derivation, with the whole-attempt cost of
 The frozen floor costs 72 ms per derivation on this host, well under the 350 to 750 ms interactive target, which is the expected shape: the target is set on the floor device of ADR-0017, and a workstation is several times faster. Raising memory is the effective lever and raising lanes is not, which matches Argon2's cost model. Calibration under §6 may therefore raise memory on a device that measures far under the target, and may never lower it. The 524288 KiB parser ceiling already exceeds the target on this host, so it is a bound rather than a candidate.
 
 A measurement on the ADR-0017 device set replaces this section; until then no candidate above the floor is approved.
+
+## 12. The Phase 2 measurements
+
+The two rows of §2 that Phase 2's exit criteria name — random seek and lock invalidation — now have numbers. They rank the work and approve nothing, for the reason §11 gives: §1 requires a release-like build on a device from [ADR-0017](../adr/0017-freeze-the-supported-device-set.md), and the host below is none of them.
+
+- **Host:** Apple silicon workstation, macOS, release profile, Rust 1.97.0.
+- **Object:** 16 MiB of synthetic plaintext at the 1 MiB video chunk of [`../format/OBJECT_CONTAINER_V1.md`](../format/OBJECT_CONTAINER_V1.md) §6.
+- **Range per seek:** 65536 bytes, which is a player-sized read rather than the one byte §11's table used.
+
+Random seek, milliseconds, 32 samples:
+
+| Seek | p50 | p95 | p99 |
+| --- | ---: | ---: | ---: |
+| warm, one reader held across seeks | 2.13 | 2.22 | 4.32 |
+| cold, reader reopened per seek | 2.17 | 2.33 | 4.91 |
+
+The §2 row is p95 under 150 ms excluding codec and network. Two things the table settles. The cost is dominated by authenticating the one 1 MiB chunk the offset falls in, which is why it matches the 2.10 ms one-byte read of §11's chunk-size table at the same chunk size: a 64 KiB range inside a chunk costs what a 1-byte range inside it costs. And reopening the reader adds about 2 percent, because the manifest is one AEAD record; a data source that drops its reader on lock therefore pays almost nothing to reacquire one.
+
+Lock invalidation, milliseconds, 8 samples:
+
+| Lock | p50 | p95 | p99 |
+| --- | ---: | ---: | ---: |
+| native | 15.9 | 48.0 | 48.0 |
+
+The §2 row is p95 under 100 ms with the UI cover immediate. The number covers [`../security/PLAINTEXT_LIFECYCLE.md`](../security/PLAINTEXT_LIFECYCLE.md) §8 steps 5 and 8: the catalog connection closes and the scratch directory is removed and recreated. Step 6, zeroizing the root, runs on `Drop` and is outside the measurement, and the UI cover is the host's and is separated by §2 already. The spread between p50 and p95 is filesystem work rather than cryptography — closing a SQLCipher connection flushes, and the directory rebuild is two syscalls whose cost depends on the page cache.
+
+A measurement on the ADR-0017 device set replaces this section, as it does §11.

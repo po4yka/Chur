@@ -10,6 +10,7 @@
 //! generate and verify the deterministic vector set, inspect a container
 //! structurally with no key, and answer the ABI handshake.
 
+mod backup;
 mod bench;
 mod manifest;
 mod vault;
@@ -59,6 +60,21 @@ enum Command {
         #[command(subcommand)]
         action: BenchAction,
     },
+    /// Create and restore a portable backup package.
+    ///
+    /// `docs/format/BACKUP_FORMAT_V1.md` §1 makes the package portable across
+    /// Android, iOS, and this binary, so a package written here restores on a
+    /// phone and one written on a phone restores here.
+    Backup {
+        /// The storage root.
+        #[arg(long, global = true)]
+        root: Option<PathBuf>,
+        /// A file holding the password, when `CHUR_PASSWORD` is not set.
+        #[arg(long, global = true)]
+        password_file: Option<PathBuf>,
+        #[command(subcommand)]
+        action: BackupAction,
+    },
     /// Create, unlock, and operate a vault.
     ///
     /// A password is read from `CHUR_PASSWORD` or `--password-file`, never from
@@ -73,6 +89,32 @@ enum Command {
         password_file: Option<PathBuf>,
         #[command(subcommand)]
         action: VaultAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum BackupAction {
+    /// Write a full package of the vault in the storage root.
+    Create {
+        /// Where to write the package. It must not already exist.
+        package: PathBuf,
+    },
+    /// Restore a package into the storage root.
+    ///
+    /// The root is not unlocked first: a restore installs an identity rather
+    /// than operating one, and the credential opens the package's own portable
+    /// descriptor.
+    Restore {
+        /// The package to read.
+        package: PathBuf,
+    },
+    /// Print what a package says about itself without opening it.
+    ///
+    /// Only the public preamble is read, so this needs no credential and
+    /// reveals nothing the file does not already reveal to anyone holding it.
+    Inspect {
+        /// The package to read.
+        package: PathBuf,
     },
 }
 
@@ -172,6 +214,24 @@ enum BenchAction {
         #[arg(long, default_value_t = 8)]
         samples: usize,
     },
+    /// Measure the random-seek cost a player's data source pays.
+    RandomSeek {
+        /// The synthetic object's plaintext length.
+        #[arg(long, default_value_t = 16 * 1024 * 1024)]
+        object_bytes: usize,
+        /// How many seeks to time.
+        #[arg(long, default_value_t = 32)]
+        samples: usize,
+        /// The range one seek asks for.
+        #[arg(long, default_value_t = 64 * 1024)]
+        range_bytes: usize,
+    },
+    /// Measure the native half of a lock.
+    LockInvalidation {
+        /// How many locks to time.
+        #[arg(long, default_value_t = 8)]
+        samples: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -216,6 +276,28 @@ enum ObjectAction {
 /// Every command but `create` and `status` unlocks first, which also runs the
 /// reconciliation of `OBJECT_CONTAINER_V1.md` §14.4 and the garbage collection
 /// of `CATALOG_SCHEMA_V1.md` §14.1, exactly as a session on a device does.
+fn run_backup(
+    root: Option<PathBuf>,
+    password_file: Option<&Path>,
+    action: BackupAction,
+) -> chur_core::Result<()> {
+    // Inspection reads a public preamble, so it runs before any password is
+    // asked for. The other two need a credential.
+    if let BackupAction::Inspect { package } = &action {
+        return backup::inspect(package);
+    }
+    let root = vault::root_of(root);
+    let password = vault::read_password(password_file)?;
+    match action {
+        BackupAction::Inspect { .. } => Ok(()),
+        BackupAction::Create { package } => {
+            let mut session = vault::unlock(&root, &password)?;
+            backup::create(&mut session, &package)
+        }
+        BackupAction::Restore { package } => backup::restore(&root, &package, &password),
+    }
+}
+
 fn run_vault(
     root: Option<PathBuf>,
     password_file: Option<&Path>,
@@ -336,6 +418,12 @@ fn run() -> Result<(), String> {
             action,
         } => run_vault(root, password_file.as_deref(), action)
             .map_err(|error| format!("vault: {error}")),
+        Command::Backup {
+            root,
+            password_file,
+            action,
+        } => run_backup(root, password_file.as_deref(), action)
+            .map_err(|error| format!("backup: {error}")),
         Command::Bench { action } => match action {
             BenchAction::ChunkSizes {
                 object_bytes,
@@ -345,6 +433,14 @@ fn run() -> Result<(), String> {
             BenchAction::Argon2 { samples } => {
                 bench::argon2(samples).map_err(|error| format!("Argon2id benchmark: {error}"))
             }
+            BenchAction::RandomSeek {
+                object_bytes,
+                samples,
+                range_bytes,
+            } => bench::random_seek(object_bytes, samples, range_bytes)
+                .map_err(|error| format!("random-seek benchmark: {error}")),
+            BenchAction::LockInvalidation { samples } => bench::lock_invalidation(samples)
+                .map_err(|error| format!("lock-invalidation benchmark: {error}")),
         },
     }
 }
