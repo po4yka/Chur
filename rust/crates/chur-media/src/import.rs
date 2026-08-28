@@ -30,6 +30,7 @@ use chur_format::container::{
 use zeroize::Zeroizing;
 
 use crate::keys;
+use crate::progress::{self, Progress};
 use crate::store::TemporaryContainer;
 
 /// The chunk size a v1 writer uses for a photo or a derived stream.
@@ -560,6 +561,63 @@ pub fn import_bytes(
     }
     for piece in plaintext.chunks(chunk) {
         import.write(session, piece)?;
+    }
+    import.commit(session, content_type, now_ms)
+}
+
+/// Feeds a whole source into an open import, chunk by chunk.
+///
+/// This is the one refill loop. Every caller that streams bytes into a vault
+/// runs it, so the bound of `MEDIA_PIPELINE.md` §12 and the cancellation of
+/// `FFI_CONTRACT.md` §9 are properties of one piece of code rather than of each
+/// caller separately.
+///
+/// On cancellation the import is abandoned under §14.4 before the error
+/// returns: the envelope is destroyed first, so the partial ciphertext already
+/// written is unrecoverable rather than merely orphaned.
+///
+/// It returns the plaintext bytes written. A source that yields none is not an
+/// object, so the import is abandoned and the call fails.
+pub fn stream_into(
+    mut import: Import,
+    session: &mut Session,
+    source: &mut impl std::io::Read,
+    content_type: &str,
+    now_ms: u64,
+    progress: &mut impl Progress,
+) -> Result<Id> {
+    let chunk = usize::try_from(import.chunk_size())
+        .map_err(|_| chur_core::err!(InternalFailure, "the chunk size exceeds a usize"))?;
+    let mut buffer = Zeroizing::new(vec![0u8; chunk]);
+    let mut processed = 0u64;
+    loop {
+        if progress.cancelled() {
+            import.abandon(session)?;
+            return Err(progress::cancelled("the import was cancelled"));
+        }
+        let mut filled = 0usize;
+        while filled < chunk {
+            let read = source
+                .read(&mut buffer[filled..])
+                .map_err(|_| chur_core::err!(IoFailure, "the import source could not be read"))?;
+            if read == 0 {
+                break;
+            }
+            filled += read;
+        }
+        if filled == 0 {
+            break;
+        }
+        import.write(session, &buffer[..filled])?;
+        processed += filled as u64;
+        progress.advance(processed);
+        if filled < chunk {
+            break;
+        }
+    }
+    if processed == 0 {
+        import.abandon(session)?;
+        bail!(InvalidInput, "an object carries at least one byte");
     }
     import.commit(session, content_type, now_ms)
 }

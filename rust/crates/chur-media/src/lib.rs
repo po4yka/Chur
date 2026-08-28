@@ -16,5 +16,6 @@ pub mod export;
 pub mod import;
 pub mod integrity;
 pub mod keys;
+pub mod progress;
 pub mod reader;
 pub mod store;

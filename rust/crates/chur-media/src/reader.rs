@@ -112,6 +112,17 @@ impl ObjectReader {
         self.inner.size()
     }
 
+    /// The container's chunk size, from the authenticated manifest.
+    ///
+    /// A sequential consumer sizes its step from this rather than from a
+    /// constant of its own: a step below the chunk size decrypts the same
+    /// chunk once per step, and a step above it holds more plaintext than
+    /// `MEDIA_PIPELINE.md` §12 bounds.
+    #[must_use]
+    pub const fn chunk_size(&self) -> u32 {
+        self.inner.manifest().chunk_size()
+    }
+
     /// The content information a player needs before its first range request.
     ///
     /// §6.1 makes this publishable only when the final commit validates, which
@@ -171,7 +182,19 @@ impl ObjectReader {
     /// cryptographic check returns `OBJECT_CORRUPT` and no summary, which is
     /// what `FFI_CONTRACT.md` §6.2 requires of the same call.
     pub fn verify_complete(&mut self) -> Result<IntegritySummary> {
-        let verified = self.inner.verify_complete()?;
+        self.verify_complete_with(&|| false)
+    }
+
+    /// Runs the complete verification, stopping when `cancelled` answers true.
+    ///
+    /// A cancelled verification returns `CANCELLED` and records no verdict: it
+    /// proved the container neither good nor bad, and an integrity scan must
+    /// not write a summary from it.
+    pub fn verify_complete_with(
+        &mut self,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<IntegritySummary> {
+        let verified = self.inner.verify_complete_with(cancelled)?;
         ensure!(
             verified == self.inner.size(),
             ObjectCorrupt,

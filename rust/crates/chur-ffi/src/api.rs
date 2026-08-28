@@ -22,7 +22,6 @@ use chur_crypto::Key;
 use chur_format::constants::{MediaClass, StreamKind};
 use chur_media::import::{CanonicalMedia, SourceCapability};
 use chur_media::{export, import, integrity, reader};
-use zeroize::Zeroizing;
 
 use crate::operation::{Operation, OperationKind, Stage};
 use crate::panic::guard_status;
@@ -992,62 +991,19 @@ fn run_import(
     now_ms: u64,
     shared: &crate::operation::Shared,
 ) -> Result<()> {
-    use std::io::Read as _;
-
     let guarded = session_of(entry)?;
-    let mut running = {
-        let mut session = registry::lock(guarded);
-        import::begin(&mut session, capability, media, now_ms)?
-    };
-    let chunk = usize::try_from(running.chunk_size())
-        .map_err(|_| chur_core::err!(InternalFailure, "the chunk size exceeds a usize"))?;
-    let mut buffer = Zeroizing::new(vec![0u8; chunk]);
-    let mut processed = 0u64;
-    loop {
-        if shared.cancelled() {
-            // §9: partial ciphertext remains journaled rather than active, and
-            // the abandonment destroys the key that could open it.
-            let mut session = registry::lock(guarded);
-            running.abandon(&mut session)?;
-            return Err(Error::new(
-                ChurStatus::Cancelled,
-                "the import was cancelled",
-            ));
-        }
-        let mut filled = 0usize;
-        while filled < chunk {
-            let read = source.read(&mut buffer[filled..]).map_err(|_| {
-                Error::new(ChurStatus::IoFailure, "the import source could not be read")
-            })?;
-            if read == 0 {
-                break;
-            }
-            filled += read;
-        }
-        if filled == 0 {
-            break;
-        }
-        {
-            let mut session = registry::lock(guarded);
-            running.write(&mut session, &buffer[..filled])?;
-        }
-        processed += filled as u64;
-        shared.advance(processed, Stage::Running);
-        if filled < chunk {
-            break;
-        }
-    }
-    if processed == 0 {
-        let mut session = registry::lock(guarded);
-        running.abandon(&mut session)?;
-        return Err(Error::new(
-            ChurStatus::InvalidInput,
-            "an object carries at least one byte",
-        ));
-    }
-    shared.advance(processed, Stage::Committing);
     let mut session = registry::lock(guarded);
-    running.commit(&mut session, content_type, now_ms)?;
+    let running = import::begin(&mut session, capability, media, now_ms)?;
+    let mut progress = crate::operation::SharedProgress::new(shared, Stage::Running);
+    import::stream_into(
+        running,
+        &mut session,
+        &mut source,
+        content_type,
+        now_ms,
+        &mut progress,
+    )?;
+    shared.advance(0, Stage::Committing);
     Ok(())
 }
 
@@ -1060,14 +1016,14 @@ fn run_export(
     let guarded = session_of(entry)?;
     let session = registry::lock(guarded);
     shared.advance(0, Stage::Running);
-    if shared.cancelled() {
-        return Err(Error::new(
-            ChurStatus::Cancelled,
-            "the export was cancelled",
-        ));
-    }
-    let written =
-        export::export_stream(&session, object_id, StreamKind::Original, &mut destination)?;
+    let mut progress = crate::operation::SharedProgress::new(shared, Stage::Running);
+    let written = export::export_stream(
+        &session,
+        object_id,
+        StreamKind::Original,
+        &mut destination,
+        &mut progress,
+    )?;
     shared.advance(written, Stage::Committing);
     Ok(())
 }
@@ -1103,7 +1059,12 @@ fn run_scan(
         }
         {
             let mut session = registry::lock(guarded);
-            integrity::scan_object(&mut session, object_id, now_ms)?;
+            let mut progress = crate::operation::SharedProgress::new(shared, Stage::Running);
+            // The per-object probe matters as much as the per-target one: one
+            // multi-gigabyte object verifies for minutes, and a scan that
+            // checked only between objects would ignore a cancellation for all
+            // of it.
+            integrity::scan_object_with(&mut session, object_id, now_ms, &mut progress)?;
         }
         shared.advance(index as u64 + 1, Stage::Running);
     }

@@ -136,8 +136,6 @@ pub fn collect_deletions(session: &mut Session) -> Result<usize> {
 
 /// Imports one file.
 pub fn import_file(session: &mut Session, path: &Path, content_type: &str) -> Result<Id> {
-    use std::io::Read as _;
-
     let mut file = std::fs::File::open(path)
         .map_err(|_| chur_core::err!(IoFailure, "the source could not be opened"))?;
     let length = file
@@ -169,34 +167,18 @@ pub fn import_file(session: &mut Session, path: &Path, content_type: &str) -> Re
         duration_ms: 0,
     };
     let now = now_ms();
-    let mut running = import::begin(session, capability, media, now)?;
-    let chunk = usize::try_from(running.chunk_size())
-        .map_err(|_| chur_core::err!(InternalFailure, "the chunk size exceeds a usize"))?;
-    let mut buffer = Zeroizing::new(vec![0u8; chunk]);
-    loop {
-        let mut filled = 0usize;
-        while filled < chunk {
-            let read = file
-                .read(&mut buffer[filled..])
-                .map_err(|_| chur_core::err!(IoFailure, "the source could not be read"))?;
-            if read == 0 {
-                break;
-            }
-            filled += read;
-        }
-        if filled == 0 {
-            break;
-        }
-        running.write(session, &buffer[..filled])?;
-        if filled < chunk {
-            break;
-        }
-    }
-    if running.written() == 0 {
-        running.abandon(session)?;
-        bail!(InvalidInput, "an object carries at least one byte");
-    }
-    running.commit(session, content_type, now)
+    let running = import::begin(session, capability, media, now)?;
+    // One refill loop lives in `chur_media::import`, so the memory bound and
+    // the cancellation behaviour are properties of that code rather than of
+    // each caller. The CLI never cancels, so it passes `Uninterrupted`.
+    import::stream_into(
+        running,
+        session,
+        &mut file,
+        content_type,
+        now,
+        &mut chur_media::progress::Uninterrupted,
+    )
 }
 
 /// Prints one page of a scope.
@@ -253,7 +235,13 @@ fn summary_name(value: u8) -> &'static str {
 pub fn export_object(session: &Session, object_id: &Id, destination: &Path) -> Result<u64> {
     let mut file = std::fs::File::create(destination)
         .map_err(|_| chur_core::err!(IoFailure, "the destination could not be created"))?;
-    let written = export::export_stream(session, object_id, StreamKind::Original, &mut file)?;
+    let written = export::export_stream(
+        session,
+        object_id,
+        StreamKind::Original,
+        &mut file,
+        &mut chur_media::progress::Uninterrupted,
+    )?;
     file.flush()
         .map_err(|_| chur_core::err!(IoFailure, "the destination could not be flushed"))?;
     Ok(written)

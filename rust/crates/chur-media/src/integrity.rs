@@ -10,6 +10,7 @@ use chur_catalog::vault::Session;
 use chur_core::{ChurStatus, Id, Result};
 use chur_format::constants::{IntegritySummary, ObjectState, StreamKind};
 
+use crate::progress::Progress;
 use crate::reader;
 use crate::store::container_exists;
 
@@ -36,6 +37,26 @@ pub struct ScanOutcome {
 /// - a cryptographic or structural check failed, which proves the object
 ///   unusable, so `state` becomes `CORRUPT` and no summary is recorded.
 pub fn scan_object(session: &mut Session, object_id: &Id, now_ms: u64) -> Result<ScanOutcome> {
+    scan_object_with(
+        session,
+        object_id,
+        now_ms,
+        &mut crate::progress::Uninterrupted,
+    )
+}
+
+/// Scans one object, stopping when `progress` reports cancellation.
+///
+/// Verifying one multi-gigabyte object runs for minutes, so a scan that checked
+/// the flag only between objects would ignore a cancellation for the whole of
+/// the object it is on. A cancelled scan leaves the row at `UNVERIFIED` rather
+/// than `VERIFYING`: nothing is running any more, and no verdict was reached.
+pub fn scan_object_with(
+    session: &mut Session,
+    object_id: &Id,
+    now_ms: u64,
+    progress: &mut impl Progress,
+) -> Result<ScanOutcome> {
     let streams = store::streams(session.catalog_ref()?, object_id)?;
     let Some(original) = streams
         .iter()
@@ -73,7 +94,7 @@ pub fn scan_object(session: &mut Session, object_id: &Id, now_ms: u64) -> Result
 
     let verdict = (|| -> Result<IntegritySummary> {
         let mut handle = reader::open(session, object_id, StreamKind::Original)?;
-        handle.verify_complete()
+        handle.verify_complete_with(&|| progress.cancelled())
     })();
 
     match verdict {
@@ -120,8 +141,9 @@ pub fn scan_object(session: &mut Session, object_id: &Id, now_ms: u64) -> Result
             })
         }
         Err(error) => {
-            // A read failure is not a verdict: the storage layer failed, and
-            // leaving the object VERIFYING would claim a scan is still running.
+            // A read failure is not a verdict, and neither is a cancellation:
+            // the storage layer failed or the caller stopped, and leaving the
+            // object VERIFYING would claim a scan is still running.
             store::set_integrity_summary(
                 session.catalog()?,
                 object_id,

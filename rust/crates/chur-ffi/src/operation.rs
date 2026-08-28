@@ -132,6 +132,35 @@ impl Shared {
     }
 }
 
+/// [`Shared`] as the media crate's progress sink.
+///
+/// `chur-media` owns the loops that must observe cancellation, and it must not
+/// depend on this crate to do it. The trait is the seam: the media crate names
+/// what it needs, and this binds it to the atomic flag and the snapshot an
+/// operation handle already owns.
+pub struct SharedProgress<'a> {
+    shared: &'a Shared,
+    stage: Stage,
+}
+
+impl<'a> SharedProgress<'a> {
+    /// Reports into `shared` under one stage.
+    #[must_use]
+    pub const fn new(shared: &'a Shared, stage: Stage) -> Self {
+        Self { shared, stage }
+    }
+}
+
+impl chur_media::progress::Progress for SharedProgress<'_> {
+    fn cancelled(&self) -> bool {
+        self.shared.cancelled()
+    }
+
+    fn advance(&mut self, processed: u64) {
+        self.shared.advance(processed, self.stage);
+    }
+}
+
 /// One operation handle: its shared state and its worker.
 pub struct Operation {
     shared: Arc<Shared>,

@@ -16,6 +16,7 @@ use chur_core::{ChurStatus, Id, Result};
 use chur_crypto::random;
 use chur_format::constants::{IntegritySummary, MediaClass, ObjectState, StreamKind};
 use chur_media::import::{CanonicalMedia, SourceCapability};
+use chur_media::progress::Uninterrupted;
 use chur_media::{derived, export, import, integrity, reader};
 use zeroize::Zeroizing;
 
@@ -347,8 +348,14 @@ fn an_export_writes_the_original_bytes() {
     let length = 262_144 + 77;
     let (object_id, expected) = import_photo(&mut session, length, "a.jpg");
     let mut out = Vec::new();
-    let written = export::export_stream(&session, &object_id, StreamKind::Original, &mut out)
-        .expect("export");
+    let written = export::export_stream(
+        &session,
+        &object_id,
+        StreamKind::Original,
+        &mut out,
+        &mut Uninterrupted,
+    )
+    .expect("export");
     assert_eq!(written, length as u64);
     assert_eq!(out.as_slice(), expected.as_slice());
 }
@@ -357,7 +364,13 @@ fn an_export_writes_the_original_bytes() {
 fn a_scratch_entry_is_created_and_released() {
     let (root, mut session) = new_vault();
     let (object_id, expected) = import_photo(&mut session, 4_096, "a.jpg");
-    let entry = export::materialize(&session, &object_id, StreamKind::Original).expect("scratch");
+    let entry = export::materialize(
+        &session,
+        &object_id,
+        StreamKind::Original,
+        &mut Uninterrupted,
+    )
+    .expect("scratch");
     assert_eq!(std::fs::read(entry.path()).unwrap(), expected.as_slice());
     let directory = root.scratch(&session.object_store_id());
     assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
@@ -372,14 +385,21 @@ fn the_scratch_entry_cap_is_enforced_before_the_first_byte() {
     let mut held = Vec::new();
     for _ in 0..4 {
         held.push(
-            export::materialize(&session, &object_id, StreamKind::Original).expect("scratch"),
+            export::materialize(
+                &session,
+                &object_id,
+                StreamKind::Original,
+                &mut Uninterrupted,
+            )
+            .expect("scratch"),
         );
     }
     assert_eq!(
         rejection(export::materialize(
             &session,
             &object_id,
-            StreamKind::Original
+            StreamKind::Original,
+            &mut Uninterrupted
         )),
         ChurStatus::ResourceLimitExceeded
     );
@@ -392,7 +412,13 @@ fn the_scratch_entry_cap_is_enforced_before_the_first_byte() {
 fn lock_clears_every_scratch_entry() {
     let (root, mut session) = new_vault();
     let (object_id, _) = import_photo(&mut session, 1_024, "a.jpg");
-    let _entry = export::materialize(&session, &object_id, StreamKind::Original).expect("scratch");
+    let _entry = export::materialize(
+        &session,
+        &object_id,
+        StreamKind::Original,
+        &mut Uninterrupted,
+    )
+    .expect("scratch");
     session.lock().expect("lock");
     let directory = root.scratch(&session.object_store_id());
     assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
@@ -637,4 +663,153 @@ fn a_source_above_the_object_bound_is_refused_before_any_work() {
             .unwrap()
             .is_empty()
     );
+}
+
+/// A caller that cancels once it has seen `after` bytes.
+///
+/// It records what it saw, so a test can assert that the operation stopped
+/// where the flag was raised rather than at the end of the object.
+struct CancelAfter {
+    after: u64,
+    seen: u64,
+    cancelled: bool,
+}
+
+impl CancelAfter {
+    const fn new(after: u64) -> Self {
+        Self {
+            after,
+            seen: 0,
+            cancelled: false,
+        }
+    }
+}
+
+impl chur_media::progress::Progress for CancelAfter {
+    fn cancelled(&self) -> bool {
+        self.cancelled
+    }
+
+    fn advance(&mut self, processed: u64) {
+        self.seen = processed;
+        if processed >= self.after {
+            self.cancelled = true;
+        }
+    }
+}
+
+/// `FFI_CONTRACT.md` §9: an operation observes cancellation without waiting for
+/// its own completion. Before this, an export checked the flag once before it
+/// started and then ran to the end, so a large export could not be stopped.
+#[test]
+fn an_export_stops_where_it_is_cancelled_rather_than_at_the_end() {
+    let (_root, mut session) = new_vault();
+    let bytes = plaintext(262_144 * 6);
+    let object_id = import::import_bytes(
+        &mut session,
+        source("long.bin", bytes.len() as u64),
+        photo(),
+        "image/jpeg",
+        &bytes,
+        NOW,
+    )
+    .expect("import");
+
+    let mut out: Vec<u8> = Vec::new();
+    let mut progress = CancelAfter::new(262_144 * 2);
+    let status = rejection(export::export_stream(
+        &session,
+        &object_id,
+        StreamKind::Original,
+        &mut out,
+        &mut progress,
+    ));
+
+    assert_eq!(status, ChurStatus::Cancelled);
+    // It wrote what it had authenticated and no more, and it stopped well
+    // before the end rather than after the last chunk.
+    assert_eq!(out.len() as u64, progress.seen);
+    assert!(out.len() < bytes.len());
+    assert_eq!(&out[..], &bytes[..out.len()]);
+}
+
+/// The same guarantee for the import half, and the §14.4 ordering with it: a
+/// cancelled import leaves no object and no live journal record.
+#[test]
+fn a_cancelled_import_activates_nothing_and_leaves_no_live_transaction() {
+    let (_root, mut session) = new_vault();
+    let bytes = plaintext(262_144 * 5);
+    let running = import::begin(
+        &mut session,
+        source("long.bin", bytes.len() as u64),
+        photo(),
+        NOW,
+    )
+    .expect("begin");
+    let mut cursor = std::io::Cursor::new(bytes.to_vec());
+    let mut progress = CancelAfter::new(262_144 * 2);
+    let status = rejection(import::stream_into(
+        running,
+        &mut session,
+        &mut cursor,
+        "image/jpeg",
+        NOW,
+        &mut progress,
+    ));
+
+    assert_eq!(status, ChurStatus::Cancelled);
+    assert!(
+        journal::live(session.catalog_ref().unwrap())
+            .unwrap()
+            .is_empty(),
+        "a cancelled import left a live journal record"
+    );
+    let listed = page(session.catalog_ref().unwrap(), &ObjectQuery::timeline()).expect("page");
+    assert_eq!(listed.total_count, 0);
+}
+
+/// An integrity scan of one long object must observe cancellation inside the
+/// object, and a cancelled scan records no verdict: it proved nothing.
+#[test]
+fn a_cancelled_scan_records_no_verdict() {
+    let (_root, mut session) = new_vault();
+    let bytes = plaintext(262_144 * 4);
+    let object_id = import::import_bytes(
+        &mut session,
+        source("long.bin", bytes.len() as u64),
+        photo(),
+        "image/jpeg",
+        &bytes,
+        NOW,
+    )
+    .expect("import");
+    // The import already verified the container, so reset the summary to the
+    // state a scan would start from.
+    store::set_integrity_summary(
+        session.catalog().unwrap(),
+        &object_id,
+        IntegritySummary::Unverified,
+        NOW,
+    )
+    .expect("reset");
+
+    struct Always;
+    impl chur_media::progress::Progress for Always {
+        fn cancelled(&self) -> bool {
+            true
+        }
+        fn advance(&mut self, _processed: u64) {}
+    }
+
+    let status = rejection(integrity::scan_object_with(
+        &mut session,
+        &object_id,
+        NOW,
+        &mut Always,
+    ));
+    assert_eq!(status, ChurStatus::Cancelled);
+
+    let row = store::object(session.catalog_ref().unwrap(), &object_id).expect("object");
+    assert_eq!(row.state, ObjectState::Active);
+    assert_eq!(row.integrity_summary, IntegritySummary::Unverified);
 }

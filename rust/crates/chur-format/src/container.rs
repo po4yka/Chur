@@ -2186,8 +2186,32 @@ impl<R: ReadAt> StreamReader<R> {
     ///
     /// As [`ContainerReader::verify_complete`].
     pub fn verify_complete(&mut self) -> Result<u64> {
+        self.verify_complete_with(&|| false)
+    }
+
+    /// Authenticates every record, stopping when `cancelled` answers true.
+    ///
+    /// A whole-object verification of a multi-gigabyte container runs for
+    /// minutes, and `docs/interop/FFI_CONTRACT.md` §9 requires an operation to
+    /// observe cancellation without waiting for its own completion. The probe
+    /// is read once per chunk record, which is the same granularity the import
+    /// journal uses.
+    ///
+    /// # Errors
+    ///
+    /// As [`ContainerReader::verify_complete`], plus [`ChurStatus::Cancelled`]
+    /// when the probe answers true. A cancelled verification records no
+    /// verdict: it did not prove the container good, and it did not prove it
+    /// bad either.
+    pub fn verify_complete_with(&mut self, cancelled: &dyn Fn() -> bool) -> Result<u64> {
         let mut committer = Committer::new(tag::OBJECT_ORDERED_COMMITMENT);
         for index in 0..self.geometry.chunk_count {
+            if cancelled() {
+                return Err(Error::new(
+                    ChurStatus::Cancelled,
+                    "the verification was cancelled",
+                ));
+            }
             let offset = self.geometry.chunk_record_offset(index)?;
             let length = self.geometry.chunk_record_length(index)?;
             let mut record = vec![0u8; length];
