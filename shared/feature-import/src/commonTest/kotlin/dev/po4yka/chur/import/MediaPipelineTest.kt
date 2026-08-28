@@ -90,6 +90,18 @@ class MediaPipelineTest {
     @Test
     fun an_opaque_object_gets_none() {
         assertTrue(requiredDerivatives(probe(mediaClass = MediaBounds.CLASS_OPAQUE)).isEmpty())
-        assertTrue(requiredDerivatives(probe(mediaClass = MediaBounds.CLASS_AUDIO)).isEmpty())
+    }
+
+    /**
+     * Audio asked for nothing until Phase 2, because §6's waveform had no
+     * format to be produced in. `WaveformTest` covers the record; this is the
+     * one line that decides audio gets one at all.
+     */
+    @Test
+    fun audio_asks_for_its_waveform() {
+        assertEquals(
+            listOf(StreamKind.AUDIO_WAVEFORM),
+            requiredDerivatives(probe(mediaClass = MediaBounds.CLASS_AUDIO)),
+        )
     }
 }

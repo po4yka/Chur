@@ -66,7 +66,13 @@ data class ProbedMedia(
 data class Derivative(
     /** The kind. */
     val kind: StreamKind,
-    /** The encoded bytes, baseline JPEG at the §12 quality for the kind. */
+    /**
+     * The encoded bytes.
+     *
+     * For an image kind they are baseline JPEG at the §12 quality for that
+     * kind. For [StreamKind.AUDIO_WAVEFORM] they are the §6.1 record, and
+     * [width] and [height] are both zero because it carries no pixels.
+     */
     val bytes: ByteArray,
     /** The width of the encoded image. */
     val width: Int,
@@ -108,6 +114,9 @@ object MediaBounds {
         StreamKind.GRID_PREVIEW -> 640
         StreamKind.SCREEN_PREVIEW -> 2_048
         StreamKind.VIDEO_POSTER -> 2_048
+        // A waveform is a data record rather than a picture: §6 lists it beside
+        // the OCR and embedding records, and §12 gives it no long edge.
+        StreamKind.AUDIO_WAVEFORM -> null
         StreamKind.ORIGINAL -> null
     }
 
@@ -214,6 +223,10 @@ fun requiredDerivatives(probe: ProbedMedia): List<StreamKind> = when (probe.medi
         if (maxOf(probe.width, probe.height) > 640) add(StreamKind.GRID_PREVIEW)
         if (maxOf(probe.width, probe.height) > 2_048) add(StreamKind.SCREEN_PREVIEW)
     }
+    // A video needs its poster at every resolution. The poster is the still the
+    // viewer shows before playback starts, so a 1080p video that is already
+    // inside the 2048 px target has no still at all until one is generated.
     MediaBounds.CLASS_VIDEO -> listOf(StreamKind.THUMBNAIL, StreamKind.VIDEO_POSTER)
+    MediaBounds.CLASS_AUDIO -> listOf(StreamKind.AUDIO_WAVEFORM)
     else -> emptyList()
 }

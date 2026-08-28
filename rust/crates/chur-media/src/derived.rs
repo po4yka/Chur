@@ -21,6 +21,7 @@ use chur_format::constants::{CONTAINER_VERSION_V1, MediaClass, SUITE_V1, StreamK
 use chur_format::container::{
     CanonicalManifest, ContainerWriter, MediaProperties, StreamIdentity, StreamReader,
 };
+use chur_format::waveform::Waveform;
 use zeroize::Zeroizing;
 
 use crate::import::DEFAULT_CHUNK_SIZE;
@@ -46,6 +47,11 @@ pub const fn long_edge(kind: StreamKind) -> Option<u32> {
         StreamKind::GridPreview => Some(media_bounds::GRID_PREVIEW_EDGE),
         StreamKind::ScreenPreview => Some(media_bounds::SCREEN_PREVIEW_EDGE),
         StreamKind::VideoPoster => Some(media_bounds::VIDEO_POSTER_EDGE),
+        // A waveform is a data record rather than a picture: §6 lists it beside
+        // the OCR and embedding records, and §12 gives it no long edge. The arm
+        // is written out so that the absence is a decision rather than a
+        // fallthrough, and `put` bounds it by its record length instead.
+        StreamKind::AudioWaveform => None,
         _ => None,
     }
 }
@@ -80,6 +86,13 @@ pub fn put(
             ResourceLimitExceeded,
             "the derivative exceeds the §12 long-edge target for its kind"
         );
+    }
+    if kind == StreamKind::AudioWaveform {
+        // A waveform has no pixel edge to bound it, so its own record is the
+        // bound. Parsing rather than measuring is deliberate: a waveform that
+        // the shared renderer cannot read is not a waveform, and the moment to
+        // find that out is before it is sealed into a container.
+        Waveform::decode(bytes)?;
     }
 
     let object = store::object(session.catalog_ref()?, object_id)?;
@@ -198,17 +211,28 @@ pub fn read(session: &Session, object_id: &Id, kind: StreamKind) -> Result<Zeroi
     reader.read_range(0, size)
 }
 
-/// Whether a source with these pixels needs a derivative of this kind.
+/// Whether a source of this class and size needs a derivative of this kind.
 ///
 /// An image already inside the long edge is its own preview, so generating one
 /// would spend a container and a key on a copy. The thumbnail is always
 /// generated, because the timeline reads it for every row and reading the
 /// original there would defeat the point.
+///
+/// The two kinds Phase 2 adds are decided by class rather than by size. A video
+/// needs a poster frame at every resolution: the poster is the still the
+/// viewer shows before playback starts, and a 1920 by 1080 video that is
+/// already inside the 2048 px target has no still at all until one is
+/// generated. Audio needs a waveform for the same reason and has no pixels to
+/// compare a target against.
 #[must_use]
-pub fn needs(kind: StreamKind, width: u32, height: u32) -> bool {
-    match long_edge(kind) {
-        None => false,
-        Some(_) if kind == StreamKind::ThumbnailSmall => true,
-        Some(edge) => width.max(height) > edge,
+pub fn needs(kind: StreamKind, media_class: MediaClass, width: u32, height: u32) -> bool {
+    match kind {
+        StreamKind::VideoPoster => media_class == MediaClass::Video,
+        StreamKind::AudioWaveform => media_class == MediaClass::Audio,
+        StreamKind::ThumbnailSmall => matches!(media_class, MediaClass::Image | MediaClass::Video),
+        _ => match long_edge(kind) {
+            None => false,
+            Some(edge) => media_class == MediaClass::Image && width.max(height) > edge,
+        },
     }
 }

@@ -689,6 +689,55 @@ pub fn streams(db: &CatalogDb, object_id: &Id) -> Result<Vec<Stream>> {
     Ok(streams)
 }
 
+/// Visits every stream of the vault in the total order of
+/// `docs/format/BACKUP_FORMAT_V1.md` §7.1.
+///
+/// The order is ascending `object_id`, then ascending `stream_id`, then
+/// ascending `stream_revision`. Those three keys are unique together, so the
+/// order is total and two conforming writers that back up the same content emit
+/// the same sequence.
+///
+/// It visits rather than collects. A vault holds up to a million objects under
+/// `docs/format/CATALOG_SCHEMA_V1.md` §21, and a vector of that many stream rows
+/// is hundreds of megabytes: a backup that materialized its own inventory would
+/// scale memory with the vault, which is what
+/// `docs/assurance/PERFORMANCE_BUDGETS.md` §4 forbids.
+pub fn for_each_stream_ordered(
+    db: &CatalogDb,
+    mut visit: impl FnMut(&Id, &Stream) -> Result<()>,
+) -> Result<()> {
+    let connection = db.connection();
+    // The stream columns keep the order `row::stream` reads, and `object_id`
+    // follows them, so one mapper serves this walk and the per-object query.
+    let mut statement = connection
+        .prepare(
+            "SELECT stream_id, stream_kind, stream_revision, source_content_revision,
+                    container_path_id, container_version, suite_id, ciphertext_size,
+                    plaintext_size, chunk_size, complete_verified_ms, final_commitment,
+                    object_id
+               FROM object_streams ORDER BY object_id, stream_id, stream_revision",
+        )
+        .map_err(|error| map_sqlite(error, "the stream walk could not be prepared"))?;
+    let mut rows = statement
+        .query([])
+        .map_err(|error| map_sqlite(error, "the streams could not be walked"))?;
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| map_sqlite(error, "a stream row could not be read"))?
+    {
+        let object_bytes: Vec<u8> = row
+            .get(12)
+            .map_err(|error| map_sqlite(error, "a stream row carried no object"))?;
+        let object_id = Id::new(object_bytes.as_slice().try_into().map_err(|_| {
+            chur_core::err!(CatalogCorrupt, "a stream row's object id is malformed")
+        })?)?;
+        let stream = crate::row::stream(&object_id, row)
+            .map_err(|error| map_sqlite(error, "a stream row could not be read"))??;
+        visit(&object_id, &stream)?;
+    }
+    Ok(())
+}
+
 /// Reads the active key envelope of one object, §7.
 pub fn active_envelope(db: &CatalogDb, object_id: &Id) -> Result<Vec<u8>> {
     db.connection()

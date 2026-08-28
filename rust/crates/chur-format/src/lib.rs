@@ -15,9 +15,11 @@
 //! Byte-exact codecs land one artifact at a time, each with positive and
 //! negative tests.
 
+pub mod backup;
 pub mod codec;
 pub mod constants;
 pub mod container;
 pub mod descriptor;
 pub mod envelope;
 pub mod slot;
+pub mod waveform;

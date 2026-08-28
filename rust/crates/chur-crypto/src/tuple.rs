@@ -50,6 +50,10 @@ pub mod tag {
     pub const CATALOG_HEADER_COMMITMENT: &[u8] = b"CHUR\0CATALOG\0HEADER-COMMITMENT\0V1";
     /// Ordered backup inventory commitment.
     pub const BACKUP_INVENTORY_COMMITMENT: &[u8] = b"CHUR\0BACKUP\0INVENTORY-COMMITMENT\0V1";
+    /// Backup manifest AAD, `BACKUP_FORMAT_V1.md` §4.
+    pub const BACKUP_MANIFEST_AAD: &[u8] = b"CHUR\0BACKUP\0MANIFEST-AAD\0V1";
+    /// Final backup commit AAD, `BACKUP_FORMAT_V1.md` §7.
+    pub const BACKUP_FINAL_COMMIT_AAD: &[u8] = b"CHUR\0BACKUP\0FINAL-COMMIT-AAD\0V1";
     /// Operation digest and per-device chain hash.
     pub const SYNC_OPERATION_CHAIN: &[u8] = b"CHUR\0SYNC\0OPERATION-CHAIN\0V1";
     /// Checkpoint record signature.
@@ -74,6 +78,8 @@ pub mod tag {
         VAULT_DESCRIPTOR_AUTH,
         CATALOG_HEADER_COMMITMENT,
         BACKUP_INVENTORY_COMMITMENT,
+        BACKUP_MANIFEST_AAD,
+        BACKUP_FINAL_COMMIT_AAD,
         SYNC_OPERATION_CHAIN,
         SYNC_CHECKPOINT,
         IDENTITY_FINGERPRINT,

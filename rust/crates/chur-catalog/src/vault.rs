@@ -573,6 +573,46 @@ impl Session {
         &self.root_secret
     }
 
+    /// The descriptor, for the backup package that copies it.
+    ///
+    /// `docs/format/BACKUP_FORMAT_V1.md` §3 lists what a portable package may
+    /// carry, and the caller of this decides which slots survive that filter.
+    #[must_use]
+    pub const fn descriptor(&self) -> &VaultDescriptor {
+        &self.descriptor
+    }
+
+    /// The catalog file this session opened.
+    ///
+    /// A backup copies the file whole, so it needs the path the descriptor
+    /// resolves rather than the identifiers that resolve it.
+    #[must_use]
+    pub fn catalog_path(&self) -> std::path::PathBuf {
+        self.root_dir.catalog(
+            &self.descriptor.object_store.opaque_root_path_id,
+            &self.descriptor.catalog.opaque_catalog_path_id,
+        )
+    }
+
+    /// Encodes and authenticates a descriptor under this session's root.
+    ///
+    /// A portable descriptor differs from the live one — §3 excludes every
+    /// device-bound slot — so it is authenticated again rather than copied: the
+    /// §8 tag covers the body, and a body with slots removed is a different
+    /// body.
+    pub fn seal_descriptor(&self, descriptor: &VaultDescriptor) -> Result<Vec<u8>> {
+        descriptor.encode(&self.root_secret)
+    }
+
+    /// Makes every committed catalog page durable, `BACKUP_FORMAT_V1.md` §7.
+    ///
+    /// §7 opens a backup on a consistent catalog snapshot. SQLCipher may hold
+    /// committed pages in a write-ahead log, and a package that copied only the
+    /// database file would carry a catalog older than the containers beside it.
+    pub fn checkpoint_catalog(&mut self) -> Result<()> {
+        self.catalog()?.checkpoint()
+    }
+
     /// Adds a recovery slot to an active vault, `RECOVERY.md` §8.
     pub fn add_recovery_slot(&mut self) -> Result<Key> {
         let secret: Key = random::secret::<32>()?;
@@ -908,6 +948,58 @@ fn seal_recovery_slot(
     KeySlotDescriptor::v1(slot_id, SlotType::Recovery, generation, body.encode())
 }
 
+/// Opens the password slot of a descriptor that is not in the registry.
+///
+/// A restore holds the package's descriptor before any vault exists, and
+/// `docs/format/BACKUP_FORMAT_V1.md` §8 step 2 has it obtain the factor from
+/// that descriptor rather than from a registry entry. The one Argon2id
+/// derivation this runs is not the constant-cost attempt of
+/// `docs/security/KEY_SLOTS.md` §8: it is not an unlock, there is no sibling
+/// identity to distinguish, and the file was supplied by the caller.
+///
+/// # Errors
+///
+/// Returns [`ChurStatus::VaultIncomplete`] when the descriptor carries no
+/// password slot, and [`ChurStatus::AuthenticationFailed`] when the password
+/// does not open it.
+pub fn open_password_slot_of(descriptor: &VaultDescriptor, password: &[u8]) -> Result<Key> {
+    let canonical = password::canonical_bytes(password)?;
+    open_password_slot(descriptor, &canonical)
+}
+
+/// Installs a descriptor body into the registry by atomic rename.
+///
+/// It is the last step of `VAULT_DESCRIPTOR_V1.md` §9 and of
+/// `BACKUP_FORMAT_V1.md` §8, and it is what makes a restored vault openable:
+/// until this rename no `.vd` entry names it, so an interrupted restore leaves
+/// no vault rather than a partial one.
+///
+/// The bytes are not re-encoded. They carry the §8 authentication tag the
+/// source device computed, and re-encoding here would authenticate whatever
+/// this build parsed rather than what the package carried.
+///
+/// # Errors
+///
+/// Returns [`ChurStatus::IoFailure`] when the write or the rename fails, and
+/// [`ChurStatus::Conflict`] when the registry already holds its two entries.
+pub fn install_descriptor(
+    root_dir: &VaultRoot,
+    entry_name: &RegistryName,
+    body: &[u8],
+) -> Result<()> {
+    ensure!(
+        root_dir.registry_names()?.len() < crate::paths::REGISTRY_MAX,
+        Conflict,
+        "the registry already holds the two identities §11 admits"
+    );
+    let temporary = root_dir.registry_temporary(entry_name);
+    let installed = root_dir.registry_entry(entry_name);
+    write_durably(&temporary, body)?;
+    std::fs::rename(&temporary, &installed)
+        .map_err(|_| chur_core::err!(IoFailure, "the descriptor could not be installed"))?;
+    sync_directory(&root_dir.registry())
+}
+
 fn open_password_slot(descriptor: &VaultDescriptor, canonical: &[u8]) -> Result<Key> {
     let Some(entry) = descriptor.password_slot() else {
         bail!(VaultIncomplete, "the descriptor carries no password slot");
@@ -963,7 +1055,19 @@ fn sync_directory(path: &std::path::Path) -> Result<()> {
 /// catalog file. Committing to them binds the descriptor to one file: a catalog
 /// substituted from another vault, or an older copy restored underneath this
 /// one, fails at unlock rather than at the first query that reads a row.
-fn catalog_header_commitment(path: &std::path::Path) -> Result<commit::Commitment> {
+/// The §5 commitment over a catalog file's header.
+///
+/// `docs/format/VAULT_DESCRIPTOR_V1.md` §5 has the descriptor commit to the
+/// catalog it names, so a substituted catalog file fails before the first query
+/// reads a row from it. A restore checks the same value before it installs a
+/// descriptor, which turns "installs and fails at the next unlock" into "does
+/// not install".
+///
+/// # Errors
+///
+/// Returns [`ChurStatus::IoFailure`] when the file cannot be opened and
+/// [`ChurStatus::CatalogCorrupt`] when it is shorter than a header.
+pub fn catalog_header_commitment(path: &std::path::Path) -> Result<commit::Commitment> {
     use std::io::Read as _;
     let mut file = std::fs::File::open(path)
         .map_err(|_| chur_core::err!(IoFailure, "the catalog file could not be opened"))?;

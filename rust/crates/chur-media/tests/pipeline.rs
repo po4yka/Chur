@@ -813,3 +813,173 @@ fn a_cancelled_scan_records_no_verdict() {
     assert_eq!(row.state, ObjectState::Active);
     assert_eq!(row.integrity_summary, IntegritySummary::Unverified);
 }
+
+/// `MEDIA_PIPELINE.md` §6 lists a video poster frame and an audio waveform as
+/// derived kinds, and `CANONICAL_ENCODING_V1.md` §15.4 allocates both. Before
+/// Phase 2 neither could be produced: `needs` had no media class, so it decided
+/// a poster by pixel size and said no to every 1080p video, and returned false
+/// for every waveform because the kind has no long edge.
+#[test]
+fn a_video_needs_a_poster_at_every_resolution_and_audio_needs_a_waveform() {
+    use chur_format::constants::MediaClass;
+
+    // The size a 1080p video reports is inside the 2048 px poster target, which
+    // is exactly the case the old rule refused.
+    assert!(derived::needs(
+        StreamKind::VideoPoster,
+        MediaClass::Video,
+        1_920,
+        1_080
+    ));
+    assert!(derived::needs(
+        StreamKind::VideoPoster,
+        MediaClass::Video,
+        3_840,
+        2_160
+    ));
+    assert!(derived::needs(
+        StreamKind::AudioWaveform,
+        MediaClass::Audio,
+        0,
+        0
+    ));
+
+    // And neither kind is generated for a class that has no use for it.
+    assert!(!derived::needs(
+        StreamKind::VideoPoster,
+        MediaClass::Image,
+        4_000,
+        3_000
+    ));
+    assert!(!derived::needs(
+        StreamKind::AudioWaveform,
+        MediaClass::Video,
+        1_920,
+        1_080
+    ));
+    // An image inside the grid target is its own preview.
+    assert!(!derived::needs(
+        StreamKind::GridPreview,
+        MediaClass::Image,
+        500,
+        400
+    ));
+    assert!(derived::needs(
+        StreamKind::GridPreview,
+        MediaClass::Image,
+        4_000,
+        3_000
+    ));
+}
+
+/// A waveform is stored, read back, and parsed by the same record the shared
+/// renderer reads, so a container that holds one holds a waveform rather than
+/// arbitrary bytes.
+#[test]
+fn a_waveform_round_trips_through_a_container() {
+    use chur_format::waveform::Waveform;
+
+    let (_root, mut session) = new_vault();
+    let (object_id, _bytes) = import_photo(&mut session, 4_096, "voice.m4a");
+
+    let peaks: Vec<u8> = (0..512).map(|index| ((index * 7) % 256) as u8).collect();
+    let record = Waveform::new(183_000, peaks.clone()).expect("build the waveform");
+    let stored = Zeroizing::new(record.encode());
+    derived::put(
+        &mut session,
+        &object_id,
+        StreamKind::AudioWaveform,
+        0,
+        0,
+        &stored,
+        NOW,
+    )
+    .expect("store the waveform");
+
+    let read = derived::read(&session, &object_id, StreamKind::AudioWaveform).expect("read");
+    let decoded = Waveform::decode(&read).expect("decode");
+    assert_eq!(decoded.duration_ms(), 183_000);
+    assert_eq!(decoded.peaks(), &peaks[..]);
+}
+
+/// The waveform kind has no pixel edge, so its record is what bounds it. Bytes
+/// that do not parse are refused before they are sealed, rather than sealed and
+/// found unreadable by whichever host tries to draw them.
+#[test]
+fn a_waveform_that_does_not_parse_is_refused_before_it_is_stored() {
+    let (_root, mut session) = new_vault();
+    let (object_id, _bytes) = import_photo(&mut session, 4_096, "voice.m4a");
+
+    let junk = Zeroizing::new(vec![0xff_u8; 64]);
+    assert_eq!(
+        rejection(derived::put(
+            &mut session,
+            &object_id,
+            StreamKind::AudioWaveform,
+            0,
+            0,
+            &junk,
+            NOW,
+        )),
+        ChurStatus::UnsupportedVersion
+    );
+
+    let oversize = Zeroizing::new(
+        chur_format::waveform::Waveform::new(1_000, vec![1; 64])
+            .expect("build")
+            .encode()
+            .into_iter()
+            .chain(std::iter::once(0))
+            .collect::<Vec<u8>>(),
+    );
+    assert_eq!(
+        rejection(derived::put(
+            &mut session,
+            &object_id,
+            StreamKind::AudioWaveform,
+            0,
+            0,
+            &oversize,
+            NOW,
+        )),
+        ChurStatus::NonCanonicalEncoding
+    );
+}
+
+/// A poster frame is an image derivative and is bound to the object, the kind,
+/// and the source content revision like every other one.
+#[test]
+fn a_poster_frame_is_stored_and_read_like_any_image_derivative() {
+    let (_root, mut session) = new_vault();
+    let (object_id, _bytes) = import_photo(&mut session, 8_192, "clip.mp4");
+
+    let poster = plaintext(20_000);
+    derived::put(
+        &mut session,
+        &object_id,
+        StreamKind::VideoPoster,
+        1_920,
+        1_080,
+        &poster,
+        NOW,
+    )
+    .expect("store the poster");
+
+    let read = derived::read(&session, &object_id, StreamKind::VideoPoster).expect("read");
+    assert_eq!(&read[..], &poster[..]);
+
+    // §12's long edge still bounds it: a poster larger than the target is a
+    // generator that ignored its own profile.
+    assert_eq!(
+        rejection(derived::put(
+            &mut session,
+            &object_id,
+            StreamKind::VideoPoster,
+            4_096,
+            2_160,
+            &poster,
+            NOW,
+        )),
+        ChurStatus::ResourceLimitExceeded
+    );
+}

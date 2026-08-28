@@ -214,6 +214,33 @@ impl CatalogDb {
     /// Lock calls this so that a database which refuses to close is a status the
     /// session can act on, instead of a silently leaked handle holding decrypted
     /// pages after the root is gone.
+    /// Folds the write-ahead log back into the database file.
+    ///
+    /// `docs/format/BACKUP_FORMAT_V1.md` §7 opens a backup on a consistent
+    /// catalog snapshot, and this connection runs in WAL mode, so committed
+    /// pages can live outside the database file. A package that copied only the
+    /// file would carry a catalog older than the containers beside it.
+    ///
+    /// `TRUNCATE` rather than `PASSIVE`: a passive checkpoint returns without
+    /// error when a reader blocks it, which would leave the same stale copy
+    /// while reporting success.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ChurStatus::CatalogCorrupt`] or [`ChurStatus::IoFailure`] as
+    /// the engine reports them.
+    pub fn checkpoint(&mut self) -> Result<()> {
+        self.connection
+            .pragma_update(None, "wal_checkpoint", "TRUNCATE")
+            .map_err(|error| map_sqlite(error, "the catalog could not be checkpointed"))
+    }
+
+    /// Closes the connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ChurStatus::CatalogCorrupt`] or [`ChurStatus::IoFailure`] when
+    /// the engine reports a failure while closing.
     pub fn close(self) -> Result<()> {
         self.connection
             .close()

@@ -617,6 +617,14 @@ enum class StreamKind(val code: Int) {
 
     /** A video poster frame. */
     VIDEO_POSTER(5),
+
+    /**
+     * An audio waveform, `docs/interop/MEDIA_PIPELINE.md` §6.1.
+     *
+     * Unlike every kind above it, this one is not a picture. Its bytes are the
+     * peak-envelope record that section defines, which shared code draws.
+     */
+    AUDIO_WAVEFORM(6),
 }
 
 /** One page request. */

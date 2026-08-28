@@ -218,6 +218,23 @@ pub mod catalog {
 }
 
 /// Media pipeline bounds, `docs/interop/MEDIA_PIPELINE.md` §12.
+/// The portable backup package, `docs/format/BACKUP_FORMAT_V1.md` §13.
+pub mod backup {
+    /// Fewest records one package holds: the manifest and the final commit.
+    pub const RECORD_COUNT_MIN: u64 = 2;
+    /// Most records one package holds.
+    pub const RECORD_COUNT_MAX: u64 = 1_048_576;
+    /// Most stream inventory entries one package carries.
+    pub const STREAM_ENTRIES_MAX: usize = 1_048_576;
+    /// Most slot inventory entries one package carries.
+    pub const SLOT_ENTRIES_MAX: usize = 16;
+    /// Largest backup manifest record payload, 16 MiB.
+    pub const MANIFEST_PAYLOAD_MAX: usize = 16_777_216;
+    /// Free space a restore requires beyond the package length, 64 MiB.
+    pub const RESTORE_HEADROOM: u64 = 67_108_864;
+}
+
+/// The media pipeline, `docs/interop/MEDIA_PIPELINE.md` §12.
 pub mod media {
     /// Largest accepted still-image edge, in pixels.
     pub const IMAGE_EDGE_MAX: u32 = 16_384;
@@ -245,6 +262,16 @@ pub mod media {
     pub const SCREEN_PREVIEW_EDGE: u32 = 2_048;
     /// Long-edge target of the video poster frame, in pixels.
     pub const VIDEO_POSTER_EDGE: u32 = 2_048;
+    /// Largest bucket count in one audio waveform record,
+    /// `docs/interop/MEDIA_PIPELINE.md` §6.1.
+    ///
+    /// A four-hour recording at this count is one bucket every 3.5 seconds,
+    /// which is finer than a scrubber can draw on any supported screen. The
+    /// bound exists because §12 gives a waveform no pixel edge, so without it
+    /// nothing would bound the record at all.
+    pub const WAVEFORM_BUCKETS_MAX: usize = 4_096;
+    /// Largest whole audio waveform record, in bytes.
+    pub const WAVEFORM_BYTES_MAX: usize = 8 + WAVEFORM_BUCKETS_MAX;
     /// Largest total decode and import buffer in flight per import, 256 MiB.
     pub const IMPORT_BUFFER_MAX: u64 = 268_435_456;
     /// Wall-clock budget of one derivative generation, in milliseconds.

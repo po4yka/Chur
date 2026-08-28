@@ -11,6 +11,7 @@
 //! - `docs/format/OBJECT_CONTAINER_V1.md` (random access, verification states)
 //! - `docs/security/PLAINTEXT_LIFECYCLE.md` (import, viewing, scratch policy)
 
+pub mod backup;
 pub mod derived;
 pub mod export;
 pub mod import;

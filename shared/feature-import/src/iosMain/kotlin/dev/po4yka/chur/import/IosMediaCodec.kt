@@ -7,10 +7,25 @@ import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.useContents
 import kotlinx.cinterop.usePinned
+import platform.AVFAudio.AVFormatIDKey
+import platform.AVFAudio.AVLinearPCMBitDepthKey
+import platform.AVFAudio.AVLinearPCMIsBigEndianKey
+import platform.AVFAudio.AVLinearPCMIsFloatKey
+import platform.AVFAudio.AVLinearPCMIsNonInterleaved
 import platform.AVFoundation.AVAsset
 import platform.AVFoundation.AVAssetImageGenerator
+import platform.AVFoundation.AVAssetReader
+import platform.AVFoundation.AVAssetReaderTrackOutput
+import platform.AVFoundation.AVAssetTrack
+import platform.AVFoundation.AVMediaTypeAudio
 import platform.AVFoundation.AVURLAsset
 import platform.AVFoundation.duration
+import platform.AVFoundation.tracksWithMediaType
+import platform.CoreAudioTypes.kAudioFormatLinearPCM
+import platform.CoreFoundation.CFRelease
+import platform.CoreMedia.CMBlockBufferCopyDataBytes
+import platform.CoreMedia.CMBlockBufferGetDataLength
+import platform.CoreMedia.CMSampleBufferGetDataBuffer
 import platform.CoreGraphics.CGRectMake
 import platform.CoreGraphics.CGSizeMake
 import platform.CoreMedia.CMTimeGetSeconds
@@ -127,6 +142,7 @@ class IosMediaCodec : MediaCodec {
 
     override fun derive(media: PickedMedia, probe: ProbedMedia, kind: StreamKind): Derivative? {
         val url = urlOf(media) ?: return null
+        if (kind == StreamKind.AUDIO_WAVEFORM) return deriveWaveform(url, probe)
         val target = MediaBounds.targetSize(kind, probe.width, probe.height) ?: return null
         val (width, height) = target
         val image = when (probe.mediaClass) {
@@ -150,6 +166,63 @@ class IosMediaCodec : MediaCodec {
         val data = scaled?.let { UIImageJPEGRepresentation(it, MediaBounds.quality(kind) / 100.0) }
             ?: return null
         return Derivative(kind, data.toByteArray(), width, height)
+    }
+
+    /**
+     * Reads the audio track as PCM and folds it into the §6.1 waveform record.
+     *
+     * `AVAssetReader` yields one sample buffer at a time and the accumulator
+     * holds one bucket array whatever the recording's length, so a four-hour
+     * import costs the same memory as a four-second one. That is the bound §12
+     * puts on every other import buffer.
+     *
+     * The output is asked for as 16-bit signed little-endian linear PCM, which
+     * `AVAssetReaderAudioMixOutput` produces for every input format the platform
+     * decodes, so the folding code is the same on both hosts.
+     */
+    private fun deriveWaveform(url: NSURL, probe: ProbedMedia): Derivative? {
+        val asset = AVURLAsset(url, options = null)
+        val track = asset.tracksWithMediaType(AVMediaTypeAudio).firstOrNull() as? AVAssetTrack
+            ?: return null
+        val settings = mapOf<Any?, Any?>(
+            AVFormatIDKey to NSNumber(unsignedInt = kAudioFormatLinearPCM),
+            AVLinearPCMBitDepthKey to NSNumber(int = 16),
+            AVLinearPCMIsBigEndianKey to NSNumber(bool = false),
+            AVLinearPCMIsFloatKey to NSNumber(bool = false),
+            AVLinearPCMIsNonInterleaved to NSNumber(bool = false),
+        )
+        val reader = AVAssetReader(asset, null) ?: return null
+        val output = AVAssetReaderTrackOutput(track, settings)
+        if (!reader.canAddOutput(output)) return null
+        reader.addOutput(output)
+        if (!reader.startReading()) return null
+
+        // Two bytes per sample; the frame count is only used to spread buckets,
+        // and the accumulator clamps an index a decoder's own count contradicts.
+        val samples = probe.durationMs * SAMPLE_RATE_HINT / 1_000L
+        val accumulator = Waveform.Accumulator(samples)
+        while (true) {
+            val buffer = output.copyNextSampleBuffer() ?: break
+            val block = CMSampleBufferGetDataBuffer(buffer)
+            if (block != null) {
+                val length = CMBlockBufferGetDataLength(block).toInt()
+                if (length > 0) {
+                    val pcm = ByteArray(length)
+                    pcm.usePinned { pinned ->
+                        CMBlockBufferCopyDataBytes(block, 0u, length.toULong(), pinned.addressOf(0))
+                    }
+                    accumulator.addAll(pcm)
+                }
+            }
+            CFRelease(buffer)
+        }
+        if (accumulator.sampleCount == 0L) return null
+        return Derivative(
+            kind = StreamKind.AUDIO_WAVEFORM,
+            bytes = accumulator.encode(probe.durationMs),
+            width = 0,
+            height = 0,
+        )
     }
 
     private fun loadImage(url: NSURL): UIImage? = url.path?.let { UIImage.imageWithContentsOfFile(it) }
@@ -178,6 +251,18 @@ class IosMediaCodec : MediaCodec {
      * the shape and the catalog stores what it was told, and no cryptographic
      * decision depends on it.
      */
+    private companion object {
+        /**
+         * The sample rate a waveform's bucket spread assumes.
+         *
+         * The value only decides how frames map onto buckets, and the
+         * accumulator clamps an index the decoder's own count contradicts, so a
+         * recording at another rate draws correctly either way. 44100 is the
+         * rate the platform resamples most inputs to.
+         */
+        const val SAMPLE_RATE_HINT = 44_100L
+    }
+
     private fun typeOf(path: String): String = when (path.substringAfterLast('.').lowercase()) {
         "jpg", "jpeg" -> "image/jpeg"
         "png" -> "image/png"

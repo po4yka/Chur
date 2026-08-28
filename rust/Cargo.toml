@@ -58,6 +58,7 @@ rusqlite = { version = "0.40", default-features = false, features = [
 # The Android JNI adapter, ADR-0040. Pure Rust, no build script, no network.
 jni = { version = "0.21", default-features = false }
 
+
 # Errors and CLI.
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
