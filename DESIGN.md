@@ -1676,7 +1676,7 @@ No item in this list blocks Phase 1. An item that did block it has been decided,
 | Multi-window and multi-scene behavior | one runtime and one session per process, [`docs/interop/FFI_CONTRACT.md`](docs/interop/FFI_CONTRACT.md) §8.1 |
 | Recovery mnemonic/QR visual encoding | [`docs/security/RECOVERY.md`](docs/security/RECOVERY.md) §2 |
 | Background operation presentation while locked | §21, Locked background work |
-| Exact owner access gesture and discoverability model | owned by [`docs/product/DISCREET_MODE.md`](docs/product/DISCREET_MODE.md), Session gate, which carries it as its open item |
+| Exact owner access gesture and discoverability model | decided in [`docs/product/DISCREET_MODE.md`](docs/product/DISCREET_MODE.md), "The v1 decision": a documented visible route and no secret gesture. The panic gesture is decided in the same document, "The panic gesture": a long press on the lock control, with a matching accessibility action |
 | Search presentation, v1 query surface | [`docs/format/CATALOG_SCHEMA_V1.md`](docs/format/CATALOG_SCHEMA_V1.md) §16 |
 
 ---
