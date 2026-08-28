@@ -56,6 +56,20 @@ interface NoteStore {
 
     /** Removes a note. */
     suspend fun remove(id: String)
+
+    /**
+     * Whether the public-shell disclosure has been shown.
+     *
+     * `docs/product/DISCREET_MODE.md` requires the statement on the first
+     * public-shell write and once only, so the answer has to survive a process
+     * restart. It lives with the notes because it is public-shell state:
+     * putting it in the vault would make a disclosure about unprotected
+     * content depend on unlocking the protected one.
+     */
+    suspend fun disclosureAcknowledged(): Boolean
+
+    /** Records that the disclosure has been shown. */
+    suspend fun acknowledgeDisclosure()
 }
 
 /**
@@ -109,5 +123,13 @@ class InMemoryNoteStore(initial: List<Note> = emptyList()) : NoteStore {
 
     override suspend fun remove(id: String) {
         notes.remove(id)
+    }
+
+    private var acknowledged = false
+
+    override suspend fun disclosureAcknowledged(): Boolean = acknowledged
+
+    override suspend fun acknowledgeDisclosure() {
+        acknowledged = true
     }
 }

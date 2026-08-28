@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The backup rules of docs/ANDROID.md section 13.4.
+
+  An <include> set makes everything else excluded, so a missing rule fails
+  closed. The two entries below are the whole public shell:
+
+    - filesDir/public/ holds the note file, which
+      docs/product/DISCREET_MODE.md deliberately puts in the platform backup:
+      "a Notes surface that loses its content on device transfer is not
+      functional";
+    - public_shell.xml is the public shell's own preferences.
+
+  Everything else is excluded by the absence of a rule, and the vault is what
+  everything else means: filesDir/vaults/, filesDir/registry/, and every
+  incoming, quarantine, and scratch directory below them. Section 13.4 makes a
+  path under vaults/ or registry/ here a release blocker, and
+  scripts/check-backup-rules.py is what fails the build on one.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="file" path="public/" />
+        <include domain="sharedpref" path="public_shell.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="file" path="public/" />
+        <include domain="sharedpref" path="public_shell.xml" />
+    </device-transfer>
+</data-extraction-rules>

@@ -172,6 +172,22 @@ jobs:
       # that drifts from the lockfile fails here.
       - run: python3 scripts/check-vendored-skills.py
 
+  backup-rules:
+    name: android backup rules
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      # ANDROID.md section 13.4: release MUST fail when either rule file names a
+      # path under vaults/ or registry/, or declares an include of the root or
+      # external domain. An <include> set makes everything else excluded, so
+      # widening one is how vault storage would enter an archive, and it would
+      # enter silently. The script also checks that the public shell's own two
+      # paths are still included, which DISCREET_MODE.md requires.
+      - run: python3 scripts/check-backup-rules.py
+
   native-targets:
     name: native targets (${{ matrix.kind }})
     runs-on: ${{ matrix.os }}

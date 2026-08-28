@@ -17,6 +17,7 @@ import dev.po4yka.chur.app.AppRoute
 import dev.po4yka.chur.app.ChurController
 import dev.po4yka.chur.app.notes.NoteEditorScreen
 import dev.po4yka.chur.app.notes.NotesScreen
+import dev.po4yka.chur.app.notes.PublicSettingsScreen
 import dev.po4yka.chur.app.vault.CreateVaultScreen
 import dev.po4yka.chur.app.vault.LibraryTile
 import dev.po4yka.chur.app.vault.RecoveryPhraseScreen
@@ -101,6 +102,7 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
 private fun PublicShell(controller: ChurController, route: AppRoute) {
     val notes by controller.notesState.collectAsState()
     val vaultState by controller.vaultState.collectAsState()
+    val disclosureDue by controller.disclosureDue.collectAsState()
     var query by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf<Note?>(null) }
 
@@ -130,17 +132,19 @@ private fun PublicShell(controller: ChurController, route: AppRoute) {
                 updatedMs = System.currentTimeMillis(),
             )
         },
-        // §2: the route to the vault is a visible settings entry, and it goes
-        // to creation or to the gate depending on whether a vault exists.
-        onOpenSettings = {
-            controller.goTo(
-                if (vaultState is VaultState.NoVault) AppRoute.CreateVault else AppRoute.Unlock,
-            )
-        },
+        // §2: the route to the vault is a visible settings entry.
+        // `DISCREET_MODE.md` "The v1 decision" makes it the session gate, and
+        // it now opens the public shell's own settings, where the permanent
+        // disclosure sits beside the vault row.
+        onOpenSettings = { controller.goTo(AppRoute.PublicSettings) },
+        showFirstWriteDisclosure = disclosureDue,
+        onAcknowledgeDisclosure = controller::acknowledgeDisclosure,
     )
     if (route == AppRoute.PublicSettings) {
-        // Reserved for the public shell's own settings; the vault entry above
-        // is the only one v1 needs and §2 forbids removing it.
+        PublicSettingsScreen(
+            onBack = { controller.goTo(AppRoute.PublicShell) },
+            onOpenVault = controller::openVaultEntry,
+        )
     }
 }
 
@@ -304,6 +308,10 @@ private fun VaultRoute(controller: ChurController) {
                 // that the pixels go, not the order they go in.
                 scope.launch { cache.clear() }
                 controller.lock()
+            },
+            onPanic = {
+                scope.launch { cache.clear() }
+                controller.panic()
             },
             onVerifyAll = { controller.verifyEverything() },
             onAddRecoverySlot = controller::addRecoverySlot,

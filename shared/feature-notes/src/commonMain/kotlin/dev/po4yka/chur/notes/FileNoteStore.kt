@@ -24,6 +24,7 @@ import kotlinx.serialization.json.Json
 class FileNoteStore(private val path: String) : NoteStore {
     private val mutex = Mutex()
     private var cache: MutableMap<String, Note>? = null
+    private var acknowledged = false
 
     override suspend fun all(): List<Note> = mutex.withLock {
         Notes.ordered(load().values.toList())
@@ -38,6 +39,19 @@ class FileNoteStore(private val path: String) : NoteStore {
     override suspend fun remove(id: String): Unit = mutex.withLock {
         val notes = load()
         if (notes.remove(id) != null) save(notes)
+    }
+
+    override suspend fun disclosureAcknowledged(): Boolean = mutex.withLock {
+        load()
+        acknowledged
+    }
+
+    override suspend fun acknowledgeDisclosure(): Unit = mutex.withLock {
+        val notes = load()
+        if (!acknowledged) {
+            acknowledged = true
+            save(notes)
+        }
     }
 
     /**
@@ -59,13 +73,17 @@ class FileNoteStore(private val path: String) : NoteStore {
                 throw IllegalStateException("the note file at $path is not readable", cause)
             }
             file.notes.forEach { notes[it.id] = it }
+            acknowledged = file.disclosureAcknowledged
         }
         cache = notes
         return notes
     }
 
     private suspend fun save(notes: MutableMap<String, Note>) {
-        val text = json.encodeToString(NoteFileV1.serializer(), NoteFileV1(notes = notes.values.toList()))
+        val text = json.encodeToString(
+            NoteFileV1.serializer(),
+            NoteFileV1(notes = notes.values.toList(), disclosureAcknowledged = acknowledged),
+        )
         withContext(Dispatchers.Default) { writeNoteFile(path, text) }
     }
 
@@ -84,6 +102,15 @@ class FileNoteStore(private val path: String) : NoteStore {
 private data class NoteFileV1(
     val version: Int = 1,
     val notes: List<Note>,
+    /**
+     * Whether the first-write disclosure has been shown.
+     *
+     * It defaults to false, so a file written by the build before this field
+     * existed shows the statement once. Showing it to a user who has seen it
+     * costs a dismissal; not showing it to one who has not is the failure
+     * `DISCREET_MODE.md` forbids.
+     */
+    val disclosureAcknowledged: Boolean = false,
 )
 
 /** The file's text, or `null` when no file is there yet. */

@@ -7,16 +7,26 @@
   content URI the application already has permission to read, and nothing else
   Chur does touches a permission-guarded API.
 
-  android:allowBackup is false and android:dataExtractionRules is absent because
-  PLAINTEXT_LIFECYCLE.md section 5 excludes vault storage from backup, and the
-  simplest way to be excluded is for the application to opt out of backup
-  entirely: a rules file that listed exclusions would have to be kept correct as
-  the storage layout changes.
+  Backup is on and governed by rule files, per ANDROID.md section 13.4 and the
+  "Public-shell disclosure and backup" section of docs/product/DISCREET_MODE.md.
+  The two halves are deliberate and disjoint: public-shell storage is included,
+  because a Notes surface that loses its content on device transfer is not
+  functional and a shell nobody uses announces what it hides; vault storage is
+  excluded, because an object store carried by a transport that chooses what to
+  copy is not restorable, and BACKUP_FORMAT_V1.md is how vault content leaves
+  the device.
+
+  An <include> set makes everything else excluded, so the rules fail closed
+  rather than needing to name the vault as the storage layout changes, which is
+  what opting out of backup entirely used to buy. scripts/check-backup-rules.py
+  fails the build if either file ever names a vault path.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <application
-        android:allowBackup="false"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
         android:hasFragileUserData="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"

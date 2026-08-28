@@ -1,5 +1,7 @@
 package dev.po4yka.chur.app.vault
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +27,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import dev.po4yka.chur.app.theme.AlbumsGlyph
 import dev.po4yka.chur.app.theme.ChurSpacing
@@ -104,6 +109,15 @@ data class VaultActions(
     val onCreateAlbum: () -> Unit,
     /** Lock the vault now. */
     val onLock: () -> Unit,
+    /**
+     * Lock immediately, `DISCREET_MODE.md` "The panic gesture".
+     *
+     * It is the same security transition as [onLock] and differs only in
+     * urgency: no confirmation and no in-flight save. The default runs the
+     * ordinary lock, so a host that has not bound it is safe rather than
+     * silent.
+     */
+    val onPanic: () -> Unit = onLock,
     /** Run an integrity scan. */
     val onVerifyAll: () -> Unit,
     /** Add a recovery slot. */
@@ -130,7 +144,7 @@ data class VaultActions(
  * cannot leave a half-rendered screen behind because there is no state to
  * leave.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun VaultShell(state: VaultUiState, actions: VaultActions) {
     val colors = LocalChurColors.current
@@ -155,7 +169,29 @@ fun VaultShell(state: VaultUiState, actions: VaultActions) {
                         }
                     },
                     actions = {
-                        IconButton(onClick = actions.onLock) {
+                        // `DISCREET_MODE.md` "The panic gesture": a press locks
+                        // and a long press performs the panic transition, on one
+                        // control so it is reachable from every private screen
+                        // without navigating first. The long press is exposed as
+                        // a custom accessibility action, which is the accessible
+                        // alternative that section requires.
+                        Box(
+                            modifier = Modifier
+                                .combinedClickable(
+                                    onClick = actions.onLock,
+                                    onLongClick = actions.onPanic,
+                                    onLongClickLabel = "Lock immediately",
+                                )
+                                .semantics {
+                                    customActions = listOf(
+                                        CustomAccessibilityAction("Lock immediately") {
+                                            actions.onPanic()
+                                            true
+                                        },
+                                    )
+                                }
+                                .padding(ChurSpacing.three),
+                        ) {
                             Icon(LockGlyph, contentDescription = "Lock now")
                         }
                     },
@@ -228,7 +264,7 @@ fun VaultShell(state: VaultUiState, actions: VaultActions) {
  * that need a picker this shell does not have yet, and an action that opens
  * nothing would be worse than one that is absent.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun SelectionBar(state: VaultUiState, actions: VaultActions) {
     TopAppBar(

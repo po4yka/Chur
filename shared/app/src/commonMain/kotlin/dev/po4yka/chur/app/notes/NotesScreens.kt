@@ -55,6 +55,8 @@ fun NotesScreen(
     onOpen: (Note) -> Unit,
     onCreate: () -> Unit,
     onOpenSettings: () -> Unit,
+    showFirstWriteDisclosure: Boolean = false,
+    onAcknowledgeDisclosure: () -> Unit = {},
 ) {
     val colors = LocalChurColors.current
     Scaffold(
@@ -76,6 +78,9 @@ fun NotesScreen(
         },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            if (showFirstWriteDisclosure) {
+                FirstWriteDisclosure(onAcknowledge = onAcknowledgeDisclosure)
+            }
             OutlinedTextField(
                 value = query,
                 onValueChange = onQueryChange,
@@ -98,6 +103,38 @@ fun NotesScreen(
                         NoteRow(note = note, onClick = { onOpen(note) })
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * The statement `DISCREET_MODE.md` requires on the first public-shell write.
+ *
+ * It is shown once and dismissed by acknowledgement rather than by time, so a
+ * user who writes a note and closes the application has still been told. The
+ * copy names the vault as the protected alternative and claims nothing for the
+ * shell, which that section forbids: a disclosure presented as a feature is not
+ * a disclosure.
+ */
+@Composable
+private fun FirstWriteDisclosure(onAcknowledge: () -> Unit) {
+    val colors = LocalChurColors.current
+    Card(modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter)) {
+        Column(
+            modifier = Modifier.padding(ChurSpacing.three),
+            verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
+        ) {
+            Text(
+                text = Disclosure.FIRST_WRITE,
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.ink,
+            )
+            TextButton(
+                onClick = onAcknowledge,
+                modifier = Modifier.align(Alignment.End),
+            ) {
+                Text("Got it")
             }
         }
     }
@@ -150,7 +187,10 @@ private fun EmptyNotes(hasQuery: Boolean) {
                 text = if (hasQuery) {
                     "Try a different word."
                 } else {
-                    "Write something down. Notes stay on this device."
+                    // "Notes stay on this device" read as a privacy
+                    // assurance for content `DISCREET_MODE.md` requires be
+                    // disclosed as unprotected and platform-backed-up.
+                    Disclosure.EMPTY_STATE
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = colors.inkMuted,

@@ -56,7 +56,20 @@ A secret gesture, route, or credential may enter the vault unlock flow, but it m
 - accessible without relying on ambiguous or unsafe gestures;
 - separated from ordinary public-shell credentials.
 
-Open item: the exact gesture and its discoverability model are decided here and nowhere else. [`../../DESIGN.md`](../../DESIGN.md) §31 routed the question to this section and no longer carries it.
+### The v1 decision
+
+v1 offers **a documented visible route and no secret gesture**, and that is the answer to the open item this section reserved rather than a deferral of it.
+
+Every candidate secret gesture fails one of the six requirements above, and fails it structurally rather than in its details. A gesture discoverable enough to satisfy "documented inside product settings/help" and "available to platform review" is discoverable enough for a coercer who has read either; one that is not discoverable fails "accessible without relying on ambiguous or unsafe gestures", and the accessible alternative the Accessibility section requires would restore the discoverability the secrecy was for. [`../security/DECOY_VAULT.md`](../security/DECOY_VAULT.md) §10 already settles what the product may claim here: the existence of the vault is public by design, so a hidden entrance buys presentation and not protection, and the protection is the credential.
+
+The route is therefore the settings entry of the public shell, and it is:
+
+- visible, so nothing has to be remembered;
+- reversible, because it opens the unlock flow and creates nothing;
+- separate from the public shell's own content, which has no credential at all;
+- an ordinary focusable control, so it needs no accessible alternative because it is already one.
+
+A later phase may add a configurable secret route. It would be an addition to this list, not a replacement for it: "Do not dynamically remove all discoverable means of reopening or managing the feature" below already forbids the replacement.
 
 The feature layer receives an opaque session result. It should not branch on `isReal` or `isDecoy`.
 
@@ -73,6 +86,16 @@ Locking must:
 7. prevent process restoration of the previous private route.
 
 Panic lock performs the same security transition immediately. It is not a data deletion command.
+
+### The panic gesture
+
+The panic transition is bound to **a long press on the lock control**, and an ordinary press performs the ordinary lock. The control sits in the private chrome, so the gesture is reachable from every private screen without navigating first, which is the property a panic transition needs and a control on one screen would not have.
+
+It satisfies the same six requirements the session gate carries, and for the same reason: the control is already visible and labelled, so nothing about it is secret. What the long press adds is that it skips every confirmation and every in-flight save. The two differ in urgency and not in what they do to the session — the seven steps above run either way — so binding both to one control keeps the product honest about that.
+
+Accessibility: a long press is exposed as a custom accessibility action on the same control, named for what it does. That is the accessible alternative the section below requires, and it is an alternative rather than a second mechanism.
+
+The reason reaches Rust as `LockReason::PANIC`, which the vault records and treats identically. A reason that changed the transition would make panic a different operation, and this section says it is not.
 
 ## Launcher and icon presentation
 

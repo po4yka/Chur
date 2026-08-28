@@ -52,6 +52,7 @@ class ChurController(
 
     private val _route = MutableStateFlow<AppRoute>(AppRoute.PublicShell)
     private val _notes = MutableStateFlow<List<Note>>(emptyList())
+    private val _disclosureDue = MutableStateFlow(false)
     private val _page = MutableStateFlow(ObjectPage(emptyList(), 0, 0, null))
     private val _albums = MutableStateFlow<List<AlbumSummary>>(emptyList())
     private val _slots = MutableStateFlow<List<SlotSummary>>(emptyList())
@@ -198,6 +199,9 @@ class ChurController(
         }
     }
 
+    /** Whether the public-shell disclosure is owed to the user right now. */
+    val disclosureDue: StateFlow<Boolean> = _disclosureDue.asStateFlow()
+
     /** Locks now, `DESIGN.md` §14.3. */
     fun lock(reason: LockReason = LockReason.USER) = guarded {
         withContext(Dispatchers.Default) { repository.lock(reason) }
@@ -205,6 +209,16 @@ class ChurController(
         clearPrivateProjections()
         _route.value = AppRoute.PublicShell
     }
+
+    /**
+     * Locks immediately, `DISCREET_MODE.md` "The panic gesture".
+     *
+     * It is the same transition as [lock] and differs in urgency only: the
+     * reason reaches Rust as `PANIC`, which the vault records and treats
+     * identically. A reason that changed the transition would make panic a
+     * different operation, and that section says it is not.
+     */
+    fun panic() = lock(LockReason.PANIC)
 
     /** The application left the foreground. */
     suspend fun onBackground() {
@@ -392,8 +406,26 @@ class ChurController(
 
     /** Writes a public note. */
     fun putNote(note: Note) = guarded {
+        val first = !notes.disclosureAcknowledged()
         notes.put(note)
         _notes.value = notes.all()
+        // `DISCREET_MODE.md`: the statement appears on the first public-shell
+        // write, which is this one. It is raised after the write rather than
+        // before it, so the note the user was making is never interrupted.
+        if (first) {
+            _disclosureDue.value = true
+        }
+    }
+
+    /**
+     * Records that the public-shell disclosure has been shown.
+     *
+     * The flag is persisted in public storage, so it survives a process
+     * restart: `DISCREET_MODE.md` says once, and once means once.
+     */
+    fun acknowledgeDisclosure() = guarded {
+        notes.acknowledgeDisclosure()
+        _disclosureDue.value = false
     }
 
     /** Removes a public note. */

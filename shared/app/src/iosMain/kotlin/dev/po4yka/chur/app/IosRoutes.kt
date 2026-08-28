@@ -11,6 +11,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
 import dev.po4yka.chur.app.notes.NoteEditorScreen
 import dev.po4yka.chur.app.notes.NotesScreen
+import dev.po4yka.chur.app.notes.PublicSettingsScreen
 import dev.po4yka.chur.app.vault.CreateVaultScreen
 import dev.po4yka.chur.app.vault.LibraryTile
 import dev.po4yka.chur.app.vault.RecoveryPhraseScreen
@@ -56,7 +57,7 @@ internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: 
     }
 
     when (route) {
-        AppRoute.PublicShell, AppRoute.PublicSettings -> PublicShell(controller)
+        AppRoute.PublicShell, AppRoute.PublicSettings -> PublicShell(controller, route)
         AppRoute.CreateVault -> CreateVaultScreen(
             busy = vaultState is VaultState.Creating,
             error = message,
@@ -80,8 +81,9 @@ internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: 
 }
 
 @Composable
-private fun PublicShell(controller: ChurController) {
+private fun PublicShell(controller: ChurController, route: AppRoute) {
     val notes by controller.notesState.collectAsState()
+    val disclosureDue by controller.disclosureDue.collectAsState()
     var query by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf<Note?>(null) }
 
@@ -107,8 +109,16 @@ private fun PublicShell(controller: ChurController) {
             val now = (NSDate().timeIntervalSince1970 * 1000).toLong()
             editing = Note(id = "note-$now", title = "", body = "", updatedMs = now)
         },
-        onOpenSettings = controller::openVaultEntry,
+        onOpenSettings = { controller.goTo(AppRoute.PublicSettings) },
+        showFirstWriteDisclosure = disclosureDue,
+        onAcknowledgeDisclosure = controller::acknowledgeDisclosure,
     )
+    if (route == AppRoute.PublicSettings) {
+        PublicSettingsScreen(
+            onBack = { controller.goTo(AppRoute.PublicShell) },
+            onOpenVault = controller::openVaultEntry,
+        )
+    }
 }
 
 @Composable
@@ -211,6 +221,10 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 // §8 step 7 clears the decoded cache, as the Android host does.
                 scope.launch { cache.clear() }
                 controller.lock()
+            },
+            onPanic = {
+                scope.launch { cache.clear() }
+                controller.panic()
             },
             onVerifyAll = { controller.verifyEverything() },
             onAddRecoverySlot = controller::addRecoverySlot,

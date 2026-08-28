@@ -45,7 +45,7 @@ class MainActivity : ComponentActivity() {
             privacy = privacy,
             exports = ExportDestinations(contentResolver),
             clock = { System.currentTimeMillis() },
-            notes = FileNoteStore(java.io.File(filesDir, "notes.json").path),
+            notes = FileNoteStore(publicShellFile("notes.json")),
             deviceUnlock = AndroidDeviceUnlock(),
         )
 
@@ -125,12 +125,27 @@ class MainActivity : ComponentActivity() {
 /**
  * The storage root, `docs/ARCHITECTURE.md` §14.4.
  *
- * `filesDir` is app-private and the manifest excludes the application from
- * backup, which is what `PLAINTEXT_LIFECYCLE.md` §5 needs of every directory
- * Chur writes into.
+ * `filesDir` is app-private, and `res/xml/data_extraction_rules.xml` names only
+ * `public/` and the public shell's preferences, so everything under this path
+ * is excluded from every archive by the absence of a rule. That is what
+ * `PLAINTEXT_LIFECYCLE.md` §5 needs of every directory the vault writes into,
+ * and `docs/ANDROID.md` §13.4 makes a rule that reached one a release blocker.
  */
 private fun ComponentActivity.storageRoot(): String =
     java.io.File(filesDir, "chur").apply { mkdirs() }.absolutePath
+
+/**
+ * A file of the public shell, `docs/ANDROID.md` §13.4.
+ *
+ * It is under `filesDir/public/` because that is the one directory the backup
+ * rules include. `DISCREET_MODE.md` puts the shell's content in the platform
+ * backup deliberately: a Notes surface that loses everything on device transfer
+ * is not functional, and a shell nobody would use announces what it hides. The
+ * path is the whole mechanism — a note file anywhere else would be excluded by
+ * the same rules that exclude the vault.
+ */
+private fun ComponentActivity.publicShellFile(name: String): String =
+    java.io.File(filesDir, "public").apply { mkdirs() }.resolve(name).path
 
 /** Whether this build is debuggable, without generating a `BuildConfig`. */
 internal object BuildConfigCompat {

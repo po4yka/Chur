@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The API 30 and below half of docs/ANDROID.md section 13.4.
+
+  It names the same two paths as data_extraction_rules.xml and for the same
+  reason: an <include> set makes everything else excluded, and everything else
+  is the vault.
+-->
+<full-backup-content>
+    <include domain="file" path="public/" />
+    <include domain="sharedpref" path="public_shell.xml" />
+</full-backup-content>
