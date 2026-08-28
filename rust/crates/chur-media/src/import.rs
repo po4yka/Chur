@@ -24,14 +24,15 @@ use chur_format::constants::{
     CONTAINER_VERSION_V1, IntegritySummary, MediaClass, ObjectState, SUITE_V1, StreamKind,
 };
 use chur_format::container::{
-    CanonicalManifest, ContainerReader, ContainerWriter, Layout, MediaProperties, StreamIdentity,
+    CanonicalManifest, ContainerWriter, Layout, MediaProperties, ReadAt, StreamIdentity,
+    StreamReader,
 };
 use zeroize::Zeroizing;
 
 use crate::keys;
 use crate::store::TemporaryContainer;
 
-/// The chunk size a v1 writer uses.
+/// The chunk size a v1 writer uses for a photo or a derived stream.
 ///
 /// `docs/format/OBJECT_CONTAINER_V1.md` §6 lists two candidates and
 /// `docs/assurance/EVIDENCE_PHASE_0.md` records that neither is approved above
@@ -39,6 +40,32 @@ use crate::store::TemporaryContainer;
 /// candidate and the one whose peak buffer is smallest, which is the safe
 /// choice while the measurement is outstanding.
 pub const DEFAULT_CHUNK_SIZE: u32 = 262_144;
+
+/// The chunk size a v1 writer uses for video and large audio, §6.
+///
+/// It is not an optimization. `chur_core::limits::container` caps a container
+/// at `CHUNK_COUNT_MAX` records, and that count times this size is exactly
+/// `TOTAL_PLAINTEXT_MAX`, so the 1 TiB object bound is reachable only at this
+/// chunk size. A video written at 256 KiB stops at 256 GiB, and it stops by
+/// failing at chunk 1048576 after hours of writing rather than at `begin`.
+pub const VIDEO_CHUNK_SIZE: u32 = 1_048_576;
+
+/// The chunk size §6 assigns to one media class.
+///
+/// §6 also states that the size is recorded in the authenticated manifest and
+/// is never inferred from a file type outside it, so this chooses the value a
+/// writer seals and no reader consults this function.
+#[must_use]
+pub const fn chunk_size_for(media_class: MediaClass) -> u32 {
+    match media_class {
+        MediaClass::Video | MediaClass::Audio => VIDEO_CHUNK_SIZE,
+        MediaClass::Image | MediaClass::Opaque => DEFAULT_CHUNK_SIZE,
+        // `MediaClass` is non-exhaustive. A class this build does not know is
+        // one whose stream shape it does not know either, so it takes the
+        // smaller candidate rather than the one sized for a long stream.
+        _ => DEFAULT_CHUNK_SIZE,
+    }
+}
 
 /// What the platform adapter reports about a source, `MEDIA_PIPELINE.md` §3.
 ///
@@ -142,6 +169,29 @@ pub struct Import {
     media: CanonicalMedia,
 }
 
+/// A read view on a temporary container whose length is already known.
+///
+/// [`Import::commit`] verifies the container before the rename of §14, so the
+/// bytes it authenticates are still in the temporary namespace. The length is
+/// carried rather than queried because [`ReadAt::length`] cannot fail and a
+/// file length can.
+struct SealedTemporary {
+    container: TemporaryContainer,
+    length: u64,
+}
+
+impl ReadAt for SealedTemporary {
+    fn length(&self) -> u64 {
+        self.length
+    }
+
+    fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> Result<()> {
+        let bytes = self.container.read_at(offset, buffer.len())?;
+        buffer.copy_from_slice(&bytes);
+        Ok(())
+    }
+}
+
 /// Opens an import transaction and writes the preamble and manifest, §14.
 ///
 /// The object key is drawn, wrapped, and journaled before the first byte is
@@ -155,11 +205,21 @@ pub fn begin(
     now_ms: u64,
 ) -> Result<Import> {
     media.check()?;
+    let chunk_size = chunk_size_for(media.media_class);
     if let Some(length) = source.known_length {
         ensure!(
             length <= container_bounds::TOTAL_PLAINTEXT_MAX,
             ResourceLimitExceeded,
             "the source exceeds the 1 TiB object bound of container §16"
+        );
+        // §16 bounds the record count as well as the total plaintext, and a
+        // source can satisfy the second bound and fail the first. Refusing it
+        // here rather than at the last chunk is the difference between a
+        // rejected import and hours of encryption thrown away.
+        ensure!(
+            length.div_ceil(u64::from(chunk_size)) <= container_bounds::CHUNK_COUNT_MAX,
+            ResourceLimitExceeded,
+            "the source needs more chunk records than container §16 admits"
         );
     }
 
@@ -190,14 +250,7 @@ pub fn begin(
         media.height,
         media.duration_ms,
     )?;
-    let manifest = CanonicalManifest::new(
-        identity,
-        None,
-        DEFAULT_CHUNK_SIZE,
-        nonce_prefix,
-        1,
-        properties,
-    )?;
+    let manifest = CanonicalManifest::new(identity, None, chunk_size, nonce_prefix, 1, properties)?;
     let manifest_length = manifest.record_length();
 
     let temp_path_id = random::id()?;
@@ -221,7 +274,7 @@ pub fn begin(
         envelope_generation: 1,
         envelope_body: Some(envelope.clone()),
         nonce_prefix,
-        chunk_size: DEFAULT_CHUNK_SIZE,
+        chunk_size,
         manifest_length,
         reserved_index: None,
         expected_length: source.known_length,
@@ -245,7 +298,7 @@ pub fn begin(
         identity,
         container_path_id,
         temp_path_id,
-        chunk_size: DEFAULT_CHUNK_SIZE,
+        chunk_size,
         source,
         media,
     })
@@ -316,14 +369,15 @@ impl Import {
         container.sync()?;
         let ciphertext_size = container.length()?;
 
-        let readable = usize::try_from(ciphertext_size).map_err(|_| {
-            chur_core::err!(
-                ResourceLimitExceeded,
-                "the container exceeds addressable memory"
-            )
-        })?;
-        let whole = Zeroizing::new(container.read_at(0, readable)?);
-        let reader = ContainerReader::open(&whole, &self.object_key, &self.identity)?;
+        // The verification reads the file, never a copy of it. A whole-container
+        // buffer would make peak memory the object's size, which
+        // `docs/assurance/PERFORMANCE_BUDGETS.md` §4 forbids, and would refuse
+        // any object above `usize::MAX` outright.
+        let mut view = SealedTemporary {
+            length: ciphertext_size,
+            container,
+        };
+        let mut reader = StreamReader::open(&mut view, &self.object_key, &self.identity)?;
         let verified = reader.verify_complete()?;
         ensure!(
             verified == total_plaintext,
@@ -332,10 +386,10 @@ impl Import {
         );
         let final_commit = reader.read_final_commit()?;
         drop(reader);
-        drop(whole);
 
         let store_id = session.object_store_id();
-        container.commit(session.root_dir(), &store_id, &self.container_path_id)?;
+        view.container
+            .commit(session.root_dir(), &store_id, &self.container_path_id)?;
 
         let capture = self.source.capture_time_ms;
         store::activate_object(

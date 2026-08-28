@@ -1817,6 +1817,21 @@ pub trait ReadAt {
     fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> Result<()>;
 }
 
+/// A borrowed source reads exactly as the source does.
+///
+/// [`StreamReader::open`] takes its source by value, so a caller that must keep
+/// the source afterwards, as an import does when it renames the file it just
+/// verified, lends it instead of surrendering it.
+impl<R: ReadAt + ?Sized> ReadAt for &mut R {
+    fn length(&self) -> u64 {
+        (**self).length()
+    }
+
+    fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> Result<()> {
+        (**self).read_at(offset, buffer)
+    }
+}
+
 /// The record length of a v1 final commit.
 ///
 /// §11 fixes `CanonicalFinalCommit` at exactly 128 bytes, so its sealed length
