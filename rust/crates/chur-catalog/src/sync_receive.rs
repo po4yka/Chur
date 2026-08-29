@@ -297,6 +297,56 @@ pub fn author_membership_operation(
     Ok(operation)
 }
 
+/// Authors and atomically persists one local collection rotation operation.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "rotation joins durable state, key routing, device identity, and private payload"
+)]
+pub fn author_rotation_operation(
+    db: &mut CatalogDb,
+    log: &mut DurableOperationLog,
+    membership: &MembershipState,
+    keys: &mut KeyDirectory,
+    root: &Key,
+    domain: &KeyDomain,
+    device_id: Id,
+    signing_key: &DeviceSigningKey,
+    now_ms: u64,
+    payload: &OperationPayload,
+) -> Result<Operation> {
+    ensure!(
+        matches!(
+            payload.body(),
+            PayloadBody::CreateCollectionEpoch { .. } | PayloadBody::RewrapObjectKey { .. }
+        ),
+        InvalidInput,
+        "operation is not a collection rotation operation"
+    );
+    let operation = log.author(
+        random::id()?,
+        *membership.vault_id(),
+        device_id,
+        *domain.selector(),
+        domain.operation_key(),
+        Nonce::random()?,
+        &payload.encode(),
+        signing_key,
+        membership,
+    )?;
+    payload.validate_for_operation(
+        &operation,
+        domain.collection_id(),
+        domain.collection_epoch(),
+    )?;
+    ensure!(
+        accept_rotation_operation(db, log, membership, keys, root, now_ms, &operation.encode(),)?
+            == ApplyOutcome::Applied,
+        InternalFailure,
+        "fresh local rotation operation was not applied"
+    );
+    Ok(operation)
+}
+
 /// Authenticates, decrypts, and atomically accepts one convergent content operation.
 pub fn accept_content_operation(
     db: &mut CatalogDb,

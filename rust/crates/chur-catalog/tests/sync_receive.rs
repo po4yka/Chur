@@ -462,6 +462,176 @@ fn collection_epoch_and_log_head_commit_together() {
 }
 
 #[test]
+fn locally_authored_rotation_rewraps_the_collection_and_commits_log_heads() {
+    let mut fixture = setup();
+    let collection_id = id(71);
+    let object_id = id(72);
+    let old_key = Key::new([73; 32]);
+    let new_key = Key::new([74; 32]);
+    let object_key = Key::new([75; 32]);
+    let old_collection_envelope = chur_format::envelope::CollectionKeyEnvelope::seal(
+        &fixture.root,
+        id(2),
+        collection_id,
+        1,
+        1,
+        Nonce::new([76; 24]),
+        &old_key,
+    )
+    .expect("old collection envelope");
+    store::put_collection_with_envelope(
+        &mut fixture.db,
+        &Collection {
+            collection_id,
+            current_epoch: 1,
+            policy_type: COLLECTION_POLICY_VAULT_DEFAULT,
+            created_revision: 1,
+            status: COLLECTION_STATUS_ACTIVE,
+        },
+        1,
+        &old_collection_envelope.encode(),
+    )
+    .expect("collection");
+    let old_object_envelope = chur_format::envelope::ObjectKeyEnvelope::seal(
+        &old_key,
+        id(2),
+        collection_id,
+        1,
+        object_id,
+        1,
+        Nonce::new([77; 24]),
+        &object_key,
+    )
+    .expect("old object envelope");
+    fixture
+        .db
+        .transaction(|transaction| {
+            transaction
+                .execute(
+                    "INSERT INTO objects VALUES (
+                         ?1, 1, ?2, ?3, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 1, 0, 1, 72
+                     )",
+                    rusqlite::params![
+                        object_id.as_bytes().as_slice(),
+                        collection_id.as_bytes().as_slice(),
+                        id(78).as_bytes().as_slice(),
+                    ],
+                )
+                .expect("object");
+            transaction
+                .execute(
+                    "INSERT INTO object_key_envelopes VALUES (?1, 1, 1, ?2)",
+                    rusqlite::params![
+                        object_id.as_bytes().as_slice(),
+                        old_object_envelope.encode()
+                    ],
+                )
+                .expect("object envelope");
+            transaction
+                .execute(
+                    "INSERT INTO sync_object_envelope_epochs VALUES (?1, ?2, 1, 1)",
+                    rusqlite::params![
+                        object_id.as_bytes().as_slice(),
+                        collection_id.as_bytes().as_slice(),
+                    ],
+                )
+                .expect("envelope projection");
+            Ok(())
+        })
+        .expect("object state");
+    let new_collection_envelope = chur_format::envelope::CollectionKeyEnvelope::seal(
+        &fixture.root,
+        id(2),
+        collection_id,
+        2,
+        2,
+        Nonce::new([79; 24]),
+        &new_key,
+    )
+    .expect("new collection envelope");
+    let old_domain = KeyDomain::collection(&old_key, &collection_id, 1).expect("old domain");
+    let mut keys = sync_keys::key_directory(&fixture.db, &fixture.root, id(2)).expect("keys");
+    let mut log = sync_log::load(&fixture.db, &fixture.membership).expect("log");
+    let begin = sync_receive::author_rotation_operation(
+        &mut fixture.db,
+        &mut log,
+        &fixture.membership,
+        &mut keys,
+        &fixture.root,
+        &old_domain,
+        id(4),
+        &fixture.issuer,
+        1_000,
+        &OperationPayload::new(
+            collection_id,
+            1,
+            PayloadBody::CreateCollectionEpoch {
+                previous_collection_epoch: 1,
+                membership_generation: 1,
+                collection_key_envelope: new_collection_envelope,
+            },
+        )
+        .expect("begin payload"),
+    )
+    .expect("author begin");
+    assert_eq!(begin.device_sequence(), 1);
+    assert_eq!(log.head(&id(4)), Some((1, begin.digest())));
+
+    let new_object_envelope = old_object_envelope
+        .rewrap(
+            &old_key,
+            &new_key,
+            collection_id,
+            2,
+            2,
+            Nonce::new([80; 24]),
+        )
+        .expect("rewrap envelope");
+    let new_domain = KeyDomain::collection(&new_key, &collection_id, 2).expect("new domain");
+    let rewrap = sync_receive::author_rotation_operation(
+        &mut fixture.db,
+        &mut log,
+        &fixture.membership,
+        &mut keys,
+        &fixture.root,
+        &new_domain,
+        id(4),
+        &fixture.issuer,
+        1_001,
+        &OperationPayload::new(
+            collection_id,
+            2,
+            PayloadBody::RewrapObjectKey {
+                object_id,
+                object_key_envelope: new_object_envelope,
+            },
+        )
+        .expect("rewrap payload"),
+    )
+    .expect("author rewrap");
+
+    assert_eq!(rewrap.device_sequence(), 2);
+    assert_eq!(log.head(&id(4)), Some((2, rewrap.digest())));
+    let rotation = chur_catalog::sync_rotation::load(
+        &fixture.db,
+        id(2),
+        collection_id,
+        &fixture.membership,
+        &fixture.root,
+    )
+    .expect("rotation");
+    assert!(rotation.is_complete());
+    assert!(
+        rotation
+            .envelope(&object_id)
+            .expect("current envelope")
+            .open(&new_key)
+            .expect("object key")
+            == object_key
+    );
+}
+
+#[test]
 fn accepted_content_state_rebuilds_after_restart() {
     let mut fixture = setup();
     let collection_id = id(24);
