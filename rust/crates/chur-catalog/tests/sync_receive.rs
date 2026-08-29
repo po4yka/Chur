@@ -237,3 +237,103 @@ fn collection_epoch_and_log_head_commit_together() {
     assert!(keys.operation_key(new_domain.selector()).is_ok());
     assert_eq!(log.head(&id(4)), Some((1, operation.digest())));
 }
+
+#[test]
+fn accepted_content_state_rebuilds_after_restart() {
+    let mut fixture = setup();
+    let collection_id = id(24);
+    let collection_key = Key::new([25; 32]);
+    let envelope = chur_format::envelope::CollectionKeyEnvelope::seal(
+        &fixture.root,
+        id(2),
+        collection_id,
+        1,
+        1,
+        Nonce::new([26; 24]),
+        &collection_key,
+    )
+    .expect("envelope");
+    store::put_collection_with_envelope(
+        &mut fixture.db,
+        &Collection {
+            collection_id,
+            current_epoch: 1,
+            policy_type: COLLECTION_POLICY_VAULT_DEFAULT,
+            created_revision: 1,
+            status: COLLECTION_STATUS_ACTIVE,
+        },
+        1,
+        &envelope.encode(),
+    )
+    .expect("collection");
+    let domain = KeyDomain::collection(&collection_key, &collection_id, 1).expect("domain");
+    let create = OperationPayload::new(
+        collection_id,
+        1,
+        PayloadBody::CreateObject {
+            object_id: id(27),
+            object_generation: 1,
+            store_id: id(28),
+            metadata_fields: Vec::new(),
+        },
+    )
+    .expect("create");
+    let create_operation = Operation::seal(
+        id(29),
+        id(2),
+        id(4),
+        1,
+        [0; 32],
+        Vec::new(),
+        *domain.selector(),
+        domain.operation_key(),
+        Nonce::new([30; 24]),
+        &create.encode(),
+    )
+    .expect("create operation")
+    .sign(&fixture.issuer);
+    let favorite = OperationPayload::new(
+        collection_id,
+        1,
+        PayloadBody::SetFavorite {
+            object_id: id(27),
+            favorite: true,
+            removed_tokens: Vec::new(),
+        },
+    )
+    .expect("favorite");
+    let favorite_operation = Operation::seal(
+        id(31),
+        id(2),
+        id(4),
+        2,
+        create_operation.digest(),
+        Vec::new(),
+        *domain.selector(),
+        domain.operation_key(),
+        Nonce::new([32; 24]),
+        &favorite.encode(),
+    )
+    .expect("favorite operation")
+    .sign(&fixture.issuer);
+    let mut log = sync_log::load(&fixture.db, &fixture.membership).expect("log");
+    log.accept_with(
+        &mut fixture.db,
+        &create_operation,
+        &fixture.membership,
+        |_| Ok(()),
+    )
+    .expect("create");
+    log.accept_with(
+        &mut fixture.db,
+        &favorite_operation,
+        &fixture.membership,
+        |_| Ok(()),
+    )
+    .expect("favorite");
+    let keys = sync_keys::key_directory(&fixture.db, &fixture.root, id(2)).expect("keys");
+
+    let restored = sync_receive::load_materialized_state(&fixture.db, &keys).expect("state");
+    assert!(restored.is_favorite(&id(27)));
+    assert!(!restored.is_presentable(&id(27)));
+}

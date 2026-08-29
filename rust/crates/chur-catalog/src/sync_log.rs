@@ -451,7 +451,7 @@ fn checkpoint_for_floor(
     bail!(CatalogCorrupt, "a checkpoint floor has no signed evidence")
 }
 
-fn device_ids(db: &CatalogDb) -> Result<Vec<Id>> {
+pub(crate) fn device_ids(db: &CatalogDb) -> Result<Vec<Id>> {
     let mut statement = db
         .connection()
         .prepare("SELECT device_id FROM sync_devices ORDER BY device_id")
@@ -467,7 +467,7 @@ fn device_ids(db: &CatalogDb) -> Result<Vec<Id>> {
     Ok(devices)
 }
 
-fn operation_at(
+pub(crate) fn operation_at(
     db: &CatalogDb,
     device_id: &Id,
     sequence: u64,
