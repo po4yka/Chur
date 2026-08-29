@@ -41,24 +41,9 @@ There is no separate payload commitment field. The AEAD tag of `encrypted_payloa
 
 ## 3. Operation kinds
 
-Initial logical set may include:
-
-```text
-CreateObject
-CommitObject
-UpdateMetadata
-CreateAlbum
-RenameAlbum
-AddAlbumMembership
-RemoveAlbumMembership
-SetFavorite
-AddTag / RemoveTag
-DeleteObject / RestoreObject if policy permits
-CreateCollectionEpoch
-AddDevice / RevokeDevice
-```
-
-Kinds and payload schemas are versioned. Unknown critical kinds fail closed.
+The v1 kind values and exact encrypted bodies are frozen in
+[`OPERATION_PAYLOAD_V1.md`](OPERATION_PAYLOAD_V1.md). All allocated kinds are
+critical: an unknown payload version or kind fails closed.
 
 ## 4. Per-device chain and observed heads
 

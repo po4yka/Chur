@@ -399,6 +399,39 @@ This is a second, independent space from the vault-descriptor `state` above. The
 
 These are also the values `chur_object_reader_verify_complete` writes through `out_state`, [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md) §6.2, so the persisted column and the ABI return carry one vocabulary. Proven corruption is a lifecycle change rather than a verification verdict, so `CORRUPT` is a value of the object row's `state` and not of this space.
 
+`operation_kind` of `OperationPayloadV1`, in the order frozen by
+[`../sync/OPERATION_PAYLOAD_V1.md`](../sync/OPERATION_PAYLOAD_V1.md) §2:
+
+| Value | Kind |
+| --- | --- |
+| `0x01` | `CreateObject` |
+| `0x02` | `CommitObject` |
+| `0x03` | `UpdateMetadata` |
+| `0x04` | `CreateAlbum` |
+| `0x05` | `RenameAlbum` |
+| `0x06` | `AddAlbumMembership` |
+| `0x07` | `RemoveAlbumMembership` |
+| `0x08` | `SetFavorite` |
+| `0x09` | `AddTag` |
+| `0x0A` | `RemoveTag` |
+| `0x0B` | `DeleteObject` |
+| `0x0C` | `RestoreObject` |
+| `0x0D` | `AddDevice` |
+| `0x0E` | `RevokeDevice` |
+| `0x0F` | `CreateCollectionEpoch` |
+| `0x10` | `RewrapObjectKey` |
+
+`field_id` of `MetadataFieldV1`, from
+[`../sync/OPERATION_PAYLOAD_V1.md`](../sync/OPERATION_PAYLOAD_V1.md) §3:
+
+| Value | Field |
+| --- | --- |
+| `0x0001` | original filename |
+| `0x0002` | media type |
+| `0x0003` | capture time |
+| `0x0004` | caption |
+| `0x0005` | rating |
+
 ### 15.5 Domain tags
 
 A domain tag is a fixed ASCII byte constant written without a length prefix, per §3 and §7, of the form `CHUR\x00<AREA>\x00<PURPOSE>\x00V<n>`.
