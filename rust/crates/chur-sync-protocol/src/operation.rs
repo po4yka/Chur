@@ -238,6 +238,42 @@ impl Operation {
         commit::commit(tag::SYNC_OPERATION_CHAIN, &[&self.encode()])
     }
 
+    /// Stable idempotency identifier.
+    #[must_use]
+    pub const fn operation_id(&self) -> &Id {
+        &self.operation_id
+    }
+    /// Vault whose log carries this operation.
+    #[must_use]
+    pub const fn vault_id(&self) -> &Id {
+        &self.vault_id
+    }
+    /// Authoring device.
+    #[must_use]
+    pub const fn device_id(&self) -> &Id {
+        &self.device_id
+    }
+    /// Per-device sequence.
+    #[must_use]
+    pub const fn device_sequence(&self) -> u64 {
+        self.device_sequence
+    }
+    /// Digest of the preceding device operation, or zero at genesis.
+    #[must_use]
+    pub const fn previous_operation_hash(&self) -> &Commitment {
+        &self.previous_operation_hash
+    }
+    /// Other-device causal heads observed by the author.
+    #[must_use]
+    pub fn observed_heads(&self) -> &[ObservedHead] {
+        &self.observed_heads
+    }
+    /// Opaque payload-key selector.
+    #[must_use]
+    pub const fn key_selector(&self) -> &Id {
+        &self.key_selector
+    }
+
     fn aad(&self) -> Vec<u8> {
         let mut writer = Writer::with_capacity(
             tag::SYNC_OPERATION.len()

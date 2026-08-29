@@ -189,6 +189,12 @@ impl MembershipState {
         &self.commitment
     }
 
+    /// Vault whose membership this state authenticates.
+    #[must_use]
+    pub const fn vault_id(&self) -> &Id {
+        &self.vault_id
+    }
+
     fn active_signing_key(&self, device_id: &Id) -> Result<&[u8; 32]> {
         let device = self.devices.get(device_id).ok_or_else(|| {
             Error::new(
