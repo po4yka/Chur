@@ -17,4 +17,5 @@
 
 pub mod checkpoint;
 pub mod identity;
+pub mod membership;
 pub mod operation;

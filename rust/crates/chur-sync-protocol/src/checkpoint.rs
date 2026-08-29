@@ -2,7 +2,7 @@
 
 use chur_core::limits::{COMMITMENT_LEN, ID_LEN, sync as bounds};
 use chur_core::{ChurStatus, Id, Result, ensure};
-use chur_crypto::tuple::tag;
+use chur_crypto::{Commitment, commit, tuple::tag};
 use chur_format::codec::{Reader, Writer};
 
 use crate::operation::{DeviceSigningKey, PROTOCOL_VERSION_V1, verify_ed25519};
@@ -117,6 +117,12 @@ impl Checkpoint {
     /// Verifies the issuer signature.
     pub fn verify_signature(&self, verifying_key: &[u8; 32]) -> Result<()> {
         verify_ed25519(verifying_key, &self.signature, &self.signing_bytes())
+    }
+
+    /// The portable commitment to the complete signed checkpoint.
+    #[must_use]
+    pub fn commitment(&self) -> Commitment {
+        commit::commit(tag::SYNC_CHECKPOINT_COMMITMENT, &[&self.encode()])
     }
 
     /// Encodes the canonical checkpoint.
@@ -292,5 +298,6 @@ mod tests {
             Checkpoint::decode(&encoded).expect("decode").encode(),
             encoded
         );
+        assert_ne!(checkpoint.commitment(), [0; COMMITMENT_LEN]);
     }
 }
