@@ -8,6 +8,7 @@ description = "Canonical encrypted operations, device logs, grants, protocol ver
 
 [dependencies]
 chur-core.workspace = true
+chur-format.workspace = true
 
 [lints]
 workspace = true

@@ -234,6 +234,25 @@ pub mod backup {
     pub const RESTORE_HEADROOM: u64 = 67_108_864;
 }
 
+/// Sync operation bounds, `docs/sync/OPERATION_LOG.md` §4 and §12.
+pub mod sync {
+    /// Other-device heads one operation may observe.
+    pub const OBSERVED_HEADS_MAX: usize = 31;
+    /// Exact encoded length of one observed head.
+    pub const OBSERVED_HEAD_LEN: usize = super::ID_LEN + 8;
+    /// Smallest sealed payload: one nonce and one authentication tag.
+    pub const ENCRYPTED_PAYLOAD_MIN: usize = super::NONCE_LEN + super::TAG_LEN;
+    /// Largest logical operation plaintext, 1 MiB.
+    pub const PAYLOAD_PLAINTEXT_MAX: usize = 1_048_576;
+    /// Largest sealed payload field.
+    pub const ENCRYPTED_PAYLOAD_MAX: usize =
+        super::NONCE_LEN + PAYLOAD_PLAINTEXT_MAX + super::TAG_LEN;
+    /// Operations accepted in one response.
+    pub const RESPONSE_OPERATIONS_MAX: usize = 256;
+    /// Operation bytes accepted in one response, 16 MiB.
+    pub const RESPONSE_BYTES_MAX: usize = 16_777_216;
+}
+
 /// The media pipeline, `docs/interop/MEDIA_PIPELINE.md` §12.
 pub mod media {
     /// Largest accepted still-image edge, in pixels.

@@ -12,4 +12,7 @@
 //! - `docs/sync/OPERATION_LOG.md`, `DEVICE_IDENTITY.md`,
 //!   `COLLECTION_GRANTS.md`, `REVOCATION.md`, `ROLLBACK_PROTECTION.md`
 //!
-//! This crate intentionally contains no code yet.
+//! The v1 operation record starts the implementation. Later modules add the
+//! device membership, checkpoint, convergence, and transport state machines.
+
+pub mod operation;

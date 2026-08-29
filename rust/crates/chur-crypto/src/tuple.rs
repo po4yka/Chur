@@ -56,6 +56,8 @@ pub mod tag {
     pub const BACKUP_FINAL_COMMIT_AAD: &[u8] = b"CHUR\0BACKUP\0FINAL-COMMIT-AAD\0V1";
     /// Operation digest and per-device chain hash.
     pub const SYNC_OPERATION_CHAIN: &[u8] = b"CHUR\0SYNC\0OPERATION-CHAIN\0V1";
+    /// Operation payload AAD and Ed25519 signature input.
+    pub const SYNC_OPERATION: &[u8] = b"CHUR\0SYNC\0OPERATION\0V1";
     /// Checkpoint record signature.
     pub const SYNC_CHECKPOINT: &[u8] = b"CHUR\0SYNC\0CHECKPOINT\0V1";
     /// Device verification fingerprint.
@@ -80,6 +82,7 @@ pub mod tag {
         BACKUP_INVENTORY_COMMITMENT,
         BACKUP_MANIFEST_AAD,
         BACKUP_FINAL_COMMIT_AAD,
+        SYNC_OPERATION,
         SYNC_OPERATION_CHAIN,
         SYNC_CHECKPOINT,
         IDENTITY_FINGERPRINT,
@@ -227,6 +230,11 @@ mod tests {
             );
             assert!(entry.iter().all(u8::is_ascii), "tag is not ASCII");
         }
+    }
+
+    #[test]
+    fn the_sync_operation_tag_matches_the_registry() {
+        assert_eq!(tag::SYNC_OPERATION, b"CHUR\0SYNC\0OPERATION\0V1");
     }
 
     #[test]

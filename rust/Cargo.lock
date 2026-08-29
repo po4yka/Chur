@@ -271,6 +271,7 @@ name = "chur-sync-protocol"
 version = "0.1.0"
 dependencies = [
  "chur-core",
+ "chur-format",
 ]
 
 [[package]]
