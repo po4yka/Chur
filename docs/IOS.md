@@ -445,7 +445,8 @@ Library/Application Support/Chur/
     │   ├── catalog.db + WAL        encrypted catalog
     │   ├── objects/                committed immutable containers
     │   ├── incoming/               in-flight import and download ciphertext
-    │   └── quarantine/             ciphertext that failed validation
+    │   ├── quarantine/             ciphertext that failed validation
+    │   └── sync-staging/           bounded unacknowledged opaque records
     └── <opaque-vault-id>/
 
 Library/Caches/Chur/

@@ -92,6 +92,12 @@ impl VaultRoot {
         self.vault(root_path_id).join("scratch")
     }
 
+    /// Opaque, disposable inbound records fetched while the vault is locked.
+    #[must_use]
+    pub fn sync_staging(&self, root_path_id: &Id) -> PathBuf {
+        self.vault(root_path_id).join("sync-staging")
+    }
+
     /// One committed container.
     ///
     /// The first byte of the identifier is a directory level. A vault holds up
@@ -134,6 +140,7 @@ impl VaultRoot {
             self.incoming(root_path_id),
             self.quarantine(root_path_id),
             self.scratch(root_path_id),
+            self.sync_staging(root_path_id),
         ] {
             std::fs::create_dir_all(&directory).map_err(|_| {
                 chur_core::err!(IoFailure, "a vault directory could not be created")

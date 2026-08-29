@@ -23,6 +23,7 @@ pub mod query;
 pub(crate) mod row;
 pub mod schema;
 pub mod store;
+pub mod sync_staging;
 pub mod vault;
 
 pub use db::{CatalogDb, CatalogKey, CatalogLocation};

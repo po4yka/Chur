@@ -751,7 +751,8 @@ chur/
 │   │   ├── catalog.db-shm
 │   │   ├── objects/
 │   │   ├── incoming/
-│   │   └── quarantine/
+│   │   ├── quarantine/
+│   │   └── sync-staging/          bounded opaque records fetched while locked
 │   └── <random-vault-dir-B>/
 │       └── ...
 └── public/

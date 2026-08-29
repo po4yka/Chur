@@ -255,6 +255,12 @@ pub mod sync {
     pub const RESPONSE_OPERATIONS_MAX: usize = 256;
     /// Operation bytes accepted in one response, 16 MiB.
     pub const RESPONSE_BYTES_MAX: usize = 16_777_216;
+    /// Opaque records retained per locked vault.
+    pub const STAGED_RECORDS_MAX: usize = 4_096;
+    /// Opaque bytes retained per locked vault, 64 MiB.
+    pub const STAGED_BYTES_MAX: u64 = 67_108_864;
+    /// Local retention of one unacknowledged staged record, seven days.
+    pub const STAGED_RETENTION_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
 }
 
 /// The media pipeline, `docs/interop/MEDIA_PIPELINE.md` §12.
