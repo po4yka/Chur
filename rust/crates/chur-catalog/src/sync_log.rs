@@ -7,7 +7,7 @@ use chur_crypto::Commitment;
 use chur_sync_protocol::{
     checkpoint::Checkpoint,
     operation::Operation,
-    operation_log::{ApplyOutcome, ForkState, OperationLog},
+    operation_log::{ApplyOutcome, CheckpointOutcome, ForkEvidence, ForkState, OperationLog},
     state::{DeviceStatus, MembershipState},
 };
 use rusqlite::{OptionalExtension, Transaction, params};
@@ -34,6 +34,12 @@ impl DurableOperationLog {
     #[must_use]
     pub fn floor(&self, device_id: &Id) -> Option<(u64, Commitment)> {
         self.log.floor(device_id)
+    }
+
+    /// Latest accepted checkpoint commitment from one issuer.
+    #[must_use]
+    pub fn checkpoint_commitment(&self, issuer_device_id: &Id) -> Option<&Commitment> {
+        self.log.checkpoint_commitment(issuer_device_id)
     }
 
     /// Validates one received operation and commits its logical projection,
@@ -111,34 +117,150 @@ impl DurableOperationLog {
                         "the protocol reported a fork without evidence",
                     )
                 })?;
-                let state = match evidence.state() {
-                    ForkState::Detected => 1i64,
-                    ForkState::Acknowledged => 2i64,
-                };
+                persist_fork(db, operation.device_id(), evidence, None)?;
+                self.log = candidate;
+                self.forked_devices.insert(*operation.device_id());
+                Err(error)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Accepts and persists one signed checkpoint and every raised floor.
+    pub fn accept_checkpoint(
+        &mut self,
+        db: &mut CatalogDb,
+        checkpoint: &Checkpoint,
+        membership: &MembershipState,
+        own: bool,
+        now_ms: u64,
+    ) -> Result<CheckpointOutcome> {
+        let mut candidate = self.log.clone();
+        match candidate.accept_checkpoint(checkpoint, membership) {
+            Ok(outcome) => {
+                let commitment = checkpoint.commitment();
+                let existing_own: Option<Vec<u8>> = db
+                    .connection()
+                    .query_row(
+                        "SELECT commitment FROM sync_checkpoints
+                          WHERE issuer_device_id = ?1 AND own = 1",
+                        [checkpoint.issuer_device_id().as_bytes().as_slice()],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(|error| map_sqlite(error, "the own checkpoint could not be read"))?;
+                ensure!(
+                    own || existing_own
+                        .as_deref()
+                        .is_none_or(|stored| stored == commitment),
+                    SyncHeadRollback,
+                    "a remote checkpoint cannot replace the latest own checkpoint"
+                );
                 db.transaction(|transaction| {
                     transaction
                         .execute(
-                            "INSERT INTO sync_forks
-                                 (device_id, state, accepted_record, conflicting_record)
-                             VALUES (?1, ?2, ?3, ?4)
-                             ON CONFLICT(device_id) DO UPDATE SET
-                                 state = excluded.state,
-                                 accepted_record = excluded.accepted_record,
-                                 conflicting_record = excluded.conflicting_record",
+                            "INSERT INTO sync_checkpoints
+                                 (issuer_device_id, commitment, record, accepted_at_ms, own)
+                             VALUES (?1, ?2, ?3, ?4, ?5)
+                             ON CONFLICT(issuer_device_id) DO UPDATE SET
+                                 commitment = excluded.commitment,
+                                 record = excluded.record,
+                                 accepted_at_ms = excluded.accepted_at_ms,
+                                 own = max(sync_checkpoints.own, excluded.own)",
                             params![
-                                operation.device_id().as_bytes().as_slice(),
-                                state,
-                                evidence.accepted_record(),
-                                evidence.conflicting_record(),
+                                checkpoint.issuer_device_id().as_bytes().as_slice(),
+                                commitment.as_slice(),
+                                checkpoint.encode(),
+                                as_sqlite_integer(
+                                    now_ms,
+                                    "the checkpoint acceptance time is too large"
+                                )?,
+                                i64::from(own),
                             ],
                         )
-                        .map_err(|sqlite| {
-                            map_sqlite(sqlite, "fork evidence could not be written")
+                        .map_err(|error| {
+                            map_sqlite(error, "the checkpoint could not be written")
                         })?;
+                    for head in checkpoint.heads() {
+                        let Some((sequence, digest)) = candidate.floor(head.device_id()) else {
+                            continue;
+                        };
+                        transaction
+                            .execute(
+                                "INSERT INTO sync_heads
+                                     (device_id, accepted_sequence, accepted_digest,
+                                      floor_sequence, floor_digest)
+                                 VALUES (?1, NULL, NULL, ?2, ?3)
+                                 ON CONFLICT(device_id) DO UPDATE SET
+                                     floor_sequence = excluded.floor_sequence,
+                                     floor_digest = excluded.floor_digest",
+                                params![
+                                    head.device_id().as_bytes().as_slice(),
+                                    as_sqlite_integer(
+                                        sequence,
+                                        "the checkpoint floor sequence is too large"
+                                    )?,
+                                    digest.as_slice(),
+                                ],
+                            )
+                            .map_err(|error| {
+                                map_sqlite(error, "the checkpoint floor could not be written")
+                            })?;
+                    }
+                    if own {
+                        let changed = transaction
+                            .execute(
+                                "UPDATE sync_state
+                                    SET latest_own_checkpoint_commitment = ?1
+                                  WHERE only_row = 1",
+                                [commitment.as_slice()],
+                            )
+                            .map_err(|error| {
+                                map_sqlite(error, "the own checkpoint could not be projected")
+                            })?;
+                        ensure!(
+                            changed == 1,
+                            CatalogCorrupt,
+                            "sync state has no membership chain"
+                        );
+                    }
                     bump_generation(transaction)
                 })?;
                 self.log = candidate;
-                self.forked_devices.insert(*operation.device_id());
+                Ok(outcome)
+            }
+            Err(error) if error.status() == ChurStatus::SyncChainFork => {
+                let device_id = checkpoint
+                    .heads()
+                    .iter()
+                    .map(|head| head.device_id())
+                    .find(|device_id| candidate.fork(device_id).is_some())
+                    .ok_or_else(|| {
+                        Error::new(
+                            ChurStatus::InternalFailure,
+                            "the protocol reported a checkpoint fork without evidence",
+                        )
+                    })?;
+                let evidence = candidate.fork(device_id).ok_or_else(|| {
+                    Error::new(
+                        ChurStatus::InternalFailure,
+                        "the protocol reported a checkpoint fork without evidence",
+                    )
+                })?;
+                let fallback = if evidence.accepted_record().is_empty() {
+                    let floor = self.log.floor(device_id).ok_or_else(|| {
+                        Error::new(
+                            ChurStatus::InternalFailure,
+                            "checkpoint fork has no accepted floor",
+                        )
+                    })?;
+                    Some(checkpoint_for_floor(db, device_id, floor)?)
+                } else {
+                    None
+                };
+                persist_fork(db, device_id, evidence, fallback.as_deref())?;
+                self.log = candidate;
+                self.forked_devices.insert(*device_id);
                 Err(error)
             }
             Err(error) => Err(error),
@@ -253,11 +375,80 @@ pub fn load(db: &CatalogDb, membership: &MembershipState) -> Result<DurableOpera
         );
     }
     restore_and_validate_heads(db, membership, &mut log)?;
+    restore_checkpoints(db, membership, &mut log)?;
     let forked_devices = validate_forks(db, membership)?;
     Ok(DurableOperationLog {
         log,
         forked_devices,
     })
+}
+
+fn persist_fork(
+    db: &mut CatalogDb,
+    device_id: &Id,
+    evidence: &ForkEvidence,
+    accepted_fallback: Option<&[u8]>,
+) -> Result<()> {
+    let state = match evidence.state() {
+        ForkState::Detected => 1i64,
+        ForkState::Acknowledged => 2i64,
+    };
+    db.transaction(|transaction| {
+        transaction
+            .execute(
+                "INSERT INTO sync_forks
+                     (device_id, state, accepted_record, conflicting_record)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(device_id) DO UPDATE SET
+                     state = excluded.state,
+                     accepted_record = excluded.accepted_record,
+                     conflicting_record = excluded.conflicting_record",
+                params![
+                    device_id.as_bytes().as_slice(),
+                    state,
+                    if evidence.accepted_record().is_empty() {
+                        accepted_fallback.ok_or_else(|| {
+                            Error::new(
+                                ChurStatus::InternalFailure,
+                                "fork evidence has no accepted signed record",
+                            )
+                        })?
+                    } else {
+                        evidence.accepted_record()
+                    },
+                    evidence.conflicting_record(),
+                ],
+            )
+            .map_err(|error| map_sqlite(error, "fork evidence could not be written"))?;
+        bump_generation(transaction)
+    })
+}
+
+fn checkpoint_for_floor(
+    db: &CatalogDb,
+    device_id: &Id,
+    floor: (u64, Commitment),
+) -> Result<Vec<u8>> {
+    let mut statement = db
+        .connection()
+        .prepare("SELECT record FROM sync_checkpoints ORDER BY issuer_device_id")
+        .map_err(|error| map_sqlite(error, "checkpoint evidence could not be prepared"))?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, Vec<u8>>(0))
+        .map_err(|error| map_sqlite(error, "checkpoint evidence could not be read"))?;
+    for row in rows {
+        let record =
+            row.map_err(|error| map_sqlite(error, "checkpoint evidence could not be read"))?;
+        let checkpoint = Checkpoint::decode(&record).map_err(corrupt_log)?;
+        if checkpoint.heads().iter().any(|head| {
+            head.device_id() == device_id
+                && head.device_sequence() == floor.0
+                && head.operation_digest() == &floor.1
+        }) {
+            return Ok(record);
+        }
+    }
+    bail!(CatalogCorrupt, "a checkpoint floor has no signed evidence")
 }
 
 fn device_ids(db: &CatalogDb) -> Result<Vec<Id>> {
@@ -401,6 +592,98 @@ fn restore_and_validate_heads(
     Ok(())
 }
 
+fn restore_checkpoints(
+    db: &CatalogDb,
+    membership: &MembershipState,
+    log: &mut OperationLog,
+) -> Result<()> {
+    let mut statement = db
+        .connection()
+        .prepare(
+            "SELECT issuer_device_id, commitment, record, own
+               FROM sync_checkpoints ORDER BY issuer_device_id",
+        )
+        .map_err(|error| map_sqlite(error, "checkpoints could not be prepared"))?;
+    let mut rows = statement
+        .query([])
+        .map_err(|error| map_sqlite(error, "checkpoints could not be read"))?;
+    let mut own_commitments = BTreeSet::new();
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| map_sqlite(error, "a checkpoint could not be read"))?
+    {
+        let issuer: Vec<u8> = row
+            .get(0)
+            .map_err(|error| map_sqlite(error, "a checkpoint issuer could not be read"))?;
+        let stored_commitment: Vec<u8> = row
+            .get(1)
+            .map_err(|error| map_sqlite(error, "a checkpoint commitment could not be read"))?;
+        let record: Vec<u8> = row
+            .get(2)
+            .map_err(|error| map_sqlite(error, "a checkpoint record could not be read"))?;
+        let own: i64 = row
+            .get(3)
+            .map_err(|error| map_sqlite(error, "a checkpoint origin could not be read"))?;
+        let issuer = crate::row::id(&issuer, "a checkpoint issuer is malformed")?;
+        let checkpoint = Checkpoint::decode(&record).map_err(corrupt_log)?;
+        let stored_commitment =
+            commitment(&stored_commitment, "a checkpoint commitment is malformed")?;
+        ensure!(
+            checkpoint.issuer_device_id() == &issuer
+                && checkpoint.commitment() == stored_commitment,
+            CatalogCorrupt,
+            "a checkpoint contradicts its catalog row"
+        );
+        verify_checkpoint_evidence(&record, &issuer, membership)?;
+        let membership_commitment: Option<Vec<u8>> = db
+            .connection()
+            .query_row(
+                "SELECT commitment FROM sync_membership_records
+                  WHERE membership_generation = ?1",
+                [as_sqlite_integer(
+                    checkpoint.membership_generation(),
+                    "the checkpoint membership generation is too large",
+                )?],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| map_sqlite(error, "checkpoint membership could not be read"))?;
+        ensure!(
+            membership_commitment.as_deref() == Some(checkpoint.membership_commitment()),
+            CatalogCorrupt,
+            "a checkpoint names an unaccepted membership generation"
+        );
+        log.restore_checkpoint_commitment(&issuer, stored_commitment, membership)
+            .map_err(corrupt_log)?;
+        if own == 1 {
+            own_commitments.insert(stored_commitment);
+        }
+    }
+    let latest_own: Option<Vec<u8>> = db
+        .connection()
+        .query_row(
+            "SELECT latest_own_checkpoint_commitment FROM sync_state WHERE only_row = 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| map_sqlite(error, "the own checkpoint head could not be read"))?
+        .flatten();
+    match latest_own {
+        Some(bytes) => ensure!(
+            own_commitments.contains(&commitment(&bytes, "the own checkpoint head is malformed")?),
+            CatalogCorrupt,
+            "the own checkpoint head has no checkpoint record"
+        ),
+        None => ensure!(
+            own_commitments.is_empty(),
+            CatalogCorrupt,
+            "an own checkpoint has no head projection"
+        ),
+    }
+    Ok(())
+}
+
 fn validate_forks(db: &CatalogDb, membership: &MembershipState) -> Result<BTreeSet<Id>> {
     let mut statement = db
         .connection()
@@ -435,15 +718,22 @@ fn validate_forks(db: &CatalogDb, membership: &MembershipState) -> Result<BTreeS
             CatalogCorrupt,
             "fork evidence has an invalid state or device"
         );
-        if !accepted.is_empty() {
-            verify_operation_evidence(&accepted, &device_id, membership)?;
-        }
-        if verify_operation_evidence(&conflicting, &device_id, membership).is_err() {
-            verify_checkpoint_evidence(&conflicting, &device_id, membership)?;
-        }
+        verify_signed_evidence(&accepted, &device_id, membership)?;
+        verify_signed_evidence(&conflicting, &device_id, membership)?;
         forked.insert(device_id);
     }
     Ok(forked)
+}
+
+fn verify_signed_evidence(
+    bytes: &[u8],
+    device_id: &Id,
+    membership: &MembershipState,
+) -> Result<()> {
+    if verify_operation_evidence(bytes, device_id, membership).is_ok() {
+        return Ok(());
+    }
+    verify_checkpoint_evidence(bytes, device_id, membership)
 }
 
 fn verify_operation_evidence(
@@ -526,8 +816,10 @@ mod tests {
     };
     use chur_crypto::{Key, Nonce, random};
     use chur_sync_protocol::{
+        checkpoint::{Checkpoint, CheckpointHead},
         membership::EnrollmentRecord,
         operation::{DeviceSigningKey, ObservedHead},
+        operation_log::CheckpointOutcome,
     };
 
     fn id(byte: u8) -> Id {
@@ -566,6 +858,26 @@ mod tests {
             &[marker],
         )
         .expect("operation")
+        .sign(key)
+    }
+
+    fn checkpoint(
+        key: &DeviceSigningKey,
+        sequence: u64,
+        digest: Commitment,
+        membership: &MembershipState,
+    ) -> Checkpoint {
+        Checkpoint::new(
+            id(1),
+            id(3),
+            sequence,
+            membership.generation(),
+            *membership.commitment(),
+            vec![CheckpointHead::new(id(3), sequence, digest)],
+            [6; 32],
+            [7; 32],
+        )
+        .expect("checkpoint")
         .sign(key)
     }
 
@@ -636,5 +948,98 @@ mod tests {
             .query_row("SELECT state FROM sync_forks", [], |row| row.get(0))
             .expect("fork state");
         assert_eq!(state, 2);
+    }
+
+    #[test]
+    fn checkpoint_floor_and_own_commitment_replay_after_reopen() {
+        let (mut db, membership, key) = setup();
+        let mut log = load(&db, &membership).expect("empty log");
+        let checkpoint = checkpoint(&key, 1, [8; 32], &membership);
+        assert_eq!(
+            log.accept_checkpoint(&mut db, &checkpoint, &membership, true, 9)
+                .expect("accept checkpoint"),
+            CheckpointOutcome::Raised
+        );
+        assert_eq!(log.floor(&id(3)), Some((1, [8; 32])));
+        let stored: Vec<u8> = db
+            .connection()
+            .query_row(
+                "SELECT latest_own_checkpoint_commitment FROM sync_state",
+                [],
+                |row| row.get(0),
+            )
+            .expect("own commitment");
+        assert_eq!(stored, checkpoint.commitment());
+
+        let replay = Checkpoint::new(
+            id(1),
+            id(3),
+            1,
+            membership.generation(),
+            *membership.commitment(),
+            vec![CheckpointHead::new(id(3), 1, [8; 32])],
+            [6; 32],
+            [9; 32],
+        )
+        .expect("replayed checkpoint")
+        .sign(&key);
+        assert_eq!(
+            log.accept_checkpoint(&mut db, &replay, &membership, false, 10)
+                .expect_err("own rollback")
+                .status(),
+            ChurStatus::SyncHeadRollback
+        );
+
+        let restored = load(&db, &membership).expect("restore checkpoint");
+        assert_eq!(restored.floor(&id(3)), Some((1, [8; 32])));
+        assert_eq!(
+            restored.checkpoint_commitment(&id(3)),
+            Some(&checkpoint.commitment())
+        );
+    }
+
+    #[test]
+    fn a_conflicting_checkpoint_persists_fork_evidence() {
+        let (mut db, membership, key) = setup();
+        let mut log = load(&db, &membership).expect("empty log");
+        let first = operation(&key, 1, [0; 32], 5);
+        log.accept_with(&mut db, &first, &membership, |_| Ok(()))
+            .expect("first");
+        let conflict = checkpoint(&key, 1, [9; 32], &membership);
+        assert_eq!(
+            log.accept_checkpoint(&mut db, &conflict, &membership, false, 9)
+                .expect_err("fork")
+                .status(),
+            ChurStatus::SyncChainFork
+        );
+        let restored = load(&db, &membership).expect("restore fork");
+        assert!(restored.forked_devices.contains(&id(3)));
+    }
+
+    #[test]
+    fn conflicting_checkpoint_floor_retains_both_signed_checkpoints() {
+        let (mut db, membership, key) = setup();
+        let mut log = load(&db, &membership).expect("empty log");
+        let accepted = checkpoint(&key, 1, [8; 32], &membership);
+        log.accept_checkpoint(&mut db, &accepted, &membership, false, 8)
+            .expect("accepted checkpoint");
+        let conflict = checkpoint(&key, 1, [9; 32], &membership);
+        assert_eq!(
+            log.accept_checkpoint(&mut db, &conflict, &membership, false, 9)
+                .expect_err("fork")
+                .status(),
+            ChurStatus::SyncChainFork
+        );
+        let (accepted_record, conflicting_record): (Vec<u8>, Vec<u8>) = db
+            .connection()
+            .query_row(
+                "SELECT accepted_record, conflicting_record FROM sync_forks",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("fork evidence");
+        assert_eq!(accepted_record, accepted.encode());
+        assert_eq!(conflicting_record, conflict.encode());
+        assert!(load(&db, &membership).is_ok());
     }
 }
