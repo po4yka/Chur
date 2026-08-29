@@ -42,27 +42,32 @@ Email/server login alone must not authorize a new decryption identity.
 
 ## 4. Enrollment record
 
-Conceptual fields:
+`EnrollmentRecordV1` is exactly 270 bytes:
 
 ```text
-protocol_version
-account/vault identity binding
-device_id
-signing_public_key
-hpke_public_key
-key_versions
-capabilities
-created_sequence
-issuer_device_id
-membership_generation
-previous_membership_commitment
-bootstrap_checkpoint_commitment
-issuer_signature
+protocol_version:u16                         = 0x0001
+vault/account binding:bytes[16]
+device_id:bytes[16]
+signing_suite:u16                            = 0x0001 (Ed25519)
+signing_public_key:bytes[32]
+hpke_suite:u16                               = 0x0001 (RFC 9180 X25519/HKDF-SHA-256/ChaCha20-Poly1305)
+hpke_public_key:bytes[32]
+capabilities:u64                             = 0x0000000000000001 for v1 sync
+created_sequence:u64
+issuer_device_id:bytes[16]
+membership_generation:u64
+previous_membership_commitment:bytes[32]
+bootstrap_checkpoint_commitment:bytes[32]
+issuer_signature:bytes[64]
 ```
 
-Canonical encoding and signature domain are versioned.
+The signature input is `CHUR\x00SYNC\x00ENROLLMENT\x00V1` followed by every field except `issuer_signature`. `created_sequence` equals the containing operation's `device_sequence`; the outer operation issuer and `issuer_device_id` must match. Generation 1 is self-enrollment: issuer equals enrolled device, `created_sequence` is 1, and both commitments are zero. Every later enrollment increments the accepted membership generation by one, names its current membership commitment, and carries a non-zero checkpoint commitment.
 
 `bootstrap_checkpoint_commitment` is BLAKE3-256 over the issuing device's current `CheckpointV1`, defined in [`ROLLBACK_PROTECTION.md`](ROLLBACK_PROTECTION.md) §6. Together with `membership_generation` it is the enrolling device's signed statement of what the vault's history was at enrollment, and it is what gives the new device a freshness floor before it has one of its own. It is 32 bytes, so it also fits the out-of-band payload of §5; the checkpoint record itself is fetched through the server and accepted only when it hashes to this value.
+
+### 4.1 Membership commitment
+
+After accepting an enrollment or revocation, the new membership commitment is BLAKE3-256 over `CHUR\x00SYNC\x00MEMBERSHIP-CHAIN\x00V1`, one record-kind byte (`0x01` enrollment, `0x02` revocation), and the complete signed canonical membership record. The record already carries the previous commitment and next generation, so this forms one append-only membership chain. Unknown kinds and generation skips are rejected.
 
 ## 5. Verification
 
@@ -133,19 +138,21 @@ Key rotation creates a signed replacement record:
 
 ## 9. Revocation
 
-Revocation is a signed membership operation. `RevokeDeviceRecordV1` is the payload of the `RevokeDevice` kind:
+Revocation is a signed membership operation. `RevokeDeviceRecordV1` is the 194-byte payload of the `RevokeDevice` kind:
 
 ```text
-protocol_version
-account/vault identity binding
-revoked_device_id
-final_accepted_device_sequence
-final_accepted_operation_digest
-membership_generation
-issuer_device_id
-previous_membership_commitment
-issuer_signature
+protocol_version:u16                         = 0x0001
+vault/account identity binding:bytes[16]
+revoked_device_id:bytes[16]
+final_accepted_device_sequence:u64
+final_accepted_operation_digest:bytes[32]
+membership_generation:u64
+issuer_device_id:bytes[16]
+previous_membership_commitment:bytes[32]
+issuer_signature:bytes[64]
 ```
+
+The signature input is `CHUR\x00SYNC\x00REVOCATION\x00V1` followed by every field except `issuer_signature`. The generation is exactly one above the accepted membership state, the previous commitment must equal that state, the issuer is an active device other than the target, and the outer operation issuer must match it. Sequence and digest are both non-zero.
 
 The pair (`final_accepted_device_sequence`, `final_accepted_operation_digest`) is the accepted revocation point. The sequence is the highest the issuer had accepted from the revoked device; the digest is that operation's `operation_digest` per [`OPERATION_LOG.md`](OPERATION_LOG.md) §4, so the point names one branch and not merely a length, and `membership_generation` fixes which membership state the point belongs to. Canonical encoding and signature domain are versioned with the enrollment record of §4. Acceptance of operations against this point is normative in [`REVOCATION.md`](REVOCATION.md) §7.
 

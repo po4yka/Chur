@@ -85,6 +85,8 @@ CheckpointV1 =
 
 Encoding follows [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md): a `u32` count followed by 56-byte elements sorted by ascending `device_id`, with duplicates and unsorted entries rejected. `operation_digest` is the value defined in [`OPERATION_LOG.md`](OPERATION_LOG.md) §4, so a checkpoint pins a branch and not only a length. Unlike `observed_heads` the list includes the issuer's own head, so it holds at most 32 entries. The Ed25519 signature covers the whole record except the signature field, under the checkpoint domain tag registered in §15.5 of the encoding profile.
 
+The portable `checkpoint_commitment` is BLAKE3-256 over `CHUR\x00SYNC\x00CHECKPOINT-COMMITMENT\x00V1` followed by the complete signed canonical checkpoint bytes. It is this value that enrollment, recovery, and backup records carry; a zero value means no checkpoint only for generation-1 self-enrollment.
+
 One device signs. There is no quorum: a quorum rule needs a membership the receiver already trusts, and membership is exactly what is under attack after state loss, so the rule would be circular. What a checkpoint is trusted for instead:
 
 - a device trusts its own checkpoints as its freshness floor after local state loss, when one is recovered from a portable backup or from the enrollment attestation of §7;

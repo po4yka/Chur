@@ -60,6 +60,14 @@ pub mod tag {
     pub const SYNC_OPERATION: &[u8] = b"CHUR\0SYNC\0OPERATION\0V1";
     /// Checkpoint record signature.
     pub const SYNC_CHECKPOINT: &[u8] = b"CHUR\0SYNC\0CHECKPOINT\0V1";
+    /// Checkpoint commitment used by enrollment and recovery.
+    pub const SYNC_CHECKPOINT_COMMITMENT: &[u8] = b"CHUR\0SYNC\0CHECKPOINT-COMMITMENT\0V1";
+    /// Device-enrollment record signature.
+    pub const SYNC_ENROLLMENT: &[u8] = b"CHUR\0SYNC\0ENROLLMENT\0V1";
+    /// Device-revocation record signature.
+    pub const SYNC_REVOCATION: &[u8] = b"CHUR\0SYNC\0REVOCATION\0V1";
+    /// Membership-chain commitment.
+    pub const SYNC_MEMBERSHIP_CHAIN: &[u8] = b"CHUR\0SYNC\0MEMBERSHIP-CHAIN\0V1";
     /// Device verification fingerprint.
     pub const IDENTITY_FINGERPRINT: &[u8] = b"CHUR\0IDENTITY\0FINGERPRINT\0V1";
 
@@ -85,6 +93,10 @@ pub mod tag {
         SYNC_OPERATION,
         SYNC_OPERATION_CHAIN,
         SYNC_CHECKPOINT,
+        SYNC_CHECKPOINT_COMMITMENT,
+        SYNC_ENROLLMENT,
+        SYNC_REVOCATION,
+        SYNC_MEMBERSHIP_CHAIN,
         IDENTITY_FINGERPRINT,
     ];
 }

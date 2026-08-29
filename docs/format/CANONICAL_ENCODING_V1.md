@@ -425,9 +425,13 @@ A domain tag is a fixed ASCII byte constant written without a length prefix, per
 | `CHUR\x00SYNC\x00OPERATION\x00V1` | operation payload AAD and Ed25519 signature input | [`../sync/OPERATION_LOG.md`](../sync/OPERATION_LOG.md) §2, §6, §7 |
 | `CHUR\x00SYNC\x00OPERATION-CHAIN\x00V1` | operation digest and per-device chain hash | [`../sync/OPERATION_LOG.md`](../sync/OPERATION_LOG.md) §4 |
 | `CHUR\x00SYNC\x00CHECKPOINT\x00V1` | checkpoint record signature | [`../sync/ROLLBACK_PROTECTION.md`](../sync/ROLLBACK_PROTECTION.md) §6 |
+| `CHUR\x00SYNC\x00CHECKPOINT-COMMITMENT\x00V1` | checkpoint commitment | [`../sync/ROLLBACK_PROTECTION.md`](../sync/ROLLBACK_PROTECTION.md) §6 |
+| `CHUR\x00SYNC\x00ENROLLMENT\x00V1` | device-enrollment signature | [`../sync/DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md) §4 |
+| `CHUR\x00SYNC\x00REVOCATION\x00V1` | device-revocation signature | [`../sync/DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md) §9 |
+| `CHUR\x00SYNC\x00MEMBERSHIP-CHAIN\x00V1` | membership-state commitment | [`../sync/DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md) §4.1 |
 | `CHUR\x00IDENTITY\x00FINGERPRINT\x00V1` | device verification fingerprint | [`../sync/DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md) §5 |
 
-No allocated tag is a byte prefix of another, as §7 requires; the twenty-one above were checked pairwise. `CHUR\x00CATALOG\x00HEADER-COMMITMENT\x00V1` differs from every other allocated tag at byte 5, `C` against `K`, `S`, `O`, `V`, `B`, or `I`, and no other tag begins with `CHUR\x00C`. The three backup tags share `CHUR\x00BACKUP\x00` and differ at byte 12, `I`, `M`, and `F`. The three sync tags differ at the first byte after `CHUR\x00SYNC\x00` or at the separator after `OPERATION`, and `CHUR\x00IDENTITY\x00FINGERPRINT\x00V1` differs from every other allocated tag at byte 5. The four slot tags share `CHUR\x00SLOT\x00` and differ at byte 11, `P`, `R`, `A`, and `A`, with the two `A` tags differing at byte 12, `N` against `P`. `CHUR\x00SLOT\x00` and `CHUR\x00SYNC\x00` differ at byte 6, `L` against `Y`.
+No allocated tag is a byte prefix of another, as §7 requires; the twenty-five above are checked pairwise by `chur-crypto`. Tags within one area differ at the first purpose byte or at a separator followed by a suffix; tags in different areas differ before the purpose.
 
 The fingerprint tag reaches no persisted or wire bytes; it is the input to a string a person reads, so the ADR requirement of §15.6 does not apply to it. A tag for an authenticated record whose AAD is not yet frozen is otherwise allocated by a row here in the same change that freezes that record.
 
