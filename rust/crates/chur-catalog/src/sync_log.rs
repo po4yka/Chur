@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use chur_core::limits::sync as bounds;
 use chur_core::{ChurStatus, Error, Id, Result, bail, ensure};
 use chur_crypto::{Commitment, Key, Nonce};
 use chur_sync_protocol::{
@@ -425,6 +426,65 @@ pub fn load(db: &CatalogDb, membership: &MembershipState) -> Result<DurableOpera
         log,
         forked_devices,
     })
+}
+
+/// Returns one bounded canonical page from a durable device chain.
+pub fn records_after(db: &CatalogDb, device_id: &Id, after_sequence: u64) -> Result<Vec<Vec<u8>>> {
+    let mut statement = db
+        .connection()
+        .prepare(
+            "SELECT device_sequence, digest, record FROM sync_operations
+              WHERE device_id = ?1 AND device_sequence > ?2
+              ORDER BY device_sequence LIMIT ?3",
+        )
+        .map_err(|error| map_sqlite(error, "outbound operations could not be prepared"))?;
+    let rows = statement
+        .query_map(
+            params![
+                device_id.as_bytes().as_slice(),
+                as_sqlite_integer(after_sequence, "the operation cursor is too large")?,
+                as_sqlite_integer(
+                    bounds::RESPONSE_OPERATIONS_MAX as u64,
+                    "the operation page limit is too large"
+                )?,
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                ))
+            },
+        )
+        .map_err(|error| map_sqlite(error, "outbound operations could not be read"))?;
+    let mut records = Vec::new();
+    let mut total = 0usize;
+    for row in rows {
+        let (sequence, stored_digest, record) =
+            row.map_err(|error| map_sqlite(error, "an outbound operation could not be read"))?;
+        let sequence = from_sqlite_integer(sequence, "an outbound operation sequence is negative")?;
+        let digest = commitment(&stored_digest, "an outbound operation digest is malformed")?;
+        let operation = Operation::decode(&record).map_err(corrupt_log)?;
+        ensure!(
+            operation.device_id() == device_id
+                && operation.device_sequence() == sequence
+                && operation.digest() == digest,
+            CatalogCorrupt,
+            "an outbound operation contradicts its catalog row"
+        );
+        let next = total.checked_add(record.len()).ok_or_else(|| {
+            Error::new(
+                ChurStatus::CatalogCorrupt,
+                "the outbound operation page length overflowed",
+            )
+        })?;
+        if next > bounds::RESPONSE_BYTES_MAX {
+            break;
+        }
+        total = next;
+        records.push(record);
+    }
+    Ok(records)
 }
 
 fn persist_fork(
@@ -943,6 +1003,19 @@ mod tests {
         );
         let restored = load(&db, &membership).expect("restore");
         assert_eq!(restored.head(&id(3)), Some((2, second.digest())));
+        assert_eq!(
+            records_after(&db, &id(3), 0).expect("full outbound page"),
+            vec![first.encode(), second.encode()]
+        );
+        assert_eq!(
+            records_after(&db, &id(3), 1).expect("tail outbound page"),
+            vec![second.encode()]
+        );
+        assert!(
+            records_after(&db, &id(3), 2)
+                .expect("empty outbound page")
+                .is_empty()
+        );
     }
 
     #[test]
