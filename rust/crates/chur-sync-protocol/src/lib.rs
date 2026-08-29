@@ -27,4 +27,4 @@ pub mod payload;
 pub mod rotation;
 pub mod state;
 
-pub use key_domain::KeyDomain;
+pub use key_domain::{KeyDirectory, KeyDomain};

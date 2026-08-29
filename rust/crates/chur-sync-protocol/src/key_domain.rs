@@ -1,8 +1,9 @@
 //! Derived operation keys and opaque selectors of ADR-0051.
 
-use chur_core::Id;
-use chur_core::Result;
+use std::collections::BTreeMap;
+
 use chur_core::limits::ID_LEN;
+use chur_core::{ChurStatus, Error, Id, Result};
 use chur_crypto::kdf;
 use chur_crypto::{Context, Key, Label};
 
@@ -10,6 +11,45 @@ use chur_crypto::{Context, Key, Label};
 pub struct KeyDomain {
     selector: Id,
     operation_key: Key,
+}
+
+/// The unlocked session's map from opaque selectors to operation keys.
+pub struct KeyDirectory(BTreeMap<Id, KeyDomain>);
+
+impl KeyDirectory {
+    /// Starts a directory with the required root-operation domain.
+    pub fn new(root: &Key, vault_id: &Id) -> Result<Self> {
+        let root = KeyDomain::root(root, vault_id)?;
+        Ok(Self(BTreeMap::from([(*root.selector(), root)])))
+    }
+
+    /// Adds a derived collection epoch and rejects a selector collision.
+    pub fn insert(&mut self, domain: KeyDomain) -> Result<()> {
+        if let Some(existing) = self.0.get(domain.selector()) {
+            if existing.operation_key() == domain.operation_key() {
+                return Ok(());
+            }
+            return Err(Error::new(
+                ChurStatus::AuthenticationFailed,
+                "sync key selector collision",
+            ));
+        }
+        self.0.insert(*domain.selector(), domain);
+        Ok(())
+    }
+
+    /// Resolves an operation key without revealing the selector's domain.
+    pub fn operation_key(&self, selector: &Id) -> Result<&Key> {
+        self.0
+            .get(selector)
+            .map(KeyDomain::operation_key)
+            .ok_or_else(|| {
+                Error::new(
+                    ChurStatus::AuthenticationFailed,
+                    "sync operation uses an unknown key selector",
+                )
+            })
+    }
 }
 
 impl KeyDomain {
@@ -80,6 +120,27 @@ mod tests {
         assert_eq!(
             selector_from_material(&Key::zeroed()).unwrap().as_bytes(),
             &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        );
+    }
+
+    #[test]
+    fn a_collision_with_another_key_is_rejected() {
+        let selector = Id::new([1; ID_LEN]).unwrap();
+        let mut directory = KeyDirectory(BTreeMap::from([(
+            selector,
+            KeyDomain {
+                selector,
+                operation_key: Key::new([2; 32]),
+            },
+        )]));
+
+        assert!(
+            directory
+                .insert(KeyDomain {
+                    selector,
+                    operation_key: Key::new([3; 32]),
+                })
+                .is_err()
         );
     }
 }

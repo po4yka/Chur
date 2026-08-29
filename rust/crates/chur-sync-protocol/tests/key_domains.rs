@@ -4,7 +4,7 @@
 
 use chur_core::Id;
 use chur_crypto::Key;
-use chur_sync_protocol::KeyDomain;
+use chur_sync_protocol::{KeyDirectory, KeyDomain};
 
 fn id(byte: u8) -> Id {
     Id::new([byte; 16]).unwrap()
@@ -34,4 +34,22 @@ fn purpose_collection_and_epoch_are_separate_domains() {
         root.selector().as_bytes(),
         &root.operation_key().expose()[..16]
     );
+}
+
+#[test]
+fn directory_routes_known_selectors_and_refuses_unknown_ones() {
+    let root_key = Key::new([6; 32]);
+    let collection_key = Key::new([7; 32]);
+    let mut directory = KeyDirectory::new(&root_key, &id(8)).unwrap();
+    let collection = KeyDomain::collection(&collection_key, &id(9), 1).unwrap();
+    let collection_selector = *collection.selector();
+    directory.insert(collection).unwrap();
+
+    assert!(
+        directory.operation_key(&collection_selector).unwrap()
+            == KeyDomain::collection(&collection_key, &id(9), 1)
+                .unwrap()
+                .operation_key()
+    );
+    assert!(directory.operation_key(&id(10)).is_err());
 }
