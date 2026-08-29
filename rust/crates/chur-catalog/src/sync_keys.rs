@@ -67,3 +67,22 @@ fn corrupt_envelope(_: Error) -> Error {
         "a collection key envelope is invalid",
     )
 }
+
+pub(crate) fn collection_key(
+    db: &CatalogDb,
+    root: &Key,
+    vault_id: Id,
+    collection_id: Id,
+    epoch: u64,
+) -> Result<Key> {
+    let body = crate::store::active_collection_envelope(db, &collection_id, epoch)?;
+    let envelope = CollectionKeyEnvelope::decode(&body).map_err(corrupt_envelope)?;
+    ensure!(
+        envelope.vault_id() == &vault_id
+            && envelope.collection_id() == &collection_id
+            && envelope.collection_epoch() == epoch,
+        CatalogCorrupt,
+        "a collection envelope contradicts its lookup key"
+    );
+    envelope.open(root).map_err(corrupt_envelope)
+}

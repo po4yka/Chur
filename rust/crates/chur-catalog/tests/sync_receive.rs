@@ -3,7 +3,8 @@
 #![allow(clippy::expect_used)]
 
 use chur_catalog::db::{CatalogKey, CatalogLocation};
-use chur_catalog::{CatalogDb, schema, sync_log, sync_membership, sync_receive};
+use chur_catalog::model::{COLLECTION_POLICY_VAULT_DEFAULT, COLLECTION_STATUS_ACTIVE, Collection};
+use chur_catalog::{CatalogDb, schema, store, sync_keys, sync_log, sync_membership, sync_receive};
 use chur_core::Id;
 use chur_crypto::{Key, Nonce};
 use chur_sync_protocol::membership::EnrollmentRecord;
@@ -144,4 +145,95 @@ fn invalid_nested_membership_rolls_back_the_log_head() {
             .head(&id(4))
             .is_none()
     );
+}
+
+#[test]
+fn collection_epoch_and_log_head_commit_together() {
+    let mut fixture = setup();
+    let collection_id = id(17);
+    let old_key = Key::new([18; 32]);
+    let new_key = Key::new([19; 32]);
+    let old_envelope = chur_format::envelope::CollectionKeyEnvelope::seal(
+        &fixture.root,
+        id(2),
+        collection_id,
+        1,
+        1,
+        Nonce::new([20; 24]),
+        &old_key,
+    )
+    .expect("old envelope");
+    store::put_collection_with_envelope(
+        &mut fixture.db,
+        &Collection {
+            collection_id,
+            current_epoch: 1,
+            policy_type: COLLECTION_POLICY_VAULT_DEFAULT,
+            created_revision: 1,
+            status: COLLECTION_STATUS_ACTIVE,
+        },
+        1,
+        &old_envelope.encode(),
+    )
+    .expect("collection");
+    let new_envelope = chur_format::envelope::CollectionKeyEnvelope::seal(
+        &fixture.root,
+        id(2),
+        collection_id,
+        2,
+        2,
+        Nonce::new([21; 24]),
+        &new_key,
+    )
+    .expect("new envelope");
+    let payload = OperationPayload::new(
+        collection_id,
+        1,
+        PayloadBody::CreateCollectionEpoch {
+            previous_collection_epoch: 1,
+            membership_generation: 1,
+            collection_key_envelope: new_envelope,
+        },
+    )
+    .expect("payload");
+    let old_domain = KeyDomain::collection(&old_key, &collection_id, 1).expect("old domain");
+    let operation = Operation::seal(
+        id(22),
+        id(2),
+        id(4),
+        1,
+        [0; 32],
+        Vec::new(),
+        *old_domain.selector(),
+        old_domain.operation_key(),
+        Nonce::new([23; 24]),
+        &payload.encode(),
+    )
+    .expect("operation")
+    .sign(&fixture.issuer);
+    let mut keys = sync_keys::key_directory(&fixture.db, &fixture.root, id(2)).expect("keys");
+    let mut log = sync_log::load(&fixture.db, &fixture.membership).expect("log");
+
+    assert_eq!(
+        sync_receive::accept_rotation_operation(
+            &mut fixture.db,
+            &mut log,
+            &fixture.membership,
+            &mut keys,
+            &fixture.root,
+            1_000,
+            &operation.encode(),
+        )
+        .expect("accept"),
+        ApplyOutcome::Applied
+    );
+    assert_eq!(
+        store::collection(&fixture.db, &collection_id)
+            .expect("collection")
+            .current_epoch,
+        2
+    );
+    let new_domain = KeyDomain::collection(&new_key, &collection_id, 2).expect("new domain");
+    assert!(keys.operation_key(new_domain.selector()).is_ok());
+    assert_eq!(log.head(&id(4)), Some((1, operation.digest())));
 }

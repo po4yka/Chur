@@ -27,8 +27,18 @@ impl KeyDirectory {
 
     /// Adds a derived collection epoch and rejects a selector collision.
     pub fn insert(&mut self, domain: KeyDomain) -> Result<()> {
+        self.check_insert(&domain)?;
+        if self.0.contains_key(domain.selector()) {
+            return Ok(());
+        }
+        self.0.insert(*domain.selector(), domain);
+        Ok(())
+    }
+
+    /// Checks a candidate domain without changing the directory.
+    pub fn check_insert(&self, domain: &KeyDomain) -> Result<()> {
         if let Some(existing) = self.0.get(domain.selector()) {
-            if existing.same_domain(&domain) {
+            if existing.same_domain(domain) {
                 return Ok(());
             }
             return Err(Error::new(
@@ -36,7 +46,6 @@ impl KeyDirectory {
                 "sync key selector collision",
             ));
         }
-        self.0.insert(*domain.selector(), domain);
         Ok(())
     }
 
