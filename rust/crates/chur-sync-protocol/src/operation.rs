@@ -3,8 +3,10 @@
 use chur_core::limits::{COMMITMENT_LEN, ID_LEN, sync as bounds};
 use chur_core::{ChurStatus, Error, Id, Result, ensure};
 use chur_crypto::tuple::tag;
+use chur_crypto::{Commitment, Key, Nonce, aead, commit};
 use chur_format::codec::{Reader, Writer};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use zeroize::Zeroizing;
 
 const SIGNATURE_LEN: usize = 64;
 const FIXED_FIELDS_LEN: usize = 2 + (ID_LEN * 4) + 8 + COMMITMENT_LEN + 4 + 4 + SIGNATURE_LEN;
@@ -74,6 +76,61 @@ pub struct Operation {
 }
 
 impl Operation {
+    /// Seals a private payload under the operation's cleartext routing fields.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the arguments are the frozen wire fields plus encryption inputs"
+    )]
+    pub fn seal(
+        operation_id: Id,
+        vault_id: Id,
+        device_id: Id,
+        device_sequence: u64,
+        previous_operation_hash: [u8; 32],
+        observed_heads: Vec<ObservedHead>,
+        key_selector: Id,
+        key: &Key,
+        nonce: Nonce,
+        plaintext: &[u8],
+    ) -> Result<Self> {
+        ensure!(
+            plaintext.len() <= bounds::PAYLOAD_PLAINTEXT_MAX,
+            ResourceLimitExceeded,
+            "sync operation plaintext exceeds the protocol limit"
+        );
+        let mut operation = Self {
+            operation_id,
+            vault_id,
+            device_id,
+            device_sequence,
+            previous_operation_hash,
+            observed_heads,
+            key_selector,
+            encrypted_payload: Vec::new(),
+            signature: [0; SIGNATURE_LEN],
+        };
+        operation.validate_outer_fields()?;
+        let sealed = aead::seal(key, &nonce, plaintext, &operation.aad())?;
+        operation.encrypted_payload.reserve_exact(
+            nonce
+                .as_bytes()
+                .len()
+                .checked_add(sealed.len())
+                .ok_or_else(|| {
+                    Error::new(
+                        ChurStatus::ResourceLimitExceeded,
+                        "sync encrypted payload length overflows the address space",
+                    )
+                })?,
+        );
+        operation
+            .encrypted_payload
+            .extend_from_slice(nonce.as_bytes());
+        operation.encrypted_payload.extend_from_slice(&sealed);
+        operation.validate()?;
+        Ok(operation)
+    }
+
     /// Builds an operation. Validation is shared with [`Self::decode`].
     #[expect(
         clippy::too_many_arguments,
@@ -113,22 +170,7 @@ impl Operation {
                 + (self.observed_heads.len() * bounds::OBSERVED_HEAD_LEN)
                 + self.encrypted_payload.len(),
         );
-        writer
-            .u16(PROTOCOL_VERSION_V1)
-            .id(&self.operation_id)
-            .id(&self.vault_id)
-            .id(&self.device_id)
-            .u64(self.device_sequence)
-            .fixed(&self.previous_operation_hash);
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "validate bounds observed_heads at 31 entries"
-        )]
-        writer.u32(self.observed_heads.len() as u32);
-        for head in &self.observed_heads {
-            writer.id(&head.device_id).u64(head.device_sequence);
-        }
-        writer.id(&self.key_selector);
+        self.write_outer_fields(&mut writer);
         #[expect(
             clippy::cast_possible_truncation,
             reason = "validate bounds encrypted_payload below u32::MAX"
@@ -168,6 +210,51 @@ impl Operation {
                     "sync operation signature did not verify",
                 )
             })
+    }
+
+    /// Opens and authenticates the private payload.
+    pub fn open_payload(&self, key: &Key) -> Result<Zeroizing<Vec<u8>>> {
+        self.validate()?;
+        let (nonce, sealed) = self
+            .encrypted_payload
+            .split_at(chur_core::limits::NONCE_LEN);
+        aead::open(key, &Nonce::from_slice(nonce)?, sealed, &self.aad())
+    }
+
+    /// The hash-chain digest of the complete signed wire record.
+    #[must_use]
+    pub fn digest(&self) -> Commitment {
+        commit::commit(tag::SYNC_OPERATION_CHAIN, &[&self.encode()])
+    }
+
+    fn aad(&self) -> Vec<u8> {
+        let mut writer = Writer::with_capacity(
+            tag::SYNC_OPERATION.len()
+                + FIXED_FIELDS_LEN
+                + (self.observed_heads.len() * bounds::OBSERVED_HEAD_LEN),
+        );
+        writer.fixed(tag::SYNC_OPERATION);
+        self.write_outer_fields(&mut writer);
+        writer.finish()
+    }
+
+    fn write_outer_fields(&self, writer: &mut Writer) {
+        writer
+            .u16(PROTOCOL_VERSION_V1)
+            .id(&self.operation_id)
+            .id(&self.vault_id)
+            .id(&self.device_id)
+            .u64(self.device_sequence)
+            .fixed(&self.previous_operation_hash);
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "validate bounds observed_heads at 31 entries"
+        )]
+        writer.u32(self.observed_heads.len() as u32);
+        for head in &self.observed_heads {
+            writer.id(&head.device_id).u64(head.device_sequence);
+        }
+        writer.id(&self.key_selector);
     }
 
     fn signing_bytes(&self) -> Vec<u8> {
@@ -235,6 +322,21 @@ impl Operation {
     }
 
     fn validate(&self) -> Result<()> {
+        self.validate_outer_fields()?;
+        ensure!(
+            self.encrypted_payload.len() >= bounds::ENCRYPTED_PAYLOAD_MIN,
+            NonCanonicalEncoding,
+            "encrypted payload is shorter than a nonce and tag"
+        );
+        ensure!(
+            self.encrypted_payload.len() <= bounds::ENCRYPTED_PAYLOAD_MAX,
+            ResourceLimitExceeded,
+            "encrypted payload exceeds the protocol limit"
+        );
+        Ok(())
+    }
+
+    fn validate_outer_fields(&self) -> Result<()> {
         ensure!(
             self.device_sequence != 0,
             NonCanonicalEncoding,
@@ -272,16 +374,6 @@ impl Operation {
             }
             previous = Some(&head.device_id);
         }
-        ensure!(
-            self.encrypted_payload.len() >= bounds::ENCRYPTED_PAYLOAD_MIN,
-            NonCanonicalEncoding,
-            "encrypted payload is shorter than a nonce and tag"
-        );
-        ensure!(
-            self.encrypted_payload.len() <= bounds::ENCRYPTED_PAYLOAD_MAX,
-            ResourceLimitExceeded,
-            "encrypted payload exceeds the protocol limit"
-        );
         Ok(())
     }
 }
@@ -344,5 +436,59 @@ mod tests {
 
         operation.encrypted_payload[24] ^= 1;
         assert!(operation.verify_signature(&key.verifying_key()).is_err());
+    }
+
+    #[test]
+    fn a_payload_is_bound_to_its_outer_fields_and_complete_record_digest() {
+        let payload_key = Key::new([12; 32]);
+        let operation = Operation::seal(
+            id(1),
+            id(2),
+            id(3),
+            1,
+            [0; 32],
+            Vec::new(),
+            id(6),
+            &payload_key,
+            Nonce::new([7; 24]),
+            b"private operation",
+        )
+        .expect("seal");
+        let unsigned_digest = operation.digest();
+        let operation = operation.sign(&DeviceSigningKey::from_seed([9; 32]));
+
+        assert_eq!(
+            operation
+                .open_payload(&payload_key)
+                .expect("open")
+                .as_slice(),
+            b"private operation"
+        );
+        assert_ne!(operation.digest(), unsigned_digest);
+        assert!(operation.open_payload(&Key::new([13; 32])).is_err());
+
+        let mut changed_outer_field = operation.clone();
+        changed_outer_field.key_selector = id(8);
+        assert!(changed_outer_field.open_payload(&payload_key).is_err());
+
+        let oversized = vec![0; bounds::PAYLOAD_PLAINTEXT_MAX + 1];
+        assert_eq!(
+            Operation::seal(
+                id(1),
+                id(2),
+                id(3),
+                1,
+                [0; 32],
+                Vec::new(),
+                id(6),
+                &payload_key,
+                Nonce::new([7; 24]),
+                &oversized,
+            )
+            .err()
+            .expect("oversized payload must fail")
+            .status(),
+            ChurStatus::ResourceLimitExceeded
+        );
     }
 }

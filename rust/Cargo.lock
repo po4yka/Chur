@@ -283,6 +283,7 @@ dependencies = [
  "chur-crypto",
  "chur-format",
  "ed25519-dalek",
+ "zeroize",
 ]
 
 [[package]]
