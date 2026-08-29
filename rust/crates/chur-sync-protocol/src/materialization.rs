@@ -1,0 +1,348 @@
+//! Aggregate deterministic state derived from accepted decrypted operations.
+
+use std::collections::BTreeMap;
+
+use chur_core::{ChurStatus, Error, Id, Result};
+use chur_format::envelope::ObjectKeyEnvelope;
+
+use crate::convergence::{
+    CausalRelation, CausalStamp, MergeOutcome, ObjectLifecycle, ObservedRemoveSet, ScalarRegister,
+    causal_relation,
+};
+use crate::operation::Operation;
+use crate::payload::{MetadataFieldId, OperationPayload, PayloadBody};
+
+#[derive(Clone)]
+struct MaterializedObject {
+    created: CausalStamp,
+    store_id: Id,
+    lifecycle: ObjectLifecycle,
+    committed: Option<CommittedObject>,
+    metadata: BTreeMap<MetadataFieldId, ScalarRegister<Vec<u8>>>,
+}
+
+#[derive(Clone)]
+struct MaterializedAlbum {
+    created: CausalStamp,
+    name: ScalarRegister<String>,
+}
+
+/// Authenticated immutable object information that still requires container verification.
+#[derive(Clone)]
+pub struct CommittedObject {
+    store_id: Id,
+    container_length: u64,
+    container_commitment: [u8; 32],
+    object_key_envelope: ObjectKeyEnvelope,
+}
+
+impl CommittedObject {
+    /// Opaque server object identifier.
+    #[must_use]
+    pub const fn store_id(&self) -> &Id {
+        &self.store_id
+    }
+
+    /// Complete encoded container length.
+    #[must_use]
+    pub const fn container_length(&self) -> u64 {
+        self.container_length
+    }
+
+    /// Authenticated container final commitment.
+    #[must_use]
+    pub const fn container_commitment(&self) -> &[u8; 32] {
+        &self.container_commitment
+    }
+
+    /// Object key envelope carried by the commit.
+    #[must_use]
+    pub const fn object_key_envelope(&self) -> &ObjectKeyEnvelope {
+        &self.object_key_envelope
+    }
+}
+
+/// Convergent private state rebuilt from the accepted operation set.
+#[derive(Clone, Default)]
+pub struct MaterializedState {
+    objects: BTreeMap<Id, MaterializedObject>,
+    albums: BTreeMap<Id, MaterializedAlbum>,
+    album_memberships: ObservedRemoveSet<(Id, Id)>,
+    favorites: ObservedRemoveSet<Id>,
+    tag_names: BTreeMap<Id, ScalarRegister<String>>,
+    object_tags: ObservedRemoveSet<(Id, Id)>,
+}
+
+impl MaterializedState {
+    /// Empty state before any accepted content operation.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Applies one already authenticated operation and its bound private payload.
+    pub fn apply(
+        &mut self,
+        operation: &Operation,
+        payload: &OperationPayload,
+    ) -> Result<MergeOutcome> {
+        let stamp = CausalStamp::from_operation(operation);
+        match payload.body() {
+            PayloadBody::CreateObject {
+                object_id,
+                object_generation,
+                store_id,
+                metadata_fields,
+            } => {
+                if self.objects.contains_key(object_id) {
+                    return Err(Error::new(
+                        ChurStatus::AuthenticationFailed,
+                        "object identifier was reused",
+                    ));
+                }
+                let mut metadata = BTreeMap::new();
+                for field in metadata_fields {
+                    let mut register = ScalarRegister::new();
+                    register.apply(stamp.clone(), field.value().to_vec())?;
+                    metadata.insert(field.id(), register);
+                }
+                self.objects.insert(
+                    *object_id,
+                    MaterializedObject {
+                        created: stamp.clone(),
+                        store_id: *store_id,
+                        lifecycle: ObjectLifecycle::new(*object_generation, stamp)?,
+                        committed: None,
+                        metadata,
+                    },
+                );
+                Ok(MergeOutcome::Applied)
+            }
+            PayloadBody::CommitObject {
+                object_id,
+                object_generation,
+                store_id,
+                container_length,
+                container_commitment,
+                object_key_envelope,
+            } => {
+                let Some(object) = self.objects.get_mut(object_id) else {
+                    return Ok(MergeOutcome::PendingCause);
+                };
+                if *object_generation > object.lifecycle.generation() {
+                    return Ok(MergeOutcome::PendingCause);
+                }
+                if *object_generation < object.lifecycle.generation() {
+                    return Ok(MergeOutcome::Obsolete);
+                }
+                if object.store_id != *store_id
+                    || causal_relation(&object.created, &stamp)? != CausalRelation::Before
+                    || object.committed.is_some()
+                {
+                    return Err(Error::new(
+                        ChurStatus::AuthenticationFailed,
+                        "object commit contradicts immutable creation state",
+                    ));
+                }
+                object.committed = Some(CommittedObject {
+                    store_id: *store_id,
+                    container_length: *container_length,
+                    container_commitment: *container_commitment,
+                    object_key_envelope: object_key_envelope.clone(),
+                });
+                Ok(MergeOutcome::Applied)
+            }
+            PayloadBody::UpdateMetadata {
+                object_id,
+                object_generation,
+                field,
+            } => {
+                let Some(object) = self.objects.get_mut(object_id) else {
+                    return Ok(MergeOutcome::PendingCause);
+                };
+                if *object_generation > object.lifecycle.generation() {
+                    return Ok(MergeOutcome::PendingCause);
+                }
+                if *object_generation < object.lifecycle.generation() {
+                    return Ok(MergeOutcome::Obsolete);
+                }
+                object
+                    .metadata
+                    .entry(field.id())
+                    .or_default()
+                    .apply(stamp, field.value().to_vec())
+            }
+            PayloadBody::CreateAlbum { album_id, name } => {
+                if self.albums.contains_key(album_id) {
+                    return Err(Error::new(
+                        ChurStatus::AuthenticationFailed,
+                        "album identifier was reused",
+                    ));
+                }
+                let mut register = ScalarRegister::new();
+                register.apply(stamp.clone(), name.clone())?;
+                self.albums.insert(
+                    *album_id,
+                    MaterializedAlbum {
+                        created: stamp,
+                        name: register,
+                    },
+                );
+                Ok(MergeOutcome::Applied)
+            }
+            PayloadBody::RenameAlbum { album_id, name } => {
+                let Some(album) = self.albums.get_mut(album_id) else {
+                    return Ok(MergeOutcome::PendingCause);
+                };
+                if causal_relation(&album.created, &stamp)? == CausalRelation::After {
+                    return Err(Error::new(
+                        ChurStatus::AuthenticationFailed,
+                        "album rename precedes album creation",
+                    ));
+                }
+                album.name.apply(stamp, name.clone())
+            }
+            PayloadBody::AddAlbumMembership {
+                album_id,
+                object_id,
+            } => {
+                if !self.albums.contains_key(album_id) || !self.objects.contains_key(object_id) {
+                    return Ok(MergeOutcome::PendingCause);
+                }
+                self.album_memberships.add((*album_id, *object_id), stamp)
+            }
+            PayloadBody::RemoveAlbumMembership {
+                album_id,
+                object_id,
+                removed_tokens,
+            } => self
+                .album_memberships
+                .remove((*album_id, *object_id), stamp, removed_tokens),
+            PayloadBody::SetFavorite {
+                object_id,
+                favorite,
+                removed_tokens,
+            } => {
+                if !self.objects.contains_key(object_id) {
+                    return Ok(MergeOutcome::PendingCause);
+                }
+                if *favorite {
+                    self.favorites.add(*object_id, stamp)
+                } else {
+                    self.favorites.remove(*object_id, stamp, removed_tokens)
+                }
+            }
+            PayloadBody::AddTag {
+                tag_id,
+                object_id,
+                name,
+            } => {
+                if !self.objects.contains_key(object_id) {
+                    return Ok(MergeOutcome::PendingCause);
+                }
+                self.tag_names
+                    .entry(*tag_id)
+                    .or_default()
+                    .apply(stamp.clone(), name.clone())?;
+                self.object_tags.add((*tag_id, *object_id), stamp)
+            }
+            PayloadBody::RemoveTag {
+                tag_id,
+                object_id,
+                removed_tokens,
+            } => self
+                .object_tags
+                .remove((*tag_id, *object_id), stamp, removed_tokens),
+            PayloadBody::DeleteObject {
+                object_id,
+                object_generation,
+                authored_at_ms,
+            } => {
+                let Some(object) = self.objects.get_mut(object_id) else {
+                    return Ok(MergeOutcome::PendingCause);
+                };
+                object
+                    .lifecycle
+                    .delete(*object_generation, *authored_at_ms, stamp)
+            }
+            PayloadBody::RestoreObject {
+                object_id,
+                tombstone_operation_id,
+                new_object_generation,
+            } => {
+                let Some(object) = self.objects.get_mut(object_id) else {
+                    return Ok(MergeOutcome::PendingCause);
+                };
+                object
+                    .lifecycle
+                    .restore(tombstone_operation_id, *new_object_generation, stamp)
+            }
+            PayloadBody::AddDevice(_)
+            | PayloadBody::RevokeDevice(_)
+            | PayloadBody::CreateCollectionEpoch { .. }
+            | PayloadBody::RewrapObjectKey { .. } => Err(Error::new(
+                ChurStatus::InvalidInput,
+                "security operation is not materialized as content",
+            )),
+        }
+    }
+
+    /// Displayed metadata bytes for one object field.
+    #[must_use]
+    pub fn metadata(&self, object_id: &Id, field: MetadataFieldId) -> Option<&[u8]> {
+        self.objects
+            .get(object_id)?
+            .metadata
+            .get(&field)?
+            .displayed()
+            .map(Vec::as_slice)
+    }
+
+    /// Deterministically displayed album name.
+    #[must_use]
+    pub fn album_name(&self, album_id: &Id) -> Option<&str> {
+        self.albums
+            .get(album_id)?
+            .name
+            .displayed()
+            .map(String::as_str)
+    }
+
+    /// Whether an object's live add tokens place it in an album.
+    #[must_use]
+    pub fn album_contains(&self, album_id: &Id, object_id: &Id) -> bool {
+        self.album_memberships.contains(&(*album_id, *object_id))
+    }
+
+    /// Whether an object has at least one live favorite token.
+    #[must_use]
+    pub fn is_favorite(&self, object_id: &Id) -> bool {
+        self.favorites.contains(object_id)
+    }
+
+    /// Deterministically displayed tag name.
+    #[must_use]
+    pub fn tag_name(&self, tag_id: &Id) -> Option<&str> {
+        self.tag_names.get(tag_id)?.displayed().map(String::as_str)
+    }
+
+    /// Whether an object has at least one live token for a tag.
+    #[must_use]
+    pub fn has_tag(&self, tag_id: &Id, object_id: &Id) -> bool {
+        self.object_tags.contains(&(*tag_id, *object_id))
+    }
+
+    /// Immutable commit information, before local container verification.
+    #[must_use]
+    pub fn committed_object(&self, object_id: &Id) -> Option<&CommittedObject> {
+        self.objects.get(object_id)?.committed.as_ref()
+    }
+
+    /// Whether a committed object is visible after tombstone convergence.
+    #[must_use]
+    pub fn is_presentable(&self, object_id: &Id) -> bool {
+        self.objects
+            .get(object_id)
+            .is_some_and(|object| object.committed.is_some() && object.lifecycle.is_visible())
+    }
+}

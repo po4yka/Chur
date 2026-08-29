@@ -139,12 +139,14 @@ pub enum MergeOutcome {
     PendingCause,
 }
 
+#[derive(Clone)]
 struct ScalarVersion<T> {
     stamp: CausalStamp,
     value: T,
 }
 
 /// Multi-value register with one deterministic displayed winner.
+#[derive(Clone)]
 pub struct ScalarRegister<T> {
     versions: Vec<ScalarVersion<T>>,
 }
@@ -203,11 +205,13 @@ impl<T> Default for ScalarRegister<T> {
     }
 }
 
+#[derive(Clone)]
 struct Tombstone {
     operation_id: Id,
     authored_at_ms: u64,
 }
 
+#[derive(Clone)]
 struct RestoredGeneration {
     generation: u64,
     tombstone_id: Id,
@@ -215,6 +219,7 @@ struct RestoredGeneration {
 }
 
 /// Deterministic visibility, generation, restore, and tombstone retention state.
+#[derive(Clone)]
 pub struct ObjectLifecycle {
     generation: u64,
     activations: Vec<CausalStamp>,
@@ -434,6 +439,7 @@ fn tombstone_retention_elapsed(
 }
 
 /// Observed-remove set shared by memberships, tags, and favorites.
+#[derive(Clone)]
 pub struct ObservedRemoveSet<E> {
     adds: BTreeMap<E, BTreeMap<Id, CausalStamp>>,
     removals: BTreeMap<E, BTreeSet<Id>>,

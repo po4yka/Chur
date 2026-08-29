@@ -20,6 +20,7 @@ pub mod convergence;
 pub mod deletion;
 pub mod identity;
 mod key_domain;
+pub mod materialization;
 pub mod membership;
 pub mod operation;
 pub mod operation_log;

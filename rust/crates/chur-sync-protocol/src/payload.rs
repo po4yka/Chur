@@ -18,7 +18,7 @@ const ENROLLMENT_LEN: usize = 270;
 const REVOCATION_LEN: usize = 194;
 
 /// One allocated metadata field identifier.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u16)]
 pub enum MetadataFieldId {
     /// Original import filename.
