@@ -85,6 +85,7 @@ impl ForkEvidence {
 pub struct OperationLog {
     heads: BTreeMap<Id, AcceptedHead>,
     accepted: BTreeMap<(Id, u64), AcceptedRecord>,
+    operation_ids: BTreeMap<Id, Commitment>,
     floors: BTreeMap<Id, AcceptedHead>,
     checkpoints: BTreeMap<Id, Commitment>,
     forks: BTreeMap<Id, ForkEvidence>,
@@ -445,6 +446,13 @@ impl OperationLog {
         }) {
             return self.freeze(operation);
         }
+        ensure!(
+            self.operation_ids
+                .get(operation.operation_id())
+                .is_none_or(|accepted| accepted == &digest),
+            AuthenticationFailed,
+            "operation identifier was reused at another log position"
+        );
         if let Some(head) = self.heads.get(operation.device_id()) {
             if operation.device_sequence() < head.sequence {
                 return Err(Error::new(
@@ -479,6 +487,7 @@ impl OperationLog {
         let bytes = operation.encode();
         self.accepted
             .insert(record_key, AcceptedRecord { digest, bytes });
+        self.operation_ids.insert(*operation.operation_id(), digest);
         self.heads.insert(
             *operation.device_id(),
             AcceptedHead {
@@ -663,6 +672,40 @@ mod tests {
         assert!(log.accept(&first, &membership).expect("first") == ApplyOutcome::Applied);
         assert!(log.accept(&second, &membership).expect("second") == ApplyOutcome::Applied);
         assert!(log.accept(&first, &membership).expect("old duplicate") == ApplyOutcome::Duplicate);
+    }
+
+    #[test]
+    fn one_operation_identifier_cannot_name_a_second_log_position() {
+        let key = DeviceSigningKey::from_seed([3; 32]);
+        let enrollment = EnrollmentRecord::initial(id(1), id(2), key.verifying_key(), [4; 32])
+            .expect("enrollment")
+            .sign(&key);
+        let membership = MembershipState::bootstrap(&enrollment).expect("membership");
+        let first = operation(&key, 1, [0; 32], 5);
+        let reused = Operation::seal(
+            *first.operation_id(),
+            id(1),
+            id(2),
+            2,
+            first.digest(),
+            Vec::new(),
+            id(9),
+            &Key::new([8; 32]),
+            Nonce::new([6; 24]),
+            &[6],
+        )
+        .expect("operation")
+        .sign(&key);
+        let mut log = OperationLog::new();
+        assert!(log.accept(&first, &membership).expect("first") == ApplyOutcome::Applied);
+
+        assert_eq!(
+            log.accept(&reused, &membership)
+                .expect_err("identifier reuse")
+                .status(),
+            ChurStatus::AuthenticationFailed
+        );
+        assert_eq!(log.head(&id(2)), Some((1, first.digest())));
     }
 
     #[test]
