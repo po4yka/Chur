@@ -1,12 +1,176 @@
 //! Rebuilds the unlocked sync key directory from catalog key envelopes.
 
 use crate::CatalogDb;
-use crate::db::{from_sqlite_integer, map_sqlite};
+use crate::db::{as_sqlite_integer, from_sqlite_integer, map_sqlite};
 use crate::model::ENVELOPE_STATUS_ACTIVE;
+use crate::schema::bump_generation;
 use chur_core::{ChurStatus, Error, Id, Result, ensure};
 use chur_crypto::Key;
 use chur_format::envelope::CollectionKeyEnvelope;
-use chur_sync_protocol::{KeyDirectory, KeyDomain};
+use chur_sync_protocol::{
+    KeyDirectory, KeyDomain,
+    identity::DeviceIdentityEnvelope,
+    state::{DeviceStatus, MembershipState},
+};
+use rusqlite::{OptionalExtension, params};
+
+/// Stores the only local private device identity as a portable recovery
+/// envelope.
+pub fn store_portable_identity_envelope(
+    db: &mut CatalogDb,
+    root: &Key,
+    membership: &MembershipState,
+    envelope: &DeviceIdentityEnvelope,
+) -> Result<()> {
+    validate_identity_envelope(root, membership, envelope, ChurStatus::AuthenticationFailed)?;
+    let device_id = envelope.device_id();
+    let generation = as_sqlite_integer(
+        envelope.identity_generation(),
+        "the identity generation is too large",
+    )?;
+    let body = envelope.encode();
+    db.transaction(|transaction| {
+        let latest: Option<(i64, i64, i64, Vec<u8>)> = transaction
+            .query_row(
+                "SELECT identity_generation, active, recovery_only, body
+                   FROM sync_identity_envelopes WHERE device_id = ?1
+                   ORDER BY identity_generation DESC LIMIT 1",
+                [device_id.as_bytes().as_slice()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(|error| map_sqlite(error, "identity envelopes could not be read"))?;
+        if latest
+            .as_ref()
+            .is_some_and(|row| row.0 == generation && row.1 == 1 && row.2 == 1 && row.3 == body)
+        {
+            return Ok(());
+        }
+        let expected = match latest {
+            Some(row) => row.0.checked_add(1).ok_or_else(|| {
+                Error::new(
+                    ChurStatus::CatalogCorrupt,
+                    "the stored identity generation has no successor",
+                )
+            })?,
+            None => 1,
+        };
+        ensure!(
+            generation == expected,
+            Conflict,
+            "identity generation does not advance the stored device identity"
+        );
+        transaction
+            .execute(
+                "UPDATE sync_identity_envelopes SET active = 0 WHERE active = 1",
+                [],
+            )
+            .map_err(|error| map_sqlite(error, "the previous identity could not be retired"))?;
+        transaction
+            .execute(
+                "INSERT INTO sync_identity_envelopes
+                     (device_id, identity_generation, active, recovery_only, body)
+                 VALUES (?1, ?2, 1, 1, ?3)",
+                params![device_id.as_bytes().as_slice(), generation, body],
+            )
+            .map_err(|error| map_sqlite(error, "the portable identity could not be stored"))?;
+        bump_generation(transaction)
+    })
+}
+
+/// Loads and authenticates the local portable recovery identity, when present.
+pub fn portable_identity_envelope(
+    db: &CatalogDb,
+    root: &Key,
+    membership: &MembershipState,
+) -> Result<Option<DeviceIdentityEnvelope>> {
+    let mut statement = db
+        .connection()
+        .prepare(
+            "SELECT device_id, identity_generation, recovery_only, body
+               FROM sync_identity_envelopes WHERE active = 1 ORDER BY device_id",
+        )
+        .map_err(|error| map_sqlite(error, "the active identity could not be prepared"))?;
+    let mut rows = statement
+        .query([])
+        .map_err(|error| map_sqlite(error, "the active identity could not be read"))?;
+    let Some(row) = rows
+        .next()
+        .map_err(|error| map_sqlite(error, "the active identity could not be read"))?
+    else {
+        return Ok(None);
+    };
+    let device_bytes: Vec<u8> = row
+        .get(0)
+        .map_err(|error| map_sqlite(error, "the identity device could not be read"))?;
+    let generation: i64 = row
+        .get(1)
+        .map_err(|error| map_sqlite(error, "the identity generation could not be read"))?;
+    let recovery_only: i64 = row
+        .get(2)
+        .map_err(|error| map_sqlite(error, "the identity purpose could not be read"))?;
+    let body: Vec<u8> = row
+        .get(3)
+        .map_err(|error| map_sqlite(error, "the identity body could not be read"))?;
+    ensure!(
+        rows.next()
+            .map_err(|error| map_sqlite(error, "the active identity could not be read"))?
+            .is_none(),
+        CatalogCorrupt,
+        "the catalog carries multiple active private identities"
+    );
+    let device_id = crate::row::id(&device_bytes, "the identity device id is malformed")?;
+    let generation = from_sqlite_integer(generation, "the identity generation is negative")?;
+    ensure!(
+        crate::row::flag(recovery_only, "the identity purpose is not a boolean")?,
+        CatalogCorrupt,
+        "the active portable identity is not recovery-only"
+    );
+    let envelope = DeviceIdentityEnvelope::decode(&body).map_err(corrupt_identity)?;
+    ensure!(
+        envelope.device_id() == &device_id && envelope.identity_generation() == generation,
+        CatalogCorrupt,
+        "the portable identity contradicts its catalog row"
+    );
+    validate_identity_envelope(root, membership, &envelope, ChurStatus::CatalogCorrupt)?;
+    Ok(Some(envelope))
+}
+
+fn validate_identity_envelope(
+    root: &Key,
+    membership: &MembershipState,
+    envelope: &DeviceIdentityEnvelope,
+    status: ChurStatus,
+) -> Result<()> {
+    let member = membership
+        .device(envelope.device_id())
+        .ok_or_else(|| Error::new(status, "the portable identity device is not enrolled"))?;
+    if envelope.vault_id() != membership.vault_id() || member.status() != DeviceStatus::Active {
+        return Err(Error::new(
+            status,
+            "the portable identity is not an active identity of this vault",
+        ));
+    }
+    let recovered = envelope
+        .open_for_recovery(root)
+        .map_err(|_| Error::new(status, "the portable identity does not authenticate"))?;
+    if recovered.signing_public_key() != *member.signing_public_key()
+        || recovered.hpke_public_key() != *member.hpke_public_key()
+    {
+        return Err(Error::new(
+            status,
+            "the portable identity keys contradict membership",
+        ));
+    }
+    Ok(())
+}
+
+fn corrupt_identity(_: Error) -> Error {
+    Error::new(
+        ChurStatus::CatalogCorrupt,
+        "the portable identity envelope is invalid",
+    )
+}
 
 /// Derives root and retained collection-epoch routing for one unlocked vault.
 pub fn key_directory(db: &CatalogDb, root: &Key, vault_id: Id) -> Result<KeyDirectory> {
@@ -85,4 +249,76 @@ pub(crate) fn collection_key(
         "a collection envelope contradicts its lookup key"
     );
     envelope.open(root).map_err(corrupt_envelope)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::panic)]
+
+    use super::*;
+    use crate::{
+        db::{CatalogKey, CatalogLocation},
+        schema::open_at_current_version,
+        sync_membership,
+    };
+    use chur_crypto::Nonce;
+    use chur_sync_protocol::{identity::DeviceIdentity, membership::EnrollmentRecord};
+
+    fn id(byte: u8) -> Id {
+        Id::new([byte; 16]).expect("id")
+    }
+
+    #[test]
+    fn portable_identity_round_trips_through_the_catalog() {
+        let root = Key::new([1; 32]);
+        let key = CatalogKey::derive(&root, &id(2)).expect("catalog key");
+        let mut db = CatalogDb::open(&CatalogLocation::Memory, &key).expect("catalog");
+        open_at_current_version(&mut db, 1).expect("schema");
+        let identity = DeviceIdentity::from_seeds([3; 32], [4; 32]);
+        let enrollment = EnrollmentRecord::initial(
+            id(2),
+            id(5),
+            identity.signing_public_key(),
+            identity.hpke_public_key(),
+        )
+        .expect("enrollment")
+        .sign(identity.signing_key());
+        let membership = sync_membership::provision(&mut db, &enrollment).expect("membership");
+        let envelope = DeviceIdentityEnvelope::seal_for_recovery(
+            &root,
+            id(2),
+            id(5),
+            1,
+            Nonce::new([6; 24]),
+            &identity,
+        )
+        .expect("envelope");
+
+        let wrong_identity = DeviceIdentity::from_seeds([7; 32], [8; 32]);
+        let wrong_envelope = DeviceIdentityEnvelope::seal_for_recovery(
+            &root,
+            id(2),
+            id(5),
+            1,
+            Nonce::new([9; 24]),
+            &wrong_identity,
+        )
+        .expect("wrong envelope");
+        let error = store_portable_identity_envelope(&mut db, &root, &membership, &wrong_envelope)
+            .expect_err("membership key substitution must fail");
+        assert_eq!(error.status(), ChurStatus::AuthenticationFailed);
+
+        store_portable_identity_envelope(&mut db, &root, &membership, &envelope).expect("store");
+        let generation = crate::schema::generation(&db).expect("generation");
+        store_portable_identity_envelope(&mut db, &root, &membership, &envelope)
+            .expect("idempotent store");
+        assert_eq!(
+            crate::schema::generation(&db).expect("same generation"),
+            generation
+        );
+        let restored = portable_identity_envelope(&db, &root, &membership)
+            .expect("load")
+            .expect("present");
+        assert_eq!(restored.encode(), envelope.encode());
+    }
 }
