@@ -16,6 +16,7 @@ use crate::payload::{MetadataFieldId, OperationPayload, PayloadBody};
 struct MaterializedObject {
     created: CausalStamp,
     store_id: Id,
+    stream_id: Id,
     lifecycle: ObjectLifecycle,
     committed: Option<CommittedObject>,
     metadata: BTreeMap<MetadataFieldId, ScalarRegister<Vec<u8>>>,
@@ -31,6 +32,7 @@ struct MaterializedAlbum {
 #[derive(Clone)]
 pub struct CommittedObject {
     store_id: Id,
+    stream_id: Id,
     container_length: u64,
     container_commitment: [u8; 32],
     object_key_envelope: ObjectKeyEnvelope,
@@ -41,6 +43,12 @@ impl CommittedObject {
     #[must_use]
     pub const fn store_id(&self) -> &Id {
         &self.store_id
+    }
+
+    /// Primary original stream identifier needed to authenticate its manifest.
+    #[must_use]
+    pub const fn stream_id(&self) -> &Id {
+        &self.stream_id
     }
 
     /// Complete encoded container length.
@@ -92,6 +100,7 @@ impl MaterializedState {
                 object_id,
                 object_generation,
                 store_id,
+                stream_id,
                 metadata_fields,
             } => {
                 if self.objects.contains_key(object_id) {
@@ -111,6 +120,7 @@ impl MaterializedState {
                     MaterializedObject {
                         created: stamp.clone(),
                         store_id: *store_id,
+                        stream_id: *stream_id,
                         lifecycle: ObjectLifecycle::new(*object_generation, stamp)?,
                         committed: None,
                         metadata,
@@ -146,6 +156,7 @@ impl MaterializedState {
                 }
                 object.committed = Some(CommittedObject {
                     store_id: *store_id,
+                    stream_id: object.stream_id,
                     container_length: *container_length,
                     container_commitment: *container_commitment,
                     object_key_envelope: object_key_envelope.clone(),

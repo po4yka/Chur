@@ -87,6 +87,8 @@ pub enum PayloadBody {
         object_generation: u64,
         /// Opaque remote store identifier.
         store_id: Id,
+        /// Primary original stream identifier required to open the sealed manifest.
+        stream_id: Id,
         /// Sorted initial metadata.
         metadata_fields: Vec<MetadataField>,
     },
@@ -522,9 +524,14 @@ impl OperationPayload {
                 object_id,
                 object_generation,
                 store_id,
+                stream_id,
                 metadata_fields,
             } => {
-                writer.id(object_id).u64(*object_generation).id(store_id);
+                writer
+                    .id(object_id)
+                    .u64(*object_generation)
+                    .id(store_id)
+                    .id(stream_id);
                 write_metadata_fields(writer, metadata_fields);
             }
             PayloadBody::CommitObject {
@@ -646,6 +653,7 @@ fn decode_body(kind: u8, reader: &mut Reader<'_>) -> Result<PayloadBody> {
             object_id: reader.id()?,
             object_generation: reader.u64()?,
             store_id: reader.id()?,
+            stream_id: reader.id()?,
             metadata_fields: read_metadata_fields(reader)?,
         },
         0x02 => PayloadBody::CommitObject {

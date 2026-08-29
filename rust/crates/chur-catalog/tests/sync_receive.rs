@@ -275,6 +275,7 @@ fn accepted_content_state_rebuilds_after_restart() {
             object_id: id(27),
             object_generation: 1,
             store_id: id(28),
+            stream_id: id(33),
             metadata_fields: Vec::new(),
         },
     )
@@ -352,6 +353,7 @@ fn missing_content_cause_does_not_advance_the_log() {
             object_id: id(35),
             object_generation: 1,
             store_id: id(36),
+            stream_id: id(43),
             metadata_fields: Vec::new(),
         },
     )

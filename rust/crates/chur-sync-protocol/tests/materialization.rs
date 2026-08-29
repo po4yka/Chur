@@ -4,6 +4,7 @@
 
 use chur_core::Id;
 use chur_crypto::{Key, Nonce};
+use chur_format::envelope::ObjectKeyEnvelope;
 use chur_sync_protocol::convergence::MergeOutcome;
 use chur_sync_protocol::materialization::MaterializedState;
 use chur_sync_protocol::operation::{DeviceSigningKey, ObservedHead, Operation};
@@ -48,6 +49,7 @@ fn object_metadata_albums_and_favorites_share_one_state() {
             object_id: id(11),
             object_generation: 1,
             store_id: id(12),
+            stream_id: id(18),
             metadata_fields: vec![
                 MetadataField::new(MetadataFieldId::Caption, b"First".to_vec()).expect("field"),
             ],
@@ -142,6 +144,7 @@ fn remove_waits_for_its_observed_add() {
             object_id: id(30),
             object_generation: 1,
             store_id: id(31),
+            stream_id: id(29),
             metadata_fields: Vec::new(),
         },
     )
@@ -195,4 +198,66 @@ fn remove_waits_for_its_observed_add() {
     state.apply(&add_operation, &add).expect("add");
     state.apply(&remove_operation, &remove).expect("remove");
     assert!(!state.is_favorite(&id(30)));
+}
+
+#[test]
+fn committed_object_keeps_the_stream_identity_needed_for_download() {
+    let key = DeviceSigningKey::from_seed([5; 32]);
+    let create = OperationPayload::new(
+        id(10),
+        1,
+        PayloadBody::CreateObject {
+            object_id: id(40),
+            object_generation: 1,
+            store_id: id(41),
+            stream_id: id(42),
+            metadata_fields: Vec::new(),
+        },
+    )
+    .expect("create");
+    let create_operation = operation(&key, 43, id(2), 1, [0; 32], Vec::new(), &create);
+    let envelope = ObjectKeyEnvelope::seal(
+        &Key::new([44; 32]),
+        id(1),
+        id(10),
+        1,
+        id(40),
+        1,
+        Nonce::new([45; 24]),
+        &Key::new([46; 32]),
+    )
+    .expect("envelope");
+    let commit = OperationPayload::new(
+        id(10),
+        1,
+        PayloadBody::CommitObject {
+            object_id: id(40),
+            object_generation: 1,
+            store_id: id(41),
+            container_length: 100,
+            container_commitment: [47; 32],
+            object_key_envelope: envelope,
+        },
+    )
+    .expect("commit");
+    let commit_operation = operation(
+        &key,
+        48,
+        id(2),
+        2,
+        create_operation.digest(),
+        Vec::new(),
+        &commit,
+    );
+    let mut state = MaterializedState::new();
+    state.apply(&create_operation, &create).expect("create");
+    state.apply(&commit_operation, &commit).expect("commit");
+
+    assert_eq!(
+        state
+            .committed_object(&id(40))
+            .expect("committed")
+            .stream_id(),
+        &id(42)
+    );
 }

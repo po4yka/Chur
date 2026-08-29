@@ -20,7 +20,7 @@ kind_body:bytes[remaining]
 
 | Value | Kind | Exact body |
 | --- | --- | --- |
-| `0x01` | `CreateObject` | `object_id:bytes[16]`, `object_generation:u64`, `store_id:bytes[16]`, `metadata_fields:MetadataFieldsV1` |
+| `0x01` | `CreateObject` | `object_id:bytes[16]`, `object_generation:u64`, `store_id:bytes[16]`, `stream_id:bytes[16]`, `metadata_fields:MetadataFieldsV1` |
 | `0x02` | `CommitObject` | `object_id:bytes[16]`, `object_generation:u64`, `store_id:bytes[16]`, `container_length:u64`, `container_commitment:bytes[32]`, `object_key_envelope:bytes[142]` |
 | `0x03` | `UpdateMetadata` | `object_id:bytes[16]`, `object_generation:u64`, `field:MetadataFieldV1` |
 | `0x04` | `CreateAlbum` | `album_id:bytes[16]`, `name:utf8` |
@@ -37,7 +37,7 @@ kind_body:bytes[remaining]
 | `0x0F` | `CreateCollectionEpoch` | `previous_collection_epoch:u64`, `membership_generation:u64`, `collection_key_envelope:bytes[126]` |
 | `0x10` | `RewrapObjectKey` | `object_id:bytes[16]`, `object_key_envelope:bytes[142]` |
 
-All identifiers are non-zero random identifiers. Every generation and every non-root epoch is non-zero and must have a successor, so `u64::MAX` is invalid. `container_length` is non-zero; the transfer service applies its configured object-size quota before reserving storage.
+All identifiers are non-zero random identifiers. `stream_id` names the primary original stream and is required to derive the manifest key and AAD before its sealed manifest can be opened. Every generation and every non-root epoch is non-zero and must have a successor, so `u64::MAX` is invalid. `container_length` is non-zero; the transfer service applies its configured object-size quota before reserving storage.
 
 `CommitObject` activates a server object only after the downloaded ciphertext validates against its container and object-key envelope. `CreateObject` alone never makes media presentable.
 

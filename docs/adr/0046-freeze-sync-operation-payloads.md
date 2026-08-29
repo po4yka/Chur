@@ -14,6 +14,7 @@ ADR-0044 froze the signed encrypted operation envelope but left its plaintext un
 - `OperationPayloadV1` has one common header: `payload_version:u16`, `operation_kind:u8`, `collection_id:bytes[16]`, and `collection_epoch:u64`, followed by the exact body selected by the kind;
 - kind values `0x01` through `0x10` are allocated in the order listed in `OPERATION_PAYLOAD_V1.md`; unknown values fail closed;
 - root-domain membership operations use `collection_id = vault_id` and `collection_epoch = 0`. Collection operations require a non-zero epoch;
+- `CreateObject` binds the random primary `stream_id`; a receiver needs it to derive the sealed manifest key and AAD before it can validate downloaded ciphertext;
 - add operations use the outer `operation_id` as their observed-remove token. Remove operations carry a sorted unique list of the exact tokens they observed;
 - deletion carries `authored_at_ms:u64` only for retention scheduling. It is never an ordering, authorization, freshness, or conflict input;
 - enrollment, revocation, collection-key, and object-key envelope bodies embed the complete canonical records their owning specifications already define. A receiver validates that every repeated identifier, epoch, sequence, issuer, and vault binding matches the outer operation and common payload header;

@@ -61,6 +61,7 @@ fn every_allocated_payload_kind_has_one_canonical_round_trip() {
                 object_id: object,
                 object_generation: 1,
                 store_id: id(13),
+                stream_id: id(20),
                 metadata_fields: vec![caption.clone(), rating],
             },
         ),
