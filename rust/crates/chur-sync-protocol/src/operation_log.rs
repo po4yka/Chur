@@ -3,12 +3,12 @@
 use std::collections::BTreeMap;
 
 use chur_core::{ChurStatus, Error, Id, Result, ensure};
-use chur_crypto::Commitment;
+use chur_crypto::{Commitment, Key, Nonce};
 
 use crate::{
     checkpoint::Checkpoint,
     membership::EnrollmentRecord,
-    operation::Operation,
+    operation::{DeviceSigningKey, ObservedHead, Operation},
     state::{DeviceStatus, MembershipState},
 };
 
@@ -97,6 +97,87 @@ impl OperationLog {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Builds the next signed operation from the current accepted local view.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the inputs are fresh wire values, encryption material, and authenticated state"
+    )]
+    pub fn author(
+        &self,
+        operation_id: Id,
+        vault_id: Id,
+        device_id: Id,
+        key_selector: Id,
+        key: &Key,
+        nonce: Nonce,
+        plaintext: &[u8],
+        signing_key: &DeviceSigningKey,
+        membership: &MembershipState,
+    ) -> Result<Operation> {
+        ensure!(
+            membership.vault_id() == &vault_id,
+            AuthenticationFailed,
+            "local operation belongs to another vault"
+        );
+        let device = membership.device(&device_id).ok_or_else(|| {
+            Error::new(
+                ChurStatus::AuthenticationFailed,
+                "local operation author is not enrolled",
+            )
+        })?;
+        ensure!(
+            device.status() == DeviceStatus::Active
+                && device.signing_public_key() == &signing_key.verifying_key(),
+            AuthenticationFailed,
+            "local operation key is not the current active device key"
+        );
+        let (device_sequence, previous_operation_hash) = self.head(&device_id).map_or_else(
+            || Ok((1, [0; 32])),
+            |(sequence, digest)| {
+                Ok::<_, Error>((
+                    sequence.checked_add(1).ok_or_else(|| {
+                        Error::new(
+                            ChurStatus::ResourceLimitExceeded,
+                            "local device sequence has no successor",
+                        )
+                    })?,
+                    digest,
+                ))
+            },
+        )?;
+        let observed_heads = self
+            .heads
+            .iter()
+            .filter(|(observed_id, _)| {
+                *observed_id != &device_id
+                    && membership
+                        .device(observed_id)
+                        .is_some_and(|observed| observed.status() == DeviceStatus::Active)
+            })
+            .map(|(observed_id, head)| ObservedHead::new(*observed_id, head.sequence))
+            .collect();
+        let operation = Operation::seal(
+            operation_id,
+            vault_id,
+            device_id,
+            device_sequence,
+            previous_operation_hash,
+            observed_heads,
+            key_selector,
+            key,
+            nonce,
+            plaintext,
+        )?
+        .sign(signing_key);
+        let mut candidate = self.clone();
+        ensure!(
+            candidate.accept(&operation, membership)? == ApplyOutcome::Applied,
+            SyncHeadRollback,
+            "local operation chain is not ready to advance"
+        );
+        Ok(operation)
     }
 
     /// Replays one record already committed in the protected local catalog.
@@ -747,7 +828,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        membership::EnrollmentRecord, operation::DeviceSigningKey, state::MembershipState,
+        membership::{EnrollmentRecord, RevocationRecord},
+        operation::DeviceSigningKey,
+        state::MembershipState,
     };
     use chur_core::Id;
     use chur_crypto::{Key, Nonce};
@@ -900,6 +983,140 @@ mod tests {
         let mut log = OperationLog::new();
         assert!(log.accept(&first, &membership).expect("old signature") == ApplyOutcome::Applied);
         assert!(log.accept(&second, &membership).expect("new signature") == ApplyOutcome::Applied);
+    }
+
+    #[test]
+    fn local_authoring_allocates_the_chain_and_current_causal_vector() {
+        let owner_key = DeviceSigningKey::from_seed([3; 32]);
+        let initial = EnrollmentRecord::initial(id(1), id(2), owner_key.verifying_key(), [4; 32])
+            .expect("initial")
+            .sign(&owner_key);
+        let mut membership = MembershipState::bootstrap(&initial).expect("membership");
+        let peer_key = DeviceSigningKey::from_seed([5; 32]);
+        let peer = EnrollmentRecord::new(
+            id(1),
+            id(6),
+            peer_key.verifying_key(),
+            [7; 32],
+            2,
+            id(2),
+            2,
+            initial.commitment(),
+            [8; 32],
+        )
+        .expect("peer")
+        .sign(&owner_key);
+        membership
+            .accept_enrollment(&peer, &id(2), 2)
+            .expect("accept peer");
+        let payload_key = Key::new([8; 32]);
+        let mut log = OperationLog::new();
+
+        let owner_first = log
+            .author(
+                id(10),
+                id(1),
+                id(2),
+                id(9),
+                &payload_key,
+                Nonce::new([10; 24]),
+                &[10],
+                &owner_key,
+                &membership,
+            )
+            .expect("owner first");
+        assert_eq!(owner_first.device_sequence(), 1);
+        assert!(owner_first.observed_heads().is_empty());
+        assert_eq!(
+            log.accept(&owner_first, &membership).expect("accept owner"),
+            ApplyOutcome::Applied
+        );
+
+        let peer_first = log
+            .author(
+                id(11),
+                id(1),
+                id(6),
+                id(9),
+                &payload_key,
+                Nonce::new([11; 24]),
+                &[11],
+                &peer_key,
+                &membership,
+            )
+            .expect("peer first");
+        assert!(peer_first.observed_heads() == [crate::operation::ObservedHead::new(id(2), 1)]);
+        assert_eq!(
+            log.accept(&peer_first, &membership).expect("accept peer"),
+            ApplyOutcome::Applied
+        );
+
+        let owner_second = log
+            .author(
+                id(12),
+                id(1),
+                id(2),
+                id(9),
+                &payload_key,
+                Nonce::new([12; 24]),
+                &[12],
+                &owner_key,
+                &membership,
+            )
+            .expect("owner second");
+        assert_eq!(owner_second.device_sequence(), 2);
+        assert_eq!(
+            owner_second.previous_operation_hash(),
+            &owner_first.digest()
+        );
+        assert!(owner_second.observed_heads() == [crate::operation::ObservedHead::new(id(6), 1)]);
+        assert_eq!(
+            log.accept(&owner_second, &membership)
+                .expect("accept owner second"),
+            ApplyOutcome::Applied
+        );
+        let revocation = RevocationRecord::new(
+            id(1),
+            id(6),
+            1,
+            peer_first.digest(),
+            3,
+            id(2),
+            peer.commitment(),
+        )
+        .expect("revocation")
+        .sign(&owner_key);
+        membership
+            .accept_revocation(&revocation, &id(2))
+            .expect("accept revocation");
+        let owner_third = log
+            .author(
+                id(13),
+                id(1),
+                id(2),
+                id(9),
+                &payload_key,
+                Nonce::new([13; 24]),
+                &[13],
+                &owner_key,
+                &membership,
+            )
+            .expect("owner third");
+        assert!(owner_third.observed_heads().is_empty());
+        let Err(error) = log.author(
+            id(14),
+            id(1),
+            id(2),
+            id(9),
+            &payload_key,
+            Nonce::new([14; 24]),
+            &[14],
+            &DeviceSigningKey::from_seed([14; 32]),
+            &membership,
+        ) else {
+            panic!("wrong current key authored an operation");
+        };
+        assert_eq!(error.status(), ChurStatus::AuthenticationFailed);
     }
 
     #[test]
