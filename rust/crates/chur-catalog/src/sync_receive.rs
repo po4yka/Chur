@@ -102,6 +102,43 @@ fn corrupt_materialized_state(_error: Error) -> Error {
     )
 }
 
+/// Authenticates, decrypts, and atomically accepts one convergent content operation.
+pub fn accept_content_operation(
+    db: &mut CatalogDb,
+    log: &mut DurableOperationLog,
+    membership: &MembershipState,
+    state: &mut MaterializedState,
+    keys: &KeyDirectory,
+    record: &[u8],
+) -> Result<ApplyOutcome> {
+    let operation = Operation::decode(record)?;
+    let payload = OperationPayload::open_for_operation(&operation, keys)?;
+    let mut projected_state = None;
+    let outcome = log.accept_gated_with(
+        db,
+        &operation,
+        membership,
+        || {
+            let mut candidate = state.clone();
+            if candidate.apply(&operation, &payload)? == MergeOutcome::PendingCause {
+                return Ok(false);
+            }
+            projected_state = Some(candidate);
+            Ok(true)
+        },
+        |_| Ok(()),
+    )?;
+    if outcome == ApplyOutcome::Applied {
+        *state = projected_state.ok_or_else(|| {
+            Error::new(
+                ChurStatus::InternalFailure,
+                "applied content operation has no projection",
+            )
+        })?;
+    }
+    Ok(outcome)
+}
+
 /// Authenticates, decrypts, and atomically commits one membership operation.
 pub fn accept_membership_operation(
     db: &mut CatalogDb,

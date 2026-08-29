@@ -7,6 +7,7 @@ use chur_catalog::model::{COLLECTION_POLICY_VAULT_DEFAULT, COLLECTION_STATUS_ACT
 use chur_catalog::{CatalogDb, schema, store, sync_keys, sync_log, sync_membership, sync_receive};
 use chur_core::Id;
 use chur_crypto::{Key, Nonce};
+use chur_sync_protocol::materialization::MaterializedState;
 use chur_sync_protocol::membership::EnrollmentRecord;
 use chur_sync_protocol::operation::{DeviceSigningKey, Operation};
 use chur_sync_protocol::operation_log::ApplyOutcome;
@@ -336,4 +337,119 @@ fn accepted_content_state_rebuilds_after_restart() {
     let restored = sync_receive::load_materialized_state(&fixture.db, &keys).expect("state");
     assert!(restored.is_favorite(&id(27)));
     assert!(!restored.is_presentable(&id(27)));
+}
+
+#[test]
+fn missing_content_cause_does_not_advance_the_log() {
+    let mut fixture = setup();
+    let collection_id = id(33);
+    let collection_key = Key::new([34; 32]);
+    let domain = KeyDomain::collection(&collection_key, &collection_id, 1).expect("domain");
+    let create_payload = OperationPayload::new(
+        collection_id,
+        1,
+        PayloadBody::CreateObject {
+            object_id: id(35),
+            object_generation: 1,
+            store_id: id(36),
+            metadata_fields: Vec::new(),
+        },
+    )
+    .expect("create payload");
+    let create = Operation::seal(
+        id(37),
+        id(2),
+        id(4),
+        1,
+        [0; 32],
+        Vec::new(),
+        *domain.selector(),
+        domain.operation_key(),
+        Nonce::new([38; 24]),
+        &create_payload.encode(),
+    )
+    .expect("create")
+    .sign(&fixture.issuer);
+    let favorite_payload = OperationPayload::new(
+        collection_id,
+        1,
+        PayloadBody::SetFavorite {
+            object_id: id(35),
+            favorite: true,
+            removed_tokens: Vec::new(),
+        },
+    )
+    .expect("favorite payload");
+    let pending = Operation::seal(
+        id(39),
+        id(2),
+        id(4),
+        1,
+        [0; 32],
+        Vec::new(),
+        *domain.selector(),
+        domain.operation_key(),
+        Nonce::new([40; 24]),
+        &favorite_payload.encode(),
+    )
+    .expect("pending")
+    .sign(&fixture.issuer);
+    let favorite = Operation::seal(
+        id(41),
+        id(2),
+        id(4),
+        2,
+        create.digest(),
+        Vec::new(),
+        *domain.selector(),
+        domain.operation_key(),
+        Nonce::new([42; 24]),
+        &favorite_payload.encode(),
+    )
+    .expect("favorite")
+    .sign(&fixture.issuer);
+    let mut keys = KeyDirectory::new(&fixture.root, &id(2)).expect("keys");
+    keys.insert(domain).expect("domain");
+    let mut log = sync_log::load(&fixture.db, &fixture.membership).expect("log");
+    let mut state = MaterializedState::new();
+
+    assert_eq!(
+        sync_receive::accept_content_operation(
+            &mut fixture.db,
+            &mut log,
+            &fixture.membership,
+            &mut state,
+            &keys,
+            &pending.encode(),
+        )
+        .expect("pending cause"),
+        ApplyOutcome::PendingCause
+    );
+    assert!(log.head(&id(4)).is_none());
+    assert_eq!(
+        sync_receive::accept_content_operation(
+            &mut fixture.db,
+            &mut log,
+            &fixture.membership,
+            &mut state,
+            &keys,
+            &create.encode(),
+        )
+        .expect("create"),
+        ApplyOutcome::Applied
+    );
+    assert_eq!(
+        sync_receive::accept_content_operation(
+            &mut fixture.db,
+            &mut log,
+            &fixture.membership,
+            &mut state,
+            &keys,
+            &favorite.encode(),
+        )
+        .expect("favorite"),
+        ApplyOutcome::Applied
+    );
+    assert!(state.is_favorite(&id(35)));
+    assert_eq!(log.head(&id(4)), Some((2, favorite.digest())));
 }

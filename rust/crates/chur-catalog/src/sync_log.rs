@@ -51,6 +51,17 @@ impl DurableOperationLog {
         membership: &MembershipState,
         apply: impl FnOnce(&Transaction<'_>) -> Result<()>,
     ) -> Result<ApplyOutcome> {
+        self.accept_gated_with(db, operation, membership, || Ok(true), apply)
+    }
+
+    pub(crate) fn accept_gated_with(
+        &mut self,
+        db: &mut CatalogDb,
+        operation: &Operation,
+        membership: &MembershipState,
+        gate: impl FnOnce() -> Result<bool>,
+        apply: impl FnOnce(&Transaction<'_>) -> Result<()>,
+    ) -> Result<ApplyOutcome> {
         if self.forked_devices.contains(operation.device_id()) {
             bail!(
                 SyncChainFork,
@@ -60,6 +71,9 @@ impl DurableOperationLog {
         let mut candidate = self.log.clone();
         match candidate.accept(operation, membership) {
             Ok(ApplyOutcome::Applied) => {
+                if !gate()? {
+                    return Ok(ApplyOutcome::PendingCause);
+                }
                 let record = operation.encode();
                 let digest = operation.digest();
                 db.transaction(|transaction| {
