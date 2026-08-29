@@ -1,5 +1,6 @@
 //! Self-hosted ciphertext-only Chur sync service.
 
+mod auth;
 mod checkpoint;
 mod deletion;
 mod relay;
@@ -111,6 +112,13 @@ impl ReferenceServer {
                  record BLOB NOT NULL,
                  PRIMARY KEY(vault_id, commitment),
                  UNIQUE(vault_id, issuer_device_id, issuer_sequence)
+             );
+             CREATE TABLE IF NOT EXISTS transport_tokens (
+                 vault_id BLOB NOT NULL CHECK(length(vault_id) = 16),
+                 device_id BLOB NOT NULL CHECK(length(device_id) = 16),
+                 token_sha256 BLOB NOT NULL CHECK(length(token_sha256) = 32),
+                 PRIMARY KEY(vault_id, device_id),
+                 UNIQUE(vault_id, token_sha256)
              );",
         )
         .map_err(|error| map_sqlite(error, "server schema creation failed"))?;

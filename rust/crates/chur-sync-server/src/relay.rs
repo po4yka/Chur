@@ -163,6 +163,11 @@ impl ReferenceServer {
             .map_err(|error| map_sqlite(error, "revocation transaction failed"))?;
         insert_operation(&transaction, outer, operation_outcome)?;
         insert_revocation(&transaction, revocation, outer)?;
+        crate::auth::revoke_in_transaction(
+            &transaction,
+            revocation.vault_id(),
+            revocation.revoked_device_id(),
+        )?;
         transaction
             .commit()
             .map_err(|error| map_sqlite(error, "revocation commit failed"))?;
@@ -766,6 +771,10 @@ mod tests {
         server
             .accept_operation(&second_device_operation)
             .expect("second device operation");
+        let second_token = [21; 32];
+        server
+            .set_transport_token(vault, second_device, &second_token)
+            .expect("second device token");
 
         let fourth = operation(vault, first_device, id(14), 4, third.digest(), &first_key);
         let revocation = RevocationRecord::new(
@@ -800,6 +809,26 @@ mod tests {
         server
             .accept_revocation(&revocation, &fourth)
             .expect("revoke second device");
+        let token_count: i64 = server
+            .db
+            .query_row(
+                "SELECT count(*) FROM transport_tokens
+                 WHERE vault_id = ?1 AND device_id = ?2",
+                rusqlite::params![
+                    vault.as_bytes().as_slice(),
+                    second_device.as_bytes().as_slice(),
+                ],
+                |row| row.get(0),
+            )
+            .expect("token count");
+        assert_eq!(token_count, 0);
+        assert_eq!(
+            server
+                .authenticate_transport(vault, &second_token)
+                .expect_err("revoked token")
+                .status(),
+            chur_core::ChurStatus::AuthenticationFailed
+        );
         assert_eq!(
             server
                 .membership_records_after(vault, 0)

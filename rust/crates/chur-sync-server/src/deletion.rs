@@ -151,6 +151,7 @@ impl ReferenceServer {
             "DELETE FROM operations WHERE vault_id = ?1",
             "DELETE FROM membership_records WHERE vault_id = ?1",
             "DELETE FROM checkpoints WHERE vault_id = ?1",
+            "DELETE FROM transport_tokens WHERE vault_id = ?1",
         ] {
             transaction
                 .execute(sql, params![authorization.vault_id().as_bytes().as_slice()])
@@ -273,6 +274,10 @@ mod tests {
         server
             .accept_initial_membership(&enrollment, &operation)
             .expect("bootstrap");
+        let token = [15; 32];
+        server
+            .set_transport_token(vault, device, &token)
+            .expect("transport token");
         server
             .begin_upload(vault, transfer, store, bytes.len() as u64)
             .expect("begin upload");
@@ -323,6 +328,15 @@ mod tests {
             server.apply_deletion(&account).expect("delete account"),
             DeletionOutcome::Deleted
         );
+        let token_count: i64 = server
+            .db
+            .query_row(
+                "SELECT count(*) FROM transport_tokens WHERE vault_id = ?1",
+                [vault.as_bytes().as_slice()],
+                |row| row.get(0),
+            )
+            .expect("token count");
+        assert_eq!(token_count, 0);
         drop(server);
         let mut server = ReferenceServer::open(&root.0, 32, 32_768).expect("reopen");
         assert_eq!(
