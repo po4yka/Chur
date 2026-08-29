@@ -6,6 +6,7 @@ use chur_core::{ChurStatus, Error, Id, Result, ensure};
 use chur_crypto::Commitment;
 
 use crate::{
+    checkpoint::Checkpoint,
     operation::Operation,
     state::{DeviceStatus, MembershipState},
 };
@@ -21,6 +22,15 @@ pub enum ApplyOutcome {
     PendingGap,
     /// One of the operation's cross-device causal heads is absent.
     PendingCause,
+}
+
+/// Result of accepting a signed checkpoint as a freshness lower bound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckpointOutcome {
+    /// At least one per-device floor increased.
+    Raised,
+    /// Every checkpoint head was at or below an equal local floor.
+    Unchanged,
 }
 
 #[derive(Clone)]
@@ -75,6 +85,8 @@ impl ForkEvidence {
 pub struct OperationLog {
     heads: BTreeMap<Id, AcceptedHead>,
     accepted: BTreeMap<(Id, u64), AcceptedRecord>,
+    floors: BTreeMap<Id, AcceptedHead>,
+    checkpoints: BTreeMap<Id, Commitment>,
     forks: BTreeMap<Id, ForkEvidence>,
 }
 
@@ -98,7 +110,27 @@ impl OperationLog {
             )
         })?;
         match device.status() {
-            DeviceStatus::Active => self.accept_inner(operation, membership, None),
+            DeviceStatus::Active => {
+                if self.floor_satisfied(operation.device_id()) {
+                    return self.accept_inner(operation, membership, None);
+                }
+                let mut candidate = self.clone();
+                let outcome = match candidate.accept_inner(operation, membership, None) {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        if error.status() == ChurStatus::SyncChainFork {
+                            *self = candidate;
+                        }
+                        return Err(error);
+                    }
+                };
+                if candidate.floor_satisfied(operation.device_id()) {
+                    *self = candidate;
+                    Ok(outcome)
+                } else {
+                    Ok(ApplyOutcome::PendingGap)
+                }
+            }
             DeviceStatus::Revoked { sequence, digest } => {
                 let mut candidate = self.clone();
                 let outcome =
@@ -119,6 +151,152 @@ impl OperationLog {
                 }
             }
         }
+    }
+
+    /// Accepts a signed checkpoint without lowering any local floor.
+    pub fn accept_checkpoint(
+        &mut self,
+        checkpoint: &Checkpoint,
+        membership: &MembershipState,
+    ) -> Result<CheckpointOutcome> {
+        ensure!(
+            checkpoint.vault_id() == membership.vault_id(),
+            AuthenticationFailed,
+            "checkpoint belongs to another vault"
+        );
+        ensure!(
+            checkpoint.membership_generation() == membership.generation()
+                && checkpoint.membership_commitment() == membership.commitment(),
+            SyncHeadRollback,
+            "checkpoint membership is not current"
+        );
+        let issuer = membership
+            .device(checkpoint.issuer_device_id())
+            .ok_or_else(|| {
+                Error::new(
+                    ChurStatus::AuthenticationFailed,
+                    "checkpoint issuer is unknown",
+                )
+            })?;
+        ensure!(
+            issuer.status() == DeviceStatus::Active,
+            AuthenticationFailed,
+            "checkpoint issuer is revoked"
+        );
+        if !issuer
+            .signing_public_keys()
+            .any(|key| checkpoint.verify_signature(key).is_ok())
+        {
+            return Err(Error::new(
+                ChurStatus::AuthenticationFailed,
+                "checkpoint signature did not verify under device key history",
+            ));
+        }
+
+        let mut candidate = self.clone();
+        let mut outcome = CheckpointOutcome::Unchanged;
+        for checkpoint_head in checkpoint.heads() {
+            ensure!(
+                membership.device(checkpoint_head.device_id()).is_some(),
+                AuthenticationFailed,
+                "checkpoint names an unknown device"
+            );
+            let offered = AcceptedHead {
+                sequence: checkpoint_head.device_sequence(),
+                digest: *checkpoint_head.operation_digest(),
+            };
+            if let Some(record) = candidate
+                .accepted
+                .get(&(*checkpoint_head.device_id(), offered.sequence))
+                && record.digest != offered.digest
+            {
+                return self.reject_checkpoint_fork(
+                    candidate,
+                    checkpoint_head.device_id(),
+                    checkpoint,
+                );
+            }
+            if let Some(current) = candidate.floors.get(checkpoint_head.device_id()) {
+                if offered.sequence < current.sequence {
+                    continue;
+                }
+                if offered.sequence == current.sequence {
+                    if offered.digest != current.digest {
+                        return self.reject_checkpoint_fork(
+                            candidate,
+                            checkpoint_head.device_id(),
+                            checkpoint,
+                        );
+                    }
+                    continue;
+                }
+            }
+            if let Some(current) = candidate.heads.get(checkpoint_head.device_id()) {
+                if offered.sequence < current.sequence {
+                    continue;
+                }
+                if offered.sequence == current.sequence {
+                    if offered.digest != current.digest {
+                        return self.reject_checkpoint_fork(
+                            candidate,
+                            checkpoint_head.device_id(),
+                            checkpoint,
+                        );
+                    }
+                    continue;
+                }
+            }
+            candidate
+                .floors
+                .insert(*checkpoint_head.device_id(), offered);
+            outcome = CheckpointOutcome::Raised;
+        }
+        candidate
+            .checkpoints
+            .insert(*checkpoint.issuer_device_id(), checkpoint.commitment());
+        *self = candidate;
+        Ok(outcome)
+    }
+
+    /// Atomically accepts one device's chain through its checkpoint floor.
+    pub fn accept_device_chain(
+        &mut self,
+        operations: &[Operation],
+        membership: &MembershipState,
+    ) -> Result<Vec<ApplyOutcome>> {
+        let first = operations
+            .first()
+            .ok_or_else(|| Error::new(ChurStatus::InvalidInput, "device chain is empty"))?;
+        let device_id = *first.device_id();
+        if matches!(
+            membership.device(&device_id).map(|device| device.status()),
+            Some(DeviceStatus::Revoked { .. })
+        ) {
+            return self.accept_revoked_chain(operations, membership);
+        }
+        let mut candidate = self.clone();
+        let mut outcomes = Vec::with_capacity(operations.len());
+        for operation in operations {
+            ensure!(
+                operation.device_id() == &device_id,
+                InvalidInput,
+                "device chain mixes devices"
+            );
+            match candidate.accept_inner(operation, membership, None) {
+                Ok(outcome) => outcomes.push(outcome),
+                Err(error) => {
+                    if error.status() == ChurStatus::SyncChainFork {
+                        *self = candidate;
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        if !candidate.floor_satisfied(&device_id) {
+            return Ok(vec![ApplyOutcome::PendingGap]);
+        }
+        *self = candidate;
+        Ok(outcomes)
     }
 
     /// Atomically accepts a contiguous revoked-device chain through its pinned point.
@@ -262,6 +440,11 @@ impl OperationLog {
             }
             return self.freeze(operation);
         }
+        if self.floors.get(operation.device_id()).is_some_and(|floor| {
+            operation.device_sequence() == floor.sequence && digest != floor.digest
+        }) {
+            return self.freeze(operation);
+        }
         if let Some(head) = self.heads.get(operation.device_id()) {
             if operation.device_sequence() < head.sequence {
                 return Err(Error::new(
@@ -337,12 +520,53 @@ impl OperationLog {
             .is_some_and(|head| head.sequence == sequence && &head.digest == digest)
     }
 
+    fn floor_satisfied(&self, device_id: &Id) -> bool {
+        self.floors.get(device_id).is_none_or(|floor| {
+            self.accepted
+                .get(&(*device_id, floor.sequence))
+                .is_some_and(|record| record.digest == floor.digest)
+        })
+    }
+
+    fn reject_checkpoint_fork(
+        &mut self,
+        mut candidate: Self,
+        device_id: &Id,
+        checkpoint: &Checkpoint,
+    ) -> Result<CheckpointOutcome> {
+        let accepted_record = checkpoint
+            .heads()
+            .iter()
+            .find(|head| head.device_id() == device_id)
+            .and_then(|head| self.accepted.get(&(*device_id, head.device_sequence())))
+            .map_or_else(Vec::new, |record| record.bytes.clone());
+        candidate.forks.insert(
+            *device_id,
+            ForkEvidence {
+                state: ForkState::Detected,
+                accepted_record,
+                conflicting_record: checkpoint.encode(),
+            },
+        );
+        *self = candidate;
+        Err(Error::new(
+            ChurStatus::SyncChainFork,
+            "checkpoint conflicts with accepted device history",
+        ))
+    }
+
     /// Latest accepted head for one device.
     #[must_use]
     pub fn head(&self, device_id: &Id) -> Option<(u64, Commitment)> {
         self.heads
             .get(device_id)
             .map(|head| (head.sequence, head.digest))
+    }
+
+    /// Latest accepted checkpoint commitment from one issuer.
+    #[must_use]
+    pub fn checkpoint_commitment(&self, issuer_device_id: &Id) -> Option<&Commitment> {
+        self.checkpoints.get(issuer_device_id)
     }
 }
 
@@ -471,6 +695,72 @@ mod tests {
         let mut log = OperationLog::new();
         assert!(log.accept(&first, &membership).expect("old signature") == ApplyOutcome::Applied);
         assert!(log.accept(&second, &membership).expect("new signature") == ApplyOutcome::Applied);
+    }
+
+    #[test]
+    fn checkpoint_floor_requires_the_pinned_chain_before_advancing() {
+        let key = DeviceSigningKey::from_seed([3; 32]);
+        let enrollment = EnrollmentRecord::initial(id(1), id(2), key.verifying_key(), [4; 32])
+            .expect("enrollment")
+            .sign(&key);
+        let membership = MembershipState::bootstrap(&enrollment).expect("membership");
+        let first = operation(&key, 1, [0; 32], 5);
+        let second = operation(&key, 2, first.digest(), 6);
+        let checkpoint = crate::checkpoint::Checkpoint::new(
+            id(1),
+            id(2),
+            2,
+            1,
+            enrollment.commitment(),
+            vec![crate::checkpoint::CheckpointHead::new(
+                id(2),
+                2,
+                second.digest(),
+            )],
+            [7; 32],
+            [8; 32],
+        )
+        .expect("checkpoint")
+        .sign(&key);
+        let mut log = OperationLog::new();
+        assert!(
+            log.accept_checkpoint(&checkpoint, &membership)
+                .expect("checkpoint")
+                == CheckpointOutcome::Raised
+        );
+        assert!(
+            log.accept(&first, &membership).expect("pending floor") == ApplyOutcome::PendingGap
+        );
+        assert!(log.head(&id(2)).is_none());
+        assert_eq!(
+            log.accept_device_chain(&[first, second], &membership)
+                .expect("chain")
+                .len(),
+            2
+        );
+        assert_eq!(
+            log.head(&id(2)),
+            Some((2, *checkpoint.heads()[0].operation_digest()))
+        );
+        let conflicting = crate::checkpoint::Checkpoint::new(
+            id(1),
+            id(2),
+            2,
+            1,
+            enrollment.commitment(),
+            vec![crate::checkpoint::CheckpointHead::new(id(2), 2, [9; 32])],
+            [7; 32],
+            [8; 32],
+        )
+        .expect("conflicting checkpoint")
+        .sign(&key);
+        assert_eq!(
+            log.accept_checkpoint(&conflicting, &membership)
+                .expect_err("fork")
+                .status(),
+            ChurStatus::SyncChainFork,
+        );
+        assert!(log.fork(&id(2)).is_some());
     }
 
     #[test]

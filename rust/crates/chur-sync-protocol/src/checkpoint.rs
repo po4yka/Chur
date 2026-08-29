@@ -32,6 +32,22 @@ impl CheckpointHead {
             operation_digest,
         }
     }
+
+    /// Device named by this head.
+    #[must_use]
+    pub const fn device_id(&self) -> &Id {
+        &self.device_id
+    }
+    /// Accepted sequence.
+    #[must_use]
+    pub const fn device_sequence(&self) -> u64 {
+        self.device_sequence
+    }
+    /// Digest at the accepted sequence.
+    #[must_use]
+    pub const fn operation_digest(&self) -> &Commitment {
+        &self.operation_digest
+    }
 }
 
 /// One canonical signed checkpoint.
@@ -123,6 +139,32 @@ impl Checkpoint {
     #[must_use]
     pub fn commitment(&self) -> Commitment {
         commit::commit(tag::SYNC_CHECKPOINT_COMMITMENT, &[&self.encode()])
+    }
+
+    /// Vault whose history is summarized.
+    #[must_use]
+    pub const fn vault_id(&self) -> &Id {
+        &self.vault_id
+    }
+    /// Device that signed this checkpoint.
+    #[must_use]
+    pub const fn issuer_device_id(&self) -> &Id {
+        &self.issuer_device_id
+    }
+    /// Membership generation used by the signer.
+    #[must_use]
+    pub const fn membership_generation(&self) -> u64 {
+        self.membership_generation
+    }
+    /// Membership commitment used by the signer.
+    #[must_use]
+    pub const fn membership_commitment(&self) -> &Commitment {
+        &self.membership_commitment
+    }
+    /// Sorted device heads included in this checkpoint.
+    #[must_use]
+    pub fn heads(&self) -> &[CheckpointHead] {
+        &self.heads
     }
 
     /// Encodes the canonical checkpoint.
