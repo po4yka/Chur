@@ -367,7 +367,7 @@ fn insert_stream_row(transaction: &Transaction<'_>, stream: &Stream) -> Result<(
     Ok(())
 }
 
-fn insert_envelope_row(
+pub(crate) fn insert_envelope_row(
     transaction: &Transaction<'_>,
     object_id: &Id,
     generation: u64,
