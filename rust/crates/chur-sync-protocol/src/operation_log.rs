@@ -234,7 +234,15 @@ impl OperationLog {
                 "operation author is not enrolled",
             )
         })?;
-        operation.verify_signature(device.signing_public_key())?;
+        if !device
+            .signing_public_keys()
+            .any(|key| operation.verify_signature(key).is_ok())
+        {
+            return Err(Error::new(
+                ChurStatus::AuthenticationFailed,
+                "operation signature did not verify under device key history",
+            ));
+        }
         let digest = operation.digest();
         if let Some((sequence, pinned_digest)) = cutoff {
             ensure!(
@@ -431,6 +439,38 @@ mod tests {
         assert!(log.accept(&first, &membership).expect("first") == ApplyOutcome::Applied);
         assert!(log.accept(&second, &membership).expect("second") == ApplyOutcome::Applied);
         assert!(log.accept(&first, &membership).expect("old duplicate") == ApplyOutcome::Duplicate);
+    }
+
+    #[test]
+    fn key_rotation_keeps_historical_operations_verifiable() {
+        let old_key = DeviceSigningKey::from_seed([3; 32]);
+        let initial = EnrollmentRecord::initial(id(1), id(2), old_key.verifying_key(), [4; 32])
+            .expect("initial")
+            .sign(&old_key);
+        let mut membership = MembershipState::bootstrap(&initial).expect("membership");
+        let new_key = DeviceSigningKey::from_seed([5; 32]);
+        let rotation = EnrollmentRecord::new(
+            id(1),
+            id(2),
+            new_key.verifying_key(),
+            [6; 32],
+            2,
+            id(2),
+            2,
+            initial.commitment(),
+            [7; 32],
+        )
+        .expect("rotation")
+        .sign(&old_key);
+        membership
+            .accept_enrollment(&rotation, &id(2), 2)
+            .expect("accept rotation");
+
+        let first = operation(&old_key, 1, [0; 32], 8);
+        let second = operation(&new_key, 2, first.digest(), 9);
+        let mut log = OperationLog::new();
+        assert!(log.accept(&first, &membership).expect("old signature") == ApplyOutcome::Applied);
+        assert!(log.accept(&second, &membership).expect("new signature") == ApplyOutcome::Applied);
     }
 
     #[test]

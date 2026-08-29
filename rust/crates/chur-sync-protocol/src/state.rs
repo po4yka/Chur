@@ -24,6 +24,7 @@ pub enum DeviceStatus {
 /// Public identity and acceptance status of one known device.
 pub struct DeviceMembership {
     signing_public_key: [u8; 32],
+    historical_signing_keys: Vec<[u8; 32]>,
     hpke_public_key: [u8; 32],
     status: DeviceStatus,
 }
@@ -33,6 +34,10 @@ impl DeviceMembership {
     #[must_use]
     pub const fn signing_public_key(&self) -> &[u8; 32] {
         &self.signing_public_key
+    }
+    /// Keys accepted for historical device signatures, current key first.
+    pub fn signing_public_keys(&self) -> impl Iterator<Item = &[u8; 32]> {
+        std::iter::once(&self.signing_public_key).chain(self.historical_signing_keys.iter())
     }
     /// Current recipient-encryption public key.
     #[must_use]
@@ -68,6 +73,7 @@ impl MembershipState {
             *record.device_id(),
             DeviceMembership {
                 signing_public_key: *record.signing_public_key(),
+                historical_signing_keys: Vec::new(),
                 hpke_public_key: *record.hpke_public_key(),
                 status: DeviceStatus::Active,
             },
@@ -101,6 +107,7 @@ impl MembershipState {
         let issuer_key = *self.active_signing_key(record.issuer_device_id())?;
         record.verify_signature(&issuer_key)?;
 
+        let mut historical_signing_keys = Vec::new();
         if let Some(existing) = self.devices.get(record.device_id()) {
             ensure!(
                 record.device_id() == record.issuer_device_id()
@@ -108,11 +115,16 @@ impl MembershipState {
                 AuthenticationFailed,
                 "enrollment reuses a device identifier"
             );
+            historical_signing_keys.clone_from(&existing.historical_signing_keys);
+            if existing.signing_public_key != *record.signing_public_key() {
+                historical_signing_keys.push(existing.signing_public_key);
+            }
         }
         self.devices.insert(
             *record.device_id(),
             DeviceMembership {
                 signing_public_key: *record.signing_public_key(),
+                historical_signing_keys,
                 hpke_public_key: *record.hpke_public_key(),
                 status: DeviceStatus::Active,
             },
@@ -334,5 +346,38 @@ mod tests {
         );
         assert_eq!(state.generation(), 1);
         assert!(!state.is_active(&id(5)));
+    }
+
+    #[test]
+    fn key_rotation_keeps_the_old_verification_key() {
+        let old_key = DeviceSigningKey::from_seed([1; 32]);
+        let initial = EnrollmentRecord::initial(id(1), id(2), old_key.verifying_key(), [3; 32])
+            .expect("initial")
+            .sign(&old_key);
+        let mut state = MembershipState::bootstrap(&initial).expect("bootstrap");
+        let new_key = DeviceSigningKey::from_seed([4; 32]);
+        let rotation = EnrollmentRecord::new(
+            id(1),
+            id(2),
+            new_key.verifying_key(),
+            [5; 32],
+            2,
+            id(2),
+            2,
+            initial.commitment(),
+            [6; 32],
+        )
+        .expect("rotation")
+        .sign(&old_key);
+        state
+            .accept_enrollment(&rotation, &id(2), 2)
+            .expect("accept rotation");
+        let keys: Vec<_> = state
+            .device(&id(2))
+            .expect("device")
+            .signing_public_keys()
+            .copied()
+            .collect();
+        assert_eq!(keys, vec![new_key.verifying_key(), old_key.verifying_key()]);
     }
 }
