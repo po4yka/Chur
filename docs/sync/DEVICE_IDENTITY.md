@@ -166,7 +166,11 @@ After acceptance:
 
 ## 10. Device loss and recovery
 
-A user can remove a lost device from another authorized device or recovery session. If every identity device is lost, recovery must bootstrap a new root membership state without trusting server key substitution. This flow requires explicit operation/log rules.
+A user can remove a lost device from another authorized device. If every physical identity device is lost, a current portable backup may carry the creating device's private identity in a root-wrapped `DeviceIdentityEnvelopeV1` under [ADR-0048](../adr/0048-recover-a-device-from-a-portable-identity-envelope.md).
+
+The restored identity is recovery-only. It first enforces its backed-up checkpoint floor, reconstructs the authenticated log, and then signs an ordinary enrollment for a newly generated device identity. It never authors ordinary catalog changes and is destroyed after the replacement enrollment and a new backup commit. If authenticated current membership revoked the recovered identity, it cannot enroll a replacement.
+
+A backup without the envelope still restores local content but needs another active device to re-enter the old membership. A stale backup with no peer or witness retains the rollback limitation of [`ROLLBACK_PROTECTION.md`](ROLLBACK_PROTECTION.md) §7.
 
 ## 11. Multi-vault/decoy
 

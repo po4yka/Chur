@@ -110,6 +110,8 @@ A device enrolling for the first time starts from the same empty state but is no
 
 Reinstall with no backup and no reachable peer keeps the residual risk. V1 must state that residual risk rather than claim perfect rollback protection.
 
+A portable identity envelope does not remove this limitation. It lets a recovered active identity sign one replacement enrollment, but its backed-up checkpoint remains the only freshness floor. The recovered identity is recovery-only and cannot author ordinary operations; [ADR-0048](../adr/0048-recover-a-device-from-a-portable-identity-envelope.md) defines the lifecycle.
+
 ## 8. Offline backups
 
 Backups are authentic but can be stale. Restore compares embedded heads/generations with any surviving trusted local/peer state. User may intentionally restore older state, which creates a new recovery branch under explicit policy rather than silently overwriting newer sync state.

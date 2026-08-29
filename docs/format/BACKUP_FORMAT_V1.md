@@ -96,7 +96,9 @@ Excluded:
 - iOS `ThisDeviceOnly` Keychain items;
 - local session handles;
 - local device-only caches and transfer state;
-- private identity key unless the multi-device recovery design explicitly includes a wrapped portable copy.
+- private identity keys other than the one optional root-wrapped recovery identity of [ADR-0048](../adr/0048-recover-a-device-from-a-portable-identity-envelope.md).
+
+For a sync-enabled vault, the creating device includes its current `DeviceIdentityEnvelopeV1` as an `Envelope` record and its latest signed checkpoint in the encrypted catalog snapshot. The identity envelope is optional for local-only backups. Its absence never makes an otherwise complete local backup invalid, but restore cannot re-enter the old sync membership without another active device.
 
 ## 4. Backup manifest
 
