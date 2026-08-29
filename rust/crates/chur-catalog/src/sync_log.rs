@@ -2,11 +2,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chur_core::limits::sync as bounds;
+use chur_core::limits::{catalog as catalog_bounds, sync as bounds};
 use chur_core::{ChurStatus, Error, Id, Result, bail, ensure};
 use chur_crypto::{Commitment, Key, Nonce};
 use chur_sync_protocol::{
-    checkpoint::Checkpoint,
+    checkpoint::{
+        Checkpoint, CheckpointHead, UNCOMPACTED_CATALOG_STATE_COMMITMENT,
+        collection_epoch_commitment,
+    },
     convergence::CausalStamp,
     operation::{DeviceSigningKey, Operation},
     operation_log::{ApplyOutcome, CheckpointOutcome, ForkEvidence, ForkState, OperationLog},
@@ -84,6 +87,55 @@ impl DurableOperationLog {
                         && operation.digest() == head.operation_digest()
                 })
             }))
+    }
+
+    /// Signs and persists a checkpoint over the exact current heads and epochs.
+    pub fn issue_own_checkpoint(
+        &mut self,
+        db: &mut CatalogDb,
+        membership: &MembershipState,
+        issuer_device_id: &Id,
+        signing_key: &DeviceSigningKey,
+        now_ms: u64,
+    ) -> Result<Checkpoint> {
+        let device = membership.device(issuer_device_id).ok_or_else(|| {
+            Error::new(
+                ChurStatus::AuthenticationFailed,
+                "checkpoint issuer is not enrolled",
+            )
+        })?;
+        ensure!(
+            device.status() == DeviceStatus::Active
+                && device.signing_public_key() == &signing_key.verifying_key(),
+            AuthenticationFailed,
+            "checkpoint key is not the current active device key"
+        );
+        let latest = self.latest_operations()?;
+        let issuer = latest.get(issuer_device_id).ok_or_else(|| {
+            Error::new(
+                ChurStatus::InvalidInput,
+                "checkpoint issuer has no accepted operation",
+            )
+        })?;
+        let heads = latest
+            .iter()
+            .map(|(device_id, operation)| {
+                CheckpointHead::new(*device_id, operation.device_sequence(), *operation.digest())
+            })
+            .collect();
+        let checkpoint = Checkpoint::new(
+            *membership.vault_id(),
+            *issuer_device_id,
+            issuer.device_sequence(),
+            membership.generation(),
+            *membership.commitment(),
+            heads,
+            current_collection_epoch_commitment(db)?,
+            UNCOMPACTED_CATALOG_STATE_COMMITMENT,
+        )?
+        .sign(signing_key);
+        self.accept_checkpoint(db, &checkpoint, membership, true, now_ms)?;
+        Ok(checkpoint)
     }
 
     /// Builds the next signed operation without changing durable state.
@@ -530,6 +582,45 @@ pub fn records_after(db: &CatalogDb, device_id: &Id, after_sequence: u64) -> Res
     Ok(records)
 }
 
+fn current_collection_epoch_commitment(db: &CatalogDb) -> Result<Commitment> {
+    let limit = as_sqlite_integer(
+        catalog_bounds::COLLECTIONS_MAX + 1,
+        "the collection query limit is too large",
+    )?;
+    let mut statement = db
+        .connection()
+        .prepare(
+            "SELECT collection_id, current_epoch FROM collections
+              ORDER BY collection_id LIMIT ?1",
+        )
+        .map_err(|error| map_sqlite(error, "collection epochs could not be prepared"))?;
+    let rows = statement
+        .query_map([limit], |row| {
+            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(|error| map_sqlite(error, "collection epochs could not be read"))?;
+    let mut epochs = Vec::new();
+    for row in rows {
+        let (collection_id, epoch) =
+            row.map_err(|error| map_sqlite(error, "a collection epoch could not be read"))?;
+        epochs.push((
+            crate::row::id(&collection_id, "a collection id is malformed")?,
+            from_sqlite_integer(epoch, "a collection epoch is negative")?,
+        ));
+    }
+    ensure!(
+        u64::try_from(epochs.len()).is_ok_and(|count| count <= catalog_bounds::COLLECTIONS_MAX),
+        CatalogCorrupt,
+        "the catalog exceeds the collection limit"
+    );
+    collection_epoch_commitment(&epochs).map_err(|_| {
+        Error::new(
+            ChurStatus::CatalogCorrupt,
+            "the current collection epochs are malformed",
+        )
+    })
+}
+
 fn persist_fork(
     db: &mut CatalogDb,
     device_id: &Id,
@@ -958,8 +1049,9 @@ mod tests {
     use super::*;
     use crate::{
         db::{CatalogKey, CatalogLocation},
+        model::{COLLECTION_POLICY_VAULT_DEFAULT, COLLECTION_STATUS_ACTIVE, Collection},
         schema::open_at_current_version,
-        sync_membership,
+        store, sync_membership,
     };
     use chur_crypto::{Key, Nonce, random};
     use chur_sync_protocol::{
@@ -1183,6 +1275,56 @@ mod tests {
         assert!(
             !log.own_checkpoint_covers_current_heads(&db)
                 .expect("stale checkpoint")
+        );
+    }
+
+    #[test]
+    fn own_checkpoint_is_authored_from_durable_heads_and_collection_epochs() {
+        let (mut db, membership, key) = setup();
+        for (marker, epoch) in [(7, 3), (6, 2)] {
+            store::put_collection(
+                &mut db,
+                &Collection {
+                    collection_id: id(marker),
+                    current_epoch: epoch,
+                    policy_type: COLLECTION_POLICY_VAULT_DEFAULT,
+                    created_revision: 1,
+                    status: COLLECTION_STATUS_ACTIVE,
+                },
+            )
+            .expect("collection");
+        }
+        let mut log = load(&db, &membership).expect("empty log");
+        let first = operation(&key, 1, [0; 32], 5);
+        log.accept_with(&mut db, &first, &membership, |_| Ok(()))
+            .expect("first");
+        let Err(error) = log.issue_own_checkpoint(
+            &mut db,
+            &membership,
+            &id(3),
+            &DeviceSigningKey::from_seed([9; 32]),
+            9,
+        ) else {
+            panic!("wrong checkpoint key was accepted");
+        };
+        assert_eq!(error.status(), ChurStatus::AuthenticationFailed);
+
+        let checkpoint = log
+            .issue_own_checkpoint(&mut db, &membership, &id(3), &key, 10)
+            .expect("checkpoint");
+        assert_eq!(
+            checkpoint.collection_epoch_commitment(),
+            &collection_epoch_commitment(&[(id(6), 2), (id(7), 3)]).expect("epochs")
+        );
+        assert_eq!(
+            checkpoint.catalog_state_commitment(),
+            &UNCOMPACTED_CATALOG_STATE_COMMITMENT
+        );
+        assert_eq!(checkpoint.heads().len(), 1);
+        assert_eq!(checkpoint.heads()[0].operation_digest(), &first.digest());
+        assert!(
+            log.own_checkpoint_covers_current_heads(&db)
+                .expect("coverage")
         );
     }
 
