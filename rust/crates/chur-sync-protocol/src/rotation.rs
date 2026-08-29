@@ -10,6 +10,7 @@ use crate::state::MembershipState;
 
 const TAKEOVER_DELAY_MS: u64 = 24 * 60 * 60 * 1_000;
 
+#[derive(Clone)]
 struct Rotation {
     owner_device_id: Id,
     membership_generation: u64,
@@ -18,6 +19,7 @@ struct Rotation {
 }
 
 /// In-memory rules for one collection's epoch transition.
+#[derive(Clone)]
 pub struct CollectionEpochState {
     vault_id: Id,
     collection_id: Id,
@@ -69,6 +71,70 @@ impl CollectionEpochState {
             current_epoch,
             envelopes: by_object,
             rotation: None,
+        })
+    }
+
+    /// Rebuilds one unfinished rotation from authenticated catalog rows.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the arguments are the durable rotation record and its owning state"
+    )]
+    pub fn restore_active(
+        vault_id: Id,
+        collection_id: Id,
+        target_epoch: u64,
+        envelopes: Vec<ObjectKeyEnvelope>,
+        owner_device_id: Id,
+        membership_generation: u64,
+        accepted_at_ms: u64,
+        collection_envelope: CollectionKeyEnvelope,
+        membership: &MembershipState,
+        root: &Key,
+    ) -> Result<Self> {
+        ensure!(
+            target_epoch > 1
+                && membership_generation != 0
+                && membership.vault_id() == &vault_id
+                && membership.generation() >= membership_generation
+                && membership.device(&owner_device_id).is_some(),
+            AuthenticationFailed,
+            "durable rotation membership is not accepted"
+        );
+        ensure!(
+            collection_envelope.vault_id() == &vault_id
+                && collection_envelope.collection_id() == &collection_id
+                && collection_envelope.collection_epoch() == target_epoch,
+            AuthenticationFailed,
+            "durable collection envelope does not bind the target epoch"
+        );
+        collection_envelope.open(root)?;
+        let previous_epoch = target_epoch - 1;
+        let mut by_object = BTreeMap::new();
+        for envelope in envelopes {
+            ensure!(
+                envelope.vault_id() == &vault_id
+                    && envelope.collection_id() == &collection_id
+                    && matches!(envelope.collection_epoch(), epoch if epoch == previous_epoch || epoch == target_epoch),
+                CatalogCorrupt,
+                "durable object envelope is outside the active rotation"
+            );
+            ensure!(
+                by_object.insert(*envelope.object_id(), envelope).is_none(),
+                CatalogCorrupt,
+                "durable rotation has duplicate object envelopes"
+            );
+        }
+        Ok(Self {
+            vault_id,
+            collection_id,
+            current_epoch: target_epoch,
+            envelopes: by_object,
+            rotation: Some(Rotation {
+                owner_device_id,
+                membership_generation,
+                accepted_at_ms,
+                collection_envelope,
+            }),
         })
     }
 
@@ -204,6 +270,17 @@ impl CollectionEpochState {
     #[must_use]
     pub fn is_complete(&self) -> bool {
         self.rotation.is_some() && self.next_missing_object().is_none()
+    }
+
+    /// Closes an active rotation after every object reached the target epoch.
+    pub fn finish_rotation(&mut self) -> Result<()> {
+        ensure!(
+            self.is_complete(),
+            Conflict,
+            "collection rotation is not complete"
+        );
+        self.rotation = None;
+        Ok(())
     }
 
     /// Current envelope for one active object.
@@ -419,5 +496,62 @@ mod tests {
                 .is_err()
         );
         assert_eq!(state.next_missing_object(), Some(&id(10)));
+    }
+
+    #[test]
+    fn an_active_rotation_restores_and_finishes_only_after_every_rewrap() {
+        let (mut state, membership, old_key, new_key) = rotation();
+        let first = state.envelope(&id(10)).expect("first").clone();
+        state
+            .apply_rewrap(
+                &membership,
+                &id(2),
+                1_000,
+                &old_key,
+                &new_key,
+                destination(&first, &old_key, &new_key),
+            )
+            .expect("rewrap first");
+        let envelopes = [10, 20, 30]
+            .into_iter()
+            .map(|object| state.envelope(&id(object)).expect("envelope").clone())
+            .collect();
+        let collection = state
+            .collection_envelope()
+            .expect("collection envelope")
+            .clone();
+        let mut restored = CollectionEpochState::restore_active(
+            id(1),
+            id(10),
+            2,
+            envelopes,
+            id(2),
+            2,
+            1_000,
+            collection,
+            &membership,
+            &Key::new([1; 32]),
+        )
+        .expect("restore rotation");
+        assert_eq!(restored.next_missing_object(), Some(&id(20)));
+        assert_eq!(
+            restored.finish_rotation().expect_err("incomplete").status(),
+            ChurStatus::Conflict
+        );
+        for object in [20, 30] {
+            let old = restored.envelope(&id(object)).expect("old").clone();
+            restored
+                .apply_rewrap(
+                    &membership,
+                    &id(2),
+                    1_000,
+                    &old_key,
+                    &new_key,
+                    destination(&old, &old_key, &new_key),
+                )
+                .expect("rewrap");
+        }
+        restored.finish_rotation().expect("finish");
+        assert!(restored.collection_envelope().is_none());
     }
 }
