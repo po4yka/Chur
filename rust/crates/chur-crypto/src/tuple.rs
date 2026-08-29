@@ -74,6 +74,8 @@ pub mod tag {
     pub const SYNC_SERVER_DELETE: &[u8] = b"CHUR\0SYNC\0SERVER-DELETE\0V1";
     /// Device verification fingerprint.
     pub const IDENTITY_FINGERPRINT: &[u8] = b"CHUR\0IDENTITY\0FINGERPRINT\0V1";
+    /// Portable device-identity envelope AAD.
+    pub const DEVICE_IDENTITY_ENVELOPE: &[u8] = b"CHUR\0IDENTITY\0ENVELOPE\0V1";
 
     /// Every tag this build allocates, for the prefix-free check of §7.
     pub const ALL: &[&[u8]] = &[
@@ -104,6 +106,7 @@ pub mod tag {
         SYNC_MEMBERSHIP_CHAIN,
         SYNC_SERVER_DELETE,
         IDENTITY_FINGERPRINT,
+        DEVICE_IDENTITY_ENVELOPE,
     ];
 }
 

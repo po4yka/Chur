@@ -91,6 +91,19 @@ A skill synchronisation updates both hashes and the commit, and the checker is w
 
 ## Recorded additions
 
+### `x25519-dalek` 3.0.0, Rust sync core
+
+- **Capability:** X25519 device key pairs for Phase 3 enrollment, collection-key grants, and portable identity recovery. The protocol already selects X25519 and requires a key separate from Ed25519.
+- **Alternatives:** the Rust standard library and the existing Chur crates have no X25519 API. A local implementation would add an unaudited cryptographic primitive. A general TLS or cryptography library would add unrelated protocols and native code.
+- **Owner and maintenance:** the dalek-cryptography project maintains it in the same active `curve25519-dalek` workspace as `ed25519-dalek`. Version 3.0.0 has MSRV 1.85, which matches this workspace.
+- **License:** BSD-3-Clause, with the same notice obligation as the repository.
+- **Review history:** it uses the dalek Curve25519 implementation covered by the project's public review history. This does not replace the independent Phase 3 protocol review required by Gate 5.
+- **Unsafe and native footprint:** `x25519-dalek` is pure Rust, has no `build.rs`, and contains no `unsafe`. Its existing `curve25519-dalek` dependency has the reviewed build and optimized arithmetic surface recorded for `ed25519-dalek` below.
+- **Features:** exact version `=3.0.0`, default features disabled, only `static_secrets` and `zeroize` enabled. Chur supplies key bytes through its existing OS CSPRNG. Serde, crate-owned randomness, reusable-secret, and precomputed-table features are absent.
+- **Targets and size:** the crate is `no_std` and uses no platform API. It adds `rand_core` as an inert trait dependency and reuses the existing curve implementation. Android and iOS target builds remain release gates.
+- **Data and telemetry:** it receives only in-process key bytes and performs no file, environment, process, network, permission, logging, or telemetry operation.
+- **Update and removal:** updates require identity and grant vectors, mobile-target builds, advisory checks, and explicit lockfile review. Removal requires another reviewed X25519 implementation.
+
 ### `ed25519-dalek` 3.0.0, Rust sync core
 
 - **Capability:** RFC 8032 Ed25519 signatures for Phase 3 device identities, operation records, enrollment, revocation, and checkpoints. `CRYPTOGRAPHY.md` §5 and §52 already select Ed25519 and name this implementation direction.

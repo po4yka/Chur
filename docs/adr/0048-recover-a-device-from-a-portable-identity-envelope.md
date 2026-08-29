@@ -22,7 +22,7 @@ Creating a second permanent recovery signer would add another high-value private
 - a backup with no identity envelope still restores local content, but it cannot re-enter the old membership without another active device;
 - a stale backup with no surviving peer or witness retains the rollback limitation of `ROLLBACK_PROTECTION.md` §7. The product shows the checkpoint date after unlock and does not claim server freshness.
 
-The envelope uses the existing backup `Envelope` record type. Its exact inner encoding is frozen with the implementation; no new outer record type or key-derivation label is added.
+The envelope uses the existing backup `Envelope` record type. [`DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md) §6.1 freezes its 153-byte inner encoding; no new outer record type or key-derivation label is added.
 
 ## Alternatives considered
 
@@ -70,5 +70,4 @@ Local-only v1 backups remain valid and restore local content. A sync-enabled res
 
 ## Follow-up
 
-- freeze and implement `DeviceIdentityEnvelopeV1` before enabling sync or portable identity backup;
 - persist the latest own checkpoint in the encrypted catalog before enabling recovery enrollment.

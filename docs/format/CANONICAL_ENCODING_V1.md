@@ -466,8 +466,9 @@ A domain tag is a fixed ASCII byte constant written without a length prefix, per
 | `CHUR\x00SYNC\x00MEMBERSHIP-CHAIN\x00V1` | membership-state commitment | [`../sync/DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md) §4.1 |
 | `CHUR\x00SYNC\x00SERVER-DELETE\x00V1` | opaque server deletion authorization signature | [`../sync/SYNC_PROTOCOL_V1.md`](../sync/SYNC_PROTOCOL_V1.md) §9.1 |
 | `CHUR\x00IDENTITY\x00FINGERPRINT\x00V1` | device verification fingerprint | [`../sync/DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md) §5 |
+| `CHUR\x00IDENTITY\x00ENVELOPE\x00V1` | portable device-identity envelope AAD | [`../sync/DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md) §6.1 |
 
-No allocated tag is a byte prefix of another, as §7 requires; the twenty-seven above are checked pairwise by `chur-crypto`. Tags within one area differ at the first purpose byte or at a separator followed by a suffix; tags in different areas differ before the purpose.
+No allocated tag is a byte prefix of another, as §7 requires; the twenty-eight above are checked pairwise by `chur-crypto`. Tags within one area differ at the first purpose byte or at a separator followed by a suffix; tags in different areas differ before the purpose.
 
 The fingerprint tag reaches no persisted or wire bytes; it is the input to a string a person reads, so the ADR requirement of §15.6 does not apply to it. A tag for an authenticated record whose AAD is not yet frozen is otherwise allocated by a row here in the same change that freezes that record.
 

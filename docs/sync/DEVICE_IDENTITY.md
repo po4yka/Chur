@@ -111,6 +111,27 @@ Server-displayed names alone are not proof. Which of these is required and which
 
 Optional Secure Enclave/Android hardware identity keys require separate suite and interoperability ADR; default portable Rust keys simplify recovery and protocol consistency.
 
+### 6.1 Portable recovery envelope
+
+`DeviceIdentityEnvelopeV1` is exactly 153 bytes:
+
+```text
+protocol_version:u16                         = 0x0001
+encoding_profile:u16                         = 0x0001
+signing_suite:u16                            = 0x0001 (Ed25519)
+hpke_suite:u16                               = 0x0001 (X25519)
+vault_id:bytes[16]
+device_id:bytes[16]
+identity_generation:u64                      = 1..0xFFFFFFFFFFFFFFFE
+recovery_only:u8                             = 0x01
+nonce:bytes[24]
+wrapped_identity:bytes[80]
+```
+
+The 64-byte plaintext is the 32-byte Ed25519 seed followed by the 32-byte X25519 private key. `wrapped_identity` is XChaCha20-Poly1305 ciphertext and its 16-byte tag. The wrapping key is `HKDF(VaultRootSecret, "chur/v1/root/device-identity-wrap", vault_id)` from [`../security/KEY_HIERARCHY.md`](../security/KEY_HIERARCHY.md).
+
+The AAD is the canonical tuple with tag `CHUR\x00IDENTITY\x00ENVELOPE\x00V1`, followed by `protocol_version`, `encoding_profile`, `signing_suite`, `hpke_suite`, `vault_id`, `device_id`, `identity_generation`, and `recovery_only`, in that order. The nonce is public and is not in the AAD because the AEAD construction authenticates it as an input. A decoder rejects another version, suite, length, generation, or recovery-purpose byte before it releases private key material.
+
 ## 7. Sequence and signing
 
 Every device maintains a strictly increasing operation sequence. Signatures bind:

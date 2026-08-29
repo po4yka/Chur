@@ -30,6 +30,10 @@ impl DeviceSigningKey {
         self.0.verifying_key().to_bytes()
     }
 
+    pub(crate) fn seed_bytes(&self) -> Zeroizing<[u8; 32]> {
+        Zeroizing::new(self.0.to_bytes())
+    }
+
     pub(crate) fn sign_bytes(&self, bytes: &[u8]) -> [u8; SIGNATURE_LEN] {
         self.0.sign(bytes).to_bytes()
     }

@@ -11,6 +11,7 @@ chur-core.workspace = true
 chur-crypto.workspace = true
 chur-format.workspace = true
 ed25519-dalek.workspace = true
+x25519-dalek.workspace = true
 zeroize.workspace = true
 
 [lints]
