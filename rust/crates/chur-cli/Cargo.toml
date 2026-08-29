@@ -16,6 +16,7 @@ chur-crypto.workspace = true
 chur-format.workspace = true
 chur-catalog.workspace = true
 chur-media.workspace = true
+chur-sync-protocol.workspace = true
 
 clap.workspace = true
 hex.workspace = true

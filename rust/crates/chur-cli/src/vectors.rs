@@ -38,6 +38,11 @@ use chur_format::envelope::{CollectionKeyEnvelope, ObjectKeyEnvelope};
 use chur_format::slot::{
     AndroidKeystoreSlotBody, AppleKeychainSlotBody, PasswordSlotBody, RecoverySlotBody, SlotBinding,
 };
+use chur_sync_protocol::checkpoint::{
+    Checkpoint, CheckpointHead, UNCOMPACTED_CATALOG_STATE_COMMITMENT, collection_epoch_commitment,
+};
+use chur_sync_protocol::membership::{EnrollmentRecord, RevocationRecord};
+use chur_sync_protocol::operation::{DeviceSigningKey, ObservedHead, Operation};
 
 use crate::manifest::{Vector, VectorBuilder, hex_of, number};
 
@@ -85,6 +90,7 @@ pub fn build_all() -> Result<Vec<Vector>> {
     object_key_envelopes(&mut vectors)?;
     object_containers(&mut vectors)?;
     backup_packages(&mut vectors)?;
+    sync_protocol(&mut vectors)?;
     vectors.sort_by(|left, right| left.entry.vector_id.cmp(&right.entry.vector_id));
     Ok(vectors)
 }
@@ -98,6 +104,9 @@ const COLLECTION_ENVELOPE_SPEC: &str = "docs/format/COLLECTION_KEY_ENVELOPE_V1.m
 const OBJECT_ENVELOPE_SPEC: &str = "docs/format/OBJECT_KEY_ENVELOPE_V1.md";
 const RECOVERY_SPEC: &str = "docs/security/RECOVERY.md";
 const BACKUP_SPEC: &str = "docs/format/BACKUP_FORMAT_V1.md";
+const OPERATION_SPEC: &str = "docs/sync/OPERATION_LOG.md";
+const IDENTITY_SPEC: &str = "docs/sync/DEVICE_IDENTITY.md";
+const ROLLBACK_SPEC: &str = "docs/sync/ROLLBACK_PROTECTION.md";
 
 // ---------------------------------------------------------------------------
 // Canonical encoding
@@ -1313,6 +1322,224 @@ fn backup_packages(out: &mut Vec<Vector>) -> Result<()> {
         .input_bytes("manifest_key", manifest_key.expose())
         .input_bytes("vault_id", vault_id.as_bytes())
         .input_bytes("record", &commit_record)
+        .note(TEST_ONLY)
+        .build(),
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Sync protocol
+// ---------------------------------------------------------------------------
+
+fn sync_protocol(out: &mut Vec<Vector>) -> Result<()> {
+    let vault_id = id(0x11)?;
+    let owner_device_id = id(0x21)?;
+    let peer_device_id = id(0x22)?;
+    let owner_seed = [0x81; 32];
+    let peer_seed = [0x82; 32];
+    let owner_key = DeviceSigningKey::from_seed(owner_seed);
+    let peer_key = DeviceSigningKey::from_seed(peer_seed);
+    let owner_hpke_public_key = [0x83; 32];
+    let peer_hpke_public_key = [0x84; 32];
+
+    let initial = EnrollmentRecord::initial(
+        vault_id,
+        owner_device_id,
+        owner_key.verifying_key(),
+        owner_hpke_public_key,
+    )?
+    .sign(&owner_key);
+    out.push(
+        VectorBuilder::accept(
+            "operation",
+            "operation-v1-initial-enrollment",
+            IDENTITY_SPEC,
+            "4",
+            "Generation-one self-enrollment fixes the device suites, capability, signature, and membership-chain commitment.",
+        )
+        .input_bytes("device_signing_seed", &owner_seed)
+        .input_bytes("vault_id", vault_id.as_bytes())
+        .input_bytes("device_id", owner_device_id.as_bytes())
+        .input_bytes("hpke_public_key", &owner_hpke_public_key)
+        .expect_bytes("signing_public_key", &owner_key.verifying_key())
+        .expect_bytes("record", &initial.encode())
+        .expect_bytes("membership_commitment", &initial.commitment())
+        .expect("record_length", json!(initial.encode().len()))
+        .note(TEST_ONLY)
+        .build(),
+    );
+
+    let payload_key = key(0x85);
+    let operation_nonce = nonce(0x86);
+    let payload = b"sync-vector-payload";
+    let operation = Operation::seal(
+        id(0x31)?,
+        vault_id,
+        owner_device_id,
+        1,
+        [0; 32],
+        Vec::<ObservedHead>::new(),
+        id(0x32)?,
+        &payload_key,
+        operation_nonce,
+        payload,
+    )?
+    .sign(&owner_key);
+    out.push(
+        VectorBuilder::accept(
+            "operation",
+            "operation-v1-signed-record",
+            OPERATION_SPEC,
+            "4",
+            "One genesis operation fixes payload encryption, canonical signing bytes, and the per-device chain digest.",
+        )
+        .input_bytes("device_signing_seed", &owner_seed)
+        .input_bytes("payload_key", payload_key.expose())
+        .input_bytes("nonce", operation_nonce.as_bytes())
+        .input_bytes("operation_id", operation.operation_id().as_bytes())
+        .input_bytes("vault_id", vault_id.as_bytes())
+        .input_bytes("device_id", owner_device_id.as_bytes())
+        .input("device_sequence", number(operation.device_sequence()))
+        .input_bytes("previous_operation_hash", operation.previous_operation_hash())
+        .input("observed_heads", json!([]))
+        .input_bytes("key_selector", operation.key_selector().as_bytes())
+        .input_bytes("payload_plaintext", payload)
+        .expect_bytes("signing_public_key", &owner_key.verifying_key())
+        .expect_bytes("record", &operation.encode())
+        .expect_bytes("operation_digest", &operation.digest())
+        .expect("record_length", json!(operation.encode().len()))
+        .note(TEST_ONLY)
+        .build(),
+    );
+
+    let epochs = [(id(0x41)?, 3), (id(0x42)?, 9)];
+    let epochs_commitment = collection_epoch_commitment(&epochs)?;
+    out.push(
+        VectorBuilder::accept(
+            "operation",
+            "operation-v1-collection-epoch-commitment",
+            ROLLBACK_SPEC,
+            "6.1",
+            "Two sorted current collection epochs fix the ordered checkpoint commitment input.",
+        )
+        .input_bytes("domain_tag", tag::SYNC_COLLECTION_EPOCHS)
+        .input(
+            "entries",
+            json!([
+                {"collection_id": hex_of(epochs[0].0.as_bytes()), "current_epoch": 3},
+                {"collection_id": hex_of(epochs[1].0.as_bytes()), "current_epoch": 9}
+            ]),
+        )
+        .expect_bytes("collection_epoch_commitment", &epochs_commitment)
+        .build(),
+    );
+
+    let checkpoint = Checkpoint::new(
+        vault_id,
+        owner_device_id,
+        operation.device_sequence(),
+        initial.membership_generation(),
+        initial.commitment(),
+        vec![CheckpointHead::new(
+            owner_device_id,
+            operation.device_sequence(),
+            operation.digest(),
+        )],
+        epochs_commitment,
+        UNCOMPACTED_CATALOG_STATE_COMMITMENT,
+    )?
+    .sign(&owner_key);
+    out.push(
+        VectorBuilder::accept(
+            "operation",
+            "operation-v1-checkpoint",
+            ROLLBACK_SPEC,
+            "6",
+            "A signed uncompacted checkpoint binds membership, exact device heads, and current collection epochs.",
+        )
+        .input_bytes("device_signing_seed", &owner_seed)
+        .input_bytes("vault_id", vault_id.as_bytes())
+        .input_bytes("issuer_device_id", owner_device_id.as_bytes())
+        .input("issuer_device_sequence", number(operation.device_sequence()))
+        .input("membership_generation", number(initial.membership_generation()))
+        .input_bytes("membership_commitment", &initial.commitment())
+        .input_bytes("operation_digest", &operation.digest())
+        .input_bytes("collection_epoch_commitment", &epochs_commitment)
+        .input_bytes(
+            "catalog_state_commitment",
+            &UNCOMPACTED_CATALOG_STATE_COMMITMENT,
+        )
+        .expect_bytes("record", &checkpoint.encode())
+        .expect_bytes("checkpoint_commitment", &checkpoint.commitment())
+        .expect("record_length", json!(checkpoint.encode().len()))
+        .note(TEST_ONLY)
+        .build(),
+    );
+
+    let successor = EnrollmentRecord::new(
+        vault_id,
+        peer_device_id,
+        peer_key.verifying_key(),
+        peer_hpke_public_key,
+        2,
+        owner_device_id,
+        2,
+        initial.commitment(),
+        checkpoint.commitment(),
+    )?
+    .sign(&owner_key);
+    out.push(
+        VectorBuilder::accept(
+            "operation",
+            "operation-v1-successor-enrollment",
+            IDENTITY_SPEC,
+            "4",
+            "A later enrollment binds the new keys to the prior membership head and the issuer's bootstrap checkpoint.",
+        )
+        .input_bytes("issuer_signing_seed", &owner_seed)
+        .input_bytes("device_id", peer_device_id.as_bytes())
+        .input_bytes("signing_public_key", &peer_key.verifying_key())
+        .input_bytes("hpke_public_key", &peer_hpke_public_key)
+        .input("created_sequence", number(2))
+        .input("membership_generation", number(2))
+        .input_bytes("previous_membership_commitment", &initial.commitment())
+        .input_bytes("bootstrap_checkpoint_commitment", &checkpoint.commitment())
+        .expect_bytes("record", &successor.encode())
+        .expect_bytes("membership_commitment", &successor.commitment())
+        .expect("record_length", json!(successor.encode().len()))
+        .note(TEST_ONLY)
+        .build(),
+    );
+
+    let peer_final_digest = [0x87; 32];
+    let revocation = RevocationRecord::new(
+        vault_id,
+        peer_device_id,
+        1,
+        peer_final_digest,
+        3,
+        owner_device_id,
+        successor.commitment(),
+    )?
+    .sign(&owner_key);
+    out.push(
+        VectorBuilder::accept(
+            "operation",
+            "operation-v1-revocation",
+            IDENTITY_SPEC,
+            "9",
+            "Device revocation pins the final accepted branch and advances the membership chain.",
+        )
+        .input_bytes("issuer_signing_seed", &owner_seed)
+        .input_bytes("revoked_device_id", peer_device_id.as_bytes())
+        .input("final_accepted_device_sequence", number(1))
+        .input_bytes("final_accepted_operation_digest", &peer_final_digest)
+        .input("membership_generation", number(3))
+        .input_bytes("previous_membership_commitment", &successor.commitment())
+        .expect_bytes("record", &revocation.encode())
+        .expect_bytes("membership_commitment", &revocation.commitment())
+        .expect("record_length", json!(revocation.encode().len()))
         .note(TEST_ONLY)
         .build(),
     );

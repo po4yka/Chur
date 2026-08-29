@@ -1,10 +1,10 @@
 {
   "manifest_version": 1,
-  "spec_commit": "6b0886f488f9bc806c8976b1b1c8af17f861f333",
+  "spec_commit": "08e5c3ae084e0c5de94a81dd77dca51998dec73e",
   "generator": {
     "name": "chur-cli",
     "version": "0.1.0",
-    "commit": "6b0886f488f9bc806c8976b1b1c8af17f861f333",
+    "commit": "08e5c3ae084e0c5de94a81dd77dca51998dec73e",
     "toolchain": "1.97.0-aarch64-apple-darwin"
   },
   "vectors": [
@@ -427,6 +427,42 @@
       "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
     },
     {
+      "vector_id": "key-derivation-v1-collection-sync-operations",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/collection/sync-operations` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "222222222222222222222222222222220000000000000001",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/collection/sync-operations"
+      },
+      "expected": {
+        "derived_key": "007aee7cfb0ca00850edf52bc7027adf5d65bd8950d2811c7c2661a76f441632",
+        "info": "43485552004b444600494e464f00563100000022636875722f76312f636f6c6c656374696f6e2f73796e632d6f7065726174696f6e73222222222222222222222222222222220000000000000001",
+        "info_length": 78
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-collection-sync-selector",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/collection/sync-selector` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "222222222222222222222222222222220000000000000001",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/collection/sync-selector"
+      },
+      "expected": {
+        "derived_key": "34c463330a9c92725ed87975eb610a8c5ba119208303c8703cfc41878cd1a614",
+        "info": "43485552004b444600494e464f00563100000020636875722f76312f636f6c6c656374696f6e2f73796e632d73656c6563746f72222222222222222222222222222222220000000000000001",
+        "info_length": 76
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
       "vector_id": "key-derivation-v1-object-content",
       "spec": "docs/security/KEY_HIERARCHY.md",
       "spec_section": "3",
@@ -823,6 +859,42 @@
       "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
     },
     {
+      "vector_id": "key-derivation-v1-root-sync-operations",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/root/sync-operations` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "11111111111111111111111111111111",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/root/sync-operations"
+      },
+      "expected": {
+        "derived_key": "1d538df6e4b732db34e1f784ce9bdda4fc74015f29ea7d2bf9f53e69349c2645",
+        "info": "43485552004b444600494e464f0056310000001c636875722f76312f726f6f742f73796e632d6f7065726174696f6e7311111111111111111111111111111111",
+        "info_length": 64
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-root-sync-selector",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/root/sync-selector` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "11111111111111111111111111111111",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/root/sync-selector"
+      },
+      "expected": {
+        "derived_key": "29954e2a5cd7e909ac1e3a4952cd324d2ec15efc40d92f82bdbbcf77312382e5",
+        "info": "43485552004b444600494e464f0056310000001a636875722f76312f726f6f742f73796e632d73656c6563746f7211111111111111111111111111111111",
+        "info_length": 62
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
       "vector_id": "key-derivation-v1-slot-apple-device-kek",
       "spec": "docs/security/KEY_HIERARCHY.md",
       "spec_section": "3",
@@ -1107,6 +1179,144 @@
       "expected": {
         "ordered_chunk_commitment": "cc19f3a543c2c332a044d45b19ca89e67e35cf4c0159439d198d2ae10608ccae"
       }
+    },
+    {
+      "vector_id": "operation-v1-checkpoint",
+      "spec": "docs/sync/ROLLBACK_PROTECTION.md",
+      "spec_section": "6",
+      "purpose": "A signed uncompacted checkpoint binds membership, exact device heads, and current collection epochs.",
+      "outcome": "accept",
+      "inputs": {
+        "catalog_state_commitment": "0000000000000000000000000000000000000000000000000000000000000000",
+        "collection_epoch_commitment": "ce9e892bd5bd82d6e7d332c616b0bede4ae829af466aa425bb587bac08e83868",
+        "device_signing_seed": "8181818181818181818181818181818181818181818181818181818181818181",
+        "issuer_device_id": "21212121212121212121212121212121",
+        "issuer_device_sequence": 1,
+        "membership_commitment": "f5bd51317db45c83bff40897418297998ade5de15c157d4b90e4dd90b47df0f6",
+        "membership_generation": 1,
+        "operation_digest": "5fe525b1a9c4bfe310ed06fa820c6eec53e7521980742443df3e0275373fa8c3",
+        "vault_id": "11111111111111111111111111111111"
+      },
+      "expected": {
+        "checkpoint_commitment": "9a0a065f13db6d7a97f2741786f4cd24ecff3967a65869132930888c00a99323",
+        "record": "0001111111111111111111111111111111112121212121212121212121212121212100000000000000010000000000000001f5bd51317db45c83bff40897418297998ade5de15c157d4b90e4dd90b47df0f6000000012121212121212121212121212121212100000000000000015fe525b1a9c4bfe310ed06fa820c6eec53e7521980742443df3e0275373fa8c3ce9e892bd5bd82d6e7d332c616b0bede4ae829af466aa425bb587bac08e838680000000000000000000000000000000000000000000000000000000000000000010333132b3f7fde7c5ec5b2172867ebf03cf443c64d44ba2bd07341d2fbe11f444391283e16332ce0e46ab21231f9907b8c6e1eca632f6890385c167b2ca802",
+        "record_length": 270
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "operation-v1-collection-epoch-commitment",
+      "spec": "docs/sync/ROLLBACK_PROTECTION.md",
+      "spec_section": "6.1",
+      "purpose": "Two sorted current collection epochs fix the ordered checkpoint commitment input.",
+      "outcome": "accept",
+      "inputs": {
+        "domain_tag": "434855520053594e4300434f4c4c454354494f4e2d45504f434853005631",
+        "entries": [
+          {
+            "collection_id": "41414141414141414141414141414141",
+            "current_epoch": 3
+          },
+          {
+            "collection_id": "42424242424242424242424242424242",
+            "current_epoch": 9
+          }
+        ]
+      },
+      "expected": {
+        "collection_epoch_commitment": "ce9e892bd5bd82d6e7d332c616b0bede4ae829af466aa425bb587bac08e83868"
+      }
+    },
+    {
+      "vector_id": "operation-v1-initial-enrollment",
+      "spec": "docs/sync/DEVICE_IDENTITY.md",
+      "spec_section": "4",
+      "purpose": "Generation-one self-enrollment fixes the device suites, capability, signature, and membership-chain commitment.",
+      "outcome": "accept",
+      "inputs": {
+        "device_id": "21212121212121212121212121212121",
+        "device_signing_seed": "8181818181818181818181818181818181818181818181818181818181818181",
+        "hpke_public_key": "8383838383838383838383838383838383838383838383838383838383838383",
+        "vault_id": "11111111111111111111111111111111"
+      },
+      "expected": {
+        "membership_commitment": "f5bd51317db45c83bff40897418297998ade5de15c157d4b90e4dd90b47df0f6",
+        "record": "00011111111111111111111111111111111121212121212121212121212121212121000193db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a370001838383838383838383838383838383838383838383838383838383838383838300000000000000010000000000000001212121212121212121212121212121210000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001b179a1f358276e4055a57475d3c3e6252720f5efa17023c7bf34d55def9026f44872317fcebefeaee38631fcec7ff14c90de5c6962cbaa02dabeef2a3c55f04",
+        "record_length": 270,
+        "signing_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37"
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "operation-v1-revocation",
+      "spec": "docs/sync/DEVICE_IDENTITY.md",
+      "spec_section": "9",
+      "purpose": "Device revocation pins the final accepted branch and advances the membership chain.",
+      "outcome": "accept",
+      "inputs": {
+        "final_accepted_device_sequence": 1,
+        "final_accepted_operation_digest": "8787878787878787878787878787878787878787878787878787878787878787",
+        "issuer_signing_seed": "8181818181818181818181818181818181818181818181818181818181818181",
+        "membership_generation": 3,
+        "previous_membership_commitment": "877b94149d60acbdca35c3cadd4a8ddda0c7207fcec52d6780e65ed0042b4103",
+        "revoked_device_id": "22222222222222222222222222222222"
+      },
+      "expected": {
+        "membership_commitment": "57480d7e71c519052f6d5bf8c00879a532ca78665f7524cc5a221e067eccc9de",
+        "record": "0001111111111111111111111111111111112222222222222222222222222222222200000000000000018787878787878787878787878787878787878787878787878787878787878787000000000000000321212121212121212121212121212121877b94149d60acbdca35c3cadd4a8ddda0c7207fcec52d6780e65ed0042b41032909703dbcd70361f6aac2c806143baa0e9e41368888f32ce005bb5efc8ba38af0551aa67a854b3756eb9d22e19c2076316dae996b499b8e91b358fca28cd505",
+        "record_length": 194
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "operation-v1-signed-record",
+      "spec": "docs/sync/OPERATION_LOG.md",
+      "spec_section": "4",
+      "purpose": "One genesis operation fixes payload encryption, canonical signing bytes, and the per-device chain digest.",
+      "outcome": "accept",
+      "inputs": {
+        "device_id": "21212121212121212121212121212121",
+        "device_sequence": 1,
+        "device_signing_seed": "8181818181818181818181818181818181818181818181818181818181818181",
+        "key_selector": "32323232323232323232323232323232",
+        "nonce": "868686868686868686868686868686868686868686868686",
+        "observed_heads": [],
+        "operation_id": "31313131313131313131313131313131",
+        "payload_key": "8585858585858585858585858585858585858585858585858585858585858585",
+        "payload_plaintext": "73796e632d766563746f722d7061796c6f6164",
+        "previous_operation_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "vault_id": "11111111111111111111111111111111"
+      },
+      "expected": {
+        "operation_digest": "5fe525b1a9c4bfe310ed06fa820c6eec53e7521980742443df3e0275373fa8c3",
+        "record": "00013131313131313131313131313131313111111111111111111111111111111111212121212121212121212121212121210000000000000001000000000000000000000000000000000000000000000000000000000000000000000000323232323232323232323232323232320000003b8686868686868686868686868686868686868686868686868b00de3c8d17b2b587005234c651b98af5cb9019127246986fb8b4565356e5044f33e35df23f4f7fde1390117f746c3deec633f89c790783d35f92a3e58a58e99e0eca294324c94e4e8746faa890780f7b7d74eb5f23d033437a9fdd79afc428126a0e",
+        "record_length": 237,
+        "signing_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37"
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "operation-v1-successor-enrollment",
+      "spec": "docs/sync/DEVICE_IDENTITY.md",
+      "spec_section": "4",
+      "purpose": "A later enrollment binds the new keys to the prior membership head and the issuer's bootstrap checkpoint.",
+      "outcome": "accept",
+      "inputs": {
+        "bootstrap_checkpoint_commitment": "9a0a065f13db6d7a97f2741786f4cd24ecff3967a65869132930888c00a99323",
+        "created_sequence": 2,
+        "device_id": "22222222222222222222222222222222",
+        "hpke_public_key": "8484848484848484848484848484848484848484848484848484848484848484",
+        "issuer_signing_seed": "8181818181818181818181818181818181818181818181818181818181818181",
+        "membership_generation": 2,
+        "previous_membership_commitment": "f5bd51317db45c83bff40897418297998ade5de15c157d4b90e4dd90b47df0f6",
+        "signing_public_key": "fa01347a991e04ae0f1a6d81db29a5ea4eeb5965f577ac9efb44e7b1f2fbb028"
+      },
+      "expected": {
+        "membership_commitment": "877b94149d60acbdca35c3cadd4a8ddda0c7207fcec52d6780e65ed0042b4103",
+        "record": "000111111111111111111111111111111111222222222222222222222222222222220001fa01347a991e04ae0f1a6d81db29a5ea4eeb5965f577ac9efb44e7b1f2fbb0280001848484848484848484848484848484848484848484848484848484848484848400000000000000010000000000000002212121212121212121212121212121210000000000000002f5bd51317db45c83bff40897418297998ade5de15c157d4b90e4dd90b47df0f69a0a065f13db6d7a97f2741786f4cd24ecff3967a65869132930888c00a99323d3bcb7738ae6e0abeae009e9dc3fe47b50a594027c0999a8868e2c652801678bd6a913205abe78e00939fcf8e66a091ab4c1217c2af53b887ef7dfa4dcc8890b",
+        "record_length": 270
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
     },
     {
       "vector_id": "password-slot-v1-frozen-floor-profile",
