@@ -16,9 +16,13 @@ use chur_crypto::{
     password::{self, Argon2Params},
     random, recovery,
 };
-use chur_format::constants::{SlotType, VaultState};
+use chur_format::constants::{
+    CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, DESCRIPTOR_VERSION_V1, SlotType,
+    VaultState,
+};
 use chur_format::descriptor::{
-    CatalogDescriptor, KeySlotDescriptor, ObjectStoreDescriptor, VaultDescriptor,
+    CatalogDescriptor, KeySlotDescriptor, MigrationDescriptor, ObjectStoreDescriptor,
+    VaultDescriptor,
 };
 use chur_format::slot::{
     AndroidKeystoreSlotBody, AppleKeychainSlotBody, PasswordSlotBody, RecoverySlotBody, SlotBinding,
@@ -200,7 +204,7 @@ pub fn create_with_params(
         descriptor_generation: 0,
         state: VaultState::Initializing,
         catalog: CatalogDescriptor {
-            catalog_format_version: chur_format::constants::CATALOG_FORMAT_VERSION_V1,
+            catalog_format_version: CATALOG_FORMAT_VERSION_V2,
             opaque_catalog_path_id: catalog_path_id,
             catalog_generation,
             catalog_header_commitment: header_commitment,
@@ -510,11 +514,11 @@ fn finish_unlock(
     root_secret: Key,
     now_ms: u64,
 ) -> Result<Session> {
-    let descriptor = VaultDescriptor::authenticate(bytes, Some(&root_secret))?;
+    let mut descriptor = VaultDescriptor::authenticate(bytes, Some(&root_secret))?;
     ensure!(
-        descriptor.state == VaultState::Active,
+        matches!(descriptor.state, VaultState::Active | VaultState::Migrating),
         VaultIncomplete,
-        "the descriptor is not in the only ordinarily openable state"
+        "the descriptor is neither active nor a resumable migration"
     );
     let catalog_key = CatalogKey::derive(&root_secret, &descriptor.vault_id)?;
     let path = root_dir.catalog(
@@ -534,9 +538,45 @@ fn finish_unlock(
         "the catalog file is not the one this descriptor commits to"
     );
     let mut catalog = CatalogDb::open(&CatalogLocation::File(&path), &catalog_key)?;
+    let version = schema::recorded_version(catalog.connection())?
+        .ok_or_else(|| chur_core::err!(CatalogCorrupt, "the catalog schema is absent"))?;
+
+    if descriptor.state == VaultState::Active
+        && descriptor.catalog.catalog_format_version == CATALOG_FORMAT_VERSION_V1
+        && version == CATALOG_FORMAT_VERSION_V1
+    {
+        descriptor = begin_catalog_v2_migration(root_dir, entry_name, &descriptor, &root_secret)?;
+    }
+
+    if descriptor.state == VaultState::Migrating {
+        validate_catalog_v2_migration(&descriptor)?;
+        ensure!(
+            matches!(
+                version,
+                CATALOG_FORMAT_VERSION_V1 | CATALOG_FORMAT_VERSION_V2
+            ),
+            MigrationRequired,
+            "the migrating descriptor and catalog versions are unsupported"
+        );
+        if version == CATALOG_FORMAT_VERSION_V1 {
+            schema::migrate_v1_to_v2(&mut catalog, &descriptor.vault_id)?;
+        }
+        catalog.checkpoint()?;
+        let commitment = catalog_header_commitment(&path)?;
+        descriptor = finish_catalog_v2_migration(
+            root_dir,
+            entry_name,
+            &descriptor,
+            &root_secret,
+            commitment,
+        )?;
+    }
+
     let version = schema::open_at_current_version(&mut catalog, now_ms)?;
     ensure!(
-        version == chur_format::constants::CATALOG_FORMAT_VERSION_V1,
+        descriptor.state == VaultState::Active
+            && descriptor.catalog.catalog_format_version == CATALOG_FORMAT_VERSION_V2
+            && version == CATALOG_FORMAT_VERSION_V2,
         CatalogCorrupt,
         "the catalog format version disagrees with the descriptor"
     );
@@ -548,6 +588,68 @@ fn finish_unlock(
         catalog: Some(catalog),
         pending_keystore: None,
     })
+}
+
+fn begin_catalog_v2_migration(
+    root_dir: &VaultRoot,
+    entry_name: &RegistryName,
+    descriptor: &VaultDescriptor,
+    root: &Key,
+) -> Result<VaultDescriptor> {
+    let mut candidate = descriptor.clone();
+    candidate.descriptor_generation = next_descriptor_generation(descriptor)?;
+    candidate.state = VaultState::Migrating;
+    candidate.migration = Some(MigrationDescriptor {
+        from_descriptor_version: DESCRIPTOR_VERSION_V1,
+        to_descriptor_version: DESCRIPTOR_VERSION_V1,
+        from_catalog_format_version: CATALOG_FORMAT_VERSION_V1,
+        to_catalog_format_version: CATALOG_FORMAT_VERSION_V2,
+        migration_generation: 1,
+        checkpoint_id: random::id()?,
+    });
+    install_authenticated_descriptor(root_dir, entry_name, &candidate, root)?;
+    Ok(candidate)
+}
+
+fn validate_catalog_v2_migration(descriptor: &VaultDescriptor) -> Result<()> {
+    let migration = descriptor
+        .migration
+        .ok_or_else(|| chur_core::err!(VaultCorrupt, "the migration descriptor is absent"))?;
+    ensure!(
+        descriptor.catalog.catalog_format_version == CATALOG_FORMAT_VERSION_V1
+            && migration.from_descriptor_version == DESCRIPTOR_VERSION_V1
+            && migration.to_descriptor_version == DESCRIPTOR_VERSION_V1
+            && migration.from_catalog_format_version == CATALOG_FORMAT_VERSION_V1
+            && migration.to_catalog_format_version == CATALOG_FORMAT_VERSION_V2
+            && migration.migration_generation == 1,
+        MigrationRequired,
+        "the descriptor names an unsupported migration"
+    );
+    Ok(())
+}
+
+fn finish_catalog_v2_migration(
+    root_dir: &VaultRoot,
+    entry_name: &RegistryName,
+    descriptor: &VaultDescriptor,
+    root: &Key,
+    catalog_header_commitment: commit::Commitment,
+) -> Result<VaultDescriptor> {
+    let mut candidate = descriptor.clone();
+    candidate.descriptor_generation = next_descriptor_generation(descriptor)?;
+    candidate.state = VaultState::Active;
+    candidate.catalog.catalog_format_version = CATALOG_FORMAT_VERSION_V2;
+    candidate.catalog.catalog_header_commitment = catalog_header_commitment;
+    candidate.migration = None;
+    install_authenticated_descriptor(root_dir, entry_name, &candidate, root)?;
+    Ok(candidate)
+}
+
+fn next_descriptor_generation(descriptor: &VaultDescriptor) -> Result<u64> {
+    descriptor
+        .descriptor_generation
+        .checked_add(1)
+        .ok_or_else(|| chur_core::err!(VaultCorrupt, "the descriptor generation has no successor"))
 }
 
 impl Session {
@@ -870,31 +972,13 @@ impl Session {
     fn commit_slots(&mut self, change: impl FnOnce(&mut Vec<KeySlotDescriptor>)) -> Result<()> {
         let mut candidate = self.descriptor.clone();
         change(&mut candidate.key_slots);
-        candidate.descriptor_generation = self
-            .descriptor
-            .descriptor_generation
-            .checked_add(1)
-            .ok_or_else(|| {
-                chur_core::err!(VaultCorrupt, "the descriptor generation has no successor")
-            })?;
-        write_temporary(
+        candidate.descriptor_generation = next_descriptor_generation(&self.descriptor)?;
+        install_authenticated_descriptor(
             &self.root_dir,
             &self.entry_name,
             &candidate,
             &self.root_secret,
         )?;
-        let temporary = self.root_dir.registry_temporary(&self.entry_name);
-        let written = std::fs::read(&temporary)
-            .map_err(|_| chur_core::err!(IoFailure, "the descriptor could not be read back"))?;
-        let verified = VaultDescriptor::authenticate(&written, Some(&self.root_secret))?;
-        ensure!(
-            verified.descriptor_generation == candidate.descriptor_generation,
-            VaultCorrupt,
-            "the written descriptor is not the one that was built"
-        );
-        std::fs::rename(&temporary, self.root_dir.registry_entry(&self.entry_name))
-            .map_err(|_| chur_core::err!(IoFailure, "the descriptor could not be installed"))?;
-        sync_directory(&self.root_dir.registry())?;
         self.descriptor = candidate;
         Ok(())
     }
@@ -1021,6 +1105,38 @@ pub fn install_descriptor(
     sync_directory(&root_dir.registry())
 }
 
+/// Validates and, when needed, migrates a restored catalog before its
+/// descriptor is installed into the registry.
+///
+/// The restore namespace is not openable yet, so it does not need an
+/// intermediate installed `MIGRATING` descriptor. The caller must update the
+/// unpublished descriptor to catalog v2 before making it active when this
+/// function returns `true`.
+pub fn prepare_restored_catalog(
+    catalog: &mut CatalogDb,
+    descriptor: &VaultDescriptor,
+) -> Result<bool> {
+    ensure!(
+        descriptor.state == VaultState::Active,
+        VaultIncomplete,
+        "the restored descriptor is not active"
+    );
+    let version = schema::recorded_version(catalog.connection())?
+        .ok_or_else(|| chur_core::err!(CatalogCorrupt, "the restored catalog schema is absent"))?;
+    match (descriptor.catalog.catalog_format_version, version) {
+        (CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V1) => {
+            schema::migrate_v1_to_v2(catalog, &descriptor.vault_id)?;
+            catalog.checkpoint()?;
+            Ok(true)
+        }
+        (CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V2) => Ok(false),
+        _ => bail!(
+            MigrationRequired,
+            "the restored descriptor and catalog versions are unsupported"
+        ),
+    }
+}
+
 fn open_password_slot(descriptor: &VaultDescriptor, canonical: &[u8]) -> Result<Key> {
     let Some(entry) = descriptor.password_slot() else {
         bail!(VaultIncomplete, "the descriptor carries no password slot");
@@ -1037,6 +1153,27 @@ fn write_temporary(
 ) -> Result<()> {
     let bytes = descriptor.encode(root)?;
     write_durably(&root_dir.registry_temporary(entry_name), &bytes)
+}
+
+fn install_authenticated_descriptor(
+    root_dir: &VaultRoot,
+    entry_name: &RegistryName,
+    descriptor: &VaultDescriptor,
+    root: &Key,
+) -> Result<()> {
+    write_temporary(root_dir, entry_name, descriptor, root)?;
+    let temporary = root_dir.registry_temporary(entry_name);
+    let written = std::fs::read(&temporary)
+        .map_err(|_| chur_core::err!(IoFailure, "the descriptor could not be read back"))?;
+    let verified = VaultDescriptor::authenticate(&written, Some(root))?;
+    ensure!(
+        &verified == descriptor,
+        VaultCorrupt,
+        "the written descriptor is not the one that was built"
+    );
+    std::fs::rename(&temporary, root_dir.registry_entry(entry_name))
+        .map_err(|_| chur_core::err!(IoFailure, "the descriptor could not be installed"))?;
+    sync_directory(&root_dir.registry())
 }
 
 /// Writes a file and fsyncs it, which §9 requires before the verification step.
@@ -1132,6 +1269,36 @@ mod tests {
             .expect("activate")
     }
 
+    fn install_v1_state(session: &mut Session) -> VaultDescriptor {
+        schema::reset_to_v1(session.catalog().expect("catalog")).expect("reset to v1");
+        let mut descriptor = session.descriptor.clone();
+        descriptor.descriptor_generation += 1;
+        descriptor.catalog.catalog_format_version = CATALOG_FORMAT_VERSION_V1;
+        install_authenticated_descriptor(
+            &session.root_dir,
+            &session.entry_name,
+            &descriptor,
+            &session.root_secret,
+        )
+        .expect("install v1 descriptor");
+        descriptor
+    }
+
+    fn migrating_v2_descriptor(source: &VaultDescriptor) -> VaultDescriptor {
+        let mut descriptor = source.clone();
+        descriptor.descriptor_generation += 1;
+        descriptor.state = VaultState::Migrating;
+        descriptor.migration = Some(MigrationDescriptor {
+            from_descriptor_version: DESCRIPTOR_VERSION_V1,
+            to_descriptor_version: DESCRIPTOR_VERSION_V1,
+            from_catalog_format_version: CATALOG_FORMAT_VERSION_V1,
+            to_catalog_format_version: CATALOG_FORMAT_VERSION_V2,
+            migration_generation: 1,
+            checkpoint_id: random::id().expect("checkpoint id"),
+        });
+        descriptor
+    }
+
     #[test]
     fn a_created_vault_unlocks_with_its_password() {
         let root_dir = scratch();
@@ -1148,6 +1315,61 @@ mod tests {
             &ObjectQuery::timeline(),
         )
         .expect("query");
+    }
+
+    #[test]
+    fn an_active_v1_vault_migrates_before_unlock_returns() {
+        let root_dir = scratch();
+        let mut session = make(&root_dir);
+        let source = install_v1_state(&mut session);
+        drop(session);
+
+        let reopened = unlock_with_password(&root_dir, PASSWORD, 2).expect("migrate and unlock");
+        assert_eq!(
+            reopened.descriptor.catalog.catalog_format_version,
+            CATALOG_FORMAT_VERSION_V2
+        );
+        assert_eq!(reopened.descriptor.state, VaultState::Active);
+        assert!(reopened.descriptor.migration.is_none());
+        assert_eq!(
+            reopened.descriptor.descriptor_generation,
+            source.descriptor_generation + 2
+        );
+    }
+
+    #[test]
+    fn a_v2_migration_resumes_on_either_side_of_the_sql_commit() {
+        for sql_committed in [false, true] {
+            let root_dir = scratch();
+            let mut session = make(&root_dir);
+            let source = install_v1_state(&mut session);
+            let migrating = migrating_v2_descriptor(&source);
+            install_authenticated_descriptor(
+                &root_dir,
+                &session.entry_name,
+                &migrating,
+                &session.root_secret,
+            )
+            .expect("install migrating descriptor");
+            if sql_committed {
+                let vault_id = session.descriptor.vault_id;
+                schema::migrate_v1_to_v2(session.catalog().expect("catalog"), &vault_id)
+                    .expect("commit catalog v2");
+            }
+            drop(session);
+
+            let reopened = unlock_with_password(&root_dir, PASSWORD, 2).expect("resume migration");
+            assert_eq!(reopened.descriptor.state, VaultState::Active);
+            assert_eq!(
+                reopened.descriptor.catalog.catalog_format_version,
+                CATALOG_FORMAT_VERSION_V2
+            );
+            assert!(reopened.descriptor.migration.is_none());
+            assert_eq!(
+                reopened.descriptor.descriptor_generation,
+                migrating.descriptor_generation + 1
+            );
+        }
     }
 
     #[test]

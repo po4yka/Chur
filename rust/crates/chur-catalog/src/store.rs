@@ -11,7 +11,10 @@
 //! catalog writes behind one mutex per session.
 
 use chur_core::{Id, Result, bail, ensure, limits::catalog as limits};
-use chur_format::constants::{IntegritySummary, ObjectState, StreamKind};
+use chur_format::{
+    constants::{IntegritySummary, ObjectState, StreamKind},
+    envelope::ObjectKeyEnvelope,
+};
 use rusqlite::{Transaction, params};
 
 use crate::db::{CatalogDb, as_sqlite_integer, from_sqlite_integer, map_sqlite};
@@ -371,6 +374,30 @@ fn insert_envelope_row(
     status: u8,
     body: &[u8],
 ) -> Result<()> {
+    let projection = if status == ENVELOPE_STATUS_ACTIVE {
+        let envelope = ObjectKeyEnvelope::decode(body)?;
+        ensure!(
+            envelope.object_id() == object_id && envelope.envelope_generation() == generation,
+            InvalidInput,
+            "the object envelope contradicts its catalog row"
+        );
+        let collection_bytes: Vec<u8> = transaction
+            .query_row(
+                "SELECT collection_id FROM objects WHERE object_id = ?1",
+                [object_id.as_bytes().as_slice()],
+                |row| row.get(0),
+            )
+            .map_err(|error| map_sqlite(error, "the object's collection could not be read"))?;
+        let collection_id = crate::row::id(&collection_bytes, "the collection id is malformed")?;
+        ensure!(
+            envelope.collection_id() == &collection_id,
+            InvalidInput,
+            "the object envelope names another collection"
+        );
+        Some((collection_id, envelope.collection_epoch()))
+    } else {
+        None
+    };
     let total: u64 = count_with(
         transaction,
         "SELECT count(*) FROM object_key_envelopes WHERE object_id = ?1",
@@ -405,6 +432,30 @@ fn insert_envelope_row(
             ],
         )
         .map_err(|error| map_sqlite(error, "the key envelope could not be written"))?;
+    if let Some((collection_id, collection_epoch)) = projection {
+        transaction
+            .execute(
+                "INSERT INTO sync_object_envelope_epochs
+                     (object_id, collection_id, collection_epoch, envelope_generation)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(object_id) DO UPDATE SET
+                     collection_id = excluded.collection_id,
+                     collection_epoch = excluded.collection_epoch,
+                     envelope_generation = excluded.envelope_generation
+                   WHERE excluded.envelope_generation
+                       > sync_object_envelope_epochs.envelope_generation",
+                params![
+                    object_id.as_bytes().as_slice(),
+                    collection_id.as_bytes().as_slice(),
+                    as_sqlite_integer(
+                        collection_epoch,
+                        "the envelope collection epoch is too large"
+                    )?,
+                    as_sqlite_integer(generation, "the envelope generation is too large")?,
+                ],
+            )
+            .map_err(|error| map_sqlite(error, "the envelope epoch could not be projected"))?;
+    }
     Ok(())
 }
 
@@ -1142,12 +1193,27 @@ mod tests {
     use crate::model::{COLLECTION_POLICY_VAULT_DEFAULT, COLLECTION_STATUS_ACTIVE};
     use crate::schema::open_at_current_version;
     use chur_core::ChurStatus;
-    use chur_crypto::{Key, random};
+    use chur_crypto::{Key, Nonce, random};
     use chur_format::constants::MediaClass;
 
     struct Fixture {
         db: CatalogDb,
         collection: Id,
+    }
+
+    fn envelope(collection_id: Id, object_id: Id, generation: u64) -> Vec<u8> {
+        ObjectKeyEnvelope::seal(
+            &random::secret::<32>().expect("collection key"),
+            random::id().expect("vault id"),
+            collection_id,
+            1,
+            object_id,
+            generation,
+            Nonce::random().expect("nonce"),
+            &random::secret::<32>().expect("object key"),
+        )
+        .expect("object envelope")
+        .encode()
     }
 
     fn fixture() -> Fixture {
@@ -1209,7 +1275,7 @@ mod tests {
                 complete_verified_ms: None,
                 final_commitment: [7u8; 32],
             },
-            envelope: vec![9u8; 142],
+            envelope: envelope(fixture.collection, object_id, 1),
             envelope_generation: 1,
             metadata: MetadataRevision {
                 object_id,
@@ -1248,6 +1314,17 @@ mod tests {
             active_envelope(&fixture.db, &object_id).expect("envelope"),
             activation.envelope
         );
+        let projection: (i64, i64) = fixture
+            .db
+            .connection()
+            .query_row(
+                "SELECT collection_epoch, envelope_generation
+                   FROM sync_object_envelope_epochs WHERE object_id = ?1",
+                [object_id.as_bytes().as_slice()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("envelope projection");
+        assert_eq!(projection, (1, 1));
         assert_eq!(
             active_metadata(&fixture.db, &object_id)
                 .expect("metadata")
@@ -1487,7 +1564,7 @@ mod tests {
                         &object_id,
                         generation,
                         ENVELOPE_STATUS_ACTIVE,
-                        &[0u8; 142],
+                        &envelope(fixture.collection, object_id, generation),
                     )
                 })
                 .expect("an envelope inside the bound");
@@ -1498,7 +1575,7 @@ mod tests {
                 &object_id,
                 5,
                 ENVELOPE_STATUS_ACTIVE,
-                &[0u8; 142],
+                &envelope(fixture.collection, object_id, 5),
             )
         });
         assert_eq!(rejection(outcome), ChurStatus::ResourceLimitExceeded);

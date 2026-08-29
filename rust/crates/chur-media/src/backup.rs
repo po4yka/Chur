@@ -35,7 +35,7 @@ use chur_format::backup::{
     RECORD_HEADER_LEN, RecordHeader, RecordType, SlotInventoryEntry, StreamInventoryEntry,
     framing_of, manifest_key,
 };
-use chur_format::constants::{CATALOG_FORMAT_VERSION_V1, SlotType, VaultState};
+use chur_format::constants::{SlotType, VaultState};
 use chur_format::container::PublicPreamble as ContainerPreamble;
 use chur_format::descriptor::VaultDescriptor;
 
@@ -218,7 +218,7 @@ pub fn create(
         created_time_ms: now_ms,
         base_backup_id: None,
         catalog_generation: schema::generation(session.catalog_ref()?)?,
-        catalog_format_version: CATALOG_FORMAT_VERSION_V1,
+        catalog_format_version: descriptor.catalog.catalog_format_version,
         stream_entry_count: stream_count,
         slot_entry_count: slot_count,
         inventory_commitment,
@@ -506,6 +506,12 @@ pub fn restore(
         bounds::MANIFEST_PAYLOAD_MAX as u64,
     )?;
     let manifest = BackupManifest::open(&manifest_payload, &key, &descriptor.vault_id)?;
+    ensure!(
+        manifest.vault_id == descriptor.vault_id
+            && manifest.catalog_format_version == descriptor.catalog.catalog_format_version,
+        VaultCorrupt,
+        "the backup manifest contradicts its descriptor"
+    );
 
     let commit_payload =
         read_payload_bounded(source, find(&slots, RecordType::FinalCommit)?, 4_096)?;
@@ -571,7 +577,7 @@ pub fn restore(
     // own slot returned, which is the same operation a creation performs.
     let store_id = random::id()?;
     let catalog_path_id = random::id()?;
-    let local = VaultDescriptor {
+    let mut local = VaultDescriptor {
         catalog: chur_format::descriptor::CatalogDescriptor {
             catalog_format_version: descriptor.catalog.catalog_format_version,
             opaque_catalog_path_id: catalog_path_id,
@@ -607,10 +613,23 @@ pub fn restore(
         // the k-th record is the k-th row and the two are compared rather than
         // assumed.
         let catalog_key = chur_catalog::db::CatalogKey::derive(&root_secret, &local.vault_id)?;
-        let catalog = chur_catalog::db::CatalogDb::open(
+        let mut catalog = chur_catalog::db::CatalogDb::open(
             &chur_catalog::db::CatalogLocation::File(&catalog_path),
             &catalog_key,
         )?;
+        if vault::prepare_restored_catalog(&mut catalog, &local)? {
+            local.descriptor_generation =
+                local.descriptor_generation.checked_add(2).ok_or_else(|| {
+                    chur_core::err!(
+                        VaultCorrupt,
+                        "the restored descriptor generation overflowed"
+                    )
+                })?;
+            local.catalog.catalog_format_version =
+                chur_format::constants::CATALOG_FORMAT_VERSION_V2;
+            local.catalog.catalog_header_commitment =
+                vault::catalog_header_commitment(&catalog_path)?;
+        }
         let mut index = 0usize;
         let mut done = 0u64;
         store::for_each_stream_ordered(&catalog, |object_id, stream| {

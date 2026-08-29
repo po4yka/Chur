@@ -112,6 +112,12 @@ pub fn erase(db: &mut CatalogDb, object_id: &Id, now_ms: u64) -> Result<()> {
             .map_err(|error| map_sqlite(error, "the object could not be read"))?;
         transaction
             .execute(
+                "DELETE FROM sync_object_envelope_epochs WHERE object_id = ?1",
+                [object_id.as_bytes().as_slice()],
+            )
+            .map_err(|error| map_sqlite(error, "the envelope epoch could not be destroyed"))?;
+        transaction
+            .execute(
                 "DELETE FROM object_key_envelopes WHERE object_id = ?1",
                 [object_id.as_bytes().as_slice()],
             )
@@ -162,6 +168,7 @@ pub fn finish(db: &mut CatalogDb, object_id: &Id) -> Result<()> {
             "DELETE FROM favorites WHERE object_id = ?1",
             "DELETE FROM object_tags WHERE object_id = ?1",
             "DELETE FROM integrity_records WHERE object_id = ?1",
+            "DELETE FROM sync_object_envelope_epochs WHERE object_id = ?1",
             "DELETE FROM object_key_envelopes WHERE object_id = ?1",
             "DELETE FROM objects WHERE object_id = ?1",
         ] {
@@ -324,12 +331,28 @@ mod tests {
     use crate::schema::open_at_current_version;
     use crate::store;
     use chur_core::ChurStatus;
-    use chur_crypto::{Key, random};
+    use chur_crypto::{Key, Nonce, random};
     use chur_format::constants::{IntegritySummary, MediaClass, StreamKind};
+    use chur_format::envelope::ObjectKeyEnvelope;
 
     struct Vault {
         db: CatalogDb,
         collection: Id,
+    }
+
+    fn envelope(collection_id: Id, object_id: Id) -> Vec<u8> {
+        ObjectKeyEnvelope::seal(
+            &random::secret::<32>().expect("collection key"),
+            random::id().expect("vault id"),
+            collection_id,
+            1,
+            object_id,
+            1,
+            Nonce::random().expect("nonce"),
+            &random::secret::<32>().expect("object key"),
+        )
+        .expect("object envelope")
+        .encode()
     }
 
     fn vault() -> Vault {
@@ -394,7 +417,7 @@ mod tests {
                     complete_verified_ms: None,
                     final_commitment: [0u8; 32],
                 },
-                envelope: vec![1u8; 142],
+                envelope: envelope(vault.collection, object_id),
                 envelope_generation: 1,
                 metadata: MetadataRevision {
                     object_id,
@@ -511,6 +534,7 @@ mod tests {
             "object_streams",
             "metadata_revisions",
             "object_key_envelopes",
+            "sync_object_envelope_epochs",
             "derived_assets",
         ] {
             let rows: i64 = vault

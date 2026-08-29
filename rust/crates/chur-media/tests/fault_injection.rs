@@ -409,7 +409,7 @@ fn a_vault_this_build_cannot_read_fails_closed() {
                 db.transaction(|transaction| {
                     transaction
                         .execute(
-                            "UPDATE vault_state SET catalog_format_version = 2 WHERE only_row = 1",
+                            "UPDATE vault_state SET catalog_format_version = 3 WHERE only_row = 1",
                             [],
                         )
                         .map(|_| ())

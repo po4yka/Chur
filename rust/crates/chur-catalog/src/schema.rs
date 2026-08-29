@@ -10,23 +10,31 @@
 //! after an album would put a private word in a page an attacker can see the
 //! size of.
 
-use chur_core::{Result, bail, err, limits::catalog as limits};
-use chur_format::constants::CATALOG_FORMAT_VERSION_V1;
+use chur_core::{Id, Result, bail, ensure, err, limits::catalog as limits};
+use chur_format::{
+    constants::{CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2},
+    envelope::ObjectKeyEnvelope,
+};
 use rusqlite::Connection;
 
 use crate::db::{CatalogDb, as_sqlite_integer, from_sqlite_integer, map_sqlite};
 
 /// One schema step: the version it produces and the statements that produce it.
+#[cfg(test)]
 struct Step {
     version: u16,
-    ddl: &'static str,
 }
 
 /// Every schema step, in ascending version order with no gap.
-const STEPS: &[Step] = &[Step {
-    version: CATALOG_FORMAT_VERSION_V1,
-    ddl: V1_DDL,
-}];
+#[cfg(test)]
+const STEPS: &[Step] = &[
+    Step {
+        version: CATALOG_FORMAT_VERSION_V1,
+    },
+    Step {
+        version: CATALOG_FORMAT_VERSION_V2,
+    },
+];
 
 /// The v1 schema.
 ///
@@ -279,32 +287,135 @@ CREATE VIRTUAL TABLE object_search USING fts5(
 );
 "#;
 
-/// Creates or upgrades the schema, and returns the version it ends at.
+/// Catalog v2 adds only encrypted synchronization state.
+const V2_DDL: &str = r#"
+CREATE TABLE sync_state (
+    only_row                         INTEGER PRIMARY KEY CHECK (only_row = 1),
+    membership_generation           INTEGER NOT NULL CHECK (membership_generation >= 0),
+    membership_commitment           BLOB NOT NULL CHECK (length(membership_commitment) = 32),
+    latest_own_checkpoint_commitment BLOB
+        CHECK (latest_own_checkpoint_commitment IS NULL OR length(latest_own_checkpoint_commitment) = 32)
+) STRICT;
+
+CREATE TABLE sync_membership_records (
+    membership_generation INTEGER PRIMARY KEY CHECK (membership_generation >= 0),
+    record_kind            INTEGER NOT NULL CHECK (record_kind IN (1, 2)),
+    device_id              BLOB NOT NULL CHECK (length(device_id) = 16),
+    commitment             BLOB NOT NULL UNIQUE CHECK (length(commitment) = 32),
+    record                 BLOB NOT NULL CHECK (length(record) BETWEEN 1 AND 16777216)
+) STRICT;
+
+CREATE TABLE sync_devices (
+    device_id              BLOB PRIMARY KEY CHECK (length(device_id) = 16),
+    signing_public_key     BLOB NOT NULL CHECK (length(signing_public_key) = 32),
+    hpke_public_key        BLOB NOT NULL CHECK (length(hpke_public_key) = 32),
+    status                 INTEGER NOT NULL CHECK (status IN (1, 2)),
+    membership_generation  INTEGER NOT NULL CHECK (membership_generation >= 0),
+    revoked_sequence       INTEGER CHECK (revoked_sequence IS NULL OR revoked_sequence >= 0),
+    revoked_digest         BLOB CHECK (revoked_digest IS NULL OR length(revoked_digest) = 32),
+    CHECK ((status = 1 AND revoked_sequence IS NULL AND revoked_digest IS NULL)
+        OR (status = 2 AND revoked_sequence IS NOT NULL AND revoked_digest IS NOT NULL))
+) STRICT;
+
+CREATE TABLE sync_signing_keys (
+    device_id              BLOB NOT NULL REFERENCES sync_devices(device_id),
+    membership_generation  INTEGER NOT NULL CHECK (membership_generation >= 0),
+    public_key             BLOB NOT NULL CHECK (length(public_key) = 32),
+    PRIMARY KEY (device_id, membership_generation)
+) STRICT;
+
+CREATE TABLE sync_identity_envelopes (
+    device_id          BLOB NOT NULL REFERENCES sync_devices(device_id),
+    identity_generation INTEGER NOT NULL CHECK (identity_generation >= 0),
+    active             INTEGER NOT NULL CHECK (active IN (0, 1)),
+    recovery_only      INTEGER NOT NULL CHECK (recovery_only IN (0, 1)),
+    body               BLOB NOT NULL CHECK (length(body) BETWEEN 1 AND 16777216),
+    PRIMARY KEY (device_id, identity_generation)
+) STRICT;
+
+CREATE TABLE sync_operations (
+    device_id       BLOB NOT NULL REFERENCES sync_devices(device_id),
+    device_sequence INTEGER NOT NULL CHECK (device_sequence >= 0),
+    operation_id    BLOB NOT NULL CHECK (length(operation_id) = 16),
+    digest          BLOB NOT NULL CHECK (length(digest) = 32),
+    record          BLOB NOT NULL CHECK (length(record) BETWEEN 1 AND 16777216),
+    PRIMARY KEY (device_id, device_sequence)
+) STRICT;
+
+CREATE TABLE sync_heads (
+    device_id         BLOB PRIMARY KEY REFERENCES sync_devices(device_id),
+    accepted_sequence INTEGER CHECK (accepted_sequence IS NULL OR accepted_sequence >= 0),
+    accepted_digest   BLOB CHECK (accepted_digest IS NULL OR length(accepted_digest) = 32),
+    floor_sequence    INTEGER CHECK (floor_sequence IS NULL OR floor_sequence >= 0),
+    floor_digest      BLOB CHECK (floor_digest IS NULL OR length(floor_digest) = 32),
+    CHECK ((accepted_sequence IS NULL) = (accepted_digest IS NULL)),
+    CHECK ((floor_sequence IS NULL) = (floor_digest IS NULL))
+) STRICT;
+
+CREATE TABLE sync_forks (
+    device_id          BLOB PRIMARY KEY REFERENCES sync_devices(device_id),
+    state              INTEGER NOT NULL CHECK (state IN (1, 2)),
+    accepted_record    BLOB NOT NULL CHECK (length(accepted_record) BETWEEN 1 AND 16777216),
+    conflicting_record BLOB NOT NULL CHECK (length(conflicting_record) BETWEEN 1 AND 16777216)
+) STRICT;
+
+CREATE TABLE sync_checkpoints (
+    issuer_device_id BLOB PRIMARY KEY REFERENCES sync_devices(device_id),
+    commitment       BLOB NOT NULL UNIQUE CHECK (length(commitment) = 32),
+    record           BLOB NOT NULL CHECK (length(record) BETWEEN 1 AND 16777216),
+    accepted_at_ms   INTEGER NOT NULL CHECK (accepted_at_ms >= 0),
+    own              INTEGER NOT NULL CHECK (own IN (0, 1))
+) STRICT;
+
+CREATE TABLE sync_rotations (
+    collection_id         BLOB PRIMARY KEY REFERENCES collections(collection_id),
+    target_epoch          INTEGER NOT NULL CHECK (target_epoch >= 0),
+    owner_device_id       BLOB NOT NULL REFERENCES sync_devices(device_id),
+    membership_generation INTEGER NOT NULL CHECK (membership_generation >= 0),
+    accepted_at_ms        INTEGER NOT NULL CHECK (accepted_at_ms >= 0),
+    collection_envelope   BLOB NOT NULL CHECK (length(collection_envelope) = 126),
+    completed             INTEGER NOT NULL CHECK (completed IN (0, 1))
+) STRICT;
+
+CREATE TABLE sync_object_envelope_epochs (
+    object_id           BLOB PRIMARY KEY REFERENCES objects(object_id),
+    collection_id       BLOB NOT NULL REFERENCES collections(collection_id),
+    collection_epoch    INTEGER NOT NULL CHECK (collection_epoch >= 0),
+    envelope_generation INTEGER NOT NULL CHECK (envelope_generation >= 0)
+) STRICT;
+
+CREATE UNIQUE INDEX sync_operations_by_id ON sync_operations (operation_id);
+CREATE INDEX sync_operations_by_digest ON sync_operations (device_id, digest);
+CREATE INDEX sync_membership_by_device
+    ON sync_membership_records (device_id, membership_generation);
+CREATE INDEX sync_old_epoch_objects
+    ON sync_object_envelope_epochs (collection_id, collection_epoch, object_id);
+CREATE UNIQUE INDEX sync_active_identity_envelope
+    ON sync_identity_envelopes (device_id) WHERE active = 1;
+"#;
+
+/// Creates the current schema or opens it without performing an implicit migration.
 ///
 /// `docs/format/CATALOG_SCHEMA_V1.md` §18 forbids skipping an untested step, so
-/// each step runs in its own transaction and the recorded version advances one
-/// value at a time. A database recording a version this build does not know is
-/// `MigrationRequired`, never a silent downgrade.
+/// Existing v1 catalogs return `MigrationRequired`: the authenticated vault
+/// descriptor must enter `MIGRATING` before their pages change.
 pub fn open_at_current_version(db: &mut CatalogDb, now_ms: u64) -> Result<u16> {
     let present = recorded_version(db.connection())?;
     let Some(present) = present else {
         install(db, now_ms)?;
-        return Ok(CATALOG_FORMAT_VERSION_V1);
+        return Ok(CATALOG_FORMAT_VERSION_V2);
     };
-    if present > CATALOG_FORMAT_VERSION_V1 {
+    if present != CATALOG_FORMAT_VERSION_V2 {
         bail!(
             MigrationRequired,
-            "the catalog records a format version this build does not read"
+            "the catalog requires an authenticated schema migration"
         );
     }
-    for step in STEPS.iter().filter(|step| step.version > present) {
-        apply(db, step)?;
-    }
-    Ok(CATALOG_FORMAT_VERSION_V1)
+    Ok(CATALOG_FORMAT_VERSION_V2)
 }
 
 /// The version the database records, or `None` when the schema is absent.
-fn recorded_version(connection: &Connection) -> Result<Option<u16>> {
+pub(crate) fn recorded_version(connection: &Connection) -> Result<Option<u16>> {
     let present: i64 = connection
         .query_row(
             "SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = 'vault_state'",
@@ -327,7 +438,7 @@ fn recorded_version(connection: &Connection) -> Result<Option<u16>> {
         .map_err(|_| err!(CatalogCorrupt, "the catalog format version is out of range"))
 }
 
-/// Installs the first version and its single `vault_state` row.
+/// Installs the current schema and its single `vault_state` row.
 fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
     let checkpoint = as_sqlite_integer(now_ms, "the install time is out of range")?;
     db.transaction(|transaction| {
@@ -335,45 +446,145 @@ fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
             .execute_batch(V1_DDL)
             .map_err(|error| map_sqlite(error, "the catalog schema could not be created"))?;
         transaction
+            .execute_batch(V2_DDL)
+            .map_err(|error| map_sqlite(error, "the sync catalog schema could not be created"))?;
+        transaction
             .execute(
                 "INSERT INTO vault_state (
                      only_row, catalog_format_version, catalog_generation,
                      active_migration_target, object_store_checkpoint,
                      integrity_checkpoint_ms, capability_flags
                  ) VALUES (1, ?1, 1, NULL, 0, ?2, 0)",
-                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V1), checkpoint],
+                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V2), checkpoint],
             )
             .map_err(|error| map_sqlite(error, "the catalog state row could not be written"))?;
         Ok(())
     })
 }
 
-/// Applies one migration step and records the version it produced.
+#[cfg(test)]
+pub(crate) fn reset_to_v1(db: &mut CatalogDb) -> Result<()> {
+    db.transaction(|transaction| {
+        transaction
+            .execute_batch(
+                "DROP TABLE sync_rotations;
+                 DROP TABLE sync_object_envelope_epochs;
+                 DROP TABLE sync_checkpoints;
+                 DROP TABLE sync_forks;
+                 DROP TABLE sync_heads;
+                 DROP TABLE sync_operations;
+                 DROP TABLE sync_identity_envelopes;
+                 DROP TABLE sync_signing_keys;
+                 DROP TABLE sync_devices;
+                 DROP TABLE sync_membership_records;
+                 DROP TABLE sync_state;
+                 UPDATE vault_state SET catalog_format_version = 1 WHERE only_row = 1;",
+            )
+            .map_err(|error| map_sqlite(error, "the test catalog could not be reset to v1"))?;
+        Ok(())
+    })
+}
+
+/// Applies the only supported migration after the descriptor entered `MIGRATING`.
 ///
 /// The version is written in the same transaction as the step's statements, so
 /// a crash leaves the database at the version whose schema is actually present.
-fn apply(db: &mut CatalogDb, step: &Step) -> Result<()> {
-    let target = i64::from(step.version);
+pub(crate) fn migrate_v1_to_v2(db: &mut CatalogDb, vault_id: &Id) -> Result<()> {
+    ensure!(
+        recorded_version(db.connection())? == Some(CATALOG_FORMAT_VERSION_V1),
+        MigrationRequired,
+        "the catalog is not at the supported migration source"
+    );
     db.transaction(|transaction| {
         transaction
             .execute(
                 "UPDATE vault_state SET active_migration_target = ?1 WHERE only_row = 1",
-                [target],
+                [i64::from(CATALOG_FORMAT_VERSION_V2)],
             )
             .map_err(|error| map_sqlite(error, "the migration target could not be recorded"))?;
         transaction
-            .execute_batch(step.ddl)
+            .execute_batch(V2_DDL)
             .map_err(|error| map_sqlite(error, "a migration step failed"))?;
+        backfill_object_envelope_epochs(transaction, vault_id)?;
         transaction
             .execute(
                 "UPDATE vault_state
                     SET catalog_format_version = ?1, active_migration_target = NULL
                   WHERE only_row = 1",
-                [target],
+                [i64::from(CATALOG_FORMAT_VERSION_V2)],
             )
             .map_err(|error| map_sqlite(error, "the migrated version could not be recorded"))?;
         Ok(())
     })
+}
+
+fn backfill_object_envelope_epochs(
+    transaction: &rusqlite::Transaction<'_>,
+    vault_id: &Id,
+) -> Result<()> {
+    let mut select = transaction
+        .prepare(
+            "SELECT e.object_id, o.collection_id, e.generation, e.body
+               FROM object_key_envelopes e
+               JOIN objects o ON o.object_id = e.object_id
+              WHERE e.status = 1
+                AND e.generation = (
+                    SELECT max(candidate.generation)
+                      FROM object_key_envelopes candidate
+                     WHERE candidate.object_id = e.object_id AND candidate.status = 1
+                )",
+        )
+        .map_err(|error| map_sqlite(error, "active object envelopes could not be read"))?;
+    let mut rows = select
+        .query([])
+        .map_err(|error| map_sqlite(error, "active object envelopes could not be read"))?;
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| map_sqlite(error, "an active object envelope could not be read"))?
+    {
+        let object_bytes: Vec<u8> = row
+            .get(0)
+            .map_err(|error| map_sqlite(error, "an object id could not be read"))?;
+        let collection_bytes: Vec<u8> = row
+            .get(1)
+            .map_err(|error| map_sqlite(error, "a collection id could not be read"))?;
+        let generation: i64 = row
+            .get(2)
+            .map_err(|error| map_sqlite(error, "an envelope generation could not be read"))?;
+        let body: Vec<u8> = row
+            .get(3)
+            .map_err(|error| map_sqlite(error, "an object envelope could not be read"))?;
+        let object_id = crate::row::id(&object_bytes, "an object id is malformed")?;
+        let collection_id = crate::row::id(&collection_bytes, "a collection id is malformed")?;
+        let generation = from_sqlite_integer(generation, "an envelope generation is negative")?;
+        let envelope = ObjectKeyEnvelope::decode(&body)
+            .map_err(|_| err!(CatalogCorrupt, "an active object envelope is malformed"))?;
+        ensure!(
+            envelope.vault_id() == vault_id
+                && envelope.object_id() == &object_id
+                && envelope.collection_id() == &collection_id
+                && envelope.envelope_generation() == generation,
+            CatalogCorrupt,
+            "an active object envelope contradicts its catalog row"
+        );
+        transaction
+            .execute(
+                "INSERT INTO sync_object_envelope_epochs
+                    (object_id, collection_id, collection_epoch, envelope_generation)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![
+                    object_id.as_bytes().as_slice(),
+                    collection_id.as_bytes().as_slice(),
+                    as_sqlite_integer(
+                        envelope.collection_epoch(),
+                        "an envelope collection epoch is too large"
+                    )?,
+                    as_sqlite_integer(generation, "an envelope generation is too large")?,
+                ],
+            )
+            .map_err(|error| map_sqlite(error, "an envelope epoch could not be projected"))?;
+    }
+    Ok(())
 }
 
 /// The catalog generation, which every query page reports so a caller can tell
@@ -419,7 +630,8 @@ mod tests {
 
     use super::*;
     use crate::db::{CatalogKey, CatalogLocation};
-    use chur_crypto::{Key, random};
+    use chur_crypto::{Key, Nonce, random};
+    use chur_format::envelope::ObjectKeyEnvelope;
 
     fn open() -> CatalogDb {
         let root: Key = random::secret::<32>().expect("root");
@@ -428,12 +640,30 @@ mod tests {
         CatalogDb::open(&CatalogLocation::Memory, &key).expect("open")
     }
 
+    fn install_v1(db: &mut CatalogDb) {
+        db.transaction(|transaction| {
+            transaction.execute_batch(V1_DDL).expect("v1 schema");
+            transaction
+                .execute(
+                    "INSERT INTO vault_state (
+                         only_row, catalog_format_version, catalog_generation,
+                         active_migration_target, object_store_checkpoint,
+                         integrity_checkpoint_ms, capability_flags
+                     ) VALUES (1, 1, 1, NULL, 0, 1, 0)",
+                    [],
+                )
+                .expect("v1 state");
+            Ok(())
+        })
+        .expect("install v1");
+    }
+
     #[test]
-    fn a_new_catalog_installs_version_one() {
+    fn a_new_catalog_installs_version_two() {
         let mut db = open();
         assert_eq!(
             open_at_current_version(&mut db, 1_700_000_000_000).expect("install"),
-            CATALOG_FORMAT_VERSION_V1
+            CATALOG_FORMAT_VERSION_V2
         );
         assert_eq!(generation(&db).expect("generation"), 1);
     }
@@ -447,19 +677,17 @@ mod tests {
     }
 
     #[test]
-    fn a_future_version_is_migration_required_and_not_a_downgrade() {
+    fn a_non_current_version_is_migration_required_and_not_changed() {
         let mut db = open();
-        open_at_current_version(&mut db, 1).expect("install");
-        db.connection()
-            .execute(
-                "UPDATE vault_state SET catalog_format_version = 2 WHERE only_row = 1",
-                [],
-            )
-            .expect("write a future version");
+        install_v1(&mut db);
         let Err(error) = open_at_current_version(&mut db, 1) else {
-            panic!("a future catalog version opened");
+            panic!("a v1 catalog migrated without an authenticated descriptor");
         };
         assert_eq!(error.status(), chur_core::ChurStatus::MigrationRequired);
+        assert_eq!(
+            recorded_version(db.connection()).expect("version"),
+            Some(CATALOG_FORMAT_VERSION_V1)
+        );
     }
 
     #[test]
@@ -485,7 +713,120 @@ mod tests {
         }
         assert_eq!(
             STEPS.last().map(|step| step.version),
-            Some(CATALOG_FORMAT_VERSION_V1)
+            Some(CATALOG_FORMAT_VERSION_V2)
+        );
+    }
+
+    #[test]
+    fn v1_migration_projects_the_highest_active_object_envelope() {
+        let mut db = open();
+        install_v1(&mut db);
+        let vault_id = random::id().expect("vault");
+        let collection_id = random::id().expect("collection");
+        let object_id = random::id().expect("object");
+        let stream_id = random::id().expect("stream");
+        let collection_key: Key = random::secret::<32>().expect("collection key");
+        let object_key: Key = random::secret::<32>().expect("object key");
+        let envelope = ObjectKeyEnvelope::seal(
+            &collection_key,
+            vault_id,
+            collection_id,
+            7,
+            object_id,
+            3,
+            Nonce::new([4; 24]),
+            &object_key,
+        )
+        .expect("envelope");
+        db.transaction(|transaction| {
+            transaction
+                .execute(
+                    "INSERT INTO collections VALUES (?1, 7, 1, 1, 1)",
+                    [collection_id.as_bytes().as_slice()],
+                )
+                .expect("collection");
+            transaction
+                .execute(
+                    "INSERT INTO objects VALUES (
+                         ?1, 1, ?2, ?3, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 1, 0, 1, 1
+                     )",
+                    rusqlite::params![
+                        object_id.as_bytes().as_slice(),
+                        collection_id.as_bytes().as_slice(),
+                        stream_id.as_bytes().as_slice(),
+                    ],
+                )
+                .expect("object");
+            transaction
+                .execute(
+                    "INSERT INTO object_key_envelopes VALUES (?1, 3, 1, ?2)",
+                    rusqlite::params![object_id.as_bytes().as_slice(), envelope.encode()],
+                )
+                .expect("envelope row");
+            Ok(())
+        })
+        .expect("v1 rows");
+
+        migrate_v1_to_v2(&mut db, &vault_id).expect("migrate");
+        let projection: (i64, i64) = db
+            .connection()
+            .query_row(
+                "SELECT collection_epoch, envelope_generation
+                   FROM sync_object_envelope_epochs WHERE object_id = ?1",
+                [object_id.as_bytes().as_slice()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("projection");
+        assert_eq!(projection, (7, 3));
+        assert_eq!(
+            recorded_version(db.connection()).expect("version"),
+            Some(CATALOG_FORMAT_VERSION_V2)
+        );
+    }
+
+    #[test]
+    fn v2_sync_constraints_reject_malformed_rows() {
+        let mut db = open();
+        open_at_current_version(&mut db, 1).expect("schema");
+        assert!(
+            db.connection()
+                .execute(
+                    "INSERT INTO sync_devices VALUES (?1, ?2, ?3, 1, 1, NULL, NULL)",
+                    rusqlite::params![vec![1u8; 15], vec![2u8; 32], vec![3u8; 32]],
+                )
+                .is_err(),
+            "a short device id was accepted"
+        );
+        let device = [1u8; 16];
+        db.connection()
+            .execute(
+                "INSERT INTO sync_devices VALUES (?1, ?2, ?3, 1, 1, NULL, NULL)",
+                rusqlite::params![device, [2u8; 32], [3u8; 32]],
+            )
+            .expect("device");
+        assert!(
+            db.connection()
+                .execute(
+                    "INSERT INTO sync_heads VALUES (?1, 1, NULL, NULL, NULL)",
+                    [device],
+                )
+                .is_err(),
+            "a partial accepted head was accepted"
+        );
+        db.connection()
+            .execute(
+                "INSERT INTO sync_identity_envelopes VALUES (?1, 1, 1, 0, ?2)",
+                rusqlite::params![device, [4u8]],
+            )
+            .expect("identity envelope");
+        assert!(
+            db.connection()
+                .execute(
+                    "INSERT INTO sync_identity_envelopes VALUES (?1, 2, 1, 0, ?2)",
+                    rusqlite::params![device, [5u8]],
+                )
+                .is_err(),
+            "a second active identity envelope was accepted"
         );
     }
 

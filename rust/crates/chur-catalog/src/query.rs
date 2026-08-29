@@ -617,12 +617,28 @@ mod tests {
     };
     use crate::schema::open_at_current_version;
     use crate::store;
-    use chur_crypto::{Key, random};
+    use chur_crypto::{Key, Nonce, random};
     use chur_format::constants::StreamKind;
+    use chur_format::envelope::ObjectKeyEnvelope;
 
     struct Vault {
         db: CatalogDb,
         collection: Id,
+    }
+
+    fn envelope(collection_id: Id, object_id: Id) -> Vec<u8> {
+        ObjectKeyEnvelope::seal(
+            &random::secret::<32>().expect("collection key"),
+            random::id().expect("vault id"),
+            collection_id,
+            1,
+            object_id,
+            1,
+            Nonce::random().expect("nonce"),
+            &random::secret::<32>().expect("object key"),
+        )
+        .expect("object envelope")
+        .encode()
     }
 
     fn vault() -> Vault {
@@ -694,7 +710,7 @@ mod tests {
                     complete_verified_ms: None,
                     final_commitment: [0u8; 32],
                 },
-                envelope: vec![0u8; 142],
+                envelope: envelope(vault.collection, object_id),
                 envelope_generation: 1,
                 metadata: MetadataRevision {
                     object_id,
