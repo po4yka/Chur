@@ -91,6 +91,19 @@ A skill synchronisation updates both hashes and the commit, and the checker is w
 
 ## Recorded additions
 
+### `ed25519-dalek` 3.0.0, Rust sync core
+
+- **Capability:** RFC 8032 Ed25519 signatures for Phase 3 device identities, operation records, enrollment, revocation, and checkpoints. `CRYPTOGRAPHY.md` §5 and §52 already select Ed25519 and name this implementation direction.
+- **Alternatives:** the Rust standard library has no Ed25519. A local implementation would create a new cryptographic primitive to audit. A TLS or general cryptography library adds unrelated protocol, native, and configuration surface.
+- **Owner and maintenance:** the dalek-cryptography project maintains it in the active `curve25519-dalek` workspace. Version 3.0.0 uses Rust 2024 and MSRV 1.85, matching this workspace.
+- **License:** BSD-3-Clause, the repository license. The transitive RustCrypto `ed25519` and `signature` interfaces are Apache-2.0 OR MIT.
+- **Review history:** the dalek libraries received a public Quarkslab review in 2019. That is supporting evidence, not the independent Phase 3 protocol review required by Gate 5.
+- **Unsafe and native footprint:** `ed25519-dalek` is pure Rust, has no `build.rs`, and forbids unsafe code when batch verification is disabled. Chur enables no batch or hazardous low-level API. Its `curve25519-dalek` dependency uses a build script only to select compiler and target capabilities, a derive macro, and target-specific unsafe optimized arithmetic; `sha2` also uses target-specific unsafe optimized code. These transitive paths perform no network, process, or application-file I/O and remain in the cryptographic review scope.
+- **Features:** exact version `=3.0.0`, default features disabled, only `fast` and `zeroize` enabled. Serde, PEM, PKCS#8, batch verification, legacy compatibility, digest/prehash, RNG, and `hazmat` are absent.
+- **Targets and size:** the crate is `no_std`, requires no platform API, and supports the Android/iOS Rust targets. `fast` includes the curve precomputation table; the release artifact size is measured with the Phase 3 native packages.
+- **Data and telemetry:** it accepts in-process keys and bytes and performs no file, environment, process, network, permission, logging, or telemetry operation.
+- **Update and removal:** protocol bytes and RFC 8032 verification semantics are pinned by vectors. Updates are deliberate lockfile changes with vector, mobile-target, advisory, and size checks. Removal requires another reviewed RFC 8032 implementation.
+
 ### `androidx.media3`, Android only
 
 - **Capability:** playing a video or a recording from a vault-backed byte source. [`interop/MEDIA_PIPELINE.md`](interop/MEDIA_PIPELINE.md) §1 puts codec probing and decoding on the platform, and §9 has the player ask for plaintext ranges; Media3 is the platform's player on Android and the only one whose `DataSource` interface accepts a source that is neither a file nor a URL.

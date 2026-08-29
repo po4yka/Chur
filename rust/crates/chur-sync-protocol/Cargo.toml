@@ -8,7 +8,9 @@ description = "Canonical encrypted operations, device logs, grants, protocol ver
 
 [dependencies]
 chur-core.workspace = true
+chur-crypto.workspace = true
 chur-format.workspace = true
+ed25519-dalek.workspace = true
 
 [lints]
 workspace = true

@@ -1,14 +1,33 @@
 //! The canonical outer sync operation of `docs/sync/OPERATION_LOG.md` §2.
 
 use chur_core::limits::{COMMITMENT_LEN, ID_LEN, sync as bounds};
-use chur_core::{ChurStatus, Id, Result, ensure};
+use chur_core::{ChurStatus, Error, Id, Result, ensure};
+use chur_crypto::tuple::tag;
 use chur_format::codec::{Reader, Writer};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 
 const SIGNATURE_LEN: usize = 64;
 const FIXED_FIELDS_LEN: usize = 2 + (ID_LEN * 4) + 8 + COMMITMENT_LEN + 4 + 4 + SIGNATURE_LEN;
 
 /// Sync protocol v1.
 pub const PROTOCOL_VERSION_V1: u16 = 0x0001;
+
+/// One portable Ed25519 device signing key.
+pub struct DeviceSigningKey(SigningKey);
+
+impl DeviceSigningKey {
+    /// Builds a signing key from its 32-byte seed.
+    #[must_use]
+    pub fn from_seed(seed: [u8; 32]) -> Self {
+        Self(SigningKey::from_bytes(&seed))
+    }
+
+    /// The public verification key carried by device membership.
+    #[must_use]
+    pub fn verifying_key(&self) -> [u8; 32] {
+        self.0.verifying_key().to_bytes()
+    }
+}
 
 /// One other device head observed by an operation's author.
 #[derive(Clone, PartialEq, Eq)]
@@ -119,6 +138,45 @@ impl Operation {
             .fixed(&self.encrypted_payload)
             .fixed(&self.signature);
         writer.finish()
+    }
+
+    /// Replaces the signature with one made by `key` over the frozen input.
+    #[must_use]
+    pub fn sign(mut self, key: &DeviceSigningKey) -> Self {
+        self.signature = key.0.sign(&self.signing_bytes()).to_bytes();
+        self
+    }
+
+    /// Verifies the operation against one enrolled device key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ChurStatus::AuthenticationFailed`] for any invalid key or
+    /// signature.
+    pub fn verify_signature(&self, verifying_key: &[u8; 32]) -> Result<()> {
+        let key = VerifyingKey::from_bytes(verifying_key).map_err(|_| {
+            Error::new(
+                ChurStatus::AuthenticationFailed,
+                "sync operation verification key is invalid",
+            )
+        })?;
+        let signature = Signature::from_bytes(&self.signature);
+        key.verify_strict(&self.signing_bytes(), &signature)
+            .map_err(|_| {
+                Error::new(
+                    ChurStatus::AuthenticationFailed,
+                    "sync operation signature did not verify",
+                )
+            })
+    }
+
+    fn signing_bytes(&self) -> Vec<u8> {
+        let mut wire = self.encode();
+        wire.truncate(wire.len() - SIGNATURE_LEN);
+        let mut bytes = Vec::with_capacity(tag::SYNC_OPERATION.len() + wire.len());
+        bytes.extend_from_slice(tag::SYNC_OPERATION);
+        bytes.extend_from_slice(&wire);
+        bytes
     }
 
     /// Decodes one canonical wire record.
@@ -256,5 +314,35 @@ mod tests {
         let bytes = operation.encode();
         assert_eq!(bytes.len(), 242);
         assert!(Operation::decode(&bytes).expect("decode") == operation);
+    }
+
+    #[test]
+    fn a_signature_verifies_only_for_the_exact_operation_and_key() {
+        let key = DeviceSigningKey::from_seed([10; 32]);
+        let mut operation = Operation::new(
+            id(1),
+            id(2),
+            id(3),
+            1,
+            [0; 32],
+            Vec::new(),
+            id(6),
+            [vec![7; 24], vec![8; 16]].concat(),
+            [0; 64],
+        )
+        .expect("valid operation")
+        .sign(&key);
+
+        operation
+            .verify_signature(&key.verifying_key())
+            .expect("signature must verify");
+        assert!(
+            operation
+                .verify_signature(&DeviceSigningKey::from_seed([11; 32]).verifying_key())
+                .is_err()
+        );
+
+        operation.encrypted_payload[24] ^= 1;
+        assert!(operation.verify_signature(&key.verifying_key()).is_err());
     }
 }
