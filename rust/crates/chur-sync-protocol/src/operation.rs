@@ -29,6 +29,30 @@ impl DeviceSigningKey {
     pub fn verifying_key(&self) -> [u8; 32] {
         self.0.verifying_key().to_bytes()
     }
+
+    pub(crate) fn sign_bytes(&self, bytes: &[u8]) -> [u8; SIGNATURE_LEN] {
+        self.0.sign(bytes).to_bytes()
+    }
+}
+
+pub(crate) fn verify_ed25519(
+    verifying_key: &[u8; 32],
+    signature: &[u8; SIGNATURE_LEN],
+    bytes: &[u8],
+) -> Result<()> {
+    let key = VerifyingKey::from_bytes(verifying_key).map_err(|_| {
+        Error::new(
+            ChurStatus::AuthenticationFailed,
+            "device verification key is invalid",
+        )
+    })?;
+    key.verify_strict(bytes, &Signature::from_bytes(signature))
+        .map_err(|_| {
+            Error::new(
+                ChurStatus::AuthenticationFailed,
+                "device signature did not verify",
+            )
+        })
 }
 
 /// One other device head observed by an operation's author.
@@ -185,7 +209,7 @@ impl Operation {
     /// Replaces the signature with one made by `key` over the frozen input.
     #[must_use]
     pub fn sign(mut self, key: &DeviceSigningKey) -> Self {
-        self.signature = key.0.sign(&self.signing_bytes()).to_bytes();
+        self.signature = key.sign_bytes(&self.signing_bytes());
         self
     }
 
@@ -196,20 +220,7 @@ impl Operation {
     /// Returns [`ChurStatus::AuthenticationFailed`] for any invalid key or
     /// signature.
     pub fn verify_signature(&self, verifying_key: &[u8; 32]) -> Result<()> {
-        let key = VerifyingKey::from_bytes(verifying_key).map_err(|_| {
-            Error::new(
-                ChurStatus::AuthenticationFailed,
-                "sync operation verification key is invalid",
-            )
-        })?;
-        let signature = Signature::from_bytes(&self.signature);
-        key.verify_strict(&self.signing_bytes(), &signature)
-            .map_err(|_| {
-                Error::new(
-                    ChurStatus::AuthenticationFailed,
-                    "sync operation signature did not verify",
-                )
-            })
+        verify_ed25519(verifying_key, &self.signature, &self.signing_bytes())
     }
 
     /// Opens and authenticates the private payload.

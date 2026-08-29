@@ -15,4 +15,5 @@
 //! The v1 operation record starts the implementation. Later modules add the
 //! device membership, checkpoint, convergence, and transport state machines.
 
+pub mod checkpoint;
 pub mod operation;

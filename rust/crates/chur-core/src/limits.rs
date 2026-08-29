@@ -240,6 +240,10 @@ pub mod sync {
     pub const OBSERVED_HEADS_MAX: usize = 31;
     /// Exact encoded length of one observed head.
     pub const OBSERVED_HEAD_LEN: usize = super::ID_LEN + 8;
+    /// Device heads one signed checkpoint may carry, including its issuer.
+    pub const CHECKPOINT_HEADS_MAX: usize = OBSERVED_HEADS_MAX + 1;
+    /// Exact encoded length of one checkpoint head.
+    pub const CHECKPOINT_HEAD_LEN: usize = super::ID_LEN + 8 + super::COMMITMENT_LEN;
     /// Smallest sealed payload: one nonce and one authentication tag.
     pub const ENCRYPTED_PAYLOAD_MIN: usize = super::NONCE_LEN + super::TAG_LEN;
     /// Largest logical operation plaintext, 1 MiB.
