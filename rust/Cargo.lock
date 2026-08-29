@@ -294,7 +294,9 @@ version = "0.1.0"
 dependencies = [
  "chur-core",
  "chur-sync-protocol",
+ "hex",
  "rusqlite",
+ "serde_json",
  "sha2 0.10.9",
 ]
 
