@@ -212,9 +212,9 @@ Thirty-one rows now name a test target rather than a section of this plan: ninet
 | SEC-037 | audit-only; API review of the surface in [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md) at each change |
 | SEC-038 | `chur-format` `descriptor::tests::a_failed_slot_unwrap_still_returns_the_authentication_failure` |
 | SEC-039 | repository check: no forbidden claim listed in [`../security/DECOY_VAULT.md`](../security/DECOY_VAULT.md) §10 or [`../product/DISCREET_MODE.md`](../product/DISCREET_MODE.md) "Forbidden claims" appears in `docs/`, `DESIGN.md`, `README.md`, or a localized string resource |
-| SEC-040 | [`../sync/SERVER_TRUST_MODEL.md`](../sync/SERVER_TRUST_MODEL.md) §10 harness |
-| SEC-041 | §2; SERVER_TRUST_MODEL §10 harness |
-| SEC-042 | SERVER_TRUST_MODEL §10 harness |
+| SEC-040 | `chur-sync-protocol` `tests/malicious_server.rs::replay_omission_key_substitution_rollback_and_equivocation_fail_closed`; `chur-media` `tests/sync_download.rs::only_a_complete_authentic_download_can_be_published` |
+| SEC-041 | §2; `chur-sync-protocol` `tests/malicious_server.rs::replay_omission_key_substitution_rollback_and_equivocation_fail_closed` |
+| SEC-042 | `chur-sync-protocol` `tests/malicious_server.rs::replay_omission_key_substitution_rollback_and_equivocation_fail_closed`; `chur-media` `tests/sync_download.rs::only_a_complete_authentic_download_can_be_published` |
 | SEC-043 | §2 |
 | SEC-044 | §2 |
 | SEC-045 | SERVER_TRUST_MODEL §10 harness for the behaviour; audit-only for the claim wording |
