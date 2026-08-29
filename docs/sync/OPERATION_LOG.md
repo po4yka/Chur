@@ -15,23 +15,27 @@ The operation log represents private catalog changes as canonical encrypted and 
 
 ## 2. Operation structure
 
-This section owns the operation record: the field order below is the order of the signed bytes. [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §52, [`../ARCHITECTURE.md`](../ARCHITECTURE.md) §34.3, and the root [`README.md`](../../README.md) point here and do not restate it. Field widths and the record's signing domain tag are the remaining open part; they are frozen by the Gate 5 sync work, with the tag allocated in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15.5, and this document owns them.
+This section owns the operation record: the field order below is the wire order. [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §52, [`../ARCHITECTURE.md`](../ARCHITECTURE.md) §34.3, and the root [`README.md`](../../README.md) point here and do not restate it. [ADR-0044](../adr/0044-freeze-the-v1-sync-operation-record.md) freezes the widths, encrypted-payload framing, limits, and signing bytes.
 
 ```text
-OperationV1
-├── protocol_version
-├── operation_id
-├── vault/account binding
-├── device_id
-├── device_sequence
-├── previous_operation_hash
-├── observed_heads
-├── key_selector
-├── encrypted_payload
-└── Ed25519 signature
+OperationV1 =
+    protocol_version:u16 = 0x0001
+    operation_id:bytes[16]
+    vault_id:bytes[16]
+    device_id:bytes[16]
+    device_sequence:u64
+    previous_operation_hash:bytes[32]
+    observed_heads:list of ObservedHeadV1
+    key_selector:bytes[16]
+    encrypted_payload:bytes
+    signature:bytes[64]
 ```
 
 Private payload is encrypted under an appropriate root/collection/operation key before signing.
+
+`encrypted_payload` is one canonical variable-byte field: its `u32` length prefixes a 24-byte XChaCha20-Poly1305 nonce followed by ciphertext including the 16-byte authentication tag. The plaintext is at most 1,048,576 bytes, so the field length is from 40 through 1,048,616 bytes. The nonce has no second length prefix.
+
+The domain tag is not stored. The Ed25519 signing input is `CHUR\x00SYNC\x00OPERATION\x00V1` followed by every wire field from `protocol_version` through the length-prefixed `encrypted_payload`, excluding `signature`.
 
 There is no separate payload commitment field. The AEAD tag of `encrypted_payload` already authenticates the payload against the outer AAD of §6, and the Ed25519 signature of §7 covers `encrypted_payload` byte for byte, so a third commitment would restate what two authenticated values already say.
 
@@ -151,13 +155,13 @@ Every other field of an operation lives inside `encrypted_payload`: `operation_k
 
 `key_selector` is 16 random bytes assigned to a `(collection, epoch)` pair when that epoch is created, and it selects the key the receiver decrypts with. It is opaque: it carries no collection identity and no ordering, and the server learns only that two operations use the same epoch. Root-domain operations carry the vault's root selector.
 
-The payload AAD is the canonical concatenation of the cleartext fields above, excluding `encrypted_payload` and the signature, after the operation signing domain tag. AAD must be readable before decryption, so no field inside the ciphertext may appear in it: `operation_kind`, collection, epoch, and object identifiers are authenticated as payload plaintext by the AEAD tag, and the signature of §7 binds the sealed payload to the outer record.
+The payload AAD is `CHUR\x00SYNC\x00OPERATION\x00V1` followed by the exact wire encoding from `protocol_version` through `key_selector`, excluding `encrypted_payload` and `signature`. AAD must be readable before decryption, so no field inside the ciphertext may appear in it: `operation_kind`, collection, epoch, and object identifiers are authenticated as payload plaintext by the AEAD tag, and the signature of §7 binds the sealed payload to the outer record.
 
 What the server still observes is enumerated in [`SERVER_TRUST_MODEL.md`](SERVER_TRUST_MODEL.md) §8.
 
 ## 7. Signatures
 
-Signature covers the canonical complete outer record excluding signature field. It authenticates device identity and prevents server modification.
+The signature covers the byte sequence fixed in §2. It authenticates device identity and prevents server modification.
 
 Signing occurs only after local catalog transaction prepares a durable pending operation. Failed upload does not reuse sequence for a different operation.
 
@@ -202,13 +206,16 @@ The 180-day cap stops one permanently offline device from blocking compaction fo
 
 ## 12. Limits
 
-- maximum record/payload size;
-- maximum operations per response/batch;
-- sequence checked arithmetic;
-- bounded device/collection references, including the `observed_heads` maximum in §4.1;
-- no nested arbitrary collections without limits;
-- signature/KDF work bounded per batch;
-- decompression forbidden or separately constrained.
+- encrypted payload plaintext: at most 1,048,576 bytes;
+- encrypted payload field: 40 through 1,048,616 bytes;
+- operations per response/batch: at most 256;
+- total operation record bytes per response/batch: at most 16,777,216;
+- `observed_heads`: at most 31 entries, as §4.1 requires;
+- sequence arithmetic is checked and `u64::MAX` cannot advance;
+- every nested collection in a logical payload has its own bound;
+- decompression is forbidden in v1 operation payloads.
+
+A parser checks every declared length, count, and multiplication before allocation or signature work. The response limits are transport bounds; the pending-set bound of §4.3 and locked-staging bounds of [`SYNC_PROTOCOL_V1.md`](SYNC_PROTOCOL_V1.md) §7 remain smaller when they apply.
 
 ## 13. Tests
 

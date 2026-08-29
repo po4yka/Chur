@@ -2434,7 +2434,7 @@ The following MUST be resolved before v1 production bytes are frozen:
 14. recovery-secret mnemonic/checksum format — resolved in [`security/RECOVERY.md`](security/RECOVERY.md) §2: 24 BIP-39 English words with the BIP-39 checksum, a `chur-recovery-v1` marker outside the mnemonic, and NFKD plus lowercase plus whitespace-collapse normalization on re-entry ([ADR-0029](adr/0029-freeze-the-recovery-secret-encoding.md));
 15. exact real/decoy password-slot candidate-discovery behavior — resolved in [`security/KEY_SLOTS.md`](security/KEY_SLOTS.md) §8 and [ADR-0026](adr/0026-argon2id-memory-floor-and-candidate-set.md): a constant two-candidate list padded with dummy derivations;
 16. HPKE library and canonical grant encoding;
-17. device-log consistency and malicious-server omission strategy;
+17. device-log consistency and malicious-server omission strategy — resolved by [ADR-0044](adr/0044-freeze-the-v1-sync-operation-record.md): per-device chains, signed observed heads, and checkpoint floors detect every omitted cause they name, while a wholly unobserved hidden branch remains outside the v1 guarantee;
 18. optional padding profiles;
 19. future AES/FIPS profile requirements;
 20. scope and schedule of independent audits.

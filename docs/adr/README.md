@@ -95,6 +95,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0041](0041-the-android-keystore-slot-exchanges-root-bytes.md) | The Android Keystore slot exchanges root bytes with the host | Accepted |
 | [0042](0042-freeze-the-audio-waveform-record.md) | Freeze the audio waveform as a peak-envelope record | Accepted |
 | [0043](0043-the-backup-manifest-carries-a-commitment-not-an-inventory.md) | The backup manifest carries the inventory's commitment, not its entries | Accepted |
+| [0044](0044-freeze-the-v1-sync-operation-record.md) | Freeze the v1 sync operation record, limits, and omission claim | Accepted |
 
 Rows are ordered by ADR number. Number 0015 was not used; no ADR carries it and none will.
 
