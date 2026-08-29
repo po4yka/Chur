@@ -19,9 +19,12 @@ pub mod checkpoint;
 pub mod convergence;
 pub mod deletion;
 pub mod identity;
+mod key_domain;
 pub mod membership;
 pub mod operation;
 pub mod operation_log;
 pub mod payload;
 pub mod rotation;
 pub mod state;
+
+pub use key_domain::KeyDomain;
