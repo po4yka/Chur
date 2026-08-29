@@ -100,6 +100,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0046](0046-freeze-sync-operation-payloads.md) | Freeze v1 sync operation payloads and kind registry | Accepted |
 | [0047](0047-resume-rewrap-from-the-next-missing-envelope.md) | Resume eager rewrap from the smallest missing target-epoch envelope | Accepted |
 | [0048](0048-recover-a-device-from-a-portable-identity-envelope.md) | Recover a lost sync device through a portable identity envelope and checkpoint | Accepted |
+| [0049](0049-add-sync-state-in-catalog-v2.md) | Add durable encrypted-sync state through catalog v2 and a crash-safe migration | Accepted |
 
 Rows are ordered by ADR number. Number 0015 was not used; no ADR carries it and none will.
 

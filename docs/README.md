@@ -96,6 +96,7 @@ Document status describes a whole document. Individual statements inside a docum
 - [`format/OBJECT_KEY_ENVELOPE_V1.md`](format/OBJECT_KEY_ENVELOPE_V1.md)
 - [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md)
 - [`format/CATALOG_SCHEMA_V1.md`](format/CATALOG_SCHEMA_V1.md)
+- [`format/CATALOG_SCHEMA_V2.md`](format/CATALOG_SCHEMA_V2.md)
 - [`format/BACKUP_FORMAT_V1.md`](format/BACKUP_FORMAT_V1.md)
 - [`format/TEST_VECTORS.md`](format/TEST_VECTORS.md)
 

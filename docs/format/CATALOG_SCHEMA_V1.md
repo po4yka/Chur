@@ -375,6 +375,8 @@ Skipping untested version steps is forbidden.
 
 Raw SQLCipher pages are not synced. Rust emits canonical encrypted operations from logical changes. The local catalog is a materialized state; the operation log is a separate protocol.
 
+Catalog v1 allocates no physical sync tables. Phase 3 state is the forward catalog-v2 extension in [`CATALOG_SCHEMA_V2.md`](CATALOG_SCHEMA_V2.md); [ADR-0049](../adr/0049-add-sync-state-in-catalog-v2.md) owns the migration.
+
 ## 20. Test requirements
 
 - schema constraints and uniqueness;

@@ -308,7 +308,7 @@ Restore writes a new local platform slot after authenticating a portable slot.
 - `slot_body_length` between 16 and 4096, and the sum of all slot bodies at most 16384;
 - every identifier is exactly 16 bytes and v1 carries no variable-length path or name, so no string length remains to cap;
 - `migration_descriptor` exactly 32 bytes when present, and v1 defines no migration extension records;
-- only `descriptor_version` `0x0001`, `canonical_encoding_profile` `0x0001`, `crypto_policy_id` `0x0001`, `catalog_format_version` `0x0001`, `catalog_crypto_suite` `0x0001`, `object_store_format_version` `0x0001`, `naming_profile_id` `0x0001`, and `slot_version` `0x0001` are accepted;
+- only `descriptor_version` `0x0001`, `canonical_encoding_profile` `0x0001`, `crypto_policy_id` `0x0001`, catalog format version `0x0001` or `0x0002`, `catalog_crypto_suite` `0x0001`, `object_store_format_version` `0x0001`, `naming_profile_id` `0x0001`, and `slot_version` `0x0001` are accepted;
 - `wrap_suite_id` is `0x0002` for an `AndroidKeystoreSlotV1` and `0x0001` for every other family, per [`KEY_SLOT_BODIES_V1.md`](KEY_SLOT_BODIES_V1.md) §5. Any other pairing of `slot_type` and `wrap_suite_id` is rejected;
 - generation arithmetic checked in `u64`, with `0xFFFFFFFFFFFFFFFF` rejected in every generation field so an increment always exists;
 - nesting depth is 2, the head followed by one level of sub-descriptors, and v1 defines no deeper structure.
