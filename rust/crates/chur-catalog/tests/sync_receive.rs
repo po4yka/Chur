@@ -43,6 +43,65 @@ fn setup() -> Fixture {
     }
 }
 
+#[test]
+fn initial_membership_and_outer_operation_provision_together() {
+    let root = Key::new([50; 32]);
+    let catalog_key = CatalogKey::derive(&root, &id(51)).expect("catalog key");
+    let mut db = CatalogDb::open(&CatalogLocation::Memory, &catalog_key).expect("catalog");
+    schema::open_at_current_version(&mut db, 1).expect("schema");
+    let signing_key = DeviceSigningKey::from_seed([52; 32]);
+    let enrollment =
+        EnrollmentRecord::initial(id(51), id(53), signing_key.verifying_key(), [54; 32])
+            .expect("initial")
+            .sign(&signing_key);
+
+    let (membership, log, operation) =
+        sync_receive::provision_initial_membership(&mut db, &root, &signing_key, &enrollment)
+            .expect("provision");
+    assert_eq!(operation.device_sequence(), 1);
+    assert_eq!(log.head(&id(53)), Some((1, operation.digest())));
+    assert_eq!(membership.generation(), 1);
+    assert_eq!(
+        sync_membership::load(&db)
+            .expect("membership")
+            .expect("present")
+            .generation(),
+        1
+    );
+    assert_eq!(
+        sync_log::load(&db, &membership).expect("log").head(&id(53)),
+        Some((1, operation.digest()))
+    );
+}
+
+#[test]
+fn failed_initial_provision_writes_no_outer_operation() {
+    let root = Key::new([55; 32]);
+    let catalog_key = CatalogKey::derive(&root, &id(56)).expect("catalog key");
+    let mut db = CatalogDb::open(&CatalogLocation::Memory, &catalog_key).expect("catalog");
+    schema::open_at_current_version(&mut db, 1).expect("schema");
+    let signing_key = DeviceSigningKey::from_seed([57; 32]);
+    let enrollment =
+        EnrollmentRecord::initial(id(56), id(58), signing_key.verifying_key(), [59; 32])
+            .expect("initial")
+            .sign(&signing_key);
+    sync_membership::provision(&mut db, &enrollment).expect("membership only");
+
+    assert!(
+        sync_receive::provision_initial_membership(&mut db, &root, &signing_key, &enrollment,)
+            .is_err()
+    );
+    let membership = sync_membership::load(&db)
+        .expect("membership")
+        .expect("present");
+    assert!(
+        sync_log::load(&db, &membership)
+            .expect("log")
+            .head(&id(58))
+            .is_none()
+    );
+}
+
 fn enrollment_operation(fixture: &Fixture, enrollment: EnrollmentRecord) -> Operation {
     let domain = KeyDomain::root(&fixture.root, &id(2)).expect("root domain");
     let payload =

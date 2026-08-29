@@ -6,6 +6,7 @@ use chur_core::{ChurStatus, Error, Id, Result, ensure};
 use chur_crypto::{Key, Nonce, random};
 use chur_sync_protocol::convergence::MergeOutcome;
 use chur_sync_protocol::materialization::MaterializedState;
+use chur_sync_protocol::membership::EnrollmentRecord;
 use chur_sync_protocol::operation::{DeviceSigningKey, Operation};
 use chur_sync_protocol::operation_log::ApplyOutcome;
 use chur_sync_protocol::payload::{OperationPayload, PayloadBody};
@@ -15,7 +16,49 @@ use chur_sync_protocol::{KeyDirectory, KeyDomain};
 use crate::CatalogDb;
 use crate::db::{from_sqlite_integer, map_sqlite};
 use crate::sync_log::DurableOperationLog;
-use crate::{sync_keys, sync_membership, sync_rotation};
+use crate::{sync_keys, sync_log, sync_membership, sync_rotation};
+
+/// Provisions generation-one membership and its outer operation atomically.
+pub fn provision_initial_membership(
+    db: &mut CatalogDb,
+    root: &Key,
+    signing_key: &DeviceSigningKey,
+    enrollment: &EnrollmentRecord,
+) -> Result<(MembershipState, DurableOperationLog, Operation)> {
+    let membership = MembershipState::bootstrap(enrollment)?;
+    let domain = KeyDomain::root(root, membership.vault_id())?;
+    let payload = OperationPayload::new(
+        *membership.vault_id(),
+        0,
+        PayloadBody::AddDevice(enrollment.clone()),
+    )?;
+    let mut log = sync_log::load(db, &membership)?;
+    let operation = log.author(
+        random::id()?,
+        *membership.vault_id(),
+        *enrollment.device_id(),
+        *domain.selector(),
+        domain.operation_key(),
+        Nonce::random()?,
+        &payload.encode(),
+        signing_key,
+        &membership,
+    )?;
+    payload.validate_for_operation(
+        &operation,
+        domain.collection_id(),
+        domain.collection_epoch(),
+    )?;
+    ensure!(
+        log.accept_with(db, &operation, &membership, |transaction| {
+            sync_membership::project_provision(transaction, enrollment)?;
+            Ok(())
+        })? == ApplyOutcome::Applied,
+        InternalFailure,
+        "fresh self-enrollment operation was not applied"
+    );
+    Ok((membership, log, operation))
+}
 
 /// Rebuilds convergent private content from authenticated accepted records.
 pub fn load_materialized_state(db: &CatalogDb, keys: &KeyDirectory) -> Result<MaterializedState> {

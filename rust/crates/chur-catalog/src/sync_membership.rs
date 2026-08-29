@@ -165,44 +165,51 @@ pub fn load(db: &CatalogDb) -> Result<Option<MembershipState>> {
 
 /// Creates generation-one membership and every required projection atomically.
 pub fn provision(db: &mut CatalogDb, enrollment: &EnrollmentRecord) -> Result<MembershipState> {
-    let state = MembershipState::bootstrap(enrollment)?;
-    let record = enrollment.encode();
-    let head = enrollment.commitment();
     db.transaction(|transaction| {
-        let present: i64 = transaction
-            .query_row("SELECT count(*) FROM sync_state", [], |row| row.get(0))
-            .map_err(|error| map_sqlite(error, "sync state could not be counted"))?;
-        ensure!(
-            present == 0,
-            Conflict,
-            "sync membership is already provisioned"
-        );
-        insert_membership_record(
-            transaction,
-            enrollment.membership_generation(),
-            ENROLLMENT,
-            enrollment.device_id(),
-            &head,
-            &record,
-        )?;
-        upsert_active_device(transaction, enrollment)?;
-        transaction
-            .execute(
-                "INSERT INTO sync_state
-                     (only_row, membership_generation, membership_commitment,
-                      latest_own_checkpoint_commitment)
-                 VALUES (1, ?1, ?2, NULL)",
-                params![
-                    as_sqlite_integer(
-                        enrollment.membership_generation(),
-                        "the membership generation is too large"
-                    )?,
-                    head.as_slice(),
-                ],
-            )
-            .map_err(|error| map_sqlite(error, "sync state could not be provisioned"))?;
-        bump_generation(transaction)
-    })?;
+        let state = project_provision(transaction, enrollment)?;
+        bump_generation(transaction)?;
+        Ok(state)
+    })
+}
+
+pub(crate) fn project_provision(
+    transaction: &Transaction<'_>,
+    enrollment: &EnrollmentRecord,
+) -> Result<MembershipState> {
+    let state = MembershipState::bootstrap(enrollment)?;
+    let present: i64 = transaction
+        .query_row("SELECT count(*) FROM sync_state", [], |row| row.get(0))
+        .map_err(|error| map_sqlite(error, "sync state could not be counted"))?;
+    ensure!(
+        present == 0,
+        Conflict,
+        "sync membership is already provisioned"
+    );
+    let head = enrollment.commitment();
+    insert_membership_record(
+        transaction,
+        enrollment.membership_generation(),
+        ENROLLMENT,
+        enrollment.device_id(),
+        &head,
+        &enrollment.encode(),
+    )?;
+    upsert_active_device(transaction, enrollment)?;
+    transaction
+        .execute(
+            "INSERT INTO sync_state
+                 (only_row, membership_generation, membership_commitment,
+                  latest_own_checkpoint_commitment)
+             VALUES (1, ?1, ?2, NULL)",
+            params![
+                as_sqlite_integer(
+                    enrollment.membership_generation(),
+                    "the membership generation is too large"
+                )?,
+                head.as_slice(),
+            ],
+        )
+        .map_err(|error| map_sqlite(error, "sync state could not be provisioned"))?;
     Ok(state)
 }
 
