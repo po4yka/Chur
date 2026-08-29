@@ -7,6 +7,7 @@ use chur_crypto::Commitment;
 
 use crate::{
     checkpoint::Checkpoint,
+    membership::EnrollmentRecord,
     operation::Operation,
     state::{DeviceStatus, MembershipState},
 };
@@ -257,6 +258,87 @@ impl OperationLog {
             .insert(*checkpoint.issuer_device_id(), checkpoint.commitment());
         *self = candidate;
         Ok(outcome)
+    }
+
+    /// Establishes a new device's first freshness floor from its enrollment.
+    pub fn bootstrap_from_enrollment(
+        &mut self,
+        enrollment: &EnrollmentRecord,
+        checkpoint: &Checkpoint,
+        membership: &MembershipState,
+    ) -> Result<CheckpointOutcome> {
+        ensure!(
+            self.heads.is_empty()
+                && self.accepted.is_empty()
+                && self.floors.is_empty()
+                && self.checkpoints.is_empty()
+                && self.forks.is_empty(),
+            Conflict,
+            "bootstrap requires an empty operation log"
+        );
+        ensure!(
+            enrollment.vault_id() == membership.vault_id()
+                && enrollment.membership_generation() == membership.generation()
+                && &enrollment.commitment() == membership.commitment()
+                && membership.is_active(enrollment.device_id())
+                && enrollment.device_id() != enrollment.issuer_device_id(),
+            AuthenticationFailed,
+            "enrollment is not the accepted membership head"
+        );
+        ensure!(
+            checkpoint.commitment() == *enrollment.bootstrap_checkpoint_commitment()
+                && checkpoint.vault_id() == membership.vault_id()
+                && checkpoint.issuer_device_id() == enrollment.issuer_device_id(),
+            AuthenticationFailed,
+            "checkpoint does not match the enrollment attestation"
+        );
+        ensure!(
+            checkpoint
+                .membership_generation()
+                .checked_add(1)
+                .is_some_and(|generation| generation == enrollment.membership_generation())
+                && checkpoint.membership_commitment()
+                    == enrollment.previous_membership_commitment(),
+            SyncHeadRollback,
+            "checkpoint does not precede the enrolled membership generation"
+        );
+        let issuer = membership
+            .device(checkpoint.issuer_device_id())
+            .ok_or_else(|| {
+                Error::new(
+                    ChurStatus::AuthenticationFailed,
+                    "checkpoint issuer is unknown",
+                )
+            })?;
+        ensure!(
+            issuer.status() == DeviceStatus::Active
+                && issuer
+                    .signing_public_keys()
+                    .any(|key| checkpoint.verify_signature(key).is_ok()),
+            AuthenticationFailed,
+            "bootstrap checkpoint issuer or signature is not accepted"
+        );
+
+        let mut floors = BTreeMap::new();
+        for head in checkpoint.heads() {
+            ensure!(
+                membership.device(head.device_id()).is_some()
+                    && head.device_id() != enrollment.device_id(),
+                AuthenticationFailed,
+                "bootstrap checkpoint names a device outside prior membership"
+            );
+            floors.insert(
+                *head.device_id(),
+                AcceptedHead {
+                    sequence: head.device_sequence(),
+                    digest: *head.operation_digest(),
+                },
+            );
+        }
+        self.floors = floors;
+        self.checkpoints
+            .insert(*checkpoint.issuer_device_id(), checkpoint.commitment());
+        Ok(CheckpointOutcome::Raised)
     }
 
     /// Atomically accepts one device's chain through its checkpoint floor.
@@ -804,6 +886,85 @@ mod tests {
             ChurStatus::SyncChainFork,
         );
         assert!(log.fork(&id(2)).is_some());
+    }
+
+    #[test]
+    fn new_device_bootstrap_uses_the_enrollment_attested_checkpoint_floor() {
+        let owner_key = DeviceSigningKey::from_seed([3; 32]);
+        let initial = EnrollmentRecord::initial(id(1), id(2), owner_key.verifying_key(), [4; 32])
+            .expect("initial")
+            .sign(&owner_key);
+        let first = operation(&owner_key, 1, [0; 32], 5);
+        let checkpoint = crate::checkpoint::Checkpoint::new(
+            id(1),
+            id(2),
+            1,
+            1,
+            initial.commitment(),
+            vec![crate::checkpoint::CheckpointHead::new(
+                id(2),
+                1,
+                first.digest(),
+            )],
+            [6; 32],
+            [7; 32],
+        )
+        .expect("checkpoint")
+        .sign(&owner_key);
+        let peer_key = DeviceSigningKey::from_seed([8; 32]);
+        let peer = EnrollmentRecord::new(
+            id(1),
+            id(3),
+            peer_key.verifying_key(),
+            [9; 32],
+            2,
+            id(2),
+            2,
+            initial.commitment(),
+            checkpoint.commitment(),
+        )
+        .expect("peer")
+        .sign(&owner_key);
+        let mut membership = MembershipState::bootstrap(&initial).expect("membership");
+        membership
+            .accept_enrollment(&peer, &id(2), 2)
+            .expect("accept peer");
+
+        let mut log = OperationLog::new();
+        assert_eq!(
+            log.bootstrap_from_enrollment(&peer, &checkpoint, &membership)
+                .expect("bootstrap"),
+            CheckpointOutcome::Raised
+        );
+        assert_eq!(
+            log.checkpoint_commitment(&id(2)),
+            Some(&checkpoint.commitment())
+        );
+        assert!(log.accept(&first, &membership).expect("floor") == ApplyOutcome::Applied);
+
+        let stale = crate::checkpoint::Checkpoint::new(
+            id(1),
+            id(2),
+            1,
+            1,
+            initial.commitment(),
+            vec![crate::checkpoint::CheckpointHead::new(
+                id(2),
+                1,
+                first.digest(),
+            )],
+            [6; 32],
+            [10; 32],
+        )
+        .expect("stale checkpoint")
+        .sign(&owner_key);
+        assert_eq!(
+            OperationLog::new()
+                .bootstrap_from_enrollment(&peer, &stale, &membership)
+                .expect_err("commitment mismatch")
+                .status(),
+            ChurStatus::AuthenticationFailed
+        );
     }
 
     #[test]
