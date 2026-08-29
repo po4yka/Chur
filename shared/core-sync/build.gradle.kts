@@ -20,6 +20,7 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             implementation(project(":shared:core-model"))
+            implementation(project(":shared:core-ffi"))
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.ktor.client.core)
         }
