@@ -17,6 +17,7 @@
 
 pub mod checkpoint;
 pub mod convergence;
+pub mod deletion;
 pub mod identity;
 pub mod membership;
 pub mod operation;
