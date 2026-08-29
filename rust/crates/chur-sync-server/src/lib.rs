@@ -3,6 +3,7 @@
 mod auth;
 mod checkpoint;
 mod deletion;
+pub mod http;
 mod relay;
 
 pub use deletion::DeletionOutcome;

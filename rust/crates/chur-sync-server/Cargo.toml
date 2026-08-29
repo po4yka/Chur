@@ -11,10 +11,13 @@ chur-core.workspace = true
 chur-sync-protocol.workspace = true
 rusqlite.workspace = true
 sha2.workspace = true
+axum.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 hex.workspace = true
 serde_json.workspace = true
+tower.workspace = true
 
 [lints]
 workspace = true

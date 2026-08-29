@@ -91,6 +91,16 @@ A skill synchronisation updates both hashes and the commit, and the checker is w
 
 ## Recorded additions
 
+### `axum` 0.8.9 and `tokio` 1.53.1, Rust sync server
+
+- **Capability:** a small HTTP/1 process for the Phase 3 self-hosted reference server. Axum maps bounded opaque request bodies to the existing synchronous server core. Tokio supplies the listener and task runtime.
+- **Alternatives:** the standard library has no HTTP server. A hand-written parser would add an unsafe trust boundary. A larger web framework would add features the service does not use.
+- **Owner and maintenance:** the Tokio project maintains both crates. The exact first-adoption versions are `=0.8.9` and `=1.53.1`.
+- **License:** both crates are MIT licensed.
+- **Features:** Axum default features are disabled; only `http1` and `tokio` are enabled. Tokio default features are disabled; only macros, networking, the multithreaded runtime, and signal support are enabled. The server has no JSON, WebSocket, HTTP/2, client, TLS, tracing, or template feature.
+- **Data and telemetry:** the crates receive opaque protocol bytes and network metadata. They add no analytics or third-party log shipping. TLS and any request log remain at the operator's reverse proxy.
+- **Update and removal:** updates require the HTTP integration tests, advisory checks, lockfile review, and a live upload/download smoke test. Removal requires another bounded HTTP transport.
+
 ### `x25519-dalek` 3.0.0, Rust sync core
 
 - **Capability:** X25519 device key pairs for Phase 3 enrollment, collection-key grants, and portable identity recovery. The protocol already selects X25519 and requires a key separate from Ed25519.
