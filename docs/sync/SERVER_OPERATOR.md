@@ -42,8 +42,15 @@ All identifiers in paths are 32 hexadecimal characters. All request and response
 | `GET /v1/vaults/{vault}/checkpoints` | none | latest checkpoint page |
 | `GET /v1/vaults/{vault}/checkpoints/{commitment}` | none | exact checkpoint |
 | `POST /v1/vaults/{vault}/token` | 32-byte replacement token | rotated caller token |
+| `POST /v1/vaults/{vault}/objects/{store}/uploads/{transfer}?length={bytes}` | none | new or resumed upload |
+| `PATCH /v1/vaults/{vault}/uploads/{transfer}?offset={bytes}&sha256={digest}` | ciphertext range | durable progress |
+| `POST /v1/vaults/{vault}/uploads/{transfer}/finish?sha256={digest}` | none | published immutable object |
+| `GET /v1/vaults/{vault}/objects/{store}?offset={bytes}&length={maximum}` | none | complete ciphertext range |
+| `POST /v1/vaults/{vault}/deletions` | signed deletion authorization | deletion result |
 
 Bootstrap uses `Authorization: Bootstrap <CHUR_SYNC_BOOTSTRAP_TOKEN>`. Its body and enrollment body are `new_token:bytes[32] || first_length:u32be || first_record || outer_operation`. Revocation omits `new_token`. A record page is `count:u32be`, followed by `length:u32be || canonical_record` for each item. The response is bounded to 256 records and 16 MiB. An error body is one signed big-endian `ChurStatus` value.
+
+Upload and download checksums are 64 hexadecimal SHA-256 characters. Upload ranges are sequential and at most 16 MiB. An exact range replay is idempotent. Upload progress is `received:u64be || expected:u64be || complete:u8`. A signed deletion route does not accept a transport token as authority; it verifies `ServerDeletionAuthorizationV1` against current device membership.
 
 ## Network boundary
 

@@ -9,9 +9,11 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use chur_core::Id;
 use chur_sync_protocol::checkpoint::{Checkpoint, CheckpointHead};
+use chur_sync_protocol::deletion::ServerDeletionAuthorization;
 use chur_sync_protocol::membership::{EnrollmentRecord, RevocationRecord};
 use chur_sync_protocol::operation::{DeviceSigningKey, Operation};
 use chur_sync_server::ReferenceServer;
+use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -282,6 +284,7 @@ async fn bootstrap_installs_transport_auth_and_relays_canonical_records() {
         .expect("token rotation response");
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     let response = app
+        .clone()
         .oneshot(request(
             Method::GET,
             &format!("/v1/vaults/{}/checkpoints", hex::encode(vault.as_bytes())),
@@ -291,6 +294,112 @@ async fn bootstrap_installs_transport_auth_and_relays_canonical_records() {
         .await
         .expect("rotated token response");
     assert_eq!(response.status(), StatusCode::OK);
+
+    let transfer = id(21);
+    let store = id(22);
+    let object = b"opaque object";
+    let checksum: [u8; 32] = Sha256::digest(object).into();
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &format!(
+                "/v1/vaults/{}/objects/{}/uploads/{}?length={}",
+                hex::encode(vault.as_bytes()),
+                hex::encode(store.as_bytes()),
+                hex::encode(transfer.as_bytes()),
+                object.len()
+            ),
+            Vec::new(),
+            Some(("Bearer", &replacement_token)),
+        ))
+        .await
+        .expect("begin upload response");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::PATCH,
+            &format!(
+                "/v1/vaults/{}/uploads/{}?offset=0&sha256={}",
+                hex::encode(vault.as_bytes()),
+                hex::encode(transfer.as_bytes()),
+                hex::encode(checksum)
+            ),
+            object.to_vec(),
+            Some(("Bearer", &replacement_token)),
+        ))
+        .await
+        .expect("append upload response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &format!(
+                "/v1/vaults/{}/uploads/{}/finish?sha256={}",
+                hex::encode(vault.as_bytes()),
+                hex::encode(transfer.as_bytes()),
+                hex::encode(checksum)
+            ),
+            Vec::new(),
+            Some(("Bearer", &replacement_token)),
+        ))
+        .await
+        .expect("finish upload response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!(
+                "/v1/vaults/{}/objects/{}?offset=0&length=64",
+                hex::encode(vault.as_bytes()),
+                hex::encode(store.as_bytes())
+            ),
+            Vec::new(),
+            Some(("Bearer", &replacement_token)),
+        ))
+        .await
+        .expect("download response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("download body")
+            .as_ref(),
+        object
+    );
+
+    let deletion =
+        ServerDeletionAuthorization::object(id(23), vault, device, store, fourth.digest())
+            .expect("deletion")
+            .sign(&key);
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &format!("/v1/vaults/{}/deletions", hex::encode(vault.as_bytes())),
+            deletion.encode(),
+            None,
+        ))
+        .await
+        .expect("deletion response");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let response = app
+        .oneshot(request(
+            Method::GET,
+            &format!(
+                "/v1/vaults/{}/objects/{}?offset=0&length=64",
+                hex::encode(vault.as_bytes()),
+                hex::encode(store.as_bytes())
+            ),
+            Vec::new(),
+            Some(("Bearer", &replacement_token)),
+        ))
+        .await
+        .expect("deleted object response");
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 fn request(

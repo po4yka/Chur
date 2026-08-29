@@ -12,10 +12,11 @@ use axum::routing::{get, post};
 use chur_core::limits::sync as bounds;
 use chur_core::{ChurStatus, Error, Id, ensure};
 use chur_sync_protocol::checkpoint::Checkpoint;
+use chur_sync_protocol::deletion::ServerDeletionAuthorization;
 use chur_sync_protocol::membership::{EnrollmentRecord, RevocationRecord};
 use chur_sync_protocol::operation::Operation;
 
-use crate::{ReferenceServer, RelayOutcome};
+use crate::{DeletionOutcome, ReferenceServer, RelayOutcome, UploadProgress};
 
 #[derive(Clone)]
 struct AppState {
@@ -48,6 +49,20 @@ pub fn router(server: ReferenceServer, bootstrap_token: [u8; 32]) -> Router {
             get(checkpoint_by_commitment),
         )
         .route("/v1/vaults/{vault}/token", post(rotate_token))
+        .route(
+            "/v1/vaults/{vault}/objects/{store}/uploads/{transfer}",
+            post(begin_upload),
+        )
+        .route(
+            "/v1/vaults/{vault}/uploads/{transfer}",
+            axum::routing::patch(append_upload),
+        )
+        .route(
+            "/v1/vaults/{vault}/uploads/{transfer}/finish",
+            post(finish_upload),
+        )
+        .route("/v1/vaults/{vault}/objects/{store}", get(download_object))
+        .route("/v1/vaults/{vault}/deletions", post(delete))
         .layer(DefaultBodyLimit::max(bounds::RESPONSE_BYTES_MAX))
         .with_state(state)
 }
@@ -223,6 +238,87 @@ async fn rotate_token(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn begin_upload(
+    State(state): State<AppState>,
+    Path((vault, store, transfer)): Path<(String, String, String)>,
+    RawQuery(query): RawQuery,
+    headers: HeaderMap,
+) -> HttpResult<Response> {
+    let vault = id(&vault)?;
+    let store = id(&store)?;
+    let transfer = id(&transfer)?;
+    let expected = query_u64(query.as_deref(), "length")?;
+    let mut server = lock(&state)?;
+    authenticate(&server, vault, &headers)?;
+    let progress = server.begin_upload(vault, transfer, store, expected)?;
+    progress_response(StatusCode::CREATED, progress)
+}
+
+async fn append_upload(
+    State(state): State<AppState>,
+    Path((vault, transfer)): Path<(String, String)>,
+    RawQuery(query): RawQuery,
+    headers: HeaderMap,
+    body: Bytes,
+) -> HttpResult<Response> {
+    let vault = id(&vault)?;
+    let transfer = id(&transfer)?;
+    let offset = query_u64(query.as_deref(), "offset")?;
+    let checksum = query_hex(query.as_deref(), "sha256")?;
+    let mut server = lock(&state)?;
+    authenticate(&server, vault, &headers)?;
+    let progress = server.append_upload(vault, transfer, offset, &body, checksum)?;
+    progress_response(StatusCode::OK, progress)
+}
+
+async fn finish_upload(
+    State(state): State<AppState>,
+    Path((vault, transfer)): Path<(String, String)>,
+    RawQuery(query): RawQuery,
+    headers: HeaderMap,
+) -> HttpResult<Response> {
+    let vault = id(&vault)?;
+    let transfer = id(&transfer)?;
+    let checksum = query_hex(query.as_deref(), "sha256")?;
+    let mut server = lock(&state)?;
+    authenticate(&server, vault, &headers)?;
+    let progress = server.finish_upload(vault, transfer, checksum)?;
+    progress_response(StatusCode::OK, progress)
+}
+
+async fn download_object(
+    State(state): State<AppState>,
+    Path((vault, store)): Path<(String, String)>,
+    RawQuery(query): RawQuery,
+    headers: HeaderMap,
+) -> HttpResult<Response> {
+    let vault = id(&vault)?;
+    let store = id(&store)?;
+    let offset = query_u64(query.as_deref(), "offset")?;
+    let length = query_u64(query.as_deref(), "length")?;
+    let server = lock(&state)?;
+    authenticate(&server, vault, &headers)?;
+    binary(server.read_object(vault, store, offset, length)?)
+}
+
+async fn delete(
+    State(state): State<AppState>,
+    Path(vault): Path<String>,
+    body: Bytes,
+) -> HttpResult<StatusCode> {
+    let vault = id(&vault)?;
+    let authorization = ServerDeletionAuthorization::decode(&body)?;
+    path_matches(
+        authorization.vault_id() == &vault,
+        "deletion path does not match its record",
+    )?;
+    let mut server = lock(&state)?;
+    Ok(match server.apply_deletion(&authorization)? {
+        DeletionOutcome::Deleted => StatusCode::NO_CONTENT,
+        DeletionOutcome::Duplicate => StatusCode::OK,
+    })
+}
+
 fn authenticate(server: &ReferenceServer, vault: Id, headers: &HeaderMap) -> chur_core::Result<Id> {
     let value = headers
         .get(header::AUTHORIZATION)
@@ -306,11 +402,33 @@ fn pair(body: &[u8]) -> chur_core::Result<(&[u8], &[u8])> {
 }
 
 fn query_u64(query: Option<&str>, name: &str) -> chur_core::Result<u64> {
-    query
-        .and_then(|query| query.strip_prefix(name))
-        .and_then(|query| query.strip_prefix('='))
+    query_value(query, name)?
         .and_then(|value| value.parse().ok())
         .ok_or_else(|| Error::new(ChurStatus::InvalidInput, "numeric query is invalid"))
+}
+
+fn query_hex(query: Option<&str>, name: &str) -> chur_core::Result<[u8; 32]> {
+    query_value(query, name)?
+        .ok_or_else(|| Error::new(ChurStatus::InvalidInput, "hex query is absent"))
+        .and_then(hex)
+}
+
+fn query_value<'a>(query: Option<&'a str>, name: &str) -> chur_core::Result<Option<&'a str>> {
+    let mut values = query
+        .into_iter()
+        .flat_map(|query| query.split('&'))
+        .filter_map(|part| {
+            part.split_once('=')
+                .filter(|(key, _)| *key == name)
+                .map(|(_, value)| value)
+        });
+    let value = values.next();
+    ensure!(
+        values.next().is_none(),
+        InvalidInput,
+        "query parameter is repeated"
+    );
+    Ok(value)
 }
 
 fn id(value: &str) -> chur_core::Result<Id> {
@@ -361,6 +479,19 @@ fn records(records: Vec<Vec<u8>>) -> Vec<u8> {
 
 fn binary(body: Vec<u8>) -> HttpResult<Response> {
     Ok(([(header::CONTENT_TYPE, "application/octet-stream")], body).into_response())
+}
+
+fn progress_response(status: StatusCode, progress: UploadProgress) -> HttpResult<Response> {
+    let mut body = Vec::with_capacity(17);
+    body.extend_from_slice(&progress.received.to_be_bytes());
+    body.extend_from_slice(&progress.expected.to_be_bytes());
+    body.push(u8::from(progress.complete));
+    Ok((
+        status,
+        [(header::CONTENT_TYPE, "application/octet-stream")],
+        body,
+    )
+        .into_response())
 }
 
 type HttpResult<T> = Result<T, HttpError>;
