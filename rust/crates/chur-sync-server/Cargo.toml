@@ -1,0 +1,15 @@
+[package]
+name = "chur-sync-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Self-hosted opaque storage and relay service for Chur sync."
+
+[dependencies]
+chur-core.workspace = true
+rusqlite.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true
