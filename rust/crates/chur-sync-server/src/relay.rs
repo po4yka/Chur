@@ -738,7 +738,7 @@ mod tests {
             enrollment.commitment(),
             vec![CheckpointHead::new(first_device, 2, second.digest())],
             [20; 32],
-            [21; 32],
+            [0; 32],
         )
         .expect("bootstrap checkpoint")
         .sign(&first_key);

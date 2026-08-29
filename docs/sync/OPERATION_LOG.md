@@ -189,7 +189,7 @@ Deletion operations create durable tombstones with causal ordering. A tombstone 
 
 Acknowledgment needs no operation kind of its own. Device D has acknowledged the tombstone once the receiver holds an operation authored by D whose `observed_heads` entry for A is at or above `s`; the vector of §4 already carries exactly that fact. A revoked device stops counting toward the condition once its revocation is accepted.
 
-The 180-day cap stops one permanently offline device from blocking compaction forever, and it is safe because a device whose accepted head predates a compaction point does not replay into it. It re-bootstraps from a checkpoint under [`ROLLBACK_PROTECTION.md`](ROLLBACK_PROTECTION.md) §6, which carries the compacted state rather than the discarded tombstones, so neither branch of the rule permits resurrection.
+The 180-day cap stops one permanently offline device from blocking object ciphertext and local-row garbage collection forever. V1 retains the signed tombstone operation after that cleanup, as [`ROLLBACK_PROTECTION.md`](ROLLBACK_PROTECTION.md) §6.1 requires, so a stale device still receives the delete and cannot resurrect the object.
 
 ## 12. Limits
 

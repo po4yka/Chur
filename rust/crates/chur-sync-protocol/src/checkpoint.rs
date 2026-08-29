@@ -2,13 +2,40 @@
 
 use chur_core::limits::{COMMITMENT_LEN, ID_LEN, sync as bounds};
 use chur_core::{ChurStatus, Id, Result, ensure};
-use chur_crypto::{Commitment, commit, tuple::tag};
+use chur_crypto::{Commitment, commit, commit::Committer, tuple::tag};
 use chur_format::codec::{Reader, Writer};
 
 use crate::operation::{DeviceSigningKey, PROTOCOL_VERSION_V1, verify_ed25519};
 
 const SIGNATURE_LEN: usize = 64;
 const FIXED_FIELDS_LEN: usize = 2 + (ID_LEN * 2) + 8 + 8 + (COMMITMENT_LEN * 3) + 4 + SIGNATURE_LEN;
+
+/// V1 retains operation history and therefore carries no compacted catalog snapshot.
+pub const UNCOMPACTED_CATALOG_STATE_COMMITMENT: Commitment = [0; COMMITMENT_LEN];
+
+/// Commits to every current collection epoch in ascending collection-id order.
+pub fn collection_epoch_commitment(epochs: &[(Id, u64)]) -> Result<Commitment> {
+    let mut previous: Option<&Id> = None;
+    let mut committer = Committer::new(tag::SYNC_COLLECTION_EPOCHS);
+    for (collection_id, epoch) in epochs {
+        if let Some(previous) = previous {
+            ensure!(
+                previous.as_bytes() < collection_id.as_bytes(),
+                NonCanonicalEncoding,
+                "collection epochs are not sorted and unique"
+            );
+        }
+        ensure!(
+            *epoch != 0,
+            NonCanonicalEncoding,
+            "collection epoch is zero"
+        );
+        committer.update(collection_id.as_bytes());
+        committer.update(&epoch.to_be_bytes());
+        previous = Some(collection_id);
+    }
+    Ok(committer.finish())
+}
 
 /// One accepted device head recorded by a checkpoint.
 #[derive(Clone, PartialEq, Eq)]
@@ -166,6 +193,16 @@ impl Checkpoint {
     pub fn heads(&self) -> &[CheckpointHead] {
         &self.heads
     }
+    /// Commitment to current collection epochs.
+    #[must_use]
+    pub const fn collection_epoch_commitment(&self) -> &Commitment {
+        &self.collection_epoch_commitment
+    }
+    /// V1 uncompacted-state sentinel.
+    #[must_use]
+    pub const fn catalog_state_commitment(&self) -> &Commitment {
+        &self.catalog_state_commitment
+    }
 
     /// Encodes the canonical checkpoint.
     #[must_use]
@@ -302,6 +339,16 @@ impl Checkpoint {
             NonCanonicalEncoding,
             "checkpoint does not carry the issuer's current head"
         );
+        ensure!(
+            self.collection_epoch_commitment != [0; COMMITMENT_LEN],
+            NonCanonicalEncoding,
+            "checkpoint collection epoch commitment is zero"
+        );
+        ensure!(
+            self.catalog_state_commitment == UNCOMPACTED_CATALOG_STATE_COMMITMENT,
+            UnsupportedVersion,
+            "v1 does not support compacted catalog snapshots"
+        );
         Ok(())
     }
 }
@@ -327,7 +374,7 @@ mod tests {
             [4; 32],
             vec![CheckpointHead::new(id(2), 7, [5; 32])],
             [6; 32],
-            [7; 32],
+            UNCOMPACTED_CATALOG_STATE_COMMITMENT,
         )
         .expect("checkpoint")
         .sign(&key);
@@ -341,5 +388,41 @@ mod tests {
             encoded
         );
         assert_ne!(checkpoint.commitment(), [0; COMMITMENT_LEN]);
+        assert_eq!(checkpoint.collection_epoch_commitment(), &[6; 32]);
+        assert_eq!(
+            checkpoint.catalog_state_commitment(),
+            &UNCOMPACTED_CATALOG_STATE_COMMITMENT
+        );
+    }
+
+    #[test]
+    fn collection_epochs_have_one_canonical_commitment() {
+        let epochs = [(id(2), 3), (id(4), 5)];
+        let commitment = collection_epoch_commitment(&epochs).expect("commitment");
+        let mut expected = Committer::new(tag::SYNC_COLLECTION_EPOCHS);
+        expected.update(id(2).as_bytes());
+        expected.update(&3u64.to_be_bytes());
+        expected.update(id(4).as_bytes());
+        expected.update(&5u64.to_be_bytes());
+        assert_eq!(commitment, expected.finish());
+        assert!(collection_epoch_commitment(&[(id(4), 5), (id(2), 3)]).is_err());
+        assert!(collection_epoch_commitment(&[(id(2), 0)]).is_err());
+    }
+
+    #[test]
+    fn v1_rejects_a_compacted_catalog_state() {
+        let Err(error) = Checkpoint::new(
+            id(1),
+            id(2),
+            1,
+            1,
+            [3; 32],
+            vec![CheckpointHead::new(id(2), 1, [4; 32])],
+            [5; 32],
+            [6; 32],
+        ) else {
+            panic!("compacted state was accepted");
+        };
+        assert_eq!(error.status(), ChurStatus::UnsupportedVersion);
     }
 }

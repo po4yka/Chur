@@ -83,7 +83,7 @@ Derived assets are cache-like records bound to source revision/generator profile
 
 ## 10. Compaction
 
-Operation/history compaction requires a checkpoint as defined in [`ROLLBACK_PROTECTION.md`](ROLLBACK_PROTECTION.md) §6, which commits to the retained state and to the per-device heads the compaction assumes. Conflict and tombstone evidence is discarded only when the retention rule of [`OPERATION_LOG.md`](OPERATION_LOG.md) §11 permits it.
+V1 does not compact operation history. A checkpoint records the uncompacted-state sentinel defined in [`ROLLBACK_PROTECTION.md`](ROLLBACK_PROTECTION.md) §6.1. Conflict and tombstone operations remain available after object ciphertext and local garbage collection complete. A later protocol version needs a canonical portable state snapshot before it can discard this history.
 
 ## 11. UX
 

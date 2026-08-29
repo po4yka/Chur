@@ -80,7 +80,7 @@ fn replay_omission_key_substitution_rollback_and_equivocation_fail_closed() {
         *membership.commitment(),
         vec![CheckpointHead::new(id(2), 2, second.digest())],
         [11; 32],
-        [12; 32],
+        [0; 32],
     )
     .expect("checkpoint")
     .sign(&owner_key);

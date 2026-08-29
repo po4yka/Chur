@@ -96,6 +96,12 @@ One device signs. There is no quorum: a quorum rule needs a membership the recei
 
 A device issues a checkpoint at the end of every sync session in which it accepted an operation, and includes its latest one in every portable backup. It retains its own latest checkpoint and the latest it has accepted from each other device.
 
+### 6.1 Collection and catalog commitments
+
+`collection_epoch_commitment` is BLAKE3-256 over `CHUR\x00SYNC\x00COLLECTION-EPOCHS\x00V1` followed by every `(collection_id:bytes[16], current_epoch:u64)` entry. Entries use ascending `collection_id` order, with no count or separator. Duplicate identifiers and epoch zero are invalid. An empty vault commits to the domain tag alone.
+
+V1 does not compact signed operation history and has no portable materialized-catalog snapshot. Its `catalog_state_commitment` is therefore exactly 32 zero bytes. A V1 reader rejects any other value as an unsupported snapshot format. Object ciphertext and local catalog rows can still complete the tombstone GC flow, but the signed operations and tombstones remain available for bootstrap and stale devices.
+
 ## 7. Device loss and reinstall
 
 If all local accepted heads are lost, a malicious server may present an older authentic history. Mitigations:

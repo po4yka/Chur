@@ -1175,7 +1175,7 @@ mod tests {
                 second.digest(),
             )],
             [7; 32],
-            [8; 32],
+            [0; 32],
         )
         .expect("checkpoint")
         .sign(&key);
@@ -1207,7 +1207,7 @@ mod tests {
             enrollment.commitment(),
             vec![crate::checkpoint::CheckpointHead::new(id(2), 2, [9; 32])],
             [7; 32],
-            [8; 32],
+            [0; 32],
         )
         .expect("conflicting checkpoint")
         .sign(&key);
@@ -1238,8 +1238,8 @@ mod tests {
                 1,
                 first.digest(),
             )],
-            [6; 32],
-            [7; 32],
+            [10; 32],
+            [0; 32],
         )
         .expect("checkpoint")
         .sign(&owner_key);
@@ -1286,7 +1286,7 @@ mod tests {
                 first.digest(),
             )],
             [6; 32],
-            [10; 32],
+            [0; 32],
         )
         .expect("stale checkpoint")
         .sign(&owner_key);

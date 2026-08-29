@@ -261,7 +261,7 @@ mod tests {
             enrollment.commitment(),
             vec![CheckpointHead::new(device, 1, operation.digest())],
             [9; 32],
-            [10; 32],
+            [0; 32],
         )
         .expect("checkpoint")
         .sign(&key);
@@ -279,7 +279,7 @@ mod tests {
             enrollment.commitment(),
             vec![CheckpointHead::new(device, 1, [99; 32])],
             [9; 32],
-            [10; 32],
+            [0; 32],
         )
         .expect("wrong-head checkpoint")
         .sign(&key);

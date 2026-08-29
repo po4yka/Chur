@@ -56,5 +56,5 @@ No checkpoints or enrollment records exist yet, so nothing migrates. `protocol_v
 
 ## Follow-up
 
-- define the `catalog_state_commitment` input, owned by `format/CATALOG_SCHEMA_V1.md`, and the `membership_commitment` input, owned by `sync/DEVICE_IDENTITY.md`; both are named here and constructed nowhere;
-- freeze the checkpoint field widths with the operation record's.
+- [`0045`](0045-freeze-device-membership-records.md) defines `membership_commitment` and freezes the checkpoint widths;
+- [`0052`](0052-keep-v1-sync-history-uncompacted.md) defines the collection-epoch input and the uncompacted V1 catalog-state sentinel.

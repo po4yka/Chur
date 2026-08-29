@@ -460,13 +460,14 @@ A domain tag is a fixed ASCII byte constant written without a length prefix, per
 | `CHUR\x00SYNC\x00OPERATION-CHAIN\x00V1` | operation digest and per-device chain hash | [`../sync/OPERATION_LOG.md`](../sync/OPERATION_LOG.md) §4 |
 | `CHUR\x00SYNC\x00CHECKPOINT\x00V1` | checkpoint record signature | [`../sync/ROLLBACK_PROTECTION.md`](../sync/ROLLBACK_PROTECTION.md) §6 |
 | `CHUR\x00SYNC\x00CHECKPOINT-COMMITMENT\x00V1` | checkpoint commitment | [`../sync/ROLLBACK_PROTECTION.md`](../sync/ROLLBACK_PROTECTION.md) §6 |
+| `CHUR\x00SYNC\x00COLLECTION-EPOCHS\x00V1` | ordered current collection-epoch commitment | [`../sync/ROLLBACK_PROTECTION.md`](../sync/ROLLBACK_PROTECTION.md) §6.1 |
 | `CHUR\x00SYNC\x00ENROLLMENT\x00V1` | device-enrollment signature | [`../sync/DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md) §4 |
 | `CHUR\x00SYNC\x00REVOCATION\x00V1` | device-revocation signature | [`../sync/DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md) §9 |
 | `CHUR\x00SYNC\x00MEMBERSHIP-CHAIN\x00V1` | membership-state commitment | [`../sync/DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md) §4.1 |
 | `CHUR\x00SYNC\x00SERVER-DELETE\x00V1` | opaque server deletion authorization signature | [`../sync/SYNC_PROTOCOL_V1.md`](../sync/SYNC_PROTOCOL_V1.md) §9.1 |
 | `CHUR\x00IDENTITY\x00FINGERPRINT\x00V1` | device verification fingerprint | [`../sync/DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md) §5 |
 
-No allocated tag is a byte prefix of another, as §7 requires; the twenty-six above are checked pairwise by `chur-crypto`. Tags within one area differ at the first purpose byte or at a separator followed by a suffix; tags in different areas differ before the purpose.
+No allocated tag is a byte prefix of another, as §7 requires; the twenty-seven above are checked pairwise by `chur-crypto`. Tags within one area differ at the first purpose byte or at a separator followed by a suffix; tags in different areas differ before the purpose.
 
 The fingerprint tag reaches no persisted or wire bytes; it is the input to a string a person reads, so the ADR requirement of §15.6 does not apply to it. A tag for an authenticated record whose AAD is not yet frozen is otherwise allocated by a row here in the same change that freezes that record.
 

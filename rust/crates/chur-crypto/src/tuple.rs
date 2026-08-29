@@ -62,6 +62,8 @@ pub mod tag {
     pub const SYNC_CHECKPOINT: &[u8] = b"CHUR\0SYNC\0CHECKPOINT\0V1";
     /// Checkpoint commitment used by enrollment and recovery.
     pub const SYNC_CHECKPOINT_COMMITMENT: &[u8] = b"CHUR\0SYNC\0CHECKPOINT-COMMITMENT\0V1";
+    /// Ordered current collection-epoch commitment.
+    pub const SYNC_COLLECTION_EPOCHS: &[u8] = b"CHUR\0SYNC\0COLLECTION-EPOCHS\0V1";
     /// Device-enrollment record signature.
     pub const SYNC_ENROLLMENT: &[u8] = b"CHUR\0SYNC\0ENROLLMENT\0V1";
     /// Device-revocation record signature.
@@ -96,6 +98,7 @@ pub mod tag {
         SYNC_OPERATION_CHAIN,
         SYNC_CHECKPOINT,
         SYNC_CHECKPOINT_COMMITMENT,
+        SYNC_COLLECTION_EPOCHS,
         SYNC_ENROLLMENT,
         SYNC_REVOCATION,
         SYNC_MEMBERSHIP_CHAIN,

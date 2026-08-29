@@ -1022,7 +1022,7 @@ mod tests {
             *membership.commitment(),
             vec![CheckpointHead::new(id(3), sequence, digest)],
             [6; 32],
-            [7; 32],
+            [0; 32],
         )
         .expect("checkpoint")
         .sign(key)
@@ -1138,8 +1138,8 @@ mod tests {
             membership.generation(),
             *membership.commitment(),
             vec![CheckpointHead::new(id(3), 1, [8; 32])],
-            [6; 32],
             [9; 32],
+            [0; 32],
         )
         .expect("replayed checkpoint")
         .sign(&key);
