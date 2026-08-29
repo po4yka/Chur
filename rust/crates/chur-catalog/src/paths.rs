@@ -98,6 +98,12 @@ impl VaultRoot {
         self.vault(root_path_id).join("sync-staging")
     }
 
+    /// Locked ciphertext inbox selected only by the public sync vault identifier.
+    #[must_use]
+    pub fn sync_inbox(&self, vault_id: &Id) -> PathBuf {
+        self.base.join("sync-staging").join(hex(vault_id))
+    }
+
     /// One committed container.
     ///
     /// The first byte of the identifier is a directory level. A vault holds up

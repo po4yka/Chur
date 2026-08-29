@@ -175,6 +175,14 @@ impl LockedStaging {
         self.read_record(&entry).map(Some)
     }
 
+    /// Returns every retained record in stable oldest-first order.
+    pub fn records(&mut self, now_ms: u64) -> Result<Vec<StagedRecord>> {
+        self.scan(now_ms)?
+            .iter()
+            .map(|entry| self.read_record(entry))
+            .collect()
+    }
+
     /// Returns one retained record without acknowledging or deleting it.
     pub fn record(&mut self, id: &Id, now_ms: u64) -> Result<Option<StagedRecord>> {
         let Some(entry) = self.scan(now_ms)?.into_iter().find(|entry| &entry.id == id) else {
