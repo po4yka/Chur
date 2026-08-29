@@ -99,6 +99,78 @@ impl OperationLog {
         Self::default()
     }
 
+    /// Replays one record already committed in the protected local catalog.
+    ///
+    /// Unlike the receive path, this commits each prefix of a revoked device's
+    /// already-accepted chain. The caller validates the final durable head
+    /// after replay, so process restart does not need the whole chain in memory.
+    pub fn restore_accepted(
+        &mut self,
+        operation: &Operation,
+        membership: &MembershipState,
+    ) -> Result<ApplyOutcome> {
+        let device = membership.device(operation.device_id()).ok_or_else(|| {
+            Error::new(
+                ChurStatus::AuthenticationFailed,
+                "operation author is not enrolled",
+            )
+        })?;
+        let cutoff = match device.status() {
+            DeviceStatus::Active => None,
+            DeviceStatus::Revoked { sequence, digest } => Some((sequence, digest)),
+        };
+        self.accept_inner(operation, membership, cutoff)
+    }
+
+    /// Restores one authenticated checkpoint floor from the protected catalog.
+    pub fn restore_floor(
+        &mut self,
+        device_id: &Id,
+        sequence: u64,
+        digest: Commitment,
+        membership: &MembershipState,
+    ) -> Result<()> {
+        ensure!(
+            membership.device(device_id).is_some() && sequence != 0 && digest != [0; 32],
+            CatalogCorrupt,
+            "a durable checkpoint floor is malformed"
+        );
+        if let Some(record) = self.accepted.get(&(*device_id, sequence)) {
+            ensure!(
+                record.digest == digest,
+                SyncChainFork,
+                "a durable floor conflicts with accepted history"
+            );
+        }
+        if let Some(current) = self.floors.get(device_id) {
+            ensure!(
+                sequence > current.sequence
+                    || (sequence == current.sequence && digest == current.digest),
+                SyncHeadRollback,
+                "a durable floor moves backwards or changes branch"
+            );
+        }
+        self.floors
+            .insert(*device_id, AcceptedHead { sequence, digest });
+        Ok(())
+    }
+
+    /// Restores the commitment of a checkpoint whose signed record was verified.
+    pub fn restore_checkpoint_commitment(
+        &mut self,
+        issuer_device_id: &Id,
+        commitment: Commitment,
+        membership: &MembershipState,
+    ) -> Result<()> {
+        ensure!(
+            membership.device(issuer_device_id).is_some() && commitment != [0; 32],
+            CatalogCorrupt,
+            "a durable checkpoint commitment is malformed"
+        );
+        self.checkpoints.insert(*issuer_device_id, commitment);
+        Ok(())
+    }
+
     /// Validates and accepts one operation from an active device.
     pub fn accept(
         &mut self,
@@ -654,6 +726,14 @@ impl OperationLog {
             .map(|head| (head.sequence, head.digest))
     }
 
+    /// Durable checkpoint floor for one device.
+    #[must_use]
+    pub fn floor(&self, device_id: &Id) -> Option<(u64, Commitment)> {
+        self.floors
+            .get(device_id)
+            .map(|floor| (floor.sequence, floor.digest))
+    }
+
     /// Latest accepted checkpoint commitment from one issuer.
     #[must_use]
     pub fn checkpoint_commitment(&self, issuer_device_id: &Id) -> Option<&Commitment> {
@@ -1012,7 +1092,7 @@ mod tests {
         assert!(log.accept(&first, &membership).expect("pending") == ApplyOutcome::PendingGap);
         assert!(log.head(&id(6)).is_none());
         assert_eq!(
-            log.accept_revoked_chain(&[first, second], &membership)
+            log.accept_revoked_chain(&[first.clone(), second.clone()], &membership)
                 .expect("chain")
                 .len(),
             2
@@ -1021,6 +1101,24 @@ mod tests {
             log.head(&id(6)),
             Some((2, revocation.final_accepted_operation_digest().to_owned()))
         );
+        let mut restored = OperationLog::new();
+        assert_eq!(
+            restored
+                .restore_accepted(&first, &membership)
+                .expect("restore first"),
+            ApplyOutcome::Applied
+        );
+        assert_eq!(restored.head(&id(6)), Some((1, first.digest())));
+        assert_eq!(
+            restored
+                .restore_accepted(&second, &membership)
+                .expect("restore second"),
+            ApplyOutcome::Applied
+        );
+        restored
+            .restore_floor(&id(6), 2, second.digest(), &membership)
+            .expect("restore floor");
+        assert_eq!(restored.floor(&id(6)), Some((2, second.digest())));
         let above = operation_for(
             &revoked_key,
             id(6),
