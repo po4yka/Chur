@@ -20,4 +20,5 @@ pub mod identity;
 pub mod membership;
 pub mod operation;
 pub mod operation_log;
+pub mod payload;
 pub mod state;

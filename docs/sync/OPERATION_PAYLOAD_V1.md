@@ -56,7 +56,7 @@ MetadataFieldV1 =
 | `field_id` | Meaning | Canonical value bytes | Maximum |
 | --- | --- | --- | --- |
 | `0x0001` | original filename | strict UTF-8, no inner length | 4096 bytes |
-| `0x0002` | media type | strict ASCII MIME string, lowercase type and subtype | 255 bytes |
+| `0x0002` | media type | lowercase RFC token, `/`, lowercase RFC token | 255 bytes |
 | `0x0003` | capture time | one big-endian `u64` milliseconds value | 8 bytes |
 | `0x0004` | caption | strict UTF-8, no inner length | 65,536 bytes |
 | `0x0005` | rating | one byte `0x00` through `0x05` | 1 byte |
@@ -80,7 +80,7 @@ The add token for album membership, favorite `true`, or a tag is the containing 
 ## 6. Parser limits
 
 - common header: exactly 27 bytes;
-- album and tag names: at most 4096 encoded bytes;
+- album and tag names: strict UTF-8 from 1 through 4096 encoded bytes;
 - metadata field count: at most 32;
 - metadata encoded value bytes: at most 262,144 in total;
 - removed-token count: at most 256;
