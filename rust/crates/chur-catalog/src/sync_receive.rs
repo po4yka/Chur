@@ -209,6 +209,94 @@ pub fn author_content_operation(
     Ok(operation)
 }
 
+/// Authors and atomically persists one local device-membership operation.
+pub fn author_membership_operation(
+    db: &mut CatalogDb,
+    log: &mut DurableOperationLog,
+    membership: &mut MembershipState,
+    root_domain: &KeyDomain,
+    device_id: Id,
+    signing_key: &DeviceSigningKey,
+    body: PayloadBody,
+) -> Result<Operation> {
+    match &body {
+        PayloadBody::AddDevice(enrollment) => ensure!(
+            log.checkpoint_commitment(enrollment.issuer_device_id())
+                == Some(enrollment.bootstrap_checkpoint_commitment()),
+            AuthenticationFailed,
+            "local enrollment does not name the issuer's durable checkpoint"
+        ),
+        PayloadBody::RevokeDevice(revocation) => ensure!(
+            log.head(revocation.revoked_device_id())
+                == Some((
+                    revocation.final_accepted_device_sequence(),
+                    *revocation.final_accepted_operation_digest(),
+                )),
+            AuthenticationFailed,
+            "local revocation does not pin the latest accepted device head"
+        ),
+        _ => {
+            return Err(Error::new(
+                ChurStatus::InvalidInput,
+                "operation is not a membership operation",
+            ));
+        }
+    }
+    let payload = OperationPayload::new(*membership.vault_id(), 0, body)?;
+    let operation = log.author(
+        random::id()?,
+        *membership.vault_id(),
+        device_id,
+        *root_domain.selector(),
+        root_domain.operation_key(),
+        Nonce::random()?,
+        &payload.encode(),
+        signing_key,
+        membership,
+    )?;
+    payload.validate_for_operation(
+        &operation,
+        root_domain.collection_id(),
+        root_domain.collection_epoch(),
+    )?;
+    let mut projected_membership = None;
+    ensure!(
+        log.accept_with(db, &operation, membership, |transaction| {
+            projected_membership = Some(match payload.body() {
+                PayloadBody::AddDevice(enrollment) => sync_membership::project_enrollment(
+                    transaction,
+                    membership,
+                    enrollment,
+                    operation.device_id(),
+                    operation.device_sequence(),
+                )?,
+                PayloadBody::RevokeDevice(revocation) => sync_membership::project_revocation(
+                    transaction,
+                    membership,
+                    revocation,
+                    operation.device_id(),
+                )?,
+                _ => {
+                    return Err(Error::new(
+                        ChurStatus::InternalFailure,
+                        "checked membership body changed before projection",
+                    ));
+                }
+            });
+            Ok(())
+        })? == ApplyOutcome::Applied,
+        InternalFailure,
+        "fresh local membership operation was not applied"
+    );
+    *membership = projected_membership.ok_or_else(|| {
+        Error::new(
+            ChurStatus::InternalFailure,
+            "local membership operation has no projection",
+        )
+    })?;
+    Ok(operation)
+}
+
 /// Authenticates, decrypts, and atomically accepts one convergent content operation.
 pub fn accept_content_operation(
     db: &mut CatalogDb,

@@ -102,6 +102,169 @@ fn failed_initial_provision_writes_no_outer_operation() {
     );
 }
 
+#[test]
+fn locally_authored_enrollment_and_revocation_commit_with_their_log_heads() {
+    let root = Key::new([60; 32]);
+    let vault = id(61);
+    let owner_id = id(62);
+    let owner = DeviceSigningKey::from_seed([63; 32]);
+    let catalog_key = CatalogKey::derive(&root, &vault).expect("catalog key");
+    let mut db = CatalogDb::open(&CatalogLocation::Memory, &catalog_key).expect("catalog");
+    schema::open_at_current_version(&mut db, 1).expect("schema");
+    let initial = EnrollmentRecord::initial(vault, owner_id, owner.verifying_key(), [64; 32])
+        .expect("initial")
+        .sign(&owner);
+    let (mut membership, mut log, _) =
+        sync_receive::provision_initial_membership(&mut db, &root, &owner, &initial)
+            .expect("provision");
+    let checkpoint = log
+        .issue_own_checkpoint(&mut db, &membership, &owner_id, &owner, 1)
+        .expect("checkpoint");
+    let root_domain = KeyDomain::root(&root, &vault).expect("root domain");
+    let peer_id = id(65);
+    let peer = DeviceSigningKey::from_seed([66; 32]);
+    let wrong_checkpoint = EnrollmentRecord::new(
+        vault,
+        peer_id,
+        peer.verifying_key(),
+        [67; 32],
+        2,
+        owner_id,
+        2,
+        *membership.commitment(),
+        [99; 32],
+    )
+    .expect("wrong checkpoint enrollment")
+    .sign(&owner);
+    assert!(
+        sync_receive::author_membership_operation(
+            &mut db,
+            &mut log,
+            &mut membership,
+            &root_domain,
+            owner_id,
+            &owner,
+            PayloadBody::AddDevice(wrong_checkpoint),
+        )
+        .is_err()
+    );
+    assert_eq!(membership.generation(), 1);
+    assert_eq!(log.head(&owner_id).map(|head| head.0), Some(1));
+    let enrollment = EnrollmentRecord::new(
+        vault,
+        peer_id,
+        peer.verifying_key(),
+        [67; 32],
+        2,
+        owner_id,
+        2,
+        *membership.commitment(),
+        checkpoint.commitment(),
+    )
+    .expect("enrollment")
+    .sign(&owner);
+    let enrollment_operation = sync_receive::author_membership_operation(
+        &mut db,
+        &mut log,
+        &mut membership,
+        &root_domain,
+        owner_id,
+        &owner,
+        PayloadBody::AddDevice(enrollment),
+    )
+    .expect("author enrollment");
+    assert_eq!(enrollment_operation.device_sequence(), 2);
+    assert_eq!(membership.generation(), 2);
+
+    let collection_id = id(68);
+    let collection_key = Key::new([69; 32]);
+    let collection_domain =
+        KeyDomain::collection(&collection_key, &collection_id, 1).expect("collection domain");
+    let mut state = MaterializedState::new();
+    let peer_operation = sync_receive::author_content_operation(
+        &mut db,
+        &mut log,
+        &membership,
+        &mut state,
+        &collection_domain,
+        peer_id,
+        &peer,
+        &OperationPayload::new(
+            collection_id,
+            1,
+            PayloadBody::CreateAlbum {
+                album_id: id(70),
+                name: "Private".to_owned(),
+            },
+        )
+        .expect("album payload"),
+    )
+    .expect("peer operation");
+    let revocation = chur_sync_protocol::membership::RevocationRecord::new(
+        vault,
+        peer_id,
+        peer_operation.device_sequence(),
+        peer_operation.digest(),
+        3,
+        owner_id,
+        *membership.commitment(),
+    )
+    .expect("revocation")
+    .sign(&owner);
+    let wrong_revocation = chur_sync_protocol::membership::RevocationRecord::new(
+        vault,
+        peer_id,
+        peer_operation.device_sequence(),
+        [99; 32],
+        3,
+        owner_id,
+        *membership.commitment(),
+    )
+    .expect("wrong revocation")
+    .sign(&owner);
+    assert!(
+        sync_receive::author_membership_operation(
+            &mut db,
+            &mut log,
+            &mut membership,
+            &root_domain,
+            owner_id,
+            &owner,
+            PayloadBody::RevokeDevice(wrong_revocation),
+        )
+        .is_err()
+    );
+    assert_eq!(membership.generation(), 2);
+    assert_eq!(log.head(&owner_id).map(|head| head.0), Some(2));
+    let revocation_operation = sync_receive::author_membership_operation(
+        &mut db,
+        &mut log,
+        &mut membership,
+        &root_domain,
+        owner_id,
+        &owner,
+        PayloadBody::RevokeDevice(revocation),
+    )
+    .expect("author revocation");
+
+    assert_eq!(revocation_operation.device_sequence(), 3);
+    assert_eq!(membership.generation(), 3);
+    assert!(matches!(
+        membership.device(&peer_id).map(|device| device.status()),
+        Some(chur_sync_protocol::state::DeviceStatus::Revoked { .. })
+    ));
+    let reloaded = sync_membership::load(&db)
+        .expect("reload membership")
+        .expect("membership");
+    assert_eq!(reloaded.generation(), 3);
+    assert_eq!(
+        sync_log::load(&db, &reloaded)
+            .expect("reload log")
+            .head(&owner_id),
+        Some((3, revocation_operation.digest()))
+    );
+}
+
 fn enrollment_operation(fixture: &Fixture, enrollment: EnrollmentRecord) -> Operation {
     let domain = KeyDomain::root(&fixture.root, &id(2)).expect("root domain");
     let payload =
