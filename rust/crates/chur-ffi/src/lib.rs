@@ -288,7 +288,7 @@ mod tests {
     #[test]
     fn the_handshake_answers_every_documented_fact() {
         assert_eq!(chur_abi_version_major(), 1);
-        assert_eq!(chur_abi_version_minor(), 3);
+        assert_eq!(chur_abi_version_minor(), 4);
         assert_eq!(chur_object_format_min(), 1);
         assert_eq!(chur_object_format_max(), 1);
         assert_eq!(chur_key_slot_format_min(), 1);
@@ -327,6 +327,11 @@ mod tests {
             declared & CHUR_CAP_DECOY_VAULT,
             0,
             "a second identity is provisionable and openable"
+        );
+        assert_ne!(
+            declared & CHUR_CAP_SYNC,
+            0,
+            "the ciphertext sync inbox exists"
         );
         assert_eq!(
             declared & CHUR_CAP_CONCURRENT_READS,
