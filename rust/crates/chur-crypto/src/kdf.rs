@@ -106,11 +106,19 @@ labels! {
     RootBackupManifest = "chur/v1/root/backup-manifest", Vault;
     /// Authenticates the vault descriptor body. Input: `VaultRootSecret`.
     RootDescriptorAuth = "chur/v1/root/descriptor-auth", Vault;
+    /// Encrypts root-domain sync operations. Input: `VaultRootSecret`.
+    RootSyncOperations = "chur/v1/root/sync-operations", Vault;
+    /// Derives the root-domain opaque selector. Input: `VaultRootSecret`.
+    RootSyncSelector = "chur/v1/root/sync-selector", Vault;
 
     /// Wraps one object key. Input: `SecurityCollectionKey[epoch]`.
     CollectionObjectEnvelope = "chur/v1/collection/object-envelope", ObjectEnvelope;
     /// Protects collection metadata. Input: `SecurityCollectionKey[epoch]`.
     CollectionMetadata = "chur/v1/collection/metadata", CollectionMetadata;
+    /// Encrypts collection-domain sync operations. Input: `SecurityCollectionKey[epoch]`.
+    CollectionSyncOperations = "chur/v1/collection/sync-operations", CollectionMetadata;
+    /// Derives a collection-domain opaque selector. Input: `SecurityCollectionKey[epoch]`.
+    CollectionSyncSelector = "chur/v1/collection/sync-selector", CollectionMetadata;
 
     /// Seals the container manifest record. Input: `ObjectKey`.
     ObjectManifest = "chur/v1/object/manifest", ContainerStream;
@@ -337,8 +345,12 @@ mod tests {
     }
 
     #[test]
-    fn the_registry_holds_twenty_five_labels() {
-        assert_eq!(Label::ALL.len(), 25);
+    fn the_registry_holds_twenty_nine_labels() {
+        assert_eq!(Label::ALL.len(), 29);
+        assert!(Label::ALL.contains(&Label::RootSyncOperations));
+        assert!(Label::ALL.contains(&Label::RootSyncSelector));
+        assert!(Label::ALL.contains(&Label::CollectionSyncOperations));
+        assert!(Label::ALL.contains(&Label::CollectionSyncSelector));
     }
 
     #[test]
@@ -409,7 +421,7 @@ mod tests {
             let key = derive(&input, *label, &context).unwrap();
             assert!(keys.insert(*key.expose()), "{} collides", label.as_str());
         }
-        assert_eq!(keys.len(), 25);
+        assert_eq!(keys.len(), 29);
     }
 
     #[test]
