@@ -37,7 +37,7 @@ kind_body:bytes[remaining]
 | `0x0F` | `CreateCollectionEpoch` | `previous_collection_epoch:u64`, `membership_generation:u64`, `collection_key_envelope:bytes[126]` |
 | `0x10` | `RewrapObjectKey` | `object_id:bytes[16]`, `object_key_envelope:bytes[142]` |
 
-All identifiers are non-zero random identifiers. Every generation and every non-root epoch is non-zero and must have a successor, so `u64::MAX` is invalid. `container_length` is non-zero and at most the object-container limit.
+All identifiers are non-zero random identifiers. Every generation and every non-root epoch is non-zero and must have a successor, so `u64::MAX` is invalid. `container_length` is non-zero; the transfer service applies its configured object-size quota before reserving storage.
 
 `CommitObject` activates a server object only after the downloaded ciphertext validates against its container and object-key envelope. `CreateObject` alone never makes media presentable.
 
