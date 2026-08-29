@@ -7,6 +7,7 @@ use chur_crypto::{Commitment, Key, Nonce};
 
 use crate::{
     checkpoint::Checkpoint,
+    convergence::CausalStamp,
     membership::EnrollmentRecord,
     operation::{DeviceSigningKey, ObservedHead, Operation},
     state::{DeviceStatus, MembershipState},
@@ -807,6 +808,33 @@ impl OperationLog {
             .map(|head| (head.sequence, head.digest))
     }
 
+    /// Latest accepted causal position for every device chain.
+    pub fn latest_operations(&self) -> Result<BTreeMap<Id, CausalStamp>> {
+        self.heads
+            .iter()
+            .map(|(device_id, head)| {
+                let record = self
+                    .accepted
+                    .get(&(*device_id, head.sequence))
+                    .ok_or_else(|| {
+                        Error::new(
+                            ChurStatus::InternalFailure,
+                            "an accepted device head has no operation record",
+                        )
+                    })?;
+                let operation = Operation::decode(&record.bytes)?;
+                ensure!(
+                    operation.device_id() == device_id
+                        && operation.device_sequence() == head.sequence
+                        && operation.digest() == head.digest,
+                    InternalFailure,
+                    "an accepted device head does not match its operation record"
+                );
+                Ok((*device_id, CausalStamp::from_operation(&operation)))
+            })
+            .collect()
+    }
+
     /// Durable checkpoint floor for one device.
     #[must_use]
     pub fn floor(&self, device_id: &Id) -> Option<(u64, Commitment)> {
@@ -1075,6 +1103,9 @@ mod tests {
                 .expect("accept owner second"),
             ApplyOutcome::Applied
         );
+        let latest = log.latest_operations().expect("latest operations");
+        assert_eq!(latest[&id(2)].operation_id(), owner_second.operation_id());
+        assert_eq!(latest[&id(6)].operation_id(), peer_first.operation_id());
         let revocation = RevocationRecord::new(
             id(1),
             id(6),
@@ -1089,6 +1120,10 @@ mod tests {
         membership
             .accept_revocation(&revocation, &id(2))
             .expect("accept revocation");
+        assert_eq!(
+            membership.active_device_ids().copied().collect::<Vec<_>>(),
+            vec![id(2)]
+        );
         let owner_third = log
             .author(
                 id(13),

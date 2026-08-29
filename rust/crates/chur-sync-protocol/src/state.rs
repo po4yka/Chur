@@ -185,6 +185,13 @@ impl MembershipState {
             .is_some_and(|device| device.status == DeviceStatus::Active)
     }
 
+    /// Active device identifiers in canonical order.
+    pub fn active_device_ids(&self) -> impl Iterator<Item = &Id> {
+        self.devices.iter().filter_map(|(device_id, device)| {
+            (device.status == DeviceStatus::Active).then_some(device_id)
+        })
+    }
+
     /// Known device identity and status.
     #[must_use]
     pub fn device(&self, device_id: &Id) -> Option<&DeviceMembership> {

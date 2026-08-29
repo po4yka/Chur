@@ -349,6 +349,31 @@ impl MaterializedState {
         self.objects.get(object_id)?.committed.as_ref()
     }
 
+    /// Deleted object identifiers that satisfy the authenticated retention gate.
+    #[must_use]
+    pub fn gc_candidates(
+        &self,
+        now_ms: u64,
+        active_devices: &[Id],
+        latest_operations: &BTreeMap<Id, CausalStamp>,
+        checkpoint_covers_state: bool,
+    ) -> Vec<Id> {
+        self.objects
+            .iter()
+            .filter_map(|(object_id, object)| {
+                object
+                    .lifecycle
+                    .eligible_for_gc(
+                        now_ms,
+                        active_devices,
+                        latest_operations,
+                        checkpoint_covers_state,
+                    )
+                    .then_some(*object_id)
+            })
+            .collect()
+    }
+
     /// Whether a committed object is visible after tombstone convergence.
     #[must_use]
     pub fn is_presentable(&self, object_id: &Id) -> bool {
