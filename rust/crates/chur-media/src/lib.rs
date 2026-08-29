@@ -20,3 +20,4 @@ pub mod keys;
 pub mod progress;
 pub mod reader;
 pub mod store;
+pub mod sync_download;
