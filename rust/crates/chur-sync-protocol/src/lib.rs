@@ -16,6 +16,7 @@
 //! device membership, checkpoint, convergence, and transport state machines.
 
 pub mod checkpoint;
+pub mod convergence;
 pub mod identity;
 pub mod membership;
 pub mod operation;
