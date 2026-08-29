@@ -203,6 +203,236 @@ impl<T> Default for ScalarRegister<T> {
     }
 }
 
+struct Tombstone {
+    operation_id: Id,
+    authored_at_ms: u64,
+}
+
+struct RestoredGeneration {
+    generation: u64,
+    tombstone_id: Id,
+    delete_stamps: Vec<CausalStamp>,
+}
+
+/// Deterministic visibility, generation, restore, and tombstone retention state.
+pub struct ObjectLifecycle {
+    generation: u64,
+    activations: Vec<CausalStamp>,
+    tombstones: ScalarRegister<Tombstone>,
+    last_restore: Option<RestoredGeneration>,
+}
+
+impl ObjectLifecycle {
+    /// Starts one active object generation at its authenticated create operation.
+    pub fn new(generation: u64, created: CausalStamp) -> Result<Self> {
+        if generation == 0 || generation == u64::MAX {
+            return Err(Error::new(
+                ChurStatus::NonCanonicalEncoding,
+                "object generation is zero or has no successor",
+            ));
+        }
+        Ok(Self {
+            generation,
+            activations: vec![created],
+            tombstones: ScalarRegister::new(),
+            last_restore: None,
+        })
+    }
+
+    /// Applies a delete for the named active generation.
+    pub fn delete(
+        &mut self,
+        generation: u64,
+        authored_at_ms: u64,
+        stamp: CausalStamp,
+    ) -> Result<MergeOutcome> {
+        if generation < self.generation {
+            return Ok(MergeOutcome::Obsolete);
+        }
+        if generation > self.generation {
+            return Ok(MergeOutcome::PendingCause);
+        }
+        let observes_activation = self
+            .activations
+            .iter()
+            .try_fold(false, |observes, active| {
+                Ok::<_, Error>(
+                    observes || causal_relation(active, &stamp)? == CausalRelation::Before,
+                )
+            })?;
+        if !observes_activation {
+            return Err(Error::new(
+                ChurStatus::AuthenticationFailed,
+                "delete does not observe the object generation it removes",
+            ));
+        }
+        let operation_id = *stamp.operation_id();
+        self.tombstones.apply(
+            stamp,
+            Tombstone {
+                operation_id,
+                authored_at_ms,
+            },
+        )
+    }
+
+    /// Applies an explicit restore that observes every current delete branch.
+    pub fn restore(
+        &mut self,
+        tombstone_id: &Id,
+        new_generation: u64,
+        stamp: CausalStamp,
+    ) -> Result<MergeOutcome> {
+        if new_generation < self.generation {
+            return Ok(MergeOutcome::Obsolete);
+        }
+        if new_generation == self.generation {
+            return self.apply_concurrent_restore(tombstone_id, &stamp);
+        }
+        if self.generation.checked_add(1) != Some(new_generation) {
+            return Ok(MergeOutcome::PendingCause);
+        }
+        let selected = self.selected_tombstone().ok_or_else(|| {
+            Error::new(
+                ChurStatus::AuthenticationFailed,
+                "restore names an object with no tombstone",
+            )
+        })?;
+        if &selected.operation_id != tombstone_id {
+            return Err(Error::new(
+                ChurStatus::AuthenticationFailed,
+                "restore does not name the displayed tombstone",
+            ));
+        }
+        let delete_stamps = self
+            .tombstones
+            .versions
+            .iter()
+            .map(|version| version.stamp.clone())
+            .collect::<Vec<_>>();
+        ensure_after_all_deletes(&stamp, &delete_stamps)?;
+        self.tombstones.versions.clear();
+        self.generation = new_generation;
+        self.activations.clear();
+        self.activations.push(stamp);
+        self.last_restore = Some(RestoredGeneration {
+            generation: new_generation,
+            tombstone_id: *tombstone_id,
+            delete_stamps,
+        });
+        Ok(MergeOutcome::Applied)
+    }
+
+    /// Current object generation.
+    #[must_use]
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Visibility after delete dominance and explicit restores.
+    #[must_use]
+    pub fn is_visible(&self) -> bool {
+        self.tombstones.versions.is_empty()
+    }
+
+    /// Deterministically displayed tombstone identifier.
+    #[must_use]
+    pub fn tombstone_id(&self) -> Option<&Id> {
+        self.selected_tombstone()
+            .map(|tombstone| &tombstone.operation_id)
+    }
+
+    /// Whether every current tombstone may be discarded under §11 retention.
+    #[must_use]
+    pub fn eligible_for_gc(
+        &self,
+        now_ms: u64,
+        active_devices: &[Id],
+        latest_operations: &BTreeMap<Id, CausalStamp>,
+        checkpoint_covers_state: bool,
+    ) -> bool {
+        if self.tombstones.versions.is_empty() {
+            return false;
+        }
+        if active_devices.len() <= 1 {
+            return true;
+        }
+        checkpoint_covers_state
+            && self.tombstones.versions.iter().all(|version| {
+                tombstone_retention_elapsed(
+                    &version.stamp,
+                    version.value.authored_at_ms,
+                    now_ms,
+                    active_devices,
+                    latest_operations,
+                )
+            })
+    }
+
+    fn selected_tombstone(&self) -> Option<&Tombstone> {
+        self.tombstones
+            .versions
+            .iter()
+            .max_by_key(|version| version.stamp.digest)
+            .map(|version| &version.value)
+    }
+
+    fn apply_concurrent_restore(
+        &mut self,
+        tombstone_id: &Id,
+        stamp: &CausalStamp,
+    ) -> Result<MergeOutcome> {
+        let Some(last) = &self.last_restore else {
+            return Ok(MergeOutcome::Obsolete);
+        };
+        if last.generation != self.generation || &last.tombstone_id != tombstone_id {
+            return Ok(MergeOutcome::Obsolete);
+        }
+        ensure_after_all_deletes(stamp, &last.delete_stamps)?;
+        for active in &self.activations {
+            match causal_relation(active, stamp)? {
+                CausalRelation::Same => return Ok(MergeOutcome::Duplicate),
+                CausalRelation::After => return Ok(MergeOutcome::Obsolete),
+                CausalRelation::Before | CausalRelation::Concurrent => {}
+            }
+        }
+        self.activations.push(stamp.clone());
+        Ok(MergeOutcome::Applied)
+    }
+}
+
+fn ensure_after_all_deletes(restore: &CausalStamp, deletes: &[CausalStamp]) -> Result<()> {
+    if deletes.iter().try_fold(true, |all, delete| {
+        Ok::<_, Error>(all && causal_relation(delete, restore)? == CausalRelation::Before)
+    })? {
+        return Ok(());
+    }
+    Err(Error::new(
+        ChurStatus::AuthenticationFailed,
+        "restore does not observe every current tombstone branch",
+    ))
+}
+
+fn tombstone_retention_elapsed(
+    tombstone: &CausalStamp,
+    authored_at_ms: u64,
+    now_ms: u64,
+    active_devices: &[Id],
+    latest_operations: &BTreeMap<Id, CausalStamp>,
+) -> bool {
+    const DAY_MS: u64 = 86_400_000;
+    let age = now_ms.saturating_sub(authored_at_ms);
+    if age >= 180 * DAY_MS {
+        return true;
+    }
+    age >= 30 * DAY_MS
+        && active_devices.iter().all(|device_id| {
+            latest_operations.get(device_id).is_some_and(|latest| {
+                latest.observes(tombstone.device_id(), tombstone.device_sequence())
+            })
+        })
+}
+
 /// Observed-remove set shared by memberships, tags, and favorites.
 pub struct ObservedRemoveSet<E> {
     adds: BTreeMap<E, BTreeMap<Id, CausalStamp>>,

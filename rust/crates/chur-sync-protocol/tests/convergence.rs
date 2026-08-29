@@ -5,7 +5,7 @@
 use chur_core::Id;
 use chur_crypto::{Key, Nonce};
 use chur_sync_protocol::convergence::{
-    CausalStamp, MergeOutcome, ObservedRemoveSet, ScalarRegister,
+    CausalStamp, MergeOutcome, ObjectLifecycle, ObservedRemoveSet, ScalarRegister,
 };
 use chur_sync_protocol::operation::{DeviceSigningKey, ObservedHead, Operation};
 
@@ -167,4 +167,135 @@ fn remove_cannot_name_an_add_token_it_did_not_causally_observe() {
         .is_err()
     );
     assert!(set.contains(&element));
+}
+
+#[test]
+fn delete_restore_and_retention_follow_causality_not_delivery_time() {
+    const DAY_MS: u64 = 86_400_000;
+    let key_a = DeviceSigningKey::from_seed([2; 32]);
+    let key_b = DeviceSigningKey::from_seed([3; 32]);
+    let created = operation(&key_a, 12, id(2), 1, [0; 32], Vec::new());
+    let deleted = operation(&key_a, 13, id(2), 2, created.digest(), Vec::new());
+    let acknowledged = operation(
+        &key_b,
+        14,
+        id(3),
+        1,
+        [0; 32],
+        vec![ObservedHead::new(id(2), 2)],
+    );
+    let restored = operation(
+        &key_b,
+        15,
+        id(3),
+        2,
+        acknowledged.digest(),
+        vec![ObservedHead::new(id(2), 2)],
+    );
+    let authored_at = 1_700_000_000_000;
+    let mut lifecycle =
+        ObjectLifecycle::new(1, CausalStamp::from_operation(&created)).expect("lifecycle");
+
+    lifecycle
+        .delete(1, authored_at, CausalStamp::from_operation(&deleted))
+        .expect("delete");
+    assert!(!lifecycle.is_visible());
+    assert_eq!(lifecycle.tombstone_id(), Some(deleted.operation_id()));
+    let latest = [
+        (id(2), CausalStamp::from_operation(&deleted)),
+        (id(3), CausalStamp::from_operation(&acknowledged)),
+    ]
+    .into_iter()
+    .collect();
+    assert!(!lifecycle.eligible_for_gc(
+        authored_at + (29 * DAY_MS),
+        &[id(2), id(3)],
+        &latest,
+        true,
+    ));
+    assert!(
+        lifecycle.eligible_for_gc(authored_at + (30 * DAY_MS), &[id(2), id(3)], &latest, true,)
+    );
+    assert!(!lifecycle.eligible_for_gc(
+        authored_at + (180 * DAY_MS),
+        &[id(2), id(3)],
+        &latest,
+        false,
+    ));
+
+    lifecycle
+        .restore(
+            deleted.operation_id(),
+            2,
+            CausalStamp::from_operation(&restored),
+        )
+        .expect("restore");
+    assert!(lifecycle.is_visible());
+    assert_eq!(lifecycle.generation(), 2);
+    assert!(
+        lifecycle
+            .delete(1, authored_at, CausalStamp::from_operation(&deleted),)
+            .expect("stale delete")
+            == MergeOutcome::Obsolete
+    );
+}
+
+#[test]
+fn restore_must_observe_every_concurrent_delete_branch() {
+    let key_a = DeviceSigningKey::from_seed([2; 32]);
+    let key_b = DeviceSigningKey::from_seed([3; 32]);
+    let key_c = DeviceSigningKey::from_seed([4; 32]);
+    let created = operation(&key_a, 16, id(2), 1, [0; 32], Vec::new());
+    let delete_a = operation(&key_a, 17, id(2), 2, created.digest(), Vec::new());
+    let delete_b = operation(
+        &key_b,
+        18,
+        id(3),
+        1,
+        [0; 32],
+        vec![ObservedHead::new(id(2), 1)],
+    );
+    let incomplete_restore = operation(
+        &key_c,
+        19,
+        id(4),
+        1,
+        [0; 32],
+        vec![ObservedHead::new(id(2), 2)],
+    );
+    let complete_restore = operation(
+        &key_c,
+        20,
+        id(4),
+        1,
+        [0; 32],
+        vec![ObservedHead::new(id(2), 2), ObservedHead::new(id(3), 1)],
+    );
+    let mut lifecycle =
+        ObjectLifecycle::new(1, CausalStamp::from_operation(&created)).expect("lifecycle");
+    lifecycle
+        .delete(1, 1, CausalStamp::from_operation(&delete_a))
+        .expect("delete a");
+    lifecycle
+        .delete(1, 1, CausalStamp::from_operation(&delete_b))
+        .expect("delete b");
+    let displayed = *lifecycle.tombstone_id().expect("tombstone");
+
+    assert!(
+        lifecycle
+            .restore(
+                &displayed,
+                2,
+                CausalStamp::from_operation(&incomplete_restore),
+            )
+            .is_err()
+    );
+    lifecycle
+        .restore(
+            &displayed,
+            2,
+            CausalStamp::from_operation(&complete_restore),
+        )
+        .expect("complete restore");
+    assert!(lifecycle.is_visible());
 }
