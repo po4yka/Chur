@@ -150,6 +150,7 @@ impl ReferenceServer {
             "DELETE FROM object_transfers WHERE vault_id = ?1",
             "DELETE FROM operations WHERE vault_id = ?1",
             "DELETE FROM membership_records WHERE vault_id = ?1",
+            "DELETE FROM checkpoints WHERE vault_id = ?1",
         ] {
             transaction
                 .execute(sql, params![authorization.vault_id().as_bytes().as_slice()])

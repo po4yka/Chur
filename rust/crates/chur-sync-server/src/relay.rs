@@ -92,6 +92,7 @@ impl ReferenceServer {
             return Ok(outcome);
         }
         let mut membership = membership_state(&self.db, enrollment.vault_id())?;
+        crate::checkpoint::verify_enrollment_checkpoint(&self.db, enrollment, &membership)?;
         let operation_outcome = validate_operation(&self.db, outer, &membership)?;
         membership.accept_enrollment(enrollment, outer.device_id(), outer.device_sequence())?;
         self.ensure_account_capacity(
@@ -256,14 +257,15 @@ impl ReferenceServer {
         Ok(Some(RelayOutcome::Duplicate))
     }
 
-    fn ensure_account_capacity(&self, vault_id: &Id, added: usize) -> Result<()> {
+    pub(super) fn ensure_account_capacity(&self, vault_id: &Id, added: usize) -> Result<()> {
         let used: i64 = self
             .db
             .query_row(
                 "SELECT
                     COALESCE((SELECT SUM(expected_length) FROM object_transfers WHERE vault_id = ?1), 0)
                   + COALESCE((SELECT SUM(length(record)) FROM operations WHERE vault_id = ?1), 0)
-                  + COALESCE((SELECT SUM(length(record)) FROM membership_records WHERE vault_id = ?1), 0)",
+                  + COALESCE((SELECT SUM(length(record)) FROM membership_records WHERE vault_id = ?1), 0)
+                  + COALESCE((SELECT SUM(length(record)) FROM checkpoints WHERE vault_id = ?1), 0)",
                 params![vault_id.as_bytes().as_slice()],
                 |row| row.get(0),
             )
@@ -630,7 +632,7 @@ fn new_record_bytes(outcome: RelayOutcome, operation: usize, membership: usize) 
         })
 }
 
-fn bounded_records(
+pub(super) fn bounded_records(
     rows: rusqlite::MappedRows<'_, impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<Vec<u8>>>,
     context: &'static str,
 ) -> Result<Vec<Vec<u8>>> {
@@ -656,6 +658,7 @@ mod tests {
 
     use chur_core::Id;
     use chur_sync_protocol::{
+        checkpoint::{Checkpoint, CheckpointHead},
         membership::{EnrollmentRecord, RevocationRecord},
         operation::{DeviceSigningKey, Operation},
     };
@@ -707,7 +710,7 @@ mod tests {
         let second_device = id(8);
         let second_key = DeviceSigningKey::from_seed([9; 32]);
         let third = operation(vault, first_device, id(10), 3, second.digest(), &first_key);
-        let second_enrollment = EnrollmentRecord::new(
+        let missing_checkpoint_enrollment = EnrollmentRecord::new(
             vault,
             second_device,
             second_key.verifying_key(),
@@ -717,6 +720,41 @@ mod tests {
             2,
             enrollment.commitment(),
             [12; 32],
+        )
+        .expect("missing checkpoint enrollment")
+        .sign(&first_key);
+        assert_eq!(
+            server
+                .accept_enrollment(&missing_checkpoint_enrollment, &third)
+                .expect_err("missing bootstrap checkpoint")
+                .status(),
+            chur_core::ChurStatus::AuthenticationFailed
+        );
+        let bootstrap_checkpoint = Checkpoint::new(
+            vault,
+            first_device,
+            2,
+            1,
+            enrollment.commitment(),
+            vec![CheckpointHead::new(first_device, 2, second.digest())],
+            [20; 32],
+            [21; 32],
+        )
+        .expect("bootstrap checkpoint")
+        .sign(&first_key);
+        server
+            .accept_checkpoint(&bootstrap_checkpoint)
+            .expect("store bootstrap checkpoint");
+        let second_enrollment = EnrollmentRecord::new(
+            vault,
+            second_device,
+            second_key.verifying_key(),
+            [11; 32],
+            3,
+            first_device,
+            2,
+            enrollment.commitment(),
+            bootstrap_checkpoint.commitment(),
         )
         .expect("second enrollment")
         .sign(&first_key);

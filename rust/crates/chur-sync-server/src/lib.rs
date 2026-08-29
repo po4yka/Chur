@@ -1,5 +1,6 @@
 //! Self-hosted ciphertext-only Chur sync service.
 
+mod checkpoint;
 mod deletion;
 mod relay;
 
@@ -101,6 +102,15 @@ impl ReferenceServer {
                  target_id BLOB NOT NULL CHECK(length(target_id) = 16),
                  record BLOB NOT NULL,
                  PRIMARY KEY(vault_id, request_id)
+             );
+             CREATE TABLE IF NOT EXISTS checkpoints (
+                 vault_id BLOB NOT NULL CHECK(length(vault_id) = 16),
+                 issuer_device_id BLOB NOT NULL CHECK(length(issuer_device_id) = 16),
+                 issuer_sequence INTEGER NOT NULL CHECK(issuer_sequence > 0),
+                 commitment BLOB NOT NULL CHECK(length(commitment) = 32),
+                 record BLOB NOT NULL,
+                 PRIMARY KEY(vault_id, commitment),
+                 UNIQUE(vault_id, issuer_device_id, issuer_sequence)
              );",
         )
         .map_err(|error| map_sqlite(error, "server schema creation failed"))?;
@@ -164,7 +174,8 @@ impl ReferenceServer {
                 "SELECT
                     COALESCE((SELECT SUM(expected_length) FROM object_transfers WHERE vault_id = ?1), 0)
                   + COALESCE((SELECT SUM(length(record)) FROM operations WHERE vault_id = ?1), 0)
-                  + COALESCE((SELECT SUM(length(record)) FROM membership_records WHERE vault_id = ?1), 0)",
+                  + COALESCE((SELECT SUM(length(record)) FROM membership_records WHERE vault_id = ?1), 0)
+                  + COALESCE((SELECT SUM(length(record)) FROM checkpoints WHERE vault_id = ?1), 0)",
                 params![vault_id.as_bytes().as_slice()],
                 |row| row.get(0),
             )
