@@ -1,7 +1,9 @@
 //! Self-hosted ciphertext-only Chur sync service.
 
+mod deletion;
 mod relay;
 
+pub use deletion::DeletionOutcome;
 pub use relay::RelayOutcome;
 
 use std::fs::{self, File, OpenOptions};
@@ -59,6 +61,7 @@ impl ReferenceServer {
         db.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = FULL;
+             PRAGMA secure_delete = ON;
              CREATE TABLE IF NOT EXISTS object_transfers (
                  vault_id BLOB NOT NULL CHECK(length(vault_id) = 16),
                  transfer_id BLOB NOT NULL CHECK(length(transfer_id) = 16),
@@ -90,6 +93,14 @@ impl ReferenceServer {
                  outer_device_sequence INTEGER NOT NULL CHECK(outer_device_sequence > 0),
                  record BLOB NOT NULL,
                  PRIMARY KEY(vault_id, membership_generation)
+             );
+             CREATE TABLE IF NOT EXISTS deletion_requests (
+                 vault_id BLOB NOT NULL CHECK(length(vault_id) = 16),
+                 request_id BLOB NOT NULL CHECK(length(request_id) = 16),
+                 target_kind INTEGER NOT NULL CHECK(target_kind IN (1, 2)),
+                 target_id BLOB NOT NULL CHECK(length(target_id) = 16),
+                 record BLOB NOT NULL,
+                 PRIMARY KEY(vault_id, request_id)
              );",
         )
         .map_err(|error| map_sqlite(error, "server schema creation failed"))?;

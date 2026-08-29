@@ -43,6 +43,11 @@ impl ReferenceServer {
             Conflict,
             "vault membership already exists"
         );
+        ensure!(
+            !crate::deletion::account_was_deleted(&self.db, enrollment.vault_id())?,
+            Conflict,
+            "deleted vault identifier cannot be reused"
+        );
         let membership = MembershipState::bootstrap(enrollment)?;
         ensure!(
             outer.vault_id() == enrollment.vault_id()
@@ -523,7 +528,7 @@ fn insert_membership_bytes(
     Ok(())
 }
 
-fn membership_state(db: &Connection, vault_id: &Id) -> Result<MembershipState> {
+pub(super) fn membership_state(db: &Connection, vault_id: &Id) -> Result<MembershipState> {
     let mut statement = db
         .prepare(
             "SELECT record_kind, outer_device_id, outer_device_sequence, record
