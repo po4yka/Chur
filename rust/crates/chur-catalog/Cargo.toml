@@ -10,6 +10,7 @@ description = "Rust-owned encrypted catalog: schema, transactions, indexes."
 chur-core.workspace = true
 chur-crypto.workspace = true
 chur-format.workspace = true
+chur-sync-protocol.workspace = true
 
 rusqlite.workspace = true
 zeroize.workspace = true

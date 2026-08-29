@@ -30,6 +30,7 @@ chur-format = { path = "crates/chur-format", version = "0.1.0" }
 chur-catalog = { path = "crates/chur-catalog", version = "0.1.0" }
 chur-media = { path = "crates/chur-media", version = "0.1.0" }
 chur-ffi = { path = "crates/chur-ffi", version = "0.1.0" }
+chur-sync-protocol = { path = "crates/chur-sync-protocol", version = "0.1.0" }
 
 # Cryptography. Narrow, well-reviewed libraries only (DEPENDENCY_POLICY.md).
 argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
