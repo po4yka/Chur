@@ -194,7 +194,7 @@ impl<T> ScalarRegister<T> {
 
     /// Number of retained concurrent causal maxima.
     #[must_use]
-    pub const fn conflict_count(&self) -> usize {
+    pub fn conflict_count(&self) -> usize {
         self.versions.len()
     }
 }

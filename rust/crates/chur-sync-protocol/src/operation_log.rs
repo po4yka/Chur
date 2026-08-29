@@ -361,11 +361,12 @@ impl OperationLog {
                 sequence: checkpoint_head.device_sequence(),
                 digest: *checkpoint_head.operation_digest(),
             };
-            if let Some(record) = candidate
-                .accepted
-                .get(&(*checkpoint_head.device_id(), offered.sequence))
-                && record.digest != offered.digest
-            {
+            if matches!(
+                candidate
+                    .accepted
+                    .get(&(*checkpoint_head.device_id(), offered.sequence)),
+                Some(record) if record.digest != offered.digest
+            ) {
                 return self.reject_checkpoint_fork(
                     candidate,
                     checkpoint_head.device_id(),

@@ -324,13 +324,10 @@ pub fn unlock_with_password(root_dir: &VaultRoot, password: &[u8], now_ms: u64) 
     let mut opened: Option<(usize, Key)> = None;
     for index in 0..PASSWORD_DERIVATIONS {
         match candidates.get(index) {
-            Some(candidate) => {
-                if let Ok(root) = candidate.body.open(&candidate.binding, &canonical)
-                    && opened.is_none()
-                {
-                    opened = Some((index, root));
-                }
-            }
+            Some(candidate) => match candidate.body.open(&candidate.binding, &canonical) {
+                Ok(root) if opened.is_none() => opened = Some((index, root)),
+                _ => {}
+            },
             None => {
                 // A dummy candidate runs the parameters of the first real
                 // candidate over a fresh random 16-byte salt and discards the

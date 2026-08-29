@@ -260,7 +260,7 @@ impl KeySlotDescriptor {
 
     /// The encoded length of this entry.
     #[must_use]
-    pub const fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         Self::HEADER_LEN + self.slot_body.len()
     }
 

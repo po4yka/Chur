@@ -236,13 +236,10 @@ pub unsafe extern "C" fn chur_vault_creation_activate(
 pub unsafe extern "C" fn chur_vault_creation_abandon(creation: Handle) -> Status {
     guard_status(|| {
         let taken = registry::close(creation)?;
-        if let Some(entry) = taken
-            && let Entry::Creation { creation, .. } = entry.as_ref()
-        {
-            let pending = registry::lock(creation).take();
-            if let Some(pending) = pending {
-                pending.abandon()?;
-            }
+        if let Some(Entry::Creation { creation, .. }) = taken.as_deref() {
+            registry::lock(creation)
+                .take()
+                .map_or(Ok(()), |pending| pending.abandon())?;
         }
         Ok(())
     })

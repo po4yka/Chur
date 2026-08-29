@@ -552,15 +552,18 @@ fn check_set(manifest: &Manifest, vectors: &[Vector]) -> Result<(), String> {
                 }
             }
         }
-        if let Some(code) = &entry.error_code
-            && !chur_core::ChurStatus::ALL
-                .iter()
-                .any(|status| status.name() == code)
-        {
-            return Err(format!(
-                "{} names an unregistered error code {code}",
-                entry.vector_id
-            ));
+        match &entry.error_code {
+            Some(code)
+                if !chur_core::ChurStatus::ALL
+                    .iter()
+                    .any(|status| status.name() == code) =>
+            {
+                return Err(format!(
+                    "{} names an unregistered error code {code}",
+                    entry.vector_id
+                ));
+            }
+            _ => {}
         }
         for (path, _) in &vector.files {
             if !files.insert(path.clone()) {
@@ -691,13 +694,15 @@ fn verify(dir: &Path) -> Result<(), String> {
             eprintln!("  only rebuilt:  {added}");
         }
         for entry in &rebuilt.vectors {
-            if let Some(other) = on_disk
+            match on_disk
                 .vectors
                 .iter()
                 .find(|candidate| candidate.vector_id == entry.vector_id)
-                && other != entry
             {
-                eprintln!("  changed:       {}", entry.vector_id);
+                Some(other) if other != entry => {
+                    eprintln!("  changed:       {}", entry.vector_id);
+                }
+                _ => {}
             }
         }
         return Err("the rebuilt vector set does not match the recorded one".to_owned());

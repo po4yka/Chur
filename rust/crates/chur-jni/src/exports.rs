@@ -46,7 +46,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_abiVersionMajor(
     _env: JNIEnv<'_>,
     _class: JClass<'_>,
 ) -> jint {
-    chur_ffi::chur_abi_version_major().cast_signed()
+    chur_ffi::chur_abi_version_major() as jint
 }
 
 /// `abiVersionMinor` of the handshake.
@@ -55,7 +55,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_abiVersionMinor(
     _env: JNIEnv<'_>,
     _class: JClass<'_>,
 ) -> jint {
-    chur_ffi::chur_abi_version_minor().cast_signed()
+    chur_ffi::chur_abi_version_minor() as jint
 }
 
 /// `capabilities` of the handshake.
@@ -64,7 +64,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_capabilities(
     _env: JNIEnv<'_>,
     _class: JClass<'_>,
 ) -> jlong {
-    chur_ffi::chur_capabilities().cast_signed()
+    chur_ffi::chur_capabilities() as jlong
 }
 
 /// `objectFormatMin` of the handshake.
@@ -109,7 +109,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_buildFlavor(
     _env: JNIEnv<'_>,
     _class: JClass<'_>,
 ) -> jint {
-    chur_ffi::chur_build_flavor().cast_signed()
+    chur_ffi::chur_build_flavor() as jint
 }
 
 /// Whether a status value is one this build allocates.
@@ -234,10 +234,10 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_syncProcess<'local>(
         &mut env,
         &out_counts,
         &[
-            report.applied.cast_signed(),
-            report.duplicates.cast_signed(),
-            report.pending.cast_signed(),
-            report.rejected.cast_signed(),
+            report.applied as jlong,
+            report.duplicates as jlong,
+            report.pending as jlong,
+            report.rejected as jlong,
         ],
         0,
     ) || !write_ints(&mut env, &out_status, &[report.first_rejection])
@@ -289,9 +289,9 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultCreateBegin<'local>
             Ok(value) => value,
             Err(_) => return INVALID_INPUT,
         },
-        memory_kib: memory_kib.cast_unsigned(),
-        iterations: iterations.cast_unsigned(),
-        parallelism: parallelism.cast_unsigned(),
+        memory_kib: memory_kib as u32,
+        iterations: iterations as u32,
+        parallelism: parallelism as u32,
     };
     let mut handle = 0u64;
     // SAFETY: `request` and `handle` are live locals.
@@ -394,7 +394,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultLock(
     reason: jint,
 ) -> jint {
     // SAFETY: both arguments are scalars the export validates itself.
-    unsafe { chur_ffi::api::chur_vault_lock(handle_of(session), reason.cast_unsigned()) }
+    unsafe { chur_ffi::api::chur_vault_lock(handle_of(session), reason as u32) }
 }
 
 /// Closes a session handle.
@@ -526,9 +526,9 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_importBegin<'local>(
         reserved: 0,
         width,
         height,
-        duration_ms: duration_ms.max(0).cast_unsigned(),
-        known_length: known_length.max(0).cast_unsigned(),
-        capture_time_ms: capture_time_ms.max(0).cast_unsigned(),
+        duration_ms: duration_ms.max(0) as u64,
+        known_length: known_length.max(0) as u64,
+        capture_time_ms: capture_time_ms.max(0) as u64,
         capture_time_present: u8::from(capture_time_ms >= 0),
         reserved_two: [0; 7],
         content_type: content.as_ptr(),
@@ -634,13 +634,10 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_operationPoll<'local>(
     if status != 0 {
         return status;
     }
-    let counts = [
-        progress.processed.cast_signed(),
-        progress.total.cast_signed(),
-    ];
+    let counts = [progress.processed as jlong, progress.total as jlong];
     let states = [
-        progress.kind.cast_signed(),
-        progress.stage.cast_signed(),
+        progress.kind as jint,
+        progress.stage as jint,
         jint::from(progress.terminal),
         progress.status,
     ];
@@ -716,7 +713,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderSize<'local>
     if status != 0 {
         return status;
     }
-    if write_long(&mut env, &out_size, 0, size.cast_signed()) {
+    if write_long(&mut env, &out_size, 0, size as jlong) {
         0
     } else {
         INVALID_INPUT
@@ -750,7 +747,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderContentInfo<
         return status;
     }
     let numbers = [
-        info.plaintext_size.cast_signed(),
+        info.plaintext_size as jlong,
         jlong::from(info.media_kind),
         jlong::from(info.byte_range_supported),
         jlong::from(info.complete),
@@ -795,7 +792,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderReadAt<'loca
     let status = unsafe {
         chur_ffi::api::chur_object_reader_read_at(
             handle_of(reader),
-            offset.cast_unsigned(),
+            offset as u64,
             address,
             capacity,
             &mut written,
@@ -819,7 +816,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderVerifyComple
     if status != 0 {
         return status;
     }
-    if write_ints(&mut env, &out_state, &[state.cast_signed()]) {
+    if write_ints(&mut env, &out_state, &[state as jint]) {
         0
     } else {
         INVALID_INPUT
@@ -846,7 +843,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderClose(
 /// The JVM has no unsigned integer, so a handle whose generation has the high
 /// bit set arrives negative. The reinterpretation is the decoding, not a loss.
 const fn handle_of(value: jlong) -> u64 {
-    value.cast_unsigned()
+    value as u64
 }
 
 /// Builds an object reference from a 16-byte array.
@@ -867,7 +864,7 @@ fn finish_handle(
     if status != 0 {
         return status;
     }
-    if write_long(env, target, 0, handle.cast_signed()) {
+    if write_long(env, target, 0, handle as jlong) {
         0
     } else {
         INTERNAL_FAILURE
