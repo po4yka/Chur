@@ -53,8 +53,12 @@ This table is the only registry of HKDF domain labels. [`../CRYPTOGRAPHY.md`](..
 | `chur/v1/root/device-identity-wrap` | `IdentityWrapKey` | `VaultRootSecret` | 32 bytes |
 | `chur/v1/root/backup-manifest` | `BackupManifestKey` | `VaultRootSecret` | 32 bytes |
 | `chur/v1/root/descriptor-auth` | `DescriptorAuthKey` | `VaultRootSecret` | 32 bytes |
+| `chur/v1/root/sync-operations` | `RootSyncOperationKey` | `VaultRootSecret` | 32 bytes |
+| `chur/v1/root/sync-selector` | `RootSyncSelectorMaterial` | `VaultRootSecret` | 32 bytes |
 | `chur/v1/collection/object-envelope` | `ObjectEnvelopeKey` | `SecurityCollectionKey[epoch]` | 32 bytes |
 | `chur/v1/collection/metadata` | `CollectionMetadataKey` | `SecurityCollectionKey[epoch]` | 32 bytes |
+| `chur/v1/collection/sync-operations` | `CollectionSyncOperationKey[epoch]` | `SecurityCollectionKey[epoch]` | 32 bytes |
+| `chur/v1/collection/sync-selector` | `CollectionSyncSelectorMaterial[epoch]` | `SecurityCollectionKey[epoch]` | 32 bytes |
 | `chur/v1/object/manifest` | `ManifestKey` | `ObjectKey` | 32 bytes |
 | `chur/v1/object/content` | `ContentKey` | `ObjectKey` | 32 bytes |
 | `chur/v1/object/metadata` | `MetadataKey` | `ObjectKey` | 32 bytes |
@@ -89,8 +93,12 @@ A context binds the scope over which the derived key must be unique. Every root 
 | `chur/v1/root/device-identity-wrap` | `vault_id:bytes[16]` |
 | `chur/v1/root/backup-manifest` | `vault_id:bytes[16]` |
 | `chur/v1/root/descriptor-auth` | `vault_id:bytes[16]` |
+| `chur/v1/root/sync-operations` | `vault_id:bytes[16]` |
+| `chur/v1/root/sync-selector` | `vault_id:bytes[16]` |
 | `chur/v1/collection/object-envelope` | `collection_id:bytes[16]`, `collection_epoch:u64`, `object_id:bytes[16]` |
 | `chur/v1/collection/metadata` | `collection_id:bytes[16]`, `collection_epoch:u64` |
+| `chur/v1/collection/sync-operations` | `collection_id:bytes[16]`, `collection_epoch:u64` |
+| `chur/v1/collection/sync-selector` | `collection_id:bytes[16]`, `collection_epoch:u64` |
 | `chur/v1/object/manifest` | `object_id:bytes[16]`, `stream_id:bytes[16]`, `stream_kind:u8`, `stream_revision:u32` |
 | `chur/v1/object/content` | `object_id:bytes[16]`, `stream_id:bytes[16]`, `stream_kind:u8`, `stream_revision:u32` |
 | `chur/v1/object/final-commit` | `object_id:bytes[16]`, `stream_id:bytes[16]`, `stream_kind:u8`, `stream_revision:u32` |

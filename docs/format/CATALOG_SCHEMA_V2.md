@@ -53,6 +53,8 @@ The two revocation columns are both null for an active device and both present f
 
 `sync_identity_envelopes(device_id, identity_generation, active, recovery_only, body)` stores root-wrapped private identity records. The primary key is `(device_id, identity_generation)`, and a partial unique index permits one active envelope per device. `recovery_only` is 1 only during ADR-0048 recovery and prevents ordinary operation signing.
 
+Catalog v2 has no selector or derived operation-key table. [ADR-0051](../adr/0051-derive-sync-operation-keys-and-selectors.md) derives the root selector and one selector per retained collection-key epoch after unlock. The catalog already stores the wrapped source keys and accepted operation bytes; persisting derived values would create duplicate authority.
+
 ## 4. Accepted operation log and floors
 
 `sync_operations` stores only fully authenticated accepted records:

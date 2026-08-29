@@ -31,7 +31,7 @@ OperationV1 =
     signature:bytes[64]
 ```
 
-Private payload is encrypted under an appropriate root/collection/operation key before signing.
+Private payload is encrypted under the exact root or collection sync-operation key of §6 before signing.
 
 `encrypted_payload` is one canonical variable-byte field: its `u32` length prefixes a 24-byte XChaCha20-Poly1305 nonce followed by ciphertext including the 16-byte authentication tag. The plaintext is at most 1,048,576 bytes, so the field length is from 40 through 1,048,616 bytes. The nonce has no second length prefix.
 
@@ -138,7 +138,9 @@ Ed25519 signature
 
 Every other field of an operation lives inside `encrypted_payload`: `operation_kind`, the collection and key epoch the operation belongs to, and every object, album, tag, and device identifier the operation names. Without this, the server reads a timestamped per-device stream of delete, favorite, rename, and tag events attributed to a collection, which is a behavioural profile of a private library and contradicts §1. A new routing need is a `protocol_version` change, not a new cleartext field.
 
-`key_selector` is 16 random bytes assigned to a `(collection, epoch)` pair when that epoch is created, and it selects the key the receiver decrypts with. It is opaque: it carries no collection identity and no ordering, and the server learns only that two operations use the same epoch. Root-domain operations carry the vault's root selector.
+`key_selector` is the 16-byte pseudorandom output fixed by [ADR-0051](../adr/0051-derive-sync-operation-keys-and-selectors.md). Root-domain operations derive it from `VaultRootSecret`; other operations derive it from `SecurityCollectionKey[epoch]`. The selector and payload key use separate HKDF labels. It is opaque: it carries no collection identity and no ordering, and the server learns only that two operations use the same key domain. Root-domain operations carry the vault's root selector.
+
+The root payload key is `RootSyncOperationKey = HKDF-SHA-256(VaultRootSecret, "chur/v1/root/sync-operations", vault_id)`. A collection payload key is `CollectionSyncOperationKey[epoch] = HKDF-SHA-256(SecurityCollectionKey[epoch], "chur/v1/collection/sync-operations", collection_id, collection_epoch)`. Exact HKDF framing and selector derivation are owned by [`../security/KEY_HIERARCHY.md`](../security/KEY_HIERARCHY.md) §3 and ADR-0051. A receiver derives a session selector directory from locally available wrapped keys and rejects an unknown or colliding selector before decryption.
 
 The payload AAD is `CHUR\x00SYNC\x00OPERATION\x00V1` followed by the exact wire encoding from `protocol_version` through `key_selector`, excluding `encrypted_payload` and `signature`. AAD must be readable before decryption, so no field inside the ciphertext may appear in it: `operation_kind`, collection, epoch, and object identifiers are authenticated as payload plaintext by the AEAD tag, and the signature of §7 binds the sealed payload to the outer record.
 

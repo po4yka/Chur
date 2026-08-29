@@ -21,6 +21,7 @@ The v1 vault descriptor already has `MigrationDescriptorV1`, a `MIGRATING` state
 - restart with `MIGRATING` plus catalog v1 reruns the idempotent migration transaction. Restart with `MIGRATING` plus catalog v2 performs the checkpoint and final descriptor install. Other version pairs fail closed;
 - downgrade does not open catalog v2. Backup restore runs the same version checks and migration before the restored descriptor becomes active;
 - sync state and its operation records live only in SQLCipher. Locked background staging remains the separate bounded disposable directory of `SYNC_PROTOCOL_V1.md` §7.
+- sync selectors and operation keys are derived session state under [ADR-0051](0051-derive-sync-operation-keys-and-selectors.md), not another durable table.
 
 ## Alternatives considered
 
