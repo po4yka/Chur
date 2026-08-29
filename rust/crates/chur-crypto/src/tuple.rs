@@ -68,6 +68,8 @@ pub mod tag {
     pub const SYNC_REVOCATION: &[u8] = b"CHUR\0SYNC\0REVOCATION\0V1";
     /// Membership-chain commitment.
     pub const SYNC_MEMBERSHIP_CHAIN: &[u8] = b"CHUR\0SYNC\0MEMBERSHIP-CHAIN\0V1";
+    /// Opaque server deletion authorization signature.
+    pub const SYNC_SERVER_DELETE: &[u8] = b"CHUR\0SYNC\0SERVER-DELETE\0V1";
     /// Device verification fingerprint.
     pub const IDENTITY_FINGERPRINT: &[u8] = b"CHUR\0IDENTITY\0FINGERPRINT\0V1";
 
@@ -97,6 +99,7 @@ pub mod tag {
         SYNC_ENROLLMENT,
         SYNC_REVOCATION,
         SYNC_MEMBERSHIP_CHAIN,
+        SYNC_SERVER_DELETE,
         IDENTITY_FINGERPRINT,
     ];
 }

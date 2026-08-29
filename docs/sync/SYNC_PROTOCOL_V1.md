@@ -98,6 +98,28 @@ Deletion is a signed tombstone. The retention rule that server physical deletion
 
 The server deletes stored ciphertext only on an authenticated signed operation from an enrolled device. A transport session token authorizes fetch and upload, never deletion, so a stolen token alone destroys nothing. Server acknowledgment of a deletion is not proof of erasure. Key-envelope destruction and collection revocation are client-side decisions.
 
+### 9.1 Server deletion authorization
+
+The server never decrypts a tombstone, and the `store_id` it must remove is private payload data. The client therefore submits this separate canonical authorization after it has accepted the tombstone locally:
+
+```text
+ServerDeletionAuthorizationV1 =
+    protocol_version:u16 = 0x0001
+    request_id:bytes[16]
+    vault_id:bytes[16]
+    device_id:bytes[16]
+    target_kind:u8
+    target_id:bytes[16]
+    authorizing_operation_digest:bytes[32]
+    signature:bytes[64]
+```
+
+The signature input is `CHUR\x00SYNC\x00SERVER-DELETE\x00V1` followed by every field from `protocol_version` through `authorizing_operation_digest`. The exact record is 163 bytes. Identifiers are non-zero random `Id` values and the server scopes every lookup by `vault_id`.
+
+`target_kind` allocates `0x01` for one immutable object and `0x02` for the whole account. An object authorization names its opaque `store_id` and a non-zero digest of an operation already stored for the vault. The server verifies the operation exists and the authorization signer is currently active; it cannot decrypt the operation and does not claim to prove its semantic kind. An account authorization requires `target_id == vault_id` and an all-zero operation digest.
+
+The server stores `request_id` with the complete canonical bytes. An exact replay is idempotent; different bytes under the same identifier are rejected. Unknown versions and target kinds fail closed. A transport token cannot substitute for this signature.
+
 ## 10. Error/retry
 
 - uploads/downloads are idempotent by opaque transfer/object IDs;

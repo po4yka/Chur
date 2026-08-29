@@ -138,7 +138,7 @@ The operator of a deployment is the data controller for everything §1 says the 
 An implementation distributed as a Chur sync server must:
 
 - retain a request log containing an IP address for at most 30 days, and retain none where the deployment does not need one for abuse control;
-- delete a device's stored records and its account row within 30 days of an authenticated deletion request, and expose that request through the protocol rather than an out-of-band process;
+- delete stored object records or the account row within 30 days of a signed `ServerDeletionAuthorizationV1`, and expose that request through the protocol rather than an out-of-band process;
 - ship operator documentation stating what it retains, for how long, and where;
 - add no analytics, no third-party log shipping, and no content-derived indexing.
 
