@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. v1 ships 1.3: the additions of §6.5 raised the minor from 0, those of §6.6 raised it again, and those of §6.7 again after that. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
+- native API version is the (major, minor) pair. v1 ships 1.4: §6.5, §6.6, §6.7, and §6.8 each added one minor surface. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -427,6 +427,22 @@ Both descriptors must be **seekable** as well as open. §7 writes the public pre
 The password crosses the boundary as bytes and is **not retained**. §12 keeps credentials inside Rust: the bytes are copied into a zeroizing buffer before the call returns and the caller's pointer is not held.
 
 A restore refuses when the registry already holds the two identities [`../format/VAULT_DESCRIPTOR_V1.md`](../format/VAULT_DESCRIPTOR_V1.md) §11 admits, and it installs nothing until the package authenticates whole.
+
+### 6.8 The ciphertext sync inbox, ABI 1.4
+
+The host can store downloaded opaque records while the vault is locked. Rust derives the local record name from the record bytes, bounds the inbox, and does not parse the record until unlock. The host passes the public random `vault_id`; it does not pass a private path or a key.
+
+```c
+chur_status_t chur_sync_stage(chur_handle_t runtime, const uint8_t vault_id[16],
+                              uint8_t kind, uint64_t staged_at_ms,
+                              const uint8_t *record, uint32_t record_length);
+chur_status_t chur_sync_process(chur_handle_t session, uint64_t now_ms,
+                                ChurSyncReportV1 *out_report);
+```
+
+Record kind `1` is an encrypted signed operation. Kind `2` is a signed checkpoint. `chur_sync_stage` is idempotent for identical bytes. It rejects one record above the 16 MiB response bound. The whole per-vault inbox remains bounded to the limits in [`../sync/SYNC_PROTOCOL_V1.md`](../sync/SYNC_PROTOCOL_V1.md) §7.
+
+`chur_sync_process` authenticates and decrypts operations under the unlocked session. It removes an applied record, an exact replay, and a record that full validation rejects. It retains an operation with a missing device sequence, causal predecessor, or collection key. The report contains applied, duplicate, pending, and rejected counts. `first_rejection` is zero or the first stable `chur_status_t`; it contains no private text.
 
 ## 7. Buffer ownership
 

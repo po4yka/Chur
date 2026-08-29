@@ -11,9 +11,9 @@
  * FFI_CONTRACT.md section 2, the status vocabulary of docs/ERROR_MODEL.md, the
  * control plane and data plane of section 6.2, the product surface of section
  * 6.5, the Android Keystore surface of section 6.6, and the portable backup
- * surface of section 6.7. Adding an export raises the minor ABI version;
- * changing or removing one raises the major. The library reports 1.3: sections
- * 6.5, 6.6, and 6.7 each raised the minor from 0.
+ * surface of section 6.7, and the sync inbox surface of section 6.8. Adding an
+ * export raises the minor ABI version;
+ * changing or removing one raises the major. The library reports 1.4.
  */
 
 #ifndef CHUR_H
@@ -314,6 +314,15 @@ typedef struct ChurContentInfoV1 {
   uint8_t reserved[4];
 } ChurContentInfoV1;
 
+typedef struct ChurSyncReportV1 {
+  uint64_t applied;
+  uint64_t duplicates;
+  uint64_t pending;
+  uint64_t rejected;
+  int32_t first_rejection;
+  uint8_t reserved[4];
+} ChurSyncReportV1;
+
 /* -------------------------------------------------------------------------
  * Runtime and session
  * ---------------------------------------------------------------------- */
@@ -326,6 +335,15 @@ chur_status_t chur_vault_unlock(chur_handle_t runtime,
                                 chur_handle_t *out_session);
 chur_status_t chur_vault_lock(chur_handle_t session, uint32_t reason);
 chur_status_t chur_session_close(chur_handle_t session);
+
+/* Opaque locked staging and unlocked validation, FFI_CONTRACT.md section 6.8. */
+#define CHUR_SYNC_RECORD_OPERATION 1
+#define CHUR_SYNC_RECORD_CHECKPOINT 2
+chur_status_t chur_sync_stage(chur_handle_t runtime, const uint8_t vault_id[16],
+                              uint8_t kind, uint64_t staged_at_ms,
+                              const uint8_t *record, uint32_t record_length);
+chur_status_t chur_sync_process(chur_handle_t session, uint64_t now_ms,
+                                ChurSyncReportV1 *out_report);
 
 /* -------------------------------------------------------------------------
  * Catalog queries

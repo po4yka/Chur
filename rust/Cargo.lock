@@ -298,6 +298,7 @@ dependencies = [
  "chur-crypto",
  "chur-format",
  "chur-media",
+ "chur-sync-protocol",
  "zeroize",
 ]
 
