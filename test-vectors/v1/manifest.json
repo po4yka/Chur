@@ -1,10 +1,10 @@
 {
   "manifest_version": 1,
-  "spec_commit": "08e5c3ae084e0c5de94a81dd77dca51998dec73e",
+  "spec_commit": "09437986b16e9faf2edcf2266c8d0d31c2404413",
   "generator": {
     "name": "chur-cli",
     "version": "0.1.0",
-    "commit": "08e5c3ae084e0c5de94a81dd77dca51998dec73e",
+    "commit": "09437986b16e9faf2edcf2266c8d0d31c2404413",
     "toolchain": "1.97.0-aarch64-apple-darwin"
   },
   "vectors": [
@@ -1228,6 +1228,28 @@
       }
     },
     {
+      "vector_id": "operation-v1-compacted-checkpoint",
+      "spec": "docs/sync/ROLLBACK_PROTECTION.md",
+      "spec_section": "6.1",
+      "purpose": "Sync v1 rejects a checkpoint that claims an unsupported compacted catalog state.",
+      "outcome": "reject",
+      "inputs": {
+        "record": "0001111111111111111111111111111111112121212121212121212121212121212100000000000000010000000000000001f5bd51317db45c83bff40897418297998ade5de15c157d4b90e4dd90b47df0f6000000012121212121212121212121212121212100000000000000015fe525b1a9c4bfe310ed06fa820c6eec53e7521980742443df3e0275373fa8c3ce9e892bd5bd82d6e7d332c616b0bede4ae829af466aa425bb587bac08e838680100000000000000000000000000000000000000000000000000000000000000010333132b3f7fde7c5ec5b2172867ebf03cf443c64d44ba2bd07341d2fbe11f444391283e16332ce0e46ab21231f9907b8c6e1eca632f6890385c167b2ca802"
+      },
+      "error_code": "UNSUPPORTED_VERSION"
+    },
+    {
+      "vector_id": "operation-v1-hpke-suite-two",
+      "spec": "docs/sync/DEVICE_IDENTITY.md",
+      "spec_section": "4",
+      "purpose": "Enrollment rejects an unallocated HPKE suite before accepting device keys.",
+      "outcome": "reject",
+      "inputs": {
+        "record": "00011111111111111111111111111111111121212121212121212121212121212121000193db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a370002838383838383838383838383838383838383838383838383838383838383838300000000000000010000000000000001212121212121212121212121212121210000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001b179a1f358276e4055a57475d3c3e6252720f5efa17023c7bf34d55def9026f44872317fcebefeaee38631fcec7ff14c90de5c6962cbaa02dabeef2a3c55f04"
+      },
+      "error_code": "UNSUPPORTED_VERSION"
+    },
+    {
       "vector_id": "operation-v1-initial-enrollment",
       "spec": "docs/sync/DEVICE_IDENTITY.md",
       "spec_section": "4",
@@ -1246,6 +1268,18 @@
         "signing_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37"
       },
       "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "operation-v1-modified-signature",
+      "spec": "docs/sync/OPERATION_LOG.md",
+      "spec_section": "7",
+      "purpose": "A modified Ed25519 signature does not authenticate the canonical operation.",
+      "outcome": "reject",
+      "inputs": {
+        "record": "00013131313131313131313131313131313111111111111111111111111111111111212121212121212121212121212121210000000000000001000000000000000000000000000000000000000000000000000000000000000000000000323232323232323232323232323232320000003b8686868686868686868686868686868686868686868686868b00de3c8d17b2b587005234c651b98af5cb9019127246986fb8b4565356e5044f33e35df23f4f7fde1390117f746c3deec633f89c790783d35f92a3e58a58e99e0eca294324c94e4e8746faa890780f7b7d74eb5f23d033437a9fdd79afc428126a0f",
+        "signing_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37"
+      },
+      "error_code": "AUTHENTICATION_FAILED"
     },
     {
       "vector_id": "operation-v1-revocation",
@@ -1267,6 +1301,17 @@
         "record_length": 194
       },
       "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "operation-v1-self-issued-revocation",
+      "spec": "docs/sync/DEVICE_IDENTITY.md",
+      "spec_section": "9",
+      "purpose": "A device cannot issue its own revocation record.",
+      "outcome": "reject",
+      "inputs": {
+        "record": "0001111111111111111111111111111111112121212121212121212121212121212100000000000000018787878787878787878787878787878787878787878787878787878787878787000000000000000321212121212121212121212121212121877b94149d60acbdca35c3cadd4a8ddda0c7207fcec52d6780e65ed0042b41032909703dbcd70361f6aac2c806143baa0e9e41368888f32ce005bb5efc8ba38af0551aa67a854b3756eb9d22e19c2076316dae996b499b8e91b358fca28cd505"
+      },
+      "error_code": "NON_CANONICAL_ENCODING"
     },
     {
       "vector_id": "operation-v1-signed-record",
@@ -1317,6 +1362,28 @@
         "record_length": 270
       },
       "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "operation-v1-truncated-signature",
+      "spec": "docs/sync/OPERATION_LOG.md",
+      "spec_section": "2",
+      "purpose": "A record with a truncated signature is not canonical.",
+      "outcome": "reject",
+      "inputs": {
+        "record": "00013131313131313131313131313131313111111111111111111111111111111111212121212121212121212121212121210000000000000001000000000000000000000000000000000000000000000000000000000000000000000000323232323232323232323232323232320000003b8686868686868686868686868686868686868686868686868b00de3c8d17b2b587005234c651b98af5cb9019127246986fb8b4565356e5044f33e35df23f4f7fde1390117f746c3deec633f89c790783d35f92a3e58a58e99e0eca294324c94e4e8746faa890780f7b7d74eb5f23d033437a9fdd79afc428126a"
+      },
+      "error_code": "NON_CANONICAL_ENCODING"
+    },
+    {
+      "vector_id": "operation-v1-version-two",
+      "spec": "docs/sync/OPERATION_LOG.md",
+      "spec_section": "2",
+      "purpose": "A v1 reader rejects an unallocated sync protocol version.",
+      "outcome": "reject",
+      "inputs": {
+        "record": "00023131313131313131313131313131313111111111111111111111111111111111212121212121212121212121212121210000000000000001000000000000000000000000000000000000000000000000000000000000000000000000323232323232323232323232323232320000003b8686868686868686868686868686868686868686868686868b00de3c8d17b2b587005234c651b98af5cb9019127246986fb8b4565356e5044f33e35df23f4f7fde1390117f746c3deec633f89c790783d35f92a3e58a58e99e0eca294324c94e4e8746faa890780f7b7d74eb5f23d033437a9fdd79afc428126a0e"
+      },
+      "error_code": "UNSUPPORTED_VERSION"
     },
     {
       "vector_id": "password-slot-v1-frozen-floor-profile",

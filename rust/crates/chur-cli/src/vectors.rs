@@ -16,7 +16,7 @@
 use serde_json::json;
 
 use chur_core::limits::{ID_LEN, KEY_LEN, NONCE_LEN};
-use chur_core::{Id, Result};
+use chur_core::{ChurStatus, Error, Id, Result};
 use chur_crypto::aead::Nonce;
 use chur_crypto::commit;
 use chur_crypto::kdf::{self, Context, ContextShape, Label};
@@ -62,6 +62,16 @@ fn key(byte: u8) -> Key {
 /// A fixed nonce built from one repeated byte.
 fn nonce(byte: u8) -> Nonce {
     Nonce::new([byte; NONCE_LEN])
+}
+
+fn expect_rejection<T>(result: Result<T>, expected: ChurStatus) -> Result<()> {
+    match result {
+        Err(error) if error.status() == expected => Ok(()),
+        _ => Err(Error::new(
+            ChurStatus::InternalFailure,
+            "a generated negative vector did not fail as declared",
+        )),
+    }
 }
 
 /// A repeatable plaintext pattern of the given length.
@@ -247,6 +257,7 @@ fn canonical_encoding(out: &mut Vec<Vector>) -> Result<()> {
         .input("parser_limit", json!(64))
         .build(),
     );
+
     Ok(())
 }
 
@@ -672,6 +683,7 @@ fn vault_descriptors(out: &mut Vec<Vector>) -> Result<()> {
         .note(TEST_ONLY)
         .build(),
     );
+
     Ok(())
 }
 
@@ -1541,6 +1553,124 @@ fn sync_protocol(out: &mut Vec<Vector>) -> Result<()> {
         .expect_bytes("membership_commitment", &revocation.commitment())
         .expect("record_length", json!(revocation.encode().len()))
         .note(TEST_ONLY)
+        .build(),
+    );
+
+    let mut version_two = operation.encode();
+    version_two[1] = 2;
+    expect_rejection(
+        Operation::decode(&version_two),
+        ChurStatus::UnsupportedVersion,
+    )?;
+    out.push(
+        VectorBuilder::reject(
+            "operation",
+            "operation-v1-version-two",
+            OPERATION_SPEC,
+            "2",
+            "A v1 reader rejects an unallocated sync protocol version.",
+            "UNSUPPORTED_VERSION",
+        )
+        .input_bytes("record", &version_two)
+        .build(),
+    );
+
+    let operation_bytes = operation.encode();
+    let truncated = &operation_bytes[..operation_bytes.len() - 1];
+    expect_rejection(
+        Operation::decode(truncated),
+        ChurStatus::NonCanonicalEncoding,
+    )?;
+    out.push(
+        VectorBuilder::reject(
+            "operation",
+            "operation-v1-truncated-signature",
+            OPERATION_SPEC,
+            "2",
+            "A record with a truncated signature is not canonical.",
+            "NON_CANONICAL_ENCODING",
+        )
+        .input_bytes("record", truncated)
+        .build(),
+    );
+
+    let mut modified_signature = operation_bytes;
+    let last = modified_signature.len() - 1;
+    modified_signature[last] ^= 1;
+    let modified = Operation::decode(&modified_signature)?;
+    expect_rejection(
+        modified.verify_signature(&owner_key.verifying_key()),
+        ChurStatus::AuthenticationFailed,
+    )?;
+    out.push(
+        VectorBuilder::reject(
+            "operation",
+            "operation-v1-modified-signature",
+            OPERATION_SPEC,
+            "7",
+            "A modified Ed25519 signature does not authenticate the canonical operation.",
+            "AUTHENTICATION_FAILED",
+        )
+        .input_bytes("signing_public_key", &owner_key.verifying_key())
+        .input_bytes("record", &modified_signature)
+        .build(),
+    );
+
+    let mut hpke_suite_two = initial.encode();
+    hpke_suite_two[69] = 2;
+    expect_rejection(
+        EnrollmentRecord::decode(&hpke_suite_two),
+        ChurStatus::UnsupportedVersion,
+    )?;
+    out.push(
+        VectorBuilder::reject(
+            "operation",
+            "operation-v1-hpke-suite-two",
+            IDENTITY_SPEC,
+            "4",
+            "Enrollment rejects an unallocated HPKE suite before accepting device keys.",
+            "UNSUPPORTED_VERSION",
+        )
+        .input_bytes("record", &hpke_suite_two)
+        .build(),
+    );
+
+    let mut compacted_checkpoint = checkpoint.encode();
+    let catalog_commitment = compacted_checkpoint.len() - 64 - 32;
+    compacted_checkpoint[catalog_commitment] = 1;
+    expect_rejection(
+        Checkpoint::decode(&compacted_checkpoint),
+        ChurStatus::UnsupportedVersion,
+    )?;
+    out.push(
+        VectorBuilder::reject(
+            "operation",
+            "operation-v1-compacted-checkpoint",
+            ROLLBACK_SPEC,
+            "6.1",
+            "Sync v1 rejects a checkpoint that claims an unsupported compacted catalog state.",
+            "UNSUPPORTED_VERSION",
+        )
+        .input_bytes("record", &compacted_checkpoint)
+        .build(),
+    );
+
+    let mut self_issued_revocation = revocation.encode();
+    self_issued_revocation.copy_within(82..98, 18);
+    expect_rejection(
+        RevocationRecord::decode(&self_issued_revocation),
+        ChurStatus::NonCanonicalEncoding,
+    )?;
+    out.push(
+        VectorBuilder::reject(
+            "operation",
+            "operation-v1-self-issued-revocation",
+            IDENTITY_SPEC,
+            "9",
+            "A device cannot issue its own revocation record.",
+            "NON_CANONICAL_ENCODING",
+        )
+        .input_bytes("record", &self_issued_revocation)
         .build(),
     );
     Ok(())
