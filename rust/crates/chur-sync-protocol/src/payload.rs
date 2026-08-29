@@ -5,6 +5,7 @@ use chur_core::{ChurStatus, Error, Id, Result, ensure};
 use chur_format::codec::{Reader, Writer};
 use chur_format::envelope::{CollectionKeyEnvelope, ObjectKeyEnvelope};
 
+use crate::KeyDirectory;
 use crate::membership::{EnrollmentRecord, RevocationRecord};
 use crate::operation::{Operation, PROTOCOL_VERSION_V1};
 
@@ -303,6 +304,19 @@ impl OperationPayload {
         let body = decode_body(kind, &mut reader)?;
         reader.finish()?;
         Self::new(collection_id, collection_epoch, body)
+    }
+
+    /// Opens, decodes, and binds a payload to its resolved outer selector.
+    pub fn open_for_operation(operation: &Operation, keys: &KeyDirectory) -> Result<Self> {
+        let domain = keys.domain(operation.key_selector())?;
+        let plaintext = operation.open_payload(domain.operation_key())?;
+        let payload = Self::decode(&plaintext)?;
+        payload.validate_for_operation(
+            operation,
+            domain.collection_id(),
+            domain.collection_epoch(),
+        )?;
+        Ok(payload)
     }
 
     /// Validates the private payload against its authenticated outer operation.

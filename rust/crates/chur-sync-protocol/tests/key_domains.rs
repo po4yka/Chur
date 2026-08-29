@@ -3,7 +3,9 @@
 #![allow(clippy::unwrap_used)]
 
 use chur_core::Id;
-use chur_crypto::Key;
+use chur_crypto::{Key, Nonce};
+use chur_sync_protocol::operation::{DeviceSigningKey, Operation};
+use chur_sync_protocol::payload::{OperationPayload, PayloadBody};
 use chur_sync_protocol::{KeyDirectory, KeyDomain};
 
 fn id(byte: u8) -> Id {
@@ -52,4 +54,68 @@ fn directory_routes_known_selectors_and_refuses_unknown_ones() {
                 .operation_key()
     );
     assert!(directory.operation_key(&id(10)).is_err());
+}
+
+#[test]
+fn selected_domain_authenticates_the_opened_payload_header() {
+    let vault_id = id(11);
+    let collection_id = id(12);
+    let collection_key = Key::new([13; 32]);
+    let domain = KeyDomain::collection(&collection_key, &collection_id, 2).unwrap();
+    let payload = OperationPayload::new(
+        collection_id,
+        2,
+        PayloadBody::CreateAlbum {
+            album_id: id(14),
+            name: "Trips".to_owned(),
+        },
+    )
+    .unwrap();
+    let operation = Operation::seal(
+        id(15),
+        vault_id,
+        id(16),
+        1,
+        [0; 32],
+        Vec::new(),
+        *domain.selector(),
+        domain.operation_key(),
+        Nonce::new([17; 24]),
+        &payload.encode(),
+    )
+    .unwrap()
+    .sign(&DeviceSigningKey::from_seed([18; 32]));
+    let mut directory = KeyDirectory::new(&Key::new([19; 32]), &vault_id).unwrap();
+    directory.insert(domain).unwrap();
+
+    let opened = OperationPayload::open_for_operation(&operation, &directory).unwrap();
+    assert_eq!(opened.collection_id(), &collection_id);
+    assert_eq!(opened.collection_epoch(), 2);
+
+    let mismatched = OperationPayload::new(
+        id(20),
+        2,
+        PayloadBody::CreateAlbum {
+            album_id: id(21),
+            name: "Hidden".to_owned(),
+        },
+    )
+    .unwrap();
+    let operation = Operation::seal(
+        id(22),
+        vault_id,
+        id(16),
+        2,
+        operation.digest(),
+        Vec::new(),
+        *directory
+            .domain(operation.key_selector())
+            .unwrap()
+            .selector(),
+        directory.operation_key(operation.key_selector()).unwrap(),
+        Nonce::new([23; 24]),
+        &mismatched.encode(),
+    )
+    .unwrap();
+    assert!(OperationPayload::open_for_operation(&operation, &directory).is_err());
 }

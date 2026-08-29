@@ -11,6 +11,8 @@ use chur_crypto::{Context, Key, Label};
 pub struct KeyDomain {
     selector: Id,
     operation_key: Key,
+    collection_id: Id,
+    collection_epoch: u64,
 }
 
 /// The unlocked session's map from opaque selectors to operation keys.
@@ -26,7 +28,7 @@ impl KeyDirectory {
     /// Adds a derived collection epoch and rejects a selector collision.
     pub fn insert(&mut self, domain: KeyDomain) -> Result<()> {
         if let Some(existing) = self.0.get(domain.selector()) {
-            if existing.operation_key() == domain.operation_key() {
+            if existing.same_domain(&domain) {
                 return Ok(());
             }
             return Err(Error::new(
@@ -40,15 +42,17 @@ impl KeyDirectory {
 
     /// Resolves an operation key without revealing the selector's domain.
     pub fn operation_key(&self, selector: &Id) -> Result<&Key> {
-        self.0
-            .get(selector)
-            .map(KeyDomain::operation_key)
-            .ok_or_else(|| {
-                Error::new(
-                    ChurStatus::AuthenticationFailed,
-                    "sync operation uses an unknown key selector",
-                )
-            })
+        Ok(self.domain(selector)?.operation_key())
+    }
+
+    /// Resolves the complete authenticated key domain for one selector.
+    pub fn domain(&self, selector: &Id) -> Result<&KeyDomain> {
+        self.0.get(selector).ok_or_else(|| {
+            Error::new(
+                ChurStatus::AuthenticationFailed,
+                "sync operation uses an unknown key selector",
+            )
+        })
     }
 }
 
@@ -60,6 +64,8 @@ impl KeyDomain {
             Label::RootSyncOperations,
             Label::RootSyncSelector,
             &Context::vault(vault_id),
+            *vault_id,
+            0,
         )
     }
 
@@ -70,6 +76,8 @@ impl KeyDomain {
             Label::CollectionSyncOperations,
             Label::CollectionSyncSelector,
             &Context::collection_metadata(collection_id, epoch),
+            *collection_id,
+            epoch,
         )
     }
 
@@ -85,18 +93,40 @@ impl KeyDomain {
         &self.operation_key
     }
 
+    /// Collection identifier, or the vault identifier for the root domain.
+    #[must_use]
+    pub const fn collection_id(&self) -> &Id {
+        &self.collection_id
+    }
+
+    /// Collection epoch, or zero for the root domain.
+    #[must_use]
+    pub const fn collection_epoch(&self) -> u64 {
+        self.collection_epoch
+    }
+
     fn derive(
         parent: &Key,
         operation_label: Label,
         selector_label: Label,
         context: &Context,
+        collection_id: Id,
+        collection_epoch: u64,
     ) -> Result<Self> {
         let operation_key = kdf::derive_from(parent, operation_label, context)?;
         let selector_material = kdf::derive_from(parent, selector_label, context)?;
         Ok(Self {
             selector: selector_from_material(&selector_material)?,
             operation_key,
+            collection_id,
+            collection_epoch,
         })
+    }
+
+    fn same_domain(&self, other: &Self) -> bool {
+        self.collection_id == other.collection_id
+            && self.collection_epoch == other.collection_epoch
+            && self.operation_key == other.operation_key
     }
 }
 
@@ -131,6 +161,8 @@ mod tests {
             KeyDomain {
                 selector,
                 operation_key: Key::new([2; 32]),
+                collection_id: Id::new([4; ID_LEN]).unwrap(),
+                collection_epoch: 1,
             },
         )]));
 
@@ -139,6 +171,8 @@ mod tests {
                 .insert(KeyDomain {
                     selector,
                     operation_key: Key::new([3; 32]),
+                    collection_id: Id::new([4; ID_LEN]).unwrap(),
+                    collection_epoch: 1,
                 })
                 .is_err()
         );
