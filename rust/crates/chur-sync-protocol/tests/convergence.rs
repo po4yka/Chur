@@ -4,7 +4,9 @@
 
 use chur_core::Id;
 use chur_crypto::{Key, Nonce};
-use chur_sync_protocol::convergence::{CausalStamp, MergeOutcome, ScalarRegister};
+use chur_sync_protocol::convergence::{
+    CausalStamp, MergeOutcome, ObservedRemoveSet, ScalarRegister,
+};
 use chur_sync_protocol::operation::{DeviceSigningKey, ObservedHead, Operation};
 
 fn id(byte: u8) -> Id {
@@ -90,4 +92,79 @@ fn scalar_register_keeps_only_causal_maxima_and_uses_digest_for_concurrency() {
             .expect("old replay")
             == MergeOutcome::Obsolete
     );
+}
+
+#[test]
+fn observed_remove_set_converges_when_remove_and_concurrent_add_are_permuted() {
+    let key_a = DeviceSigningKey::from_seed([2; 32]);
+    let key_b = DeviceSigningKey::from_seed([3; 32]);
+    let key_c = DeviceSigningKey::from_seed([4; 32]);
+    let element = (id(20), id(21));
+    let observed_add = operation(&key_a, 7, id(2), 1, [0; 32], Vec::new());
+    let remove = operation(
+        &key_b,
+        8,
+        id(3),
+        1,
+        [0; 32],
+        vec![ObservedHead::new(id(2), 1)],
+    );
+    let concurrent_add = operation(&key_c, 9, id(4), 1, [0; 32], Vec::new());
+    let removed = [*observed_add.operation_id()];
+    let mut ordered = ObservedRemoveSet::new();
+    ordered
+        .add(element, CausalStamp::from_operation(&observed_add))
+        .expect("add");
+    ordered
+        .remove(element, CausalStamp::from_operation(&remove), &removed)
+        .expect("remove");
+    ordered
+        .add(element, CausalStamp::from_operation(&concurrent_add))
+        .expect("concurrent add");
+    let mut permuted = ObservedRemoveSet::new();
+    assert!(
+        permuted
+            .remove(element, CausalStamp::from_operation(&remove), &removed)
+            .expect("remove first")
+            == MergeOutcome::PendingCause
+    );
+    permuted
+        .add(element, CausalStamp::from_operation(&observed_add))
+        .expect("late add");
+    permuted
+        .remove(element, CausalStamp::from_operation(&remove), &removed)
+        .expect("retried remove");
+    permuted
+        .add(element, CausalStamp::from_operation(&concurrent_add))
+        .expect("concurrent add");
+
+    assert!(ordered.contains(&element));
+    assert_eq!(ordered.add_tokens(&element), permuted.add_tokens(&element));
+    assert_eq!(
+        ordered.add_tokens(&element),
+        vec![*concurrent_add.operation_id()]
+    );
+}
+
+#[test]
+fn remove_cannot_name_an_add_token_it_did_not_causally_observe() {
+    let key_a = DeviceSigningKey::from_seed([2; 32]);
+    let key_b = DeviceSigningKey::from_seed([3; 32]);
+    let element = id(20);
+    let add = operation(&key_a, 10, id(2), 1, [0; 32], Vec::new());
+    let concurrent_remove = operation(&key_b, 11, id(3), 1, [0; 32], Vec::new());
+    let removed = [*add.operation_id()];
+    let mut set = ObservedRemoveSet::new();
+    set.add(element, CausalStamp::from_operation(&add))
+        .expect("add");
+
+    assert!(
+        set.remove(
+            element,
+            CausalStamp::from_operation(&concurrent_remove),
+            &removed,
+        )
+        .is_err()
+    );
+    assert!(set.contains(&element));
 }

@@ -1,5 +1,7 @@
 //! Causal comparison and deterministic scalar convergence.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use chur_core::{ChurStatus, Error, Id, Result};
 use chur_crypto::Commitment;
 
@@ -133,6 +135,8 @@ pub enum MergeOutcome {
     Duplicate,
     /// A causally later value was already represented.
     Obsolete,
+    /// A remove token's add operation has not been materialized yet.
+    PendingCause,
 }
 
 struct ScalarVersion<T> {
@@ -194,6 +198,136 @@ impl<T> ScalarRegister<T> {
 }
 
 impl<T> Default for ScalarRegister<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Observed-remove set shared by memberships, tags, and favorites.
+pub struct ObservedRemoveSet<E> {
+    adds: BTreeMap<E, BTreeMap<Id, CausalStamp>>,
+    removals: BTreeMap<E, BTreeSet<Id>>,
+    applied: BTreeMap<Id, Commitment>,
+}
+
+impl<E: Clone + Ord> ObservedRemoveSet<E> {
+    /// Empty set.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            adds: BTreeMap::new(),
+            removals: BTreeMap::new(),
+            applied: BTreeMap::new(),
+        }
+    }
+
+    /// Adds the containing operation's identifier as a unique token.
+    pub fn add(&mut self, element: E, stamp: CausalStamp) -> Result<MergeOutcome> {
+        if let Some(outcome) = self.duplicate_or_reuse(&stamp)? {
+            return Ok(outcome);
+        }
+        let token = *stamp.operation_id();
+        self.applied.insert(token, *stamp.digest());
+        self.adds
+            .entry(element.clone())
+            .or_default()
+            .insert(token, stamp);
+        Ok(
+            if self
+                .removals
+                .get(&element)
+                .is_some_and(|tokens| tokens.contains(&token))
+            {
+                MergeOutcome::Obsolete
+            } else {
+                MergeOutcome::Applied
+            },
+        )
+    }
+
+    /// Removes exactly the add tokens observed by the author.
+    pub fn remove(
+        &mut self,
+        element: E,
+        stamp: CausalStamp,
+        removed_tokens: &[Id],
+    ) -> Result<MergeOutcome> {
+        if let Some(outcome) = self.duplicate_or_reuse(&stamp)? {
+            return Ok(outcome);
+        }
+        if removed_tokens.is_empty() {
+            self.applied.insert(*stamp.operation_id(), *stamp.digest());
+            return Ok(MergeOutcome::Applied);
+        }
+        let Some(adds) = self.adds.get(&element) else {
+            return Ok(MergeOutcome::PendingCause);
+        };
+        for token in removed_tokens {
+            let Some(add) = adds.get(token) else {
+                return Ok(MergeOutcome::PendingCause);
+            };
+            ensure_observed_remove(add, &stamp)?;
+        }
+        self.applied.insert(*stamp.operation_id(), *stamp.digest());
+        self.removals
+            .entry(element)
+            .or_default()
+            .extend(removed_tokens.iter().copied());
+        Ok(MergeOutcome::Applied)
+    }
+
+    /// Whether at least one unremoved add token remains.
+    #[must_use]
+    pub fn contains(&self, element: &E) -> bool {
+        self.adds.get(element).is_some_and(|adds| {
+            adds.keys().any(|token| {
+                self.removals
+                    .get(element)
+                    .is_none_or(|removals| !removals.contains(token))
+            })
+        })
+    }
+
+    /// Sorted current tokens to place in a remove operation.
+    #[must_use]
+    pub fn add_tokens(&self, element: &E) -> Vec<Id> {
+        self.adds.get(element).map_or_else(Vec::new, |adds| {
+            adds.keys()
+                .filter(|token| {
+                    self.removals
+                        .get(element)
+                        .is_none_or(|removals| !removals.contains(token))
+                })
+                .copied()
+                .collect()
+        })
+    }
+
+    fn duplicate_or_reuse(&self, stamp: &CausalStamp) -> Result<Option<MergeOutcome>> {
+        let Some(digest) = self.applied.get(stamp.operation_id()) else {
+            return Ok(None);
+        };
+        if digest == stamp.digest() {
+            return Ok(Some(MergeOutcome::Duplicate));
+        }
+        Err(Error::new(
+            ChurStatus::AuthenticationFailed,
+            "operation identifier was reused in observed-remove state",
+        ))
+    }
+}
+
+fn ensure_observed_remove(add: &CausalStamp, remove: &CausalStamp) -> Result<()> {
+    if causal_relation(add, remove)? == CausalRelation::Before {
+        return Ok(());
+    }
+    Err(Error::new(
+        ChurStatus::AuthenticationFailed,
+        "remove names an add token it did not causally observe",
+    ))
+}
+
+impl<E: Clone + Ord> Default for ObservedRemoveSet<E> {
     fn default() -> Self {
         Self::new()
     }
