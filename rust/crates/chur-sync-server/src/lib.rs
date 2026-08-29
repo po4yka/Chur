@@ -1,5 +1,9 @@
 //! Self-hosted ciphertext-only Chur sync service.
 
+mod relay;
+
+pub use relay::RelayOutcome;
+
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -67,6 +71,25 @@ impl ReferenceServer {
                  object_sha256 BLOB CHECK(object_sha256 IS NULL OR length(object_sha256) = 32),
                  PRIMARY KEY(vault_id, transfer_id),
                  UNIQUE(vault_id, store_id)
+             );
+             CREATE TABLE IF NOT EXISTS operations (
+                 vault_id BLOB NOT NULL CHECK(length(vault_id) = 16),
+                 device_id BLOB NOT NULL CHECK(length(device_id) = 16),
+                 device_sequence INTEGER NOT NULL CHECK(device_sequence > 0),
+                 operation_id BLOB NOT NULL CHECK(length(operation_id) = 16),
+                 digest BLOB NOT NULL CHECK(length(digest) = 32),
+                 record BLOB NOT NULL,
+                 PRIMARY KEY(vault_id, device_id, device_sequence),
+                 UNIQUE(vault_id, operation_id)
+             );
+             CREATE TABLE IF NOT EXISTS membership_records (
+                 vault_id BLOB NOT NULL CHECK(length(vault_id) = 16),
+                 membership_generation INTEGER NOT NULL CHECK(membership_generation > 0),
+                 record_kind INTEGER NOT NULL CHECK(record_kind IN (1, 2)),
+                 outer_device_id BLOB NOT NULL CHECK(length(outer_device_id) = 16),
+                 outer_device_sequence INTEGER NOT NULL CHECK(outer_device_sequence > 0),
+                 record BLOB NOT NULL,
+                 PRIMARY KEY(vault_id, membership_generation)
              );",
         )
         .map_err(|error| map_sqlite(error, "server schema creation failed"))?;
@@ -127,8 +150,10 @@ impl ReferenceServer {
         let reserved: i64 = self
             .db
             .query_row(
-                "SELECT COALESCE(SUM(expected_length), 0)
-                 FROM object_transfers WHERE vault_id = ?1",
+                "SELECT
+                    COALESCE((SELECT SUM(expected_length) FROM object_transfers WHERE vault_id = ?1), 0)
+                  + COALESCE((SELECT SUM(length(record)) FROM operations WHERE vault_id = ?1), 0)
+                  + COALESCE((SELECT SUM(length(record)) FROM membership_records WHERE vault_id = ?1), 0)",
                 params![vault_id.as_bytes().as_slice()],
                 |row| row.get(0),
             )
@@ -558,10 +583,10 @@ mod tests {
 
     use super::*;
 
-    struct TestRoot(PathBuf);
+    pub(crate) struct TestRoot(pub(crate) PathBuf);
 
     impl TestRoot {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             static NEXT: AtomicU64 = AtomicU64::new(0);
             let path = std::env::temp_dir().join(format!(
                 "chur-sync-server-{}-{}",

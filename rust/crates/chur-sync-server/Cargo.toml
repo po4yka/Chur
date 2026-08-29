@@ -8,6 +8,7 @@ description = "Self-hosted opaque storage and relay service for Chur sync."
 
 [dependencies]
 chur-core.workspace = true
+chur-sync-protocol.workspace = true
 rusqlite.workspace = true
 sha2.workspace = true
 
