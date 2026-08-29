@@ -359,9 +359,6 @@ impl ObjectLifecycle {
         if self.tombstones.versions.is_empty() {
             return false;
         }
-        if active_devices.len() <= 1 {
-            return true;
-        }
         checkpoint_covers_state
             && self.tombstones.versions.iter().all(|version| {
                 tombstone_retention_elapsed(

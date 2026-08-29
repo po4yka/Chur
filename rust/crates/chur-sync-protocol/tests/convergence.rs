@@ -222,6 +222,9 @@ fn delete_restore_and_retention_follow_causality_not_delivery_time() {
         &latest,
         false,
     ));
+    assert!(!lifecycle.eligible_for_gc(authored_at + (29 * DAY_MS), &[id(2)], &latest, true,));
+    assert!(lifecycle.eligible_for_gc(authored_at + (30 * DAY_MS), &[id(2)], &latest, true,));
+    assert!(!lifecycle.eligible_for_gc(authored_at + (180 * DAY_MS), &[id(2)], &latest, false,));
 
     lifecycle
         .restore(
