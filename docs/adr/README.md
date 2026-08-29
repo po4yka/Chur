@@ -98,6 +98,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0044](0044-freeze-the-v1-sync-operation-record.md) | Freeze the v1 sync operation record, limits, and omission claim | Accepted |
 | [0045](0045-freeze-device-membership-records.md) | Freeze v1 enrollment, revocation, membership, and checkpoint commitments | Accepted |
 | [0046](0046-freeze-sync-operation-payloads.md) | Freeze v1 sync operation payloads and kind registry | Accepted |
+| [0047](0047-resume-rewrap-from-the-next-missing-envelope.md) | Resume eager rewrap from the smallest missing target-epoch envelope | Accepted |
 
 Rows are ordered by ADR number. Number 0015 was not used; no ADR carries it and none will.
 
