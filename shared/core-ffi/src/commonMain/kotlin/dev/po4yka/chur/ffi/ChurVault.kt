@@ -114,6 +114,31 @@ object ChurVault {
         ChurFailure.check(ChurNative.sessionClose(session), "session close")
     }
 
+    /** Stages one opaque downloaded record without opening vault keys. */
+    fun stageSync(
+        runtime: Long,
+        vaultId: ByteArray,
+        kind: SyncRecordKind,
+        stagedAtMs: Long,
+        record: ByteArray,
+    ) {
+        withChurBuffer(record.size) { buffer ->
+            buffer.copyIn(record)
+            ChurFailure.check(
+                ChurNative.syncStage(runtime, vaultId, kind.code, stagedAtMs, buffer, record.size),
+                "sync stage",
+            )
+        }
+    }
+
+    /** Validates and applies the retained inbox after unlock. */
+    fun processSync(session: Long, nowMs: Long): SyncProcessReport {
+        val counts = LongArray(4)
+        val status = IntArray(1)
+        ChurFailure.check(ChurNative.syncProcess(session, nowMs, counts, status), "sync process")
+        return SyncProcessReport(counts[0], counts[1], counts[2], counts[3], status[0])
+    }
+
     // -----------------------------------------------------------------------
     // Key slots
     // -----------------------------------------------------------------------
@@ -548,6 +573,21 @@ object ChurVault {
     /** A screen preview at 2048 px is the largest derivative §12 allows. */
     private const val DERIVED_CAPACITY = 8 * 1024 * 1024
 }
+
+/** Opaque record families accepted by the locked sync inbox. */
+enum class SyncRecordKind(internal val code: Int) {
+    OPERATION(1),
+    CHECKPOINT(2),
+}
+
+/** Counts from one unlocked inbox pass. */
+data class SyncProcessReport(
+    val applied: Long,
+    val duplicates: Long,
+    val pending: Long,
+    val rejected: Long,
+    val firstRejection: Int,
+)
 
 /** The handshake facts of §2. */
 data class NativeHandshake(

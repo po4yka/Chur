@@ -48,6 +48,12 @@ internal actual object ChurNative {
 
     actual fun sessionClose(session: Long): Int = ChurJni.sessionClose(session)
 
+    actual fun syncStage(runtime: Long, vaultId: ByteArray, kind: Int, stagedAtMs: Long, record: ChurBuffer, length: Int): Int =
+        ChurJni.syncStage(runtime, vaultId, kind, stagedAtMs, record.buffer, length)
+
+    actual fun syncProcess(session: Long, nowMs: Long, outCounts: LongArray, outStatus: IntArray): Int =
+        ChurJni.syncProcess(session, nowMs, outCounts, outStatus)
+
     actual fun catalogQuery(session: Long, scope: Int, sort: Int, kinds: Int, limit: Int, scopeId: ByteArray, cursor: ByteArray?, terms: ByteArray?, destination: ChurBuffer, outWritten: IntArray): Int = ChurJni.catalogQuery(session, scope, sort, kinds, limit, scopeId, cursor, terms, destination.buffer, outWritten)
 
     actual fun importBegin(session: Long, sourceFd: Int, mediaClass: Int, width: Int, height: Int, durationMs: Long, knownLength: Long, captureTimeMs: Long, contentType: String, originalFilename: String?, outImport: LongArray): Int = ChurJni.importBegin(session, sourceFd, mediaClass, width, height, durationMs, knownLength, captureTimeMs, contentType, originalFilename, outImport)

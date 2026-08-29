@@ -197,7 +197,7 @@ class ChurVaultHostTest {
     fun the_handshake_matches_the_frozen_abi() {
         val handshake = ChurVault.handshake()
         assertEquals(1, handshake.major)
-        assertEquals(3, handshake.minor, "§6.5, §6.6, and §6.7 each raised the minor")
+        assertEquals(4, handshake.minor, "§6.8 added the sync inbox")
         assertEquals(1, handshake.objectFormatMin)
         assertEquals(1, handshake.objectFormatMax)
         assertTrue(handshake.capabilities and 0b0000_0010L != 0L, "the reader is declared")
@@ -208,6 +208,10 @@ class ChurVaultHostTest {
         assertTrue(
             handshake.capabilities and 0b0000_0001L != 0L,
             "the independent decoy identity is declared",
+        )
+        assertTrue(
+            handshake.capabilities and 0b0010_0000L != 0L,
+            "the encrypted sync inbox is declared",
         )
         assertTrue(ChurVault.statusIsKnown(ChurStatus.AUTHENTICATION_FAILED.value))
         assertFalse(ChurVault.statusIsKnown(42))

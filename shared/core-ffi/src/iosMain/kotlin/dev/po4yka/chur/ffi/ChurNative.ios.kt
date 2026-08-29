@@ -10,6 +10,7 @@ import dev.po4yka.chur.native.ChurProgressV1
 import dev.po4yka.chur.native.ChurQueryV1
 import dev.po4yka.chur.native.ChurRuntimeConfigV1
 import dev.po4yka.chur.native.ChurScanRequestV1
+import dev.po4yka.chur.native.ChurSyncReportV1
 import dev.po4yka.chur.native.ChurUnlockRequestV1
 import dev.po4yka.chur.native.chur_abi_version_major
 import dev.po4yka.chur.native.chur_abi_version_minor
@@ -48,6 +49,8 @@ import dev.po4yka.chur.native.chur_runtime_close
 import dev.po4yka.chur.native.chur_runtime_open
 import dev.po4yka.chur.native.chur_session_close
 import dev.po4yka.chur.native.chur_status_is_known
+import dev.po4yka.chur.native.chur_sync_process
+import dev.po4yka.chur.native.chur_sync_stage
 import dev.po4yka.chur.native.chur_tag_create
 import dev.po4yka.chur.native.chur_vault_add_device_slot
 import dev.po4yka.chur.native.chur_vault_add_recovery_slot
@@ -133,6 +136,42 @@ internal actual object ChurNative {
     }
 
     actual fun runtimeClose(runtime: Long): Int = chur_runtime_close(runtime.toULong())
+
+    actual fun syncStage(
+        runtime: Long,
+        vaultId: ByteArray,
+        kind: Int,
+        stagedAtMs: Long,
+        record: ChurBuffer,
+        length: Int,
+    ): Int = vaultId.pinnedPointer { vaultPointer ->
+        chur_sync_stage(
+            runtime.toULong(),
+            vaultPointer,
+            kind.toUByte(),
+            stagedAtMs.toULong(),
+            record.pointer,
+            length.toUInt(),
+        )
+    }
+
+    actual fun syncProcess(
+        session: Long,
+        nowMs: Long,
+        outCounts: LongArray,
+        outStatus: IntArray,
+    ): Int = memScoped {
+        val report = alloc<ChurSyncReportV1>()
+        val status = chur_sync_process(session.toULong(), nowMs.toULong(), report.ptr)
+        if (status == 0) {
+            outCounts[0] = report.applied.toLong()
+            outCounts[1] = report.duplicates.toLong()
+            outCounts[2] = report.pending.toLong()
+            outCounts[3] = report.rejected.toLong()
+            outStatus[0] = report.first_rejection
+        }
+        status
+    }
 
     actual fun vaultPresent(runtime: Long, outPresent: ByteArray): Int = memScoped {
         val present = alloc<UByteVar>()

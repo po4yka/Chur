@@ -60,6 +60,10 @@ internal object ChurJni {
 
     external fun sessionClose(session: Long): Int
 
+    external fun syncStage(runtime: Long, vaultId: ByteArray, kind: Int, stagedAtMs: Long, record: ByteBuffer, length: Int): Int
+
+    external fun syncProcess(session: Long, nowMs: Long, outCounts: LongArray, outStatus: IntArray): Int
+
     external fun catalogQuery(session: Long, scope: Int, sort: Int, kinds: Int, limit: Int, scopeId: ByteArray, cursor: ByteArray?, terms: ByteArray?, destination: ByteBuffer, outWritten: IntArray): Int
 
     external fun importBegin(session: Long, sourceFd: Int, mediaClass: Int, width: Int, height: Int, durationMs: Long, knownLength: Long, captureTimeMs: Long, contentType: String, originalFilename: String?, outImport: LongArray): Int

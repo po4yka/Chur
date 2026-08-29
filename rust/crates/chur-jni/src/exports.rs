@@ -17,6 +17,7 @@ use chur_ffi::records::{
     ChurContentInfoV1, ChurCreateRequestV1, ChurImportRequestV1, ChurObjectRefV1, ChurProgressV1,
     ChurQueryV1, ChurRuntimeConfigV1, ChurScanRequestV1, ChurUnlockRequestV1,
 };
+use chur_ffi::sync::ChurSyncReportV1;
 use jni::JNIEnv;
 use jni::objects::{JByteArray, JByteBuffer, JClass, JIntArray, JLongArray, JString};
 use jni::sys::{jboolean, jint, jlong};
@@ -159,6 +160,91 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_runtimeClose(
 ) -> jint {
     // SAFETY: the handle is a scalar the export validates itself.
     unsafe { chur_ffi::api::chur_runtime_close(handle_of(runtime)) }
+}
+
+/// Stages one opaque sync record while the vault may be locked.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_syncStage<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    runtime: jlong,
+    vault_id: JByteArray<'local>,
+    kind: jint,
+    staged_at_ms: jlong,
+    record: JByteBuffer<'local>,
+    length: jint,
+) -> jint {
+    let Some(vault_id) = fixed_array(&mut env, &vault_id, ID_LEN) else {
+        return INVALID_INPUT;
+    };
+    let Some((address, capacity)) = direct_buffer(&env, &record) else {
+        return INVALID_INPUT;
+    };
+    let (Ok(kind), Ok(staged_at_ms), Ok(length)) = (
+        u8::try_from(kind),
+        u64::try_from(staged_at_ms),
+        u32::try_from(length),
+    ) else {
+        return INVALID_INPUT;
+    };
+    if length as usize > capacity {
+        return INVALID_INPUT;
+    }
+    // SAFETY: the identifier and direct buffer remain live for this call.
+    unsafe {
+        chur_ffi::sync::chur_sync_stage(
+            handle_of(runtime),
+            vault_id.as_ptr(),
+            kind,
+            staged_at_ms,
+            address,
+            length,
+        )
+    }
+}
+
+/// Processes the current unlocked vault's sync inbox.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_syncProcess<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    now_ms: jlong,
+    out_counts: JLongArray<'local>,
+    out_status: JIntArray<'local>,
+) -> jint {
+    let Ok(now_ms) = u64::try_from(now_ms) else {
+        return INVALID_INPUT;
+    };
+    let mut report = ChurSyncReportV1 {
+        applied: 0,
+        duplicates: 0,
+        pending: 0,
+        rejected: 0,
+        first_rejection: 0,
+        reserved: [0; 4],
+    };
+    // SAFETY: `report` is a live writable local.
+    let status =
+        unsafe { chur_ffi::sync::chur_sync_process(handle_of(session), now_ms, &mut report) };
+    if status != 0 {
+        return status;
+    }
+    if !write_longs(
+        &mut env,
+        &out_counts,
+        &[
+            report.applied.cast_signed(),
+            report.duplicates.cast_signed(),
+            report.pending.cast_signed(),
+            report.rejected.cast_signed(),
+        ],
+        0,
+    ) || !write_ints(&mut env, &out_status, &[report.first_rejection])
+    {
+        return INVALID_INPUT;
+    }
+    0
 }
 
 /// Whether the storage root holds a vault.

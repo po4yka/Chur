@@ -38,6 +38,8 @@ internal expect object ChurNative {
     fun vaultUnlock(runtime: Long, factor: Int, secret: ByteArray, outSession: LongArray): Int
     fun vaultLock(session: Long, reason: Int): Int
     fun sessionClose(session: Long): Int
+    fun syncStage(runtime: Long, vaultId: ByteArray, kind: Int, stagedAtMs: Long, record: ChurBuffer, length: Int): Int
+    fun syncProcess(session: Long, nowMs: Long, outCounts: LongArray, outStatus: IntArray): Int
     fun catalogQuery(session: Long, scope: Int, sort: Int, kinds: Int, limit: Int, scopeId: ByteArray, cursor: ByteArray?, terms: ByteArray?, destination: ChurBuffer, outWritten: IntArray): Int
     fun importBegin(session: Long, sourceFd: Int, mediaClass: Int, width: Int, height: Int, durationMs: Long, knownLength: Long, captureTimeMs: Long, contentType: String, originalFilename: String?, outImport: LongArray): Int
     fun exportBegin(session: Long, objectId: ByteArray, destinationFd: Int, outExport: LongArray): Int
