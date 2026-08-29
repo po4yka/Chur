@@ -23,9 +23,9 @@ use chur_crypto::tuple::tag;
 
 use crate::codec::{Reader, Writer};
 use crate::constants::{
-    CATALOG_FORMAT_VERSION_V1, CONTAINER_VERSION_V1, CRYPTO_POLICY_V1, DESCRIPTOR_VERSION_V1,
-    ENCODING_PROFILE_V1, FLAGS_V1, MAGIC_VAULT, NAMING_PROFILE_V1, OBJECT_STORE_FORMAT_VERSION_V1,
-    SLOT_VERSION_V1, SUITE_V1, SlotType, VaultState,
+    CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, CONTAINER_VERSION_V1, CRYPTO_POLICY_V1,
+    DESCRIPTOR_VERSION_V1, ENCODING_PROFILE_V1, FLAGS_V1, MAGIC_VAULT, NAMING_PROFILE_V1,
+    OBJECT_STORE_FORMAT_VERSION_V1, SLOT_VERSION_V1, SUITE_V1, SlotType, VaultState,
 };
 use crate::slot::{SlotBinding, WRAP_SUITE_ANDROID_KEYSTORE, WRAP_SUITE_RUST};
 
@@ -39,6 +39,8 @@ const STRUCTURAL: ChurStatus = ChurStatus::VaultCorrupt;
 /// The catalog sub-descriptor of §5: exactly 60 bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CatalogDescriptor {
+    /// Physical private-catalog schema version.
+    pub catalog_format_version: u16,
     /// Random opaque identifier of the catalog file.
     pub opaque_catalog_path_id: Id,
     /// Catalog transaction generation.
@@ -53,7 +55,7 @@ impl CatalogDescriptor {
 
     fn write(&self, writer: &mut Writer) {
         writer
-            .u16(CATALOG_FORMAT_VERSION_V1)
+            .u16(self.catalog_format_version)
             .u16(SUITE_V1)
             .id(&self.opaque_catalog_path_id)
             .u64(self.catalog_generation)
@@ -61,8 +63,12 @@ impl CatalogDescriptor {
     }
 
     fn read(reader: &mut Reader<'_>) -> Result<Self> {
+        let catalog_format_version = reader.u16()?;
         ensure!(
-            reader.u16()? == CATALOG_FORMAT_VERSION_V1,
+            matches!(
+                catalog_format_version,
+                CATALOG_FORMAT_VERSION_V1 | CATALOG_FORMAT_VERSION_V2
+            ),
             UnsupportedVersion,
             "catalog format version is not supported"
         );
@@ -72,6 +78,7 @@ impl CatalogDescriptor {
             "catalog crypto suite is not supported"
         );
         Ok(Self {
+            catalog_format_version,
             opaque_catalog_path_id: reader.id()?,
             catalog_generation: reader.u64()?,
             catalog_header_commitment: reader.fixed::<COMMITMENT_LEN>()?,
@@ -550,6 +557,14 @@ impl VaultDescriptor {
             VaultCorrupt,
             "descriptor generation has no successor"
         );
+        ensure!(
+            matches!(
+                self.catalog.catalog_format_version,
+                CATALOG_FORMAT_VERSION_V1 | CATALOG_FORMAT_VERSION_V2
+            ),
+            UnsupportedVersion,
+            "catalog format version is not supported"
+        );
         let count = u32::try_from(self.key_slots.len()).unwrap_or(u32::MAX);
         ensure!(
             (bounds::SLOT_COUNT_MIN..=bounds::SLOT_COUNT_MAX).contains(&count),
@@ -689,6 +704,7 @@ mod tests {
             descriptor_generation: 1,
             state: VaultState::Active,
             catalog: CatalogDescriptor {
+                catalog_format_version: CATALOG_FORMAT_VERSION_V1,
                 opaque_catalog_path_id: id(0x02),
                 catalog_generation: 1,
                 catalog_header_commitment: [0x03; COMMITMENT_LEN],
@@ -730,6 +746,20 @@ mod tests {
         assert_eq!(
             VaultDescriptor::authenticate(&encoded, Some(&root())).unwrap(),
             descriptor
+        );
+    }
+
+    #[test]
+    fn the_v1_descriptor_carries_catalog_v1_or_v2() {
+        let mut descriptor = minimal();
+        descriptor.catalog.catalog_format_version = CATALOG_FORMAT_VERSION_V2;
+        let encoded = descriptor.encode(&root()).expect("catalog v2 descriptor");
+        assert_eq!(VaultDescriptor::parse(&encoded).expect("parse"), descriptor);
+
+        descriptor.catalog.catalog_format_version = 3;
+        assert_eq!(
+            descriptor.encode(&root()).expect_err("catalog v3").status(),
+            ChurStatus::UnsupportedVersion
         );
     }
 

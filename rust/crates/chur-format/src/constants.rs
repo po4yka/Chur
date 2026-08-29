@@ -39,6 +39,8 @@ pub const ENVELOPE_FORMAT_VERSION_V1: u16 = 0x0001;
 pub const BACKUP_VERSION_V1: u16 = 0x0001;
 /// §15.2: `catalog_format_version` of the private catalog.
 pub const CATALOG_FORMAT_VERSION_V1: u16 = 0x0001;
+/// §15.2: private catalog v2 with durable encrypted-sync state.
+pub const CATALOG_FORMAT_VERSION_V2: u16 = 0x0002;
 /// §15.2: `object_store_format_version`.
 pub const OBJECT_STORE_FORMAT_VERSION_V1: u16 = 0x0001;
 /// §15.2: `slot_version` of the v1 key-slot families.

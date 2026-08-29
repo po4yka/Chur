@@ -188,6 +188,7 @@ fn every_bit_of_a_vault_descriptor_is_caught() {
         descriptor_generation: 1,
         state: VaultState::Active,
         catalog: CatalogDescriptor {
+            catalog_format_version: chur_format::constants::CATALOG_FORMAT_VERSION_V1,
             opaque_catalog_path_id: id(0x12),
             catalog_generation: 1,
             catalog_header_commitment: [0x13; 32],

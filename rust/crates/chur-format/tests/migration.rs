@@ -156,6 +156,7 @@ fn a_descriptor_from_a_later_version_is_unsupported_before_any_credential() {
         descriptor_generation: 1,
         state: VaultState::Active,
         catalog: CatalogDescriptor {
+            catalog_format_version: chur_format::constants::CATALOG_FORMAT_VERSION_V1,
             opaque_catalog_path_id: id(0x12),
             catalog_generation: 1,
             catalog_header_commitment: [0x13; 32],
@@ -242,6 +243,7 @@ fn a_writer_emits_only_the_current_approved_version() {
         descriptor_generation: 1,
         state: VaultState::Active,
         catalog: CatalogDescriptor {
+            catalog_format_version: chur_format::constants::CATALOG_FORMAT_VERSION_V1,
             opaque_catalog_path_id: id(0x12),
             catalog_generation: 1,
             catalog_header_commitment: [0x13; 32],

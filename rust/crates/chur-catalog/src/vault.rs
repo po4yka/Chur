@@ -200,6 +200,7 @@ pub fn create_with_params(
         descriptor_generation: 0,
         state: VaultState::Initializing,
         catalog: CatalogDescriptor {
+            catalog_format_version: chur_format::constants::CATALOG_FORMAT_VERSION_V1,
             opaque_catalog_path_id: catalog_path_id,
             catalog_generation,
             catalog_header_commitment: header_commitment,

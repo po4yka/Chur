@@ -573,6 +573,7 @@ pub fn restore(
     let catalog_path_id = random::id()?;
     let local = VaultDescriptor {
         catalog: chur_format::descriptor::CatalogDescriptor {
+            catalog_format_version: descriptor.catalog.catalog_format_version,
             opaque_catalog_path_id: catalog_path_id,
             ..descriptor.catalog
         },
