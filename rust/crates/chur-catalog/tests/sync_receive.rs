@@ -808,12 +808,14 @@ fn missing_content_cause_does_not_advance_the_log() {
     let mut state = MaterializedState::new();
 
     assert_eq!(
-        sync_receive::accept_content_operation(
+        sync_receive::accept_operation(
             &mut fixture.db,
             &mut log,
-            &fixture.membership,
+            &mut fixture.membership,
             &mut state,
-            &keys,
+            &mut keys,
+            &fixture.root,
+            1,
             &pending.encode(),
         )
         .expect("pending cause"),
@@ -821,24 +823,28 @@ fn missing_content_cause_does_not_advance_the_log() {
     );
     assert!(log.head(&id(4)).is_none());
     assert_eq!(
-        sync_receive::accept_content_operation(
+        sync_receive::accept_operation(
             &mut fixture.db,
             &mut log,
-            &fixture.membership,
+            &mut fixture.membership,
             &mut state,
-            &keys,
+            &mut keys,
+            &fixture.root,
+            1,
             &create.encode(),
         )
         .expect("create"),
         ApplyOutcome::Applied
     );
     assert_eq!(
-        sync_receive::accept_content_operation(
+        sync_receive::accept_operation(
             &mut fixture.db,
             &mut log,
-            &fixture.membership,
+            &mut fixture.membership,
             &mut state,
-            &keys,
+            &mut keys,
+            &fixture.root,
+            1,
             &favorite.encode(),
         )
         .expect("favorite"),

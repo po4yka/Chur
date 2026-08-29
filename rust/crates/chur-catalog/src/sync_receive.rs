@@ -347,6 +347,34 @@ pub fn author_rotation_operation(
     Ok(operation)
 }
 
+/// Authenticates, decrypts, and atomically routes one inbound operation.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "inbound acceptance joins durable membership, log, keys, and convergent state"
+)]
+pub fn accept_operation(
+    db: &mut CatalogDb,
+    log: &mut DurableOperationLog,
+    membership: &mut MembershipState,
+    state: &mut MaterializedState,
+    keys: &mut KeyDirectory,
+    root: &Key,
+    now_ms: u64,
+    record: &[u8],
+) -> Result<ApplyOutcome> {
+    let operation = Operation::decode(record)?;
+    let payload = OperationPayload::open_for_operation(&operation, keys)?;
+    match payload.body() {
+        PayloadBody::AddDevice(_) | PayloadBody::RevokeDevice(_) => {
+            accept_membership_operation(db, log, membership, keys, record)
+        }
+        PayloadBody::CreateCollectionEpoch { .. } | PayloadBody::RewrapObjectKey { .. } => {
+            accept_rotation_operation(db, log, membership, keys, root, now_ms, record)
+        }
+        _ => accept_content_operation(db, log, membership, state, keys, record),
+    }
+}
+
 /// Authenticates, decrypts, and atomically accepts one convergent content operation.
 pub fn accept_content_operation(
     db: &mut CatalogDb,
