@@ -91,6 +91,15 @@ A skill synchronisation updates both hashes and the commit, and the checker is w
 
 ## Recorded additions
 
+### Ktor Client 3.5.2, shared sync transport
+
+- **Capability:** a Kotlin Multiplatform HTTP client that transfers opaque Phase 3 records and ciphertext on Android and iOS.
+- **Alternatives:** the Kotlin standard library has no network client. Separate native clients would duplicate the wire boundary and behavior.
+- **Owner, license, and version:** JetBrains maintains Ktor under Apache 2.0. The exact first-adoption version is 3.5.2.
+- **Features and targets:** common code uses only the client core and raw byte bodies. Android uses the OkHttp engine, and iOS uses the Darwin engine. No content negotiation, serializer, logging, WebSocket, server, or telemetry feature is enabled.
+- **Data and security:** Ktor receives opaque signed records, ciphertext, random identifiers, and a per-device transport token. Platform TLS validates HTTPS. Plain HTTP is rejected except for loopback development endpoints.
+- **Update and removal:** updates require Android host tests, both iOS compilations, server integration tests, dependency-graph review, and advisory checks. Removal requires another shared byte-oriented HTTP transport.
+
 ### `axum` 0.8.9 and `tokio` 1.53.1, Rust sync server
 
 - **Capability:** a small HTTP/1 process for the Phase 3 self-hosted reference server. Axum maps bounded opaque request bodies to the existing synchronous server core. Tokio supplies the listener and task runtime.
