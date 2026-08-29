@@ -1,6 +1,6 @@
 # Rollback, Replay, and Fork Protection
 
-> **Status:** Proposed future sync security model
+> **Status:** Accepted Phase 3 security model
 
 AEAD and signatures prove authenticity, not freshness or completeness. Chur uses local accepted heads, per-device chains, membership generations, and checkpoints to reject common rollback/replay attacks while documenting malicious-server limitations.
 

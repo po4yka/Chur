@@ -273,7 +273,7 @@ A crash before `ACTIVE` must be recoverable or removable without exposing a part
 
 Local descriptor generations are strictly increasing. A lower generation discovered beside a newer authenticated catalog state is suspicious and must not be selected silently.
 
-Future sync/backup rollback protection is separate; a copied old but authentic standalone vault may require an external trusted checkpoint to detect.
+Sync and backup rollback protection is separate; a copied old but authentic standalone vault may require an external trusted checkpoint to detect.
 
 ## 11. Discovery and real/decoy handling
 

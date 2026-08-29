@@ -47,7 +47,7 @@ High-value report areas include:
 - Android Keystore and iOS Keychain integration;
 - plaintext scratch files, caches, app-switcher snapshots, logs, and backups;
 - real/decoy vault isolation;
-- future sync identities, operation logs, rollback protection, and collection grants;
+- sync identities, operation logs, rollback protection, and revocation, plus future collection grants;
 - supply-chain or build-system compromise affecting released artifacts.
 
 Examples that are generally out of scope unless they demonstrate a Chur-specific defect:

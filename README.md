@@ -76,7 +76,7 @@ Chur
     ├── private catalog
     ├── integrity validation
     ├── migrations
-    └── future sync protocol
+    └── encrypted sync protocol
 ```
 
 ### Public shell
@@ -99,7 +99,8 @@ Planned capabilities include:
 - immediate and timed locking;
 - local integrity validation and repair tooling;
 - optional recovery and encrypted backup;
-- later end-to-end encrypted sync and collection sharing.
+- end-to-end encrypted synchronization;
+- later collection sharing.
 
 ### Discreet mode
 
@@ -399,7 +400,7 @@ Vault
 │   ├── wrapped object keys
 │   ├── derived-asset relationships
 │   ├── integrity state
-│   └── future encrypted sync state
+│   └── encrypted sync state
 │
 └── Object store
     ├── immutable encrypted originals
@@ -552,7 +553,7 @@ A recovery secret is high-entropy random data, not a second low-entropy password
 
 1. **Device-bound vault** — only a platform slot; maximum local binding, highest data-loss risk.
 2. **Recoverable vault** — platform slot plus password and/or recovery slot; recommended consumer default.
-3. **Synced vault** — additional device identities and encrypted device/collection grants; future scope.
+3. **Synced vault** — additional device identities and encrypted synchronization; collection grants remain Phase 4 scope.
 
 ---
 
@@ -1061,7 +1062,7 @@ It cannot honestly guarantee screenshot prevention on every iOS version and devi
 
 ## Sync and sharing
 
-Sync and sharing are intentionally deferred until the local storage format, migrations, recovery, and integrity semantics are stable.
+Encrypted synchronization is implemented in Phase 3. Collection sharing remains deferred to Phase 4.
 
 ### Opaque server model
 
@@ -1095,7 +1096,7 @@ Media containers remain immutable. Favorites, captions, logical albums, tags, an
 
 ### Authenticated operation log
 
-AEAD alone does not prevent a malicious or broken server from replaying an older, valid ciphertext. The future sync protocol therefore requires signed, chained device operations:
+AEAD alone does not prevent a malicious or broken server from replaying an older, valid ciphertext. The sync protocol therefore uses signed, chained device operations:
 
 The signed record's fields, the cleartext set, and the chain hash are defined in [`docs/sync/OPERATION_LOG.md`](docs/sync/OPERATION_LOG.md) §2, §4, and §6, and are not repeated here.
 

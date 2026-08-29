@@ -2,7 +2,7 @@
 
 > **Status:** Proposed normative logical schema. The v1 catalog has two representations and no third: a physical SQLCipher schema for the live local database, and the canonical serialization of [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) when exported into a portable backup. The engine is decided in [ADR-0038](../adr/0038-adopt-sqlcipher-as-the-v1-catalog-engine.md), which records the build, linkage, WAL, and migration evidence; performance on a device from [ADR-0017](../adr/0017-freeze-the-supported-device-set.md) and backup correctness remain outstanding.
 
-The private catalog is Rust-owned. It stores queryable private metadata, object and collection relationships, key envelopes, journals, integrity state, and future sync projections. Room and DataStore never open or mirror it.
+The private catalog is Rust-owned. It stores queryable private metadata, object and collection relationships, key envelopes, journals, integrity state, and synchronization projections. Room and DataStore never open or mirror it.
 
 ## 1. Logical entities
 
@@ -24,7 +24,7 @@ ScratchEntry
 IntegrityRecord
 MigrationState
 Tombstone
-SyncProjection (future)
+SyncProjection
 ```
 
 ## 2. Vault state
@@ -168,7 +168,7 @@ Both values are private metadata. They live inside the encrypted catalog and app
 
 ## 9. Albums and memberships
 
-Albums are logical groupings. Membership operations are revisioned and future-syncable. A many-to-many object↔album relationship does not create duplicate object keys unless collection access policy differs.
+Albums are logical groupings. Membership operations are revisioned and synchronizable. A many-to-many object↔album relationship does not create duplicate object keys unless collection access policy differs.
 
 ## 10. Derived assets
 
@@ -201,7 +201,7 @@ Record structural and cryptographic status with stable codes, not secret error s
 
 ## 14. Tombstones
 
-Deletion creates a tombstone before physical garbage collection so future sync or crash recovery cannot resurrect removed objects. Tombstone retention and crypto-erasure are distinct:
+Deletion creates a tombstone before physical garbage collection so synchronization or crash recovery cannot resurrect removed objects. Tombstone retention and crypto-erasure are distinct:
 
 - key envelopes are destroyed at step 2 of §14.1, which is the erasure moment;
 - ciphertext cleanup may lag, because steps 3 to 6 of §14.1 carry no security property;

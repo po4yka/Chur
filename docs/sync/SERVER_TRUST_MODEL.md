@@ -1,6 +1,6 @@
 # Server Trust Model
 
-> **Status:** Proposed future-sync threat model; not part of the initial local release
+> **Status:** Accepted Phase 3 threat model
 
 Chur treats the sync/backup server as untrusted for confidentiality and content integrity. The server is a storage and relay service, not a cryptographic authority. §11 names who operates it, who controls the metadata it observes, and what an implementation distributed as a Chur sync server must do.
 

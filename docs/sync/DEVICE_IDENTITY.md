@@ -1,6 +1,6 @@
 # Device Identity
 
-> **Status:** Proposed future protocol
+> **Status:** Accepted normative Phase 3 protocol
 
 Device identity authenticates sync operations, enrollment, and collection grants. It is separate from transport authentication and from local vault-unlock credentials.
 

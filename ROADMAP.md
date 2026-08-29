@@ -6,7 +6,7 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 
 ## Current status
 
-**Phase 2 implementation.** Video and audio play from the vault on both hosts, the portable backup package is implemented and restores through the CLI, the second vault identity is provisionable and has an isolation harness, and both of Discreet Mode's open specification items are decided. What Phase 2 owes is what a workstation cannot give it: no job runs on a device, so every player, every device slot, and the energy measurement of [`docs/assurance/PERFORMANCE_BUDGETS.md`](docs/assurance/PERFORMANCE_BUDGETS.md) §8 is unproved. Phase 1 still owes the independent review, which is an engagement rather than code, and Phase 0 owes the same two approvals, which are decisions rather than code.
+**Phase 3 implementation.** The canonical encrypted synchronization protocol, durable client state, reference self-hosted server, ciphertext transport, locked inbox, recovery identity, revocation, rotation, malicious-server harness, and protocol vectors are implemented. Gate 5 is not approved: no job runs the background path on a device or a user-operated deployment, and the protocol-focused independent review has not been commissioned. Earlier phase device, review, and approval gaps remain open.
 
 ## Phase 0 — specification and repository foundation
 
@@ -109,23 +109,29 @@ None of these is started, which is the intent:
 
 ### Scope
 
-- opaque object storage in a deployment the user controls, per [`docs/sync/SERVER_TRUST_MODEL.md`](docs/sync/SERVER_TRUST_MODEL.md) §11;
-- reference sync-server implementation with its operator documentation;
-- ciphertext-only background transfers;
-- device identities;
-- signed per-device operation logs;
-- replay, rollback, and fork detection;
-- deterministic conflict resolution;
-- tombstones and garbage collection;
-- multi-device recovery;
-- device revocation, and the collection-epoch rotation and rewrap it forces.
+| Item | State |
+| --- | --- |
+| opaque object storage in a deployment the user controls | done. `chur-sync-server` stores immutable ciphertext under opaque vault and object identifiers; [`docs/sync/SERVER_OPERATOR.md`](docs/sync/SERVER_OPERATOR.md) is the operator contract |
+| reference sync-server implementation with operator documentation | done. The Axum service exposes authenticated membership, operation, checkpoint, resumable object, token-rotation, and signed-deletion routes |
+| ciphertext-only background transfers | done in code, unproved on a device. Ktor uses OkHttp on Android and Darwin on iOS; `LockedSyncPuller` stages bounded opaque records through ABI 1.4 without opening the catalog or advancing accepted cursors |
+| device identities | done. Ed25519 and X25519 keys are separated, the portable identity is root-wrapped in the catalog, and backup carries its recovery form |
+| signed per-device operation logs | done. Authoring, acceptance, durable heads, checkpoint floors, and historical verification-key retention are implemented |
+| replay, rollback, and fork detection | done. The operation state machine and malicious-server harness reject replay conflicts, rollback, equivocation, omission against a checkpoint, and key substitution |
+| deterministic conflict resolution | done. Causal scalar registers, observed-remove sets, materialization, and digest tie-breaking converge for the same authenticated operation set |
+| tombstones and garbage collection | done. Delete and restore follow causality; collection is gated by authenticated checkpoint coverage and retention |
+| multi-device recovery | done. Portable identity recovery restores the sync identity and its authenticated bootstrap state without exporting device-bound slots |
+| device revocation and forced collection-epoch rotation and rewrap | done. Revocation pins the final accepted device operation, revokes transport credentials, advances the epoch, and resumes bounded rewrap work |
 
 ### Exit criteria
 
-- server trust model and sync protocol finalized;
-- malicious-server test harness operational;
-- protocol vectors published;
-- independent review of identity, log, and rollback design.
+| Criterion | State |
+| --- | --- |
+| server trust model and sync protocol finalized | met. The accepted v1 documents define the server's observable data, client trust rules, canonical records, limits, deletion authorization, and locked behavior |
+| malicious-server test harness operational | met. `chur-sync-protocol` `tests/malicious_server.rs` exercises replay, omission, key substitution, rollback, and equivocation |
+| protocol vectors published | met. The v1 set has 94 vectors and two fixtures, including accepted and rejected sync records, and the reference server consumes them |
+| independent review of identity, log, and rollback design | **outstanding.** [`docs/assurance/SECURITY_REVIEW_SCOPE.md`](docs/assurance/SECURITY_REVIEW_SCOPE.md) defines the engagement; no repository job can supply an independent reviewer |
+
+[`docs/assurance/EVIDENCE_PHASE_3.md`](docs/assurance/EVIDENCE_PHASE_3.md) records the observed implementation and verification evidence.
 
 ## Phase 4 — collection sharing
 

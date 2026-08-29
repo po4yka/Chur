@@ -988,7 +988,7 @@ Expected permissions depend on enabled features, but the baseline SHOULD avoid:
 - overlay permissions;
 - install/unknown-source privileges.
 
-Likely platform declarations include only capabilities actually used, such as biometric authorization, network access for future sync, and notification permission when notifications are enabled.
+Likely platform declarations include only capabilities actually used, such as biometric authorization, network access for encrypted synchronization, and notification permission when notifications are enabled.
 
 Every permission must have:
 

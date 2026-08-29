@@ -47,7 +47,7 @@ This document covers:
 - generation, derivation, wrapping, storage, rotation, and destruction of keys;
 - password-derived key-encryption keys;
 - Android Keystore and iOS Keychain unlock slots;
-- recovery and future peer-device slots;
+- recovery and peer-device slots;
 - independent real and decoy vault identities;
 - security-collection and per-object envelope encryption;
 - independent authenticated media chunks;
@@ -168,7 +168,7 @@ The initial local-vault profile is intentionally narrow.
 | Android platform root wrapping | Android Keystore AES-256-GCM | Accepted |
 | iOS device unlock secret | Keychain-protected random secret with access control | Accepted |
 | Future recipient encryption | RFC 9180 HPKE: X25519/HKDF-SHA-256/ChaCha20-Poly1305 | Accepted for future sharing |
-| Future operation signatures | Ed25519 | Accepted for future sync/sharing |
+| Device operation signatures | Ed25519 | Accepted for sync and future sharing |
 | Optional corporate/FIPS-oriented local suite | AES-256-GCM | Deferred |
 | Optional nonce-misuse-resistant suite | AES-256-GCM-SIV | Deferred |
 | Optional hybrid post-quantum recipient | X25519 plus ML-KEM profile | Deferred |
@@ -1677,7 +1677,7 @@ The server MUST NOT be treated as the authority for object integrity. Clients ve
 
 AEAD alone does not prevent replay or rollback of previously valid ciphertext.
 
-A future synchronized vault requires signed device operations.
+A synchronized vault requires signed device operations.
 
 Requirements:
 

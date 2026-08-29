@@ -2,7 +2,7 @@
 
 > **Status:** Proposed portable backup contract
 
-The backup format packages a complete or incremental encrypted vault for user-controlled storage and cross-device restore. It is distinct from the live vault layout and from future sync transport.
+The backup format packages a complete or incremental encrypted vault for user-controlled storage and cross-device restore. It is distinct from the live vault layout and from sync transport.
 
 ## 1. Goals
 

@@ -59,7 +59,7 @@ Inject failure at every write, flush, rename, DB commit, and cleanup step for:
 - collection rotation;
 - catalog migration;
 - backup creation/restore;
-- future sync operation application.
+- sync operation application.
 
 After restart, state must be safe, bounded, and reconcilable.
 

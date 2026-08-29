@@ -1,6 +1,6 @@
 # Conflict Resolution
 
-> **Status:** Proposed future deterministic merge model
+> **Status:** Accepted normative Phase 3 merge model
 
 Clients that receive the same valid operation set must converge without server-selected semantics. Immutable media bytes simplify conflicts; mutable metadata, memberships, favorites, tags, and deletions require explicit rules.
 

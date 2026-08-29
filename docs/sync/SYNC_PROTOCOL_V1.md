@@ -1,6 +1,6 @@
 # Chur Sync Protocol v1
 
-> **Status:** Proposed future protocol outline; no production implementation is authorized by this document alone
+> **Status:** Accepted normative Phase 3 protocol; production use still requires Gate 5 review
 
 Sync transports immutable encrypted objects and authenticated encrypted catalog operations between authorized devices through an untrusted server.
 

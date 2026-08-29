@@ -922,7 +922,7 @@ It MAY be represented as a mnemonic or QR code, but the canonical binary secret 
 
 - **Device-bound mode:** only a platform slot exists; loss or invalidation can make the vault unrecoverable.
 - **Recoverable mode:** a platform slot plus password and/or recovery slot exists. This is the intended consumer default.
-- **Synced mode:** future peer-device envelopes and device identities are added without replacing local slots.
+- **Synced mode:** peer-device envelopes and device identities are added without replacing local slots.
 
 ---
 
@@ -1662,9 +1662,9 @@ An `age`-compatible stream may be used for an interoperable export or backup env
 
 ---
 
-## 34. Future synchronization architecture
+## 34. Synchronization architecture
 
-Sync is added only after local format and migrations are stable.
+Sync was added after the local format and migrations became stable.
 
 ### 34.1 Opaque server model
 
@@ -1838,7 +1838,7 @@ Migrations MUST be restartable or rollback-safe. An interrupted migration cannot
 | Casual UI observation | functional public shell, privacy snapshots, immediate lock |
 | Coercive UI inspection | independent decoy vault with explicit limitations |
 | Interrupted import | transaction journal, fsync, atomic rename, catalog commit |
-| Replay of known sync entries | future device sequence/hash chains and signatures |
+| Replay of known sync entries | device sequence/hash chains, signatures, and authenticated checkpoints |
 
 ### 37.2 Threats not fully mitigated
 

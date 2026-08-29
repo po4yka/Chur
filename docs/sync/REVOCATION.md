@@ -1,6 +1,6 @@
 # Revocation Semantics
 
-> **Status:** Proposed normative revocation policy
+> **Status:** Accepted normative policy; Phase 3 implements device revocation and Phase 4 owns sharing revocation
 
 The types in §1 do not all ship together. Device revocation (§2), credential rotation, and server transport-token revocation are required by Gate 5 in [`../assurance/RELEASE_GATES.md`](../assurance/RELEASE_GATES.md) and ship with Phase 3, because a vault that can enrol a second device can lose one. Member revocation, permission downgrade, collection-grant revocation, and multi-recipient rewrap are required by Gate 6 and ship with Phase 4.
 

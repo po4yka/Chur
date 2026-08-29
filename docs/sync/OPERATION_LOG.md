@@ -1,6 +1,6 @@
 # Authenticated Operation Log
 
-> **Status:** Proposed future protocol
+> **Status:** Accepted normative Phase 3 protocol
 
 The operation log represents private catalog changes as canonical encrypted and signed records. The local SQLCipher catalog is a materialized view; raw database pages are never the sync protocol.
 

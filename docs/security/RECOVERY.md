@@ -22,7 +22,7 @@ The password slot is mandatory and the other two are optional: [`PROVISIONING.md
 
 ### Multi-device/synced
 
-Adds authenticated peer-device enrollment and remote ciphertext. This requires device identity, operation-log, rollback, and revocation specifications.
+Adds authenticated peer-device enrollment and remote ciphertext. This uses the device identity, operation-log, rollback, and revocation specifications.
 
 ## 2. Recovery secret
 

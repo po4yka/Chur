@@ -12,7 +12,8 @@ This document defines the artifacts and boundaries expected for Chur security re
 - validate private catalog and migration behavior;
 - validate FFI ownership, cancellation, panic containment, and stale handles;
 - validate Android/iOS platform key and plaintext lifecycle integration;
-- later validate sync identities, operation logs, rollback, grants, and revocation.
+- validate sync identities, operation logs, rollback, and device revocation;
+- later validate collection grants and sharing revocation.
 
 ## 2. Local-vault code scope
 
