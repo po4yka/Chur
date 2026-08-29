@@ -16,11 +16,12 @@ use chur_catalog::paths::VaultRoot;
 use chur_catalog::query::{ObjectQuery, page};
 use chur_catalog::vault::{self, Session};
 use chur_core::{ChurStatus, Id, Result};
-use chur_crypto::random;
+use chur_crypto::{Key, Nonce, random};
 use chur_format::constants::{MediaClass, StreamKind};
 use chur_media::import::{CanonicalMedia, SourceCapability};
 use chur_media::progress::Uninterrupted;
 use chur_media::{backup, export, import};
+use chur_sync_protocol::{identity::DeviceIdentity, membership::EnrollmentRecord};
 use zeroize::Zeroizing;
 
 const PASSWORD: &[u8] = b"correct horse battery staple";
@@ -153,6 +154,144 @@ fn an_empty_vault_makes_a_package_that_restores_to_an_empty_vault() {
     assert_eq!(listed.total_count, 0);
 }
 
+#[test]
+fn a_sync_backup_requires_a_portable_identity() {
+    let (_root, mut session) = new_vault();
+    let identity = DeviceIdentity::from_seeds([1; 32], [2; 32]);
+    let enrollment = EnrollmentRecord::initial(
+        session.vault_id(),
+        Id::new([3; 16]).expect("device"),
+        identity.signing_public_key(),
+        identity.hpke_public_key(),
+    )
+    .expect("enrollment")
+    .sign(identity.signing_key());
+    chur_catalog::sync_membership::provision(session.catalog().expect("catalog"), &enrollment)
+        .expect("membership");
+
+    let mut package = Cursor::new(Vec::new());
+    assert_eq!(
+        rejection(backup::create(
+            &mut session,
+            &mut package,
+            NOW,
+            &mut Uninterrupted,
+        )),
+        ChurStatus::VaultIncomplete
+    );
+}
+
+#[test]
+fn a_sync_backup_authenticates_and_restores_its_recovery_identity() {
+    let (_root, mut session) = new_vault();
+    let root = session.root_secret().duplicate();
+    let vault_id = session.vault_id();
+    let device_id = Id::new([11; 16]).expect("device");
+    let identity = DeviceIdentity::from_seeds([12; 32], [13; 32]);
+    let enrollment = EnrollmentRecord::initial(
+        vault_id,
+        device_id,
+        identity.signing_public_key(),
+        identity.hpke_public_key(),
+    )
+    .expect("enrollment")
+    .sign(identity.signing_key());
+    let membership =
+        chur_catalog::sync_membership::provision(session.catalog().expect("catalog"), &enrollment)
+            .expect("membership");
+    let mut log =
+        chur_catalog::sync_log::load(session.catalog_ref().expect("catalog"), &membership)
+            .expect("log");
+    let operation = log
+        .author(
+            Id::new([14; 16]).expect("operation"),
+            vault_id,
+            device_id,
+            Id::new([15; 16]).expect("selector"),
+            &Key::new([16; 32]),
+            Nonce::new([17; 24]),
+            b"checkpoint seed operation",
+            identity.signing_key(),
+            &membership,
+        )
+        .expect("operation");
+    log.accept_with(
+        session.catalog().expect("catalog"),
+        &operation,
+        &membership,
+        |_| Ok(()),
+    )
+    .expect("accept");
+    log.issue_own_checkpoint(
+        session.catalog().expect("catalog"),
+        &membership,
+        &device_id,
+        identity.signing_key(),
+        NOW,
+    )
+    .expect("checkpoint");
+    let envelope = chur_sync_protocol::identity::DeviceIdentityEnvelope::seal_for_recovery(
+        &root,
+        vault_id,
+        device_id,
+        1,
+        Nonce::new([18; 24]),
+        &identity,
+    )
+    .expect("envelope");
+    chur_catalog::sync_keys::store_portable_identity_envelope(
+        session.catalog().expect("catalog"),
+        &root,
+        &membership,
+        &envelope,
+    )
+    .expect("store identity");
+
+    let mut package = Cursor::new(Vec::new());
+    let summary =
+        backup::create(&mut session, &mut package, NOW, &mut Uninterrupted).expect("backup");
+    assert_eq!(summary.record_count, 5);
+    let whole = package.into_inner();
+    session.lock().expect("lock");
+
+    let destination = scratch_root();
+    backup::restore(
+        &destination,
+        &mut Cursor::new(whole.clone()),
+        PASSWORD,
+        &mut Uninterrupted,
+    )
+    .expect("restore");
+    let opened = vault::unlock_with_password(&destination, PASSWORD, NOW + 1).expect("unlock");
+    let membership = chur_catalog::sync_membership::load(opened.catalog_ref().expect("catalog"))
+        .expect("membership")
+        .expect("sync membership");
+    assert!(
+        chur_catalog::sync_keys::portable_identity_envelope(
+            opened.catalog_ref().expect("catalog"),
+            opened.root_secret(),
+            &membership,
+        )
+        .expect("identity")
+        .is_some()
+    );
+
+    let mut damaged = whole;
+    let envelope_payload = record_payload_byte(&damaged, 0x05);
+    damaged[envelope_payload] ^= 1;
+    let destination = scratch_root();
+    assert_eq!(
+        rejection(backup::restore(
+            &destination,
+            &mut Cursor::new(damaged),
+            PASSWORD,
+            &mut Uninterrupted,
+        )),
+        ChurStatus::VaultCorrupt
+    );
+    assert!(destination.registry_names().expect("registry").is_empty());
+}
+
 /// §7's whole point: the package is authenticated as a unit. A truncated one,
 /// one with a byte changed inside a container, and one with two container
 /// records swapped must each fail, and none of them may install a vault.
@@ -256,6 +395,19 @@ fn catalog_header_byte(package: &[u8]) -> usize {
             .expect("a record length fits a usize");
         if header[0] == 0x03 {
             return offset + 12 + 4;
+        }
+        offset += 12 + length;
+    }
+}
+
+fn record_payload_byte(package: &[u8], record_type: u8) -> usize {
+    let mut offset = 32usize;
+    loop {
+        let header = &package[offset..offset + 12];
+        let length = usize::try_from(u64::from_be_bytes(header[4..12].try_into().unwrap()))
+            .expect("a record length fits a usize");
+        if header[0] == record_type {
+            return offset + 12 + length / 2;
         }
         offset += 12 + length;
     }

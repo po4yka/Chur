@@ -11,6 +11,7 @@ chur-core.workspace = true
 chur-crypto.workspace = true
 chur-format.workspace = true
 chur-catalog.workspace = true
+chur-sync-protocol.workspace = true
 
 zeroize.workspace = true
 

@@ -274,6 +274,7 @@ dependencies = [
  "chur-core",
  "chur-crypto",
  "chur-format",
+ "chur-sync-protocol",
  "zeroize",
 ]
 

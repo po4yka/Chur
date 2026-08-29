@@ -38,6 +38,7 @@ use chur_format::backup::{
 use chur_format::constants::{SlotType, VaultState};
 use chur_format::container::PublicPreamble as ContainerPreamble;
 use chur_format::descriptor::VaultDescriptor;
+use chur_sync_protocol::identity::DeviceIdentityEnvelope;
 
 use crate::progress::{self, Progress};
 
@@ -180,6 +181,30 @@ pub fn create(
     // carry a catalog older than the containers beside it.
     session.checkpoint_catalog()?;
 
+    let identity_payload = match chur_catalog::sync_membership::load(session.catalog_ref()?)? {
+        Some(membership) => {
+            let envelope = chur_catalog::sync_keys::portable_identity_envelope(
+                session.catalog_ref()?,
+                session.root_secret(),
+                &membership,
+            )?
+            .ok_or_else(|| {
+                chur_core::err!(
+                    VaultIncomplete,
+                    "the sync vault has no portable device identity"
+                )
+            })?;
+            let log = chur_catalog::sync_log::load(session.catalog_ref()?, &membership)?;
+            ensure!(
+                log.own_checkpoint_covers_current_heads(session.catalog_ref()?)?,
+                VaultIncomplete,
+                "the sync vault has no current own checkpoint"
+            );
+            Some(envelope.encode())
+        }
+        None => None,
+    };
+
     let vault_id = session.vault_id();
     let store_id = session.object_store_id();
     let backup_id = random::id()?;
@@ -209,7 +234,7 @@ pub fn create(
 
     // The manifest, the descriptor, the catalog export, one record per stream,
     // and the final commit.
-    let record_count = u64::from(stream_count) + 4;
+    let record_count = u64::from(stream_count) + 4 + u64::from(identity_payload.is_some());
     let preamble = PublicPreamble::new(record_count)?;
 
     let manifest = BackupManifest {
@@ -266,6 +291,10 @@ pub fn create(
         Ok(())
     })?;
     written += copied;
+
+    if let Some(identity_payload) = identity_payload {
+        written += write_record(destination, RecordType::Envelope, &identity_payload)?;
+    }
 
     let commit = FinalBackupCommit {
         backup_id,
@@ -532,6 +561,21 @@ pub fn restore(
         VaultCorrupt,
         "the final backup commit contradicts the package it closes"
     );
+    let identity_payload = match find_optional(&slots, RecordType::Envelope)? {
+        Some(slot) => {
+            ensure!(
+                slot.payload_length == DeviceIdentityEnvelope::LEN as u64,
+                VaultCorrupt,
+                "the backup identity envelope has the wrong length"
+            );
+            Some(read_payload_bounded(
+                source,
+                slot,
+                DeviceIdentityEnvelope::LEN as u64,
+            )?)
+        }
+        None => None,
+    };
 
     // §8 step 4: completeness before anything is written. Every container entry
     // is read in package order and folded into the commitment the commit sealed.
@@ -629,6 +673,53 @@ pub fn restore(
                 chur_format::constants::CATALOG_FORMAT_VERSION_V2;
             local.catalog.catalog_header_commitment =
                 vault::catalog_header_commitment(&catalog_path)?;
+        }
+        match chur_catalog::sync_membership::load(&catalog)
+            .map_err(|_| chur_core::err!(VaultCorrupt, "the backup sync membership is invalid"))?
+        {
+            Some(membership) => {
+                let package_identity = identity_payload.as_deref().ok_or_else(|| {
+                    chur_core::err!(
+                        VaultCorrupt,
+                        "the sync backup has no portable device identity"
+                    )
+                })?;
+                let catalog_identity = chur_catalog::sync_keys::portable_identity_envelope(
+                    &catalog,
+                    &root_secret,
+                    &membership,
+                )
+                .map_err(|_| {
+                    chur_core::err!(VaultCorrupt, "the backup device identity is invalid")
+                })?
+                .ok_or_else(|| {
+                    chur_core::err!(
+                        VaultCorrupt,
+                        "the backup catalog has no portable device identity"
+                    )
+                })?;
+                ensure!(
+                    package_identity == catalog_identity.encode(),
+                    VaultCorrupt,
+                    "the backup device identities do not match"
+                );
+                let log = chur_catalog::sync_log::load(&catalog, &membership).map_err(|_| {
+                    chur_core::err!(VaultCorrupt, "the backup operation log is invalid")
+                })?;
+                ensure!(
+                    log.own_checkpoint_covers_current_heads(&catalog)
+                        .map_err(|_| {
+                            chur_core::err!(VaultCorrupt, "the backup checkpoint is invalid")
+                        })?,
+                    VaultCorrupt,
+                    "the backup has no checkpoint for its current heads"
+                );
+            }
+            None => ensure!(
+                identity_payload.is_none(),
+                VaultCorrupt,
+                "a local-only backup carries a device identity"
+            ),
         }
         let mut index = 0usize;
         let mut done = 0u64;
@@ -789,6 +880,17 @@ fn find(slots: &[RecordSlot], record_type: RecordType) -> Result<&RecordSlot> {
     let Some(slot) = found.next() else {
         bail!(VaultCorrupt, "the package is missing a required record");
     };
+    ensure!(
+        found.next().is_none(),
+        VaultCorrupt,
+        "the package carries two of a record it may carry once"
+    );
+    Ok(slot)
+}
+
+fn find_optional(slots: &[RecordSlot], record_type: RecordType) -> Result<Option<&RecordSlot>> {
+    let mut found = slots.iter().filter(|slot| slot.record_type == record_type);
+    let slot = found.next();
     ensure!(
         found.next().is_none(),
         VaultCorrupt,
