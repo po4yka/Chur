@@ -348,6 +348,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "chur-core",
+ "chur-crypto",
  "chur-sync-protocol",
  "hex",
  "rusqlite",

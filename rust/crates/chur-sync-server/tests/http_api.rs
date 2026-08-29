@@ -6,15 +6,20 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{Method, Request, StatusCode};
+use chur_core::Id;
+use chur_sync_protocol::checkpoint::{Checkpoint, CheckpointHead};
+use chur_sync_protocol::membership::{EnrollmentRecord, RevocationRecord};
+use chur_sync_protocol::operation::{DeviceSigningKey, Operation};
 use chur_sync_server::ReferenceServer;
 use tower::ServiceExt;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
+const BOOTSTRAP_TOKEN: [u8; 32] = [10; 32];
 
 #[tokio::test]
 async fn health_checks_the_open_server() {
-    let response = chur_sync_server::http::router(server())
+    let response = chur_sync_server::http::router(server(), BOOTSTRAP_TOKEN)
         .oneshot(
             Request::builder()
                 .uri("/healthz")
@@ -24,6 +29,335 @@ async fn health_checks_the_open_server() {
         .await
         .expect("response");
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn bootstrap_installs_transport_auth_and_relays_canonical_records() {
+    let vault = id(1);
+    let device = id(2);
+    let key = DeviceSigningKey::from_seed([3; 32]);
+    let enrollment = EnrollmentRecord::initial(vault, device, key.verifying_key(), [4; 32])
+        .expect("enrollment")
+        .sign(&key);
+    let initial_operation = Operation::new(
+        id(5),
+        vault,
+        device,
+        1,
+        [0; 32],
+        Vec::new(),
+        id(6),
+        [vec![7; 24], vec![8; 16]].concat(),
+        [0; 64],
+    )
+    .expect("operation")
+    .sign(&key);
+    let token = [9; 32];
+    let app = chur_sync_server::http::router(server(), BOOTSTRAP_TOKEN);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &format!("/v1/vaults/{}/bootstrap", hex::encode(vault.as_bytes())),
+            paired_body(&token, &enrollment.encode(), &initial_operation.encode()),
+            Some(("Bootstrap", &[99; 32])),
+        ))
+        .await
+        .expect("rejected bootstrap response");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &format!("/v1/vaults/{}/bootstrap", hex::encode(vault.as_bytes())),
+            paired_body(&token, &enrollment.encode(), &initial_operation.encode()),
+            Some(("Bootstrap", &BOOTSTRAP_TOKEN)),
+        ))
+        .await
+        .expect("bootstrap response");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!(
+                "/v1/vaults/{}/memberships?after=0",
+                hex::encode(vault.as_bytes())
+            ),
+            Vec::new(),
+            Some(("Bearer", &token)),
+        ))
+        .await
+        .expect("membership response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    assert_eq!(body.as_ref(), framed(&[enrollment.encode()]));
+
+    let second = operation(vault, device, id(11), 2, initial_operation.digest(), &key);
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &format!("/v1/vaults/{}/operations", hex::encode(vault.as_bytes())),
+            second.encode(),
+            Some(("Bearer", &token)),
+        ))
+        .await
+        .expect("operation response");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let checkpoint = Checkpoint::new(
+        vault,
+        device,
+        2,
+        1,
+        enrollment.commitment(),
+        vec![CheckpointHead::new(device, 2, second.digest())],
+        [12; 32],
+        [0; 32],
+    )
+    .expect("checkpoint")
+    .sign(&key);
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &format!("/v1/vaults/{}/checkpoints", hex::encode(vault.as_bytes())),
+            checkpoint.encode(),
+            Some(("Bearer", &token)),
+        ))
+        .await
+        .expect("checkpoint response");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!(
+                "/v1/vaults/{}/operations/{}?after=0",
+                hex::encode(vault.as_bytes()),
+                hex::encode(device.as_bytes())
+            ),
+            Vec::new(),
+            Some(("Bearer", &token)),
+        ))
+        .await
+        .expect("operation page response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("operation page")
+            .as_ref(),
+        framed(&[initial_operation.encode(), second.encode()])
+    );
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!(
+                "/v1/vaults/{}/checkpoints/{}",
+                hex::encode(vault.as_bytes()),
+                hex::encode(checkpoint.commitment())
+            ),
+            Vec::new(),
+            Some(("Bearer", &token)),
+        ))
+        .await
+        .expect("checkpoint fetch response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("checkpoint body")
+            .as_ref(),
+        checkpoint.encode()
+    );
+
+    let second_device = id(13);
+    let second_key = DeviceSigningKey::from_seed([14; 32]);
+    let third = operation(vault, device, id(15), 3, second.digest(), &key);
+    let second_enrollment = EnrollmentRecord::new(
+        vault,
+        second_device,
+        second_key.verifying_key(),
+        [16; 32],
+        3,
+        device,
+        2,
+        enrollment.commitment(),
+        checkpoint.commitment(),
+    )
+    .expect("second enrollment")
+    .sign(&key);
+    let second_token = [17; 32];
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &format!(
+                "/v1/vaults/{}/memberships/enroll",
+                hex::encode(vault.as_bytes())
+            ),
+            paired_body(&second_token, &second_enrollment.encode(), &third.encode()),
+            Some(("Bearer", &token)),
+        ))
+        .await
+        .expect("enrollment response");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let second_device_operation = operation(vault, second_device, id(18), 1, [0; 32], &second_key);
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &format!("/v1/vaults/{}/operations", hex::encode(vault.as_bytes())),
+            second_device_operation.encode(),
+            Some(("Bearer", &second_token)),
+        ))
+        .await
+        .expect("second-device operation response");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let fourth = operation(vault, device, id(19), 4, third.digest(), &key);
+    let revocation = RevocationRecord::new(
+        vault,
+        second_device,
+        1,
+        second_device_operation.digest(),
+        3,
+        device,
+        second_enrollment.commitment(),
+    )
+    .expect("revocation")
+    .sign(&key);
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &format!(
+                "/v1/vaults/{}/memberships/revoke",
+                hex::encode(vault.as_bytes())
+            ),
+            pair_body(&revocation.encode(), &fourth.encode()),
+            Some(("Bearer", &token)),
+        ))
+        .await
+        .expect("revocation response");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!(
+                "/v1/vaults/{}/operations/{}?after=0",
+                hex::encode(vault.as_bytes()),
+                hex::encode(second_device.as_bytes())
+            ),
+            Vec::new(),
+            Some(("Bearer", &second_token)),
+        ))
+        .await
+        .expect("revoked response");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let replacement_token = [20; 32];
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &format!("/v1/vaults/{}/token", hex::encode(vault.as_bytes())),
+            replacement_token.to_vec(),
+            Some(("Bearer", &token)),
+        ))
+        .await
+        .expect("token rotation response");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let response = app
+        .oneshot(request(
+            Method::GET,
+            &format!("/v1/vaults/{}/checkpoints", hex::encode(vault.as_bytes())),
+            Vec::new(),
+            Some(("Bearer", &replacement_token)),
+        ))
+        .await
+        .expect("rotated token response");
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+fn request(
+    method: Method,
+    uri: &str,
+    body: Vec<u8>,
+    authorization: Option<(&str, &[u8; 32])>,
+) -> Request<Body> {
+    let mut request = Request::builder().method(method).uri(uri);
+    if let Some((scheme, token)) = authorization {
+        request = request.header("authorization", format!("{scheme} {}", hex::encode(token)));
+    }
+    request.body(Body::from(body)).expect("request")
+}
+
+fn paired_body(token: &[u8; 32], first: &[u8], second: &[u8]) -> Vec<u8> {
+    let mut body = Vec::with_capacity(36 + first.len() + second.len());
+    body.extend_from_slice(token);
+    body.extend_from_slice(&u32::try_from(first.len()).expect("length").to_be_bytes());
+    body.extend_from_slice(first);
+    body.extend_from_slice(second);
+    body
+}
+
+fn pair_body(first: &[u8], second: &[u8]) -> Vec<u8> {
+    let mut body = Vec::with_capacity(4 + first.len() + second.len());
+    body.extend_from_slice(&u32::try_from(first.len()).expect("length").to_be_bytes());
+    body.extend_from_slice(first);
+    body.extend_from_slice(second);
+    body
+}
+
+fn operation(
+    vault: Id,
+    device: Id,
+    operation_id: Id,
+    sequence: u64,
+    previous: [u8; 32],
+    key: &DeviceSigningKey,
+) -> Operation {
+    Operation::new(
+        operation_id,
+        vault,
+        device,
+        sequence,
+        previous,
+        Vec::new(),
+        id(6),
+        [vec![7; 24], vec![8; 16]].concat(),
+        [0; 64],
+    )
+    .expect("operation")
+    .sign(key)
+}
+
+fn framed(records: &[Vec<u8>]) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&u32::try_from(records.len()).expect("count").to_be_bytes());
+    for record in records {
+        body.extend_from_slice(&u32::try_from(record.len()).expect("length").to_be_bytes());
+        body.extend_from_slice(record);
+    }
+    body
+}
+
+fn id(byte: u8) -> Id {
+    Id::new([byte; 16]).expect("id")
 }
 
 fn server() -> ReferenceServer {
