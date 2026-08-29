@@ -148,9 +148,9 @@ class VectorSuiteTest {
     @Test
     fun every_hkdf_label_and_every_key_slot_family_has_a_vector() {
         // TEST_VECTORS.md section 4 requires both. The counts are what the
-        // registries hold: 25 labels, 4 slot families.
+        // registries hold: 29 labels, 4 slot families.
         val derivations = manifest.vectors.count { it.formatWord == "key-derivation" }
-        assertEquals(25, derivations, "the label registry has 25 entries")
+        assertEquals(29, derivations, "the label registry has 29 entries")
         for (family in listOf("password-slot", "recovery-slot", "keystore-slot", "keychain-slot")) {
             assertTrue(
                 manifest.vectors.any { it.formatWord == family },
