@@ -213,37 +213,55 @@ pub fn accept_enrollment(
     outer_device_id: &Id,
     outer_sequence: u64,
 ) -> Result<MembershipState> {
-    let mut state = load(db)?.ok_or_else(|| {
+    let state = load(db)?.ok_or_else(|| {
         Error::new(
             ChurStatus::VaultIncomplete,
             "sync membership is not provisioned",
         )
     })?;
-    let previous_generation = state.generation();
-    let previous_commitment = *state.commitment();
-    state.accept_enrollment(enrollment, outer_device_id, outer_sequence)?;
-    let record = enrollment.encode();
-    let head = enrollment.commitment();
     db.transaction(|transaction| {
-        insert_membership_record(
+        let candidate = project_enrollment(
             transaction,
-            enrollment.membership_generation(),
-            ENROLLMENT,
-            enrollment.device_id(),
-            &head,
-            &record,
+            &state,
+            enrollment,
+            outer_device_id,
+            outer_sequence,
         )?;
-        upsert_active_device(transaction, enrollment)?;
-        advance_head(
-            transaction,
-            previous_generation,
-            &previous_commitment,
-            enrollment.membership_generation(),
-            &head,
-        )?;
-        bump_generation(transaction)
-    })?;
-    Ok(state)
+        bump_generation(transaction)?;
+        Ok(candidate)
+    })
+}
+
+/// Projects one validated successor enrollment inside its operation transaction.
+pub fn project_enrollment(
+    transaction: &Transaction<'_>,
+    current: &MembershipState,
+    enrollment: &EnrollmentRecord,
+    outer_device_id: &Id,
+    outer_sequence: u64,
+) -> Result<MembershipState> {
+    let previous_generation = current.generation();
+    let previous_commitment = *current.commitment();
+    let mut candidate = current.clone();
+    candidate.accept_enrollment(enrollment, outer_device_id, outer_sequence)?;
+    let head = enrollment.commitment();
+    insert_membership_record(
+        transaction,
+        enrollment.membership_generation(),
+        ENROLLMENT,
+        enrollment.device_id(),
+        &head,
+        &enrollment.encode(),
+    )?;
+    upsert_active_device(transaction, enrollment)?;
+    advance_head(
+        transaction,
+        previous_generation,
+        &previous_commitment,
+        enrollment.membership_generation(),
+        &head,
+    )?;
+    Ok(candidate)
 }
 
 /// Accepts one validated device revocation and pins its final branch atomically.
@@ -252,63 +270,74 @@ pub fn accept_revocation(
     revocation: &RevocationRecord,
     outer_device_id: &Id,
 ) -> Result<MembershipState> {
-    let mut state = load(db)?.ok_or_else(|| {
+    let state = load(db)?.ok_or_else(|| {
         Error::new(
             ChurStatus::VaultIncomplete,
             "sync membership is not provisioned",
         )
     })?;
-    let previous_generation = state.generation();
-    let previous_commitment = *state.commitment();
-    state.accept_revocation(revocation, outer_device_id)?;
-    let record = revocation.encode();
-    let head = revocation.commitment();
     db.transaction(|transaction| {
-        insert_membership_record(
-            transaction,
-            revocation.membership_generation(),
-            REVOCATION,
-            revocation.revoked_device_id(),
-            &head,
-            &record,
-        )?;
-        let changed = transaction
-            .execute(
-                "UPDATE sync_devices
-                    SET status = ?2, membership_generation = ?3,
-                        revoked_sequence = ?4, revoked_digest = ?5
-                  WHERE device_id = ?1 AND status = ?6",
-                params![
-                    revocation.revoked_device_id().as_bytes().as_slice(),
-                    REVOKED,
-                    as_sqlite_integer(
-                        revocation.membership_generation(),
-                        "the membership generation is too large"
-                    )?,
-                    as_sqlite_integer(
-                        revocation.final_accepted_device_sequence(),
-                        "the revocation sequence is too large"
-                    )?,
-                    revocation.final_accepted_operation_digest().as_slice(),
-                    ACTIVE,
-                ],
-            )
-            .map_err(|error| map_sqlite(error, "the revoked device could not be updated"))?;
-        ensure!(
-            changed == 1,
-            Conflict,
-            "the revocation projection changed concurrently"
-        );
-        advance_head(
-            transaction,
-            previous_generation,
-            &previous_commitment,
-            revocation.membership_generation(),
-            &head,
-        )?;
-        bump_generation(transaction)
-    })?;
-    Ok(state)
+        let candidate = project_revocation(transaction, &state, revocation, outer_device_id)?;
+        bump_generation(transaction)?;
+        Ok(candidate)
+    })
+}
+
+/// Projects one validated revocation inside its operation transaction.
+pub fn project_revocation(
+    transaction: &Transaction<'_>,
+    current: &MembershipState,
+    revocation: &RevocationRecord,
+    outer_device_id: &Id,
+) -> Result<MembershipState> {
+    let previous_generation = current.generation();
+    let previous_commitment = *current.commitment();
+    let mut candidate = current.clone();
+    candidate.accept_revocation(revocation, outer_device_id)?;
+    let head = revocation.commitment();
+    insert_membership_record(
+        transaction,
+        revocation.membership_generation(),
+        REVOCATION,
+        revocation.revoked_device_id(),
+        &head,
+        &revocation.encode(),
+    )?;
+    let changed = transaction
+        .execute(
+            "UPDATE sync_devices
+                SET status = ?2, membership_generation = ?3,
+                    revoked_sequence = ?4, revoked_digest = ?5
+              WHERE device_id = ?1 AND status = ?6",
+            params![
+                revocation.revoked_device_id().as_bytes().as_slice(),
+                REVOKED,
+                as_sqlite_integer(
+                    revocation.membership_generation(),
+                    "the membership generation is too large"
+                )?,
+                as_sqlite_integer(
+                    revocation.final_accepted_device_sequence(),
+                    "the revocation sequence is too large"
+                )?,
+                revocation.final_accepted_operation_digest().as_slice(),
+                ACTIVE,
+            ],
+        )
+        .map_err(|error| map_sqlite(error, "the revoked device could not be updated"))?;
+    ensure!(
+        changed == 1,
+        Conflict,
+        "the revocation projection changed concurrently"
+    );
+    advance_head(
+        transaction,
+        previous_generation,
+        &previous_commitment,
+        revocation.membership_generation(),
+        &head,
+    )?;
+    Ok(candidate)
 }
 
 fn insert_membership_record(

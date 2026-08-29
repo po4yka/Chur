@@ -22,6 +22,7 @@ pub enum DeviceStatus {
 }
 
 /// Public identity and acceptance status of one known device.
+#[derive(Clone)]
 pub struct DeviceMembership {
     signing_public_key: [u8; 32],
     historical_signing_keys: Vec<[u8; 32]>,
@@ -52,6 +53,7 @@ impl DeviceMembership {
 }
 
 /// Validated membership state for one vault.
+#[derive(Clone)]
 pub struct MembershipState {
     vault_id: Id,
     generation: u64,
