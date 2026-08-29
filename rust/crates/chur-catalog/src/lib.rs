@@ -24,6 +24,7 @@ pub mod query;
 pub(crate) mod row;
 pub mod schema;
 pub mod store;
+pub mod sync_keys;
 pub mod sync_log;
 pub mod sync_membership;
 pub mod sync_rotation;
