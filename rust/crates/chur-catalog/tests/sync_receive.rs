@@ -455,3 +455,70 @@ fn missing_content_cause_does_not_advance_the_log() {
     assert!(state.is_favorite(&id(35)));
     assert_eq!(log.head(&id(4)), Some((2, favorite.digest())));
 }
+
+#[test]
+fn locally_authored_content_and_head_commit_together() {
+    let mut fixture = setup();
+    let collection_id = id(44);
+    let collection_key = Key::new([45; 32]);
+    let domain = KeyDomain::collection(&collection_key, &collection_id, 1).expect("domain");
+    let create = OperationPayload::new(
+        collection_id,
+        1,
+        PayloadBody::CreateObject {
+            object_id: id(46),
+            object_generation: 1,
+            store_id: id(47),
+            stream_id: id(48),
+            metadata_fields: Vec::new(),
+        },
+    )
+    .expect("create");
+    let mut log = sync_log::load(&fixture.db, &fixture.membership).expect("log");
+    let mut state = MaterializedState::new();
+
+    let operation = sync_receive::author_content_operation(
+        &mut fixture.db,
+        &mut log,
+        &fixture.membership,
+        &mut state,
+        &domain,
+        id(4),
+        &fixture.issuer,
+        &create,
+    )
+    .expect("author create");
+    assert_eq!(operation.device_sequence(), 1);
+    assert_eq!(log.head(&id(4)), Some((1, operation.digest())));
+    assert_eq!(
+        sync_log::load(&fixture.db, &fixture.membership)
+            .expect("reload")
+            .head(&id(4)),
+        Some((1, operation.digest()))
+    );
+
+    let invalid = OperationPayload::new(
+        collection_id,
+        1,
+        PayloadBody::SetFavorite {
+            object_id: id(49),
+            favorite: true,
+            removed_tokens: Vec::new(),
+        },
+    )
+    .expect("invalid favorite");
+    assert!(
+        sync_receive::author_content_operation(
+            &mut fixture.db,
+            &mut log,
+            &fixture.membership,
+            &mut state,
+            &domain,
+            id(4),
+            &fixture.issuer,
+            &invalid,
+        )
+        .is_err()
+    );
+    assert_eq!(log.head(&id(4)), Some((1, operation.digest())));
+}

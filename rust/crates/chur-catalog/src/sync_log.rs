@@ -3,10 +3,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chur_core::{ChurStatus, Error, Id, Result, bail, ensure};
-use chur_crypto::Commitment;
+use chur_crypto::{Commitment, Key, Nonce};
 use chur_sync_protocol::{
     checkpoint::Checkpoint,
-    operation::Operation,
+    operation::{DeviceSigningKey, Operation},
     operation_log::{ApplyOutcome, CheckpointOutcome, ForkEvidence, ForkState, OperationLog},
     state::{DeviceStatus, MembershipState},
 };
@@ -40,6 +40,36 @@ impl DurableOperationLog {
     #[must_use]
     pub fn checkpoint_commitment(&self, issuer_device_id: &Id) -> Option<&Commitment> {
         self.log.checkpoint_commitment(issuer_device_id)
+    }
+
+    /// Builds the next signed operation without changing durable state.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the inputs are fresh wire values, encryption material, and authenticated state"
+    )]
+    pub fn author(
+        &self,
+        operation_id: Id,
+        vault_id: Id,
+        device_id: Id,
+        key_selector: Id,
+        key: &Key,
+        nonce: Nonce,
+        plaintext: &[u8],
+        signing_key: &DeviceSigningKey,
+        membership: &MembershipState,
+    ) -> Result<Operation> {
+        self.log.author(
+            operation_id,
+            vault_id,
+            device_id,
+            key_selector,
+            key,
+            nonce,
+            plaintext,
+            signing_key,
+            membership,
+        )
     }
 
     /// Validates one received operation and commits its logical projection,

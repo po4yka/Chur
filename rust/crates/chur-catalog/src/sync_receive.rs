@@ -2,11 +2,11 @@
 
 use std::collections::BTreeMap;
 
-use chur_core::{ChurStatus, Error, Result, ensure};
-use chur_crypto::Key;
+use chur_core::{ChurStatus, Error, Id, Result, ensure};
+use chur_crypto::{Key, Nonce, random};
 use chur_sync_protocol::convergence::MergeOutcome;
 use chur_sync_protocol::materialization::MaterializedState;
-use chur_sync_protocol::operation::Operation;
+use chur_sync_protocol::operation::{DeviceSigningKey, Operation};
 use chur_sync_protocol::operation_log::ApplyOutcome;
 use chur_sync_protocol::payload::{OperationPayload, PayloadBody};
 use chur_sync_protocol::state::MembershipState;
@@ -100,6 +100,52 @@ fn corrupt_materialized_state(_error: Error) -> Error {
         ChurStatus::CatalogCorrupt,
         "an accepted content operation could not be materialized",
     )
+}
+
+/// Authors and atomically persists one local convergent content operation.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the operation joins durable state, device identity, key domain, and private payload"
+)]
+pub fn author_content_operation(
+    db: &mut CatalogDb,
+    log: &mut DurableOperationLog,
+    membership: &MembershipState,
+    state: &mut MaterializedState,
+    domain: &KeyDomain,
+    device_id: Id,
+    signing_key: &DeviceSigningKey,
+    payload: &OperationPayload,
+) -> Result<Operation> {
+    let operation = log.author(
+        random::id()?,
+        *membership.vault_id(),
+        device_id,
+        *domain.selector(),
+        domain.operation_key(),
+        Nonce::random()?,
+        &payload.encode(),
+        signing_key,
+        membership,
+    )?;
+    payload.validate_for_operation(
+        &operation,
+        domain.collection_id(),
+        domain.collection_epoch(),
+    )?;
+    let mut projected = state.clone();
+    ensure!(
+        projected.apply(&operation, payload)? == MergeOutcome::Applied,
+        InvalidInput,
+        "local content operation does not change the current state"
+    );
+    ensure!(
+        log.accept_with(db, &operation, membership, |_| Ok(()))? == ApplyOutcome::Applied,
+        InternalFailure,
+        "fresh local content operation was not applied"
+    );
+    *state = projected;
+    Ok(operation)
 }
 
 /// Authenticates, decrypts, and atomically accepts one convergent content operation.
