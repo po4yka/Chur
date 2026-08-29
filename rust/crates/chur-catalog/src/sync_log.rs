@@ -7,6 +7,7 @@ use chur_core::{ChurStatus, Error, Id, Result, bail, ensure};
 use chur_crypto::{Commitment, Key, Nonce};
 use chur_sync_protocol::{
     checkpoint::Checkpoint,
+    convergence::CausalStamp,
     operation::{DeviceSigningKey, Operation},
     operation_log::{ApplyOutcome, CheckpointOutcome, ForkEvidence, ForkState, OperationLog},
     state::{DeviceStatus, MembershipState},
@@ -41,6 +42,48 @@ impl DurableOperationLog {
     #[must_use]
     pub fn checkpoint_commitment(&self, issuer_device_id: &Id) -> Option<&Commitment> {
         self.log.checkpoint_commitment(issuer_device_id)
+    }
+
+    pub(crate) fn latest_operations(&self) -> Result<BTreeMap<Id, CausalStamp>> {
+        self.log.latest_operations().map_err(corrupt_log)
+    }
+
+    /// Whether the latest own checkpoint covers every current accepted head.
+    pub fn own_checkpoint_covers_current_heads(&self, db: &CatalogDb) -> Result<bool> {
+        let row: Option<(Vec<u8>, Vec<u8>)> = db
+            .connection()
+            .query_row(
+                "SELECT checkpoint.commitment, checkpoint.record
+                   FROM sync_state AS state
+                   JOIN sync_checkpoints AS checkpoint
+                     ON checkpoint.commitment = state.latest_own_checkpoint_commitment
+                  WHERE state.only_row = 1 AND checkpoint.own = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|error| map_sqlite(error, "the own checkpoint could not be read"))?;
+        let Some((stored_commitment, record)) = row else {
+            return Ok(false);
+        };
+        let checkpoint = Checkpoint::decode(&record).map_err(corrupt_log)?;
+        ensure!(
+            checkpoint.commitment()
+                == commitment(
+                    &stored_commitment,
+                    "the own checkpoint commitment is malformed"
+                )?,
+            CatalogCorrupt,
+            "the own checkpoint contradicts its catalog row"
+        );
+        let latest = self.latest_operations()?;
+        Ok(checkpoint.heads().len() == latest.len()
+            && checkpoint.heads().iter().all(|head| {
+                latest.get(head.device_id()).is_some_and(|operation| {
+                    operation.device_sequence() == head.device_sequence()
+                        && operation.digest() == head.operation_digest()
+                })
+            }))
     }
 
     /// Builds the next signed operation without changing durable state.
@@ -1112,6 +1155,34 @@ mod tests {
         assert_eq!(
             restored.checkpoint_commitment(&id(3)),
             Some(&checkpoint.commitment())
+        );
+    }
+
+    #[test]
+    fn own_checkpoint_covers_only_the_exact_current_heads() {
+        let (mut db, membership, key) = setup();
+        let mut log = load(&db, &membership).expect("empty log");
+        let first = operation(&key, 1, [0; 32], 5);
+        log.accept_with(&mut db, &first, &membership, |_| Ok(()))
+            .expect("first");
+        assert!(
+            !log.own_checkpoint_covers_current_heads(&db)
+                .expect("no checkpoint")
+        );
+        let current = checkpoint(&key, 1, first.digest(), &membership);
+        log.accept_checkpoint(&mut db, &current, &membership, true, 9)
+            .expect("current checkpoint");
+        assert!(
+            log.own_checkpoint_covers_current_heads(&db)
+                .expect("covered")
+        );
+
+        let second = operation(&key, 2, first.digest(), 6);
+        log.accept_with(&mut db, &second, &membership, |_| Ok(()))
+            .expect("second");
+        assert!(
+            !log.own_checkpoint_covers_current_heads(&db)
+                .expect("stale checkpoint")
         );
     }
 

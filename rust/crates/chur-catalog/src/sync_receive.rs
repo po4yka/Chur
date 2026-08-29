@@ -145,6 +145,24 @@ fn corrupt_materialized_state(_error: Error) -> Error {
     )
 }
 
+/// Returns tombstoned objects that the current durable checkpoint permits GC to discard.
+pub fn gc_candidates(
+    db: &CatalogDb,
+    log: &DurableOperationLog,
+    membership: &MembershipState,
+    state: &MaterializedState,
+    now_ms: u64,
+) -> Result<Vec<Id>> {
+    let active_devices = membership.active_device_ids().copied().collect::<Vec<_>>();
+    let latest_operations = log.latest_operations()?;
+    Ok(state.gc_candidates(
+        now_ms,
+        &active_devices,
+        &latest_operations,
+        log.own_checkpoint_covers_current_heads(db)?,
+    ))
+}
+
 /// Authors and atomically persists one local convergent content operation.
 #[expect(
     clippy::too_many_arguments,
