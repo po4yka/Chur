@@ -59,12 +59,13 @@ pub const ABI_VERSION_MAJOR: u32 = 1;
 /// A minor difference is negotiated only within explicitly compatible
 /// behaviour; it never selects a cryptographic suite from untrusted input.
 ///
-/// It is 6 rather than 0 because `docs/interop/FFI_CONTRACT.md` §6.5 adds the
+/// It is 7 rather than 0 because `docs/interop/FFI_CONTRACT.md` §6.5 adds the
 /// exports Phase 1's product scope requires, §6.6 adds the Android Keystore
 /// surface, §6.7 adds portable backup, §6.8 adds the sync inbox, and §6.9 adds
-/// sharing identity. §6.10 adds share preparation. §6.2 makes an addition a minor bump. Nothing in the §6.2 list changed, so a host built
+/// sharing identity. §6.10 adds share preparation and §6.11 adds share
+/// acceptance. §6.2 makes an addition a minor bump. Nothing in the §6.2 list changed, so a host built
 /// against 1.0 still works: an export it does not call costs it nothing.
-pub const ABI_VERSION_MINOR: u32 = 6;
+pub const ABI_VERSION_MINOR: u32 = 7;
 
 /// Capability bit: independent decoy identity supported.
 pub const CHUR_CAP_DECOY_VAULT: u64 = 1 << 0;
@@ -292,7 +293,7 @@ mod tests {
     #[test]
     fn the_handshake_answers_every_documented_fact() {
         assert_eq!(chur_abi_version_major(), 1);
-        assert_eq!(chur_abi_version_minor(), 6);
+        assert_eq!(chur_abi_version_minor(), 7);
         assert_eq!(chur_object_format_min(), 1);
         assert_eq!(chur_object_format_max(), 1);
         assert_eq!(chur_key_slot_format_min(), 1);

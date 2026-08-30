@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. v1 ships 1.6: §6.5 through §6.10 each added one minor surface. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
+- native API version is the (major, minor) pair. v1 ships 1.7: §6.5 through §6.11 each added one minor surface. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -473,6 +473,35 @@ chur_status_t chur_sharing_prepare(chur_handle_t session,
 ```
 
 The caller-owned output is `version:u16 = 1` followed by four `u32`-length-prefixed canonical fields: the collection membership record, its authenticated outer operation, the HPKE grant, and its authenticated outer operation. Integers are big-endian. A retry with the same accepted state returns identical bytes. A short buffer receives no partial record, sets `bytes_written` to zero, and returns `RESOURCE_LIMIT_EXCEEDED`.
+
+### 6.11 Share acceptance, ABI 1.7
+
+`chur_sharing_accept` receives relay records, authenticates every issuer membership and operation chain, opens the local device's HPKE grant, and atomically installs the shared collection, its root-wrapped key, membership, pins, and grant. Issuer operations are transient evidence and are not inserted into the recipient identity-vault log. Private keys and the opened collection key do not cross the ABI.
+
+```c
+chur_status_t chur_sharing_accept(chur_handle_t session,
+                                  const uint8_t *bundle,
+                                  uint32_t bundle_length);
+```
+
+The bundle is at most 16 MiB. It contains big-endian fields in this order:
+
+```text
+version:u16 = 1
+issuer_count:u32
+repeat issuer_count:
+    membership_count:u32
+    membership_records:membership_count * bytes<u32>
+    operation_count:u32
+    operations:operation_count * bytes<u32>
+collection_membership_count:u32
+collection_memberships:collection_membership_count * (
+    membership_record:bytes<u32>, outer_operation:bytes<u32>)
+grant:bytes<u32>
+grant_outer_operation:bytes<u32>
+```
+
+There are at most 257 issuers and 4096 records in each counted list. Membership records are canonical `EnrollmentRecordV1` or `RevocationRecordV1`; every other record has its normative Phase 4 encoding. Counts, lengths, trailing bytes, gaps, causal predecessors, signatures, recipient bindings, selectors, payload pairs, epochs, permissions, and replay conflicts fail closed. Exact replay succeeds without advancing the catalog generation.
 
 ## 7. Buffer ownership
 

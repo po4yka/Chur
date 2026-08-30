@@ -2,9 +2,13 @@
 
 use chur_core::{ChurStatus, Error, Id, ensure};
 use chur_crypto::Key;
-use chur_format::codec::Writer;
+use chur_format::codec::{Reader, Writer};
 use chur_sync_protocol::{
-    grant::PermissionProfile, identity::fingerprint, membership::EnrollmentRecord,
+    collection_membership::CollectionMembershipRecord,
+    grant::{CollectionGrant, PermissionProfile},
+    identity::fingerprint,
+    membership::{EnrollmentRecord, RevocationRecord},
+    operation::Operation,
 };
 
 use crate::api::{Status, borrow_bytes, borrow_bytes_mut, write_out};
@@ -12,6 +16,14 @@ use crate::panic::guard_status;
 use crate::registry::{self, Entry, Handle, Kind};
 
 const RECORD_VERSION_V1: u16 = 1;
+const BUNDLE_BYTES_MAX: u32 = 16_777_216;
+const BUNDLE_RECORDS_MAX: usize = 4_096;
+const ISSUERS_MAX: usize = 257;
+
+struct DecodedIssuer {
+    membership: Vec<chur_catalog::sharing_service::IssuerMembershipRecord>,
+    operations: Vec<Operation>,
+}
 
 fn permission_profile(value: u8) -> Result<PermissionProfile, Error> {
     match value {
@@ -174,4 +186,145 @@ pub unsafe extern "C" fn chur_sharing_prepare(
         // SAFETY: the caller guarantees the writable out-parameter above.
         unsafe { write_out(bytes_written, encoded.len()) }
     })
+}
+
+/// Authenticates and installs one recipient share bundle.
+///
+/// # Safety
+///
+/// `bundle` covers `bundle_length` readable bytes for this call.
+#[unsafe(no_mangle)]
+#[expect(
+    unsafe_code,
+    reason = "FFI_CONTRACT.md section 6.11 fixes this exported symbol"
+)]
+pub unsafe extern "C" fn chur_sharing_accept(
+    session: Handle,
+    bundle: *const u8,
+    bundle_length: u32,
+) -> Status {
+    guard_status(|| {
+        ensure!(
+            bundle_length <= BUNDLE_BYTES_MAX,
+            ResourceLimitExceeded,
+            "the sharing acceptance bundle exceeds the ABI limit"
+        );
+        // SAFETY: the caller guarantees the readable input range above.
+        let bytes = unsafe { borrow_bytes(bundle, bundle_length)? };
+        let (issuers, membership, grant, grant_operation) = decode_accept_bundle(bytes)?;
+        let evidence = issuers
+            .iter()
+            .map(|issuer| chur_catalog::sharing_service::IssuerEvidence {
+                membership: &issuer.membership,
+                operations: &issuer.operations,
+            })
+            .collect::<Vec<_>>();
+        let entry = registry::get(session, Kind::Session)?;
+        let Entry::Session { session, .. } = entry.as_ref() else {
+            return Err(Error::new(
+                ChurStatus::InvalidInput,
+                "the handle is of another type",
+            ));
+        };
+        let mut session = registry::lock(session);
+        let root = Key::new(*session.root_secret().expose());
+        chur_catalog::sharing_service::accept_share(
+            session.catalog()?,
+            &root,
+            &evidence,
+            &membership,
+            &grant,
+            &grant_operation,
+        )?;
+        Ok(())
+    })
+}
+
+type DecodedAcceptBundle = (
+    Vec<DecodedIssuer>,
+    Vec<(CollectionMembershipRecord, Operation)>,
+    CollectionGrant,
+    Operation,
+);
+
+fn decode_accept_bundle(bytes: &[u8]) -> Result<DecodedAcceptBundle, Error> {
+    let mut reader = Reader::new(bytes, ChurStatus::NonCanonicalEncoding);
+    ensure!(
+        reader.u16()? == RECORD_VERSION_V1,
+        UnsupportedVersion,
+        "sharing acceptance bundle version is not supported"
+    );
+    let issuer_count = bounded_count(&mut reader, ISSUERS_MAX, "sharing issuer count")?;
+    let mut issuers = Vec::with_capacity(issuer_count);
+    for _ in 0..issuer_count {
+        let membership_count =
+            bounded_count(&mut reader, BUNDLE_RECORDS_MAX, "issuer membership count")?;
+        let mut membership = Vec::with_capacity(membership_count);
+        for _ in 0..membership_count {
+            let bytes = reader.variable(EnrollmentRecord::LEN as u32)?;
+            let record = match bytes.len() {
+                EnrollmentRecord::LEN => {
+                    chur_catalog::sharing_service::IssuerMembershipRecord::Enrollment(
+                        EnrollmentRecord::decode(bytes)?,
+                    )
+                }
+                RevocationRecord::LEN => {
+                    chur_catalog::sharing_service::IssuerMembershipRecord::Revocation(
+                        RevocationRecord::decode(bytes)?,
+                    )
+                }
+                _ => {
+                    return Err(Error::new(
+                        ChurStatus::NonCanonicalEncoding,
+                        "issuer membership record has another length",
+                    ));
+                }
+            };
+            membership.push(record);
+        }
+        let operation_count =
+            bounded_count(&mut reader, BUNDLE_RECORDS_MAX, "issuer operation count")?;
+        let mut operations = Vec::with_capacity(operation_count);
+        for _ in 0..operation_count {
+            operations.push(Operation::decode(reader.variable(BUNDLE_BYTES_MAX)?)?);
+        }
+        issuers.push(DecodedIssuer {
+            membership,
+            operations,
+        });
+    }
+    let membership_count = bounded_count(
+        &mut reader,
+        BUNDLE_RECORDS_MAX,
+        "collection membership count",
+    )?;
+    let mut membership = Vec::with_capacity(membership_count);
+    for _ in 0..membership_count {
+        let record = CollectionMembershipRecord::decode(
+            reader.variable(CollectionMembershipRecord::LEN as u32)?,
+        )?;
+        let operation = Operation::decode(reader.variable(BUNDLE_BYTES_MAX)?)?;
+        membership.push((record, operation));
+    }
+    let grant = CollectionGrant::decode(reader.variable(CollectionGrant::LEN as u32)?)?;
+    let grant_operation = Operation::decode(reader.variable(BUNDLE_BYTES_MAX)?)?;
+    reader.finish()?;
+    Ok((issuers, membership, grant, grant_operation))
+}
+
+fn bounded_count(
+    reader: &mut Reader<'_>,
+    maximum: usize,
+    context: &'static str,
+) -> Result<usize, Error> {
+    let count = usize::try_from(reader.u32()?).map_err(|_| {
+        Error::new(
+            ChurStatus::ResourceLimitExceeded,
+            "sharing record count exceeds the address space",
+        )
+    })?;
+    if count > maximum {
+        return Err(Error::new(ChurStatus::ResourceLimitExceeded, context));
+    }
+    Ok(count)
 }

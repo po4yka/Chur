@@ -5,13 +5,13 @@
 
 use chur_ffi::api::{chur_runtime_close, chur_runtime_open, chur_session_close, chur_vault_unlock};
 use chur_ffi::records::{ChurRuntimeConfigV1, ChurUnlockRequestV1};
-use chur_ffi::sharing::{chur_sharing_identity, chur_sharing_prepare};
-use chur_format::codec::Reader;
+use chur_ffi::sharing::{chur_sharing_accept, chur_sharing_identity, chur_sharing_prepare};
+use chur_format::codec::{Reader, Writer};
 use chur_format::envelope::CollectionKeyEnvelope;
 use chur_sync_protocol::{
     collection_membership::CollectionMembershipRecord,
     grant::{CollectionGrant, PermissionProfile},
-    identity::{DeviceIdentity, fingerprint},
+    identity::fingerprint,
     membership::EnrollmentRecord,
     operation::Operation,
 };
@@ -109,18 +109,61 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
     assert_eq!(operation.device_id(), &device_id);
     assert_eq!(operation.device_sequence(), 1);
 
-    let recipient_vault_id = chur_crypto::random::id().expect("recipient vault");
-    let recipient_device_id = chur_crypto::random::id().expect("recipient device");
-    let recipient = DeviceIdentity::from_seeds([41; 32], [42; 32]);
-    let recipient_enrollment = EnrollmentRecord::initial(
-        recipient_vault_id,
-        recipient_device_id,
-        recipient.signing_public_key(),
-        recipient.hpke_public_key(),
-    )
-    .expect("recipient enrollment")
-    .sign(recipient.signing_key())
-    .encode();
+    let recipient_path = std::env::temp_dir().join(format!(
+        "chur-ffi-sharing-recipient-{}",
+        chur_crypto::random::id().expect("random id").to_hex()
+    ));
+    let recipient_root = chur_catalog::paths::VaultRoot::new(&recipient_path);
+    drop(
+        chur_catalog::vault::create(&recipient_root, PASSWORD, 1)
+            .expect("create recipient")
+            .activate()
+            .expect("activate recipient"),
+    );
+    let recipient_path_bytes = recipient_path.to_str().expect("UTF-8 path").as_bytes();
+    let recipient_config = ChurRuntimeConfigV1 {
+        root_path: recipient_path_bytes.as_ptr(),
+        root_path_length: recipient_path_bytes.len() as u32,
+    };
+    let mut recipient_runtime = 0;
+    assert_eq!(
+        unsafe { chur_runtime_open(&recipient_config, &mut recipient_runtime) },
+        0
+    );
+    let mut recipient_session = 0;
+    assert_eq!(
+        unsafe { chur_vault_unlock(recipient_runtime, &unlock, &mut recipient_session) },
+        0
+    );
+    let mut recipient_identity = vec![0u8; 4096];
+    let mut recipient_identity_length = 0;
+    assert_eq!(
+        unsafe {
+            chur_sharing_identity(
+                recipient_session,
+                recipient_identity.as_mut_ptr(),
+                recipient_identity.len(),
+                &mut recipient_identity_length,
+            )
+        },
+        0
+    );
+    recipient_identity.truncate(recipient_identity_length);
+    let mut recipient_reader = Reader::new(
+        &recipient_identity,
+        chur_core::ChurStatus::NonCanonicalEncoding,
+    );
+    assert_eq!(recipient_reader.u16().expect("version"), 1);
+    let recipient_vault_id = recipient_reader.id().expect("recipient vault");
+    let recipient_device_id = recipient_reader.id().expect("recipient device");
+    recipient_reader.slice(64).expect("recipient public keys");
+    recipient_reader
+        .variable(49)
+        .expect("recipient fingerprint");
+    let recipient_enrollment = recipient_reader
+        .variable(EnrollmentRecord::LEN as u32)
+        .expect("recipient enrollment")
+        .to_vec();
     let mut short = [0xa5];
     written = usize::MAX;
     assert_eq!(
@@ -189,6 +232,46 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
     assert!(grant.permissions() == PermissionProfile::Contribute);
     assert!(membership_operation.device_sequence() < grant_operation.device_sequence());
 
+    let mut bundle = Writer::new();
+    bundle.u16(1).u32(1).u32(1);
+    bundle
+        .variable(&enrollment.encode())
+        .expect("issuer enrollment");
+    bundle.u32(3);
+    bundle
+        .variable(&operation.encode())
+        .expect("issuer operation");
+    bundle
+        .variable(&membership_operation.encode())
+        .expect("membership operation");
+    bundle
+        .variable(&grant_operation.encode())
+        .expect("grant operation");
+    bundle.u32(1);
+    bundle
+        .variable(&membership.encode())
+        .expect("membership record");
+    bundle
+        .variable(&membership_operation.encode())
+        .expect("membership operation");
+    bundle.variable(&grant.encode()).expect("grant");
+    bundle
+        .variable(&grant_operation.encode())
+        .expect("grant operation");
+    let bundle = bundle.finish();
+    assert_eq!(
+        unsafe { chur_sharing_accept(recipient_session, bundle.as_ptr(), 1) },
+        chur_core::ChurStatus::NonCanonicalEncoding.as_i32()
+    );
+    assert_eq!(
+        unsafe { chur_sharing_accept(recipient_session, bundle.as_ptr(), bundle.len() as u32,) },
+        0
+    );
+    assert_eq!(
+        unsafe { chur_sharing_accept(recipient_session, bundle.as_ptr(), bundle.len() as u32,) },
+        0
+    );
+
     let mut share_replay = vec![0u8; 4096];
     let mut share_replay_written = 0;
     assert_eq!(
@@ -225,5 +308,35 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
     assert_eq!(&replay[..replay_written], bytes.as_slice());
     assert_eq!(unsafe { chur_session_close(session) }, 0);
     assert_eq!(unsafe { chur_runtime_close(runtime) }, 0);
+    assert_eq!(unsafe { chur_session_close(recipient_session) }, 0);
+    assert_eq!(unsafe { chur_runtime_close(recipient_runtime) }, 0);
+    let mut received =
+        chur_catalog::vault::unlock_with_password(&recipient_root, PASSWORD, 1).expect("unlock");
+    assert_eq!(
+        chur_catalog::store::collection(received.catalog().expect("catalog"), &collection_id)
+            .expect("shared collection")
+            .policy_type,
+        chur_catalog::model::COLLECTION_POLICY_SHARED
+    );
+    let received_root = chur_crypto::Key::new(*received.root_secret().expose());
+    let received_envelope = CollectionKeyEnvelope::decode(
+        &chur_catalog::store::active_collection_envelope(
+            received.catalog().expect("catalog"),
+            &collection_id,
+            1,
+        )
+        .expect("received envelope"),
+    )
+    .expect("valid envelope");
+    assert_eq!(received_envelope.vault_id(), &recipient_vault_id);
+    assert_eq!(
+        received_envelope
+            .open(&received_root)
+            .expect("collection key")
+            .expose(),
+        collection_key.expose()
+    );
+    drop(received);
     std::fs::remove_dir_all(path).expect("cleanup");
+    std::fs::remove_dir_all(recipient_path).expect("cleanup recipient");
 }

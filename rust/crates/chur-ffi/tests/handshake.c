@@ -52,8 +52,8 @@ int main(void) {
           "neither format range is the empty panic fallback");
 
     check(chur_abi_version_major() == 1, "major ABI version is 1");
-    check(chur_abi_version_minor() == 4,
-          "minor ABI version is 4, including the section 6.8 sync inbox");
+    check(chur_abi_version_minor() == 7,
+          "minor ABI version is 7, including section 6.11 share acceptance");
 
     check(chur_object_format_min() <= chur_object_format_max(),
           "object format range is ordered");

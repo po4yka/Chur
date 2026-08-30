@@ -13,9 +13,9 @@
  * 6.5, the Android Keystore surface of section 6.6, and the portable backup
  * surface of section 6.7, the sync inbox surface of section 6.8, and the
  * sharing identity surface of section 6.9, and the share preparation surface
- * of section 6.10. Adding an
+ * of section 6.10, and the share acceptance surface of section 6.11. Adding an
  * export raises the minor ABI version;
- * changing or removing one raises the major. The library reports 1.6.
+ * changing or removing one raises the major. The library reports 1.7.
  */
 
 #ifndef CHUR_H
@@ -362,6 +362,11 @@ chur_status_t chur_sharing_prepare(chur_handle_t session,
                                    uint8_t fingerprint_verified,
                                    uint8_t *destination, size_t capacity,
                                    size_t *bytes_written);
+
+/* Authenticated recipient share installation, section 6.11. */
+chur_status_t chur_sharing_accept(chur_handle_t session,
+                                  const uint8_t *bundle,
+                                  uint32_t bundle_length);
 
 /* -------------------------------------------------------------------------
  * Catalog queries

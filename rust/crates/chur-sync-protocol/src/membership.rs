@@ -33,6 +33,9 @@ pub struct EnrollmentRecord {
 }
 
 impl EnrollmentRecord {
+    /// Exact canonical encoded length.
+    pub const LEN: usize = ENROLLMENT_LEN;
+
     /// Builds generation-1 self-enrollment.
     pub fn initial(
         vault_id: Id,
@@ -308,6 +311,9 @@ pub struct RevocationRecord {
 }
 
 impl RevocationRecord {
+    /// Exact canonical encoded length.
+    pub const LEN: usize = REVOCATION_LEN;
+
     /// Builds an unsigned revocation record.
     pub fn new(
         vault_id: Id,
