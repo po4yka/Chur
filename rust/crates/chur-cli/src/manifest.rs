@@ -141,6 +141,7 @@ pub const FORMAT_DIRECTORIES: &[(&str, &str)] = &[
     ("backup", "backup-packages"),
     ("operation", "sync-operations"),
     ("collection-grant", "collection-grants"),
+    ("collection-membership", "collection-memberships"),
 ];
 
 /// The directory an allocated `format` word maps to.

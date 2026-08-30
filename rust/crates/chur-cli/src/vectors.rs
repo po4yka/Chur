@@ -41,6 +41,11 @@ use chur_format::slot::{
 use chur_sync_protocol::checkpoint::{
     Checkpoint, CheckpointHead, UNCOMPACTED_CATALOG_STATE_COMMITMENT, collection_epoch_commitment,
 };
+use chur_sync_protocol::collection_membership::{
+    CollectionMembershipAction, CollectionMembershipRecord,
+};
+use chur_sync_protocol::grant::{CollectionGrant, PermissionProfile, hpke_key_id, signing_key_id};
+use chur_sync_protocol::identity::DeviceIdentity;
 use chur_sync_protocol::membership::{EnrollmentRecord, RevocationRecord};
 use chur_sync_protocol::operation::{DeviceSigningKey, ObservedHead, Operation};
 
@@ -101,6 +106,7 @@ pub fn build_all() -> Result<Vec<Vector>> {
     object_containers(&mut vectors)?;
     backup_packages(&mut vectors)?;
     sync_protocol(&mut vectors)?;
+    sharing_protocol(&mut vectors)?;
     vectors.sort_by(|left, right| left.entry.vector_id.cmp(&right.entry.vector_id));
     Ok(vectors)
 }
@@ -117,6 +123,8 @@ const BACKUP_SPEC: &str = "docs/format/BACKUP_FORMAT_V1.md";
 const OPERATION_SPEC: &str = "docs/sync/OPERATION_LOG.md";
 const IDENTITY_SPEC: &str = "docs/sync/DEVICE_IDENTITY.md";
 const ROLLBACK_SPEC: &str = "docs/sync/ROLLBACK_PROTECTION.md";
+const GRANT_SPEC: &str = "docs/sync/COLLECTION_GRANTS.md";
+const COLLECTION_MEMBERSHIP_SPEC: &str = "docs/sync/COLLECTION_MEMBERSHIP.md";
 
 // ---------------------------------------------------------------------------
 // Canonical encoding
@@ -1671,6 +1679,165 @@ fn sync_protocol(out: &mut Vec<Vector>) -> Result<()> {
             "NON_CANONICAL_ENCODING",
         )
         .input_bytes("record", &self_issued_revocation)
+        .build(),
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Collection sharing
+// ---------------------------------------------------------------------------
+
+fn sharing_protocol(out: &mut Vec<Vector>) -> Result<()> {
+    let source_vault_id = id(0x91)?;
+    let collection_id = id(0x92)?;
+    let sender_device_id = id(0x93)?;
+    let recipient_vault_id = id(0x94)?;
+    let recipient_device_id = id(0x95)?;
+    let sender = DeviceSigningKey::from_seed([0x96; 32]);
+    let recipient = DeviceIdentity::from_seeds([0x97; 32], [0x98; 32]);
+    let membership = CollectionMembershipRecord::new(
+        source_vault_id,
+        collection_id,
+        1,
+        [0; 32],
+        CollectionMembershipAction::Upsert(PermissionProfile::Contribute),
+        recipient_vault_id,
+        recipient_device_id,
+        recipient.signing_public_key(),
+        recipient.hpke_public_key(),
+        1,
+        source_vault_id,
+        sender_device_id,
+        1,
+        1,
+    )?
+    .sign(&sender);
+    out.push(
+        VectorBuilder::accept(
+            "collection-membership",
+            "collection-membership-v1-upsert",
+            COLLECTION_MEMBERSHIP_SPEC,
+            "1",
+            "One signed generation-one recipient-device membership entry.",
+        )
+        .input_bytes("sender_signing_seed", &[0x96; 32])
+        .input_bytes(
+            "recipient_signing_public_key",
+            &recipient.signing_public_key(),
+        )
+        .input_bytes("recipient_hpke_public_key", &recipient.hpke_public_key())
+        .expect_bytes("record", &membership.encode())
+        .expect_bytes("membership_commitment", &membership.commitment())
+        .expect("record_length", json!(CollectionMembershipRecord::LEN))
+        .build(),
+    );
+
+    let collection_key = key(0x99);
+    let ephemeral_ikm = [0x9a; 32];
+    let grant = CollectionGrant::seal_for_test_vector(
+        id(0x9b)?,
+        source_vault_id,
+        collection_id,
+        1,
+        1,
+        recipient_vault_id,
+        recipient_device_id,
+        &recipient.hpke_public_key(),
+        sender_device_id,
+        PermissionProfile::Contribute,
+        1,
+        2,
+        &collection_key,
+        &sender,
+        ephemeral_ikm,
+    )?;
+    let opened = grant.open_collection_key(
+        &recipient_vault_id,
+        &recipient_device_id,
+        &recipient,
+        &sender.verifying_key(),
+    )?;
+    if opened != collection_key {
+        return Err(Error::new(
+            ChurStatus::InternalFailure,
+            "sharing vector opened the wrong collection key",
+        ));
+    }
+    out.push(
+        VectorBuilder::accept(
+            "collection-grant",
+            "collection-grant-v1-signed-hpke",
+            GRANT_SPEC,
+            "2",
+            "One byte-exact signed RFC 9180 grant opens only to the bound recipient device.",
+        )
+        .input_bytes("collection_key", collection_key.expose())
+        .input_bytes("ephemeral_ikm", &ephemeral_ikm)
+        .input_bytes("recipient_hpke_public_key", &recipient.hpke_public_key())
+        .input_bytes("sender_signing_seed", &[0x96; 32])
+        .expect_bytes(
+            "recipient_hpke_key_id",
+            &hpke_key_id(
+                &recipient_vault_id,
+                &recipient_device_id,
+                &recipient.hpke_public_key(),
+            ),
+        )
+        .expect_bytes(
+            "sender_signing_key_id",
+            &signing_key_id(&source_vault_id, &sender_device_id, &sender.verifying_key()),
+        )
+        .expect_bytes("record", &grant.encode())
+        .expect_bytes("opened_collection_key", opened.expose())
+        .expect("record_length", json!(CollectionGrant::LEN))
+        .build(),
+    );
+
+    let mut modified_signature = grant.encode();
+    modified_signature[CollectionGrant::LEN - 1] ^= 1;
+    let modified = CollectionGrant::decode(&modified_signature)?;
+    expect_rejection(
+        modified.open_collection_key(
+            &recipient_vault_id,
+            &recipient_device_id,
+            &recipient,
+            &sender.verifying_key(),
+        ),
+        ChurStatus::AuthenticationFailed,
+    )?;
+    out.push(
+        VectorBuilder::reject(
+            "collection-grant",
+            "collection-grant-v1-modified-signature",
+            GRANT_SPEC,
+            "4",
+            "A modified sender signature cannot authenticate the HPKE grant.",
+            "AUTHENTICATION_FAILED",
+        )
+        .input_bytes("recipient_signing_seed", &[0x97; 32])
+        .input_bytes("recipient_hpke_secret", &[0x98; 32])
+        .input_bytes("sender_signing_public_key", &sender.verifying_key())
+        .input_bytes("record", &modified_signature)
+        .build(),
+    );
+
+    let mut unknown_profile = grant.encode();
+    unknown_profile[3] = 2;
+    expect_rejection(
+        CollectionGrant::decode(&unknown_profile),
+        ChurStatus::UnsupportedVersion,
+    )?;
+    out.push(
+        VectorBuilder::reject(
+            "collection-grant",
+            "collection-grant-v1-unknown-hpke-profile",
+            GRANT_SPEC,
+            "1",
+            "A reader rejects an unallocated HPKE profile before opening a key.",
+            "UNSUPPORTED_VERSION",
+        )
+        .input_bytes("record", &unknown_profile)
         .build(),
     );
     Ok(())

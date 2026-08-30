@@ -25,6 +25,7 @@ test-vectors/
     ├── backup-packages/
     ├── sync-operations/
     ├── collection-grants/
+    ├── collection-memberships/
     └── negative/
 ```
 
@@ -174,6 +175,7 @@ The `case` describes the input, never the expectation, because `outcome` already
 | `backup` | `backup-packages/` |
 | `operation` | `sync-operations/` |
 | `collection-grant` | `collection-grants/` |
+| `collection-membership` | `collection-memberships/` |
 
 Examples:
 

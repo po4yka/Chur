@@ -90,7 +90,7 @@ impl CollectionGrant {
         collection_key: &Key,
         sender_signing_key: &DeviceSigningKey,
     ) -> Result<Self> {
-        let mut grant = Self::from_fields(
+        let grant = Self::unsigned(
             grant_id,
             source_vault_id,
             collection_id,
@@ -98,33 +98,15 @@ impl CollectionGrant {
             collection_membership_generation,
             recipient_identity_vault_id,
             recipient_device_id,
-            hpke_key_id(
-                &recipient_identity_vault_id,
-                &recipient_device_id,
-                recipient_hpke_public_key,
-            ),
             sender_device_id,
-            signing_key_id(
-                &source_vault_id,
-                &sender_device_id,
-                &sender_signing_key.verifying_key(),
-            ),
             permissions,
             sender_membership_generation,
             created_sequence,
-            [1; ENCAPSULATED_KEY_LEN],
-            [0; WRAPPED_COLLECTION_KEY_LEN],
-            [0; SIGNATURE_LEN],
+            recipient_hpke_public_key,
+            sender_signing_key,
         )?;
         let context = grant.context_bytes();
-        let recipient_public_key =
-            <X25519HkdfSha256 as KemTrait>::PublicKey::from_bytes(recipient_hpke_public_key)
-                .map_err(|_| {
-                    Error::new(
-                        ChurStatus::InvalidInput,
-                        "recipient HPKE public key is invalid",
-                    )
-                })?;
+        let recipient_public_key = recipient_public_key(recipient_hpke_public_key)?;
         let (encapsulated_key, wrapped_collection_key) =
             hpke::single_shot_seal::<ChaCha20Poly1305, HkdfSha256, X25519HkdfSha256>(
                 &OpModeS::Base,
@@ -139,15 +121,74 @@ impl CollectionGrant {
                     "collection grant HPKE seal failed",
                 )
             })?;
-        grant
-            .encapsulated_key
-            .copy_from_slice(encapsulated_key.to_bytes().as_ref());
-        grant
-            .wrapped_collection_key
-            .copy_from_slice(&wrapped_collection_key);
-        grant.sender_signature = sender_signing_key.sign_bytes(&grant.signature_input());
-        grant.validate()?;
-        Ok(grant)
+        grant.finish_seal(
+            encapsulated_key.to_bytes().as_ref(),
+            &wrapped_collection_key,
+            sender_signing_key,
+        )
+    }
+
+    /// Seals with fixed test-only ephemeral input for published vectors.
+    #[cfg(feature = "test-vectors")]
+    #[doc(hidden)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the arguments are the frozen grant fields plus test input"
+    )]
+    pub fn seal_for_test_vector(
+        grant_id: Id,
+        source_vault_id: Id,
+        collection_id: Id,
+        collection_epoch: u64,
+        collection_membership_generation: u64,
+        recipient_identity_vault_id: Id,
+        recipient_device_id: Id,
+        recipient_hpke_public_key: &[u8; 32],
+        sender_device_id: Id,
+        permissions: PermissionProfile,
+        sender_membership_generation: u64,
+        created_sequence: u64,
+        collection_key: &Key,
+        sender_signing_key: &DeviceSigningKey,
+        ephemeral_ikm: [u8; 32],
+    ) -> Result<Self> {
+        let grant = Self::unsigned(
+            grant_id,
+            source_vault_id,
+            collection_id,
+            collection_epoch,
+            collection_membership_generation,
+            recipient_identity_vault_id,
+            recipient_device_id,
+            sender_device_id,
+            permissions,
+            sender_membership_generation,
+            created_sequence,
+            recipient_hpke_public_key,
+            sender_signing_key,
+        )?;
+        let context = grant.context_bytes();
+        let mut rng = FixedTestRng::new(ephemeral_ikm);
+        let (encapsulated_key, wrapped_collection_key) =
+            hpke::single_shot_seal_with_rng::<ChaCha20Poly1305, HkdfSha256, X25519HkdfSha256>(
+                &OpModeS::Base,
+                &recipient_public_key(recipient_hpke_public_key)?,
+                &grant_info(&context),
+                collection_key.expose(),
+                &grant_aad(&context),
+                &mut rng,
+            )
+            .map_err(|_| {
+                Error::new(
+                    ChurStatus::InternalFailure,
+                    "collection grant HPKE seal failed",
+                )
+            })?;
+        grant.finish_seal(
+            encapsulated_key.to_bytes().as_ref(),
+            &wrapped_collection_key,
+            sender_signing_key,
+        )
     }
 
     /// Verifies and opens the collection key for the bound recipient device.
@@ -476,7 +517,131 @@ impl CollectionGrant {
         input.extend_from_slice(&self.encode()[..Self::LEN - SIGNATURE_LEN]);
         input
     }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the arguments are the frozen grant fields"
+    )]
+    fn unsigned(
+        grant_id: Id,
+        source_vault_id: Id,
+        collection_id: Id,
+        collection_epoch: u64,
+        collection_membership_generation: u64,
+        recipient_identity_vault_id: Id,
+        recipient_device_id: Id,
+        sender_device_id: Id,
+        permissions: PermissionProfile,
+        sender_membership_generation: u64,
+        created_sequence: u64,
+        recipient_hpke_public_key: &[u8; 32],
+        sender_signing_key: &DeviceSigningKey,
+    ) -> Result<Self> {
+        Self::from_fields(
+            grant_id,
+            source_vault_id,
+            collection_id,
+            collection_epoch,
+            collection_membership_generation,
+            recipient_identity_vault_id,
+            recipient_device_id,
+            hpke_key_id(
+                &recipient_identity_vault_id,
+                &recipient_device_id,
+                recipient_hpke_public_key,
+            ),
+            sender_device_id,
+            signing_key_id(
+                &source_vault_id,
+                &sender_device_id,
+                &sender_signing_key.verifying_key(),
+            ),
+            permissions,
+            sender_membership_generation,
+            created_sequence,
+            [1; ENCAPSULATED_KEY_LEN],
+            [0; WRAPPED_COLLECTION_KEY_LEN],
+            [0; SIGNATURE_LEN],
+        )
+    }
+
+    fn finish_seal(
+        mut self,
+        encapsulated_key: &[u8],
+        wrapped_collection_key: &[u8],
+        sender_signing_key: &DeviceSigningKey,
+    ) -> Result<Self> {
+        self.encapsulated_key = encapsulated_key.try_into().map_err(|_| {
+            Error::new(
+                ChurStatus::InternalFailure,
+                "collection grant encapsulation is not 32 bytes",
+            )
+        })?;
+        self.wrapped_collection_key = wrapped_collection_key.try_into().map_err(|_| {
+            Error::new(
+                ChurStatus::InternalFailure,
+                "wrapped collection key is not 48 bytes",
+            )
+        })?;
+        self.sender_signature = sender_signing_key.sign_bytes(&self.signature_input());
+        self.validate()?;
+        Ok(self)
+    }
 }
+
+fn recipient_public_key(bytes: &[u8; 32]) -> Result<<X25519HkdfSha256 as KemTrait>::PublicKey> {
+    <X25519HkdfSha256 as KemTrait>::PublicKey::from_bytes(bytes).map_err(|_| {
+        Error::new(
+            ChurStatus::InvalidInput,
+            "recipient HPKE public key is invalid",
+        )
+    })
+}
+
+#[cfg(feature = "test-vectors")]
+struct FixedTestRng {
+    bytes: [u8; 32],
+    offset: usize,
+}
+
+#[cfg(feature = "test-vectors")]
+impl FixedTestRng {
+    const fn new(bytes: [u8; 32]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn fill(&mut self, output: &mut [u8]) {
+        for byte in output {
+            *byte = self.bytes[self.offset % self.bytes.len()];
+            self.offset += 1;
+        }
+    }
+}
+
+#[cfg(feature = "test-vectors")]
+impl hpke::rand_core::TryRng for FixedTestRng {
+    type Error = hpke::rand_core::Infallible;
+
+    fn try_next_u32(&mut self) -> core::result::Result<u32, Self::Error> {
+        let mut bytes = [0; 4];
+        self.fill(&mut bytes);
+        Ok(u32::from_le_bytes(bytes))
+    }
+
+    fn try_next_u64(&mut self) -> core::result::Result<u64, Self::Error> {
+        let mut bytes = [0; 8];
+        self.fill(&mut bytes);
+        Ok(u64::from_le_bytes(bytes))
+    }
+
+    fn try_fill_bytes(&mut self, output: &mut [u8]) -> core::result::Result<(), Self::Error> {
+        self.fill(output);
+        Ok(())
+    }
+}
+
+#[cfg(feature = "test-vectors")]
+impl hpke::rand_core::TryCryptoRng for FixedTestRng {}
 
 fn grant_info(context: &[u8]) -> Vec<u8> {
     [tag::SHARING_GRANT_HPKE_INFO, context].concat()
@@ -692,5 +857,35 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    #[cfg(feature = "test-vectors")]
+    #[test]
+    fn fixed_ephemeral_input_produces_one_repeatable_grant() {
+        let recipient = DeviceIdentity::from_seeds([1; 32], [2; 32]);
+        let sender = DeviceSigningKey::from_seed([3; 32]);
+        let seal = || {
+            CollectionGrant::seal_for_test_vector(
+                Id::new([4; 16]).expect("grant"),
+                Id::new([5; 16]).expect("source"),
+                Id::new([6; 16]).expect("collection"),
+                1,
+                1,
+                Id::new([7; 16]).expect("recipient vault"),
+                Id::new([8; 16]).expect("recipient device"),
+                &recipient.hpke_public_key(),
+                Id::new([9; 16]).expect("sender device"),
+                PermissionProfile::Read,
+                1,
+                1,
+                &Key::new([10; 32]),
+                &sender,
+                [11; 32],
+            )
+            .expect("grant")
+            .encode()
+        };
+
+        assert_eq!(seal(), seal());
     }
 }

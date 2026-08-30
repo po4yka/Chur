@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 description = "Canonical encrypted operations, device logs, grants, protocol versioning."
 
+[features]
+test-vectors = []
+
 [dependencies]
 chur-core.workspace = true
 chur-crypto.workspace = true
