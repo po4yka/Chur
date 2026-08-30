@@ -8,7 +8,8 @@ use chur_crypto::{Commitment, commit, tuple::tag};
 use chur_format::codec::{Reader, Writer};
 
 use crate::grant::{CollectionGrant, PermissionProfile, hpke_key_id};
-use crate::operation::{DeviceSigningKey, PROTOCOL_VERSION_V1, verify_ed25519};
+use crate::operation::{DeviceSigningKey, Operation, PROTOCOL_VERSION_V1, verify_ed25519};
+use crate::payload::{OperationPayload, PayloadBody};
 use crate::state::MembershipState;
 
 const PUBLIC_KEY_LEN: usize = 32;
@@ -390,6 +391,71 @@ impl CollectionMembershipState {
             "collection grant sender is revoked"
         );
         grant.verify_sender_signature(sender.signing_public_key())
+    }
+
+    /// Authorizes one already-opened shared operation against current permissions.
+    pub fn authorize_operation(
+        &self,
+        operation: &Operation,
+        payload: &OperationPayload,
+        issuer_membership: &MembershipState,
+    ) -> Result<()> {
+        payload.validate_for_operation(operation, &self.collection_id, self.collection_epoch)?;
+        ensure!(
+            issuer_membership.vault_id() == operation.vault_id(),
+            AuthenticationFailed,
+            "shared operation issuer membership belongs to another vault"
+        );
+        let issuer = issuer_membership
+            .device(operation.device_id())
+            .ok_or_else(|| {
+                Error::new(
+                    ChurStatus::AuthenticationFailed,
+                    "shared operation issuer is unknown",
+                )
+            })?;
+        ensure!(
+            issuer_membership.is_active(operation.device_id()),
+            AuthenticationFailed,
+            "shared operation issuer is revoked"
+        );
+        operation.verify_signature(issuer.signing_public_key())?;
+        if operation.vault_id() == &self.source_vault_id {
+            return Ok(());
+        }
+        ensure!(
+            !matches!(
+                payload.body(),
+                PayloadBody::AddDevice(_)
+                    | PayloadBody::RevokeDevice(_)
+                    | PayloadBody::CreateCollectionEpoch { .. }
+                    | PayloadBody::RewrapObjectKey { .. }
+                    | PayloadBody::IssueCollectionGrant(_)
+            ),
+            AuthenticationFailed,
+            "shared security operation requires a source-vault device"
+        );
+        let member = self
+            .member(operation.vault_id(), operation.device_id())
+            .ok_or_else(|| {
+                Error::new(
+                    ChurStatus::AuthenticationFailed,
+                    "shared operation issuer is not a collection member",
+                )
+            })?;
+        let required = if matches!(payload.body(), PayloadBody::ChangeCollectionMembership(_)) {
+            PermissionProfile::ManageMembers
+        } else {
+            PermissionProfile::Contribute
+        };
+        ensure!(
+            member.active
+                && member.signing_public_key == *issuer.signing_public_key()
+                && (member.permissions as u8 & required as u8) == required as u8,
+            AuthenticationFailed,
+            "shared operation issuer lacks the required permission"
+        );
+        Ok(())
     }
 
     /// Explicitly verifies or replaces one recipient key pin.
@@ -783,6 +849,7 @@ mod tests {
     use super::*;
     use crate::identity::DeviceIdentity;
     use crate::membership::EnrollmentRecord;
+    use chur_crypto::Nonce;
     use chur_crypto::secret::Key;
 
     fn id(byte: u8) -> Id {
@@ -1134,8 +1201,129 @@ mod tests {
             .expect("manager")
             .permissions = PermissionProfile::Contribute;
         assert!(insufficient.accept(&next, &manager_membership).is_err());
+        let payload = OperationPayload::new(
+            id(8),
+            1,
+            PayloadBody::ChangeCollectionMembership(next.clone()),
+        )
+        .expect("payload");
+        let operation = Operation::seal(
+            id(15),
+            id(5),
+            id(6),
+            14,
+            [16; 32],
+            Vec::new(),
+            id(17),
+            &Key::new([18; 32]),
+            Nonce::new([19; 24]),
+            &payload.encode(),
+        )
+        .expect("operation")
+        .sign(&manager_key);
+        assert!(
+            insufficient
+                .authorize_operation(&operation, &payload, &manager_membership)
+                .is_err()
+        );
+        state
+            .authorize_operation(&operation, &payload, &manager_membership)
+            .expect("manager operation");
         state
             .accept(&next, &manager_membership)
             .expect("member manager");
+    }
+
+    #[test]
+    fn read_cannot_author_content_but_contribute_can() {
+        let source_key = DeviceSigningKey::from_seed([1; 32]);
+        let source_enrollment =
+            EnrollmentRecord::initial(id(1), id(2), source_key.verifying_key(), [3; 32])
+                .expect("source enrollment")
+                .sign(&source_key);
+        let source_membership =
+            MembershipState::bootstrap(&source_enrollment).expect("source membership");
+        let recipient_key = DeviceSigningKey::from_seed([4; 32]);
+        let recipient_enrollment =
+            EnrollmentRecord::initial(id(5), id(6), recipient_key.verifying_key(), [7; 32])
+                .expect("recipient enrollment")
+                .sign(&recipient_key);
+        let recipient_membership =
+            MembershipState::bootstrap(&recipient_enrollment).expect("recipient membership");
+        let first = CollectionMembershipRecord::new(
+            id(1),
+            id(8),
+            1,
+            [0; 32],
+            CollectionMembershipAction::Upsert(PermissionProfile::Read),
+            id(5),
+            id(6),
+            recipient_key.verifying_key(),
+            [7; 32],
+            1,
+            id(1),
+            id(2),
+            1,
+            9,
+        )
+        .expect("first")
+        .sign(&source_key);
+        let mut state = CollectionMembershipState::new(id(1), id(8), 1).expect("state");
+        state
+            .accept(&first, &source_membership)
+            .expect("read member");
+        let payload = OperationPayload::new(
+            id(8),
+            1,
+            PayloadBody::CreateAlbum {
+                album_id: id(10),
+                name: "Shared".to_owned(),
+            },
+        )
+        .expect("payload");
+        let operation = Operation::seal(
+            id(11),
+            id(5),
+            id(6),
+            1,
+            [0; 32],
+            Vec::new(),
+            id(12),
+            &Key::new([13; 32]),
+            Nonce::new([14; 24]),
+            &payload.encode(),
+        )
+        .expect("operation")
+        .sign(&recipient_key);
+
+        assert!(
+            state
+                .authorize_operation(&operation, &payload, &recipient_membership)
+                .is_err()
+        );
+        let upgrade = CollectionMembershipRecord::new(
+            id(1),
+            id(8),
+            2,
+            first.commitment(),
+            CollectionMembershipAction::Upsert(PermissionProfile::Contribute),
+            id(5),
+            id(6),
+            recipient_key.verifying_key(),
+            [7; 32],
+            1,
+            id(1),
+            id(2),
+            1,
+            15,
+        )
+        .expect("upgrade")
+        .sign(&source_key);
+        state
+            .accept(&upgrade, &source_membership)
+            .expect("upgrade member");
+        state
+            .authorize_operation(&operation, &payload, &recipient_membership)
+            .expect("contribute");
     }
 }

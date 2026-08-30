@@ -405,8 +405,8 @@ impl OperationPayload {
             }
             PayloadBody::ChangeCollectionMembership(record) => {
                 ensure!(
-                    record.source_vault_id() == operation.vault_id()
-                        && record.collection_id() == &self.collection_id
+                    record.collection_id() == &self.collection_id
+                        && record.issuer_identity_vault_id() == operation.vault_id()
                         && record.issuer_device_id() == operation.device_id()
                         && record.created_sequence() == operation.device_sequence(),
                     AuthenticationFailed,

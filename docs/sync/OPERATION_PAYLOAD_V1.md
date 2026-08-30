@@ -45,7 +45,7 @@ All identifiers are non-zero random identifiers. `stream_id` names the primary o
 
 `AddDevice` and `RevokeDevice` carry the complete signed membership records of [`DEVICE_IDENTITY.md`](DEVICE_IDENTITY.md) §4 and §9. Their `created_sequence` or issuer, membership generation, and vault binding must agree with the containing operation. `CreateCollectionEpoch` and `RewrapObjectKey` carry the complete canonical envelope records of the format specifications; all repeated collection, epoch, object, and vault values must agree.
 
-`ChangeCollectionMembership` carries the complete record of [`COLLECTION_MEMBERSHIP.md`](COLLECTION_MEMBERSHIP.md). Its source vault, collection, issuer, creation sequence, and pre-change epoch agree with the containing operation. `IssueCollectionGrant` carries the complete grant of [`COLLECTION_GRANTS.md`](COLLECTION_GRANTS.md). Its grant identifier equals the containing operation identifier; its source vault, collection, sender, creation sequence, and collection epoch agree with the operation and selected key domain.
+`ChangeCollectionMembership` carries the complete record of [`COLLECTION_MEMBERSHIP.md`](COLLECTION_MEMBERSHIP.md). Its collection, issuer identity vault, issuer device, creation sequence, and pre-change epoch agree with the containing operation. The source vault can differ from the operation vault when an external `MANAGE_MEMBERS` recipient authors the change. `IssueCollectionGrant` carries the complete grant of [`COLLECTION_GRANTS.md`](COLLECTION_GRANTS.md). Its grant identifier equals the containing operation identifier; its source vault, collection, sender, creation sequence, and collection epoch agree with the operation and selected key domain.
 
 ## 3. Metadata fields
 
