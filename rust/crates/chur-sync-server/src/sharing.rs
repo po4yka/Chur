@@ -805,13 +805,17 @@ fn ensure_issuer_recipient(
                 "recipient collection state is absent",
             )
         })?;
-        if state.source_vault_id() == &issuer_vault_id
-            && state.is_authorized(
-                &recipient_vault_id,
-                &recipient_device_id,
-                PermissionProfile::Read,
-            )
-        {
+        let requester_is_current = state.is_authorized(
+            &recipient_vault_id,
+            &recipient_device_id,
+            PermissionProfile::Read,
+        );
+        let issuer_is_current = state.source_vault_id() == &issuer_vault_id
+            || state.active_members().any(|(vault_id, _, member)| {
+                vault_id == &issuer_vault_id
+                    && member.permissions() == PermissionProfile::ManageMembers
+            });
+        if requester_is_current && issuer_is_current {
             return Ok(());
         }
     }
@@ -1439,7 +1443,7 @@ mod tests {
             collection_id,
             2,
             membership.commitment(),
-            CollectionMembershipAction::Upsert(PermissionProfile::Contribute),
+            CollectionMembershipAction::Upsert(PermissionProfile::ManageMembers),
             second_vault,
             second_device,
             second_recipient.signing_public_key(),
@@ -1473,7 +1477,7 @@ mod tests {
             second_device,
             &second_recipient.hpke_public_key(),
             source_device,
-            PermissionProfile::Contribute,
+            PermissionProfile::ManageMembers,
             1,
             5,
             &collection_key,
@@ -1491,6 +1495,29 @@ mod tests {
         server
             .accept_collection_grant(&second_grant, &second_grant_outer)
             .expect("second grant");
+        assert_eq!(
+            server
+                .issuer_memberships_for_recipient(
+                    recipient_vault,
+                    recipient_device,
+                    second_vault,
+                    0,
+                )
+                .expect("manager membership chain"),
+            vec![second_enrollment.encode()]
+        );
+        assert_eq!(
+            server
+                .issuer_operations_for_recipient(
+                    recipient_vault,
+                    recipient_device,
+                    second_vault,
+                    second_device,
+                    0,
+                )
+                .expect("manager operation chain"),
+            vec![second_initial.encode()]
+        );
         let first_grants = server
             .collection_grants_for_recipient(recipient_vault, recipient_device)
             .expect("first grant inbox");
@@ -1539,6 +1566,16 @@ mod tests {
         server
             .accept_collection_membership(&revocation, &revocation_outer)
             .expect("recipient revocation");
+        assert!(
+            server
+                .issuer_memberships_for_recipient(
+                    recipient_vault,
+                    recipient_device,
+                    second_vault,
+                    0,
+                )
+                .is_err_and(|error| error.status() == ChurStatus::AuthenticationFailed)
+        );
         let current_grant = CollectionGrant::seal(
             id(28),
             source_vault,
@@ -1549,7 +1586,7 @@ mod tests {
             second_device,
             &second_recipient.hpke_public_key(),
             source_device,
-            PermissionProfile::Contribute,
+            PermissionProfile::ManageMembers,
             1,
             7,
             &Key::new([29; 32]),
