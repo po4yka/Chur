@@ -519,6 +519,37 @@ pub fn load_grants(db: &CatalogDb, collection_id: &Id) -> Result<Vec<CollectionG
     Ok(grants)
 }
 
+/// Loads one exact accepted collection-membership record.
+pub fn membership_record_at(
+    db: &CatalogDb,
+    collection_id: &Id,
+    generation: u64,
+) -> Result<CollectionMembershipRecord> {
+    let bytes: Vec<u8> = db
+        .connection()
+        .query_row(
+            "SELECT record FROM sharing_membership_records
+              WHERE collection_id = ?1 AND membership_generation = ?2",
+            params![
+                collection_id.as_bytes().as_slice(),
+                as_sqlite_integer(
+                    generation,
+                    "the collection membership generation is too large"
+                )?,
+            ],
+            |row| row.get(0),
+        )
+        .map_err(|error| map_sqlite(error, "collection membership record could not be read"))?;
+    let record = CollectionMembershipRecord::decode(&bytes).map_err(corrupt_sharing)?;
+    ensure!(
+        record.collection_id() == collection_id
+            && record.collection_membership_generation() == generation,
+        CatalogCorrupt,
+        "collection membership lookup contradicts its record"
+    );
+    Ok(record)
+}
+
 /// Projects one validated collection grant inside an existing transaction.
 pub fn project_grant(
     transaction: &Transaction<'_>,

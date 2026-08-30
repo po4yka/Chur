@@ -27,6 +27,7 @@ pub(crate) mod row;
 pub mod schema;
 pub mod sharing;
 pub mod sharing_log;
+pub mod sharing_service;
 pub mod store;
 pub mod sync_engine;
 pub mod sync_keys;

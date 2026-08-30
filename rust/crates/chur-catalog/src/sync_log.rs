@@ -705,6 +705,12 @@ pub(crate) fn device_ids(db: &CatalogDb) -> Result<Vec<Id>> {
     Ok(devices)
 }
 
+/// Returns one exact canonical operation from a durable device chain.
+pub fn record_at(db: &CatalogDb, device_id: &Id, sequence: u64) -> Result<Option<Vec<u8>>> {
+    operation_at(db, device_id, sequence)
+        .map(|record| record.map(|(operation, _)| operation.encode()))
+}
+
 pub(crate) fn operation_at(
     db: &CatalogDb,
     device_id: &Id,
