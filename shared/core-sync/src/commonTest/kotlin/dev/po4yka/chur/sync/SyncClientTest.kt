@@ -3,6 +3,7 @@ package dev.po4yka.chur.sync
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.engine.mock.toByteArray
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
@@ -11,6 +12,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 class SyncClientTest {
     @Test
@@ -55,6 +57,33 @@ class SyncClientTest {
         assertFailsWith<IllegalArgumentException> {
             client.memberships(ByteArray(16), 0u)
         }
+    }
+
+    @Test
+    fun sharing_records_and_collection_cursor_use_the_frozen_routes() = runTest {
+        val requests = mutableListOf<Pair<String, ByteArray>>()
+        val engine = MockEngine { request ->
+            requests += request.url.toString() to (request.body.toByteArray())
+            respond(frame(byteArrayOf(7)), status = HttpStatusCode.OK)
+        }
+        val client = SyncClient("https://sync.example", { ByteArray(32) }, HttpClient(engine))
+        val vault = ByteArray(16) { 1 }
+        val selector = ByteArray(16) { 2 }
+        val issuer = ByteArray(16) { 3 }
+        val device = ByteArray(16) { 4 }
+
+        client.putSharingMembership(vault, byteArrayOf(5, 6), byteArrayOf(7, 8, 9))
+        val page = client.collectionOperations(
+            vault,
+            selector,
+            CollectionOperationCursor(issuer, device, 11u),
+        )
+
+        assertContentEquals(byteArrayOf(0, 0, 0, 2, 5, 6, 7, 8, 9), requests[0].second)
+        assertTrue(requests[1].first.endsWith(
+            "/sharing/operations/${selector.hex()}?after_vault=${issuer.hex()}&after_device=${device.hex()}&after=11",
+        ))
+        assertContentEquals(byteArrayOf(7), page.single())
     }
 }
 

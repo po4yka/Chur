@@ -70,6 +70,55 @@ public class SyncClient(
             "/v1/vaults/${vaultId.id()}/operations/${deviceId.id()}?after=$after",
         )
 
+    /** Uploads one collection membership record with its authenticated outer operation. */
+    public suspend fun putSharingMembership(
+        vaultId: ByteArray,
+        membership: ByteArray,
+        operation: ByteArray,
+    ): Unit = success(
+        HttpMethod.Post,
+        "/v1/vaults/${vaultId.id()}/sharing/memberships",
+        pair(membership, operation),
+    )
+
+    /** Fetches bounded collection membership chains visible to this device. */
+    public suspend fun sharingMemberships(vaultId: ByteArray): List<ByteArray> =
+        page(HttpMethod.Get, "/v1/vaults/${vaultId.id()}/sharing/memberships")
+
+    /** Uploads one recipient grant with its authenticated outer operation. */
+    public suspend fun putSharingGrant(
+        vaultId: ByteArray,
+        grant: ByteArray,
+        operation: ByteArray,
+    ): Unit = success(
+        HttpMethod.Post,
+        "/v1/vaults/${vaultId.id()}/sharing/grants",
+        pair(grant, operation),
+    )
+
+    /** Fetches current grants addressed to this device. */
+    public suspend fun sharingGrants(vaultId: ByteArray): List<ByteArray> =
+        page(HttpMethod.Get, "/v1/vaults/${vaultId.id()}/sharing/grants")
+
+    /** Uploads one opaque signed collection operation. */
+    public suspend fun putCollectionOperation(vaultId: ByteArray, operation: ByteArray): Unit =
+        success(HttpMethod.Post, "/v1/vaults/${vaultId.id()}/sharing/operations", operation)
+
+    /** Fetches one keyset-paginated opaque collection-operation page. */
+    public suspend fun collectionOperations(
+        vaultId: ByteArray,
+        selector: ByteArray,
+        after: CollectionOperationCursor? = null,
+    ): List<ByteArray> {
+        val cursor = after?.let {
+            "?after_vault=${it.issuerVaultId.id()}&after_device=${it.issuerDeviceId.id()}&after=${it.sequence}"
+        }.orEmpty()
+        return page(
+            HttpMethod.Get,
+            "/v1/vaults/${vaultId.id()}/sharing/operations/${selector.id()}$cursor",
+        )
+    }
+
     /** Uploads one signed checkpoint. Exact replays are idempotent. */
     public suspend fun putCheckpoint(vaultId: ByteArray, checkpoint: ByteArray): Unit =
         success(HttpMethod.Post, "/v1/vaults/${vaultId.id()}/checkpoints", checkpoint)
@@ -232,6 +281,13 @@ public class SyncClient(
 
 /** The durable server state of one object upload. */
 public data class UploadProgress(public val received: ULong, public val expected: ULong, public val complete: Boolean)
+
+/** Last accepted collection-operation position in the server's canonical order. */
+public data class CollectionOperationCursor(
+    public val issuerVaultId: ByteArray,
+    public val issuerDeviceId: ByteArray,
+    public val sequence: ULong,
+)
 
 /** A stable server or local transport-boundary failure. */
 public class SyncTransportFailure(
