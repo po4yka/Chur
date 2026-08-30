@@ -10,6 +10,145 @@ use rusqlite::{OptionalExtension, params};
 
 use super::{ReferenceServer, RelayOutcome, map_sqlite, relay, to_sqlite};
 
+pub(super) fn migrate_outer_associations(db: &mut rusqlite::Connection) -> Result<()> {
+    for (table, column, definition) in [
+        (
+            "collection_membership_records",
+            "outer_device_id",
+            "outer_device_id BLOB CHECK(length(outer_device_id) = 16)",
+        ),
+        (
+            "collection_membership_records",
+            "outer_device_sequence",
+            "outer_device_sequence INTEGER CHECK(outer_device_sequence > 0)",
+        ),
+        (
+            "collection_grants",
+            "outer_device_id",
+            "outer_device_id BLOB CHECK(length(outer_device_id) = 16)",
+        ),
+        (
+            "collection_grants",
+            "outer_device_sequence",
+            "outer_device_sequence INTEGER CHECK(outer_device_sequence > 0)",
+        ),
+    ] {
+        if !column_exists(db, table, column)? {
+            db.execute(&format!("ALTER TABLE {table} ADD COLUMN {definition}"), [])
+                .map_err(|error| map_sqlite(error, "sharing schema migration failed"))?;
+        }
+    }
+
+    let transaction = db
+        .transaction()
+        .map_err(|error| map_sqlite(error, "sharing association migration failed"))?;
+    let membership_rows = {
+        let mut statement = transaction
+            .prepare(
+                "SELECT collection_id, membership_generation, record
+                   FROM collection_membership_records
+                  WHERE outer_device_id IS NULL OR outer_device_sequence IS NULL",
+            )
+            .map_err(|error| map_sqlite(error, "sharing membership migration prepare failed"))?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                ))
+            })
+            .map_err(|error| map_sqlite(error, "sharing membership migration query failed"))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| map_sqlite(error, "sharing membership migration row failed"))?
+    };
+    for (collection_id, generation, bytes) in membership_rows {
+        let record = CollectionMembershipRecord::decode(&bytes).map_err(corrupt_sharing)?;
+        ensure!(
+            record.collection_id().as_bytes().as_slice() == collection_id
+                && to_sqlite(
+                    record.collection_membership_generation(),
+                    "collection membership generation does not fit"
+                )? == generation,
+            CatalogCorrupt,
+            "stored collection membership projection is invalid"
+        );
+        transaction
+            .execute(
+                "UPDATE collection_membership_records
+                    SET outer_device_id = ?3, outer_device_sequence = ?4
+                  WHERE collection_id = ?1 AND membership_generation = ?2",
+                params![
+                    collection_id,
+                    generation,
+                    record.issuer_device_id().as_bytes().as_slice(),
+                    to_sqlite(
+                        record.created_sequence(),
+                        "outer membership sequence does not fit"
+                    )?,
+                ],
+            )
+            .map_err(|error| map_sqlite(error, "sharing membership migration failed"))?;
+    }
+    let grant_rows = {
+        let mut statement = transaction
+            .prepare(
+                "SELECT grant_id, record FROM collection_grants
+                  WHERE outer_device_id IS NULL OR outer_device_sequence IS NULL",
+            )
+            .map_err(|error| map_sqlite(error, "sharing grant migration prepare failed"))?;
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })
+            .map_err(|error| map_sqlite(error, "sharing grant migration query failed"))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| map_sqlite(error, "sharing grant migration row failed"))?
+    };
+    for (grant_id, bytes) in grant_rows {
+        let grant = CollectionGrant::decode(&bytes).map_err(corrupt_sharing)?;
+        ensure!(
+            grant.grant_id().as_bytes().as_slice() == grant_id,
+            CatalogCorrupt,
+            "stored collection grant projection is invalid"
+        );
+        transaction
+            .execute(
+                "UPDATE collection_grants
+                    SET outer_device_id = ?2, outer_device_sequence = ?3
+                  WHERE grant_id = ?1",
+                params![
+                    grant_id,
+                    grant.sender_device_id().as_bytes().as_slice(),
+                    to_sqlite(
+                        grant.created_sequence(),
+                        "outer grant sequence does not fit"
+                    )?,
+                ],
+            )
+            .map_err(|error| map_sqlite(error, "sharing grant migration failed"))?;
+    }
+    transaction
+        .commit()
+        .map_err(|error| map_sqlite(error, "sharing association migration commit failed"))
+}
+
+fn column_exists(db: &rusqlite::Connection, table: &str, column: &str) -> Result<bool> {
+    let mut statement = db
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|error| map_sqlite(error, "sharing schema inspection failed"))?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| map_sqlite(error, "sharing schema inspection query failed"))?;
+    for stored in columns {
+        if stored.map_err(|error| map_sqlite(error, "sharing schema column is invalid"))? == column
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 impl ReferenceServer {
     /// Accepts one signed collection membership record and its outer operation.
     pub fn accept_collection_membership(
@@ -72,8 +211,9 @@ impl ReferenceServer {
                 "INSERT INTO collection_membership_records (
                     collection_id, membership_generation, issuer_vault_id,
                     issuer_signing_public_key, recipient_vault_id,
-                    recipient_device_id, record
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    recipient_device_id, outer_device_id,
+                    outer_device_sequence, record
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     record.collection_id().as_bytes().as_slice(),
                     to_sqlite(
@@ -84,6 +224,11 @@ impl ReferenceServer {
                     issuer_key.as_slice(),
                     record.recipient_identity_vault_id().as_bytes().as_slice(),
                     record.recipient_device_id().as_bytes().as_slice(),
+                    outer.device_id().as_bytes().as_slice(),
+                    to_sqlite(
+                        outer.device_sequence(),
+                        "outer operation sequence does not fit"
+                    )?,
                     record.encode(),
                 ],
             )
@@ -138,8 +283,9 @@ impl ReferenceServer {
             .execute(
                 "INSERT INTO collection_grants (
                     grant_id, collection_id, collection_epoch, issuer_vault_id,
-                    recipient_vault_id, recipient_device_id, record
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    recipient_vault_id, recipient_device_id, outer_device_id,
+                    outer_device_sequence, record
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     grant.grant_id().as_bytes().as_slice(),
                     grant.collection_id().as_bytes().as_slice(),
@@ -147,6 +293,11 @@ impl ReferenceServer {
                     outer.vault_id().as_bytes().as_slice(),
                     grant.recipient_identity_vault_id().as_bytes().as_slice(),
                     grant.recipient_device_id().as_bytes().as_slice(),
+                    outer.device_id().as_bytes().as_slice(),
+                    to_sqlite(
+                        outer.device_sequence(),
+                        "outer operation sequence does not fit"
+                    )?,
                     grant.encode(),
                 ],
             )
@@ -189,9 +340,14 @@ impl ReferenceServer {
             let mut statement = self
                 .db
                 .prepare(
-                    "SELECT record FROM collection_membership_records
-                     WHERE collection_id = ?1 AND membership_generation <= ?2
-                     ORDER BY membership_generation LIMIT ?3",
+                    "SELECT sharing.record, operations.record
+                       FROM collection_membership_records AS sharing
+                       JOIN operations ON operations.vault_id = sharing.issuer_vault_id
+                        AND operations.device_id = sharing.outer_device_id
+                        AND operations.device_sequence = sharing.outer_device_sequence
+                      WHERE sharing.collection_id = ?1
+                        AND sharing.membership_generation <= ?2
+                      ORDER BY sharing.membership_generation LIMIT ?3",
                 )
                 .map_err(|error| map_sqlite(error, "collection inbox prepare failed"))?;
             let rows = statement
@@ -201,14 +357,15 @@ impl ReferenceServer {
                         cutoff,
                         i64::try_from(bounds::RESPONSE_OPERATIONS_MAX).unwrap_or(i64::MAX),
                     ],
-                    |row| row.get::<_, Vec<u8>>(0),
+                    |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
                 )
                 .map_err(|error| map_sqlite(error, "collection inbox query failed"))?;
             for row in rows {
                 if !push_bounded(
                     &mut records,
                     &mut bytes,
-                    row.map_err(|error| map_sqlite(error, "collection inbox row failed"))?,
+                    row.map_err(|error| map_sqlite(error, "collection inbox row failed"))
+                        .map(|(record, outer)| record_pair_bytes(&record, &outer))?,
                 )? {
                     return Ok(records);
                 }
@@ -249,10 +406,15 @@ impl ReferenceServer {
             let mut statement = self
                 .db
                 .prepare(
-                    "SELECT record FROM collection_grants
-                     WHERE collection_id = ?1 AND recipient_vault_id = ?2
-                       AND recipient_device_id = ?3
-                     ORDER BY collection_epoch, grant_id LIMIT ?4",
+                    "SELECT sharing.record, operations.record
+                       FROM collection_grants AS sharing
+                       JOIN operations ON operations.vault_id = sharing.issuer_vault_id
+                        AND operations.device_id = sharing.outer_device_id
+                        AND operations.device_sequence = sharing.outer_device_sequence
+                      WHERE sharing.collection_id = ?1
+                        AND sharing.recipient_vault_id = ?2
+                        AND sharing.recipient_device_id = ?3
+                      ORDER BY sharing.collection_epoch, sharing.grant_id LIMIT ?4",
                 )
                 .map_err(|error| map_sqlite(error, "grant inbox prepare failed"))?;
             let rows = statement
@@ -263,18 +425,19 @@ impl ReferenceServer {
                         recipient_device_id.as_bytes().as_slice(),
                         i64::try_from(bounds::RESPONSE_OPERATIONS_MAX).unwrap_or(i64::MAX),
                     ],
-                    |row| row.get::<_, Vec<u8>>(0),
+                    |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
                 )
                 .map_err(|error| map_sqlite(error, "grant inbox query failed"))?;
             for row in rows {
-                let record = row.map_err(|error| map_sqlite(error, "grant inbox row failed"))?;
+                let (record, outer) =
+                    row.map_err(|error| map_sqlite(error, "grant inbox row failed"))?;
                 let grant = CollectionGrant::decode(&record).map_err(corrupt_sharing)?;
                 if grant.collection_epoch() != state.collection_epoch()
                     || grant.collection_membership_generation() != membership_generation
                 {
                     continue;
                 }
-                if !push_bounded(&mut records, &mut bytes, record)? {
+                if !push_bounded(&mut records, &mut bytes, record_pair_bytes(&record, &outer))? {
                     return Ok(records);
                 }
             }
@@ -513,6 +676,14 @@ fn push_bounded(records: &mut Vec<Vec<u8>>, bytes: &mut usize, record: Vec<u8>) 
     *bytes = next;
     records.push(record);
     Ok(true)
+}
+
+fn record_pair_bytes(record: &[u8], outer: &[u8]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(4 + record.len() + outer.len());
+    bytes.extend_from_slice(&(record.len() as u32).to_be_bytes());
+    bytes.extend_from_slice(record);
+    bytes.extend_from_slice(outer);
+    bytes
 }
 
 fn corrupt_sharing(_: Error) -> Error {
@@ -787,10 +958,12 @@ mod tests {
         let first_grants = server
             .collection_grants_for_recipient(recipient_vault, recipient_device)
             .expect("first grant inbox");
-        assert_eq!(first_grants, vec![grant.encode()]);
+        assert_eq!(
+            first_grants,
+            vec![record_pair(&grant.encode(), &grant_outer.encode())]
+        );
         assert!(
-            CollectionGrant::decode(&first_grants[0])
-                .expect("decode grant")
+            grant
                 .open_collection_key(
                     &recipient_vault,
                     &recipient_device,
@@ -866,9 +1039,12 @@ mod tests {
                 .collection_memberships_for_recipient(recipient_vault, recipient_device)
                 .expect("membership inbox"),
             vec![
-                membership.encode(),
-                second_membership.encode(),
-                revocation.encode(),
+                record_pair(&membership.encode(), &membership_outer.encode()),
+                record_pair(
+                    &second_membership.encode(),
+                    &second_membership_outer.encode()
+                ),
+                record_pair(&revocation.encode(), &revocation_outer.encode()),
             ]
         );
         let grants = server
@@ -880,16 +1056,22 @@ mod tests {
                 .collection_memberships_for_recipient(second_vault, second_device)
                 .expect("second membership inbox"),
             vec![
-                membership.encode(),
-                second_membership.encode(),
-                revocation.encode(),
+                record_pair(&membership.encode(), &membership_outer.encode()),
+                record_pair(
+                    &second_membership.encode(),
+                    &second_membership_outer.encode()
+                ),
+                record_pair(&revocation.encode(), &revocation_outer.encode()),
             ]
         );
         assert_eq!(
             server
                 .collection_grants_for_recipient(second_vault, second_device)
                 .expect("second grant inbox"),
-            vec![current_grant.encode()]
+            vec![record_pair(
+                &current_grant.encode(),
+                &current_grant_outer.encode()
+            )]
         );
         assert!(
             server
@@ -905,8 +1087,148 @@ mod tests {
         );
     }
 
+    #[test]
+    fn old_sharing_tables_gain_outer_operation_associations() {
+        let root = crate::tests::TestRoot::new();
+        let db = rusqlite::Connection::open(root.0.join("server.sqlite")).expect("old database");
+        db.execute_batch(
+            "CREATE TABLE collection_membership_records (
+                 collection_id BLOB NOT NULL,
+                 membership_generation INTEGER NOT NULL,
+                 issuer_vault_id BLOB NOT NULL,
+                 issuer_signing_public_key BLOB NOT NULL,
+                 recipient_vault_id BLOB NOT NULL,
+                 recipient_device_id BLOB NOT NULL,
+                 record BLOB NOT NULL,
+                 PRIMARY KEY(collection_id, membership_generation)
+             );
+             CREATE TABLE collection_grants (
+                 grant_id BLOB PRIMARY KEY,
+                 collection_id BLOB NOT NULL,
+                 collection_epoch INTEGER NOT NULL,
+                 issuer_vault_id BLOB NOT NULL,
+                 recipient_vault_id BLOB NOT NULL,
+                 recipient_device_id BLOB NOT NULL,
+                 record BLOB NOT NULL
+             );",
+        )
+        .expect("old schema");
+        let source_key = DeviceSigningKey::from_seed([1; 32]);
+        let recipient = DeviceIdentity::from_seeds([2; 32], [3; 32]);
+        let membership = CollectionMembershipRecord::new(
+            id(4),
+            id(5),
+            1,
+            [0; 32],
+            CollectionMembershipAction::Upsert(PermissionProfile::Read),
+            id(6),
+            id(7),
+            recipient.signing_public_key(),
+            recipient.hpke_public_key(),
+            1,
+            id(4),
+            id(8),
+            1,
+            9,
+        )
+        .expect("membership")
+        .sign(&source_key);
+        db.execute(
+            "INSERT INTO collection_membership_records VALUES (?1, 1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                id(5).as_bytes().as_slice(),
+                id(4).as_bytes().as_slice(),
+                source_key.verifying_key().as_slice(),
+                id(6).as_bytes().as_slice(),
+                id(7).as_bytes().as_slice(),
+                membership.encode(),
+            ],
+        )
+        .expect("old membership row");
+        let grant = CollectionGrant::seal(
+            id(10),
+            id(4),
+            id(5),
+            1,
+            1,
+            id(6),
+            id(7),
+            &recipient.hpke_public_key(),
+            id(8),
+            PermissionProfile::Read,
+            1,
+            11,
+            &Key::new([12; 32]),
+            &source_key,
+        )
+        .expect("grant");
+        db.execute(
+            "INSERT INTO collection_grants VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6)",
+            params![
+                id(10).as_bytes().as_slice(),
+                id(5).as_bytes().as_slice(),
+                id(4).as_bytes().as_slice(),
+                id(6).as_bytes().as_slice(),
+                id(7).as_bytes().as_slice(),
+                grant.encode(),
+            ],
+        )
+        .expect("old grant row");
+        drop(db);
+
+        let server = ReferenceServer::open(&root.0, 1_024, 65_536).expect("migrate");
+        for table in ["collection_membership_records", "collection_grants"] {
+            let mut statement = server
+                .db
+                .prepare(&format!("PRAGMA table_info({table})"))
+                .expect("table info");
+            let columns = statement
+                .query_map([], |row| row.get::<_, String>(1))
+                .expect("columns")
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .expect("column rows");
+            assert!(columns.iter().any(|column| column == "outer_device_id"));
+            assert!(
+                columns
+                    .iter()
+                    .any(|column| column == "outer_device_sequence")
+            );
+        }
+        let membership_outer: (Vec<u8>, i64) = server
+            .db
+            .query_row(
+                "SELECT outer_device_id, outer_device_sequence
+                   FROM collection_membership_records",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("migrated membership");
+        assert_eq!(membership_outer, (id(8).as_bytes().to_vec(), 9));
+        let grant_outer: (Vec<u8>, i64) = server
+            .db
+            .query_row(
+                "SELECT outer_device_id, outer_device_sequence FROM collection_grants",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("migrated grant");
+        assert_eq!(grant_outer, (id(8).as_bytes().to_vec(), 11));
+    }
+
     fn id(byte: u8) -> Id {
         Id::new([byte; 16]).expect("id")
+    }
+
+    fn record_pair(record: &[u8], outer: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(4 + record.len() + outer.len());
+        bytes.extend_from_slice(
+            &u32::try_from(record.len())
+                .expect("record length")
+                .to_be_bytes(),
+        );
+        bytes.extend_from_slice(record);
+        bytes.extend_from_slice(outer);
+        bytes
     }
 
     fn operation(

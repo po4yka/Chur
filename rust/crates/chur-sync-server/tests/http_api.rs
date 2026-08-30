@@ -556,8 +556,11 @@ async fn sharing_endpoints_authenticate_issuers_and_recipient_inboxes() {
     assert_eq!(response.status(), StatusCode::CREATED);
 
     for (path, expected) in [
-        ("memberships", membership.encode()),
-        ("grants", grant.encode()),
+        (
+            "memberships",
+            pair_body(&membership.encode(), &membership_outer.encode()),
+        ),
+        ("grants", pair_body(&grant.encode(), &grant_outer.encode())),
     ] {
         let response = app
             .clone()

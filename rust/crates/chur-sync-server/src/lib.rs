@@ -60,7 +60,7 @@ impl ReferenceServer {
                 "server root creation failed",
             )
         })?;
-        let db = Connection::open(root.join("server.sqlite"))
+        let mut db = Connection::open(root.join("server.sqlite"))
             .map_err(|error| map_sqlite(error, "server database open failed"))?;
         db.execute_batch(
             "PRAGMA journal_mode = WAL;
@@ -105,6 +105,8 @@ impl ReferenceServer {
                  issuer_signing_public_key BLOB NOT NULL CHECK(length(issuer_signing_public_key) = 32),
                  recipient_vault_id BLOB NOT NULL CHECK(length(recipient_vault_id) = 16),
                  recipient_device_id BLOB NOT NULL CHECK(length(recipient_device_id) = 16),
+                 outer_device_id BLOB NOT NULL CHECK(length(outer_device_id) = 16),
+                 outer_device_sequence INTEGER NOT NULL CHECK(outer_device_sequence > 0),
                  record BLOB NOT NULL,
                  PRIMARY KEY(collection_id, membership_generation)
              );
@@ -117,6 +119,8 @@ impl ReferenceServer {
                  issuer_vault_id BLOB NOT NULL CHECK(length(issuer_vault_id) = 16),
                  recipient_vault_id BLOB NOT NULL CHECK(length(recipient_vault_id) = 16),
                  recipient_device_id BLOB NOT NULL CHECK(length(recipient_device_id) = 16),
+                 outer_device_id BLOB NOT NULL CHECK(length(outer_device_id) = 16),
+                 outer_device_sequence INTEGER NOT NULL CHECK(outer_device_sequence > 0),
                  record BLOB NOT NULL
              );
              CREATE INDEX IF NOT EXISTS collection_grant_recipient
@@ -147,6 +151,7 @@ impl ReferenceServer {
              );",
         )
         .map_err(|error| map_sqlite(error, "server schema creation failed"))?;
+        sharing::migrate_outer_associations(&mut db)?;
         Ok(Self {
             root,
             db,
