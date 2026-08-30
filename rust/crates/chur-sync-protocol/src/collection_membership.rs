@@ -382,6 +382,21 @@ impl CollectionMembershipState {
                         "collection member upsert changes no state"
                     );
                 }
+                let activates_recipient = candidate
+                    .members
+                    .get(&recipient)
+                    .is_none_or(|member| !member.active);
+                ensure!(
+                    !activates_recipient
+                        || candidate
+                            .members
+                            .values()
+                            .filter(|member| member.active)
+                            .count()
+                            < chur_core::limits::sync::COLLECTION_RECIPIENT_DEVICES_MAX,
+                    ResourceLimitExceeded,
+                    "active collection recipient count exceeds the protocol limit"
+                );
                 candidate.members.insert(
                     recipient,
                     CollectionMember {
@@ -1165,6 +1180,53 @@ mod tests {
             &recipient_device_id,
             PermissionProfile::ManageMembers,
         ));
+    }
+
+    #[test]
+    fn active_external_recipient_limit_is_enforced() {
+        let source_key = DeviceSigningKey::from_seed([1; 32]);
+        let source_enrollment =
+            EnrollmentRecord::initial(id(1), id(2), source_key.verifying_key(), [3; 32])
+                .expect("source enrollment")
+                .sign(&source_key);
+        let source_membership =
+            MembershipState::bootstrap(&source_enrollment).expect("source membership");
+        let mut state = CollectionMembershipState::new(id(1), id(6), 1).expect("state");
+
+        for generation in 1..=chur_core::limits::sync::COLLECTION_RECIPIENT_DEVICES_MAX + 1 {
+            let mut vault = [4; 16];
+            vault[14..].copy_from_slice(&(generation as u16).to_be_bytes());
+            let record = CollectionMembershipRecord::new(
+                id(1),
+                id(6),
+                generation as u64,
+                *state.commitment(),
+                CollectionMembershipAction::Upsert(PermissionProfile::Read),
+                Id::new(vault).expect("recipient vault"),
+                id(5),
+                [7; 32],
+                [8; 32],
+                1,
+                id(1),
+                id(2),
+                1,
+                generation as u64,
+            )
+            .expect("record")
+            .sign(&source_key);
+            if generation <= chur_core::limits::sync::COLLECTION_RECIPIENT_DEVICES_MAX {
+                state.accept(&record, &source_membership).expect("member");
+            } else {
+                assert_eq!(
+                    state
+                        .accept(&record, &source_membership)
+                        .err()
+                        .expect("recipient limit")
+                        .status(),
+                    ChurStatus::ResourceLimitExceeded
+                );
+            }
+        }
     }
 
     #[test]

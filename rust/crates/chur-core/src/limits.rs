@@ -244,6 +244,8 @@ pub mod sync {
     pub const COLLECTION_OBSERVED_HEADS_MAX: usize = 287;
     /// Exact encoded length of one cross-vault observed head.
     pub const COLLECTION_OBSERVED_HEAD_LEN: usize = (super::ID_LEN * 2) + 8;
+    /// Active external recipient devices in one collection.
+    pub const COLLECTION_RECIPIENT_DEVICES_MAX: usize = 256;
     /// Device heads one signed checkpoint may carry, including its issuer.
     pub const CHECKPOINT_HEADS_MAX: usize = OBSERVED_HEADS_MAX + 1;
     /// Exact encoded length of one checkpoint head.
