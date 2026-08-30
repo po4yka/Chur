@@ -121,10 +121,22 @@ impl ReferenceServer {
                  recipient_device_id BLOB NOT NULL CHECK(length(recipient_device_id) = 16),
                  outer_device_id BLOB NOT NULL CHECK(length(outer_device_id) = 16),
                  outer_device_sequence INTEGER NOT NULL CHECK(outer_device_sequence > 0),
+                 key_selector BLOB NOT NULL CHECK(length(key_selector) = 16),
                  record BLOB NOT NULL
              );
              CREATE INDEX IF NOT EXISTS collection_grant_recipient
                  ON collection_grants(recipient_vault_id, recipient_device_id, collection_id);
+             CREATE TABLE IF NOT EXISTS collection_operations (
+                 key_selector BLOB NOT NULL CHECK(length(key_selector) = 16),
+                 issuer_vault_id BLOB NOT NULL CHECK(length(issuer_vault_id) = 16),
+                 issuer_device_id BLOB NOT NULL CHECK(length(issuer_device_id) = 16),
+                 device_sequence INTEGER NOT NULL CHECK(device_sequence > 0),
+                 operation_id BLOB NOT NULL CHECK(length(operation_id) = 16),
+                 digest BLOB NOT NULL CHECK(length(digest) = 32),
+                 record BLOB NOT NULL,
+                 PRIMARY KEY(key_selector, issuer_vault_id, issuer_device_id, device_sequence),
+                 UNIQUE(key_selector, operation_id)
+             );
              CREATE TABLE IF NOT EXISTS deletion_requests (
                  vault_id BLOB NOT NULL CHECK(length(vault_id) = 16),
                  request_id BLOB NOT NULL CHECK(length(request_id) = 16),

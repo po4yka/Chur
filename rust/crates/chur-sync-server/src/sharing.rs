@@ -4,6 +4,7 @@ use chur_sync_protocol::collection_membership::{
     CollectionMembershipAction, CollectionMembershipOutcome, CollectionMembershipRecord,
     CollectionMembershipState,
 };
+use chur_sync_protocol::collection_operation::CollectionOperation;
 use chur_sync_protocol::grant::{CollectionGrant, PermissionProfile};
 use chur_sync_protocol::operation::Operation;
 use rusqlite::{OptionalExtension, params};
@@ -31,6 +32,11 @@ pub(super) fn migrate_outer_associations(db: &mut rusqlite::Connection) -> Resul
             "collection_grants",
             "outer_device_sequence",
             "outer_device_sequence INTEGER CHECK(outer_device_sequence > 0)",
+        ),
+        (
+            "collection_grants",
+            "key_selector",
+            "key_selector BLOB CHECK(length(key_selector) = 16)",
         ),
     ] {
         if !column_exists(db, table, column)? {
@@ -128,6 +134,34 @@ pub(super) fn migrate_outer_associations(db: &mut rusqlite::Connection) -> Resul
             )
             .map_err(|error| map_sqlite(error, "sharing grant migration failed"))?;
     }
+    let selector_rows = {
+        let mut statement = transaction
+            .prepare(
+                "SELECT grants.grant_id, operations.record
+                   FROM collection_grants AS grants
+                   JOIN operations ON operations.vault_id = grants.issuer_vault_id
+                    AND operations.device_id = grants.outer_device_id
+                    AND operations.device_sequence = grants.outer_device_sequence
+                  WHERE grants.key_selector IS NULL",
+            )
+            .map_err(|error| map_sqlite(error, "sharing selector migration prepare failed"))?;
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })
+            .map_err(|error| map_sqlite(error, "sharing selector migration query failed"))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| map_sqlite(error, "sharing selector migration row failed"))?
+    };
+    for (grant_id, operation_bytes) in selector_rows {
+        let operation = Operation::decode(&operation_bytes).map_err(corrupt_sharing)?;
+        transaction
+            .execute(
+                "UPDATE collection_grants SET key_selector = ?2 WHERE grant_id = ?1",
+                params![grant_id, operation.key_selector().as_bytes().as_slice()],
+            )
+            .map_err(|error| map_sqlite(error, "sharing selector migration failed"))?;
+    }
     transaction
         .commit()
         .map_err(|error| map_sqlite(error, "sharing association migration commit failed"))
@@ -150,6 +184,253 @@ fn column_exists(db: &rusqlite::Connection, table: &str, column: &str) -> Result
 }
 
 impl ReferenceServer {
+    /// Accepts one opaque collection operation from its authenticated issuer.
+    pub fn accept_collection_operation(
+        &mut self,
+        operation: &CollectionOperation,
+    ) -> Result<RelayOutcome> {
+        if let Some(stored) = self
+            .db
+            .query_row(
+                "SELECT record FROM collection_operations
+                  WHERE key_selector = ?1 AND issuer_vault_id = ?2
+                    AND issuer_device_id = ?3 AND device_sequence = ?4",
+                params![
+                    operation.key_selector().as_bytes().as_slice(),
+                    operation.issuer_identity_vault_id().as_bytes().as_slice(),
+                    operation.issuer_device_id().as_bytes().as_slice(),
+                    to_sqlite(
+                        operation.device_sequence(),
+                        "collection sequence does not fit"
+                    )?,
+                ],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .optional()
+            .map_err(|error| map_sqlite(error, "collection operation replay lookup failed"))?
+        {
+            ensure!(
+                stored == operation.encode(),
+                SyncChainFork,
+                "collection operation replay differs"
+            );
+            return Ok(RelayOutcome::Duplicate);
+        }
+        let (collection_id, collection_epoch) =
+            selector_collection(self, operation.key_selector())?;
+        let state = collection_state(self, &collection_id)?.ok_or_else(|| {
+            Error::new(ChurStatus::CatalogCorrupt, "selector collection is absent")
+        })?;
+        ensure!(
+            state.collection_epoch() == collection_epoch,
+            AuthenticationFailed,
+            "collection selector is not current"
+        );
+        let issuer = relay::membership_state(&self.db, operation.issuer_identity_vault_id())?;
+        let device = issuer.device(operation.issuer_device_id()).ok_or_else(|| {
+            Error::new(
+                ChurStatus::AuthenticationFailed,
+                "collection operation issuer is unknown",
+            )
+        })?;
+        ensure!(
+            issuer.is_active(operation.issuer_device_id()),
+            AuthenticationFailed,
+            "collection operation issuer is revoked"
+        );
+        operation.verify_signature(device.signing_public_key())?;
+        if operation.issuer_identity_vault_id() != state.source_vault_id() {
+            ensure!(
+                state.is_authorized(
+                    operation.issuer_identity_vault_id(),
+                    operation.issuer_device_id(),
+                    PermissionProfile::Contribute
+                ),
+                AuthenticationFailed,
+                "collection operation issuer cannot contribute"
+            );
+        }
+        let previous: Option<(i64, Vec<u8>)> = self
+            .db
+            .query_row(
+                "SELECT device_sequence, digest FROM collection_operations
+              WHERE key_selector = ?1 AND issuer_vault_id = ?2 AND issuer_device_id = ?3
+              ORDER BY device_sequence DESC LIMIT 1",
+                params![
+                    operation.key_selector().as_bytes().as_slice(),
+                    operation.issuer_identity_vault_id().as_bytes().as_slice(),
+                    operation.issuer_device_id().as_bytes().as_slice()
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|error| map_sqlite(error, "collection operation head lookup failed"))?;
+        match previous {
+            Some((sequence, digest)) => ensure!(
+                to_sqlite(
+                    operation.device_sequence(),
+                    "collection sequence does not fit"
+                )? == sequence + 1
+                    && operation.previous_operation_hash().as_slice() == digest,
+                SyncHeadRollback,
+                "collection operation does not extend the relay head"
+            ),
+            None => ensure!(
+                operation.device_sequence() == 1,
+                SyncHeadRollback,
+                "collection operation starts with a gap"
+            ),
+        }
+        let reused: Option<Vec<u8>> = self.db.query_row(
+            "SELECT record FROM collection_operations WHERE key_selector = ?1 AND operation_id = ?2",
+            params![operation.key_selector().as_bytes().as_slice(), operation.operation_id().as_bytes().as_slice()],
+            |row| row.get(0),
+        ).optional().map_err(|error| map_sqlite(error, "collection operation identifier lookup failed"))?;
+        ensure!(
+            reused.is_none(),
+            AuthenticationFailed,
+            "collection operation identifier was reused"
+        );
+        for observed in operation.observed_heads() {
+            let present: i64 = self
+                .db
+                .query_row(
+                    "SELECT count(*) FROM collection_operations
+                  WHERE key_selector = ?1 AND issuer_vault_id = ?2
+                    AND issuer_device_id = ?3 AND device_sequence >= ?4",
+                    params![
+                        operation.key_selector().as_bytes().as_slice(),
+                        observed.issuer_identity_vault_id().as_bytes().as_slice(),
+                        observed.issuer_device_id().as_bytes().as_slice(),
+                        to_sqlite(
+                            observed.device_sequence(),
+                            "observed collection sequence does not fit"
+                        )?
+                    ],
+                    |row| row.get(0),
+                )
+                .map_err(|error| map_sqlite(error, "collection observed head lookup failed"))?;
+            ensure!(
+                present == 1,
+                SyncHeadRollback,
+                "collection operation has a missing cause"
+            );
+        }
+        self.ensure_account_capacity(
+            operation.issuer_identity_vault_id(),
+            operation.encode().len(),
+        )?;
+        self.db
+            .execute(
+                "INSERT INTO collection_operations
+                 (key_selector, issuer_vault_id, issuer_device_id, device_sequence,
+                  operation_id, digest, record)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    operation.key_selector().as_bytes().as_slice(),
+                    operation.issuer_identity_vault_id().as_bytes().as_slice(),
+                    operation.issuer_device_id().as_bytes().as_slice(),
+                    to_sqlite(
+                        operation.device_sequence(),
+                        "collection sequence does not fit"
+                    )?,
+                    operation.operation_id().as_bytes().as_slice(),
+                    operation.digest().as_slice(),
+                    operation.encode()
+                ],
+            )
+            .map_err(|error| map_sqlite(error, "collection operation storage failed"))?;
+        Ok(RelayOutcome::Stored)
+    }
+
+    /// Returns bounded opaque collection operations visible to one current device.
+    pub fn collection_operations_for_recipient(
+        &self,
+        requester_vault_id: Id,
+        requester_device_id: Id,
+        key_selector: Id,
+    ) -> Result<Vec<Vec<u8>>> {
+        let (collection_id, collection_epoch) = selector_collection(self, &key_selector)?;
+        let state = collection_state(self, &collection_id)?.ok_or_else(|| {
+            Error::new(ChurStatus::CatalogCorrupt, "selector collection is absent")
+        })?;
+        ensure!(
+            state.collection_epoch() == collection_epoch,
+            AuthenticationFailed,
+            "collection selector is not current"
+        );
+        if requester_vault_id == *state.source_vault_id() {
+            ensure!(
+                relay::membership_state(&self.db, &requester_vault_id)?
+                    .is_active(&requester_device_id),
+                AuthenticationFailed,
+                "source requester is not active"
+            );
+        } else {
+            ensure!(
+                state.is_authorized(
+                    &requester_vault_id,
+                    &requester_device_id,
+                    PermissionProfile::Read
+                ),
+                AuthenticationFailed,
+                "requester cannot read this collection"
+            );
+            let grant_exists: i64 = self
+                .db
+                .query_row(
+                    "SELECT count(*) FROM collection_grants AS grants
+                  WHERE grants.collection_id = ?1 AND grants.collection_epoch = ?2
+                    AND grants.recipient_vault_id = ?3 AND grants.recipient_device_id = ?4
+                    AND grants.key_selector = ?5",
+                    params![
+                        collection_id.as_bytes().as_slice(),
+                        to_sqlite(collection_epoch, "collection epoch does not fit")?,
+                        requester_vault_id.as_bytes().as_slice(),
+                        requester_device_id.as_bytes().as_slice(),
+                        key_selector.as_bytes().as_slice()
+                    ],
+                    |row| row.get(0),
+                )
+                .map_err(|error| {
+                    map_sqlite(error, "collection grant authorization lookup failed")
+                })?;
+            ensure!(
+                grant_exists == 1,
+                AuthenticationFailed,
+                "requester has no current selector grant"
+            );
+        }
+        let mut statement = self
+            .db
+            .prepare(
+                "SELECT record FROM collection_operations WHERE key_selector = ?1
+              ORDER BY issuer_vault_id, issuer_device_id, device_sequence LIMIT ?2",
+            )
+            .map_err(|error| map_sqlite(error, "collection operation inbox prepare failed"))?;
+        let rows = statement
+            .query_map(
+                params![
+                    key_selector.as_bytes().as_slice(),
+                    i64::try_from(bounds::RESPONSE_OPERATIONS_MAX).unwrap_or(i64::MAX)
+                ],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .map_err(|error| map_sqlite(error, "collection operation inbox query failed"))?;
+        let mut records = Vec::new();
+        let mut bytes = 0;
+        for row in rows {
+            if !push_bounded(
+                &mut records,
+                &mut bytes,
+                row.map_err(|error| map_sqlite(error, "collection operation inbox row failed"))?,
+            )? {
+                break;
+            }
+        }
+        Ok(records)
+    }
+
     /// Accepts one signed collection membership record and its outer operation.
     pub fn accept_collection_membership(
         &mut self,
@@ -284,8 +565,8 @@ impl ReferenceServer {
                 "INSERT INTO collection_grants (
                     grant_id, collection_id, collection_epoch, issuer_vault_id,
                     recipient_vault_id, recipient_device_id, outer_device_id,
-                    outer_device_sequence, record
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    outer_device_sequence, key_selector, record
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     grant.grant_id().as_bytes().as_slice(),
                     grant.collection_id().as_bytes().as_slice(),
@@ -298,6 +579,7 @@ impl ReferenceServer {
                         outer.device_sequence(),
                         "outer operation sequence does not fit"
                     )?,
+                    outer.key_selector().as_bytes().as_slice(),
                     grant.encode(),
                 ],
             )
@@ -478,6 +760,39 @@ fn existing_grant(server: &ReferenceServer, grant: &CollectionGrant) -> Result<O
         )
         .optional()
         .map_err(|error| map_sqlite(error, "collection grant replay lookup failed"))
+}
+
+fn selector_collection(server: &ReferenceServer, selector: &Id) -> Result<(Id, u64)> {
+    let rows: Vec<(Vec<u8>, i64)> = {
+        let mut statement = server
+            .db
+            .prepare(
+                "SELECT DISTINCT collection_id, collection_epoch
+                   FROM collection_grants WHERE key_selector = ?1",
+            )
+            .map_err(|error| map_sqlite(error, "collection selector lookup prepare failed"))?;
+        statement
+            .query_map([selector.as_bytes().as_slice()], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .map_err(|error| map_sqlite(error, "collection selector lookup failed"))?
+            .collect::<rusqlite::Result<_>>()
+            .map_err(|error| map_sqlite(error, "collection selector row failed"))?
+    };
+    ensure!(
+        rows.len() == 1,
+        AuthenticationFailed,
+        "collection selector is unknown or ambiguous"
+    );
+    Ok((
+        Id::from_slice(&rows[0].0).map_err(corrupt_sharing)?,
+        u64::try_from(rows[0].1).map_err(|_| {
+            Error::new(
+                ChurStatus::CatalogCorrupt,
+                "collection selector epoch is invalid",
+            )
+        })?,
+    ))
 }
 
 fn initial_epoch(record: &CollectionMembershipRecord) -> Result<u64> {
@@ -697,10 +1012,11 @@ fn corrupt_sharing(_: Error) -> Error {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use chur_crypto::secret::Key;
+    use chur_crypto::{Nonce, secret::Key};
     use chur_sync_protocol::collection_membership::{
         CollectionMembershipAction, CollectionMembershipRecord,
     };
+    use chur_sync_protocol::collection_operation::CollectionOperation;
     use chur_sync_protocol::grant::{CollectionGrant, PermissionProfile};
     use chur_sync_protocol::identity::DeviceIdentity;
     use chur_sync_protocol::membership::EnrollmentRecord;
@@ -873,6 +1189,61 @@ mod tests {
                 .accept_collection_grant(&grant, &grant_outer)
                 .expect("grant replay")
                 == RelayOutcome::Duplicate
+        );
+        let shared_operation = CollectionOperation::seal(
+            id(30),
+            source_vault,
+            source_device,
+            1,
+            [0; 32],
+            Vec::new(),
+            *grant_outer.key_selector(),
+            &Key::new([31; 32]),
+            Nonce::new([32; 24]),
+            b"opaque shared payload",
+        )
+        .expect("shared operation")
+        .sign(&source_key);
+        assert_eq!(
+            server
+                .accept_collection_operation(&shared_operation)
+                .expect("shared operation"),
+            RelayOutcome::Stored
+        );
+        assert_eq!(
+            server
+                .accept_collection_operation(&shared_operation)
+                .expect("shared operation replay"),
+            RelayOutcome::Duplicate
+        );
+        assert_eq!(
+            server
+                .collection_operations_for_recipient(
+                    recipient_vault,
+                    recipient_device,
+                    *grant_outer.key_selector(),
+                )
+                .expect("shared operation inbox"),
+            vec![shared_operation.encode()]
+        );
+        let unauthorized = CollectionOperation::seal(
+            id(33),
+            recipient_vault,
+            recipient_device,
+            1,
+            [0; 32],
+            Vec::new(),
+            *grant_outer.key_selector(),
+            &Key::new([31; 32]),
+            Nonce::new([34; 24]),
+            b"read-only author",
+        )
+        .expect("unauthorized operation")
+        .sign(recipient.signing_key());
+        assert!(
+            server
+                .accept_collection_operation(&unauthorized)
+                .is_err_and(|error| error.status() == ChurStatus::AuthenticationFailed)
         );
         let conflicting_grant = CollectionGrant::seal(
             id(14),

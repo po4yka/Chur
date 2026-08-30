@@ -13,6 +13,7 @@ use chur_core::limits::sync as bounds;
 use chur_core::{ChurStatus, Error, Id, ensure};
 use chur_sync_protocol::checkpoint::Checkpoint;
 use chur_sync_protocol::collection_membership::CollectionMembershipRecord;
+use chur_sync_protocol::collection_operation::CollectionOperation;
 use chur_sync_protocol::deletion::ServerDeletionAuthorization;
 use chur_sync_protocol::grant::CollectionGrant;
 use chur_sync_protocol::membership::{EnrollmentRecord, RevocationRecord};
@@ -49,6 +50,14 @@ pub fn router(server: ReferenceServer, bootstrap_token: [u8; 32]) -> Router {
         .route(
             "/v1/vaults/{vault}/sharing/grants",
             get(sharing_grants).post(sharing_grant),
+        )
+        .route(
+            "/v1/vaults/{vault}/sharing/operations",
+            post(sharing_operation),
+        )
+        .route(
+            "/v1/vaults/{vault}/sharing/operations/{selector}",
+            get(sharing_operations),
         )
         .route(
             "/v1/vaults/{vault}/checkpoints",
@@ -244,6 +253,43 @@ async fn sharing_grant(
     Ok(relay_status(
         server.accept_collection_grant(&grant, &operation)?,
     ))
+}
+
+async fn sharing_operation(
+    State(state): State<AppState>,
+    Path(vault): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> HttpResult<StatusCode> {
+    let vault = id(&vault)?;
+    let operation = CollectionOperation::decode(&body)?;
+    path_matches(
+        operation.issuer_identity_vault_id() == &vault,
+        "collection operation path does not match its issuer",
+    )?;
+    let mut server = lock(&state)?;
+    let device = authenticate(&server, vault, &headers)?;
+    path_matches(
+        operation.issuer_device_id() == &device,
+        "collection operation transport device does not match its issuer",
+    )?;
+    Ok(relay_status(
+        server.accept_collection_operation(&operation)?,
+    ))
+}
+
+async fn sharing_operations(
+    State(state): State<AppState>,
+    Path((vault, selector)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> HttpResult<Response> {
+    let vault = id(&vault)?;
+    let selector = id(&selector)?;
+    let server = lock(&state)?;
+    let device = authenticate(&server, vault, &headers)?;
+    binary(records(server.collection_operations_for_recipient(
+        vault, device, selector,
+    )?))
 }
 
 async fn sharing_grants(

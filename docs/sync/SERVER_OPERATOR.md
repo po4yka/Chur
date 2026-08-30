@@ -42,6 +42,8 @@ All identifiers in paths are 32 hexadecimal characters. All request and response
 | `GET /v1/vaults/{vault}/sharing/memberships` | none | collection membership chains for the caller device |
 | `POST /v1/vaults/{vault}/sharing/grants` | collection grant, outer operation | stored recipient grant |
 | `GET /v1/vaults/{vault}/sharing/grants` | none | current grants for the caller device |
+| `POST /v1/vaults/{vault}/sharing/operations` | `CollectionOperationV1` | stored opaque collection operation |
+| `GET /v1/vaults/{vault}/sharing/operations/{selector}` | none | current bounded operation stream for the caller device |
 | `POST /v1/vaults/{vault}/checkpoints` | one canonical checkpoint | stored checkpoint |
 | `GET /v1/vaults/{vault}/checkpoints` | none | latest checkpoint page |
 | `GET /v1/vaults/{vault}/checkpoints/{commitment}` | none | exact checkpoint |
