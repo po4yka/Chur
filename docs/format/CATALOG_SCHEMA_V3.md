@@ -41,4 +41,5 @@ The only new step is `v2 -> v3`. It creates empty sharing tables and indexes, th
 - catalog load decodes every record and checks every projection;
 - source and recipient keys are public only; collection keys stay in existing encrypted envelope records;
 - membership, pin, grant, and epoch updates are crash-atomic;
+- an accepted collection rotation advances `sharing_collections.current_epoch` in the same transaction as the collection envelope and rotation row;
 - restoration never weakens a TOFU or explicitly verified pin.

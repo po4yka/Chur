@@ -44,6 +44,8 @@ BLAKE3-256("CHUR\x00SHARING\x00MEMBERSHIP-CHAIN\x00V1" || complete_record)
 
 A permission downgrade that retains `READ` uses `UPSERT` at the current epoch. It changes operation authorization but cannot remove a collection key already delivered. Removing read access uses `REVOKE`, a new epoch, eager object-key rewrap, and grants to remaining devices.
 
+Revoking a device of the source vault can also advance the collection epoch through an authenticated `CreateCollectionEpoch` operation without changing collection membership generation. The client commits that accepted epoch to collection-sharing state in the same transaction that starts eager rewrap. This keeps later grants bound to the current key after source-device loss.
+
 ## 3. Issuer authorization
 
 An issuer is accepted only when its signature key and `issuer_membership_generation` select authenticated current state:
