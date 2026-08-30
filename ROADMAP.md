@@ -6,7 +6,7 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 
 ## Current status
 
-**Phase 3 implementation.** The canonical encrypted synchronization protocol, durable client state, reference self-hosted server, ciphertext transport, locked inbox, recovery identity, revocation, rotation, malicious-server harness, and protocol vectors are implemented. Gate 5 is not approved: no job runs the background path on a device or a user-operated deployment, and the protocol-focused independent review has not been commissioned. Earlier phase device, review, and approval gaps remain open.
+**Phase 4 implementation.** Canonical collection grants, recipient verification, permissions, membership changes, collection operations, epochs, rewrap, forward-only revocation, durable client state, mobile bindings, reference-server relay, and multi-recipient/device-loss tests are implemented. Gate 6 is not approved: the separate sharing-protocol audit and physical-device interoperability proof are outstanding. Earlier phase device, review, deployment, and approval gaps remain open.
 
 ## Phase 0 — specification and repository foundation
 
@@ -147,10 +147,14 @@ None of these is started, which is the intent:
 
 ### Exit criteria
 
-- separate sharing-protocol audit;
-- clear forward-only revocation guarantees;
-- recovery and device-loss behavior tested;
-- no claim that previously authorized recipients can be forced to delete plaintext.
+| Criterion | State |
+| --- | --- |
+| separate sharing-protocol audit | **outstanding.** The implementation team cannot supply an independent review |
+| clear forward-only revocation guarantees | met. Revocation advances the collection epoch and sends replacement grants only to current recipient devices; it cannot retract data already received |
+| recovery and device-loss behavior tested | met in code. Multi-recipient, multi-device loss, restart, and retry paths run in the workspace; physical-device proof is outstanding |
+| no claim that previously authorized recipients can be forced to delete plaintext | met. Recipient retention is an explicit protocol and product limitation |
+
+[`docs/assurance/EVIDENCE_PHASE_4.md`](docs/assurance/EVIDENCE_PHASE_4.md) records the observed implementation and verification evidence.
 
 ## Later exploration
 

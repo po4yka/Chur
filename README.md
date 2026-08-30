@@ -100,7 +100,7 @@ Planned capabilities include:
 - local integrity validation and repair tooling;
 - optional recovery and encrypted backup;
 - end-to-end encrypted synchronization;
-- later collection sharing.
+- end-to-end encrypted collection sharing.
 
 ### Discreet mode
 
@@ -553,7 +553,7 @@ A recovery secret is high-entropy random data, not a second low-entropy password
 
 1. **Device-bound vault** — only a platform slot; maximum local binding, highest data-loss risk.
 2. **Recoverable vault** — platform slot plus password and/or recovery slot; recommended consumer default.
-3. **Synced vault** — additional device identities and encrypted synchronization; collection grants remain Phase 4 scope.
+3. **Synced vault** — additional device identities, encrypted synchronization, and optional collection grants to verified recipient devices.
 
 ---
 
@@ -1062,7 +1062,7 @@ It cannot honestly guarantee screenshot prevention on every iOS version and devi
 
 ## Sync and sharing
 
-Encrypted synchronization is implemented in Phase 3. Collection sharing remains deferred to Phase 4.
+Encrypted synchronization is implemented in Phase 3. Phase 4 implements collection sharing through canonical grants, verified recipient devices, membership permissions, forward-only revocation, native/mobile bindings, and the reference self-hosted server. Gate 6 remains unapproved until its independent audit and physical-device evidence exist.
 
 ### Opaque server model
 

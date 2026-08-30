@@ -120,6 +120,9 @@ The complete platform documents are [`ANDROID.md`](ANDROID.md) and [`IOS.md`](IO
 - [`assurance/RELEASE_GATES.md`](assurance/RELEASE_GATES.md)
 - [`assurance/EVIDENCE_PHASE_0.md`](assurance/EVIDENCE_PHASE_0.md) — what the Gate 0 and Gate 1 items are met by today, and which have no enforcing job
 - [`assurance/EVIDENCE_PHASE_1.md`](assurance/EVIDENCE_PHASE_1.md) — what the Phase 1 scope and exit criteria are met by today, and what is missing
+- [`assurance/EVIDENCE_PHASE_2.md`](assurance/EVIDENCE_PHASE_2.md) — what the Phase 2 scope and exit criteria are met by today, and what is missing
+- [`assurance/EVIDENCE_PHASE_3.md`](assurance/EVIDENCE_PHASE_3.md) — encrypted synchronization evidence and unenforced Gate 5 items
+- [`assurance/EVIDENCE_PHASE_4.md`](assurance/EVIDENCE_PHASE_4.md) — collection-sharing evidence and unenforced Gate 6 items
 - [`assurance/SECURITY_REVIEW_SCOPE.md`](assurance/SECURITY_REVIEW_SCOPE.md)
 
 ## Sync and sharing

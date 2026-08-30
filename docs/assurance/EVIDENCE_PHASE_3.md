@@ -68,5 +68,5 @@
 
 - The repository provides the protocol, native state machine, transport, locked pull primitive, and reference server. It does not provide a user-facing server-enrollment screen or an OS background scheduler.
 - The reference server terminates plain HTTP and expects a production operator to place authenticated TLS in front of it. Plain HTTP clients are accepted only for loopback development.
-- Collection sharing, recipient grants, member revocation, and multi-recipient interoperability remain Phase 4 scope.
+- Phase 4 now implements collection sharing. [`EVIDENCE_PHASE_4.md`](EVIDENCE_PHASE_4.md) records its separate evidence and release-gate gaps.
 - A server delete receipt is not proof of physical erasure. Client-side crypto-erasure remains subject to copies already held by devices and backups.
