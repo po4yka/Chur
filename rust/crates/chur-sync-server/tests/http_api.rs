@@ -584,6 +584,34 @@ async fn sharing_endpoints_authenticate_issuers_and_recipient_inboxes() {
             framed(&[expected])
         );
     }
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!(
+                "/v1/vaults/{}/sharing/issuers/{}/operations/{}?after=0",
+                hex::encode(recipient_vault.as_bytes()),
+                hex::encode(source_vault.as_bytes()),
+                hex::encode(source_device.as_bytes()),
+            ),
+            Vec::new(),
+            Some(("Bearer", &recipient_token)),
+        ))
+        .await
+        .expect("issuer operations response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("issuer operations body")
+            .as_ref(),
+        framed(&[
+            source_initial.encode(),
+            membership_outer.encode(),
+            grant_outer.encode(),
+        ])
+    );
 }
 
 async fn bootstrap_vault(

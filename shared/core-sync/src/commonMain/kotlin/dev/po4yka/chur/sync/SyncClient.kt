@@ -110,6 +110,17 @@ public class SyncClient(
         "/v1/vaults/${vaultId.id()}/sharing/issuers/${issuerVaultId.id()}/memberships?after=$after",
     )
 
+    /** Fetches one source issuer operation chain needed to authenticate a share. */
+    public suspend fun sharingIssuerOperations(
+        vaultId: ByteArray,
+        issuerVaultId: ByteArray,
+        issuerDeviceId: ByteArray,
+        after: ULong,
+    ): List<ByteArray> = page(
+        HttpMethod.Get,
+        "/v1/vaults/${vaultId.id()}/sharing/issuers/${issuerVaultId.id()}/operations/${issuerDeviceId.id()}?after=$after",
+    )
+
     /** Uploads one opaque signed collection operation. */
     public suspend fun putCollectionOperation(vaultId: ByteArray, operation: ByteArray): Unit =
         success(HttpMethod.Post, "/v1/vaults/${vaultId.id()}/sharing/operations", operation)

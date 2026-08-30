@@ -757,32 +757,68 @@ impl ReferenceServer {
         issuer_vault_id: Id,
         after: u64,
     ) -> Result<Vec<Vec<u8>>> {
-        let mut authorized = false;
-        for collection_id in recipient_collections(self, recipient_vault_id, recipient_device_id)? {
-            let state = collection_state(self, &collection_id)?.ok_or_else(|| {
-                Error::new(
-                    ChurStatus::CatalogCorrupt,
-                    "recipient collection state is absent",
-                )
-            })?;
-            if state.source_vault_id() == &issuer_vault_id
-                && state.is_authorized(
-                    &recipient_vault_id,
-                    &recipient_device_id,
-                    PermissionProfile::Read,
-                )
-            {
-                authorized = true;
-                break;
-            }
-        }
-        ensure!(
-            authorized,
-            AuthenticationFailed,
-            "requester has no current collection from this issuer"
-        );
+        ensure_issuer_recipient(
+            self,
+            recipient_vault_id,
+            recipient_device_id,
+            issuer_vault_id,
+        )?;
         self.membership_records_after(issuer_vault_id, after)
     }
+
+    /// Returns one issuer operation chain only to a current collection recipient.
+    pub fn issuer_operations_for_recipient(
+        &self,
+        recipient_vault_id: Id,
+        recipient_device_id: Id,
+        issuer_vault_id: Id,
+        issuer_device_id: Id,
+        after: u64,
+    ) -> Result<Vec<Vec<u8>>> {
+        ensure_issuer_recipient(
+            self,
+            recipient_vault_id,
+            recipient_device_id,
+            issuer_vault_id,
+        )?;
+        ensure!(
+            relay::membership_state(&self.db, &issuer_vault_id)?
+                .device(&issuer_device_id)
+                .is_some(),
+            NotFound,
+            "issuer device is not in authenticated membership"
+        );
+        self.operations_after(issuer_vault_id, issuer_device_id, after)
+    }
+}
+
+fn ensure_issuer_recipient(
+    server: &ReferenceServer,
+    recipient_vault_id: Id,
+    recipient_device_id: Id,
+    issuer_vault_id: Id,
+) -> Result<()> {
+    for collection_id in recipient_collections(server, recipient_vault_id, recipient_device_id)? {
+        let state = collection_state(server, &collection_id)?.ok_or_else(|| {
+            Error::new(
+                ChurStatus::CatalogCorrupt,
+                "recipient collection state is absent",
+            )
+        })?;
+        if state.source_vault_id() == &issuer_vault_id
+            && state.is_authorized(
+                &recipient_vault_id,
+                &recipient_device_id,
+                PermissionProfile::Read,
+            )
+        {
+            return Ok(());
+        }
+    }
+    Err(Error::new(
+        ChurStatus::AuthenticationFailed,
+        "requester has no current collection from this issuer",
+    ))
 }
 
 fn existing_membership(
@@ -1295,9 +1331,36 @@ mod tests {
                 .expect("issuer membership chain"),
             vec![source_enrollment.encode()]
         );
+        assert_eq!(
+            server
+                .issuer_operations_for_recipient(
+                    recipient_vault,
+                    recipient_device,
+                    source_vault,
+                    source_device,
+                    0,
+                )
+                .expect("issuer operation chain"),
+            vec![
+                source_initial.encode(),
+                membership_outer.encode(),
+                grant_outer.encode(),
+            ]
+        );
         assert!(
             server
                 .issuer_memberships_for_recipient(second_vault, second_device, source_vault, 0,)
+                .is_err_and(|error| error.status() == ChurStatus::AuthenticationFailed)
+        );
+        assert!(
+            server
+                .issuer_operations_for_recipient(
+                    second_vault,
+                    second_device,
+                    source_vault,
+                    source_device,
+                    0,
+                )
                 .is_err_and(|error| error.status() == ChurStatus::AuthenticationFailed)
         );
         let second_operation = CollectionOperation::seal(
