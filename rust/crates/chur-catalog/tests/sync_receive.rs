@@ -4,9 +4,15 @@
 
 use chur_catalog::db::{CatalogKey, CatalogLocation};
 use chur_catalog::model::{COLLECTION_POLICY_VAULT_DEFAULT, COLLECTION_STATUS_ACTIVE, Collection};
-use chur_catalog::{CatalogDb, schema, store, sync_keys, sync_log, sync_membership, sync_receive};
+use chur_catalog::{
+    CatalogDb, schema, sharing, store, sync_keys, sync_log, sync_membership, sync_receive,
+};
 use chur_core::Id;
 use chur_crypto::{Key, Nonce};
+use chur_sync_protocol::collection_membership::{
+    CollectionMembershipAction, CollectionMembershipRecord,
+};
+use chur_sync_protocol::grant::{CollectionGrant, PermissionProfile};
 use chur_sync_protocol::materialization::MaterializedState;
 use chur_sync_protocol::membership::EnrollmentRecord;
 use chur_sync_protocol::operation::{DeviceSigningKey, Operation};
@@ -100,6 +106,132 @@ fn failed_initial_provision_writes_no_outer_operation() {
             .head(&id(58))
             .is_none()
     );
+}
+
+#[test]
+fn sharing_membership_and_log_head_commit_together() {
+    let mut fixture = setup();
+    let collection_id = id(80);
+    let collection_key = Key::new([81; 32]);
+    let domain = KeyDomain::collection(&collection_key, &collection_id, 1).expect("domain");
+    let mut sharing_state =
+        sharing::provision(&mut fixture.db, id(2), collection_id, 1).expect("sharing state");
+    let recipient = DeviceSigningKey::from_seed([82; 32]);
+    let record = CollectionMembershipRecord::new(
+        id(2),
+        collection_id,
+        1,
+        [0; 32],
+        CollectionMembershipAction::Upsert(PermissionProfile::Read),
+        id(83),
+        id(84),
+        recipient.verifying_key(),
+        [85; 32],
+        1,
+        id(2),
+        id(4),
+        1,
+        1,
+    )
+    .expect("membership record")
+    .sign(&fixture.issuer);
+    let mut log = sync_log::load(&fixture.db, &fixture.membership).expect("log");
+
+    let operation = sync_receive::author_sharing_operation(
+        &mut fixture.db,
+        &mut log,
+        &fixture.membership,
+        &mut sharing_state,
+        &domain,
+        id(86),
+        id(4),
+        &fixture.issuer,
+        PayloadBody::ChangeCollectionMembership(record.clone()),
+    )
+    .expect("author sharing membership");
+
+    assert_eq!(operation.device_sequence(), 1);
+    assert_eq!(sharing_state.commitment(), &record.commitment());
+    assert_eq!(log.head(&id(4)), Some((1, operation.digest())));
+    assert_eq!(
+        sharing::load(&fixture.db, &collection_id)
+            .expect("load")
+            .expect("sharing state")
+            .commitment(),
+        &record.commitment()
+    );
+
+    let grant_id = id(87);
+    let grant = CollectionGrant::seal(
+        grant_id,
+        id(2),
+        collection_id,
+        1,
+        1,
+        id(83),
+        id(84),
+        &[85; 32],
+        id(4),
+        PermissionProfile::Read,
+        1,
+        2,
+        &collection_key,
+        &fixture.issuer,
+    )
+    .expect("grant");
+    let grant_operation = sync_receive::author_sharing_operation(
+        &mut fixture.db,
+        &mut log,
+        &fixture.membership,
+        &mut sharing_state,
+        &domain,
+        grant_id,
+        id(4),
+        &fixture.issuer,
+        PayloadBody::IssueCollectionGrant(grant.clone()),
+    )
+    .expect("author grant");
+    assert_eq!(grant_operation.device_sequence(), 2);
+    assert_eq!(log.head(&id(4)), Some((2, grant_operation.digest())));
+    assert!(
+        sharing::load_grants(&fixture.db, &collection_id).is_ok_and(|stored| stored == [grant])
+    );
+
+    let wrong_key = DeviceSigningKey::from_seed([88; 32]);
+    let invalid = CollectionMembershipRecord::new(
+        id(2),
+        collection_id,
+        2,
+        *sharing_state.commitment(),
+        CollectionMembershipAction::Upsert(PermissionProfile::Contribute),
+        id(83),
+        id(84),
+        recipient.verifying_key(),
+        [85; 32],
+        1,
+        id(2),
+        id(4),
+        1,
+        3,
+    )
+    .expect("invalid membership")
+    .sign(&wrong_key);
+    assert!(
+        sync_receive::author_sharing_operation(
+            &mut fixture.db,
+            &mut log,
+            &fixture.membership,
+            &mut sharing_state,
+            &domain,
+            id(89),
+            id(4),
+            &fixture.issuer,
+            PayloadBody::ChangeCollectionMembership(invalid),
+        )
+        .is_err()
+    );
+    assert_eq!(log.head(&id(4)), Some((2, grant_operation.digest())));
+    assert_eq!(sharing_state.generation(), 1);
 }
 
 #[test]

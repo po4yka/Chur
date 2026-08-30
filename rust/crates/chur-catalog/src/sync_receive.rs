@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use chur_core::{ChurStatus, Error, Id, Result, ensure};
 use chur_crypto::{Key, Nonce, random};
+use chur_sync_protocol::collection_membership::CollectionMembershipState;
 use chur_sync_protocol::convergence::MergeOutcome;
 use chur_sync_protocol::materialization::MaterializedState;
 use chur_sync_protocol::membership::EnrollmentRecord;
@@ -16,7 +17,7 @@ use chur_sync_protocol::{KeyDirectory, KeyDomain};
 use crate::CatalogDb;
 use crate::db::{from_sqlite_integer, map_sqlite};
 use crate::sync_log::DurableOperationLog;
-use crate::{sync_keys, sync_log, sync_membership, sync_rotation};
+use crate::{sharing, sync_keys, sync_log, sync_membership, sync_rotation};
 
 /// Provisions generation-one membership and its outer operation atomically.
 pub fn provision_initial_membership(
@@ -101,6 +102,8 @@ pub fn load_materialized_state(db: &CatalogDb, keys: &KeyDirectory) -> Result<Ma
                     | PayloadBody::RevokeDevice(_)
                     | PayloadBody::CreateCollectionEpoch { .. }
                     | PayloadBody::RewrapObjectKey { .. }
+                    | PayloadBody::ChangeCollectionMembership(_)
+                    | PayloadBody::IssueCollectionGrant(_)
             ) {
                 let mut candidate = state.clone();
                 if candidate
@@ -297,6 +300,128 @@ pub fn author_membership_operation(
     Ok(operation)
 }
 
+/// Authors and atomically persists one collection membership or grant operation.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "sharing joins durable state, identity membership, and a collection key domain"
+)]
+pub fn author_sharing_operation(
+    db: &mut CatalogDb,
+    log: &mut DurableOperationLog,
+    issuer_membership: &MembershipState,
+    sharing_state: &mut CollectionMembershipState,
+    domain: &KeyDomain,
+    operation_id: Id,
+    device_id: Id,
+    signing_key: &DeviceSigningKey,
+    body: PayloadBody,
+) -> Result<Operation> {
+    ensure!(
+        matches!(
+            body,
+            PayloadBody::ChangeCollectionMembership(_) | PayloadBody::IssueCollectionGrant(_)
+        ),
+        InvalidInput,
+        "operation is not a collection-sharing security operation"
+    );
+    let payload = OperationPayload::new(
+        *sharing_state.collection_id(),
+        sharing_state.collection_epoch(),
+        body,
+    )?;
+    let operation = log.author(
+        operation_id,
+        *issuer_membership.vault_id(),
+        device_id,
+        *domain.selector(),
+        domain.operation_key(),
+        Nonce::random()?,
+        &payload.encode(),
+        signing_key,
+        issuer_membership,
+    )?;
+    ensure!(
+        accept_opened_sharing_operation(
+            db,
+            log,
+            issuer_membership,
+            sharing_state,
+            &operation,
+            &payload,
+        )? == ApplyOutcome::Applied,
+        InternalFailure,
+        "fresh local sharing operation was not applied"
+    );
+    Ok(operation)
+}
+
+/// Authenticates, decrypts, and atomically commits one sharing security operation.
+pub fn accept_sharing_operation(
+    db: &mut CatalogDb,
+    log: &mut DurableOperationLog,
+    issuer_membership: &MembershipState,
+    sharing_state: &mut CollectionMembershipState,
+    keys: &KeyDirectory,
+    record: &[u8],
+) -> Result<ApplyOutcome> {
+    let operation = Operation::decode(record)?;
+    let payload = OperationPayload::open_for_operation(&operation, keys)?;
+    accept_opened_sharing_operation(
+        db,
+        log,
+        issuer_membership,
+        sharing_state,
+        &operation,
+        &payload,
+    )
+}
+
+fn accept_opened_sharing_operation(
+    db: &mut CatalogDb,
+    log: &mut DurableOperationLog,
+    issuer_membership: &MembershipState,
+    sharing_state: &mut CollectionMembershipState,
+    operation: &Operation,
+    payload: &OperationPayload,
+) -> Result<ApplyOutcome> {
+    sharing_state.authorize_operation(operation, payload, issuer_membership)?;
+    let mut projected_sharing = None;
+    let outcome = log.accept_with(db, operation, issuer_membership, |transaction| {
+        match payload.body() {
+            PayloadBody::ChangeCollectionMembership(record) => {
+                let (candidate, membership_outcome) =
+                    sharing::project_membership(transaction, sharing_state, record, issuer_membership)?;
+                ensure!(
+                    membership_outcome
+                        == chur_sync_protocol::collection_membership::CollectionMembershipOutcome::Applied,
+                    InternalFailure,
+                    "fresh sharing operation carried duplicate membership"
+                );
+                projected_sharing = Some(candidate);
+            }
+            PayloadBody::IssueCollectionGrant(grant) => ensure!(
+                sharing::project_grant(transaction, sharing_state, grant, issuer_membership)?
+                    == sharing::GrantStoreOutcome::Stored,
+                InternalFailure,
+                "fresh sharing operation carried duplicate grant"
+            ),
+            _ => {
+                return Err(Error::new(
+                    ChurStatus::InvalidInput,
+                    "operation is not a collection-sharing security operation",
+                ));
+            }
+        }
+        Ok(())
+    })?;
+    if outcome == ApplyOutcome::Applied
+        && let Some(candidate) = projected_sharing
+    {
+        *sharing_state = candidate;
+    }
+    Ok(outcome)
+}
+
 /// Authors and atomically persists one local collection rotation operation.
 #[expect(
     clippy::too_many_arguments,
@@ -370,6 +495,12 @@ pub fn accept_operation(
         }
         PayloadBody::CreateCollectionEpoch { .. } | PayloadBody::RewrapObjectKey { .. } => {
             accept_rotation_operation(db, log, membership, keys, root, now_ms, record)
+        }
+        PayloadBody::ChangeCollectionMembership(_) | PayloadBody::IssueCollectionGrant(_) => {
+            Err(Error::new(
+                ChurStatus::InvalidInput,
+                "sharing security operation requires collection authorization state",
+            ))
         }
         _ => accept_content_operation(db, log, membership, state, keys, record),
     }
