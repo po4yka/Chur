@@ -384,6 +384,7 @@ dependencies = [
  "axum",
  "chur-core",
  "chur-crypto",
+ "chur-format",
  "chur-sync-protocol",
  "hex",
  "rusqlite",

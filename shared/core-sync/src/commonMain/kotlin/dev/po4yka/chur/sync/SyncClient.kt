@@ -100,6 +100,10 @@ public class SyncClient(
     public suspend fun sharingGrants(vaultId: ByteArray): List<ByteArray> =
         page(HttpMethod.Get, "/v1/vaults/${vaultId.id()}/sharing/grants")
 
+    /** Fetches complete opaque share-acceptance packages for this device. */
+    public suspend fun sharingPackages(vaultId: ByteArray): List<ByteArray> =
+        page(HttpMethod.Get, "/v1/vaults/${vaultId.id()}/sharing/packages")
+
     /** Fetches an authenticated issuer device-membership page for a current share. */
     public suspend fun sharingIssuerMemberships(
         vaultId: ByteArray,

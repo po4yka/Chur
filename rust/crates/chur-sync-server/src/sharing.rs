@@ -1,15 +1,22 @@
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
 use chur_core::limits::sync as bounds;
 use chur_core::{ChurStatus, Error, Id, Result, ensure};
+use chur_format::codec::Writer;
 use chur_sync_protocol::collection_membership::{
     CollectionMembershipAction, CollectionMembershipOutcome, CollectionMembershipRecord,
     CollectionMembershipState,
 };
 use chur_sync_protocol::collection_operation::CollectionOperation;
 use chur_sync_protocol::grant::{CollectionGrant, PermissionProfile};
+use chur_sync_protocol::membership::{EnrollmentRecord, RevocationRecord};
 use chur_sync_protocol::operation::Operation;
 use rusqlite::{OptionalExtension, params};
 
 use super::{ReferenceServer, RelayOutcome, map_sqlite, relay, to_sqlite};
+
+const PACKAGE_ISSUERS_MAX: usize = 257;
+const PACKAGE_RECORDS_MAX: usize = 4_096;
 
 pub(super) fn migrate_outer_associations(db: &mut rusqlite::Connection) -> Result<()> {
     for (table, column, definition) in [
@@ -790,6 +797,412 @@ impl ReferenceServer {
         );
         self.operations_after(issuer_vault_id, issuer_device_id, after)
     }
+
+    /// Returns complete, collection-grouped bundles consumed by the recipient ABI.
+    pub fn share_acceptance_packages(
+        &self,
+        recipient_vault_id: Id,
+        recipient_device_id: Id,
+    ) -> Result<Vec<Vec<u8>>> {
+        let mut packages = Vec::new();
+        let mut bytes = 0usize;
+        for collection_id in recipient_collections(self, recipient_vault_id, recipient_device_id)? {
+            let state = collection_state(self, &collection_id)?.ok_or_else(|| {
+                Error::new(
+                    ChurStatus::CatalogCorrupt,
+                    "recipient collection state is absent",
+                )
+            })?;
+            ensure!(
+                state.is_authorized(
+                    &recipient_vault_id,
+                    &recipient_device_id,
+                    PermissionProfile::Read,
+                ),
+                AuthenticationFailed,
+                "requester is not a current collection recipient"
+            );
+            let member = state
+                .member(&recipient_vault_id, &recipient_device_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        ChurStatus::CatalogCorrupt,
+                        "recipient collection member is absent",
+                    )
+                })?;
+            let membership = collection_membership_pairs(self, collection_id)?;
+            let grants = current_grant_pairs(
+                self,
+                collection_id,
+                recipient_vault_id,
+                recipient_device_id,
+                state.collection_epoch(),
+                member.membership_generation(),
+            )?;
+            for (grant, grant_outer) in grants {
+                let package = acceptance_package(self, &membership, &grant, &grant_outer)?;
+                if !push_bounded(&mut packages, &mut bytes, package)? {
+                    return Ok(packages);
+                }
+            }
+        }
+        Ok(packages)
+    }
+}
+
+type RecordPair = (Vec<u8>, Vec<u8>);
+type IssuerEvidence = (Vec<Vec<u8>>, Vec<Vec<u8>>);
+
+fn collection_membership_pairs(
+    server: &ReferenceServer,
+    collection_id: Id,
+) -> Result<Vec<RecordPair>> {
+    let mut statement = server
+        .db
+        .prepare(
+            "SELECT memberships.record, operations.record
+               FROM collection_membership_records AS memberships
+               JOIN operations
+                 ON operations.vault_id = memberships.issuer_vault_id
+                AND operations.device_id = memberships.outer_device_id
+                AND operations.device_sequence = memberships.outer_device_sequence
+              WHERE memberships.collection_id = ?1
+              ORDER BY memberships.membership_generation",
+        )
+        .map_err(|error| map_sqlite(error, "acceptance membership prepare failed"))?;
+    let rows = statement
+        .query_map([collection_id.as_bytes().as_slice()], |row| {
+            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })
+        .map_err(|error| map_sqlite(error, "acceptance membership query failed"))?;
+    let records = rows
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| map_sqlite(error, "acceptance membership row failed"))?;
+    ensure!(
+        !records.is_empty() && records.len() <= PACKAGE_RECORDS_MAX,
+        ResourceLimitExceeded,
+        "acceptance membership count is outside the package bound"
+    );
+    for (record, outer) in &records {
+        let membership = CollectionMembershipRecord::decode(record).map_err(corrupt_sharing)?;
+        let operation = Operation::decode(outer).map_err(corrupt_sharing)?;
+        ensure!(
+            membership.collection_id() == &collection_id
+                && operation.vault_id() == membership.issuer_identity_vault_id()
+                && operation.device_id() == membership.issuer_device_id()
+                && operation.device_sequence() == membership.created_sequence(),
+            CatalogCorrupt,
+            "acceptance membership pair is inconsistent"
+        );
+    }
+    Ok(records)
+}
+
+fn current_grant_pairs(
+    server: &ReferenceServer,
+    collection_id: Id,
+    recipient_vault_id: Id,
+    recipient_device_id: Id,
+    collection_epoch: u64,
+    membership_generation: u64,
+) -> Result<Vec<(CollectionGrant, Operation)>> {
+    let mut statement = server
+        .db
+        .prepare(
+            "SELECT grants.record, operations.record
+               FROM collection_grants AS grants
+               JOIN operations
+                 ON operations.vault_id = grants.issuer_vault_id
+                AND operations.device_id = grants.outer_device_id
+                AND operations.device_sequence = grants.outer_device_sequence
+              WHERE grants.collection_id = ?1
+                AND grants.recipient_vault_id = ?2
+                AND grants.recipient_device_id = ?3
+              ORDER BY grants.grant_id",
+        )
+        .map_err(|error| map_sqlite(error, "acceptance grant prepare failed"))?;
+    let rows = statement
+        .query_map(
+            params![
+                collection_id.as_bytes().as_slice(),
+                recipient_vault_id.as_bytes().as_slice(),
+                recipient_device_id.as_bytes().as_slice(),
+            ],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+        )
+        .map_err(|error| map_sqlite(error, "acceptance grant query failed"))?;
+    let mut grants = Vec::new();
+    for row in rows {
+        let (record, outer) =
+            row.map_err(|error| map_sqlite(error, "acceptance grant row failed"))?;
+        let grant = CollectionGrant::decode(&record).map_err(corrupt_sharing)?;
+        let operation = Operation::decode(&outer).map_err(corrupt_sharing)?;
+        ensure!(
+            grant.collection_id() == &collection_id
+                && grant.recipient_identity_vault_id() == &recipient_vault_id
+                && grant.recipient_device_id() == &recipient_device_id
+                && operation.vault_id() == grant.source_vault_id()
+                && operation.device_id() == grant.sender_device_id()
+                && operation.device_sequence() == grant.created_sequence(),
+            CatalogCorrupt,
+            "acceptance grant pair is inconsistent"
+        );
+        if grant.collection_epoch() == collection_epoch
+            && grant.collection_membership_generation() == membership_generation
+        {
+            ensure!(
+                grants.len() < PACKAGE_RECORDS_MAX,
+                ResourceLimitExceeded,
+                "acceptance grant count exceeds the package bound"
+            );
+            grants.push((grant, operation));
+        }
+    }
+    Ok(grants)
+}
+
+fn acceptance_package(
+    server: &ReferenceServer,
+    membership: &[RecordPair],
+    grant: &CollectionGrant,
+    grant_outer: &Operation,
+) -> Result<Vec<u8>> {
+    let mut requirements = BTreeMap::<Id, BTreeMap<Id, u64>>::new();
+    let mut issuer_ids = BTreeSet::new();
+    for (record, _) in membership {
+        let record = CollectionMembershipRecord::decode(record).map_err(corrupt_sharing)?;
+        issuer_ids.insert(*record.issuer_identity_vault_id());
+        raise_required(
+            &mut requirements,
+            *record.issuer_identity_vault_id(),
+            *record.issuer_device_id(),
+            record.created_sequence(),
+        );
+    }
+    issuer_ids.insert(*grant.source_vault_id());
+    raise_required(
+        &mut requirements,
+        *grant.source_vault_id(),
+        *grant.sender_device_id(),
+        grant.created_sequence(),
+    );
+    ensure!(
+        issuer_ids.len() <= PACKAGE_ISSUERS_MAX,
+        ResourceLimitExceeded,
+        "acceptance issuer count exceeds the package bound"
+    );
+
+    let mut evidence = Vec::with_capacity(issuer_ids.len());
+    for issuer_id in issuer_ids {
+        evidence.push(issuer_evidence(
+            server,
+            issuer_id,
+            requirements.remove(&issuer_id).unwrap_or_default(),
+        )?);
+    }
+    let mut writer = Writer::new();
+    writer.u16(1).u32(count_u32(evidence.len())?);
+    for (issuer_membership, issuer_operations) in evidence {
+        writer.u32(count_u32(issuer_membership.len())?);
+        for record in issuer_membership {
+            writer.variable(&record)?;
+        }
+        writer.u32(count_u32(issuer_operations.len())?);
+        for operation in issuer_operations {
+            writer.variable(&operation)?;
+        }
+    }
+    writer.u32(count_u32(membership.len())?);
+    for (record, outer) in membership {
+        writer.variable(record)?.variable(outer)?;
+    }
+    writer
+        .variable(&grant.encode())?
+        .variable(&grant_outer.encode())?;
+    let package = writer.finish();
+    ensure!(
+        package
+            .len()
+            .checked_add(8)
+            .is_some_and(|bytes| bytes <= bounds::RESPONSE_BYTES_MAX),
+        ResourceLimitExceeded,
+        "acceptance package exceeds the response byte bound"
+    );
+    Ok(package)
+}
+
+fn issuer_evidence(
+    server: &ReferenceServer,
+    issuer_vault_id: Id,
+    mut required: BTreeMap<Id, u64>,
+) -> Result<IssuerEvidence> {
+    let mut statement = server
+        .db
+        .prepare(
+            "SELECT record_kind, outer_device_id, outer_device_sequence, record
+               FROM membership_records WHERE vault_id = ?1
+               ORDER BY membership_generation",
+        )
+        .map_err(|error| map_sqlite(error, "acceptance issuer membership prepare failed"))?;
+    let rows = statement
+        .query_map([issuer_vault_id.as_bytes().as_slice()], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, Vec<u8>>(3)?,
+            ))
+        })
+        .map_err(|error| map_sqlite(error, "acceptance issuer membership query failed"))?;
+    let rows = rows
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| map_sqlite(error, "acceptance issuer membership row failed"))?;
+    ensure!(
+        !rows.is_empty() && rows.len() <= PACKAGE_RECORDS_MAX,
+        ResourceLimitExceeded,
+        "acceptance issuer membership count is outside the package bound"
+    );
+    let mut membership = Vec::with_capacity(rows.len());
+    for (kind, outer_device, outer_sequence, record) in rows {
+        let outer_device = Id::from_slice(&outer_device).map_err(corrupt_sharing)?;
+        let outer_sequence =
+            super::from_sqlite(outer_sequence, "issuer outer operation sequence is invalid")?;
+        raise_device_required(&mut required, outer_device, outer_sequence);
+        match kind {
+            1 => {
+                let enrollment = EnrollmentRecord::decode(&record).map_err(corrupt_sharing)?;
+                ensure!(
+                    enrollment.vault_id() == &issuer_vault_id,
+                    CatalogCorrupt,
+                    "issuer enrollment belongs to another vault"
+                );
+            }
+            2 => {
+                let revocation = RevocationRecord::decode(&record).map_err(corrupt_sharing)?;
+                ensure!(
+                    revocation.vault_id() == &issuer_vault_id,
+                    CatalogCorrupt,
+                    "issuer revocation belongs to another vault"
+                );
+                raise_device_required(
+                    &mut required,
+                    *revocation.revoked_device_id(),
+                    revocation.final_accepted_device_sequence(),
+                );
+            }
+            _ => {
+                return Err(Error::new(
+                    ChurStatus::CatalogCorrupt,
+                    "issuer membership kind is invalid",
+                ));
+            }
+        }
+        membership.push(record);
+    }
+    let operations = operation_closure(server, issuer_vault_id, required)?;
+    Ok((membership, operations))
+}
+
+fn operation_closure(
+    server: &ReferenceServer,
+    vault_id: Id,
+    required: BTreeMap<Id, u64>,
+) -> Result<Vec<Vec<u8>>> {
+    let mut queue = required.into_iter().collect::<VecDeque<_>>();
+    let mut loaded = BTreeMap::<Id, u64>::new();
+    let mut records = BTreeMap::<(Id, u64), Vec<u8>>::new();
+    while let Some((device_id, target)) = queue.pop_front() {
+        let after = loaded.get(&device_id).copied().unwrap_or(0);
+        if target <= after {
+            continue;
+        }
+        let mut statement = server
+            .db
+            .prepare(
+                "SELECT device_sequence, record FROM operations
+                  WHERE vault_id = ?1 AND device_id = ?2
+                    AND device_sequence > ?3 AND device_sequence <= ?4
+                  ORDER BY device_sequence",
+            )
+            .map_err(|error| map_sqlite(error, "acceptance operation prepare failed"))?;
+        let rows = statement
+            .query_map(
+                params![
+                    vault_id.as_bytes().as_slice(),
+                    device_id.as_bytes().as_slice(),
+                    to_sqlite(after, "acceptance operation cursor does not fit")?,
+                    to_sqlite(target, "acceptance operation target does not fit")?,
+                ],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            )
+            .map_err(|error| map_sqlite(error, "acceptance operation query failed"))?;
+        let mut expected = after;
+        for row in rows {
+            let (sequence, record) =
+                row.map_err(|error| map_sqlite(error, "acceptance operation row failed"))?;
+            let sequence = super::from_sqlite(sequence, "acceptance operation sequence invalid")?;
+            expected = expected.checked_add(1).ok_or_else(|| {
+                Error::new(
+                    ChurStatus::ResourceLimitExceeded,
+                    "acceptance operation sequence has no successor",
+                )
+            })?;
+            let operation = Operation::decode(&record).map_err(corrupt_sharing)?;
+            ensure!(
+                sequence == expected
+                    && operation.vault_id() == &vault_id
+                    && operation.device_id() == &device_id
+                    && operation.device_sequence() == sequence,
+                CatalogCorrupt,
+                "acceptance operation chain has a gap or wrong projection"
+            );
+            ensure!(
+                records.len() < PACKAGE_RECORDS_MAX,
+                ResourceLimitExceeded,
+                "acceptance issuer operations exceed the package bound"
+            );
+            for observed in operation.observed_heads() {
+                queue.push_back((*observed.device_id(), observed.device_sequence()));
+            }
+            records.insert((device_id, sequence), record);
+        }
+        ensure!(
+            expected == target,
+            SyncHeadRollback,
+            "acceptance operation chain does not reach its required head"
+        );
+        loaded.insert(device_id, target);
+    }
+    Ok(records.into_values().collect())
+}
+
+fn raise_required(
+    requirements: &mut BTreeMap<Id, BTreeMap<Id, u64>>,
+    vault_id: Id,
+    device_id: Id,
+    sequence: u64,
+) {
+    raise_device_required(
+        requirements.entry(vault_id).or_default(),
+        device_id,
+        sequence,
+    );
+}
+
+fn raise_device_required(required: &mut BTreeMap<Id, u64>, device_id: Id, sequence: u64) {
+    required
+        .entry(device_id)
+        .and_modify(|current| *current = (*current).max(sequence))
+        .or_insert(sequence);
+}
+
+fn count_u32(count: usize) -> Result<u32> {
+    u32::try_from(count).map_err(|_| {
+        Error::new(
+            ChurStatus::ResourceLimitExceeded,
+            "acceptance package count exceeds u32",
+        )
+    })
 }
 
 fn ensure_issuer_recipient(
@@ -1079,8 +1492,10 @@ fn push_bounded(records: &mut Vec<Vec<u8>>, bytes: &mut usize, record: Vec<u8>) 
     if records.len() == bounds::RESPONSE_OPERATIONS_MAX {
         return Ok(false);
     }
+    let framing = if records.is_empty() { 8 } else { 4 };
     let next = bytes
-        .checked_add(record.len())
+        .checked_add(framing)
+        .and_then(|bytes| bytes.checked_add(record.len()))
         .ok_or_else(|| Error::new(ChurStatus::CatalogCorrupt, "sharing inbox size overflows"))?;
     if next > bounds::RESPONSE_BYTES_MAX {
         return Ok(false);
@@ -1110,6 +1525,7 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use chur_crypto::{Nonce, secret::Key};
+    use chur_format::codec::Reader;
     use chur_sync_protocol::collection_membership::{
         CollectionMembershipAction, CollectionMembershipRecord,
     };
@@ -1287,6 +1703,55 @@ mod tests {
                 .expect("grant replay")
                 == RelayOutcome::Duplicate
         );
+        let packages = server
+            .share_acceptance_packages(recipient_vault, recipient_device)
+            .expect("acceptance packages");
+        assert_eq!(packages.len(), 1);
+        let mut package = Reader::new(&packages[0], ChurStatus::NonCanonicalEncoding);
+        assert_eq!(package.u16().expect("package version"), 1);
+        assert_eq!(package.u32().expect("issuer count"), 1);
+        assert_eq!(package.u32().expect("issuer membership count"), 1);
+        assert_eq!(
+            package
+                .variable(EnrollmentRecord::LEN as u32)
+                .expect("issuer membership"),
+            source_enrollment.encode()
+        );
+        assert_eq!(package.u32().expect("issuer operation count"), 3);
+        for expected in [&source_initial, &membership_outer, &grant_outer] {
+            assert_eq!(
+                package
+                    .variable(bounds::RESPONSE_BYTES_MAX as u32)
+                    .expect("issuer operation"),
+                expected.encode()
+            );
+        }
+        assert_eq!(package.u32().expect("collection membership count"), 1);
+        assert_eq!(
+            package
+                .variable(CollectionMembershipRecord::LEN as u32)
+                .expect("membership"),
+            membership.encode()
+        );
+        assert_eq!(
+            package
+                .variable(bounds::RESPONSE_BYTES_MAX as u32)
+                .expect("membership outer"),
+            membership_outer.encode()
+        );
+        assert_eq!(
+            package
+                .variable(CollectionGrant::LEN as u32)
+                .expect("grant"),
+            grant.encode()
+        );
+        assert_eq!(
+            package
+                .variable(bounds::RESPONSE_BYTES_MAX as u32)
+                .expect("grant outer"),
+            grant_outer.encode()
+        );
+        package.finish().expect("complete package");
         let shared_operation = CollectionOperation::seal(
             id(30),
             source_vault,

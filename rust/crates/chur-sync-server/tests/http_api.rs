@@ -590,6 +590,31 @@ async fn sharing_endpoints_authenticate_issuers_and_recipient_inboxes() {
         .oneshot(request(
             Method::GET,
             &format!(
+                "/v1/vaults/{}/sharing/packages",
+                hex::encode(recipient_vault.as_bytes())
+            ),
+            Vec::new(),
+            Some(("Bearer", &recipient_token)),
+        ))
+        .await
+        .expect("sharing package response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("sharing package body");
+    assert_eq!(&body[..4], &1u32.to_be_bytes());
+    let package_length = u32::from_be_bytes(body[4..8].try_into().expect("package length"));
+    assert_eq!(
+        usize::try_from(package_length).expect("package size"),
+        body.len() - 8
+    );
+    assert_eq!(&body[8..10], &[0, 1]);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!(
                 "/v1/vaults/{}/sharing/issuers/{}/operations/{}?after=0",
                 hex::encode(recipient_vault.as_bytes()),
                 hex::encode(source_vault.as_bytes()),

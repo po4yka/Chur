@@ -51,6 +51,7 @@ pub fn router(server: ReferenceServer, bootstrap_token: [u8; 32]) -> Router {
             "/v1/vaults/{vault}/sharing/grants",
             get(sharing_grants).post(sharing_grant),
         )
+        .route("/v1/vaults/{vault}/sharing/packages", get(sharing_packages))
         .route(
             "/v1/vaults/{vault}/sharing/operations",
             post(sharing_operation),
@@ -313,6 +314,17 @@ async fn sharing_grants(
     binary(records(
         server.collection_grants_for_recipient(vault, device)?,
     ))
+}
+
+async fn sharing_packages(
+    State(state): State<AppState>,
+    Path(vault): Path<String>,
+    headers: HeaderMap,
+) -> HttpResult<Response> {
+    let vault = id(&vault)?;
+    let server = lock(&state)?;
+    let device = authenticate(&server, vault, &headers)?;
+    binary(records(server.share_acceptance_packages(vault, device)?))
 }
 
 async fn sharing_issuer_memberships(
