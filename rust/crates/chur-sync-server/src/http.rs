@@ -281,14 +281,16 @@ async fn sharing_operation(
 async fn sharing_operations(
     State(state): State<AppState>,
     Path((vault, selector)): Path<(String, String)>,
+    RawQuery(query): RawQuery,
     headers: HeaderMap,
 ) -> HttpResult<Response> {
     let vault = id(&vault)?;
     let selector = id(&selector)?;
     let server = lock(&state)?;
     let device = authenticate(&server, vault, &headers)?;
+    let after = collection_cursor(query.as_deref())?;
     binary(records(server.collection_operations_for_recipient(
-        vault, device, selector,
+        vault, device, selector, after,
     )?))
 }
 
@@ -555,6 +557,26 @@ fn query_value<'a>(query: Option<&'a str>, name: &str) -> chur_core::Result<Opti
     Ok(value)
 }
 
+fn collection_cursor(query: Option<&str>) -> chur_core::Result<Option<(Id, Id, u64)>> {
+    let vault = query_value(query, "after_vault")?;
+    let device = query_value(query, "after_device")?;
+    let sequence = query_value(query, "after")?;
+    match (vault, device, sequence) {
+        (None, None, None) => Ok(None),
+        (Some(vault), Some(device), Some(sequence)) => Ok(Some((
+            id(vault)?,
+            id(device)?,
+            sequence.parse().map_err(|_| {
+                Error::new(ChurStatus::InvalidInput, "collection cursor is invalid")
+            })?,
+        ))),
+        _ => Err(Error::new(
+            ChurStatus::InvalidInput,
+            "collection cursor is incomplete",
+        )),
+    }
+}
+
 fn id(value: &str) -> chur_core::Result<Id> {
     Id::new(hex(value)?)
 }
@@ -653,5 +675,34 @@ impl IntoResponse for HttpError {
             self.0.status().as_i32().to_be_bytes(),
         )
             .into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use super::*;
+
+    #[test]
+    fn collection_cursor_is_complete_or_absent() {
+        assert_eq!(collection_cursor(None).expect("absent cursor"), None);
+        let query = format!(
+            "after_vault={}&after_device={}&after=7",
+            "01".repeat(16),
+            "02".repeat(16),
+        );
+        assert_eq!(
+            collection_cursor(Some(&query)).expect("cursor"),
+            Some((
+                Id::new([1; 16]).expect("vault"),
+                Id::new([2; 16]).expect("device"),
+                7,
+            ))
+        );
+        assert!(
+            collection_cursor(Some("after=7"))
+                .is_err_and(|error| error.status() == ChurStatus::InvalidInput)
+        );
     }
 }

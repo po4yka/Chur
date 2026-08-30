@@ -349,6 +349,7 @@ impl ReferenceServer {
         requester_vault_id: Id,
         requester_device_id: Id,
         key_selector: Id,
+        after: Option<(Id, Id, u64)>,
     ) -> Result<Vec<Vec<u8>>> {
         let (collection_id, collection_epoch) = selector_collection(self, &key_selector)?;
         let state = collection_state(self, &collection_id)?.ok_or_else(|| {
@@ -401,18 +402,39 @@ impl ReferenceServer {
                 "requester has no current selector grant"
             );
         }
+        let limit = i64::try_from(bounds::RESPONSE_OPERATIONS_MAX).unwrap_or(i64::MAX);
+        let (sql, cursor_vault, cursor_device, cursor_sequence) = match after {
+            Some((vault, device, sequence)) => (
+                "SELECT record FROM collection_operations WHERE key_selector = ?1
+                   AND (issuer_vault_id > ?2
+                     OR (issuer_vault_id = ?2 AND issuer_device_id > ?3)
+                     OR (issuer_vault_id = ?2 AND issuer_device_id = ?3
+                         AND device_sequence > ?4))
+                 ORDER BY issuer_vault_id, issuer_device_id, device_sequence LIMIT ?5",
+                *vault.as_bytes(),
+                *device.as_bytes(),
+                to_sqlite(sequence, "collection operation cursor does not fit")?,
+            ),
+            None => (
+                "SELECT record FROM collection_operations WHERE key_selector = ?1
+                 ORDER BY issuer_vault_id, issuer_device_id, device_sequence LIMIT ?5",
+                [0; 16],
+                [0; 16],
+                0,
+            ),
+        };
         let mut statement = self
             .db
-            .prepare(
-                "SELECT record FROM collection_operations WHERE key_selector = ?1
-              ORDER BY issuer_vault_id, issuer_device_id, device_sequence LIMIT ?2",
-            )
+            .prepare(sql)
             .map_err(|error| map_sqlite(error, "collection operation inbox prepare failed"))?;
         let rows = statement
             .query_map(
                 params![
                     key_selector.as_bytes().as_slice(),
-                    i64::try_from(bounds::RESPONSE_OPERATIONS_MAX).unwrap_or(i64::MAX)
+                    cursor_vault.as_slice(),
+                    cursor_device.as_slice(),
+                    cursor_sequence,
+                    limit,
                 ],
                 |row| row.get::<_, Vec<u8>>(0),
             )
@@ -1222,9 +1244,38 @@ mod tests {
                     recipient_vault,
                     recipient_device,
                     *grant_outer.key_selector(),
+                    None,
                 )
                 .expect("shared operation inbox"),
             vec![shared_operation.encode()]
+        );
+        let second_operation = CollectionOperation::seal(
+            id(35),
+            source_vault,
+            source_device,
+            2,
+            shared_operation.digest(),
+            Vec::new(),
+            *grant_outer.key_selector(),
+            &Key::new([31; 32]),
+            Nonce::new([36; 24]),
+            b"second opaque shared payload",
+        )
+        .expect("second shared operation")
+        .sign(&source_key);
+        server
+            .accept_collection_operation(&second_operation)
+            .expect("second shared operation");
+        assert_eq!(
+            server
+                .collection_operations_for_recipient(
+                    recipient_vault,
+                    recipient_device,
+                    *grant_outer.key_selector(),
+                    Some((source_vault, source_device, 1)),
+                )
+                .expect("paged shared operation inbox"),
+            vec![second_operation.encode()]
         );
         let unauthorized = CollectionOperation::seal(
             id(33),
