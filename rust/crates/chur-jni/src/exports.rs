@@ -433,6 +433,52 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingIdentity<'local>(
     finish_written(&mut env, status, &out_written, written)
 }
 
+/// Prepares one recipient membership and collection-key grant.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingPrepare<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    collection_id: JByteArray<'local>,
+    recipient_enrollment: JByteArray<'local>,
+    permissions: jint,
+    fingerprint_verified: jboolean,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    let Some(collection_id) = fixed_array(&mut env, &collection_id, ID_LEN) else {
+        return INVALID_INPUT;
+    };
+    let Some(recipient_enrollment) = byte_array(&mut env, &recipient_enrollment) else {
+        return INVALID_INPUT;
+    };
+    let Ok(recipient_enrollment_length) = u32::try_from(recipient_enrollment.len()) else {
+        return INVALID_INPUT;
+    };
+    let Ok(permissions) = u8::try_from(permissions) else {
+        return INVALID_INPUT;
+    };
+    let Some((address, capacity)) = direct_buffer(&env, &destination) else {
+        return INVALID_INPUT;
+    };
+    let mut written = 0usize;
+    // SAFETY: the vectors, `written`, and direct buffer stay live for the call.
+    let status = unsafe {
+        chur_ffi::sharing::chur_sharing_prepare(
+            handle_of(session),
+            collection_id.as_ptr(),
+            recipient_enrollment.as_ptr(),
+            recipient_enrollment_length,
+            permissions,
+            u8::from(fingerprint_verified != 0),
+            address,
+            capacity,
+            &mut written,
+        )
+    };
+    finish_written(&mut env, status, &out_written, written)
+}
+
 // ---------------------------------------------------------------------------
 // Catalog queries
 // ---------------------------------------------------------------------------

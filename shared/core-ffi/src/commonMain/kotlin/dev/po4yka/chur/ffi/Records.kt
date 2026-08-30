@@ -147,6 +147,21 @@ class SharingIdentity(
     val initialOperation: ByteArray,
 )
 
+/** One cumulative collection-sharing permission profile. */
+enum class SharingPermission(val code: Int) {
+    READ(0x01),
+    CONTRIBUTE(0x03),
+    MANAGE_MEMBERS(0x07),
+}
+
+/** Canonical records the sender uploads in dependency order. */
+class PreparedShare(
+    val membership: ByteArray,
+    val membershipOperation: ByteArray,
+    val grant: ByteArray,
+    val grantOperation: ByteArray,
+)
+
 /** Decodes the collection-sharing identity record of §6.9. */
 fun decodeSharingIdentity(bytes: ByteArray, length: Int): SharingIdentity {
     val reader = RecordReader(bytes, length)
@@ -164,6 +179,22 @@ fun decodeSharingIdentity(bytes: ByteArray, length: Int): SharingIdentity {
     )
     reader.requireExhausted()
     return identity
+}
+
+/** Decodes the prepared share record of §6.10. */
+fun decodePreparedShare(bytes: ByteArray, length: Int): PreparedShare {
+    val reader = RecordReader(bytes, length)
+    if (reader.short() != 1) {
+        throw ChurFailure(ChurStatus.NON_CANONICAL_ENCODING, "the prepared share version")
+    }
+    val share = PreparedShare(
+        membership = reader.bounded(),
+        membershipOperation = reader.bounded(),
+        grant = reader.bounded(),
+        grantOperation = reader.bounded(),
+    )
+    reader.requireExhausted()
+    return share
 }
 
 /** Decodes `ChurPageV1`, §6.4. */

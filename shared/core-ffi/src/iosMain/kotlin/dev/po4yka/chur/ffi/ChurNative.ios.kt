@@ -49,6 +49,7 @@ import dev.po4yka.chur.native.chur_runtime_close
 import dev.po4yka.chur.native.chur_runtime_open
 import dev.po4yka.chur.native.chur_session_close
 import dev.po4yka.chur.native.chur_sharing_identity
+import dev.po4yka.chur.native.chur_sharing_prepare
 import dev.po4yka.chur.native.chur_status_is_known
 import dev.po4yka.chur.native.chur_sync_process
 import dev.po4yka.chur.native.chur_sync_stage
@@ -256,6 +257,34 @@ internal actual object ChurNative {
                 destination.size.toULong(),
                 written,
             )
+        }
+    }
+
+    actual fun sharingPrepare(
+        session: Long,
+        collectionId: ByteArray,
+        recipientEnrollment: ByteArray,
+        permissions: Int,
+        fingerprintVerified: Boolean,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int = memScoped {
+        collectionId.pinnedPointer { collection ->
+            recipientEnrollment.pinnedPointer { enrollment ->
+                writtenCall(outWritten) { written ->
+                    chur_sharing_prepare(
+                        session.toULong(),
+                        collection,
+                        enrollment,
+                        recipientEnrollment.size.toUInt(),
+                        permissions.toUByte(),
+                        if (fingerprintVerified) 1u.toUByte() else 0u.toUByte(),
+                        destination.pointer,
+                        destination.size.toULong(),
+                        written,
+                    )
+                }
+            }
         }
     }
 

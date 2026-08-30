@@ -51,6 +51,9 @@ internal actual object ChurNative {
     actual fun sharingIdentity(session: Long, destination: ChurBuffer, outWritten: IntArray): Int =
         ChurJni.sharingIdentity(session, destination.buffer, outWritten)
 
+    actual fun sharingPrepare(session: Long, collectionId: ByteArray, recipientEnrollment: ByteArray, permissions: Int, fingerprintVerified: Boolean, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.sharingPrepare(session, collectionId, recipientEnrollment, permissions, fingerprintVerified, destination.buffer, outWritten)
+
     actual fun syncStage(runtime: Long, vaultId: ByteArray, kind: Int, stagedAtMs: Long, record: ChurBuffer, length: Int): Int =
         ChurJni.syncStage(runtime, vaultId, kind, stagedAtMs, record.buffer, length)
 

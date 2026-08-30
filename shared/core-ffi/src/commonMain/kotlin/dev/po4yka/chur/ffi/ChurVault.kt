@@ -125,6 +125,30 @@ object ChurVault {
             decodeSharingIdentity(buffer.copyOut(written[0]), written[0])
         }
 
+    /** Prepares the membership and HPKE grant for one recipient device. */
+    fun prepareShare(
+        session: Long,
+        collectionId: ByteArray,
+        recipientEnrollment: ByteArray,
+        permissions: SharingPermission,
+        fingerprintVerified: Boolean,
+    ): PreparedShare = withChurBuffer(PREPARED_SHARE_CAPACITY) { buffer ->
+        val written = IntArray(1)
+        ChurFailure.check(
+            ChurNative.sharingPrepare(
+                session,
+                collectionId,
+                recipientEnrollment,
+                permissions.code,
+                fingerprintVerified,
+                buffer,
+                written,
+            ),
+            "sharing prepare",
+        )
+        decodePreparedShare(buffer.copyOut(written[0]), written[0])
+    }
+
     /** Stages one opaque downloaded record without opening vault keys. */
     fun stageSync(
         runtime: Long,
@@ -569,6 +593,9 @@ object ChurVault {
 
     /** The bounded public identity, enrollment, and initial operation record. */
     private const val SHARING_IDENTITY_CAPACITY = 4 * 1024
+
+    /** Four bounded sharing records; current v1 output is below two KiB. */
+    private const val PREPARED_SHARE_CAPACITY = 16 * 1024
 
     /** The default page size of §16.2. */
     private const val DEFAULT_PAGE_LIMIT = 200
