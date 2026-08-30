@@ -201,6 +201,38 @@ class ShareAcceptance(
     val grantOperation: ByteArray,
 )
 
+/** Encodes one opaque recipient identity-vault history for §6.13. */
+fun encodeSharingIssuerEvidence(evidence: SharingIssuerEvidence): ByteArray {
+    require(evidence.membership.size <= SHARING_RECORDS_MAX) { "too many issuer memberships" }
+    require(evidence.operations.size <= SHARING_RECORDS_MAX) { "too many issuer operations" }
+    val records = evidence.membership + evidence.operations
+    val size = records.fold(2L + 8) { total, record -> total + 4 + record.size }
+    require(size <= SHARING_BUNDLE_BYTES_MAX) { "recipient evidence is too large" }
+    val bytes = ByteArray(size.toInt())
+    var at = 0
+    fun putShort(value: Int) {
+        bytes[at++] = (value ushr 8).toByte()
+        bytes[at++] = value.toByte()
+    }
+    fun putInt(value: Int) {
+        bytes[at++] = (value ushr 24).toByte()
+        bytes[at++] = (value ushr 16).toByte()
+        bytes[at++] = (value ushr 8).toByte()
+        bytes[at++] = value.toByte()
+    }
+    fun putRecord(record: ByteArray) {
+        putInt(record.size)
+        record.copyInto(bytes, at)
+        at += record.size
+    }
+    putShort(1)
+    putInt(evidence.membership.size)
+    evidence.membership.forEach(::putRecord)
+    putInt(evidence.operations.size)
+    evidence.operations.forEach(::putRecord)
+    return bytes
+}
+
 /** Decodes the collection-sharing identity record of §6.9. */
 fun decodeSharingIdentity(bytes: ByteArray, length: Int): SharingIdentity {
     val reader = RecordReader(bytes, length)

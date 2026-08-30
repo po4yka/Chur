@@ -64,6 +64,8 @@ internal object ChurJni {
 
     external fun sharingPrepare(session: Long, collectionId: ByteArray, recipientEnrollment: ByteArray, permissions: Int, fingerprintVerified: Boolean, destination: ByteBuffer, outWritten: IntArray): Int
 
+    external fun sharingPrepareDevice(session: Long, collectionId: ByteArray, recipientEvidence: ByteBuffer, recipientEvidenceLength: Int, recipientDeviceId: ByteArray, permissions: Int, fingerprintVerified: Boolean, destination: ByteBuffer, outWritten: IntArray): Int
+
     external fun sharingAccept(session: Long, bundle: ByteBuffer, length: Int): Int
 
     external fun sharingRevoke(session: Long, collectionId: ByteArray, recipientVaultId: ByteArray, recipientDeviceId: ByteArray, acceptedAtMs: Long, destination: ByteBuffer, outWritten: IntArray): Int

@@ -50,6 +50,7 @@ import dev.po4yka.chur.native.chur_runtime_open
 import dev.po4yka.chur.native.chur_session_close
 import dev.po4yka.chur.native.chur_sharing_identity
 import dev.po4yka.chur.native.chur_sharing_prepare
+import dev.po4yka.chur.native.chur_sharing_prepare_device
 import dev.po4yka.chur.native.chur_sharing_accept
 import dev.po4yka.chur.native.chur_sharing_revoke
 import dev.po4yka.chur.native.chur_status_is_known
@@ -279,6 +280,37 @@ internal actual object ChurNative {
                         collection,
                         enrollment,
                         recipientEnrollment.size.toUInt(),
+                        permissions.toUByte(),
+                        if (fingerprintVerified) 1u.toUByte() else 0u.toUByte(),
+                        destination.pointer,
+                        destination.size.toULong(),
+                        written,
+                    )
+                }
+            }
+        }
+    }
+
+    actual fun sharingPrepareDevice(
+        session: Long,
+        collectionId: ByteArray,
+        recipientEvidence: ChurBuffer,
+        recipientEvidenceLength: Int,
+        recipientDeviceId: ByteArray,
+        permissions: Int,
+        fingerprintVerified: Boolean,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int = memScoped {
+        collectionId.pinnedPointer { collection ->
+            recipientDeviceId.pinnedPointer { recipientDevice ->
+                writtenCall(outWritten) { written ->
+                    chur_sharing_prepare_device(
+                        session.toULong(),
+                        collection,
+                        recipientEvidence.pointer,
+                        recipientEvidenceLength.toUInt(),
+                        recipientDevice,
                         permissions.toUByte(),
                         if (fingerprintVerified) 1u.toUByte() else 0u.toUByte(),
                         destination.pointer,

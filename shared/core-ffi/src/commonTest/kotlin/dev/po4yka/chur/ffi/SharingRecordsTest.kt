@@ -6,6 +6,28 @@ import kotlin.test.assertFailsWith
 
 class SharingRecordsTest {
     @Test
+    fun recipient_evidence_keeps_membership_and_operation_boundaries() {
+        val encoded = encodeSharingIssuerEvidence(
+            SharingIssuerEvidence(
+                membership = listOf(byteArrayOf(1), byteArrayOf(2)),
+                operations = listOf(byteArrayOf(3)),
+            ),
+        )
+
+        assertContentEquals(
+            byteArrayOf(
+                0, 1,
+                0, 0, 0, 2,
+                0, 0, 0, 1, 1,
+                0, 0, 0, 1, 2,
+                0, 0, 0, 1,
+                0, 0, 0, 1, 3,
+            ),
+            encoded,
+        )
+    }
+
+    @Test
     fun prepared_revocation_keeps_batch_and_grant_boundaries() {
         val encoded = byteArrayOf(
             0, 1,

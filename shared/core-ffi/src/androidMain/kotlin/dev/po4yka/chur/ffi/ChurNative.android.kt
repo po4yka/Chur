@@ -54,6 +54,9 @@ internal actual object ChurNative {
     actual fun sharingPrepare(session: Long, collectionId: ByteArray, recipientEnrollment: ByteArray, permissions: Int, fingerprintVerified: Boolean, destination: ChurBuffer, outWritten: IntArray): Int =
         ChurJni.sharingPrepare(session, collectionId, recipientEnrollment, permissions, fingerprintVerified, destination.buffer, outWritten)
 
+    actual fun sharingPrepareDevice(session: Long, collectionId: ByteArray, recipientEvidence: ChurBuffer, recipientEvidenceLength: Int, recipientDeviceId: ByteArray, permissions: Int, fingerprintVerified: Boolean, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.sharingPrepareDevice(session, collectionId, recipientEvidence.buffer, recipientEvidenceLength, recipientDeviceId, permissions, fingerprintVerified, destination.buffer, outWritten)
+
     actual fun sharingAccept(session: Long, bundle: ChurBuffer, length: Int): Int =
         ChurJni.sharingAccept(session, bundle.buffer, length)
 

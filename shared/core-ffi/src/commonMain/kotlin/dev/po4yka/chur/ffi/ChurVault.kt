@@ -149,6 +149,39 @@ object ChurVault {
         decodePreparedShare(buffer.copyOut(written[0]), written[0])
     }
 
+    /** Prepares a grant for one device in an authenticated recipient vault. */
+    fun prepareShareForDevice(
+        session: Long,
+        collectionId: ByteArray,
+        recipient: SharingIssuerEvidence,
+        recipientDeviceId: ByteArray,
+        permissions: SharingPermission,
+        fingerprintVerified: Boolean,
+    ): PreparedShare {
+        val evidence = encodeSharingIssuerEvidence(recipient)
+        return withChurBuffer(evidence.size) { evidenceBuffer ->
+            evidenceBuffer.copyIn(evidence)
+            withChurBuffer(PREPARED_SHARE_CAPACITY) { destination ->
+                val written = IntArray(1)
+                ChurFailure.check(
+                    ChurNative.sharingPrepareDevice(
+                        session,
+                        collectionId,
+                        evidenceBuffer,
+                        evidence.size,
+                        recipientDeviceId,
+                        permissions.code,
+                        fingerprintVerified,
+                        destination,
+                        written,
+                    ),
+                    "sharing prepare device",
+                )
+                decodePreparedShare(destination.copyOut(written[0]), written[0])
+            }
+        }
+    }
+
     /** Authenticates relay evidence and atomically installs one recipient share. */
     fun acceptShare(session: Long, share: ShareAcceptance) {
         val encoded = encodeShareAcceptance(share)
