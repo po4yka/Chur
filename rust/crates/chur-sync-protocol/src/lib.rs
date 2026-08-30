@@ -18,6 +18,7 @@
 pub mod checkpoint;
 pub mod convergence;
 pub mod deletion;
+pub mod grant;
 pub mod identity;
 mod key_domain;
 pub mod materialization;
