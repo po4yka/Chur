@@ -497,9 +497,7 @@ fn accept_opened_sharing_operation(
         }
         Ok(())
     })?;
-    if outcome == ApplyOutcome::Applied
-        && let Some(candidate) = projected_sharing
-    {
+    if let (ApplyOutcome::Applied, Some(candidate)) = (outcome, projected_sharing) {
         *sharing_state = candidate;
     }
     Ok(outcome)
