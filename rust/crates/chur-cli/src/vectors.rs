@@ -44,6 +44,7 @@ use chur_sync_protocol::checkpoint::{
 use chur_sync_protocol::collection_membership::{
     CollectionMembershipAction, CollectionMembershipRecord,
 };
+use chur_sync_protocol::collection_operation::{CollectionObservedHead, CollectionOperation};
 use chur_sync_protocol::grant::{CollectionGrant, PermissionProfile, hpke_key_id, signing_key_id};
 use chur_sync_protocol::identity::DeviceIdentity;
 use chur_sync_protocol::membership::{EnrollmentRecord, RevocationRecord};
@@ -125,6 +126,7 @@ const IDENTITY_SPEC: &str = "docs/sync/DEVICE_IDENTITY.md";
 const ROLLBACK_SPEC: &str = "docs/sync/ROLLBACK_PROTECTION.md";
 const GRANT_SPEC: &str = "docs/sync/COLLECTION_GRANTS.md";
 const COLLECTION_MEMBERSHIP_SPEC: &str = "docs/sync/COLLECTION_MEMBERSHIP.md";
+const COLLECTION_OPERATION_SPEC: &str = "docs/sync/COLLECTION_OPERATION_LOG.md";
 
 // ---------------------------------------------------------------------------
 // Canonical encoding
@@ -1730,6 +1732,52 @@ fn sharing_protocol(out: &mut Vec<Vector>) -> Result<()> {
         .expect_bytes("record", &membership.encode())
         .expect_bytes("membership_commitment", &membership.commitment())
         .expect("record_length", json!(CollectionMembershipRecord::LEN))
+        .build(),
+    );
+
+    let operation_key = key(0x9c);
+    let operation_plaintext = b"deterministic shared collection payload";
+    let collection_operation = CollectionOperation::seal(
+        id(0x9d)?,
+        source_vault_id,
+        sender_device_id,
+        1,
+        [0; 32],
+        vec![CollectionObservedHead::new(
+            recipient_vault_id,
+            recipient_device_id,
+            3,
+        )],
+        id(0x9e)?,
+        &operation_key,
+        nonce(0x9f),
+        operation_plaintext,
+    )?
+    .sign(&sender);
+    collection_operation.verify_signature(&sender.verifying_key())?;
+    let opened = collection_operation.open_payload(&operation_key)?;
+    if opened.as_slice() != operation_plaintext {
+        return Err(Error::new(
+            ChurStatus::InternalFailure,
+            "collection operation vector opened the wrong payload",
+        ));
+    }
+    out.push(
+        VectorBuilder::accept(
+            "collection-operation",
+            "collection-operation-v1-signed-encrypted",
+            COLLECTION_OPERATION_SPEC,
+            "1",
+            "One byte-exact signed and encrypted cross-vault collection operation.",
+        )
+        .input_bytes("issuer_signing_seed", &[0x96; 32])
+        .input_bytes("operation_key", operation_key.expose())
+        .input_bytes("nonce", &[0x9f; NONCE_LEN])
+        .input_bytes("plaintext", operation_plaintext)
+        .expect_bytes("record", &collection_operation.encode())
+        .expect_bytes("operation_digest", &collection_operation.digest())
+        .expect_bytes("opened_plaintext", &opened)
+        .expect("record_length", json!(collection_operation.encode().len()))
         .build(),
     );
 

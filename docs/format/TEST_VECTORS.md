@@ -26,6 +26,7 @@ test-vectors/
     ├── sync-operations/
     ├── collection-grants/
     ├── collection-memberships/
+    ├── collection-operations/
     └── negative/
 ```
 
@@ -176,6 +177,7 @@ The `case` describes the input, never the expectation, because `outcome` already
 | `operation` | `sync-operations/` |
 | `collection-grant` | `collection-grants/` |
 | `collection-membership` | `collection-memberships/` |
+| `collection-operation` | `collection-operations/` |
 
 Examples:
 
