@@ -100,6 +100,16 @@ public class SyncClient(
     public suspend fun sharingGrants(vaultId: ByteArray): List<ByteArray> =
         page(HttpMethod.Get, "/v1/vaults/${vaultId.id()}/sharing/grants")
 
+    /** Fetches an authenticated issuer device-membership page for a current share. */
+    public suspend fun sharingIssuerMemberships(
+        vaultId: ByteArray,
+        issuerVaultId: ByteArray,
+        after: ULong,
+    ): List<ByteArray> = page(
+        HttpMethod.Get,
+        "/v1/vaults/${vaultId.id()}/sharing/issuers/${issuerVaultId.id()}/memberships?after=$after",
+    )
+
     /** Uploads one opaque signed collection operation. */
     public suspend fun putCollectionOperation(vaultId: ByteArray, operation: ByteArray): Unit =
         success(HttpMethod.Post, "/v1/vaults/${vaultId.id()}/sharing/operations", operation)

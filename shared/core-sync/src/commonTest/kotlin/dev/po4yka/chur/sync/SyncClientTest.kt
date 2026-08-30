@@ -78,12 +78,16 @@ class SyncClientTest {
             selector,
             CollectionOperationCursor(issuer, device, 11u),
         )
+        client.sharingIssuerMemberships(vault, issuer, 12u)
 
         assertContentEquals(byteArrayOf(0, 0, 0, 2, 5, 6, 7, 8, 9), requests[0].second)
         assertTrue(requests[1].first.endsWith(
             "/sharing/operations/${selector.hex()}?after_vault=${issuer.hex()}&after_device=${device.hex()}&after=11",
         ))
         assertContentEquals(byteArrayOf(7), page.single())
+        assertTrue(requests[2].first.endsWith(
+            "/sharing/issuers/${issuer.hex()}/memberships?after=12",
+        ))
     }
 }
 
