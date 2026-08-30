@@ -88,11 +88,32 @@ pub enum RecipientVerification {
     Verified,
 }
 
+/// One pinned recipient key pair and its local verification state.
 #[derive(Clone)]
-struct RecipientPin {
+pub struct RecipientPin {
     signing_public_key: [u8; PUBLIC_KEY_LEN],
     hpke_public_key: [u8; PUBLIC_KEY_LEN],
     verification: RecipientVerification,
+}
+
+impl RecipientPin {
+    /// Pinned recipient signing key.
+    #[must_use]
+    pub const fn signing_public_key(&self) -> &[u8; PUBLIC_KEY_LEN] {
+        &self.signing_public_key
+    }
+
+    /// Pinned recipient HPKE key.
+    #[must_use]
+    pub const fn hpke_public_key(&self) -> &[u8; PUBLIC_KEY_LEN] {
+        &self.hpke_public_key
+    }
+
+    /// Whether this pin was accepted on first use or explicitly verified.
+    #[must_use]
+    pub const fn verification(&self) -> RecipientVerification {
+        self.verification
+    }
 }
 
 #[derive(Clone)]
@@ -173,27 +194,9 @@ impl CollectionMembershipState {
         issuer_membership: &MembershipState,
     ) -> Result<CollectionMembershipOutcome> {
         let encoded = record.encode();
-        if self
-            .last_record
-            .as_ref()
-            .is_some_and(|accepted| accepted == &encoded)
-        {
-            return Ok(CollectionMembershipOutcome::Duplicate);
+        if let Some(outcome) = self.validate_next(record, &encoded)? {
+            return Ok(outcome);
         }
-        ensure!(
-            record.source_vault_id == self.source_vault_id
-                && record.collection_id == self.collection_id,
-            AuthenticationFailed,
-            "collection membership record belongs to another collection"
-        );
-        ensure!(
-            self.generation
-                .checked_add(1)
-                .is_some_and(|generation| generation == record.collection_membership_generation)
-                && record.previous_membership_commitment == self.commitment,
-            SyncHeadRollback,
-            "collection membership record is not the next chain entry"
-        );
         ensure!(
             issuer_membership.vault_id() == &record.issuer_identity_vault_id
                 && issuer_membership.generation() == record.issuer_membership_generation,
@@ -232,7 +235,82 @@ impl CollectionMembershipState {
             );
         }
         record.verify_signature(issuer.signing_public_key())?;
+        self.apply_verified(record, encoded)
+    }
 
+    /// Replays one record already accepted into the protected local catalog.
+    pub fn restore_accepted(
+        &mut self,
+        record: &CollectionMembershipRecord,
+        issuer_signing_public_key: &[u8; PUBLIC_KEY_LEN],
+    ) -> Result<CollectionMembershipOutcome> {
+        let encoded = record.encode();
+        if let Some(outcome) = self.validate_next(record, &encoded)? {
+            return Ok(outcome);
+        }
+        if record.issuer_identity_vault_id != self.source_vault_id {
+            let manager = self
+                .members
+                .get(&(record.issuer_identity_vault_id, record.issuer_device_id))
+                .ok_or_else(|| {
+                    Error::new(
+                        ChurStatus::CatalogCorrupt,
+                        "restored collection membership issuer is unknown",
+                    )
+                })?;
+            ensure!(
+                manager.active
+                    && manager.permissions == PermissionProfile::ManageMembers
+                    && manager.signing_public_key == *issuer_signing_public_key,
+                CatalogCorrupt,
+                "restored collection membership issuer cannot manage members"
+            );
+        }
+        record
+            .verify_signature(issuer_signing_public_key)
+            .map_err(|_| {
+                Error::new(
+                    ChurStatus::CatalogCorrupt,
+                    "restored collection membership signature is invalid",
+                )
+            })?;
+        self.apply_verified(record, encoded)
+    }
+
+    fn validate_next(
+        &self,
+        record: &CollectionMembershipRecord,
+        encoded: &[u8],
+    ) -> Result<Option<CollectionMembershipOutcome>> {
+        if self
+            .last_record
+            .as_ref()
+            .is_some_and(|accepted| accepted == encoded)
+        {
+            return Ok(Some(CollectionMembershipOutcome::Duplicate));
+        }
+        ensure!(
+            record.source_vault_id == self.source_vault_id
+                && record.collection_id == self.collection_id,
+            AuthenticationFailed,
+            "collection membership record belongs to another collection"
+        );
+        ensure!(
+            self.generation
+                .checked_add(1)
+                .is_some_and(|generation| generation == record.collection_membership_generation)
+                && record.previous_membership_commitment == self.commitment,
+            SyncHeadRollback,
+            "collection membership record is not the next chain entry"
+        );
+        Ok(None)
+    }
+
+    fn apply_verified(
+        &mut self,
+        record: &CollectionMembershipRecord,
+        encoded: Vec<u8>,
+    ) -> Result<CollectionMembershipOutcome> {
         let mut candidate = self.clone();
         let recipient = (
             record.recipient_identity_vault_id,
@@ -492,6 +570,12 @@ impl CollectionMembershipState {
         self.pins
             .get(&(*identity_vault_id, *device_id))
             .map(|pin| pin.verification)
+    }
+
+    /// Pinned keys and verification state for one recipient device.
+    #[must_use]
+    pub fn recipient_pin(&self, identity_vault_id: &Id, device_id: &Id) -> Option<&RecipientPin> {
+        self.pins.get(&(*identity_vault_id, *device_id))
     }
 
     /// Accepted recipient entry, including historical revoked entries.
@@ -1135,6 +1219,23 @@ mod tests {
                 == Some(RecipientVerification::Verified)
         );
         assert!(CollectionMembershipState::new(id(1), id(6), 0).is_err());
+
+        let mut restored = CollectionMembershipState::new(id(1), id(6), 1).expect("restore");
+        restored
+            .restore_accepted(&first, &source_key.verifying_key())
+            .expect("restore first");
+        restored
+            .verify_recipient_keys(recipient_vault_id, recipient_device_id, [10; 32], [11; 32])
+            .expect("restore verified pin");
+        restored
+            .restore_accepted(&replacement, &source_key.verifying_key())
+            .expect("restore replacement");
+        restored
+            .restore_accepted(&revoke, &source_key.verifying_key())
+            .expect("restore revoke");
+        assert_eq!(restored.generation(), state.generation());
+        assert_eq!(restored.commitment(), state.commitment());
+        assert_eq!(restored.collection_epoch(), state.collection_epoch());
     }
 
     #[test]
