@@ -479,6 +479,65 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingPrepare<'local>(
     finish_written(&mut env, status, &out_written, written)
 }
 
+/// Prepares a grant for one authenticated recipient device.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingPrepareDevice<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    collection_id: JByteArray<'local>,
+    recipient_evidence: JByteBuffer<'local>,
+    recipient_evidence_length: jint,
+    recipient_device_id: JByteArray<'local>,
+    permissions: jint,
+    fingerprint_verified: jboolean,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    let Some(collection_id) = fixed_array(&mut env, &collection_id, ID_LEN) else {
+        return INVALID_INPUT;
+    };
+    let Some(recipient_device_id) = fixed_array(&mut env, &recipient_device_id, ID_LEN) else {
+        return INVALID_INPUT;
+    };
+    let Some((evidence_address, evidence_capacity)) = direct_buffer(&env, &recipient_evidence)
+    else {
+        return INVALID_INPUT;
+    };
+    let Ok(evidence_length) = usize::try_from(recipient_evidence_length) else {
+        return INVALID_INPUT;
+    };
+    if evidence_length > evidence_capacity {
+        return INVALID_INPUT;
+    }
+    let Ok(evidence_length) = u32::try_from(evidence_length) else {
+        return INVALID_INPUT;
+    };
+    let Ok(permissions) = u8::try_from(permissions) else {
+        return INVALID_INPUT;
+    };
+    let Some((address, capacity)) = direct_buffer(&env, &destination) else {
+        return INVALID_INPUT;
+    };
+    let mut written = 0usize;
+    // SAFETY: the arrays, direct buffers, and `written` stay live for the call.
+    let status = unsafe {
+        chur_ffi::sharing::chur_sharing_prepare_device(
+            handle_of(session),
+            collection_id.as_ptr(),
+            evidence_address,
+            evidence_length,
+            recipient_device_id.as_ptr(),
+            permissions,
+            u8::from(fingerprint_verified != 0),
+            address,
+            capacity,
+            &mut written,
+        )
+    };
+    finish_written(&mut env, status, &out_written, written)
+}
+
 /// Revokes one recipient and writes one bounded rotation batch.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingRevoke<'local>(

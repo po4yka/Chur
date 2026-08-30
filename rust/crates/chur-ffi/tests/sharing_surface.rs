@@ -6,7 +6,8 @@
 use chur_ffi::api::{chur_runtime_close, chur_runtime_open, chur_session_close, chur_vault_unlock};
 use chur_ffi::records::{ChurRuntimeConfigV1, ChurUnlockRequestV1};
 use chur_ffi::sharing::{
-    chur_sharing_accept, chur_sharing_identity, chur_sharing_prepare, chur_sharing_revoke,
+    chur_sharing_accept, chur_sharing_identity, chur_sharing_prepare, chur_sharing_prepare_device,
+    chur_sharing_revoke,
 };
 use chur_format::codec::{Reader, Writer};
 use chur_format::envelope::CollectionKeyEnvelope;
@@ -166,6 +167,13 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
         .variable(EnrollmentRecord::LEN as u32)
         .expect("recipient enrollment")
         .to_vec();
+    let recipient_initial_operation = recipient_reader
+        .variable(16_777_216)
+        .expect("recipient initial operation")
+        .to_vec();
+    recipient_reader
+        .finish()
+        .expect("recipient identity record");
     let mut short = [0xa5];
     written = usize::MAX;
     assert_eq!(
@@ -233,6 +241,37 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
     assert_eq!(grant.recipient_device_id(), &recipient_device_id);
     assert!(grant.permissions() == PermissionProfile::Contribute);
     assert!(membership_operation.device_sequence() < grant_operation.device_sequence());
+
+    let mut recipient_evidence = Writer::new();
+    recipient_evidence.u16(1).u32(1);
+    recipient_evidence
+        .variable(&recipient_enrollment)
+        .expect("recipient membership");
+    recipient_evidence.u32(1);
+    recipient_evidence
+        .variable(&recipient_initial_operation)
+        .expect("recipient operation");
+    let recipient_evidence = recipient_evidence.finish();
+    let mut device_share = vec![0u8; 4096];
+    let mut device_share_written = 0;
+    assert_eq!(
+        unsafe {
+            chur_sharing_prepare_device(
+                session,
+                collection_id.as_bytes().as_ptr(),
+                recipient_evidence.as_ptr(),
+                recipient_evidence.len() as u32,
+                recipient_device_id.as_bytes().as_ptr(),
+                PermissionProfile::Contribute as u8,
+                1,
+                device_share.as_mut_ptr(),
+                device_share.len(),
+                &mut device_share_written,
+            )
+        },
+        0
+    );
+    assert_eq!(&device_share[..device_share_written], share.as_slice());
 
     let mut bundle = Writer::new();
     bundle.u16(1).u32(1).u32(1);

@@ -14,9 +14,10 @@
  * surface of section 6.7, the sync inbox surface of section 6.8, and the
  * sharing identity surface of section 6.9, and the share preparation surface
  * of section 6.10, the share acceptance surface of section 6.11, and the
- * recipient revocation surface of section 6.12. Adding an export raises the
- * minor ABI version; changing or removing one raises the major. The library
- * reports 1.8.
+ * recipient revocation surface of section 6.12, and the authenticated
+ * recipient-device surface of section 6.13. Adding an export raises the minor
+ * ABI version; changing or removing one raises the major. The library reports
+ * 1.9.
  */
 
 #ifndef CHUR_H
@@ -363,6 +364,17 @@ chur_status_t chur_sharing_prepare(chur_handle_t session,
                                    uint8_t fingerprint_verified,
                                    uint8_t *destination, size_t capacity,
                                    size_t *bytes_written);
+
+/* Authenticated multi-device recipient preparation, section 6.13. */
+chur_status_t chur_sharing_prepare_device(chur_handle_t session,
+                                          const uint8_t collection_id[16],
+                                          const uint8_t *recipient_evidence,
+                                          uint32_t recipient_evidence_length,
+                                          const uint8_t recipient_device_id[16],
+                                          uint8_t permissions,
+                                          uint8_t fingerprint_verified,
+                                          uint8_t *destination, size_t capacity,
+                                          size_t *bytes_written);
 
 /* Authenticated recipient share installation, section 6.11. */
 chur_status_t chur_sharing_accept(chur_handle_t session,

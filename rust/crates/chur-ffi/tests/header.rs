@@ -352,6 +352,8 @@ fn every_declared_function_is_exported() {
         "chur_sharing_identity",
         // §6.10, the share preparation surface added at ABI 1.6.
         "chur_sharing_prepare",
+        // §6.13, authenticated recipient devices added at ABI 1.9.
+        "chur_sharing_prepare_device",
         // §6.11, the share acceptance surface added at ABI 1.7.
         "chur_sharing_accept",
         // §6.12, the recipient revocation surface added at ABI 1.8.
@@ -371,7 +373,7 @@ fn every_declared_function_is_exported() {
 
     // Calling each one proves the list above is not a stale copy.
     assert_eq!(chur_ffi::chur_abi_version_major(), 1);
-    assert_eq!(chur_ffi::chur_abi_version_minor(), 8);
+    assert_eq!(chur_ffi::chur_abi_version_minor(), 9);
     assert_eq!(
         chur_ffi::chur_capabilities(),
         chur_ffi::CHUR_CAP_DECOY_VAULT

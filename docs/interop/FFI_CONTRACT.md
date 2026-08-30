@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. v1 ships 1.8: §6.5 through §6.12 each added one minor surface. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
+- native API version is the (major, minor) pair. v1 ships 1.9: §6.5 through §6.13 each added one minor surface. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -531,6 +531,24 @@ rotation_complete:u8
 ```
 
 Each counted list has at most 4096 records. One call authors at most 4096 rotation operations. If more rewrap work remains, it returns `rotation_complete = 0` and no grants; the caller uploads that batch and calls the function again. Current grants appear only with `rotation_complete = 1`. The flag is exactly `0` or `1`, and an exact retry creates no new record. The destination capacity must cover the 16 MiB response bound so buffer validation happens before durable state changes. A smaller buffer receives no partial record, sets `bytes_written` to zero, and returns `RESOURCE_LIMIT_EXCEEDED`.
+
+### 6.13 Authenticated recipient devices, ABI 1.9
+
+`chur_sharing_prepare_device` prepares the same output as §6.10, but it accepts a complete authenticated recipient identity-vault history and can address any active device in that vault. Rust validates the membership chain, operation chains, signatures, causal predecessors, revocation heads, and selected device before it pins keys or issues a grant. Kotlin does not parse recipient protocol records.
+
+```c
+chur_status_t chur_sharing_prepare_device(chur_handle_t session,
+                                          const uint8_t collection_id[16],
+                                          const uint8_t *recipient_evidence,
+                                          uint32_t recipient_evidence_length,
+                                          const uint8_t recipient_device_id[16],
+                                          uint8_t permissions,
+                                          uint8_t fingerprint_verified,
+                                          uint8_t *destination, size_t capacity,
+                                          size_t *bytes_written);
+```
+
+The evidence is at most 16 MiB and contains `version:u16 = 1`, `membership_count:u32`, that many `membership_record:bytes<u32>` values, `operation_count:u32`, and that many `operation:bytes<u32>` values. Each count is at most 4096. The membership list starts at generation one and includes every successor through the selected device's current membership. The output and retry rules are identical to §6.10. The initial-enrollment function remains for ABI compatibility and first-device invitations.
 
 ## 7. Buffer ownership
 

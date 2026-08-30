@@ -167,13 +167,98 @@ pub unsafe extern "C" fn chur_sharing_prepare(
                 permissions,
                 fingerprint_verified,
             )?;
-            let mut writer = Writer::new();
-            writer.u16(RECORD_VERSION_V1);
-            writer.variable(&prepared.membership().encode())?;
-            writer.variable(&prepared.membership_operation().encode())?;
-            writer.variable(&prepared.grant().encode())?;
-            writer.variable(&prepared.grant_operation().encode())?;
-            writer.finish()
+            encode_prepared_share(&prepared)?
+        };
+        // SAFETY: the caller guarantees the destination range above.
+        let buffer = unsafe { borrow_bytes_mut(destination, capacity)? };
+        ensure!(
+            encoded.len() <= buffer.len(),
+            ResourceLimitExceeded,
+            "the destination buffer is smaller than the prepared share record"
+        );
+        buffer[..encoded.len()].copy_from_slice(&encoded);
+        // SAFETY: the caller guarantees the writable out-parameter above.
+        unsafe { write_out(bytes_written, encoded.len()) }
+    })
+}
+
+/// Prepares a grant for one device in an authenticated recipient vault.
+///
+/// # Safety
+///
+/// Fixed and variable input pointers cover their declared readable ranges.
+/// `destination` covers `capacity` writable bytes and `bytes_written` points
+/// to one writable, aligned `size_t` for this call.
+#[unsafe(no_mangle)]
+#[expect(
+    unsafe_code,
+    reason = "FFI_CONTRACT.md section 6.13 fixes this exported symbol"
+)]
+pub unsafe extern "C" fn chur_sharing_prepare_device(
+    session: Handle,
+    collection_id: *const u8,
+    recipient_evidence: *const u8,
+    recipient_evidence_length: u32,
+    recipient_device_id: *const u8,
+    permissions: u8,
+    fingerprint_verified: u8,
+    destination: *mut u8,
+    capacity: usize,
+    bytes_written: *mut usize,
+) -> Status {
+    guard_status(|| {
+        // SAFETY: the caller guarantees the writable out-parameter above.
+        let _ = unsafe { write_out(bytes_written, 0usize) };
+        ensure!(
+            recipient_evidence_length <= BUNDLE_BYTES_MAX,
+            ResourceLimitExceeded,
+            "recipient evidence exceeds the ABI limit"
+        );
+        // SAFETY: the caller guarantees the fixed input range above.
+        let collection_id = Id::from_slice(unsafe { borrow_bytes(collection_id, 16)? })?;
+        // SAFETY: the caller guarantees the fixed input range above.
+        let recipient_device_id =
+            Id::from_slice(unsafe { borrow_bytes(recipient_device_id, 16)? })?;
+        // SAFETY: the caller guarantees the variable input range above.
+        let evidence = decode_recipient_evidence(unsafe {
+            borrow_bytes(recipient_evidence, recipient_evidence_length)?
+        })?;
+        let permissions = permission_profile(permissions)?;
+        let fingerprint_verified = match fingerprint_verified {
+            0 => false,
+            1 => true,
+            _ => {
+                return Err(Error::new(
+                    ChurStatus::InvalidInput,
+                    "fingerprint verification must be zero or one",
+                ));
+            }
+        };
+        let entry = registry::get(session, Kind::Session)?;
+        let Entry::Session { session, .. } = entry.as_ref() else {
+            return Err(Error::new(
+                ChurStatus::InvalidInput,
+                "the handle is of another type",
+            ));
+        };
+        let encoded = {
+            let mut session = registry::lock(session);
+            let source_vault_id = session.vault_id();
+            let root = Key::new(*session.root_secret().expose());
+            let prepared = chur_catalog::sharing_service::prepare_share_for_device(
+                session.catalog()?,
+                &root,
+                source_vault_id,
+                collection_id,
+                chur_catalog::sharing_service::IssuerEvidence {
+                    membership: &evidence.membership,
+                    operations: &evidence.operations,
+                },
+                recipient_device_id,
+                permissions,
+                fingerprint_verified,
+            )?;
+            encode_prepared_share(&prepared)?
         };
         // SAFETY: the caller guarantees the destination range above.
         let buffer = unsafe { borrow_bytes_mut(destination, capacity)? };
@@ -363,41 +448,7 @@ fn decode_accept_bundle(bytes: &[u8]) -> Result<DecodedAcceptBundle, Error> {
     let issuer_count = bounded_count(&mut reader, ISSUERS_MAX, "sharing issuer count")?;
     let mut issuers = Vec::with_capacity(issuer_count);
     for _ in 0..issuer_count {
-        let membership_count =
-            bounded_count(&mut reader, BUNDLE_RECORDS_MAX, "issuer membership count")?;
-        let mut membership = Vec::with_capacity(membership_count);
-        for _ in 0..membership_count {
-            let bytes = reader.variable(EnrollmentRecord::LEN as u32)?;
-            let record = match bytes.len() {
-                EnrollmentRecord::LEN => {
-                    chur_catalog::sharing_service::IssuerMembershipRecord::Enrollment(
-                        EnrollmentRecord::decode(bytes)?,
-                    )
-                }
-                RevocationRecord::LEN => {
-                    chur_catalog::sharing_service::IssuerMembershipRecord::Revocation(
-                        RevocationRecord::decode(bytes)?,
-                    )
-                }
-                _ => {
-                    return Err(Error::new(
-                        ChurStatus::NonCanonicalEncoding,
-                        "issuer membership record has another length",
-                    ));
-                }
-            };
-            membership.push(record);
-        }
-        let operation_count =
-            bounded_count(&mut reader, BUNDLE_RECORDS_MAX, "issuer operation count")?;
-        let mut operations = Vec::with_capacity(operation_count);
-        for _ in 0..operation_count {
-            operations.push(Operation::decode(reader.variable(BUNDLE_BYTES_MAX)?)?);
-        }
-        issuers.push(DecodedIssuer {
-            membership,
-            operations,
-        });
+        issuers.push(decode_issuer(&mut reader)?);
     }
     let membership_count = bounded_count(
         &mut reader,
@@ -416,6 +467,66 @@ fn decode_accept_bundle(bytes: &[u8]) -> Result<DecodedAcceptBundle, Error> {
     let grant_operation = Operation::decode(reader.variable(BUNDLE_BYTES_MAX)?)?;
     reader.finish()?;
     Ok((issuers, membership, grant, grant_operation))
+}
+
+fn decode_recipient_evidence(bytes: &[u8]) -> Result<DecodedIssuer, Error> {
+    let mut reader = Reader::new(bytes, ChurStatus::NonCanonicalEncoding);
+    ensure!(
+        reader.u16()? == RECORD_VERSION_V1,
+        UnsupportedVersion,
+        "recipient evidence version is not supported"
+    );
+    let evidence = decode_issuer(&mut reader)?;
+    reader.finish()?;
+    Ok(evidence)
+}
+
+fn decode_issuer(reader: &mut Reader<'_>) -> Result<DecodedIssuer, Error> {
+    let membership_count = bounded_count(reader, BUNDLE_RECORDS_MAX, "issuer membership count")?;
+    let mut membership = Vec::with_capacity(membership_count);
+    for _ in 0..membership_count {
+        let bytes = reader.variable(EnrollmentRecord::LEN as u32)?;
+        let record = match bytes.len() {
+            EnrollmentRecord::LEN => {
+                chur_catalog::sharing_service::IssuerMembershipRecord::Enrollment(
+                    EnrollmentRecord::decode(bytes)?,
+                )
+            }
+            RevocationRecord::LEN => {
+                chur_catalog::sharing_service::IssuerMembershipRecord::Revocation(
+                    RevocationRecord::decode(bytes)?,
+                )
+            }
+            _ => {
+                return Err(Error::new(
+                    ChurStatus::NonCanonicalEncoding,
+                    "issuer membership record has another length",
+                ));
+            }
+        };
+        membership.push(record);
+    }
+    let operation_count = bounded_count(reader, BUNDLE_RECORDS_MAX, "issuer operation count")?;
+    let mut operations = Vec::with_capacity(operation_count);
+    for _ in 0..operation_count {
+        operations.push(Operation::decode(reader.variable(BUNDLE_BYTES_MAX)?)?);
+    }
+    Ok(DecodedIssuer {
+        membership,
+        operations,
+    })
+}
+
+fn encode_prepared_share(
+    prepared: &chur_catalog::sharing_service::PreparedShare,
+) -> Result<Vec<u8>, Error> {
+    let mut writer = Writer::new();
+    writer.u16(RECORD_VERSION_V1);
+    writer.variable(&prepared.membership().encode())?;
+    writer.variable(&prepared.membership_operation().encode())?;
+    writer.variable(&prepared.grant().encode())?;
+    writer.variable(&prepared.grant_operation().encode())?;
+    Ok(writer.finish())
 }
 
 fn bounded_count(
