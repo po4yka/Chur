@@ -531,6 +531,7 @@ fn collection_epoch_and_log_head_commit_together() {
         &old_envelope.encode(),
     )
     .expect("collection");
+    sharing::provision(&mut fixture.db, id(2), collection_id, 1).expect("sharing");
     let new_envelope = chur_format::envelope::CollectionKeyEnvelope::seal(
         &fixture.root,
         id(2),
@@ -586,6 +587,13 @@ fn collection_epoch_and_log_head_commit_together() {
         store::collection(&fixture.db, &collection_id)
             .expect("collection")
             .current_epoch,
+        2
+    );
+    assert_eq!(
+        sharing::load(&fixture.db, &collection_id)
+            .expect("sharing")
+            .expect("sharing state")
+            .collection_epoch(),
         2
     );
     let new_domain = KeyDomain::collection(&new_key, &collection_id, 2).expect("new domain");

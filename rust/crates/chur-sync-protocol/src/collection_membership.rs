@@ -277,6 +277,35 @@ impl CollectionMembershipState {
         self.apply_verified(record, encoded)
     }
 
+    /// Advances the collection epoch by one or accepts the same epoch idempotently.
+    pub fn advance_collection_epoch(&mut self, target_epoch: u64) -> Result<bool> {
+        validate_counter(target_epoch, "collection epoch is invalid")?;
+        if target_epoch == self.collection_epoch {
+            return Ok(false);
+        }
+        ensure!(
+            self.collection_epoch
+                .checked_add(1)
+                .is_some_and(|next| next == target_epoch),
+            SyncHeadRollback,
+            "collection epoch is not the next epoch"
+        );
+        self.collection_epoch = target_epoch;
+        Ok(true)
+    }
+
+    /// Restores a durable collection epoch that can be ahead of membership records.
+    pub fn restore_collection_epoch(&mut self, target_epoch: u64) -> Result<()> {
+        validate_counter(target_epoch, "restored collection epoch is invalid")?;
+        ensure!(
+            target_epoch >= self.collection_epoch,
+            SyncHeadRollback,
+            "restored collection epoch rolls back membership state"
+        );
+        self.collection_epoch = target_epoch;
+        Ok(())
+    }
+
     fn validate_next(
         &self,
         record: &CollectionMembershipRecord,
@@ -1236,6 +1265,20 @@ mod tests {
         assert_eq!(restored.generation(), state.generation());
         assert_eq!(restored.commitment(), state.commitment());
         assert_eq!(restored.collection_epoch(), state.collection_epoch());
+    }
+
+    #[test]
+    fn collection_epoch_advances_once_and_restores_forward() {
+        let mut state = CollectionMembershipState::new(id(1), id(2), 7).expect("state");
+
+        assert!(state.advance_collection_epoch(8).expect("advance"));
+        assert!(!state.advance_collection_epoch(8).expect("duplicate"));
+        assert!(state.advance_collection_epoch(10).is_err());
+        assert!(state.advance_collection_epoch(7).is_err());
+        state.restore_collection_epoch(10).expect("restore");
+        assert_eq!(state.collection_epoch(), 10);
+        assert!(state.restore_collection_epoch(9).is_err());
+        assert!(state.restore_collection_epoch(u64::MAX).is_err());
     }
 
     #[test]

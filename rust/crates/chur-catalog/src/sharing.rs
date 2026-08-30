@@ -185,6 +185,45 @@ pub fn project_membership(
     Ok((candidate, outcome))
 }
 
+/// Projects one authenticated collection epoch inside an existing transaction.
+pub fn project_collection_epoch(
+    transaction: &Transaction<'_>,
+    current: &CollectionMembershipState,
+    target_epoch: u64,
+) -> Result<CollectionMembershipState> {
+    let mut candidate = current.clone();
+    if !candidate.advance_collection_epoch(target_epoch)? {
+        check_head(transaction, current)?;
+        return Ok(candidate);
+    }
+    let changed = transaction
+        .execute(
+            "UPDATE sharing_collections SET current_epoch = ?2
+              WHERE collection_id = ?1 AND membership_generation = ?3
+                AND membership_commitment = ?4 AND current_epoch = ?5",
+            params![
+                current.collection_id().as_bytes().as_slice(),
+                as_sqlite_integer(target_epoch, "the target collection epoch is too large")?,
+                as_sqlite_integer(
+                    current.generation(),
+                    "the collection membership generation is too large"
+                )?,
+                current.commitment().as_slice(),
+                as_sqlite_integer(
+                    current.collection_epoch(),
+                    "the previous collection epoch is too large"
+                )?,
+            ],
+        )
+        .map_err(|error| map_sqlite(error, "the sharing collection epoch could not advance"))?;
+    ensure!(
+        changed == 1,
+        Conflict,
+        "the sharing collection epoch changed concurrently"
+    );
+    Ok(candidate)
+}
+
 /// Replays one collection's accepted membership and recipient pins.
 pub fn load(db: &CatalogDb, collection_id: &Id) -> Result<Option<CollectionMembershipState>> {
     let stored: Option<StoredStateRow> = db
@@ -233,6 +272,27 @@ pub fn load(db: &CatalogDb, collection_id: &Id) -> Result<Option<CollectionMembe
     )?;
     let stored_head = fixed(&head_bytes, "the collection membership head is malformed")?;
     let stored_epoch = from_sqlite_integer(current_epoch, "the collection epoch is negative")?;
+    let collection_epoch: Option<i64> = db
+        .connection()
+        .query_row(
+            "SELECT current_epoch FROM collections WHERE collection_id = ?1",
+            [collection_id.as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| map_sqlite(error, "the collection epoch could not be read"))?;
+    if let Some(collection_epoch) = collection_epoch {
+        let collection_epoch =
+            from_sqlite_integer(collection_epoch, "the collection epoch is negative")?;
+        ensure!(
+            stored_epoch == collection_epoch
+                || collection_epoch
+                    .checked_add(1)
+                    .is_some_and(|pending| pending == stored_epoch),
+            CatalogCorrupt,
+            "sharing and collection epochs contradict"
+        );
+    }
     let pins = load_pins(db, collection_id)?;
     let mut state = CollectionMembershipState::new(source_vault_id, *collection_id, initial_epoch)
         .map_err(corrupt_sharing)?;
@@ -332,10 +392,11 @@ pub fn load(db: &CatalogDb, collection_id: &Id) -> Result<Option<CollectionMembe
                 .map_err(corrupt_sharing)?;
         }
     }
+    state
+        .restore_collection_epoch(stored_epoch)
+        .map_err(corrupt_sharing)?;
     ensure!(
-        state.generation() == stored_generation
-            && state.commitment() == &stored_head
-            && state.collection_epoch() == stored_epoch,
+        state.generation() == stored_generation && state.commitment() == &stored_head,
         CatalogCorrupt,
         "sharing state contradicts its membership chain"
     );
@@ -793,6 +854,12 @@ mod tests {
                 .expect("source enrollment")
                 .sign(&source_key);
         let source = MembershipState::bootstrap(&source_record).expect("source membership");
+        db.connection()
+            .execute(
+                "INSERT INTO collections VALUES (?1, 7, 1, 1, 1)",
+                [id(4).as_bytes().as_slice()],
+            )
+            .expect("collection");
         let initial = provision(&mut db, id(1), id(4), 7).expect("provision sharing");
         let first = CollectionMembershipRecord::new(
             id(1),
@@ -863,6 +930,17 @@ mod tests {
                 == Some(RecipientVerification::Verified)
         );
         assert!(!restored.member(&id(5), &id(6)).expect("member").is_active());
+
+        db.connection()
+            .execute(
+                "UPDATE sharing_collections SET current_epoch = 9 WHERE collection_id = ?1",
+                [id(4).as_bytes().as_slice()],
+            )
+            .expect("tamper epoch");
+        let Err(error) = load(&db, &id(4)) else {
+            panic!("divergent sharing epoch loaded")
+        };
+        assert!(error.status() == ChurStatus::CatalogCorrupt);
     }
 
     #[test]

@@ -614,6 +614,14 @@ pub fn accept_rotation_operation(
                 collection_key_envelope.collection_epoch(),
             )?;
             keys.check_insert(&new_domain)?;
+            let sharing_state = sharing::load(db, payload.collection_id())?;
+            if let Some(state) = &sharing_state {
+                ensure!(
+                    state.source_vault_id() == operation.vault_id(),
+                    AuthenticationFailed,
+                    "collection rotation comes from another sharing source vault"
+                );
+            }
             let outcome = log.accept_with(db, &operation, membership, |transaction| {
                 sync_rotation::project_begin(
                     transaction,
@@ -625,7 +633,15 @@ pub fn accept_rotation_operation(
                     now_ms,
                     collection_key_envelope.clone(),
                     root,
-                )
+                )?;
+                if let Some(state) = &sharing_state {
+                    sharing::project_collection_epoch(
+                        transaction,
+                        state,
+                        collection_key_envelope.collection_epoch(),
+                    )?;
+                }
+                Ok(())
             })?;
             if outcome == ApplyOutcome::Applied {
                 keys.insert(new_domain)?;
