@@ -8,11 +8,13 @@ use chur_format::envelope::{CollectionKeyEnvelope, ObjectKeyEnvelope};
 use chur_sync_protocol::collection_membership::{
     CollectionMembershipAction, CollectionMembershipRecord,
 };
+use chur_sync_protocol::collection_operation::CollectionOperation;
 use chur_sync_protocol::grant::{CollectionGrant, PermissionProfile};
 use chur_sync_protocol::identity::DeviceIdentity;
 use chur_sync_protocol::membership::{EnrollmentRecord, RevocationRecord};
 use chur_sync_protocol::operation::{DeviceSigningKey, Operation};
 use chur_sync_protocol::payload::{MetadataField, MetadataFieldId, OperationPayload, PayloadBody};
+use chur_sync_protocol::{KeyDirectory, KeyDomain};
 
 fn id(byte: u8) -> Id {
     Id::new([byte; 16]).expect("non-zero identifier")
@@ -111,6 +113,62 @@ fn sharing_records_round_trip_as_bounded_payload_kinds() {
     payloads[1]
         .validate_for_operation(&grant_operation, &id(5), 7)
         .expect("grant binding");
+}
+
+#[test]
+fn a_collection_operation_accepts_only_content_payload_kinds() {
+    let collection = id(1);
+    let collection_key = Key::new([2; 32]);
+    let domain = KeyDomain::collection(&collection_key, &collection, 7).expect("domain");
+    let selector = *domain.selector();
+    let mut keys = KeyDirectory::new(&Key::new([3; 32]), &id(4)).expect("directory");
+    keys.insert(domain).expect("insert domain");
+    let payload = OperationPayload::new(
+        collection,
+        7,
+        PayloadBody::CreateAlbum {
+            album_id: id(5),
+            name: "Shared".to_owned(),
+        },
+    )
+    .expect("payload");
+    let operation = CollectionOperation::seal(
+        id(6),
+        id(7),
+        id(8),
+        1,
+        [0; 32],
+        Vec::new(),
+        selector,
+        keys.operation_key(&selector).expect("operation key"),
+        Nonce::new([9; 24]),
+        &payload.encode(),
+    )
+    .expect("operation");
+
+    assert!(
+        OperationPayload::open_for_collection_operation(&operation, &keys)
+            .is_ok_and(|opened| opened == payload)
+    );
+
+    let identity = DeviceIdentity::from_seeds([10; 32], [11; 32]);
+    let enrollment = EnrollmentRecord::initial(
+        id(7),
+        id(8),
+        identity.signing_public_key(),
+        identity.hpke_public_key(),
+    )
+    .expect("enrollment")
+    .sign(&DeviceSigningKey::from_seed([10; 32]));
+    let forbidden =
+        OperationPayload::new(id(7), 0, PayloadBody::AddDevice(enrollment)).expect("root payload");
+    assert_eq!(
+        forbidden
+            .validate_for_collection_operation(&id(7), 0)
+            .expect_err("identity payload must be rejected")
+            .status(),
+        ChurStatus::AuthenticationFailed
+    );
 }
 
 #[test]

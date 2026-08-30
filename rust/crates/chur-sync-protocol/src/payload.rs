@@ -7,6 +7,7 @@ use chur_format::envelope::{CollectionKeyEnvelope, ObjectKeyEnvelope};
 
 use crate::KeyDirectory;
 use crate::collection_membership::CollectionMembershipRecord;
+use crate::collection_operation::CollectionOperation;
 use crate::grant::CollectionGrant;
 use crate::membership::{EnrollmentRecord, RevocationRecord};
 use crate::operation::{Operation, PROTOCOL_VERSION_V1};
@@ -327,6 +328,54 @@ impl OperationPayload {
             domain.collection_epoch(),
         )?;
         Ok(payload)
+    }
+
+    /// Opens and binds a payload from a shared-collection operation stream.
+    pub fn open_for_collection_operation(
+        operation: &CollectionOperation,
+        keys: &KeyDirectory,
+    ) -> Result<Self> {
+        let domain = keys.domain(operation.key_selector())?;
+        let plaintext = operation.open_payload(domain.operation_key())?;
+        let payload = Self::decode(&plaintext)?;
+        payload
+            .validate_for_collection_operation(domain.collection_id(), domain.collection_epoch())?;
+        Ok(payload)
+    }
+
+    /// Validates the payload kind and collection epoch for a shared stream.
+    pub fn validate_for_collection_operation(
+        &self,
+        selected_collection_id: &Id,
+        selected_collection_epoch: u64,
+    ) -> Result<()> {
+        ensure!(
+            &self.collection_id == selected_collection_id
+                && self.collection_epoch == selected_collection_epoch,
+            AuthenticationFailed,
+            "payload does not match the resolved collection selector"
+        );
+        ensure!(
+            matches!(
+                self.body,
+                PayloadBody::CreateObject { .. }
+                    | PayloadBody::CommitObject { .. }
+                    | PayloadBody::UpdateMetadata { .. }
+                    | PayloadBody::CreateAlbum { .. }
+                    | PayloadBody::RenameAlbum { .. }
+                    | PayloadBody::AddAlbumMembership { .. }
+                    | PayloadBody::RemoveAlbumMembership { .. }
+                    | PayloadBody::SetFavorite { .. }
+                    | PayloadBody::AddTag { .. }
+                    | PayloadBody::RemoveTag { .. }
+                    | PayloadBody::DeleteObject { .. }
+                    | PayloadBody::RestoreObject { .. }
+                    | PayloadBody::RewrapObjectKey { .. }
+            ),
+            AuthenticationFailed,
+            "payload kind is not allowed in a collection operation stream"
+        );
+        Ok(())
     }
 
     /// Validates the private payload against its authenticated outer operation.
