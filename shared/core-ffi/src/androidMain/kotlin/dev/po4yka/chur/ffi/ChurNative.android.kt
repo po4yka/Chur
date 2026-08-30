@@ -48,6 +48,9 @@ internal actual object ChurNative {
 
     actual fun sessionClose(session: Long): Int = ChurJni.sessionClose(session)
 
+    actual fun sharingIdentity(session: Long, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.sharingIdentity(session, destination.buffer, outWritten)
+
     actual fun syncStage(runtime: Long, vaultId: ByteArray, kind: Int, stagedAtMs: Long, record: ChurBuffer, length: Int): Int =
         ChurJni.syncStage(runtime, vaultId, kind, stagedAtMs, record.buffer, length)
 

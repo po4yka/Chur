@@ -194,10 +194,32 @@ class ChurVaultHostTest {
         }.digest()
 
     @Test
+    fun the_sharing_identity_is_public_and_idempotent() {
+        val runtime = openRuntime()
+        val session = createVault(runtime)
+
+        val first = ChurVault.sharingIdentity(session)
+        val replay = ChurVault.sharingIdentity(session)
+
+        assertEquals(16, first.vaultId.size)
+        assertEquals(16, first.deviceId.size)
+        assertEquals(32, first.signingPublicKey.size)
+        assertEquals(32, first.hpkePublicKey.size)
+        assertEquals(49, first.fingerprint.length)
+        assertTrue(first.enrollment.isNotEmpty())
+        assertTrue(first.initialOperation.isNotEmpty())
+        assertContentEquals(first.vaultId, replay.vaultId)
+        assertContentEquals(first.deviceId, replay.deviceId)
+        assertContentEquals(first.enrollment, replay.enrollment)
+        assertContentEquals(first.initialOperation, replay.initialOperation)
+        ChurVault.closeSession(session)
+    }
+
+    @Test
     fun the_handshake_matches_the_frozen_abi() {
         val handshake = ChurVault.handshake()
         assertEquals(1, handshake.major)
-        assertEquals(4, handshake.minor, "§6.8 added the sync inbox")
+        assertEquals(5, handshake.minor, "§6.9 added collection sharing")
         assertEquals(1, handshake.objectFormatMin)
         assertEquals(1, handshake.objectFormatMax)
         assertTrue(handshake.capabilities and 0b0000_0010L != 0L, "the reader is declared")
@@ -212,6 +234,10 @@ class ChurVaultHostTest {
         assertTrue(
             handshake.capabilities and 0b0010_0000L != 0L,
             "the encrypted sync inbox is declared",
+        )
+        assertTrue(
+            handshake.capabilities and 0b1000_0000L != 0L,
+            "collection sharing is declared",
         )
         assertTrue(ChurVault.statusIsKnown(ChurStatus.AUTHENTICATION_FAILED.value))
         assertFalse(ChurVault.statusIsKnown(42))

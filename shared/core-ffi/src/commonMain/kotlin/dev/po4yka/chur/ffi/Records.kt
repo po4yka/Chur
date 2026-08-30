@@ -37,6 +37,9 @@ const val GCM_NONCE_LENGTH: Int = 12
 /** A wrapped 32-byte key and its 16-byte tag. */
 const val WRAPPED_KEY_LENGTH: Int = 48
 
+/** Length of an Ed25519 or X25519 public key. */
+const val PUBLIC_KEY_LENGTH: Int = 32
+
 /**
  * The largest recovery phrase, §6.5.
  *
@@ -132,6 +135,36 @@ data class ObjectDetail(
     val caption: String,
     val tags: List<Pair<ByteArray, String>>,
 )
+
+/** Public material needed to discover and address one sharing device. */
+class SharingIdentity(
+    val vaultId: ByteArray,
+    val deviceId: ByteArray,
+    val signingPublicKey: ByteArray,
+    val hpkePublicKey: ByteArray,
+    val fingerprint: String,
+    val enrollment: ByteArray,
+    val initialOperation: ByteArray,
+)
+
+/** Decodes the collection-sharing identity record of §6.9. */
+fun decodeSharingIdentity(bytes: ByteArray, length: Int): SharingIdentity {
+    val reader = RecordReader(bytes, length)
+    if (reader.short() != 1) {
+        throw ChurFailure(ChurStatus.NON_CANONICAL_ENCODING, "the sharing identity version")
+    }
+    val identity = SharingIdentity(
+        vaultId = reader.take(ID_LENGTH),
+        deviceId = reader.take(ID_LENGTH),
+        signingPublicKey = reader.take(PUBLIC_KEY_LENGTH),
+        hpkePublicKey = reader.take(PUBLIC_KEY_LENGTH),
+        fingerprint = reader.bounded().decodeToString(),
+        enrollment = reader.bounded(),
+        initialOperation = reader.bounded(),
+    )
+    reader.requireExhausted()
+    return identity
+}
 
 /** Decodes `ChurPageV1`, §6.4. */
 fun decodeObjectPage(bytes: ByteArray, length: Int): ObjectPage {

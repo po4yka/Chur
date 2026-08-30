@@ -114,6 +114,17 @@ object ChurVault {
         ChurFailure.check(ChurNative.sessionClose(session), "session close")
     }
 
+    /** Provisions or returns this device's public collection-sharing identity. */
+    fun sharingIdentity(session: Long): SharingIdentity =
+        withChurBuffer(SHARING_IDENTITY_CAPACITY) { buffer ->
+            val written = IntArray(1)
+            ChurFailure.check(
+                ChurNative.sharingIdentity(session, buffer, written),
+                "sharing identity",
+            )
+            decodeSharingIdentity(buffer.copyOut(written[0]), written[0])
+        }
+
     /** Stages one opaque downloaded record without opening vault keys. */
     fun stageSync(
         runtime: Long,
@@ -555,6 +566,9 @@ object ChurVault {
 
     /** A count and two entries, which is every identity the registry admits. */
     private const val KEYSTORE_MATERIAL_CAPACITY = 4 + 2 * (4 + 64 + 4 + 160 + 12 + 48)
+
+    /** The bounded public identity, enrollment, and initial operation record. */
+    private const val SHARING_IDENTITY_CAPACITY = 4 * 1024
 
     /** The default page size of §16.2. */
     private const val DEFAULT_PAGE_LIMIT = 200

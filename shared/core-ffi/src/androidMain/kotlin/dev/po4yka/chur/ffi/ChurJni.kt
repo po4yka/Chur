@@ -60,6 +60,8 @@ internal object ChurJni {
 
     external fun sessionClose(session: Long): Int
 
+    external fun sharingIdentity(session: Long, destination: ByteBuffer, outWritten: IntArray): Int
+
     external fun syncStage(runtime: Long, vaultId: ByteArray, kind: Int, stagedAtMs: Long, record: ByteBuffer, length: Int): Int
 
     external fun syncProcess(session: Long, nowMs: Long, outCounts: LongArray, outStatus: IntArray): Int

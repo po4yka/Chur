@@ -408,6 +408,31 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sessionClose(
     unsafe { chur_ffi::api::chur_session_close(handle_of(session)) }
 }
 
+/// Provisions or returns the ordinary local collection-sharing identity.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingIdentity<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    let Some((address, capacity)) = direct_buffer(&env, &destination) else {
+        return INVALID_INPUT;
+    };
+    let mut written = 0usize;
+    // SAFETY: `written` is a live local and the buffer is direct.
+    let status = unsafe {
+        chur_ffi::sharing::chur_sharing_identity(
+            handle_of(session),
+            address,
+            capacity,
+            &mut written,
+        )
+    };
+    finish_written(&mut env, status, &out_written, written)
+}
+
 // ---------------------------------------------------------------------------
 // Catalog queries
 // ---------------------------------------------------------------------------

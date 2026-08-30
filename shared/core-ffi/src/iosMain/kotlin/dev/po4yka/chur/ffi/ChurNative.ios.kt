@@ -48,6 +48,7 @@ import dev.po4yka.chur.native.chur_operation_poll
 import dev.po4yka.chur.native.chur_runtime_close
 import dev.po4yka.chur.native.chur_runtime_open
 import dev.po4yka.chur.native.chur_session_close
+import dev.po4yka.chur.native.chur_sharing_identity
 import dev.po4yka.chur.native.chur_status_is_known
 import dev.po4yka.chur.native.chur_sync_process
 import dev.po4yka.chur.native.chur_sync_stage
@@ -242,6 +243,21 @@ internal actual object ChurNative {
         chur_vault_lock(session.toULong(), reason.toUInt())
 
     actual fun sessionClose(session: Long): Int = chur_session_close(session.toULong())
+
+    actual fun sharingIdentity(
+        session: Long,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int = memScoped {
+        writtenCall(outWritten) { written ->
+            chur_sharing_identity(
+                session.toULong(),
+                destination.pointer,
+                destination.size.toULong(),
+                written,
+            )
+        }
+    }
 
     // -----------------------------------------------------------------------
     // Catalog queries
