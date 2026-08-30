@@ -21,6 +21,7 @@ const SIGNING_SUITE_V1: u16 = 1;
 const HPKE_SUITE_V1: u16 = 1;
 const PRIVATE_IDENTITY_LEN: usize = 64;
 const WRAPPED_IDENTITY_LEN: usize = PRIVATE_IDENTITY_LEN + 16;
+const LOCAL_IDENTITY: bool = false;
 const RECOVERY_ONLY: bool = true;
 
 /// One portable Ed25519 and X25519 device identity.
@@ -145,12 +146,13 @@ impl RecoveredDeviceIdentity {
     }
 }
 
-/// One root-wrapped portable identity used only to enroll a replacement.
+/// One root-wrapped local or recovery-purpose device identity.
 #[derive(Clone, PartialEq, Eq)]
 pub struct DeviceIdentityEnvelope {
     vault_id: Id,
     device_id: Id,
     identity_generation: u64,
+    recovery_only: bool,
     nonce: Nonce,
     wrapped_identity: [u8; WRAPPED_IDENTITY_LEN],
 }
@@ -158,6 +160,26 @@ pub struct DeviceIdentityEnvelope {
 impl DeviceIdentityEnvelope {
     /// Exact canonical encoded length.
     pub const LEN: usize = 2 + 2 + 2 + 2 + 16 + 16 + 8 + 1 + NONCE_LEN + WRAPPED_IDENTITY_LEN;
+
+    /// Seals an ordinary local identity for unlocked signing and grant opening.
+    pub fn seal_for_local(
+        root: &Key,
+        vault_id: Id,
+        device_id: Id,
+        identity_generation: u64,
+        nonce: Nonce,
+        identity: &DeviceIdentity,
+    ) -> Result<Self> {
+        Self::seal(
+            root,
+            vault_id,
+            device_id,
+            identity_generation,
+            LOCAL_IDENTITY,
+            nonce,
+            identity,
+        )
+    }
 
     /// Seals an identity for portable recovery.
     ///
@@ -173,9 +195,29 @@ impl DeviceIdentityEnvelope {
         nonce: Nonce,
         identity: &DeviceIdentity,
     ) -> Result<Self> {
+        Self::seal(
+            root,
+            vault_id,
+            device_id,
+            identity_generation,
+            RECOVERY_ONLY,
+            nonce,
+            identity,
+        )
+    }
+
+    fn seal(
+        root: &Key,
+        vault_id: Id,
+        device_id: Id,
+        identity_generation: u64,
+        recovery_only: bool,
+        nonce: Nonce,
+        identity: &DeviceIdentity,
+    ) -> Result<Self> {
         check_generation(identity_generation)?;
         let wrapping_key = wrapping_key(root, &vault_id)?;
-        let aad = identity_aad(&vault_id, &device_id, identity_generation);
+        let aad = identity_aad(&vault_id, &device_id, identity_generation, recovery_only);
         let sealed = aead::seal(
             &wrapping_key,
             &nonce,
@@ -192,6 +234,7 @@ impl DeviceIdentityEnvelope {
             vault_id,
             device_id,
             identity_generation,
+            recovery_only,
             nonce,
             wrapped_identity,
         })
@@ -203,12 +246,42 @@ impl DeviceIdentityEnvelope {
     ///
     /// Returns [`ChurStatus::ObjectCorrupt`] when authentication fails.
     pub fn open_for_recovery(&self, root: &Key) -> Result<RecoveredDeviceIdentity> {
+        ensure!(
+            self.recovery_only,
+            InvalidInput,
+            "ordinary device identity cannot enter recovery mode"
+        );
+        let identity = self.open_identity(root)?;
+        Ok(RecoveredDeviceIdentity {
+            identity,
+            vault_id: self.vault_id,
+            device_id: self.device_id,
+            identity_generation: self.identity_generation,
+        })
+    }
+
+    /// Opens ordinary local identity material inside an unlocked Rust session.
+    pub fn open_for_local(&self, root: &Key) -> Result<DeviceIdentity> {
+        ensure!(
+            !self.recovery_only,
+            InvalidInput,
+            "recovery-only identity cannot authorize ordinary operations"
+        );
+        self.open_identity(root)
+    }
+
+    fn open_identity(&self, root: &Key) -> Result<DeviceIdentity> {
         let wrapping_key = wrapping_key(root, &self.vault_id)?;
         let plaintext = aead::open(
             &wrapping_key,
             &self.nonce,
             &self.wrapped_identity,
-            &identity_aad(&self.vault_id, &self.device_id, self.identity_generation),
+            &identity_aad(
+                &self.vault_id,
+                &self.device_id,
+                self.identity_generation,
+                self.recovery_only,
+            ),
         )?;
         ensure!(
             plaintext.len() == PRIVATE_IDENTITY_LEN,
@@ -219,12 +292,7 @@ impl DeviceIdentityEnvelope {
         let mut hpke_secret = Zeroizing::new([0; 32]);
         signing_seed.copy_from_slice(&plaintext[..32]);
         hpke_secret.copy_from_slice(&plaintext[32..]);
-        Ok(RecoveredDeviceIdentity {
-            identity: DeviceIdentity::from_seeds(*signing_seed, *hpke_secret),
-            vault_id: self.vault_id,
-            device_id: self.device_id,
-            identity_generation: self.identity_generation,
-        })
+        Ok(DeviceIdentity::from_seeds(*signing_seed, *hpke_secret))
     }
 
     /// Encodes the fixed-width canonical record.
@@ -239,7 +307,7 @@ impl DeviceIdentityEnvelope {
             .id(&self.vault_id)
             .id(&self.device_id)
             .u64(self.identity_generation)
-            .bool(RECOVERY_ONLY)
+            .bool(self.recovery_only)
             .fixed(self.nonce.as_bytes())
             .fixed(&self.wrapped_identity);
         debug_assert_eq!(writer.len(), Self::LEN);
@@ -283,11 +351,7 @@ impl DeviceIdentityEnvelope {
         let device_id = reader.id()?;
         let identity_generation = reader.u64()?;
         check_generation(identity_generation)?;
-        ensure!(
-            reader.bool()?,
-            InvalidInput,
-            "portable device identity is not recovery-only"
-        );
+        let recovery_only = reader.bool()?;
         let nonce = Nonce::new(reader.fixed::<NONCE_LEN>()?);
         let wrapped_identity = reader.fixed::<WRAPPED_IDENTITY_LEN>()?;
         reader.finish()?;
@@ -295,6 +359,7 @@ impl DeviceIdentityEnvelope {
             vault_id,
             device_id,
             identity_generation,
+            recovery_only,
             nonce,
             wrapped_identity,
         })
@@ -317,6 +382,12 @@ impl DeviceIdentityEnvelope {
     pub const fn identity_generation(&self) -> u64 {
         self.identity_generation
     }
+
+    /// Whether this envelope can only enroll a replacement device.
+    #[must_use]
+    pub const fn is_recovery_only(&self) -> bool {
+        self.recovery_only
+    }
 }
 
 fn check_generation(generation: u64) -> Result<()> {
@@ -336,7 +407,12 @@ fn wrapping_key(root: &Key, vault_id: &Id) -> Result<Key> {
     )
 }
 
-fn identity_aad(vault_id: &Id, device_id: &Id, identity_generation: u64) -> Vec<u8> {
+fn identity_aad(
+    vault_id: &Id,
+    device_id: &Id,
+    identity_generation: u64,
+    recovery_only: bool,
+) -> Vec<u8> {
     Tuple::new(tag::DEVICE_IDENTITY_ENVELOPE)
         .u16(PROTOCOL_VERSION_V1)
         .u16(ENCODING_PROFILE_V1)
@@ -345,7 +421,7 @@ fn identity_aad(vault_id: &Id, device_id: &Id, identity_generation: u64) -> Vec<
         .id(vault_id)
         .id(device_id)
         .u64(identity_generation)
-        .bool(RECOVERY_ONLY)
+        .bool(recovery_only)
         .finish()
 }
 
@@ -527,6 +603,7 @@ mod tests {
         assert_eq!(decoded.vault_id(), &vault_id);
         assert_eq!(decoded.device_id(), &device_id);
         assert_eq!(decoded.identity_generation(), 3);
+        assert!(decoded.is_recovery_only());
 
         let wrong_root = Key::new([13; 32]);
         let error = match decoded.open_for_recovery(&wrong_root) {
@@ -537,8 +614,37 @@ mod tests {
 
         let mut ordinary = envelope.encode();
         ordinary[48] = 0;
-        let error = match DeviceIdentityEnvelope::decode(&ordinary) {
-            Ok(_) => panic!("ordinary identity was accepted as portable recovery material"),
+        let ordinary = DeviceIdentityEnvelope::decode(&ordinary).expect("local envelope shape");
+        let error = match ordinary.open_for_local(&root) {
+            Ok(_) => panic!("modified purpose opened without authenticating"),
+            Err(error) => error,
+        };
+        assert_eq!(error.status(), ChurStatus::ObjectCorrupt);
+    }
+
+    #[test]
+    fn local_identity_round_trips_but_cannot_enter_recovery_mode() {
+        let root = Key::new([21; 32]);
+        let vault_id = Id::new([22; 16]).expect("vault");
+        let device_id = Id::new([23; 16]).expect("device");
+        let identity = DeviceIdentity::from_seeds([24; 32], [25; 32]);
+        let envelope = DeviceIdentityEnvelope::seal_for_local(
+            &root,
+            vault_id,
+            device_id,
+            1,
+            Nonce::new([26; NONCE_LEN]),
+            &identity,
+        )
+        .expect("seal");
+        let decoded = DeviceIdentityEnvelope::decode(&envelope.encode()).expect("decode");
+        let restored = decoded.open_for_local(&root).expect("open");
+
+        assert!(!decoded.is_recovery_only());
+        assert_eq!(restored.signing_public_key(), identity.signing_public_key());
+        assert_eq!(restored.hpke_public_key(), identity.hpke_public_key());
+        let error = match decoded.open_for_recovery(&root) {
+            Ok(_) => panic!("ordinary identity entered recovery mode"),
             Err(error) => error,
         };
         assert_eq!(error.status(), ChurStatus::InvalidInput);
