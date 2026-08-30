@@ -91,6 +91,18 @@ A skill synchronisation updates both hashes and the commit, and the checker is w
 
 ## Recorded additions
 
+### `hpke` 0.14.0, Rust sharing protocol
+
+- **Capability:** RFC 9180 Base-mode sealing and opening of one 32-byte collection key with DHKEM(X25519, HKDF-SHA-256), HKDF-SHA-256, and ChaCha20-Poly1305. Phase 4 and ADR-0053 require this exact interoperable construction.
+- **Alternatives:** the Rust standard library has no HPKE API. The existing X25519, HKDF, and ChaCha20-Poly1305 primitives are not an HPKE implementation; composing RFC 9180 locally would create a new unaudited cryptographic protocol. A TLS library adds unrelated transport, certificate, native, and configuration surfaces.
+- **Owner and maintenance:** `rozbb/rust-hpke` is the active upstream. Version 0.14.0 was the current crates.io release at adoption and declares MSRV 1.85, matching this workspace.
+- **License and review:** the crate is MIT OR Apache-2.0. No independent audit of this release was found. RFC 9180 known-answer vectors, Chur grant vectors, mobile-target builds, and the separate Gate 6 sharing audit remain mandatory.
+- **Unsafe and native footprint:** the crate is pure Rust and advertises RFC 9180 compliance. The published source has no native library requirement. Its cryptographic backends remain part of the sharing audit scope.
+- **Features:** exact version `=0.14.0`, default features disabled, only `alloc`, `getrandom`, `x25519`, and `chacha` enabled. ML-KEM/X-Wing, SHAKE, NIST curves, AES-GCM, and the broad KAT feature are absent.
+- **Targets and size:** the selected profile reuses `x25519-dalek` 3.0.0 but introduces newer RustCrypto core versions for HPKE. Android and Apple native builds, duplicate-version review, and artifact-size checks remain release gates.
+- **Data and telemetry:** the crate receives in-process public/private key bytes, fixed grant context, and one collection key. It performs no application file, process, network, permission, logging, analytics, or telemetry operation. Its randomness feature reads the operating-system CSPRNG for sender encapsulation.
+- **Update and removal:** updates require RFC and Chur vectors, malformed-input tests, lockfile and advisory review, all mobile targets, and explicit protocol compatibility review. Removal requires another reviewed RFC 9180 implementation; a local construction is not an acceptable fallback.
+
 ### Ktor Client 3.5.2, shared sync transport
 
 - **Capability:** a Kotlin Multiplatform HTTP client that transfers opaque Phase 3 records and ciphertext on Android and iOS.
