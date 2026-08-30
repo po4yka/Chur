@@ -23,6 +23,7 @@
 //! - `docs/security/SECURITY_INVARIANTS.md` (SEC-050, SEC-051)
 
 pub mod api;
+pub mod sharing;
 pub mod sync;
 
 /// The number of live handles in this process.
@@ -58,12 +59,12 @@ pub const ABI_VERSION_MAJOR: u32 = 1;
 /// A minor difference is negotiated only within explicitly compatible
 /// behaviour; it never selects a cryptographic suite from untrusted input.
 ///
-/// It is 4 rather than 0 because `docs/interop/FFI_CONTRACT.md` §6.5 adds the
+/// It is 5 rather than 0 because `docs/interop/FFI_CONTRACT.md` §6.5 adds the
 /// exports Phase 1's product scope requires, §6.6 adds the Android Keystore
-/// surface, §6.7 adds portable backup, and §6.8 adds the sync inbox. §6.2 makes an
-/// addition a minor bump. Nothing in the §6.2 list changed, so a host built
+/// surface, §6.7 adds portable backup, §6.8 adds the sync inbox, and §6.9 adds
+/// sharing identity. §6.2 makes an addition a minor bump. Nothing in the §6.2 list changed, so a host built
 /// against 1.0 still works: an export it does not call costs it nothing.
-pub const ABI_VERSION_MINOR: u32 = 4;
+pub const ABI_VERSION_MINOR: u32 = 5;
 
 /// Capability bit: independent decoy identity supported.
 pub const CHUR_CAP_DECOY_VAULT: u64 = 1 << 0;
@@ -79,6 +80,8 @@ pub const CHUR_CAP_BACKUP_PACKAGE: u64 = 1 << 4;
 pub const CHUR_CAP_SYNC: u64 = 1 << 5;
 /// Capability bit: one reader handle serves parallel reads.
 pub const CHUR_CAP_CONCURRENT_READS: u64 = 1 << 6;
+/// Capability bit: collection-sharing identity and records available.
+pub const CHUR_CAP_COLLECTION_SHARING: u64 = 1 << 7;
 
 /// Build-flavor bit: this is a release build.
 pub const CHUR_FLAVOR_RELEASE: u32 = 1 << 0;
@@ -139,7 +142,8 @@ const CAPABILITIES: u64 = CHUR_CAP_DECOY_VAULT
     | CHUR_CAP_SEQUENTIAL_READER
     | CHUR_CAP_INTEGRITY_SCAN
     | CHUR_CAP_BACKUP_PACKAGE
-    | CHUR_CAP_SYNC;
+    | CHUR_CAP_SYNC
+    | CHUR_CAP_COLLECTION_SHARING;
 
 /// The major ABI version.
 // SAFETY: the function takes no pointer, reads no caller memory, and returns a
@@ -288,7 +292,7 @@ mod tests {
     #[test]
     fn the_handshake_answers_every_documented_fact() {
         assert_eq!(chur_abi_version_major(), 1);
-        assert_eq!(chur_abi_version_minor(), 4);
+        assert_eq!(chur_abi_version_minor(), 5);
         assert_eq!(chur_object_format_min(), 1);
         assert_eq!(chur_object_format_max(), 1);
         assert_eq!(chur_key_slot_format_min(), 1);
@@ -333,12 +337,17 @@ mod tests {
             0,
             "the ciphertext sync inbox exists"
         );
+        assert_ne!(
+            declared & CHUR_CAP_COLLECTION_SHARING,
+            0,
+            "the sharing identity surface exists"
+        );
         assert_eq!(
             declared & CHUR_CAP_CONCURRENT_READS,
             0,
             "a capability is declared but every reader handle is still serialized"
         );
-        for bit in 7..64 {
+        for bit in 8..64 {
             assert_eq!(
                 declared & (1 << bit),
                 0,

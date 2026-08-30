@@ -11,9 +11,10 @@
  * FFI_CONTRACT.md section 2, the status vocabulary of docs/ERROR_MODEL.md, the
  * control plane and data plane of section 6.2, the product surface of section
  * 6.5, the Android Keystore surface of section 6.6, and the portable backup
- * surface of section 6.7, and the sync inbox surface of section 6.8. Adding an
+ * surface of section 6.7, the sync inbox surface of section 6.8, and the
+ * sharing identity surface of section 6.9. Adding an
  * export raises the minor ABI version;
- * changing or removing one raises the major. The library reports 1.4.
+ * changing or removing one raises the major. The library reports 1.5.
  */
 
 #ifndef CHUR_H
@@ -115,6 +116,7 @@ typedef int32_t chur_status_t;
 #define CHUR_CAP_BACKUP_PACKAGE (UINT64_C(1) << 4)
 #define CHUR_CAP_SYNC (UINT64_C(1) << 5)
 #define CHUR_CAP_CONCURRENT_READS (UINT64_C(1) << 6)
+#define CHUR_CAP_COLLECTION_SHARING (UINT64_C(1) << 7)
 
 /* -------------------------------------------------------------------------
  * Build-flavor bits, returned by chur_build_flavor().
@@ -344,6 +346,11 @@ chur_status_t chur_sync_stage(chur_handle_t runtime, const uint8_t vault_id[16],
                               const uint8_t *record, uint32_t record_length);
 chur_status_t chur_sync_process(chur_handle_t session, uint64_t now_ms,
                                 ChurSyncReportV1 *out_report);
+
+/* Idempotent local identity provisioning, FFI_CONTRACT.md section 6.9. */
+chur_status_t chur_sharing_identity(chur_handle_t session,
+                                    uint8_t *destination, size_t capacity,
+                                    size_t *bytes_written);
 
 /* -------------------------------------------------------------------------
  * Catalog queries

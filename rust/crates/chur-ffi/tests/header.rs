@@ -193,6 +193,11 @@ fn the_capability_bits_match() {
             chur_ffi::CHUR_CAP_CONCURRENT_READS,
             6,
         ),
+        (
+            "CHUR_CAP_COLLECTION_SHARING",
+            chur_ffi::CHUR_CAP_COLLECTION_SHARING,
+            7,
+        ),
     ];
     assert_eq!(header.len(), expected.len());
     for (name, rust_value, bit) in expected {
@@ -343,6 +348,8 @@ fn every_declared_function_is_exported() {
         // §6.8, the Phase-3 sync inbox surface added at ABI 1.4.
         "chur_sync_stage",
         "chur_sync_process",
+        // §6.9, the collection-sharing identity surface added at ABI 1.5.
+        "chur_sharing_identity",
         // §6.6, the Android Keystore surface added at ABI 1.2.
         "chur_vault_keystore_begin",
         "chur_vault_keystore_commit",
@@ -358,7 +365,7 @@ fn every_declared_function_is_exported() {
 
     // Calling each one proves the list above is not a stale copy.
     assert_eq!(chur_ffi::chur_abi_version_major(), 1);
-    assert_eq!(chur_ffi::chur_abi_version_minor(), 4);
+    assert_eq!(chur_ffi::chur_abi_version_minor(), 5);
     assert_eq!(
         chur_ffi::chur_capabilities(),
         chur_ffi::CHUR_CAP_DECOY_VAULT
@@ -367,6 +374,7 @@ fn every_declared_function_is_exported() {
             | chur_ffi::CHUR_CAP_INTEGRITY_SCAN
             | chur_ffi::CHUR_CAP_BACKUP_PACKAGE
             | chur_ffi::CHUR_CAP_SYNC
+            | chur_ffi::CHUR_CAP_COLLECTION_SHARING
     );
     assert_eq!(chur_ffi::chur_object_format_min(), 1);
     assert_eq!(chur_ffi::chur_object_format_max(), 1);

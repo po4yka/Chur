@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. v1 ships 1.4: §6.5, §6.6, §6.7, and §6.8 each added one minor surface. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
+- native API version is the (major, minor) pair. v1 ships 1.5: §6.5 through §6.9 each added one minor surface. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -53,7 +53,8 @@ chur_build_flavor()        -> uint32_t
 | 4 | `CHUR_CAP_BACKUP_PACKAGE` | portable backup package import/export available |
 | 5 | `CHUR_CAP_SYNC` | ciphertext sync available |
 | 6 | `CHUR_CAP_CONCURRENT_READS` | one reader handle serves parallel reads (§8) |
-| 7-63 | reserved | zero in v1 |
+| 7 | `CHUR_CAP_COLLECTION_SHARING` | local sharing identity and collection records available |
+| 8-63 | reserved | zero in v1 |
 
 An unknown set bit is ignored and never enables behavior. Minor and capability differences are negotiated only within explicitly compatible behavior; they never select cryptographic suites from untrusted input.
 
@@ -443,6 +444,18 @@ chur_status_t chur_sync_process(chur_handle_t session, uint64_t now_ms,
 Record kind `1` is an encrypted signed operation. Kind `2` is a signed checkpoint. `chur_sync_stage` is idempotent for identical bytes. It rejects one record above the 16 MiB response bound. The whole per-vault inbox remains bounded to the limits in [`../sync/SYNC_PROTOCOL_V1.md`](../sync/SYNC_PROTOCOL_V1.md) §7.
 
 `chur_sync_process` authenticates and decrypts operations under the unlocked session. It removes an applied record, an exact replay, and a record that full validation rejects. It retains an operation with a missing device sequence, causal predecessor, or collection key. The report contains applied, duplicate, pending, and rejected counts. `first_rejection` is zero or the first stable `chur_status_t`; it contains no private text.
+
+### 6.9 Sharing identity, ABI 1.5
+
+`chur_sharing_identity` idempotently creates the vault's first ordinary device identity or returns the existing one. Ed25519 and X25519 private keys stay root-wrapped in the encrypted catalog and never cross the ABI. The same transaction commits the signed self-enrollment and its encrypted outer operation.
+
+```c
+chur_status_t chur_sharing_identity(chur_handle_t session,
+                                    uint8_t *destination, size_t capacity,
+                                    size_t *bytes_written);
+```
+
+The caller-owned result is a bounded public record: `version:u16 = 1`, `vault_id:bytes[16]`, `device_id:bytes[16]`, `signing_public_key:bytes[32]`, `hpke_public_key:bytes[32]`, then three `u32`-length-prefixed fields containing the 49-byte ASCII fingerprint, the 270-byte self-enrollment, and its canonical outer operation. Integers are big-endian. A retry returns identical bytes. A buffer that is too small receives no partial record and returns `RESOURCE_LIMIT_EXCEEDED`.
 
 ## 7. Buffer ownership
 
