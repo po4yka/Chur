@@ -82,5 +82,8 @@ fn local_identity_provisioning_commits_keys_membership_and_operation_together() 
         *enrollment.signing_public_key()
     );
     assert_eq!(identity.hpke_public_key(), *enrollment.hpke_public_key());
-    assert!(sync_receive::provision_local_identity(&mut db, &root, vault_id).is_err());
+    let replay = sync_receive::provision_local_identity(&mut db, &root, vault_id)
+        .expect("idempotent identity");
+    assert_eq!(replay.0.encode(), enrollment.encode());
+    assert_eq!(replay.1.encode(), operation.encode());
 }

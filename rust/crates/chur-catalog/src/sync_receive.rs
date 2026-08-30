@@ -81,11 +81,42 @@ pub fn provision_local_identity(
     root: &Key,
     vault_id: Id,
 ) -> Result<(EnrollmentRecord, Operation)> {
-    ensure!(
-        sync_membership::load(db)?.is_none(),
-        Conflict,
-        "device identity is already provisioned"
-    );
+    if let Some(membership) = sync_membership::load(db)? {
+        ensure!(
+            membership.vault_id() == &vault_id,
+            CatalogCorrupt,
+            "local membership belongs to another vault"
+        );
+        let (device_id, _) =
+            sync_keys::local_identity(db, root, &membership)?.ok_or_else(|| {
+                Error::new(
+                    ChurStatus::RecoveryRequired,
+                    "sync membership has no ordinary local identity",
+                )
+            })?;
+        let enrollment = sync_membership::enrollment_for_device(db, &device_id)?;
+        let operation_bytes = sync_log::records_after(db, &device_id, 0)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                Error::new(
+                    ChurStatus::CatalogCorrupt,
+                    "local identity has no initial operation",
+                )
+            })?;
+        let operation = Operation::decode(&operation_bytes).map_err(|_| {
+            Error::new(
+                ChurStatus::CatalogCorrupt,
+                "local identity initial operation is invalid",
+            )
+        })?;
+        ensure!(
+            operation.device_id() == &device_id && operation.device_sequence() == 1,
+            CatalogCorrupt,
+            "local identity initial operation contradicts its device"
+        );
+        return Ok((enrollment, operation));
+    }
     let device_id = random::id()?;
     let identity = DeviceIdentity::generate()?;
     let enrollment = EnrollmentRecord::initial(

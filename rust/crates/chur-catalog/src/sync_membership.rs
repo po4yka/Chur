@@ -172,6 +172,27 @@ pub fn provision(db: &mut CatalogDb, enrollment: &EnrollmentRecord) -> Result<Me
     })
 }
 
+/// Loads the latest authenticated enrollment for one device.
+pub fn enrollment_for_device(db: &CatalogDb, device_id: &Id) -> Result<EnrollmentRecord> {
+    let record: Vec<u8> = db
+        .connection()
+        .query_row(
+            "SELECT record FROM sync_membership_records
+              WHERE device_id = ?1 AND record_kind = ?2
+              ORDER BY membership_generation DESC LIMIT 1",
+            params![device_id.as_bytes().as_slice(), ENROLLMENT],
+            |row| row.get(0),
+        )
+        .map_err(|error| map_sqlite(error, "the device enrollment could not be read"))?;
+    let enrollment = EnrollmentRecord::decode(&record).map_err(corrupt_membership)?;
+    ensure!(
+        enrollment.device_id() == device_id,
+        CatalogCorrupt,
+        "the device enrollment contradicts its lookup key"
+    );
+    Ok(enrollment)
+}
+
 pub(crate) fn project_provision(
     transaction: &Transaction<'_>,
     enrollment: &EnrollmentRecord,
