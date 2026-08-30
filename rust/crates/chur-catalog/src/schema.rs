@@ -12,7 +12,7 @@
 
 use chur_core::{Id, Result, bail, ensure, err, limits::catalog as limits};
 use chur_format::{
-    constants::{CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2},
+    constants::{CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V3},
     envelope::ObjectKeyEnvelope,
 };
 use rusqlite::Connection;
@@ -33,6 +33,9 @@ const STEPS: &[Step] = &[
     },
     Step {
         version: CATALOG_FORMAT_VERSION_V2,
+    },
+    Step {
+        version: CATALOG_FORMAT_VERSION_V3,
     },
 ];
 
@@ -394,6 +397,57 @@ CREATE UNIQUE INDEX sync_active_identity_envelope
     ON sync_identity_envelopes (device_id) WHERE active = 1;
 "#;
 
+/// Catalog v3 adds only durable collection-sharing state.
+const V3_DDL: &str = r#"
+CREATE TABLE sharing_collections (
+    collection_id         BLOB PRIMARY KEY CHECK (length(collection_id) = 16),
+    source_vault_id       BLOB NOT NULL CHECK (length(source_vault_id) = 16),
+    initial_epoch         INTEGER NOT NULL CHECK (initial_epoch >= 1),
+    membership_generation INTEGER NOT NULL CHECK (membership_generation >= 0),
+    membership_commitment BLOB NOT NULL CHECK (length(membership_commitment) = 32),
+    current_epoch         INTEGER NOT NULL CHECK (current_epoch >= initial_epoch)
+) STRICT;
+
+CREATE TABLE sharing_membership_records (
+    collection_id              BLOB NOT NULL REFERENCES sharing_collections(collection_id),
+    membership_generation      INTEGER NOT NULL CHECK (membership_generation >= 1),
+    commitment                 BLOB NOT NULL CHECK (length(commitment) = 32),
+    issuer_signing_public_key  BLOB NOT NULL CHECK (length(issuer_signing_public_key) = 32),
+    recipient_identity_vault_id BLOB NOT NULL CHECK (length(recipient_identity_vault_id) = 16),
+    recipient_device_id        BLOB NOT NULL CHECK (length(recipient_device_id) = 16),
+    record                     BLOB NOT NULL CHECK (length(record) = 292),
+    PRIMARY KEY (collection_id, membership_generation),
+    UNIQUE (collection_id, commitment)
+) STRICT;
+
+CREATE TABLE sharing_recipient_pins (
+    collection_id               BLOB NOT NULL REFERENCES sharing_collections(collection_id),
+    recipient_identity_vault_id BLOB NOT NULL CHECK (length(recipient_identity_vault_id) = 16),
+    recipient_device_id         BLOB NOT NULL CHECK (length(recipient_device_id) = 16),
+    signing_public_key          BLOB NOT NULL CHECK (length(signing_public_key) = 32),
+    hpke_public_key             BLOB NOT NULL CHECK (length(hpke_public_key) = 32),
+    verification                INTEGER NOT NULL CHECK (verification IN (1, 2)),
+    PRIMARY KEY (collection_id, recipient_identity_vault_id, recipient_device_id)
+) STRICT;
+
+CREATE TABLE sharing_grants (
+    grant_id                    BLOB PRIMARY KEY CHECK (length(grant_id) = 16),
+    collection_id               BLOB NOT NULL REFERENCES sharing_collections(collection_id),
+    recipient_identity_vault_id BLOB NOT NULL CHECK (length(recipient_identity_vault_id) = 16),
+    recipient_device_id         BLOB NOT NULL CHECK (length(recipient_device_id) = 16),
+    membership_generation       INTEGER NOT NULL CHECK (membership_generation >= 1),
+    collection_epoch            INTEGER NOT NULL CHECK (collection_epoch >= 1),
+    record                      BLOB NOT NULL CHECK (length(record) = 309)
+) STRICT;
+
+CREATE INDEX sharing_membership_by_recipient
+    ON sharing_membership_records (
+        collection_id, recipient_identity_vault_id, recipient_device_id, membership_generation
+    );
+CREATE INDEX sharing_grants_by_collection
+    ON sharing_grants (collection_id, membership_generation, collection_epoch, grant_id);
+"#;
+
 /// Creates the current schema or opens it without performing an implicit migration.
 ///
 /// `docs/format/CATALOG_SCHEMA_V1.md` §18 forbids skipping an untested step, so
@@ -403,15 +457,15 @@ pub fn open_at_current_version(db: &mut CatalogDb, now_ms: u64) -> Result<u16> {
     let present = recorded_version(db.connection())?;
     let Some(present) = present else {
         install(db, now_ms)?;
-        return Ok(CATALOG_FORMAT_VERSION_V2);
+        return Ok(CATALOG_FORMAT_VERSION_V3);
     };
-    if present != CATALOG_FORMAT_VERSION_V2 {
+    if present != CATALOG_FORMAT_VERSION_V3 {
         bail!(
             MigrationRequired,
             "the catalog requires an authenticated schema migration"
         );
     }
-    Ok(CATALOG_FORMAT_VERSION_V2)
+    Ok(CATALOG_FORMAT_VERSION_V3)
 }
 
 /// The version the database records, or `None` when the schema is absent.
@@ -448,6 +502,9 @@ fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
         transaction
             .execute_batch(V2_DDL)
             .map_err(|error| map_sqlite(error, "the sync catalog schema could not be created"))?;
+        transaction.execute_batch(V3_DDL).map_err(|error| {
+            map_sqlite(error, "the sharing catalog schema could not be created")
+        })?;
         transaction
             .execute(
                 "INSERT INTO vault_state (
@@ -455,7 +512,7 @@ fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
                      active_migration_target, object_store_checkpoint,
                      integrity_checkpoint_ms, capability_flags
                  ) VALUES (1, ?1, 1, NULL, 0, ?2, 0)",
-                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V2), checkpoint],
+                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V3), checkpoint],
             )
             .map_err(|error| map_sqlite(error, "the catalog state row could not be written"))?;
         Ok(())
@@ -467,7 +524,11 @@ pub(crate) fn reset_to_v1(db: &mut CatalogDb) -> Result<()> {
     db.transaction(|transaction| {
         transaction
             .execute_batch(
-                "DROP TABLE sync_rotations;
+                "DROP TABLE sharing_grants;
+                 DROP TABLE sharing_recipient_pins;
+                 DROP TABLE sharing_membership_records;
+                 DROP TABLE sharing_collections;
+                 DROP TABLE sync_rotations;
                  DROP TABLE sync_object_envelope_epochs;
                  DROP TABLE sync_checkpoints;
                  DROP TABLE sync_forks;
@@ -481,6 +542,22 @@ pub(crate) fn reset_to_v1(db: &mut CatalogDb) -> Result<()> {
                  UPDATE vault_state SET catalog_format_version = 1 WHERE only_row = 1;",
             )
             .map_err(|error| map_sqlite(error, "the test catalog could not be reset to v1"))?;
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn reset_to_v2(db: &mut CatalogDb) -> Result<()> {
+    db.transaction(|transaction| {
+        transaction
+            .execute_batch(
+                "DROP TABLE sharing_grants;
+                 DROP TABLE sharing_recipient_pins;
+                 DROP TABLE sharing_membership_records;
+                 DROP TABLE sharing_collections;
+                 UPDATE vault_state SET catalog_format_version = 2 WHERE only_row = 1;",
+            )
+            .map_err(|error| map_sqlite(error, "the test catalog could not be reset to v2"))?;
         Ok(())
     })
 }
@@ -512,6 +589,36 @@ pub(crate) fn migrate_v1_to_v2(db: &mut CatalogDb, vault_id: &Id) -> Result<()> 
                     SET catalog_format_version = ?1, active_migration_target = NULL
                   WHERE only_row = 1",
                 [i64::from(CATALOG_FORMAT_VERSION_V2)],
+            )
+            .map_err(|error| map_sqlite(error, "the migrated version could not be recorded"))?;
+        Ok(())
+    })
+}
+
+/// Applies the v2-to-v3 sharing-state migration after the descriptor entered
+/// `MIGRATING`.
+pub(crate) fn migrate_v2_to_v3(db: &mut CatalogDb) -> Result<()> {
+    ensure!(
+        recorded_version(db.connection())? == Some(CATALOG_FORMAT_VERSION_V2),
+        MigrationRequired,
+        "the catalog is not at the supported migration source"
+    );
+    db.transaction(|transaction| {
+        transaction
+            .execute(
+                "UPDATE vault_state SET active_migration_target = ?1 WHERE only_row = 1",
+                [i64::from(CATALOG_FORMAT_VERSION_V3)],
+            )
+            .map_err(|error| map_sqlite(error, "the migration target could not be recorded"))?;
+        transaction
+            .execute_batch(V3_DDL)
+            .map_err(|error| map_sqlite(error, "a migration step failed"))?;
+        transaction
+            .execute(
+                "UPDATE vault_state
+                    SET catalog_format_version = ?1, active_migration_target = NULL
+                  WHERE only_row = 1",
+                [i64::from(CATALOG_FORMAT_VERSION_V3)],
             )
             .map_err(|error| map_sqlite(error, "the migrated version could not be recorded"))?;
         Ok(())
@@ -659,12 +766,22 @@ mod tests {
     }
 
     #[test]
-    fn a_new_catalog_installs_version_two() {
+    fn a_new_catalog_installs_version_three() {
         let mut db = open();
         assert_eq!(
             open_at_current_version(&mut db, 1_700_000_000_000).expect("install"),
-            CATALOG_FORMAT_VERSION_V2
+            CATALOG_FORMAT_VERSION_V3
         );
+        let sharing_tables: i64 = db
+            .connection()
+            .query_row(
+                "SELECT count(*) FROM sqlite_schema
+                  WHERE type = 'table' AND name LIKE 'sharing_%'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("sharing tables");
+        assert_eq!(sharing_tables, 4);
         assert_eq!(generation(&db).expect("generation"), 1);
     }
 
@@ -713,7 +830,63 @@ mod tests {
         }
         assert_eq!(
             STEPS.last().map(|step| step.version),
-            Some(CATALOG_FORMAT_VERSION_V2)
+            Some(CATALOG_FORMAT_VERSION_V3)
+        );
+    }
+
+    #[test]
+    fn v2_migration_installs_empty_sharing_state() {
+        let mut db = open();
+        open_at_current_version(&mut db, 1).expect("install");
+        reset_to_v2(&mut db).expect("reset to v2");
+
+        migrate_v2_to_v3(&mut db).expect("migrate");
+
+        assert_eq!(
+            recorded_version(db.connection()).expect("version"),
+            Some(CATALOG_FORMAT_VERSION_V3)
+        );
+        let sharing_tables: i64 = db
+            .connection()
+            .query_row(
+                "SELECT count(*) FROM sqlite_schema
+                  WHERE type = 'table' AND name LIKE 'sharing_%'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("sharing tables");
+        assert_eq!(sharing_tables, 4);
+    }
+
+    #[test]
+    fn v3_sharing_constraints_reject_malformed_rows() {
+        let mut db = open();
+        open_at_current_version(&mut db, 1).expect("schema");
+        let collection = [1u8; 16];
+        db.connection()
+            .execute(
+                "INSERT INTO sharing_collections VALUES (?1, ?2, 1, 0, ?3, 1)",
+                rusqlite::params![collection, [2u8; 16], [0u8; 32]],
+            )
+            .expect("collection");
+
+        assert!(
+            db.connection()
+                .execute(
+                    "INSERT INTO sharing_recipient_pins VALUES (?1, ?2, ?3, ?4, ?5, 3)",
+                    rusqlite::params![collection, [3u8; 16], [4u8; 16], [5u8; 32], [6u8; 32],],
+                )
+                .is_err(),
+            "an invalid verification state was accepted"
+        );
+        assert!(
+            db.connection()
+                .execute(
+                    "INSERT INTO sharing_grants VALUES (?1, ?2, ?3, ?4, 1, 1, ?5)",
+                    rusqlite::params![[7u8; 16], collection, [3u8; 16], [4u8; 16], [8u8; 308],],
+                )
+                .is_err(),
+            "a short grant record was accepted"
         );
     }
 

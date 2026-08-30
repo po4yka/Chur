@@ -17,8 +17,8 @@ use chur_crypto::{
     random, recovery,
 };
 use chur_format::constants::{
-    CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, DESCRIPTOR_VERSION_V1, SlotType,
-    VaultState,
+    CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V3,
+    DESCRIPTOR_VERSION_V1, SlotType, VaultState,
 };
 use chur_format::descriptor::{
     CatalogDescriptor, KeySlotDescriptor, MigrationDescriptor, ObjectStoreDescriptor,
@@ -204,7 +204,7 @@ pub fn create_with_params(
         descriptor_generation: 0,
         state: VaultState::Initializing,
         catalog: CatalogDescriptor {
-            catalog_format_version: CATALOG_FORMAT_VERSION_V2,
+            catalog_format_version: CATALOG_FORMAT_VERSION_V3,
             opaque_catalog_path_id: catalog_path_id,
             catalog_generation,
             catalog_header_commitment: header_commitment,
@@ -535,45 +535,72 @@ fn finish_unlock(
         "the catalog file is not the one this descriptor commits to"
     );
     let mut catalog = CatalogDb::open(&CatalogLocation::File(&path), &catalog_key)?;
-    let version = schema::recorded_version(catalog.connection())?
-        .ok_or_else(|| chur_core::err!(CatalogCorrupt, "the catalog schema is absent"))?;
+    loop {
+        let version = schema::recorded_version(catalog.connection())?
+            .ok_or_else(|| chur_core::err!(CatalogCorrupt, "the catalog schema is absent"))?;
+        if descriptor.state == VaultState::Active {
+            let (to, migration_generation) =
+                match (descriptor.catalog.catalog_format_version, version) {
+                    (CATALOG_FORMAT_VERSION_V3, CATALOG_FORMAT_VERSION_V3) => break,
+                    (CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V1) => {
+                        (CATALOG_FORMAT_VERSION_V2, 1)
+                    }
+                    (CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V2) => {
+                        (CATALOG_FORMAT_VERSION_V3, 2)
+                    }
+                    _ => bail!(
+                        MigrationRequired,
+                        "the active descriptor and catalog versions are unsupported"
+                    ),
+                };
+            descriptor = begin_catalog_migration(
+                root_dir,
+                entry_name,
+                &descriptor,
+                &root_secret,
+                to,
+                migration_generation,
+            )?;
+        }
 
-    if descriptor.state == VaultState::Active
-        && descriptor.catalog.catalog_format_version == CATALOG_FORMAT_VERSION_V1
-        && version == CATALOG_FORMAT_VERSION_V1
-    {
-        descriptor = begin_catalog_v2_migration(root_dir, entry_name, &descriptor, &root_secret)?;
-    }
-
-    if descriptor.state == VaultState::Migrating {
-        validate_catalog_v2_migration(&descriptor)?;
+        let migration = validate_catalog_migration(&descriptor)?;
         ensure!(
-            matches!(
-                version,
-                CATALOG_FORMAT_VERSION_V1 | CATALOG_FORMAT_VERSION_V2
-            ),
+            version == migration.from_catalog_format_version
+                || version == migration.to_catalog_format_version,
             MigrationRequired,
             "the migrating descriptor and catalog versions are unsupported"
         );
-        if version == CATALOG_FORMAT_VERSION_V1 {
-            schema::migrate_v1_to_v2(&mut catalog, &descriptor.vault_id)?;
+        if version == migration.from_catalog_format_version {
+            match (
+                migration.from_catalog_format_version,
+                migration.to_catalog_format_version,
+            ) {
+                (CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2) => {
+                    schema::migrate_v1_to_v2(&mut catalog, &descriptor.vault_id)?;
+                }
+                (CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V3) => {
+                    schema::migrate_v2_to_v3(&mut catalog)?;
+                }
+                _ => unreachable!("validated migration"),
+            }
         }
         catalog.checkpoint()?;
         let commitment = catalog_header_commitment(&path)?;
-        descriptor = finish_catalog_v2_migration(
+        descriptor = finish_catalog_migration(
             root_dir,
             entry_name,
             &descriptor,
             &root_secret,
             commitment,
+            migration.to_catalog_format_version,
         )?;
     }
 
     let version = schema::open_at_current_version(&mut catalog, now_ms)?;
     ensure!(
         descriptor.state == VaultState::Active
-            && descriptor.catalog.catalog_format_version == CATALOG_FORMAT_VERSION_V2
-            && version == CATALOG_FORMAT_VERSION_V2,
+            && descriptor.catalog.catalog_format_version == CATALOG_FORMAT_VERSION_V3
+            && version == CATALOG_FORMAT_VERSION_V3,
         CatalogCorrupt,
         "the catalog format version disagrees with the descriptor"
     );
@@ -587,11 +614,13 @@ fn finish_unlock(
     })
 }
 
-fn begin_catalog_v2_migration(
+fn begin_catalog_migration(
     root_dir: &VaultRoot,
     entry_name: &RegistryName,
     descriptor: &VaultDescriptor,
     root: &Key,
+    to_catalog_format_version: u16,
+    migration_generation: u64,
 ) -> Result<VaultDescriptor> {
     let mut candidate = descriptor.clone();
     candidate.descriptor_generation = next_descriptor_generation(descriptor)?;
@@ -599,43 +628,50 @@ fn begin_catalog_v2_migration(
     candidate.migration = Some(MigrationDescriptor {
         from_descriptor_version: DESCRIPTOR_VERSION_V1,
         to_descriptor_version: DESCRIPTOR_VERSION_V1,
-        from_catalog_format_version: CATALOG_FORMAT_VERSION_V1,
-        to_catalog_format_version: CATALOG_FORMAT_VERSION_V2,
-        migration_generation: 1,
+        from_catalog_format_version: descriptor.catalog.catalog_format_version,
+        to_catalog_format_version,
+        migration_generation,
         checkpoint_id: random::id()?,
     });
     install_authenticated_descriptor(root_dir, entry_name, &candidate, root)?;
     Ok(candidate)
 }
 
-fn validate_catalog_v2_migration(descriptor: &VaultDescriptor) -> Result<()> {
+fn validate_catalog_migration(descriptor: &VaultDescriptor) -> Result<MigrationDescriptor> {
     let migration = descriptor
         .migration
         .ok_or_else(|| chur_core::err!(VaultCorrupt, "the migration descriptor is absent"))?;
     ensure!(
-        descriptor.catalog.catalog_format_version == CATALOG_FORMAT_VERSION_V1
+        descriptor.catalog.catalog_format_version == migration.from_catalog_format_version
             && migration.from_descriptor_version == DESCRIPTOR_VERSION_V1
             && migration.to_descriptor_version == DESCRIPTOR_VERSION_V1
-            && migration.from_catalog_format_version == CATALOG_FORMAT_VERSION_V1
-            && migration.to_catalog_format_version == CATALOG_FORMAT_VERSION_V2
-            && migration.migration_generation == 1,
+            && matches!(
+                (
+                    migration.from_catalog_format_version,
+                    migration.to_catalog_format_version,
+                    migration.migration_generation,
+                ),
+                (CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, 1)
+                    | (CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V3, 2)
+            ),
         MigrationRequired,
         "the descriptor names an unsupported migration"
     );
-    Ok(())
+    Ok(migration)
 }
 
-fn finish_catalog_v2_migration(
+fn finish_catalog_migration(
     root_dir: &VaultRoot,
     entry_name: &RegistryName,
     descriptor: &VaultDescriptor,
     root: &Key,
     catalog_header_commitment: commit::Commitment,
+    catalog_format_version: u16,
 ) -> Result<VaultDescriptor> {
     let mut candidate = descriptor.clone();
     candidate.descriptor_generation = next_descriptor_generation(descriptor)?;
     candidate.state = VaultState::Active;
-    candidate.catalog.catalog_format_version = CATALOG_FORMAT_VERSION_V2;
+    candidate.catalog.catalog_format_version = catalog_format_version;
     candidate.catalog.catalog_header_commitment = catalog_header_commitment;
     candidate.migration = None;
     install_authenticated_descriptor(root_dir, entry_name, &candidate, root)?;
@@ -1107,7 +1143,7 @@ pub fn install_descriptor(
 ///
 /// The restore namespace is not openable yet, so it does not need an
 /// intermediate installed `MIGRATING` descriptor. The caller must update the
-/// unpublished descriptor to catalog v2 before making it active when this
+/// unpublished descriptor to catalog v3 before making it active when this
 /// function returns `true`.
 pub fn prepare_restored_catalog(
     catalog: &mut CatalogDb,
@@ -1123,10 +1159,16 @@ pub fn prepare_restored_catalog(
     match (descriptor.catalog.catalog_format_version, version) {
         (CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V1) => {
             schema::migrate_v1_to_v2(catalog, &descriptor.vault_id)?;
+            schema::migrate_v2_to_v3(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
-        (CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V2) => Ok(false),
+        (CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V2) => {
+            schema::migrate_v2_to_v3(catalog)?;
+            catalog.checkpoint()?;
+            Ok(true)
+        }
+        (CATALOG_FORMAT_VERSION_V3, CATALOG_FORMAT_VERSION_V3) => Ok(false),
         _ => bail!(
             MigrationRequired,
             "the restored descriptor and catalog versions are unsupported"
@@ -1281,16 +1323,35 @@ mod tests {
         descriptor
     }
 
-    fn migrating_v2_descriptor(source: &VaultDescriptor) -> VaultDescriptor {
+    fn install_v2_state(session: &mut Session) -> VaultDescriptor {
+        schema::reset_to_v2(session.catalog().expect("catalog")).expect("reset to v2");
+        let mut descriptor = session.descriptor.clone();
+        descriptor.descriptor_generation += 1;
+        descriptor.catalog.catalog_format_version = CATALOG_FORMAT_VERSION_V2;
+        install_authenticated_descriptor(
+            &session.root_dir,
+            &session.entry_name,
+            &descriptor,
+            &session.root_secret,
+        )
+        .expect("install v2 descriptor");
+        descriptor
+    }
+
+    fn migrating_descriptor(
+        source: &VaultDescriptor,
+        to_catalog_format_version: u16,
+        migration_generation: u64,
+    ) -> VaultDescriptor {
         let mut descriptor = source.clone();
         descriptor.descriptor_generation += 1;
         descriptor.state = VaultState::Migrating;
         descriptor.migration = Some(MigrationDescriptor {
             from_descriptor_version: DESCRIPTOR_VERSION_V1,
             to_descriptor_version: DESCRIPTOR_VERSION_V1,
-            from_catalog_format_version: CATALOG_FORMAT_VERSION_V1,
-            to_catalog_format_version: CATALOG_FORMAT_VERSION_V2,
-            migration_generation: 1,
+            from_catalog_format_version: source.catalog.catalog_format_version,
+            to_catalog_format_version,
+            migration_generation,
             checkpoint_id: random::id().expect("checkpoint id"),
         });
         descriptor
@@ -1324,23 +1385,23 @@ mod tests {
         let reopened = unlock_with_password(&root_dir, PASSWORD, 2).expect("migrate and unlock");
         assert_eq!(
             reopened.descriptor.catalog.catalog_format_version,
-            CATALOG_FORMAT_VERSION_V2
+            CATALOG_FORMAT_VERSION_V3
         );
         assert_eq!(reopened.descriptor.state, VaultState::Active);
         assert!(reopened.descriptor.migration.is_none());
         assert_eq!(
             reopened.descriptor.descriptor_generation,
-            source.descriptor_generation + 2
+            source.descriptor_generation + 4
         );
     }
 
     #[test]
-    fn a_v2_migration_resumes_on_either_side_of_the_sql_commit() {
+    fn a_v1_to_v2_migration_resumes_then_reaches_v3() {
         for sql_committed in [false, true] {
             let root_dir = scratch();
             let mut session = make(&root_dir);
             let source = install_v1_state(&mut session);
-            let migrating = migrating_v2_descriptor(&source);
+            let migrating = migrating_descriptor(&source, CATALOG_FORMAT_VERSION_V2, 1);
             install_authenticated_descriptor(
                 &root_dir,
                 &session.entry_name,
@@ -1359,7 +1420,41 @@ mod tests {
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V2
+                CATALOG_FORMAT_VERSION_V3
+            );
+            assert!(reopened.descriptor.migration.is_none());
+            assert_eq!(
+                reopened.descriptor.descriptor_generation,
+                migrating.descriptor_generation + 3
+            );
+        }
+    }
+
+    #[test]
+    fn a_v2_to_v3_migration_resumes_on_either_side_of_the_sql_commit() {
+        for sql_committed in [false, true] {
+            let root_dir = scratch();
+            let mut session = make(&root_dir);
+            let source = install_v2_state(&mut session);
+            let migrating = migrating_descriptor(&source, CATALOG_FORMAT_VERSION_V3, 2);
+            install_authenticated_descriptor(
+                &root_dir,
+                &session.entry_name,
+                &migrating,
+                &session.root_secret,
+            )
+            .expect("install migrating descriptor");
+            if sql_committed {
+                schema::migrate_v2_to_v3(session.catalog().expect("catalog"))
+                    .expect("commit catalog v3");
+            }
+            drop(session);
+
+            let reopened = unlock_with_password(&root_dir, PASSWORD, 2).expect("resume migration");
+            assert_eq!(reopened.descriptor.state, VaultState::Active);
+            assert_eq!(
+                reopened.descriptor.catalog.catalog_format_version,
+                CATALOG_FORMAT_VERSION_V3
             );
             assert!(reopened.descriptor.migration.is_none());
             assert_eq!(

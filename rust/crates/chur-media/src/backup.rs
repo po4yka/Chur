@@ -662,15 +662,18 @@ pub fn restore(
             &catalog_key,
         )?;
         if vault::prepare_restored_catalog(&mut catalog, &local)? {
-            local.descriptor_generation =
-                local.descriptor_generation.checked_add(2).ok_or_else(|| {
+            let target = chur_format::constants::CATALOG_FORMAT_VERSION_V3;
+            let migration_steps = target - local.catalog.catalog_format_version;
+            local.descriptor_generation = local
+                .descriptor_generation
+                .checked_add(u64::from(migration_steps) * 2)
+                .ok_or_else(|| {
                     chur_core::err!(
                         VaultCorrupt,
                         "the restored descriptor generation overflowed"
                     )
                 })?;
-            local.catalog.catalog_format_version =
-                chur_format::constants::CATALOG_FORMAT_VERSION_V2;
+            local.catalog.catalog_format_version = target;
             local.catalog.catalog_header_commitment =
                 vault::catalog_header_commitment(&catalog_path)?;
         }
