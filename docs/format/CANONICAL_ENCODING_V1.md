@@ -471,6 +471,8 @@ A domain tag is a fixed ASCII byte constant written without a length prefix, per
 | `CHUR\x00SHARING\x00GRANT-HPKE-INFO\x00V1` | collection-grant HPKE `info` | [`../sync/COLLECTION_GRANTS.md`](../sync/COLLECTION_GRANTS.md) §3 |
 | `CHUR\x00SHARING\x00GRANT-HPKE-AAD\x00V1` | collection-grant HPKE AAD | [`../sync/COLLECTION_GRANTS.md`](../sync/COLLECTION_GRANTS.md) §3 |
 | `CHUR\x00SHARING\x00COLLECTION-GRANT\x00V1` | collection-grant Ed25519 signature | [`../sync/COLLECTION_GRANTS.md`](../sync/COLLECTION_GRANTS.md) §4 |
+| `CHUR\x00SHARING\x00COLLECTION-MEMBERSHIP\x00V1` | collection-membership Ed25519 signature | [`../sync/COLLECTION_MEMBERSHIP.md`](../sync/COLLECTION_MEMBERSHIP.md) §1 |
+| `CHUR\x00SHARING\x00MEMBERSHIP-CHAIN\x00V1` | collection-membership chain commitment | [`../sync/COLLECTION_MEMBERSHIP.md`](../sync/COLLECTION_MEMBERSHIP.md) §1 |
 | `CHUR\x00IDENTITY\x00ENVELOPE\x00V1` | portable device-identity envelope AAD | [`../sync/DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md) §6.1 |
 
 No allocated tag is a byte prefix of another, as §7 requires; the thirty-three above are checked pairwise by `chur-crypto`. Tags within one area differ at the first purpose byte or at a separator followed by a suffix; tags in different areas differ before the purpose.

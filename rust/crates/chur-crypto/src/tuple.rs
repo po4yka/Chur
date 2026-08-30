@@ -84,6 +84,10 @@ pub mod tag {
     pub const SHARING_GRANT_HPKE_AAD: &[u8] = b"CHUR\0SHARING\0GRANT-HPKE-AAD\0V1";
     /// Collection-grant Ed25519 signature.
     pub const SHARING_COLLECTION_GRANT: &[u8] = b"CHUR\0SHARING\0COLLECTION-GRANT\0V1";
+    /// Signs one collection membership change.
+    pub const SHARING_COLLECTION_MEMBERSHIP: &[u8] = b"CHUR\0SHARING\0COLLECTION-MEMBERSHIP\0V1";
+    /// Commits the ordered collection membership chain.
+    pub const SHARING_MEMBERSHIP_CHAIN: &[u8] = b"CHUR\0SHARING\0MEMBERSHIP-CHAIN\0V1";
     /// Portable device-identity envelope AAD.
     pub const DEVICE_IDENTITY_ENVELOPE: &[u8] = b"CHUR\0IDENTITY\0ENVELOPE\0V1";
 
@@ -121,6 +125,8 @@ pub mod tag {
         SHARING_GRANT_HPKE_INFO,
         SHARING_GRANT_HPKE_AAD,
         SHARING_COLLECTION_GRANT,
+        SHARING_COLLECTION_MEMBERSHIP,
+        SHARING_MEMBERSHIP_CHAIN,
         DEVICE_IDENTITY_ENVELOPE,
     ];
 }

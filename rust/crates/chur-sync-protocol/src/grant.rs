@@ -31,7 +31,7 @@ pub enum PermissionProfile {
 }
 
 impl PermissionProfile {
-    fn decode(value: u8) -> Result<Self> {
+    pub(crate) fn decode(value: u8) -> Result<Self> {
         match value {
             0x01 => Ok(Self::Read),
             0x03 => Ok(Self::Contribute),
