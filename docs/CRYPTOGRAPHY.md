@@ -1699,7 +1699,7 @@ The signed record's fields, including the `observed_heads` causality vector that
 
 Sharing encrypts the collection key, not media payloads.
 
-Standard future HPKE suite:
+The Phase 4 HPKE profile is:
 
 ```text
 KEM:  DHKEM(X25519, HKDF-SHA-256)
@@ -1709,7 +1709,7 @@ AEAD: ChaCha20-Poly1305
 
 This uses the RFC 9180 AEAD with a 96-bit nonce internally. It is distinct from Chur's local XChaCha20-Poly1305 records.
 
-Candidate grant flow:
+Grant flow:
 
 ```text
 Sender unwraps SecurityCollectionKey[epoch]
@@ -1723,26 +1723,20 @@ sign grant with sender/device Ed25519 key
 store/relay encrypted grant
 ```
 
-Candidate grant fields:
+The exact fixed record is defined in [`sync/COLLECTION_GRANTS.md`](sync/COLLECTION_GRANTS.md). Its fields are:
 
 ```text
-grant_version
-vault_id
-collection_id
-collection_epoch
-sender_identity_id
-sender_device_id
-recipient_key_id
-permissions
-creation logical time
-expiry or policy version
-HPKE suite identifiers
-HPKE encapsulated key
-HPKE ciphertext
+grant version and HPKE profile
+grant, source-vault, and collection identifiers
+collection epoch and membership generation
+recipient identity-vault, device, and HPKE-key identifiers
+sender device, signing-key, and membership identifiers
+cumulative permission profile and creation operation sequence
+HPKE encapsulated key and fixed 48-byte ciphertext
 sender signature
 ```
 
-HPKE `info` and AAD MUST include the protocol domain, collection, epoch, sender, recipient, permissions, and grant version.
+HPKE `info` and AAD use separate domain tags followed by the same fixed grant context. The HPKE plaintext is exactly one 32-byte `SecurityCollectionKey`; the sender signature covers the outer context, encapsulation, and ciphertext. V1 has no expiry because a device clock cannot revoke a key already delivered.
 
 Base-mode HPKE alone does not authenticate the sender. The Ed25519 signature provides explicit sender/device authenticity and durable offline verification.
 

@@ -1727,7 +1727,7 @@ Global deduplication through plaintext hashes is forbidden. Allowed options:
 
 Public-key cryptography wraps security-collection keys, not media files.
 
-Proposed recipient suite:
+The Phase 4 recipient suite is:
 
 ```text
 KEM  = DHKEM(X25519, HKDF-SHA-256)
@@ -1738,18 +1738,21 @@ AEAD = ChaCha20-Poly1305
 Ed25519 provides persistent sender/device identity and operation signatures.
 
 ```text
-CollectionGrant
-├── protocol_version
+CollectionGrantV1
+├── grant_version / HPKE profile
+├── grant ID / source vault
 ├── collection_id
-├── collection_epoch
-├── recipient_key_id
-├── sender_key_id
-├── permissions
+├── epoch / collection membership generation
+├── recipient identity vault / device / HPKE key ID
+├── sender device / signing key ID / membership generation
+├── cumulative permissions
 ├── HPKE encapsulation
 ├── wrapped collection key
-├── creation and expiry policy
+├── creation operation sequence
 └── sender signature
 ```
+
+The exact fixed 309-byte record and authenticated context are defined in [`sync/COLLECTION_GRANTS.md`](sync/COLLECTION_GRANTS.md). V1 has no expiry or user-level identity record.
 
 Requirements:
 

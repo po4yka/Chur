@@ -1,12 +1,12 @@
 # Collection Grants
 
-> **Status:** Proposed future sharing protocol
+> **Status:** Accepted normative Phase 4 protocol
 
 A collection grant authorizes a recipient device/user to unwrap one Security Collection key epoch. Public-key cryptography wraps only the small collection key, never bulk media.
 
 ## 1. Cryptographic profile
 
-Proposed RFC 9180 suite:
+HPKE profile `0x0001` is the RFC 9180 suite:
 
 ```text
 KEM: DHKEM(X25519, HKDF-SHA-256)
@@ -16,49 +16,51 @@ AEAD: ChaCha20-Poly1305
 
 Sender/device authentication uses a separate Ed25519 signature over the canonical grant. HPKE Base mode alone does not prove sender identity.
 
-## 2. Grant structure
+## 2. Grant record
 
-Conceptual fields:
+`CollectionGrantV1` is exactly 309 bytes:
 
 ```text
-grant_version
-grant_id
-vault/account binding
-collection_id
-collection_epoch
-recipient_device_id
-recipient_hpke_key_id
-sender_device_id
-sender_signing_key_id
-permissions
-membership_generation
-created operation/sequence context
-HPKE encapsulated key
-HPKE ciphertext of CollectionKey and context
-sender signature
+grant_version:u16                         = 0x0001
+hpke_profile:u16                          = 0x0001
+grant_id:bytes[16]
+source_vault_id:bytes[16]
+collection_id:bytes[16]
+collection_epoch:u64
+collection_membership_generation:u64
+recipient_identity_vault_id:bytes[16]
+recipient_device_id:bytes[16]
+recipient_hpke_key_id:bytes[16]
+sender_device_id:bytes[16]
+sender_signing_key_id:bytes[16]
+permissions:u8                            = 0x01, 0x03, or 0x07
+sender_membership_generation:u64
+created_sequence:u64
+encapsulated_key:bytes[32]
+wrapped_collection_key:bytes[48]
+sender_signature:bytes[64]
 ```
 
-The exact fields are minimized and canonically encoded. `membership_generation` is the vault device-membership counter of [`DEVICE_IDENTITY.md`](DEVICE_IDENTITY.md) §4, not a per-collection counter: it fixes which device-membership state the grant was issued under, which is what §9 compares.
+Every identifier, generation, epoch, and sequence is non-zero. `u64::MAX` is invalid for a generation or epoch because it has no successor. The source and recipient identity-vault identifiers must differ: another device of the source vault uses Phase 3 enrollment, not sharing. `grant_id` equals the containing issue-grant operation identifier, and `created_sequence` equals its device sequence.
+
+`sender_membership_generation` selects the accepted sender-device membership of [`DEVICE_IDENTITY.md`](DEVICE_IDENTITY.md) §4. `collection_membership_generation` independently selects the recipient and permission state of this collection. Neither value substitutes for the other.
 
 ## 3. HPKE plaintext/context
 
-Encrypted plaintext includes:
+The HPKE plaintext is exactly the 32-byte `SecurityCollectionKey` for `collection_epoch`. Public-key encryption receives no media, metadata, or variable-length value.
+
+The grant context is the first 165 bytes of the record, from `grant_version` through `created_sequence`. HPKE uses:
 
 ```text
-SecurityCollectionKey[epoch]
-collection ID/epoch
-recipient ID/key ID
-sender ID
-permissions/membership generation
-grant ID
-protocol version
+info = "CHUR\x00SHARING\x00GRANT-HPKE-INFO\x00V1" || grant_context
+aad  = "CHUR\x00SHARING\x00GRANT-HPKE-AAD\x00V1"  || grant_context
 ```
 
-HPKE `info` and AAD use unique domain tags and the same immutable context to prevent cross-protocol/key substitution.
+The 32-byte X25519 encapsulation and the 48-byte HPKE ciphertext follow the context. The ciphertext length is fixed: 32 key bytes plus the 16-byte ChaCha20-Poly1305 tag.
 
 ## 4. Sender signature
 
-Signature covers all canonical outer fields including HPKE encapsulation/ciphertext and identity context. Recipient verifies:
+The Ed25519 input is `CHUR\x00SHARING\x00COLLECTION-GRANT\x00V1` followed by the first 245 bytes of the record, from `grant_version` through `wrapped_collection_key`. The recipient verifies:
 
 - known authorized sender device;
 - signature/key validity at membership generation;
@@ -66,6 +68,18 @@ Signature covers all canonical outer fields including HPKE encapsulation/ciphert
 - grant not revoked/stale;
 - collection epoch accepted;
 - HPKE decrypt/context.
+
+The sender signing key identifier and recipient HPKE key identifier are the leading 16 bytes of:
+
+```text
+BLAKE3-256(key-id domain tag
+    || identity_vault_id:bytes[16]
+    || device_id:bytes[16]
+    || suite:u16
+    || public_key:bytes[32])
+```
+
+The signing tag is `CHUR\x00IDENTITY\x00SIGNING-KEY-ID\x00V1`; the HPKE tag is `CHUR\x00IDENTITY\x00HPKE-KEY-ID\x00V1`. The suite is `0x0001` for both v1 key types. A directory entry whose recomputed identifier differs is rejected before signature verification or HPKE open.
 
 ## 5. Recipient verification
 
@@ -75,19 +89,19 @@ A change to a pinned recipient key blocks: no further grant is issued to that re
 
 ## 6. Permissions
 
-Initial permission candidates:
+The only v1 permission profiles are cumulative:
 
 ```text
-READ
-CONTRIBUTE
-MANAGE_MEMBERS
+0x01 READ
+0x03 CONTRIBUTE      = READ | 0x02
+0x07 MANAGE_MEMBERS  = CONTRIBUTE | 0x04
 ```
 
-Permissions affect accepted signed operations, not ciphertext ability already granted. A recipient with collection key can decrypt all objects in that epoch available to it.
+Every other byte fails closed. `READ` accepts replicated content state. `CONTRIBUTE` additionally authors ordinary collection operations. `MANAGE_MEMBERS` additionally issues, changes, and revokes grants. Permissions affect accepted signed operations, not ciphertext ability already granted. A recipient with a collection key can decrypt all objects in that epoch available to it.
 
 ## 7. Multiple devices
 
-Grant may be per recipient device to support independent revocation and key directory verification. User-level abstraction can issue one grant per verified active device.
+A grant is always for one recipient device. A user-level interface issues one grant per verified active device. Phase 4 adds no separate user identity protocol.
 
 ## 8. Membership changes
 
@@ -108,17 +122,21 @@ Removing member:
 
 ## 9. Replay and stale grants
 
-Clients reject grants below accepted membership generation/epoch or already revoked. Identical grant replay is idempotent. Conflicting grant ID/content is a security error.
+Clients reject grants below the accepted sender membership generation, collection membership generation, or collection epoch, and reject a revoked grant. Identical grant replay is idempotent. Reusing one grant ID with different bytes is a security error.
 
 ## 10. Recovery and device rotation
 
-New recipient device requires new verified key and grant. Copying another device's private key is discouraged unless the identity recovery protocol explicitly permits wrapped portability.
+New recipient devices require new verified keys and grants. They do not copy another device's private key. Device loss revokes that device's grant, advances collection membership, and rotates the collection epoch before remaining-device grants are issued.
 
 ## 11. Post-quantum extension
 
-Grant records carry suite/recipient type so a future hybrid X25519+ML-KEM profile can be added without changing local media containers. It requires new vectors and audit; no server-chosen downgrade.
+The `hpke_profile` field reserves future recipient types without changing local media containers. A hybrid X25519+ML-KEM profile requires a new allocated value, vectors, and audit; the server never negotiates it.
 
-## 12. Tests
+## 12. Excluded from v1
+
+There is no grant expiry. A device clock is not an authorization authority, and expiry cannot erase a key already delivered. There is no user-level identity record: multi-device users are the set of their individually enrolled and granted devices.
+
+## 13. Tests
 
 - valid sender/recipient grant;
 - wrong recipient/key/context;
