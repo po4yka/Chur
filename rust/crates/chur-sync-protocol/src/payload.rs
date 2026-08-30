@@ -416,7 +416,6 @@ impl OperationPayload {
             PayloadBody::IssueCollectionGrant(grant) => {
                 ensure!(
                     grant.grant_id() == operation.operation_id()
-                        && grant.source_vault_id() == operation.vault_id()
                         && grant.collection_id() == &self.collection_id
                         && grant.collection_epoch() == self.collection_epoch
                         && grant.sender_device_id() == operation.device_id()

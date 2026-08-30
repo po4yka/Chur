@@ -479,10 +479,9 @@ impl CollectionMembershipState {
             "collection grant does not match current recipient membership"
         );
         ensure!(
-            sender_membership.vault_id() == &self.source_vault_id
-                && sender_membership.generation() == grant.sender_membership_generation(),
+            sender_membership.generation() == grant.sender_membership_generation(),
             AuthenticationFailed,
-            "collection grant sender membership is stale or unrelated"
+            "collection grant sender membership is stale"
         );
         let sender = sender_membership
             .device(grant.sender_device_id())
@@ -497,6 +496,23 @@ impl CollectionMembershipState {
             AuthenticationFailed,
             "collection grant sender is revoked"
         );
+        if sender_membership.vault_id() != &self.source_vault_id {
+            let manager = self
+                .member(sender_membership.vault_id(), grant.sender_device_id())
+                .ok_or_else(|| {
+                    Error::new(
+                        ChurStatus::AuthenticationFailed,
+                        "collection grant sender is not a collection member",
+                    )
+                })?;
+            ensure!(
+                manager.active
+                    && manager.permissions == PermissionProfile::ManageMembers
+                    && manager.signing_public_key == *sender.signing_public_key(),
+                AuthenticationFailed,
+                "collection grant sender cannot manage members"
+            );
+        }
         grant.verify_sender_signature(sender.signing_public_key())
     }
 
@@ -537,7 +553,6 @@ impl CollectionMembershipState {
                     | PayloadBody::RevokeDevice(_)
                     | PayloadBody::CreateCollectionEpoch { .. }
                     | PayloadBody::RewrapObjectKey { .. }
-                    | PayloadBody::IssueCollectionGrant(_)
             ),
             AuthenticationFailed,
             "shared security operation requires a source-vault device"
@@ -550,7 +565,10 @@ impl CollectionMembershipState {
                     "shared operation issuer is not a collection member",
                 )
             })?;
-        let required = if matches!(payload.body(), PayloadBody::ChangeCollectionMembership(_)) {
+        let required = if matches!(
+            payload.body(),
+            PayloadBody::ChangeCollectionMembership(_) | PayloadBody::IssueCollectionGrant(_)
+        ) {
             PermissionProfile::ManageMembers
         } else {
             PermissionProfile::Contribute
@@ -1282,7 +1300,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_member_manager_can_issue_the_next_membership_record() {
+    fn only_a_member_manager_can_change_membership_and_issue_grants() {
         let source_key = DeviceSigningKey::from_seed([1; 32]);
         let source_enrollment =
             EnrollmentRecord::initial(id(1), id(2), source_key.verifying_key(), [3; 32])
@@ -1376,6 +1394,64 @@ mod tests {
         state
             .accept(&next, &manager_membership)
             .expect("member manager");
+
+        let grant = CollectionGrant::seal(
+            id(20),
+            id(1),
+            id(8),
+            1,
+            2,
+            id(10),
+            id(11),
+            &[13; 32],
+            id(6),
+            PermissionProfile::Read,
+            1,
+            21,
+            &Key::new([22; 32]),
+            &manager_key,
+        )
+        .expect("manager grant");
+        let grant_payload =
+            OperationPayload::new(id(8), 1, PayloadBody::IssueCollectionGrant(grant.clone()))
+                .expect("grant payload");
+        let grant_operation = Operation::seal(
+            id(20),
+            id(5),
+            id(6),
+            21,
+            [23; 32],
+            Vec::new(),
+            id(24),
+            &Key::new([25; 32]),
+            Nonce::new([26; 24]),
+            &grant_payload.encode(),
+        )
+        .expect("grant operation")
+        .sign(&manager_key);
+        state
+            .validate_grant(&grant, &manager_membership)
+            .expect("manager grant authorization");
+        state
+            .authorize_operation(&grant_operation, &grant_payload, &manager_membership)
+            .expect("manager grant operation");
+
+        let mut grant_insufficient = state.clone();
+        grant_insufficient
+            .members
+            .get_mut(&(id(5), id(6)))
+            .expect("manager")
+            .permissions = PermissionProfile::Contribute;
+        assert!(
+            grant_insufficient
+                .validate_grant(&grant, &manager_membership)
+                .is_err()
+        );
+        assert!(
+            grant_insufficient
+                .authorize_operation(&grant_operation, &grant_payload, &manager_membership)
+                .is_err()
+        );
     }
 
     #[test]
