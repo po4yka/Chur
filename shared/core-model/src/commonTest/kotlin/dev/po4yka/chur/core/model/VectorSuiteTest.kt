@@ -79,6 +79,8 @@ class VectorSuiteTest {
             "backup",
             "operation",
             "collection-grant",
+            "collection-membership",
+            "collection-operation",
         )
         for (entry in manifest.vectors) {
             assertTrue(
