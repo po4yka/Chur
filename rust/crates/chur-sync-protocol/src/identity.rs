@@ -71,6 +71,10 @@ impl DeviceIdentity {
         &self.signing_key
     }
 
+    pub(crate) fn hpke_secret_bytes(&self) -> &[u8; 32] {
+        self.hpke_secret.as_bytes()
+    }
+
     fn secret_bytes(&self) -> Zeroizing<[u8; PRIVATE_IDENTITY_LEN]> {
         let signing_seed = self.signing_key.seed_bytes();
         let mut bytes = Zeroizing::new([0; PRIVATE_IDENTITY_LEN]);
