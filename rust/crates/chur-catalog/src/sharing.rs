@@ -8,6 +8,7 @@ use chur_sync_protocol::{
         CollectionMembershipOutcome, CollectionMembershipRecord, CollectionMembershipState,
         RecipientPin, RecipientVerification,
     },
+    grant::CollectionGrant,
     state::MembershipState,
 };
 use rusqlite::{OptionalExtension, Transaction, params};
@@ -25,6 +26,15 @@ struct StoredPin {
     signing_public_key: [u8; 32],
     hpke_public_key: [u8; 32],
     verification: RecipientVerification,
+}
+
+/// Result of storing one canonical collection grant.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum GrantStoreOutcome {
+    /// A new grant was stored.
+    Stored,
+    /// The exact canonical grant was already stored.
+    Duplicate,
 }
 
 /// Creates the empty durable sharing state for one security collection.
@@ -330,6 +340,7 @@ pub fn load(db: &CatalogDb, collection_id: &Id) -> Result<Option<CollectionMembe
         "sharing state contradicts its membership chain"
     );
     validate_pins(&state, &pins)?;
+    load_grants(db, collection_id)?;
     Ok(Some(state))
 }
 
@@ -370,6 +381,133 @@ pub fn verify_recipient_keys(
         Ok(())
     })?;
     Ok(candidate)
+}
+
+/// Validates and stores one canonical collection grant atomically.
+pub fn store_grant(
+    db: &mut CatalogDb,
+    grant: &CollectionGrant,
+    sender_membership: &MembershipState,
+) -> Result<GrantStoreOutcome> {
+    let state = load(db, grant.collection_id())?.ok_or_else(|| {
+        Error::new(
+            ChurStatus::VaultIncomplete,
+            "collection sharing is not provisioned",
+        )
+    })?;
+    db.transaction(|transaction| {
+        let outcome = project_grant(transaction, &state, grant, sender_membership)?;
+        if outcome == GrantStoreOutcome::Stored {
+            bump_generation(transaction)?;
+        }
+        Ok(outcome)
+    })
+}
+
+/// Loads and validates all stored grants for one collection.
+pub fn load_grants(db: &CatalogDb, collection_id: &Id) -> Result<Vec<CollectionGrant>> {
+    let mut statement = db
+        .connection()
+        .prepare(
+            "SELECT grant_id, recipient_identity_vault_id, recipient_device_id,
+                    membership_generation, collection_epoch, record
+               FROM sharing_grants WHERE collection_id = ?1 ORDER BY grant_id",
+        )
+        .map_err(|error| map_sqlite(error, "collection grants could not be prepared"))?;
+    let rows = statement
+        .query_map([collection_id.as_bytes().as_slice()], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, Vec<u8>>(5)?,
+            ))
+        })
+        .map_err(|error| map_sqlite(error, "collection grants could not be read"))?;
+    let mut grants = Vec::new();
+    for row in rows {
+        let (grant_id, recipient_vault, recipient_device, generation, epoch, bytes) =
+            row.map_err(|error| map_sqlite(error, "a collection grant could not be read"))?;
+        let grant_id = crate::row::id(&grant_id, "a grant id is malformed")?;
+        let recipient_vault =
+            crate::row::id(&recipient_vault, "a grant recipient vault id is malformed")?;
+        let recipient_device = crate::row::id(
+            &recipient_device,
+            "a grant recipient device id is malformed",
+        )?;
+        let generation = from_sqlite_integer(
+            generation,
+            "a grant collection membership generation is negative",
+        )?;
+        let epoch = from_sqlite_integer(epoch, "a grant collection epoch is negative")?;
+        let grant = CollectionGrant::decode(&bytes).map_err(corrupt_sharing)?;
+        ensure!(
+            grant.grant_id() == &grant_id
+                && grant.collection_id() == collection_id
+                && grant.recipient_identity_vault_id() == &recipient_vault
+                && grant.recipient_device_id() == &recipient_device
+                && grant.collection_membership_generation() == generation
+                && grant.collection_epoch() == epoch,
+            CatalogCorrupt,
+            "a collection grant projection contradicts its record"
+        );
+        grants.push(grant);
+    }
+    Ok(grants)
+}
+
+/// Projects one validated collection grant inside an existing transaction.
+pub fn project_grant(
+    transaction: &Transaction<'_>,
+    current: &CollectionMembershipState,
+    grant: &CollectionGrant,
+    sender_membership: &MembershipState,
+) -> Result<GrantStoreOutcome> {
+    let encoded = grant.encode();
+    let existing: Option<Vec<u8>> = transaction
+        .query_row(
+            "SELECT record FROM sharing_grants WHERE grant_id = ?1",
+            [grant.grant_id().as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| map_sqlite(error, "an existing collection grant could not be read"))?;
+    if let Some(existing) = existing {
+        ensure!(
+            existing == encoded,
+            Conflict,
+            "a grant identifier names different canonical bytes"
+        );
+        return Ok(GrantStoreOutcome::Duplicate);
+    }
+    current.validate_grant(grant, sender_membership)?;
+    check_head(transaction, current)?;
+    transaction
+        .execute(
+            "INSERT INTO sharing_grants
+                 (grant_id, collection_id, recipient_identity_vault_id,
+                  recipient_device_id, membership_generation, collection_epoch, record)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                grant.grant_id().as_bytes().as_slice(),
+                grant.collection_id().as_bytes().as_slice(),
+                grant.recipient_identity_vault_id().as_bytes().as_slice(),
+                grant.recipient_device_id().as_bytes().as_slice(),
+                as_sqlite_integer(
+                    grant.collection_membership_generation(),
+                    "the grant collection membership generation is too large"
+                )?,
+                as_sqlite_integer(
+                    grant.collection_epoch(),
+                    "the grant collection epoch is too large"
+                )?,
+                encoded,
+            ],
+        )
+        .map_err(|error| map_sqlite(error, "the collection grant could not be written"))?;
+    Ok(GrantStoreOutcome::Stored)
 }
 
 fn load_pins(db: &CatalogDb, collection_id: &Id) -> Result<BTreeMap<(Id, Id), StoredPin>> {
@@ -575,6 +713,7 @@ mod tests {
     use chur_sync_protocol::{
         collection_membership::{CollectionMembershipAction, RecipientVerification},
         grant::PermissionProfile,
+        identity::DeviceIdentity,
         membership::EnrollmentRecord,
         operation::DeviceSigningKey,
         state::MembershipState,
@@ -724,5 +863,91 @@ mod tests {
                 == Some(RecipientVerification::Verified)
         );
         assert!(!restored.member(&id(5), &id(6)).expect("member").is_active());
+    }
+
+    #[test]
+    fn grant_storage_is_idempotent_and_rejects_an_identifier_conflict() {
+        let mut db = catalog();
+        let source_key = DeviceSigningKey::from_seed([1; 32]);
+        let source_record =
+            EnrollmentRecord::initial(id(1), id(2), source_key.verifying_key(), [3; 32])
+                .expect("source enrollment")
+                .sign(&source_key);
+        let source = MembershipState::bootstrap(&source_record).expect("source membership");
+        provision(&mut db, id(1), id(4), 7).expect("provision sharing");
+        let recipient = DeviceIdentity::from_seeds([5; 32], [6; 32]);
+        let membership = CollectionMembershipRecord::new(
+            id(1),
+            id(4),
+            1,
+            [0; 32],
+            CollectionMembershipAction::Upsert(PermissionProfile::Read),
+            id(7),
+            id(8),
+            recipient.signing_public_key(),
+            recipient.hpke_public_key(),
+            7,
+            id(1),
+            id(2),
+            1,
+            1,
+        )
+        .expect("membership")
+        .sign(&source_key);
+        accept_membership(&mut db, &membership, &source).expect("accept membership");
+        let collection_key = Key::new([9; 32]);
+        let grant = CollectionGrant::seal(
+            id(10),
+            id(1),
+            id(4),
+            7,
+            1,
+            id(7),
+            id(8),
+            &recipient.hpke_public_key(),
+            id(2),
+            PermissionProfile::Read,
+            1,
+            2,
+            &collection_key,
+            &source_key,
+        )
+        .expect("grant");
+
+        assert!(store_grant(&mut db, &grant, &source).expect("store") == GrantStoreOutcome::Stored);
+        assert!(
+            store_grant(&mut db, &grant, &source).expect("replay") == GrantStoreOutcome::Duplicate
+        );
+        assert!(load_grants(&db, &id(4)).is_ok_and(|grants| grants == [grant.clone()]));
+
+        let conflicting = CollectionGrant::seal(
+            id(10),
+            id(1),
+            id(4),
+            7,
+            1,
+            id(7),
+            id(8),
+            &recipient.hpke_public_key(),
+            id(2),
+            PermissionProfile::Read,
+            1,
+            3,
+            &collection_key,
+            &source_key,
+        )
+        .expect("conflicting grant");
+        let Err(error) = store_grant(&mut db, &conflicting, &source) else {
+            panic!("conflicting grant id was accepted")
+        };
+        assert!(error.status() == ChurStatus::Conflict);
+
+        db.connection()
+            .execute("UPDATE sharing_grants SET collection_epoch = 8", [])
+            .expect("tamper grant projection");
+        let Err(error) = load_grants(&db, &id(4)) else {
+            panic!("corrupt grant projection loaded")
+        };
+        assert!(error.status() == ChurStatus::CatalogCorrupt);
     }
 }
