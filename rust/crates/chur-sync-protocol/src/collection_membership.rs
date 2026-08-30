@@ -457,6 +457,15 @@ impl CollectionMembershipState {
             })
     }
 
+    /// Active recipient-device memberships in canonical identity order.
+    pub fn active_members(&self) -> impl Iterator<Item = (&Id, &Id, &CollectionMember)> {
+        self.members
+            .iter()
+            .filter_map(|((vault_id, device_id), member)| {
+                member.is_active().then_some((vault_id, device_id, member))
+            })
+    }
+
     /// Validates one grant against current sender and recipient membership.
     pub fn validate_grant(
         &self,

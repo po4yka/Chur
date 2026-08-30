@@ -22,7 +22,7 @@ use chur_sync_protocol::{
 use crate::{
     CatalogDb,
     model::{COLLECTION_POLICY_SHARED, COLLECTION_STATUS_ACTIVE, Collection},
-    schema, sharing, store, sync_keys, sync_log, sync_membership, sync_receive,
+    schema, sharing, store, sync_keys, sync_log, sync_membership, sync_receive, sync_rotation,
 };
 
 /// One canonical record in an issuer identity-membership chain.
@@ -74,6 +74,47 @@ impl PreparedShare {
     #[must_use]
     pub const fn grant_operation(&self) -> &Operation {
         &self.grant_operation
+    }
+}
+
+/// Durable records produced by one complete forward-only member revocation.
+pub struct PreparedShareRevocation {
+    membership: CollectionMembershipRecord,
+    membership_operation: Operation,
+    rotation_operations: Vec<Operation>,
+    grants: Vec<(CollectionGrant, Operation)>,
+    rotation_complete: bool,
+}
+
+impl PreparedShareRevocation {
+    /// Signed recipient revocation.
+    #[must_use]
+    pub const fn membership(&self) -> &CollectionMembershipRecord {
+        &self.membership
+    }
+
+    /// Outer source-vault operation for the revocation.
+    #[must_use]
+    pub const fn membership_operation(&self) -> &Operation {
+        &self.membership_operation
+    }
+
+    /// Newly authored epoch and object-key rewrap operations.
+    #[must_use]
+    pub fn rotation_operations(&self) -> &[Operation] {
+        &self.rotation_operations
+    }
+
+    /// Current-epoch grants for every remaining active recipient device.
+    #[must_use]
+    pub fn grants(&self) -> &[(CollectionGrant, Operation)] {
+        &self.grants
+    }
+
+    /// Whether eager object-key rewrap reached the end.
+    #[must_use]
+    pub const fn rotation_complete(&self) -> bool {
+        self.rotation_complete
     }
 }
 
@@ -275,6 +316,299 @@ pub fn prepare_share(
         membership_operation,
         grant,
         grant_operation,
+    })
+}
+
+/// Revokes one recipient, rotates the collection, eagerly rewraps every active
+/// object key, and issues current grants to all remaining recipients.
+pub fn prepare_share_revocation(
+    db: &mut CatalogDb,
+    root: &Key,
+    source_vault_id: Id,
+    collection_id: Id,
+    recipient_vault_id: Id,
+    recipient_device_id: Id,
+    accepted_at_ms: u64,
+) -> Result<PreparedShareRevocation> {
+    let source_membership = sync_membership::load(db)?.ok_or_else(|| {
+        Error::new(
+            ChurStatus::RecoveryRequired,
+            "collection revocation has no local device membership",
+        )
+    })?;
+    ensure!(
+        source_membership.vault_id() == &source_vault_id,
+        CatalogCorrupt,
+        "local membership belongs to another vault"
+    );
+    let (source_device_id, identity) = sync_keys::local_identity(db, root, &source_membership)?
+        .ok_or_else(|| {
+            Error::new(
+                ChurStatus::RecoveryRequired,
+                "collection revocation has no ordinary local identity",
+            )
+        })?;
+    let mut sharing_state = sharing::load(db, &collection_id)?
+        .ok_or_else(|| Error::new(ChurStatus::NotFound, "collection has no sharing membership"))?;
+    ensure!(
+        sharing_state.source_vault_id() == &source_vault_id,
+        AuthenticationFailed,
+        "collection belongs to another source vault"
+    );
+    let target = sharing_state
+        .member(&recipient_vault_id, &recipient_device_id)
+        .ok_or_else(|| Error::new(ChurStatus::NotFound, "collection recipient is unknown"))?;
+    let target_signing_key = *target.signing_public_key();
+    let target_hpke_key = *target.hpke_public_key();
+    let mut log = sync_log::load(db, &source_membership)?;
+    let (membership, membership_operation) = if target.is_active() {
+        let old_key = sync_keys::collection_key(
+            db,
+            root,
+            source_vault_id,
+            collection_id,
+            sharing_state.collection_epoch(),
+        )?;
+        let old_domain =
+            KeyDomain::collection(&old_key, &collection_id, sharing_state.collection_epoch())?;
+        let sequence = next_sequence(&log, &source_device_id)?;
+        let membership = CollectionMembershipRecord::new(
+            source_vault_id,
+            collection_id,
+            sharing_state.generation().checked_add(1).ok_or_else(|| {
+                Error::new(
+                    ChurStatus::ResourceLimitExceeded,
+                    "collection membership generation has no successor",
+                )
+            })?,
+            *sharing_state.commitment(),
+            CollectionMembershipAction::Revoke,
+            recipient_vault_id,
+            recipient_device_id,
+            target_signing_key,
+            target_hpke_key,
+            sharing_state
+                .collection_epoch()
+                .checked_add(1)
+                .ok_or_else(|| {
+                    Error::new(
+                        ChurStatus::ResourceLimitExceeded,
+                        "collection epoch has no successor",
+                    )
+                })?,
+            source_vault_id,
+            source_device_id,
+            source_membership.generation(),
+            sequence,
+        )?
+        .sign(identity.signing_key());
+        let operation = sync_receive::author_sharing_operation(
+            db,
+            &mut log,
+            &source_membership,
+            &mut sharing_state,
+            &old_domain,
+            random::id()?,
+            source_device_id,
+            identity.signing_key(),
+            PayloadBody::ChangeCollectionMembership(membership.clone()),
+        )?;
+        (membership, operation)
+    } else {
+        let membership =
+            sharing::membership_record_at(db, &collection_id, target.membership_generation())?;
+        ensure!(
+            membership.action() == CollectionMembershipAction::Revoke
+                && membership.recipient_identity_vault_id() == &recipient_vault_id
+                && membership.recipient_device_id() == &recipient_device_id,
+            CatalogCorrupt,
+            "revoked recipient has no matching membership record"
+        );
+        let operation = operation_for(
+            db,
+            membership.issuer_device_id(),
+            membership.created_sequence(),
+        )?;
+        (membership, operation)
+    };
+
+    let target_epoch = sharing_state.collection_epoch();
+    let previous_epoch = target_epoch.checked_sub(1).ok_or_else(|| {
+        Error::new(
+            ChurStatus::CatalogCorrupt,
+            "revoked collection has no previous epoch",
+        )
+    })?;
+    let previous_key =
+        sync_keys::collection_key(db, root, source_vault_id, collection_id, previous_epoch)?;
+    let previous_domain = KeyDomain::collection(&previous_key, &collection_id, previous_epoch)?;
+    let mut keys = sync_keys::key_directory(db, root, source_vault_id)?;
+    let collection = store::collection(db, &collection_id)?;
+    let mut rotation_operations = Vec::new();
+    if collection.current_epoch == previous_epoch {
+        let current_key: Key = random::secret::<32>()?;
+        let envelope = CollectionKeyEnvelope::seal(
+            root,
+            source_vault_id,
+            collection_id,
+            target_epoch,
+            target_epoch,
+            Nonce::random()?,
+            &current_key,
+        )?;
+        rotation_operations.push(sync_receive::author_rotation_operation(
+            db,
+            &mut log,
+            &source_membership,
+            &mut keys,
+            root,
+            &previous_domain,
+            source_device_id,
+            identity.signing_key(),
+            accepted_at_ms,
+            &OperationPayload::new(
+                collection_id,
+                previous_epoch,
+                PayloadBody::CreateCollectionEpoch {
+                    previous_collection_epoch: previous_epoch,
+                    membership_generation: source_membership.generation(),
+                    collection_key_envelope: envelope,
+                },
+            )?,
+        )?);
+    } else {
+        ensure!(
+            collection.current_epoch == target_epoch,
+            SyncHeadRollback,
+            "collection epoch is outside the pending revocation"
+        );
+    }
+    let current_key =
+        sync_keys::collection_key(db, root, source_vault_id, collection_id, target_epoch)?;
+    let current_domain = KeyDomain::collection(&current_key, &collection_id, target_epoch)?;
+    loop {
+        let rotation =
+            sync_rotation::load(db, source_vault_id, collection_id, &source_membership, root)?;
+        let Some(object_id) = rotation.next_missing_object().copied() else {
+            ensure!(
+                rotation.is_complete(),
+                InternalFailure,
+                "collection rotation stopped before eager rewrap completed"
+            );
+            break;
+        };
+        let old_envelope = rotation.envelope(&object_id).ok_or_else(|| {
+            Error::new(
+                ChurStatus::CatalogCorrupt,
+                "rotation target has no object-key envelope",
+            )
+        })?;
+        let generation = old_envelope
+            .envelope_generation()
+            .checked_add(1)
+            .ok_or_else(|| {
+                Error::new(
+                    ChurStatus::ResourceLimitExceeded,
+                    "object envelope generation has no successor",
+                )
+            })?;
+        let envelope = old_envelope.rewrap(
+            &previous_key,
+            &current_key,
+            collection_id,
+            target_epoch,
+            generation,
+            Nonce::random()?,
+        )?;
+        rotation_operations.push(sync_receive::author_rotation_operation(
+            db,
+            &mut log,
+            &source_membership,
+            &mut keys,
+            root,
+            &current_domain,
+            source_device_id,
+            identity.signing_key(),
+            accepted_at_ms,
+            &OperationPayload::new(
+                collection_id,
+                target_epoch,
+                PayloadBody::RewrapObjectKey {
+                    object_id,
+                    object_key_envelope: envelope,
+                },
+            )?,
+        )?);
+    }
+
+    let recipients = sharing_state
+        .active_members()
+        .map(|(vault_id, device_id, member)| {
+            (
+                *vault_id,
+                *device_id,
+                *member.hpke_public_key(),
+                member.permissions(),
+                member.membership_generation(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let existing_grants = sharing::load_grants(db, &collection_id)?;
+    let mut grants = Vec::with_capacity(recipients.len());
+    for (vault_id, device_id, hpke_key, permissions, generation) in recipients {
+        if let Some(grant) = existing_grants.iter().find(|grant| {
+            grant.recipient_identity_vault_id() == &vault_id
+                && grant.recipient_device_id() == &device_id
+                && grant.collection_epoch() == target_epoch
+                && grant.collection_membership_generation() == generation
+                && grant.permissions() == permissions
+        }) {
+            grants.push((
+                grant.clone(),
+                operation_for(db, grant.sender_device_id(), grant.created_sequence())?,
+            ));
+            continue;
+        }
+        let sequence = next_sequence(&log, &source_device_id)?;
+        let grant_id = random::id()?;
+        let grant = CollectionGrant::seal(
+            grant_id,
+            source_vault_id,
+            collection_id,
+            target_epoch,
+            generation,
+            vault_id,
+            device_id,
+            &hpke_key,
+            source_device_id,
+            permissions,
+            source_membership.generation(),
+            sequence,
+            &current_key,
+            identity.signing_key(),
+        )?;
+        let operation = sync_receive::author_sharing_operation(
+            db,
+            &mut log,
+            &source_membership,
+            &mut sharing_state,
+            &current_domain,
+            grant_id,
+            source_device_id,
+            identity.signing_key(),
+            PayloadBody::IssueCollectionGrant(grant.clone()),
+        )?;
+        grants.push((grant, operation));
+    }
+    let rotation_complete =
+        sync_rotation::load(db, source_vault_id, collection_id, &source_membership, root)?
+            .is_complete();
+    Ok(PreparedShareRevocation {
+        membership,
+        membership_operation,
+        rotation_operations,
+        grants,
+        rotation_complete,
     })
 }
 
@@ -775,7 +1109,7 @@ fn operation_for(db: &CatalogDb, device_id: &Id, sequence: u64) -> Result<Operat
 mod tests {
     #![allow(clippy::expect_used, clippy::panic)]
 
-    use chur_format::envelope::CollectionKeyEnvelope;
+    use chur_format::envelope::{CollectionKeyEnvelope, ObjectKeyEnvelope};
     use chur_sync_protocol::identity::DeviceIdentity;
 
     use super::*;
@@ -827,6 +1161,50 @@ mod tests {
             &envelope.encode(),
         )
         .expect("collection");
+        let object_id = id(14);
+        let object_key = Key::new([15; 32]);
+        let object_envelope = ObjectKeyEnvelope::seal(
+            &collection_key,
+            source_vault,
+            collection_id,
+            1,
+            object_id,
+            1,
+            Nonce::new([16; 24]),
+            &object_key,
+        )
+        .expect("object envelope");
+        db.transaction(|transaction| {
+            transaction
+                .execute(
+                    "INSERT INTO objects VALUES (
+                         ?1, 1, ?2, ?3, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 1, 0, 1, 72
+                     )",
+                    rusqlite::params![
+                        object_id.as_bytes().as_slice(),
+                        collection_id.as_bytes().as_slice(),
+                        id(17).as_bytes().as_slice(),
+                    ],
+                )
+                .expect("object");
+            transaction
+                .execute(
+                    "INSERT INTO object_key_envelopes VALUES (?1, 1, 1, ?2)",
+                    rusqlite::params![object_id.as_bytes().as_slice(), object_envelope.encode(),],
+                )
+                .expect("object envelope");
+            transaction
+                .execute(
+                    "INSERT INTO sync_object_envelope_epochs VALUES (?1, ?2, 1, 1)",
+                    rusqlite::params![
+                        object_id.as_bytes().as_slice(),
+                        collection_id.as_bytes().as_slice(),
+                    ],
+                )
+                .expect("envelope projection");
+            Ok(())
+        })
+        .expect("object projection");
         let recipient_vault = id(6);
         let recipient_device = id(7);
         let recipient = DeviceIdentity::from_seeds([8; 32], [9; 32]);
@@ -896,6 +1274,89 @@ mod tests {
                 .expect("operations")
                 .len(),
             3
+        );
+
+        let second_vault = id(10);
+        let second_device = id(11);
+        let second = DeviceIdentity::from_seeds([12; 32], [13; 32]);
+        let second_enrollment = EnrollmentRecord::initial(
+            second_vault,
+            second_device,
+            second.signing_public_key(),
+            second.hpke_public_key(),
+        )
+        .expect("second enrollment")
+        .sign(second.signing_key());
+        prepare_share(
+            &mut db,
+            &root,
+            source_vault,
+            collection_id,
+            &second_enrollment,
+            PermissionProfile::Read,
+            true,
+        )
+        .expect("second share");
+        let revoked = prepare_share_revocation(
+            &mut db,
+            &root,
+            source_vault,
+            collection_id,
+            recipient_vault,
+            recipient_device,
+            1_000,
+        )
+        .expect("revoke share");
+        assert!(revoked.membership().action() == CollectionMembershipAction::Revoke);
+        assert!(revoked.rotation_complete());
+        assert_eq!(revoked.rotation_operations().len(), 2);
+        assert_eq!(revoked.grants().len(), 1);
+        let remaining_grant = revoked.grants()[0].0.clone();
+        assert_eq!(remaining_grant.recipient_identity_vault_id(), &second_vault);
+        assert_eq!(remaining_grant.collection_epoch(), 2);
+        let rotated_key = remaining_grant
+            .open_collection_key(&second_vault, &second_device, &second, source_key)
+            .expect("rotated key");
+        let rotation =
+            sync_rotation::load(&db, source_vault, collection_id, &source_membership, &root)
+                .expect("rotation");
+        assert_eq!(
+            rotation
+                .envelope(&object_id)
+                .expect("rewrapped object")
+                .open(&rotated_key)
+                .expect("open rewrapped object")
+                .expose(),
+            object_key.expose()
+        );
+        let replayed_revocation = prepare_share_revocation(
+            &mut db,
+            &root,
+            source_vault,
+            collection_id,
+            recipient_vault,
+            recipient_device,
+            2_000,
+        )
+        .expect("replay revocation");
+        assert_eq!(
+            revoked.membership().encode(),
+            replayed_revocation.membership().encode()
+        );
+        assert!(replayed_revocation.rotation_operations().is_empty());
+        assert_eq!(replayed_revocation.grants().len(), 1);
+        assert_eq!(
+            remaining_grant.encode(),
+            replayed_revocation.grants()[0].0.encode()
+        );
+        let final_state = sharing::load(&db, &collection_id)
+            .expect("sharing state")
+            .expect("present");
+        assert_eq!(final_state.collection_epoch(), 2);
+        assert!(
+            final_state
+                .validate_grant(first.grant(), &source_membership)
+                .is_err()
         );
     }
 
