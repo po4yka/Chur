@@ -60,6 +60,10 @@ pub fn router(server: ReferenceServer, bootstrap_token: [u8; 32]) -> Router {
             get(sharing_operations),
         )
         .route(
+            "/v1/vaults/{vault}/sharing/issuers/{issuer}/memberships",
+            get(sharing_issuer_memberships),
+        )
+        .route(
             "/v1/vaults/{vault}/checkpoints",
             get(checkpoints).post(checkpoint),
         )
@@ -305,6 +309,22 @@ async fn sharing_grants(
     binary(records(
         server.collection_grants_for_recipient(vault, device)?,
     ))
+}
+
+async fn sharing_issuer_memberships(
+    State(state): State<AppState>,
+    Path((vault, issuer)): Path<(String, String)>,
+    RawQuery(query): RawQuery,
+    headers: HeaderMap,
+) -> HttpResult<Response> {
+    let vault = id(&vault)?;
+    let issuer = id(&issuer)?;
+    let after = query_u64(query.as_deref(), "after")?;
+    let server = lock(&state)?;
+    let device = authenticate(&server, vault, &headers)?;
+    binary(records(server.issuer_memberships_for_recipient(
+        vault, device, issuer, after,
+    )?))
 }
 
 async fn checkpoint(

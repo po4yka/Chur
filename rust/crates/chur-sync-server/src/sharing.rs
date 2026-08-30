@@ -748,6 +748,41 @@ impl ReferenceServer {
         }
         Ok(records)
     }
+
+    /// Returns an issuer membership chain only to a current collection recipient.
+    pub fn issuer_memberships_for_recipient(
+        &self,
+        recipient_vault_id: Id,
+        recipient_device_id: Id,
+        issuer_vault_id: Id,
+        after: u64,
+    ) -> Result<Vec<Vec<u8>>> {
+        let mut authorized = false;
+        for collection_id in recipient_collections(self, recipient_vault_id, recipient_device_id)? {
+            let state = collection_state(self, &collection_id)?.ok_or_else(|| {
+                Error::new(
+                    ChurStatus::CatalogCorrupt,
+                    "recipient collection state is absent",
+                )
+            })?;
+            if state.source_vault_id() == &issuer_vault_id
+                && state.is_authorized(
+                    &recipient_vault_id,
+                    &recipient_device_id,
+                    PermissionProfile::Read,
+                )
+            {
+                authorized = true;
+                break;
+            }
+        }
+        ensure!(
+            authorized,
+            AuthenticationFailed,
+            "requester has no current collection from this issuer"
+        );
+        self.membership_records_after(issuer_vault_id, after)
+    }
 }
 
 fn existing_membership(
@@ -1248,6 +1283,22 @@ mod tests {
                 )
                 .expect("shared operation inbox"),
             vec![shared_operation.encode()]
+        );
+        assert_eq!(
+            server
+                .issuer_memberships_for_recipient(
+                    recipient_vault,
+                    recipient_device,
+                    source_vault,
+                    0,
+                )
+                .expect("issuer membership chain"),
+            vec![source_enrollment.encode()]
+        );
+        assert!(
+            server
+                .issuer_memberships_for_recipient(second_vault, second_device, source_vault, 0,)
+                .is_err_and(|error| error.status() == ChurStatus::AuthenticationFailed)
         );
         let second_operation = CollectionOperation::seal(
             id(35),
