@@ -22,7 +22,7 @@ use chur_catalog::vault;
 use chur_catalog::{journal, store};
 use chur_core::{ChurStatus, Result};
 use chur_crypto::random;
-use chur_format::constants::{MediaClass, ObjectState};
+use chur_format::constants::{CATALOG_FORMAT_VERSION_V4, MediaClass, ObjectState};
 use chur_media::import::{self, CanonicalMedia, SourceCapability};
 
 const PASSWORD: &[u8] = b"correct horse battery staple";
@@ -409,8 +409,8 @@ fn a_vault_this_build_cannot_read_fails_closed() {
                 db.transaction(|transaction| {
                     transaction
                         .execute(
-                            "UPDATE vault_state SET catalog_format_version = 4 WHERE only_row = 1",
-                            [],
+                            "UPDATE vault_state SET catalog_format_version = ?1 WHERE only_row = 1",
+                            [i64::from(CATALOG_FORMAT_VERSION_V4) + 1],
                         )
                         .map(|_| ())
                         .map_err(|_| {
