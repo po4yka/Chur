@@ -122,7 +122,7 @@ Removing member:
 
 ## 9. Replay and stale grants
 
-Clients reject grants below the accepted sender membership generation, collection membership generation, or collection epoch, and reject a revoked grant. Identical grant replay is idempotent. Reusing one grant ID with different bytes is a security error.
+Clients reject grants below the accepted sender membership generation, below the accepted membership generation for that recipient device, or below the accepted collection epoch, and reject a revoked grant. A later membership change for another recipient does not stale an existing grant. Identical grant replay is idempotent. Reusing one grant ID with different bytes is a security error. The authenticated membership chain is defined in [`COLLECTION_MEMBERSHIP.md`](COLLECTION_MEMBERSHIP.md).
 
 ## 10. Recovery and device rotation
 

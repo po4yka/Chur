@@ -129,6 +129,7 @@ The complete platform documents are [`ANDROID.md`](ANDROID.md) and [`IOS.md`](IO
 - [`sync/ROLLBACK_PROTECTION.md`](sync/ROLLBACK_PROTECTION.md)
 - [`sync/CONFLICT_RESOLUTION.md`](sync/CONFLICT_RESOLUTION.md)
 - [`sync/COLLECTION_GRANTS.md`](sync/COLLECTION_GRANTS.md)
+- [`sync/COLLECTION_MEMBERSHIP.md`](sync/COLLECTION_MEMBERSHIP.md)
 - [`sync/REVOCATION.md`](sync/REVOCATION.md)
 
 ## Decisions

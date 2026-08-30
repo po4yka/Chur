@@ -36,12 +36,16 @@ kind_body:bytes[remaining]
 | `0x0E` | `RevokeDevice` | `revocation_record:bytes[194]` |
 | `0x0F` | `CreateCollectionEpoch` | `previous_collection_epoch:u64`, `membership_generation:u64`, `collection_key_envelope:bytes[126]` |
 | `0x10` | `RewrapObjectKey` | `object_id:bytes[16]`, `object_key_envelope:bytes[142]` |
+| `0x11` | `ChangeCollectionMembership` | `membership_record:bytes[292]` |
+| `0x12` | `IssueCollectionGrant` | `collection_grant:bytes[309]` |
 
 All identifiers are non-zero random identifiers. `stream_id` names the primary original stream and is required to derive the manifest key and AAD before its sealed manifest can be opened. Every generation and every non-root epoch is non-zero and must have a successor, so `u64::MAX` is invalid. `container_length` is non-zero; the transfer service applies its configured object-size quota before reserving storage.
 
 `CommitObject` activates a server object only after the downloaded ciphertext validates against its container and object-key envelope. `CreateObject` alone never makes media presentable.
 
 `AddDevice` and `RevokeDevice` carry the complete signed membership records of [`DEVICE_IDENTITY.md`](DEVICE_IDENTITY.md) §4 and §9. Their `created_sequence` or issuer, membership generation, and vault binding must agree with the containing operation. `CreateCollectionEpoch` and `RewrapObjectKey` carry the complete canonical envelope records of the format specifications; all repeated collection, epoch, object, and vault values must agree.
+
+`ChangeCollectionMembership` carries the complete record of [`COLLECTION_MEMBERSHIP.md`](COLLECTION_MEMBERSHIP.md). Its source vault, collection, issuer, creation sequence, and pre-change epoch agree with the containing operation. `IssueCollectionGrant` carries the complete grant of [`COLLECTION_GRANTS.md`](COLLECTION_GRANTS.md). Its grant identifier equals the containing operation identifier; its source vault, collection, sender, creation sequence, and collection epoch agree with the operation and selected key domain.
 
 ## 3. Metadata fields
 
