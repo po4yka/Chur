@@ -183,12 +183,15 @@ object ChurVault {
     }
 
     /** Authenticates relay evidence and atomically installs one recipient share. */
-    fun acceptShare(session: Long, share: ShareAcceptance) {
-        val encoded = encodeShareAcceptance(share)
-        withChurBuffer(encoded.size) { buffer ->
-            buffer.copyIn(encoded)
+    fun acceptShare(session: Long, share: ShareAcceptance) =
+        acceptSharePackage(session, encodeShareAcceptance(share))
+
+    /** Passes one complete opaque relay package to the native sharing verifier. */
+    fun acceptSharePackage(session: Long, packageBytes: ByteArray) {
+        withChurBuffer(packageBytes.size) { buffer ->
+            buffer.copyIn(packageBytes)
             ChurFailure.check(
-                ChurNative.sharingAccept(session, buffer, encoded.size),
+                ChurNative.sharingAccept(session, buffer, packageBytes.size),
                 "sharing accept",
             )
         }
