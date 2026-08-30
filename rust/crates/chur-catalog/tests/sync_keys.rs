@@ -4,7 +4,7 @@
 
 use chur_catalog::db::{CatalogKey, CatalogLocation};
 use chur_catalog::model::{COLLECTION_POLICY_VAULT_DEFAULT, COLLECTION_STATUS_ACTIVE, Collection};
-use chur_catalog::{CatalogDb, schema, store, sync_keys};
+use chur_catalog::{CatalogDb, schema, store, sync_keys, sync_membership, sync_receive};
 use chur_core::Id;
 use chur_crypto::{Key, Nonce};
 use chur_format::envelope::CollectionKeyEnvelope;
@@ -56,4 +56,31 @@ fn all_retained_collection_epochs_are_routable() {
         let domain = KeyDomain::collection(&collection_key, &collection_id, epoch).expect("domain");
         assert!(directory.operation_key(domain.selector()).is_ok());
     }
+}
+
+#[test]
+fn local_identity_provisioning_commits_keys_membership_and_operation_together() {
+    let vault_id = id(11);
+    let root = Key::new([12; 32]);
+    let catalog_key = CatalogKey::derive(&root, &vault_id).expect("catalog key");
+    let mut db = CatalogDb::open(&CatalogLocation::Memory, &catalog_key).expect("catalog");
+    schema::open_at_current_version(&mut db, 1).expect("schema");
+
+    let (enrollment, operation) =
+        sync_receive::provision_local_identity(&mut db, &root, vault_id).expect("identity");
+    assert_eq!(operation.device_id(), enrollment.device_id());
+    assert_eq!(operation.device_sequence(), 1);
+    let membership = sync_membership::load(&db)
+        .expect("membership")
+        .expect("present");
+    let (device_id, identity) = sync_keys::local_identity(&db, &root, &membership)
+        .expect("identity")
+        .expect("present");
+    assert_eq!(&device_id, enrollment.device_id());
+    assert_eq!(
+        identity.signing_public_key(),
+        *enrollment.signing_public_key()
+    );
+    assert_eq!(identity.hpke_public_key(), *enrollment.hpke_public_key());
+    assert!(sync_receive::provision_local_identity(&mut db, &root, vault_id).is_err());
 }

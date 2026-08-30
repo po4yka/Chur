@@ -12,7 +12,7 @@ use chur_sync_protocol::{
     identity::{DeviceIdentity, DeviceIdentityEnvelope},
     state::{DeviceStatus, MembershipState},
 };
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OptionalExtension, Transaction, params};
 
 /// Stores the only local private device identity as a portable recovery envelope.
 pub fn store_portable_identity_envelope(
@@ -112,6 +112,33 @@ fn store_identity_envelope(
             .map_err(|error| map_sqlite(error, "the private identity could not be stored"))?;
         bump_generation(transaction)
     })
+}
+
+pub(crate) fn project_local_identity(
+    transaction: &Transaction<'_>,
+    envelope: &DeviceIdentityEnvelope,
+) -> Result<()> {
+    ensure!(
+        !envelope.is_recovery_only(),
+        InvalidInput,
+        "local identity has recovery-only purpose"
+    );
+    transaction
+        .execute(
+            "INSERT INTO sync_identity_envelopes
+                 (device_id, identity_generation, active, recovery_only, body)
+             VALUES (?1, ?2, 1, 0, ?3)",
+            params![
+                envelope.device_id().as_bytes().as_slice(),
+                as_sqlite_integer(
+                    envelope.identity_generation(),
+                    "the identity generation is too large"
+                )?,
+                envelope.encode()
+            ],
+        )
+        .map_err(|error| map_sqlite(error, "the local identity could not be stored"))?;
+    Ok(())
 }
 
 /// Loads and authenticates the local portable recovery identity, when present.

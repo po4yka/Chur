@@ -6,6 +6,7 @@ use chur_core::{ChurStatus, Error, Id, Result, ensure};
 use chur_crypto::{Key, Nonce, random};
 use chur_sync_protocol::collection_membership::CollectionMembershipState;
 use chur_sync_protocol::convergence::MergeOutcome;
+use chur_sync_protocol::identity::{DeviceIdentity, DeviceIdentityEnvelope};
 use chur_sync_protocol::materialization::MaterializedState;
 use chur_sync_protocol::membership::EnrollmentRecord;
 use chur_sync_protocol::operation::{DeviceSigningKey, Operation};
@@ -25,6 +26,16 @@ pub fn provision_initial_membership(
     root: &Key,
     signing_key: &DeviceSigningKey,
     enrollment: &EnrollmentRecord,
+) -> Result<(MembershipState, DurableOperationLog, Operation)> {
+    provision_initial_membership_with_identity(db, root, signing_key, enrollment, None)
+}
+
+fn provision_initial_membership_with_identity(
+    db: &mut CatalogDb,
+    root: &Key,
+    signing_key: &DeviceSigningKey,
+    enrollment: &EnrollmentRecord,
+    local_identity: Option<&DeviceIdentityEnvelope>,
 ) -> Result<(MembershipState, DurableOperationLog, Operation)> {
     let membership = MembershipState::bootstrap(enrollment)?;
     let domain = KeyDomain::root(root, membership.vault_id())?;
@@ -53,12 +64,53 @@ pub fn provision_initial_membership(
     ensure!(
         log.accept_with(db, &operation, &membership, |transaction| {
             sync_membership::project_provision(transaction, enrollment)?;
+            if let Some(envelope) = local_identity {
+                sync_keys::project_local_identity(transaction, envelope)?;
+            }
             Ok(())
         })? == ApplyOutcome::Applied,
         InternalFailure,
         "fresh self-enrollment operation was not applied"
     );
     Ok((membership, log, operation))
+}
+
+/// Creates and atomically stores the first ordinary device identity.
+pub fn provision_local_identity(
+    db: &mut CatalogDb,
+    root: &Key,
+    vault_id: Id,
+) -> Result<(EnrollmentRecord, Operation)> {
+    ensure!(
+        sync_membership::load(db)?.is_none(),
+        Conflict,
+        "device identity is already provisioned"
+    );
+    let device_id = random::id()?;
+    let identity = DeviceIdentity::generate()?;
+    let enrollment = EnrollmentRecord::initial(
+        vault_id,
+        device_id,
+        identity.signing_public_key(),
+        identity.hpke_public_key(),
+    )?
+    .sign(identity.signing_key());
+    let envelope = DeviceIdentityEnvelope::seal_for_local(
+        root,
+        vault_id,
+        device_id,
+        1,
+        Nonce::random()?,
+        &identity,
+    )?;
+    let (_, _, operation) = provision_initial_membership_with_identity(
+        db,
+        root,
+        identity.signing_key(),
+        &enrollment,
+        Some(&envelope),
+    )?;
+    Ok((enrollment, operation))
 }
 
 /// Rebuilds convergent private content from authenticated accepted records.
