@@ -106,6 +106,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0052](0052-keep-v1-sync-history-uncompacted.md) | Commit collection epochs and keep v1 sync history uncompacted | Accepted |
 | [0053](0053-freeze-the-v1-collection-grant.md) | Freeze the v1 collection grant, permissions, and HPKE context | Accepted |
 | [0054](0054-freeze-collection-membership-records.md) | Freeze v1 collection membership, permission, and revocation records | Accepted |
+| [0055](0055-add-sharing-state-in-catalog-v3.md) | Add durable collection-sharing state through catalog v3 | Accepted |
 
 Rows are ordered by ADR number. Number 0015 was not used; no ADR carries it and none will.
 
