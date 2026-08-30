@@ -283,6 +283,7 @@ Each format version field has its own namespace:
 | `catalog_format_version` | `0x0001` | private catalog schema v1 | [`CATALOG_SCHEMA_V1.md`](CATALOG_SCHEMA_V1.md) |
 | `catalog_format_version` | `0x0002` | private catalog schema v2 with durable sync state | [`CATALOG_SCHEMA_V2.md`](CATALOG_SCHEMA_V2.md) |
 | `catalog_format_version` | `0x0003` | private catalog schema v3 with durable collection-sharing state | [`CATALOG_SCHEMA_V3.md`](CATALOG_SCHEMA_V3.md) |
+| `catalog_format_version` | `0x0004` | private catalog schema v4 with durable collection-operation streams | [`CATALOG_SCHEMA_V4.md`](CATALOG_SCHEMA_V4.md) |
 | `object_store_format_version` | `0x0001` | object store layout v1 | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §6 |
 | `slot_version` | `0x0001` | v1 key-slot families | [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §1 |
 

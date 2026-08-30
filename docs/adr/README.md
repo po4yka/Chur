@@ -108,6 +108,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0054](0054-freeze-collection-membership-records.md) | Freeze v1 collection membership, permission, and revocation records | Accepted |
 | [0055](0055-add-sharing-state-in-catalog-v3.md) | Add durable collection-sharing state through catalog v3 | Accepted |
 | [0056](0056-add-collection-scoped-sharing-operation-streams.md) | Add collection-scoped cross-vault sharing operation streams | Accepted |
+| [0057](0057-add-collection-operation-streams-in-catalog-v4.md) | Add durable collection operation streams through catalog v4 | Accepted |
 
 Rows are ordered by ADR number. Number 0015 was not used; no ADR carries it and none will.
 
