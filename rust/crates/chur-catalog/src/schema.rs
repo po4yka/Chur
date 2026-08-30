@@ -12,7 +12,10 @@
 
 use chur_core::{Id, Result, bail, ensure, err, limits::catalog as limits};
 use chur_format::{
-    constants::{CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V3},
+    constants::{
+        CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V3,
+        CATALOG_FORMAT_VERSION_V4,
+    },
     envelope::ObjectKeyEnvelope,
 };
 use rusqlite::Connection;
@@ -36,6 +39,9 @@ const STEPS: &[Step] = &[
     },
     Step {
         version: CATALOG_FORMAT_VERSION_V3,
+    },
+    Step {
+        version: CATALOG_FORMAT_VERSION_V4,
     },
 ];
 
@@ -448,6 +454,43 @@ CREATE INDEX sharing_grants_by_collection
     ON sharing_grants (collection_id, membership_generation, collection_epoch, grant_id);
 "#;
 
+/// Catalog v4 adds only durable collection-operation streams.
+const V4_DDL: &str = r#"
+CREATE TABLE sharing_operation_streams (
+    key_selector      BLOB PRIMARY KEY CHECK (length(key_selector) = 16),
+    collection_id     BLOB NOT NULL REFERENCES sharing_collections(collection_id),
+    collection_epoch  INTEGER NOT NULL CHECK (collection_epoch >= 1),
+    UNIQUE (collection_id, collection_epoch)
+) STRICT;
+
+CREATE TABLE sharing_operations (
+    key_selector              BLOB NOT NULL REFERENCES sharing_operation_streams(key_selector),
+    issuer_identity_vault_id  BLOB NOT NULL CHECK (length(issuer_identity_vault_id) = 16),
+    issuer_device_id          BLOB NOT NULL CHECK (length(issuer_device_id) = 16),
+    device_sequence           INTEGER NOT NULL CHECK (device_sequence >= 1),
+    operation_id              BLOB NOT NULL CHECK (length(operation_id) = 16),
+    digest                    BLOB NOT NULL CHECK (length(digest) = 32),
+    record                    BLOB NOT NULL CHECK (length(record) BETWEEN 1 AND 16777216),
+    PRIMARY KEY (key_selector, issuer_identity_vault_id, issuer_device_id, device_sequence),
+    UNIQUE (key_selector, operation_id)
+) STRICT;
+
+CREATE TABLE sharing_operation_forks (
+    key_selector              BLOB NOT NULL REFERENCES sharing_operation_streams(key_selector),
+    issuer_identity_vault_id  BLOB NOT NULL CHECK (length(issuer_identity_vault_id) = 16),
+    issuer_device_id          BLOB NOT NULL CHECK (length(issuer_device_id) = 16),
+    state                     INTEGER NOT NULL CHECK (state IN (1, 2)),
+    accepted_record           BLOB NOT NULL CHECK (length(accepted_record) BETWEEN 1 AND 16777216),
+    conflicting_record        BLOB NOT NULL CHECK (length(conflicting_record) BETWEEN 1 AND 16777216),
+    PRIMARY KEY (key_selector, issuer_identity_vault_id, issuer_device_id)
+) STRICT;
+
+CREATE INDEX sharing_operations_by_participant
+    ON sharing_operations (
+        key_selector, issuer_identity_vault_id, issuer_device_id, device_sequence
+    );
+"#;
+
 /// Creates the current schema or opens it without performing an implicit migration.
 ///
 /// `docs/format/CATALOG_SCHEMA_V1.md` §18 forbids skipping an untested step, so
@@ -457,15 +500,15 @@ pub fn open_at_current_version(db: &mut CatalogDb, now_ms: u64) -> Result<u16> {
     let present = recorded_version(db.connection())?;
     let Some(present) = present else {
         install(db, now_ms)?;
-        return Ok(CATALOG_FORMAT_VERSION_V3);
+        return Ok(CATALOG_FORMAT_VERSION_V4);
     };
-    if present != CATALOG_FORMAT_VERSION_V3 {
+    if present != CATALOG_FORMAT_VERSION_V4 {
         bail!(
             MigrationRequired,
             "the catalog requires an authenticated schema migration"
         );
     }
-    Ok(CATALOG_FORMAT_VERSION_V3)
+    Ok(CATALOG_FORMAT_VERSION_V4)
 }
 
 /// The version the database records, or `None` when the schema is absent.
@@ -505,6 +548,12 @@ fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
         transaction.execute_batch(V3_DDL).map_err(|error| {
             map_sqlite(error, "the sharing catalog schema could not be created")
         })?;
+        transaction.execute_batch(V4_DDL).map_err(|error| {
+            map_sqlite(
+                error,
+                "the collection operation catalog schema could not be created",
+            )
+        })?;
         transaction
             .execute(
                 "INSERT INTO vault_state (
@@ -512,7 +561,7 @@ fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
                      active_migration_target, object_store_checkpoint,
                      integrity_checkpoint_ms, capability_flags
                  ) VALUES (1, ?1, 1, NULL, 0, ?2, 0)",
-                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V3), checkpoint],
+                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V4), checkpoint],
             )
             .map_err(|error| map_sqlite(error, "the catalog state row could not be written"))?;
         Ok(())
@@ -524,7 +573,10 @@ pub(crate) fn reset_to_v1(db: &mut CatalogDb) -> Result<()> {
     db.transaction(|transaction| {
         transaction
             .execute_batch(
-                "DROP TABLE sharing_grants;
+                "DROP TABLE sharing_operation_forks;
+                 DROP TABLE sharing_operations;
+                 DROP TABLE sharing_operation_streams;
+                 DROP TABLE sharing_grants;
                  DROP TABLE sharing_recipient_pins;
                  DROP TABLE sharing_membership_records;
                  DROP TABLE sharing_collections;
@@ -551,13 +603,31 @@ pub(crate) fn reset_to_v2(db: &mut CatalogDb) -> Result<()> {
     db.transaction(|transaction| {
         transaction
             .execute_batch(
-                "DROP TABLE sharing_grants;
+                "DROP TABLE sharing_operation_forks;
+                 DROP TABLE sharing_operations;
+                 DROP TABLE sharing_operation_streams;
+                 DROP TABLE sharing_grants;
                  DROP TABLE sharing_recipient_pins;
                  DROP TABLE sharing_membership_records;
                  DROP TABLE sharing_collections;
                  UPDATE vault_state SET catalog_format_version = 2 WHERE only_row = 1;",
             )
             .map_err(|error| map_sqlite(error, "the test catalog could not be reset to v2"))?;
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn reset_to_v3(db: &mut CatalogDb) -> Result<()> {
+    db.transaction(|transaction| {
+        transaction
+            .execute_batch(
+                "DROP TABLE sharing_operation_forks;
+                 DROP TABLE sharing_operations;
+                 DROP TABLE sharing_operation_streams;
+                 UPDATE vault_state SET catalog_format_version = 3 WHERE only_row = 1;",
+            )
+            .map_err(|error| map_sqlite(error, "the test catalog could not be reset to v3"))?;
         Ok(())
     })
 }
@@ -619,6 +689,36 @@ pub(crate) fn migrate_v2_to_v3(db: &mut CatalogDb) -> Result<()> {
                     SET catalog_format_version = ?1, active_migration_target = NULL
                   WHERE only_row = 1",
                 [i64::from(CATALOG_FORMAT_VERSION_V3)],
+            )
+            .map_err(|error| map_sqlite(error, "the migrated version could not be recorded"))?;
+        Ok(())
+    })
+}
+
+/// Applies the v3-to-v4 collection-operation migration after the descriptor
+/// entered `MIGRATING`.
+pub(crate) fn migrate_v3_to_v4(db: &mut CatalogDb) -> Result<()> {
+    ensure!(
+        recorded_version(db.connection())? == Some(CATALOG_FORMAT_VERSION_V3),
+        MigrationRequired,
+        "the catalog is not at the supported migration source"
+    );
+    db.transaction(|transaction| {
+        transaction
+            .execute(
+                "UPDATE vault_state SET active_migration_target = ?1 WHERE only_row = 1",
+                [i64::from(CATALOG_FORMAT_VERSION_V4)],
+            )
+            .map_err(|error| map_sqlite(error, "the migration target could not be recorded"))?;
+        transaction
+            .execute_batch(V4_DDL)
+            .map_err(|error| map_sqlite(error, "a migration step failed"))?;
+        transaction
+            .execute(
+                "UPDATE vault_state
+                    SET catalog_format_version = ?1, active_migration_target = NULL
+                  WHERE only_row = 1",
+                [i64::from(CATALOG_FORMAT_VERSION_V4)],
             )
             .map_err(|error| map_sqlite(error, "the migrated version could not be recorded"))?;
         Ok(())
@@ -766,11 +866,11 @@ mod tests {
     }
 
     #[test]
-    fn a_new_catalog_installs_version_three() {
+    fn a_new_catalog_installs_version_four() {
         let mut db = open();
         assert_eq!(
             open_at_current_version(&mut db, 1_700_000_000_000).expect("install"),
-            CATALOG_FORMAT_VERSION_V3
+            CATALOG_FORMAT_VERSION_V4
         );
         let sharing_tables: i64 = db
             .connection()
@@ -781,7 +881,7 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("sharing tables");
-        assert_eq!(sharing_tables, 4);
+        assert_eq!(sharing_tables, 7);
         assert_eq!(generation(&db).expect("generation"), 1);
     }
 
@@ -830,7 +930,7 @@ mod tests {
         }
         assert_eq!(
             STEPS.last().map(|step| step.version),
-            Some(CATALOG_FORMAT_VERSION_V3)
+            Some(CATALOG_FORMAT_VERSION_V4)
         );
     }
 
@@ -856,6 +956,33 @@ mod tests {
             )
             .expect("sharing tables");
         assert_eq!(sharing_tables, 4);
+    }
+
+    #[test]
+    fn v3_migration_installs_empty_collection_operation_state() {
+        let mut db = open();
+        open_at_current_version(&mut db, 1).expect("install");
+        reset_to_v3(&mut db).expect("reset to v3");
+
+        migrate_v3_to_v4(&mut db).expect("migrate");
+
+        assert_eq!(
+            recorded_version(db.connection()).expect("version"),
+            Some(CATALOG_FORMAT_VERSION_V4)
+        );
+        let operation_tables: i64 = db
+            .connection()
+            .query_row(
+                "SELECT count(*) FROM sqlite_schema
+                  WHERE type = 'table' AND name IN (
+                    'sharing_operation_streams', 'sharing_operations',
+                    'sharing_operation_forks'
+                  )",
+                [],
+                |row| row.get(0),
+            )
+            .expect("operation tables");
+        assert_eq!(operation_tables, 3);
     }
 
     #[test]
