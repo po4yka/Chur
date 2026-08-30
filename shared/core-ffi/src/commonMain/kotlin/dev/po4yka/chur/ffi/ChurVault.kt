@@ -161,6 +161,33 @@ object ChurVault {
         }
     }
 
+    /** Revokes one recipient and returns one resumable rotation batch. */
+    fun revokeShare(
+        session: Long,
+        collectionId: ByteArray,
+        recipientVaultId: ByteArray,
+        recipientDeviceId: ByteArray,
+        acceptedAtMs: Long,
+    ): PreparedShareRevocation {
+        require(acceptedAtMs >= 0) { "sharing revocation time is negative" }
+        return withChurBuffer(SHARING_BUNDLE_CAPACITY) { buffer ->
+            val written = IntArray(1)
+            ChurFailure.check(
+                ChurNative.sharingRevoke(
+                    session,
+                    collectionId,
+                    recipientVaultId,
+                    recipientDeviceId,
+                    acceptedAtMs,
+                    buffer,
+                    written,
+                ),
+                "sharing revoke",
+            )
+            decodePreparedShareRevocation(buffer.copyOut(written[0]), written[0])
+        }
+    }
+
     /** Stages one opaque downloaded record without opening vault keys. */
     fun stageSync(
         runtime: Long,
@@ -608,6 +635,9 @@ object ChurVault {
 
     /** Four bounded sharing records; current v1 output is below two KiB. */
     private const val PREPARED_SHARE_CAPACITY = 16 * 1024
+
+    /** The exact response bound required before a revocation changes state. */
+    private const val SHARING_BUNDLE_CAPACITY = 16 * 1024 * 1024
 
     /** The default page size of §16.2. */
     private const val DEFAULT_PAGE_LIMIT = 200

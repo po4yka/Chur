@@ -479,6 +479,51 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingPrepare<'local>(
     finish_written(&mut env, status, &out_written, written)
 }
 
+/// Revokes one recipient and writes one bounded rotation batch.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingRevoke<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    collection_id: JByteArray<'local>,
+    recipient_vault_id: JByteArray<'local>,
+    recipient_device_id: JByteArray<'local>,
+    accepted_at_ms: jlong,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    let Some(collection_id) = fixed_array(&mut env, &collection_id, ID_LEN) else {
+        return INVALID_INPUT;
+    };
+    let Some(recipient_vault_id) = fixed_array(&mut env, &recipient_vault_id, ID_LEN) else {
+        return INVALID_INPUT;
+    };
+    let Some(recipient_device_id) = fixed_array(&mut env, &recipient_device_id, ID_LEN) else {
+        return INVALID_INPUT;
+    };
+    let Ok(accepted_at_ms) = u64::try_from(accepted_at_ms) else {
+        return INVALID_INPUT;
+    };
+    let Some((address, capacity)) = direct_buffer(&env, &destination) else {
+        return INVALID_INPUT;
+    };
+    let mut written = 0usize;
+    // SAFETY: the identifier vectors, `written`, and direct buffer stay live.
+    let status = unsafe {
+        chur_ffi::sharing::chur_sharing_revoke(
+            handle_of(session),
+            collection_id.as_ptr(),
+            recipient_vault_id.as_ptr(),
+            recipient_device_id.as_ptr(),
+            accepted_at_ms,
+            address,
+            capacity,
+            &mut written,
+        )
+    };
+    finish_written(&mut env, status, &out_written, written)
+}
+
 /// Authenticates and installs one recipient share bundle.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingAccept<'local>(

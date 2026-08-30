@@ -66,6 +66,8 @@ internal object ChurJni {
 
     external fun sharingAccept(session: Long, bundle: ByteBuffer, length: Int): Int
 
+    external fun sharingRevoke(session: Long, collectionId: ByteArray, recipientVaultId: ByteArray, recipientDeviceId: ByteArray, acceptedAtMs: Long, destination: ByteBuffer, outWritten: IntArray): Int
+
     external fun syncStage(runtime: Long, vaultId: ByteArray, kind: Int, stagedAtMs: Long, record: ByteBuffer, length: Int): Int
 
     external fun syncProcess(session: Long, nowMs: Long, outCounts: LongArray, outStatus: IntArray): Int

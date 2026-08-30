@@ -107,12 +107,12 @@ public fun gate(handshake: NativeHandshake, releaseApplication: Boolean): GateRe
         return refuse(GateResult.Reason.BUILD_FLAVOR)
     }
     // An unknown capability bit is ignored and never enables behaviour, so the
-    // mask is masked down to the seven v1 bits before the host sees it.
+    // mask is masked down to the eight v1 bits before the host sees it.
     return GateResult.Compatible(handshake.capabilities and V1_CAPABILITY_MASK)
 }
 
 private fun refuse(reason: GateResult.Reason): GateResult =
     GateResult.Incompatible(ChurStatus.ABI_INCOMPATIBLE, reason)
 
-/** Bits 0 to 6, the capabilities v1 allocates. */
-private const val V1_CAPABILITY_MASK: ULong = 0x7fu
+/** Bits 0 to 7, the capabilities v1 allocates. */
+private const val V1_CAPABILITY_MASK: ULong = 0xffu

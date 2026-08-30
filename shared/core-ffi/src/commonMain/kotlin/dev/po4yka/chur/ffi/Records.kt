@@ -166,6 +166,21 @@ class PreparedShare(
     val grantOperation: ByteArray,
 )
 
+/** One current recipient grant and its authenticated outer operation. */
+class PreparedGrant(
+    val grant: ByteArray,
+    val operation: ByteArray,
+)
+
+/** One bounded, resumable forward-only recipient revocation batch. */
+class PreparedShareRevocation(
+    val membership: ByteArray,
+    val membershipOperation: ByteArray,
+    val rotationOperations: List<ByteArray>,
+    val grants: List<PreparedGrant>,
+    val rotationComplete: Boolean,
+)
+
 /** Public identity evidence for one issuer of sharing records. */
 class SharingIssuerEvidence(
     val membership: List<ByteArray>,
@@ -219,6 +234,35 @@ fun decodePreparedShare(bytes: ByteArray, length: Int): PreparedShare {
     )
     reader.requireExhausted()
     return share
+}
+
+/** Decodes the prepared recipient revocation record of §6.12. */
+fun decodePreparedShareRevocation(bytes: ByteArray, length: Int): PreparedShareRevocation {
+    val reader = RecordReader(bytes, length)
+    if (reader.short() != 1) {
+        throw ChurFailure(ChurStatus.NON_CANONICAL_ENCODING, "the prepared revocation version")
+    }
+    val membership = reader.bounded()
+    val membershipOperation = reader.bounded()
+    val rotationCount = reader.int()
+    if (rotationCount !in 0..SHARING_RECORDS_MAX) {
+        throw ChurFailure(ChurStatus.NON_CANONICAL_ENCODING, "the rotation operation count")
+    }
+    val rotationOperations = List(rotationCount) { reader.bounded() }
+    val grantCount = reader.int()
+    if (grantCount !in 0..SHARING_RECORDS_MAX) {
+        throw ChurFailure(ChurStatus.NON_CANONICAL_ENCODING, "the current grant count")
+    }
+    val grants = List(grantCount) { PreparedGrant(reader.bounded(), reader.bounded()) }
+    val record = PreparedShareRevocation(
+        membership = membership,
+        membershipOperation = membershipOperation,
+        rotationOperations = rotationOperations,
+        grants = grants,
+        rotationComplete = reader.flag(),
+    )
+    reader.requireExhausted()
+    return record
 }
 
 /** Encodes the bounded share acceptance bundle of §6.11. */

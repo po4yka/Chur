@@ -114,7 +114,7 @@ class AbiGateTest {
             releaseApplication = true,
         )
         assertIs<GateResult.Compatible>(result)
-        assertEquals(0x7fuL, result.capabilities)
+        assertEquals(0xffuL, result.capabilities)
     }
 
     @Test

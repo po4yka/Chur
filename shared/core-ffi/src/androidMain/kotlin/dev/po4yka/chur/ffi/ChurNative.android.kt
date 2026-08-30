@@ -57,6 +57,9 @@ internal actual object ChurNative {
     actual fun sharingAccept(session: Long, bundle: ChurBuffer, length: Int): Int =
         ChurJni.sharingAccept(session, bundle.buffer, length)
 
+    actual fun sharingRevoke(session: Long, collectionId: ByteArray, recipientVaultId: ByteArray, recipientDeviceId: ByteArray, acceptedAtMs: Long, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.sharingRevoke(session, collectionId, recipientVaultId, recipientDeviceId, acceptedAtMs, destination.buffer, outWritten)
+
     actual fun syncStage(runtime: Long, vaultId: ByteArray, kind: Int, stagedAtMs: Long, record: ChurBuffer, length: Int): Int =
         ChurJni.syncStage(runtime, vaultId, kind, stagedAtMs, record.buffer, length)
 

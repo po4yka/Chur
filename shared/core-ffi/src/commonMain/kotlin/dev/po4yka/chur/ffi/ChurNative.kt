@@ -41,6 +41,7 @@ internal expect object ChurNative {
     fun sharingIdentity(session: Long, destination: ChurBuffer, outWritten: IntArray): Int
     fun sharingPrepare(session: Long, collectionId: ByteArray, recipientEnrollment: ByteArray, permissions: Int, fingerprintVerified: Boolean, destination: ChurBuffer, outWritten: IntArray): Int
     fun sharingAccept(session: Long, bundle: ChurBuffer, length: Int): Int
+    fun sharingRevoke(session: Long, collectionId: ByteArray, recipientVaultId: ByteArray, recipientDeviceId: ByteArray, acceptedAtMs: Long, destination: ChurBuffer, outWritten: IntArray): Int
     fun syncStage(runtime: Long, vaultId: ByteArray, kind: Int, stagedAtMs: Long, record: ChurBuffer, length: Int): Int
     fun syncProcess(session: Long, nowMs: Long, outCounts: LongArray, outStatus: IntArray): Int
     fun catalogQuery(session: Long, scope: Int, sort: Int, kinds: Int, limit: Int, scopeId: ByteArray, cursor: ByteArray?, terms: ByteArray?, destination: ChurBuffer, outWritten: IntArray): Int
