@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. v1 ships 1.7: §6.5 through §6.11 each added one minor surface. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
+- native API version is the (major, minor) pair. v1 ships 1.8: §6.5 through §6.12 each added one minor surface. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -502,6 +502,35 @@ grant_outer_operation:bytes<u32>
 ```
 
 There are at most 257 issuers and 4096 records in each counted list. Membership records are canonical `EnrollmentRecordV1` or `RevocationRecordV1`; every other record has its normative Phase 4 encoding. Counts, lengths, trailing bytes, gaps, causal predecessors, signatures, recipient bindings, selectors, payload pairs, epochs, permissions, and replay conflicts fail closed. Exact replay succeeds without advancing the catalog generation.
+
+### 6.12 Share revocation, ABI 1.8
+
+`chur_sharing_revoke` signs a recipient revocation, advances the collection epoch, eagerly rewraps active object keys, and issues current HPKE grants only to the remaining recipients. Revocation is forward-only: a removed recipient can retain old keys or plaintext. Private keys stay inside Rust.
+
+```c
+chur_status_t chur_sharing_revoke(chur_handle_t session,
+                                  const uint8_t collection_id[16],
+                                  const uint8_t recipient_vault_id[16],
+                                  const uint8_t recipient_device_id[16],
+                                  uint64_t accepted_at_ms,
+                                  uint8_t *destination, size_t capacity,
+                                  size_t *bytes_written);
+```
+
+The caller-owned output is at most 16 MiB and contains big-endian fields in this order:
+
+```text
+version:u16 = 1
+revocation_membership:bytes<u32>
+revocation_outer_operation:bytes<u32>
+rotation_operation_count:u32
+rotation_operations:rotation_operation_count * bytes<u32>
+grant_count:u32
+grants:grant_count * (grant:bytes<u32>, outer_operation:bytes<u32>)
+rotation_complete:u8
+```
+
+Each counted list has at most 4096 records. One call authors at most 4096 rotation operations. If more rewrap work remains, it returns `rotation_complete = 0` and no grants; the caller uploads that batch and calls the function again. Current grants appear only with `rotation_complete = 1`. The flag is exactly `0` or `1`, and an exact retry creates no new record. The destination capacity must cover the 16 MiB response bound so buffer validation happens before durable state changes. A smaller buffer receives no partial record, sets `bytes_written` to zero, and returns `RESOURCE_LIMIT_EXCEEDED`.
 
 ## 7. Buffer ownership
 

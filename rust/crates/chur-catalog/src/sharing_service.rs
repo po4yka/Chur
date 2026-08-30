@@ -321,6 +321,10 @@ pub fn prepare_share(
 
 /// Revokes one recipient, rotates the collection, eagerly rewraps every active
 /// object key, and issues current grants to all remaining recipients.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the request names the source, target recipient, time, and batch bound"
+)]
 pub fn prepare_share_revocation(
     db: &mut CatalogDb,
     root: &Key,
@@ -329,7 +333,13 @@ pub fn prepare_share_revocation(
     recipient_vault_id: Id,
     recipient_device_id: Id,
     accepted_at_ms: u64,
+    rotation_operation_limit: usize,
 ) -> Result<PreparedShareRevocation> {
+    ensure!(
+        rotation_operation_limit != 0,
+        InvalidInput,
+        "the revocation rotation batch limit is zero"
+    );
     let source_membership = sync_membership::load(db)?.ok_or_else(|| {
         Error::new(
             ChurStatus::RecoveryRequired,
@@ -486,7 +496,7 @@ pub fn prepare_share_revocation(
     let current_key =
         sync_keys::collection_key(db, root, source_vault_id, collection_id, target_epoch)?;
     let current_domain = KeyDomain::collection(&current_key, &collection_id, target_epoch)?;
-    loop {
+    while rotation_operations.len() < rotation_operation_limit {
         let rotation =
             sync_rotation::load(db, source_vault_id, collection_id, &source_membership, root)?;
         let Some(object_id) = rotation.next_missing_object().copied() else {
@@ -541,68 +551,71 @@ pub fn prepare_share_revocation(
         )?);
     }
 
-    let recipients = sharing_state
-        .active_members()
-        .map(|(vault_id, device_id, member)| {
-            (
-                *vault_id,
-                *device_id,
-                *member.hpke_public_key(),
-                member.permissions(),
-                member.membership_generation(),
-            )
-        })
-        .collect::<Vec<_>>();
-    let existing_grants = sharing::load_grants(db, &collection_id)?;
-    let mut grants = Vec::with_capacity(recipients.len());
-    for (vault_id, device_id, hpke_key, permissions, generation) in recipients {
-        if let Some(grant) = existing_grants.iter().find(|grant| {
-            grant.recipient_identity_vault_id() == &vault_id
-                && grant.recipient_device_id() == &device_id
-                && grant.collection_epoch() == target_epoch
-                && grant.collection_membership_generation() == generation
-                && grant.permissions() == permissions
-        }) {
-            grants.push((
-                grant.clone(),
-                operation_for(db, grant.sender_device_id(), grant.created_sequence())?,
-            ));
-            continue;
-        }
-        let sequence = next_sequence(&log, &source_device_id)?;
-        let grant_id = random::id()?;
-        let grant = CollectionGrant::seal(
-            grant_id,
-            source_vault_id,
-            collection_id,
-            target_epoch,
-            generation,
-            vault_id,
-            device_id,
-            &hpke_key,
-            source_device_id,
-            permissions,
-            source_membership.generation(),
-            sequence,
-            &current_key,
-            identity.signing_key(),
-        )?;
-        let operation = sync_receive::author_sharing_operation(
-            db,
-            &mut log,
-            &source_membership,
-            &mut sharing_state,
-            &current_domain,
-            grant_id,
-            source_device_id,
-            identity.signing_key(),
-            PayloadBody::IssueCollectionGrant(grant.clone()),
-        )?;
-        grants.push((grant, operation));
-    }
     let rotation_complete =
         sync_rotation::load(db, source_vault_id, collection_id, &source_membership, root)?
             .is_complete();
+    let mut grants = Vec::new();
+    if rotation_complete {
+        let recipients = sharing_state
+            .active_members()
+            .map(|(vault_id, device_id, member)| {
+                (
+                    *vault_id,
+                    *device_id,
+                    *member.hpke_public_key(),
+                    member.permissions(),
+                    member.membership_generation(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let existing_grants = sharing::load_grants(db, &collection_id)?;
+        grants.reserve(recipients.len());
+        for (vault_id, device_id, hpke_key, permissions, generation) in recipients {
+            if let Some(grant) = existing_grants.iter().find(|grant| {
+                grant.recipient_identity_vault_id() == &vault_id
+                    && grant.recipient_device_id() == &device_id
+                    && grant.collection_epoch() == target_epoch
+                    && grant.collection_membership_generation() == generation
+                    && grant.permissions() == permissions
+            }) {
+                grants.push((
+                    grant.clone(),
+                    operation_for(db, grant.sender_device_id(), grant.created_sequence())?,
+                ));
+                continue;
+            }
+            let sequence = next_sequence(&log, &source_device_id)?;
+            let grant_id = random::id()?;
+            let grant = CollectionGrant::seal(
+                grant_id,
+                source_vault_id,
+                collection_id,
+                target_epoch,
+                generation,
+                vault_id,
+                device_id,
+                &hpke_key,
+                source_device_id,
+                permissions,
+                source_membership.generation(),
+                sequence,
+                &current_key,
+                identity.signing_key(),
+            )?;
+            let operation = sync_receive::author_sharing_operation(
+                db,
+                &mut log,
+                &source_membership,
+                &mut sharing_state,
+                &current_domain,
+                grant_id,
+                source_device_id,
+                identity.signing_key(),
+                PayloadBody::IssueCollectionGrant(grant.clone()),
+            )?;
+            grants.push((grant, operation));
+        }
+    }
     Ok(PreparedShareRevocation {
         membership,
         membership_operation,
@@ -1305,13 +1318,28 @@ mod tests {
             recipient_vault,
             recipient_device,
             1_000,
+            1,
         )
         .expect("revoke share");
         assert!(revoked.membership().action() == CollectionMembershipAction::Revoke);
-        assert!(revoked.rotation_complete());
-        assert_eq!(revoked.rotation_operations().len(), 2);
-        assert_eq!(revoked.grants().len(), 1);
-        let remaining_grant = revoked.grants()[0].0.clone();
+        assert!(!revoked.rotation_complete());
+        assert_eq!(revoked.rotation_operations().len(), 1);
+        assert!(revoked.grants().is_empty());
+        let continued = prepare_share_revocation(
+            &mut db,
+            &root,
+            source_vault,
+            collection_id,
+            recipient_vault,
+            recipient_device,
+            1_500,
+            4_096,
+        )
+        .expect("continue revocation");
+        assert!(continued.rotation_complete());
+        assert_eq!(continued.rotation_operations().len(), 1);
+        assert_eq!(continued.grants().len(), 1);
+        let remaining_grant = continued.grants()[0].0.clone();
         assert_eq!(remaining_grant.recipient_identity_vault_id(), &second_vault);
         assert_eq!(remaining_grant.collection_epoch(), 2);
         let rotated_key = remaining_grant
@@ -1337,6 +1365,7 @@ mod tests {
             recipient_vault,
             recipient_device,
             2_000,
+            4_096,
         )
         .expect("replay revocation");
         assert_eq!(

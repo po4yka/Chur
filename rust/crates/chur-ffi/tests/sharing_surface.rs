@@ -5,11 +5,13 @@
 
 use chur_ffi::api::{chur_runtime_close, chur_runtime_open, chur_session_close, chur_vault_unlock};
 use chur_ffi::records::{ChurRuntimeConfigV1, ChurUnlockRequestV1};
-use chur_ffi::sharing::{chur_sharing_accept, chur_sharing_identity, chur_sharing_prepare};
+use chur_ffi::sharing::{
+    chur_sharing_accept, chur_sharing_identity, chur_sharing_prepare, chur_sharing_revoke,
+};
 use chur_format::codec::{Reader, Writer};
 use chur_format::envelope::CollectionKeyEnvelope;
 use chur_sync_protocol::{
-    collection_membership::CollectionMembershipRecord,
+    collection_membership::{CollectionMembershipAction, CollectionMembershipRecord},
     grant::{CollectionGrant, PermissionProfile},
     identity::fingerprint,
     membership::EnrollmentRecord,
@@ -291,6 +293,69 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
         0
     );
     assert_eq!(&share_replay[..share_replay_written], share.as_slice());
+
+    let mut revoke_short = [0xa5];
+    let mut revoke_written = usize::MAX;
+    assert_eq!(
+        unsafe {
+            chur_sharing_revoke(
+                session,
+                collection_id.as_bytes().as_ptr(),
+                recipient_vault_id.as_bytes().as_ptr(),
+                recipient_device_id.as_bytes().as_ptr(),
+                1_000,
+                revoke_short.as_mut_ptr(),
+                revoke_short.len(),
+                &mut revoke_written,
+            )
+        },
+        chur_core::ChurStatus::ResourceLimitExceeded.as_i32()
+    );
+    assert_eq!(revoke_written, 0);
+    assert_eq!(revoke_short, [0xa5]);
+
+    let mut revoke = vec![0u8; 16_777_216];
+    assert_eq!(
+        unsafe {
+            chur_sharing_revoke(
+                session,
+                collection_id.as_bytes().as_ptr(),
+                recipient_vault_id.as_bytes().as_ptr(),
+                recipient_device_id.as_bytes().as_ptr(),
+                1_000,
+                revoke.as_mut_ptr(),
+                revoke.len(),
+                &mut revoke_written,
+            )
+        },
+        0
+    );
+    revoke.truncate(revoke_written);
+    let mut revoke_reader = Reader::new(&revoke, chur_core::ChurStatus::NonCanonicalEncoding);
+    assert_eq!(revoke_reader.u16().expect("revoke version"), 1);
+    let revoked_membership = CollectionMembershipRecord::decode(
+        revoke_reader
+            .variable(CollectionMembershipRecord::LEN as u32)
+            .expect("revoked membership"),
+    )
+    .expect("valid revoked membership");
+    assert!(revoked_membership.action() == CollectionMembershipAction::Revoke);
+    Operation::decode(
+        revoke_reader
+            .variable(16_777_216)
+            .expect("revoked membership operation"),
+    )
+    .expect("valid revoked membership operation");
+    assert_eq!(revoke_reader.u32().expect("rotation operation count"), 1);
+    Operation::decode(
+        revoke_reader
+            .variable(16_777_216)
+            .expect("rotation operation"),
+    )
+    .expect("valid rotation operation");
+    assert_eq!(revoke_reader.u32().expect("grant count"), 0);
+    assert_eq!(revoke_reader.u8().expect("rotation complete"), 1);
+    revoke_reader.finish().expect("complete revocation record");
 
     let mut replay = vec![0u8; 4096];
     let mut replay_written = 0;

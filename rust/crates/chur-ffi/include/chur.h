@@ -13,9 +13,10 @@
  * 6.5, the Android Keystore surface of section 6.6, and the portable backup
  * surface of section 6.7, the sync inbox surface of section 6.8, and the
  * sharing identity surface of section 6.9, and the share preparation surface
- * of section 6.10, and the share acceptance surface of section 6.11. Adding an
- * export raises the minor ABI version;
- * changing or removing one raises the major. The library reports 1.7.
+ * of section 6.10, the share acceptance surface of section 6.11, and the
+ * recipient revocation surface of section 6.12. Adding an export raises the
+ * minor ABI version; changing or removing one raises the major. The library
+ * reports 1.8.
  */
 
 #ifndef CHUR_H
@@ -367,6 +368,15 @@ chur_status_t chur_sharing_prepare(chur_handle_t session,
 chur_status_t chur_sharing_accept(chur_handle_t session,
                                   const uint8_t *bundle,
                                   uint32_t bundle_length);
+
+/* Forward-only recipient revocation and key rotation, section 6.12. */
+chur_status_t chur_sharing_revoke(chur_handle_t session,
+                                  const uint8_t collection_id[16],
+                                  const uint8_t recipient_vault_id[16],
+                                  const uint8_t recipient_device_id[16],
+                                  uint64_t accepted_at_ms,
+                                  uint8_t *destination, size_t capacity,
+                                  size_t *bytes_written);
 
 /* -------------------------------------------------------------------------
  * Catalog queries

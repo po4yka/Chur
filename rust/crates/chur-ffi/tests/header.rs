@@ -354,6 +354,8 @@ fn every_declared_function_is_exported() {
         "chur_sharing_prepare",
         // §6.11, the share acceptance surface added at ABI 1.7.
         "chur_sharing_accept",
+        // §6.12, the recipient revocation surface added at ABI 1.8.
+        "chur_sharing_revoke",
         // §6.6, the Android Keystore surface added at ABI 1.2.
         "chur_vault_keystore_begin",
         "chur_vault_keystore_commit",
@@ -369,7 +371,7 @@ fn every_declared_function_is_exported() {
 
     // Calling each one proves the list above is not a stale copy.
     assert_eq!(chur_ffi::chur_abi_version_major(), 1);
-    assert_eq!(chur_ffi::chur_abi_version_minor(), 7);
+    assert_eq!(chur_ffi::chur_abi_version_minor(), 8);
     assert_eq!(
         chur_ffi::chur_capabilities(),
         chur_ffi::CHUR_CAP_DECOY_VAULT

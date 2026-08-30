@@ -188,6 +188,112 @@ pub unsafe extern "C" fn chur_sharing_prepare(
     })
 }
 
+/// Revokes one recipient and prepares the forward-only collection rotation.
+///
+/// # Safety
+///
+/// Each identifier points to 16 readable bytes. `destination` covers
+/// `capacity` writable bytes and `bytes_written` points to one writable,
+/// aligned `size_t` for this call.
+#[unsafe(no_mangle)]
+#[expect(
+    unsafe_code,
+    reason = "FFI_CONTRACT.md section 6.12 fixes this exported symbol"
+)]
+pub unsafe extern "C" fn chur_sharing_revoke(
+    session: Handle,
+    collection_id: *const u8,
+    recipient_vault_id: *const u8,
+    recipient_device_id: *const u8,
+    accepted_at_ms: u64,
+    destination: *mut u8,
+    capacity: usize,
+    bytes_written: *mut usize,
+) -> Status {
+    guard_status(|| {
+        // SAFETY: the caller guarantees the writable out-parameter above.
+        unsafe { write_out(bytes_written, 0usize)? };
+        ensure!(
+            capacity >= BUNDLE_BYTES_MAX as usize,
+            ResourceLimitExceeded,
+            "the revocation destination must cover the ABI response bound"
+        );
+        // SAFETY: the caller guarantees the destination range above.
+        let buffer = unsafe { borrow_bytes_mut(destination, capacity)? };
+        // SAFETY: the caller guarantees the fixed input ranges above.
+        let collection_id = Id::from_slice(unsafe { borrow_bytes(collection_id, 16)? })?;
+        // SAFETY: the caller guarantees the fixed input ranges above.
+        let recipient_vault_id = Id::from_slice(unsafe { borrow_bytes(recipient_vault_id, 16)? })?;
+        // SAFETY: the caller guarantees the fixed input ranges above.
+        let recipient_device_id =
+            Id::from_slice(unsafe { borrow_bytes(recipient_device_id, 16)? })?;
+        let entry = registry::get(session, Kind::Session)?;
+        let Entry::Session { session, .. } = entry.as_ref() else {
+            return Err(Error::new(
+                ChurStatus::InvalidInput,
+                "the handle is of another type",
+            ));
+        };
+        let encoded = {
+            let mut session = registry::lock(session);
+            let source_vault_id = session.vault_id();
+            let root = Key::new(*session.root_secret().expose());
+            let prepared = chur_catalog::sharing_service::prepare_share_revocation(
+                session.catalog()?,
+                &root,
+                source_vault_id,
+                collection_id,
+                recipient_vault_id,
+                recipient_device_id,
+                accepted_at_ms,
+                BUNDLE_RECORDS_MAX,
+            )?;
+            ensure!(
+                prepared.rotation_operations().len() <= BUNDLE_RECORDS_MAX
+                    && prepared.grants().len() <= BUNDLE_RECORDS_MAX,
+                ResourceLimitExceeded,
+                "the prepared revocation exceeds the ABI record limit"
+            );
+            let rotation_count =
+                u32::try_from(prepared.rotation_operations().len()).map_err(|_| {
+                    Error::new(
+                        ChurStatus::ResourceLimitExceeded,
+                        "the rotation operation count exceeds u32",
+                    )
+                })?;
+            let grant_count = u32::try_from(prepared.grants().len()).map_err(|_| {
+                Error::new(
+                    ChurStatus::ResourceLimitExceeded,
+                    "the current grant count exceeds u32",
+                )
+            })?;
+            let mut writer = Writer::new();
+            writer.u16(RECORD_VERSION_V1);
+            writer.variable(&prepared.membership().encode())?;
+            writer.variable(&prepared.membership_operation().encode())?;
+            writer.u32(rotation_count);
+            for operation in prepared.rotation_operations() {
+                writer.variable(&operation.encode())?;
+            }
+            writer.u32(grant_count);
+            for (grant, operation) in prepared.grants() {
+                writer.variable(&grant.encode())?;
+                writer.variable(&operation.encode())?;
+            }
+            writer.u8(u8::from(prepared.rotation_complete()));
+            writer.finish()
+        };
+        ensure!(
+            encoded.len() <= BUNDLE_BYTES_MAX as usize,
+            ResourceLimitExceeded,
+            "the prepared revocation exceeds the ABI byte limit"
+        );
+        buffer[..encoded.len()].copy_from_slice(&encoded);
+        // SAFETY: the caller guarantees the writable out-parameter above.
+        unsafe { write_out(bytes_written, encoded.len()) }
+    })
+}
+
 /// Authenticates and installs one recipient share bundle.
 ///
 /// # Safety
