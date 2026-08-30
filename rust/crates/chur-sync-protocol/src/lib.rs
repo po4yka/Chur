@@ -17,6 +17,7 @@
 
 pub mod checkpoint;
 pub mod collection_membership;
+pub mod collection_operation;
 pub mod convergence;
 pub mod deletion;
 pub mod grant;

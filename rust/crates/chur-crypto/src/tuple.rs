@@ -88,6 +88,14 @@ pub mod tag {
     pub const SHARING_COLLECTION_MEMBERSHIP: &[u8] = b"CHUR\0SHARING\0COLLECTION-MEMBERSHIP\0V1";
     /// Commits the ordered collection membership chain.
     pub const SHARING_MEMBERSHIP_CHAIN: &[u8] = b"CHUR\0SHARING\0MEMBERSHIP-CHAIN\0V1";
+    /// Shared-collection operation payload AAD.
+    pub const SHARING_COLLECTION_OPERATION_AAD: &[u8] =
+        b"CHUR\0SHARING\0COLLECTION-OPERATION-AAD\0V1";
+    /// Shared-collection operation signature input.
+    pub const SHARING_COLLECTION_OPERATION: &[u8] = b"CHUR\0SHARING\0COLLECTION-OPERATION\0V1";
+    /// Shared-collection operation chain digest.
+    pub const SHARING_COLLECTION_OPERATION_CHAIN: &[u8] =
+        b"CHUR\0SHARING\0COLLECTION-OPERATION-CHAIN\0V1";
     /// Portable device-identity envelope AAD.
     pub const DEVICE_IDENTITY_ENVELOPE: &[u8] = b"CHUR\0IDENTITY\0ENVELOPE\0V1";
 
@@ -127,6 +135,9 @@ pub mod tag {
         SHARING_COLLECTION_GRANT,
         SHARING_COLLECTION_MEMBERSHIP,
         SHARING_MEMBERSHIP_CHAIN,
+        SHARING_COLLECTION_OPERATION_AAD,
+        SHARING_COLLECTION_OPERATION,
+        SHARING_COLLECTION_OPERATION_CHAIN,
         DEVICE_IDENTITY_ENVELOPE,
     ];
 }
