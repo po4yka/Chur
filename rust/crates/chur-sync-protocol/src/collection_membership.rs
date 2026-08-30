@@ -7,6 +7,7 @@ use chur_core::{ChurStatus, Error, Id, Result, ensure};
 use chur_crypto::{Commitment, commit, tuple::tag};
 use chur_format::codec::{Reader, Writer};
 
+use crate::collection_operation::CollectionOperation;
 use crate::grant::{CollectionGrant, PermissionProfile, hpke_key_id};
 use crate::operation::{DeviceSigningKey, Operation, PROTOCOL_VERSION_V1, verify_ed25519};
 use crate::payload::{OperationPayload, PayloadBody};
@@ -579,6 +580,63 @@ impl CollectionMembershipState {
                 && (member.permissions as u8 & required as u8) == required as u8,
             AuthenticationFailed,
             "shared operation issuer lacks the required permission"
+        );
+        Ok(())
+    }
+
+    /// Authorizes one content operation from a collection-scoped stream.
+    pub fn authorize_collection_operation(
+        &self,
+        operation: &CollectionOperation,
+        payload: &OperationPayload,
+        issuer_membership: &MembershipState,
+    ) -> Result<()> {
+        payload.validate_for_collection_operation(&self.collection_id, self.collection_epoch)?;
+        ensure!(
+            issuer_membership.vault_id() == operation.issuer_identity_vault_id(),
+            AuthenticationFailed,
+            "collection operation issuer membership belongs to another vault"
+        );
+        let issuer = issuer_membership
+            .device(operation.issuer_device_id())
+            .ok_or_else(|| {
+                Error::new(
+                    ChurStatus::AuthenticationFailed,
+                    "collection operation issuer is unknown",
+                )
+            })?;
+        ensure!(
+            issuer_membership.is_active(operation.issuer_device_id()),
+            AuthenticationFailed,
+            "collection operation issuer is revoked"
+        );
+        operation.verify_signature(issuer.signing_public_key())?;
+        if operation.issuer_identity_vault_id() == &self.source_vault_id {
+            return Ok(());
+        }
+        ensure!(
+            !matches!(payload.body(), PayloadBody::RewrapObjectKey { .. }),
+            AuthenticationFailed,
+            "object-key rewrap requires a source-vault device"
+        );
+        let member = self
+            .member(
+                operation.issuer_identity_vault_id(),
+                operation.issuer_device_id(),
+            )
+            .ok_or_else(|| {
+                Error::new(
+                    ChurStatus::AuthenticationFailed,
+                    "collection operation issuer is not a collection member",
+                )
+            })?;
+        ensure!(
+            member.active
+                && member.signing_public_key == *issuer.signing_public_key()
+                && (member.permissions as u8 & PermissionProfile::Contribute as u8)
+                    == PermissionProfile::Contribute as u8,
+            AuthenticationFailed,
+            "collection operation issuer lacks contribute permission"
         );
         Ok(())
     }
