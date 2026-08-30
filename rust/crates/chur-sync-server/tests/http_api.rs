@@ -8,8 +8,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use chur_core::Id;
+use chur_crypto::secret::Key;
 use chur_sync_protocol::checkpoint::{Checkpoint, CheckpointHead};
+use chur_sync_protocol::collection_membership::{
+    CollectionMembershipAction, CollectionMembershipRecord,
+};
 use chur_sync_protocol::deletion::ServerDeletionAuthorization;
+use chur_sync_protocol::grant::{CollectionGrant, PermissionProfile};
+use chur_sync_protocol::identity::DeviceIdentity;
 use chur_sync_protocol::membership::{EnrollmentRecord, RevocationRecord};
 use chur_sync_protocol::operation::{DeviceSigningKey, Operation};
 use chur_sync_server::ReferenceServer;
@@ -400,6 +406,201 @@ async fn bootstrap_installs_transport_auth_and_relays_canonical_records() {
         .await
         .expect("deleted object response");
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn sharing_endpoints_authenticate_issuers_and_recipient_inboxes() {
+    let source_vault = id(30);
+    let source_device = id(31);
+    let source_key = DeviceSigningKey::from_seed([32; 32]);
+    let source_enrollment = EnrollmentRecord::initial(
+        source_vault,
+        source_device,
+        source_key.verifying_key(),
+        [33; 32],
+    )
+    .expect("source enrollment")
+    .sign(&source_key);
+    let source_initial = operation(source_vault, source_device, id(34), 1, [0; 32], &source_key);
+    let source_token = [35; 32];
+    let recipient_vault = id(36);
+    let recipient_device = id(37);
+    let recipient = DeviceIdentity::from_seeds([38; 32], [39; 32]);
+    let recipient_enrollment = EnrollmentRecord::initial(
+        recipient_vault,
+        recipient_device,
+        recipient.signing_public_key(),
+        recipient.hpke_public_key(),
+    )
+    .expect("recipient enrollment")
+    .sign(recipient.signing_key());
+    let recipient_initial = operation(
+        recipient_vault,
+        recipient_device,
+        id(40),
+        1,
+        [0; 32],
+        recipient.signing_key(),
+    );
+    let recipient_token = [41; 32];
+    let app = chur_sync_server::http::router(server(), BOOTSTRAP_TOKEN);
+    bootstrap_vault(
+        &app,
+        source_vault,
+        &source_token,
+        &source_enrollment,
+        &source_initial,
+    )
+    .await;
+    bootstrap_vault(
+        &app,
+        recipient_vault,
+        &recipient_token,
+        &recipient_enrollment,
+        &recipient_initial,
+    )
+    .await;
+
+    let collection_id = id(42);
+    let membership = CollectionMembershipRecord::new(
+        source_vault,
+        collection_id,
+        1,
+        [0; 32],
+        CollectionMembershipAction::Upsert(PermissionProfile::Read),
+        recipient_vault,
+        recipient_device,
+        recipient.signing_public_key(),
+        recipient.hpke_public_key(),
+        1,
+        source_vault,
+        source_device,
+        1,
+        2,
+    )
+    .expect("membership")
+    .sign(&source_key);
+    let membership_outer = operation(
+        source_vault,
+        source_device,
+        id(43),
+        2,
+        source_initial.digest(),
+        &source_key,
+    );
+    let membership_uri = format!(
+        "/v1/vaults/{}/sharing/memberships",
+        hex::encode(source_vault.as_bytes())
+    );
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &membership_uri,
+            pair_body(&membership.encode(), &membership_outer.encode()),
+            Some(("Bearer", &recipient_token)),
+        ))
+        .await
+        .expect("wrong issuer response");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &membership_uri,
+            pair_body(&membership.encode(), &membership_outer.encode()),
+            Some(("Bearer", &source_token)),
+        ))
+        .await
+        .expect("membership response");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let grant = CollectionGrant::seal(
+        id(44),
+        source_vault,
+        collection_id,
+        1,
+        1,
+        recipient_vault,
+        recipient_device,
+        &recipient.hpke_public_key(),
+        source_device,
+        PermissionProfile::Read,
+        1,
+        3,
+        &Key::new([45; 32]),
+        &source_key,
+    )
+    .expect("grant");
+    let grant_outer = operation(
+        source_vault,
+        source_device,
+        id(44),
+        3,
+        membership_outer.digest(),
+        &source_key,
+    );
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &format!(
+                "/v1/vaults/{}/sharing/grants",
+                hex::encode(source_vault.as_bytes())
+            ),
+            pair_body(&grant.encode(), &grant_outer.encode()),
+            Some(("Bearer", &source_token)),
+        ))
+        .await
+        .expect("grant response");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    for (path, expected) in [
+        ("memberships", membership.encode()),
+        ("grants", grant.encode()),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(request(
+                Method::GET,
+                &format!(
+                    "/v1/vaults/{}/sharing/{path}",
+                    hex::encode(recipient_vault.as_bytes())
+                ),
+                Vec::new(),
+                Some(("Bearer", &recipient_token)),
+            ))
+            .await
+            .expect("inbox response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("inbox body")
+                .as_ref(),
+            framed(&[expected])
+        );
+    }
+}
+
+async fn bootstrap_vault(
+    app: &axum::Router,
+    vault: Id,
+    token: &[u8; 32],
+    enrollment: &EnrollmentRecord,
+    operation: &Operation,
+) {
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &format!("/v1/vaults/{}/bootstrap", hex::encode(vault.as_bytes())),
+            paired_body(token, &enrollment.encode(), &operation.encode()),
+            Some(("Bootstrap", &BOOTSTRAP_TOKEN)),
+        ))
+        .await
+        .expect("bootstrap response");
+    assert_eq!(response.status(), StatusCode::CREATED);
 }
 
 fn request(

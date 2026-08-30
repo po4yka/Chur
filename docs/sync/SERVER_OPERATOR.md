@@ -38,6 +38,10 @@ All identifiers in paths are 32 hexadecimal characters. All request and response
 | `POST /v1/vaults/{vault}/memberships/revoke` | revocation, outer operation | successor membership |
 | `POST /v1/vaults/{vault}/operations` | one canonical operation | stored operation |
 | `GET /v1/vaults/{vault}/operations/{device}?after={sequence}` | none | operation page |
+| `POST /v1/vaults/{vault}/sharing/memberships` | membership record, outer operation | stored collection membership |
+| `GET /v1/vaults/{vault}/sharing/memberships` | none | collection membership chains for the caller device |
+| `POST /v1/vaults/{vault}/sharing/grants` | collection grant, outer operation | stored recipient grant |
+| `GET /v1/vaults/{vault}/sharing/grants` | none | current grants for the caller device |
 | `POST /v1/vaults/{vault}/checkpoints` | one canonical checkpoint | stored checkpoint |
 | `GET /v1/vaults/{vault}/checkpoints` | none | latest checkpoint page |
 | `GET /v1/vaults/{vault}/checkpoints/{commitment}` | none | exact checkpoint |
@@ -49,6 +53,8 @@ All identifiers in paths are 32 hexadecimal characters. All request and response
 | `POST /v1/vaults/{vault}/deletions` | signed deletion authorization | deletion result |
 
 Bootstrap uses `Authorization: Bootstrap <CHUR_SYNC_BOOTSTRAP_TOKEN>`. Its body and enrollment body are `new_token:bytes[32] || first_length:u32be || first_record || outer_operation`. Revocation omits `new_token`. A record page is `count:u32be`, followed by `length:u32be || canonical_record` for each item. The response is bounded to 256 records and 16 MiB. An error body is one signed big-endian `ChurStatus` value.
+
+A sharing POST body is `record_length:u32be || signed_record || outer_operation`. The vault path and bearer token identify the issuer. A sharing GET uses the authenticated device from the bearer token. The membership response includes each visible chain through the caller's revocation record. The grant response includes only grants that match the caller's current membership generation and collection epoch.
 
 Upload and download checksums are 64 hexadecimal SHA-256 characters. Upload ranges are sequential and at most 16 MiB. An exact range replay is idempotent. Upload progress is `received:u64be || expected:u64be || complete:u8`. A signed deletion route does not accept a transport token as authority; it verifies `ServerDeletionAuthorizationV1` against current device membership.
 

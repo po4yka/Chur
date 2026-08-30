@@ -12,7 +12,9 @@ use axum::routing::{get, post};
 use chur_core::limits::sync as bounds;
 use chur_core::{ChurStatus, Error, Id, ensure};
 use chur_sync_protocol::checkpoint::Checkpoint;
+use chur_sync_protocol::collection_membership::CollectionMembershipRecord;
 use chur_sync_protocol::deletion::ServerDeletionAuthorization;
+use chur_sync_protocol::grant::CollectionGrant;
 use chur_sync_protocol::membership::{EnrollmentRecord, RevocationRecord};
 use chur_sync_protocol::operation::Operation;
 
@@ -40,6 +42,14 @@ pub fn router(server: ReferenceServer, bootstrap_token: [u8; 32]) -> Router {
         .route("/v1/vaults/{vault}/memberships/revoke", post(revoke))
         .route("/v1/vaults/{vault}/operations", post(operation))
         .route("/v1/vaults/{vault}/operations/{device}", get(operations))
+        .route(
+            "/v1/vaults/{vault}/sharing/memberships",
+            get(sharing_memberships).post(sharing_membership),
+        )
+        .route(
+            "/v1/vaults/{vault}/sharing/grants",
+            get(sharing_grants).post(sharing_grant),
+        )
         .route(
             "/v1/vaults/{vault}/checkpoints",
             get(checkpoints).post(checkpoint),
@@ -179,6 +189,74 @@ async fn operations(
     let server = lock(&state)?;
     authenticate(&server, vault, &headers)?;
     binary(records(server.operations_after(vault, device, after)?))
+}
+
+async fn sharing_membership(
+    State(state): State<AppState>,
+    Path(vault): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> HttpResult<StatusCode> {
+    let vault = id(&vault)?;
+    let (membership_bytes, operation_bytes) = pair(&body)?;
+    let membership = CollectionMembershipRecord::decode(membership_bytes)?;
+    let operation = Operation::decode(operation_bytes)?;
+    path_matches(
+        membership.issuer_identity_vault_id() == &vault && operation.vault_id() == &vault,
+        "sharing membership path does not match its records",
+    )?;
+    let mut server = lock(&state)?;
+    authenticate(&server, vault, &headers)?;
+    Ok(relay_status(
+        server.accept_collection_membership(&membership, &operation)?,
+    ))
+}
+
+async fn sharing_memberships(
+    State(state): State<AppState>,
+    Path(vault): Path<String>,
+    headers: HeaderMap,
+) -> HttpResult<Response> {
+    let vault = id(&vault)?;
+    let server = lock(&state)?;
+    let device = authenticate(&server, vault, &headers)?;
+    binary(records(
+        server.collection_memberships_for_recipient(vault, device)?,
+    ))
+}
+
+async fn sharing_grant(
+    State(state): State<AppState>,
+    Path(vault): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> HttpResult<StatusCode> {
+    let vault = id(&vault)?;
+    let (grant_bytes, operation_bytes) = pair(&body)?;
+    let grant = CollectionGrant::decode(grant_bytes)?;
+    let operation = Operation::decode(operation_bytes)?;
+    path_matches(
+        operation.vault_id() == &vault,
+        "sharing grant path does not match its operation",
+    )?;
+    let mut server = lock(&state)?;
+    authenticate(&server, vault, &headers)?;
+    Ok(relay_status(
+        server.accept_collection_grant(&grant, &operation)?,
+    ))
+}
+
+async fn sharing_grants(
+    State(state): State<AppState>,
+    Path(vault): Path<String>,
+    headers: HeaderMap,
+) -> HttpResult<Response> {
+    let vault = id(&vault)?;
+    let server = lock(&state)?;
+    let device = authenticate(&server, vault, &headers)?;
+    binary(records(
+        server.collection_grants_for_recipient(vault, device)?,
+    ))
 }
 
 async fn checkpoint(
