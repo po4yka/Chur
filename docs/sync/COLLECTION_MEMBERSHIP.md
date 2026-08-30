@@ -40,6 +40,8 @@ BLAKE3-256("CHUR\x00SHARING\x00MEMBERSHIP-CHAIN\x00V1" || complete_record)
 
 `UPSERT` adds a recipient device or changes its permission. It uses one canonical cumulative profile from [`COLLECTION_GRANTS.md`](COLLECTION_GRANTS.md) §6. Repeating the same recipient keys and permission at a later generation is non-canonical.
 
+One collection has at most 256 active recipient devices. A revoked historical entry does not count against this bound. The source vault still has the separate 32-active-device bound from [`DEVICE_IDENTITY.md`](DEVICE_IDENTITY.md).
+
 `REVOKE` names the exact keys of an active entry, uses permission byte zero, and advances `collection_epoch` by exactly one. The removed entry becomes historical verification state and cannot author later operations or membership changes.
 
 A permission downgrade that retains `READ` uses `UPSERT` at the current epoch. It changes operation authorization but cannot remove a collection key already delivered. Removing read access uses `REVOKE`, a new epoch, eager object-key rewrap, and grants to remaining devices.
