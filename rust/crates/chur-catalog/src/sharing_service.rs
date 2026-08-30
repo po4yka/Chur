@@ -1231,7 +1231,7 @@ mod tests {
     }
 
     #[test]
-    fn verified_share_is_hpke_openable_and_idempotent() {
+    fn multi_recipient_device_loss_rotates_forward_and_replays() {
         let source_vault = id(1);
         let collection_id = id(2);
         let root = Key::new([3; 32]);
@@ -1466,6 +1466,20 @@ mod tests {
             panic!("incomplete recipient evidence was accepted");
         };
         assert_eq!(error.status(), ChurStatus::SyncHeadRollback);
+        let second_primary_share = prepare_share_for_device(
+            &mut db,
+            &root,
+            source_vault,
+            collection_id,
+            IssuerEvidence {
+                membership: &recipient_records,
+                operations: &recipient_operations,
+            },
+            second_device,
+            PermissionProfile::Read,
+            true,
+        )
+        .expect("second primary share");
         let second_share = prepare_share_for_device(
             &mut db,
             &root,
@@ -1494,8 +1508,8 @@ mod tests {
             &root,
             source_vault,
             collection_id,
-            recipient_vault,
-            recipient_device,
+            second_vault,
+            peer_device,
             1_000,
             1,
         )
@@ -1509,21 +1523,35 @@ mod tests {
             &root,
             source_vault,
             collection_id,
-            recipient_vault,
-            recipient_device,
+            second_vault,
+            peer_device,
             1_500,
             4_096,
         )
         .expect("continue revocation");
         assert!(continued.rotation_complete());
         assert_eq!(continued.rotation_operations().len(), 1);
-        assert_eq!(continued.grants().len(), 1);
-        let remaining_grant = continued.grants()[0].0.clone();
-        assert_eq!(remaining_grant.recipient_identity_vault_id(), &second_vault);
-        assert_eq!(remaining_grant.collection_epoch(), 2);
-        let rotated_key = remaining_grant
-            .open_collection_key(&second_vault, &peer_device, &peer, source_key)
-            .expect("rotated key");
+        assert_eq!(continued.grants().len(), 2);
+        assert!(continued.grants().iter().all(|(grant, _)| {
+            grant.collection_epoch() == 2 && grant.recipient_device_id() != &peer_device
+        }));
+        let first_remaining = continued
+            .grants()
+            .iter()
+            .find(|(grant, _)| grant.recipient_device_id() == &recipient_device)
+            .expect("first recipient grant")
+            .0
+            .open_collection_key(&recipient_vault, &recipient_device, &recipient, source_key)
+            .expect("first recipient rotated key");
+        let second_remaining = continued
+            .grants()
+            .iter()
+            .find(|(grant, _)| grant.recipient_device_id() == &second_device)
+            .expect("second recipient primary grant")
+            .0
+            .open_collection_key(&second_vault, &second_device, &second, source_key)
+            .expect("second recipient rotated key");
+        assert_eq!(first_remaining.expose(), second_remaining.expose());
         let rotation =
             sync_rotation::load(&db, source_vault, collection_id, &source_membership, &root)
                 .expect("rotation");
@@ -1531,7 +1559,7 @@ mod tests {
             rotation
                 .envelope(&object_id)
                 .expect("rewrapped object")
-                .open(&rotated_key)
+                .open(&first_remaining)
                 .expect("open rewrapped object")
                 .expose(),
             object_key.expose()
@@ -1541,8 +1569,8 @@ mod tests {
             &root,
             source_vault,
             collection_id,
-            recipient_vault,
-            recipient_device,
+            second_vault,
+            peer_device,
             2_000,
             4_096,
         )
@@ -1552,10 +1580,18 @@ mod tests {
             replayed_revocation.membership().encode()
         );
         assert!(replayed_revocation.rotation_operations().is_empty());
-        assert_eq!(replayed_revocation.grants().len(), 1);
+        assert_eq!(replayed_revocation.grants().len(), 2);
         assert_eq!(
-            remaining_grant.encode(),
-            replayed_revocation.grants()[0].0.encode()
+            continued
+                .grants()
+                .iter()
+                .map(|(grant, _)| grant.encode())
+                .collect::<Vec<_>>(),
+            replayed_revocation
+                .grants()
+                .iter()
+                .map(|(grant, _)| grant.encode())
+                .collect::<Vec<_>>()
         );
         let final_state = sharing::load(&db, &collection_id)
             .expect("sharing state")
@@ -1564,6 +1600,16 @@ mod tests {
         assert!(
             final_state
                 .validate_grant(first.grant(), &source_membership)
+                .is_err()
+        );
+        assert!(
+            final_state
+                .validate_grant(second_primary_share.grant(), &source_membership)
+                .is_err()
+        );
+        assert!(
+            final_state
+                .validate_grant(second_share.grant(), &source_membership)
                 .is_err()
         );
     }
