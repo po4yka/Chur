@@ -5,6 +5,7 @@ mod checkpoint;
 mod deletion;
 pub mod http;
 mod relay;
+mod sharing;
 
 pub use deletion::DeletionOutcome;
 pub use relay::RelayOutcome;
@@ -97,6 +98,29 @@ impl ReferenceServer {
                  record BLOB NOT NULL,
                  PRIMARY KEY(vault_id, membership_generation)
              );
+             CREATE TABLE IF NOT EXISTS collection_membership_records (
+                 collection_id BLOB NOT NULL CHECK(length(collection_id) = 16),
+                 membership_generation INTEGER NOT NULL CHECK(membership_generation > 0),
+                 issuer_vault_id BLOB NOT NULL CHECK(length(issuer_vault_id) = 16),
+                 issuer_signing_public_key BLOB NOT NULL CHECK(length(issuer_signing_public_key) = 32),
+                 recipient_vault_id BLOB NOT NULL CHECK(length(recipient_vault_id) = 16),
+                 recipient_device_id BLOB NOT NULL CHECK(length(recipient_device_id) = 16),
+                 record BLOB NOT NULL,
+                 PRIMARY KEY(collection_id, membership_generation)
+             );
+             CREATE INDEX IF NOT EXISTS collection_membership_recipient
+                 ON collection_membership_records(recipient_vault_id, recipient_device_id);
+             CREATE TABLE IF NOT EXISTS collection_grants (
+                 grant_id BLOB PRIMARY KEY CHECK(length(grant_id) = 16),
+                 collection_id BLOB NOT NULL CHECK(length(collection_id) = 16),
+                 collection_epoch INTEGER NOT NULL CHECK(collection_epoch > 0),
+                 issuer_vault_id BLOB NOT NULL CHECK(length(issuer_vault_id) = 16),
+                 recipient_vault_id BLOB NOT NULL CHECK(length(recipient_vault_id) = 16),
+                 recipient_device_id BLOB NOT NULL CHECK(length(recipient_device_id) = 16),
+                 record BLOB NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS collection_grant_recipient
+                 ON collection_grants(recipient_vault_id, recipient_device_id, collection_id);
              CREATE TABLE IF NOT EXISTS deletion_requests (
                  vault_id BLOB NOT NULL CHECK(length(vault_id) = 16),
                  request_id BLOB NOT NULL CHECK(length(request_id) = 16),
@@ -184,6 +208,8 @@ impl ReferenceServer {
                     COALESCE((SELECT SUM(expected_length) FROM object_transfers WHERE vault_id = ?1), 0)
                   + COALESCE((SELECT SUM(length(record)) FROM operations WHERE vault_id = ?1), 0)
                   + COALESCE((SELECT SUM(length(record)) FROM membership_records WHERE vault_id = ?1), 0)
+                  + COALESCE((SELECT SUM(length(record)) FROM collection_membership_records WHERE issuer_vault_id = ?1), 0)
+                  + COALESCE((SELECT SUM(length(record)) FROM collection_grants WHERE issuer_vault_id = ?1), 0)
                   + COALESCE((SELECT SUM(length(record)) FROM checkpoints WHERE vault_id = ?1), 0)",
                 params![vault_id.as_bytes().as_slice()],
                 |row| row.get(0),

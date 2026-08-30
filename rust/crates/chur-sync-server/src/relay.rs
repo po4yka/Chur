@@ -270,6 +270,8 @@ impl ReferenceServer {
                     COALESCE((SELECT SUM(expected_length) FROM object_transfers WHERE vault_id = ?1), 0)
                   + COALESCE((SELECT SUM(length(record)) FROM operations WHERE vault_id = ?1), 0)
                   + COALESCE((SELECT SUM(length(record)) FROM membership_records WHERE vault_id = ?1), 0)
+                  + COALESCE((SELECT SUM(length(record)) FROM collection_membership_records WHERE issuer_vault_id = ?1), 0)
+                  + COALESCE((SELECT SUM(length(record)) FROM collection_grants WHERE issuer_vault_id = ?1), 0)
                   + COALESCE((SELECT SUM(length(record)) FROM checkpoints WHERE vault_id = ?1), 0)",
                 params![vault_id.as_bytes().as_slice()],
                 |row| row.get(0),
@@ -291,7 +293,7 @@ impl ReferenceServer {
     }
 }
 
-fn validate_operation(
+pub(super) fn validate_operation(
     db: &Connection,
     operation: &Operation,
     membership: &MembershipState,
@@ -431,7 +433,7 @@ fn operation_digest_at(
     .map_err(|error| map_sqlite(error, "revocation point lookup failed"))
 }
 
-fn operation_is_exact(db: &Connection, operation: &Operation) -> Result<bool> {
+pub(super) fn operation_is_exact(db: &Connection, operation: &Operation) -> Result<bool> {
     let stored: Option<Vec<u8>> = db
         .query_row(
             "SELECT record FROM operations
@@ -451,7 +453,11 @@ fn operation_is_exact(db: &Connection, operation: &Operation) -> Result<bool> {
     Ok(stored.as_deref() == Some(operation.encode().as_slice()))
 }
 
-fn insert_operation(db: &Connection, operation: &Operation, outcome: RelayOutcome) -> Result<()> {
+pub(super) fn insert_operation(
+    db: &Connection,
+    operation: &Operation,
+    outcome: RelayOutcome,
+) -> Result<()> {
     if outcome == RelayOutcome::Duplicate {
         return Ok(());
     }
