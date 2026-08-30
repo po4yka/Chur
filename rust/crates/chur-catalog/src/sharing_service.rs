@@ -16,7 +16,7 @@ use chur_sync_protocol::{
     operation::Operation,
     operation_log::{ApplyOutcome, OperationLog},
     payload::{OperationPayload, PayloadBody},
-    state::MembershipState,
+    state::{DeviceStatus, MembershipState},
 };
 
 use crate::{
@@ -133,6 +133,96 @@ pub fn prepare_share(
     let recipient_membership = MembershipState::bootstrap(recipient_enrollment)?;
     let recipient_vault_id = *recipient_membership.vault_id();
     let recipient_device_id = *recipient_enrollment.device_id();
+    prepare_share_to_device(
+        db,
+        root,
+        source_vault_id,
+        collection_id,
+        recipient_vault_id,
+        recipient_device_id,
+        *recipient_enrollment.signing_public_key(),
+        *recipient_enrollment.hpke_public_key(),
+        permissions,
+        fingerprint_verified,
+    )
+}
+
+/// Authenticates a recipient vault history and shares to one active device.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the request names the source, recipient evidence, target device, and policy"
+)]
+pub fn prepare_share_for_device(
+    db: &mut CatalogDb,
+    root: &Key,
+    source_vault_id: Id,
+    collection_id: Id,
+    recipient: IssuerEvidence<'_>,
+    recipient_device_id: Id,
+    permissions: PermissionProfile,
+    fingerprint_verified: bool,
+) -> Result<PreparedShare> {
+    let (states, _) = authenticate_issuers(std::slice::from_ref(&recipient))?;
+    ensure!(
+        states.len() == 1,
+        InvalidInput,
+        "recipient evidence must contain one identity vault"
+    );
+    let (recipient_vault_id, history) = states
+        .first_key_value()
+        .ok_or_else(|| Error::new(ChurStatus::InvalidInput, "recipient evidence is empty"))?;
+    let recipient_membership = history
+        .last_key_value()
+        .map(|(_, state)| state)
+        .ok_or_else(|| {
+            Error::new(
+                ChurStatus::AuthenticationFailed,
+                "recipient membership history is empty",
+            )
+        })?;
+    let recipient_device = recipient_membership
+        .device(&recipient_device_id)
+        .ok_or_else(|| {
+            Error::new(
+                ChurStatus::AuthenticationFailed,
+                "recipient device is not enrolled",
+            )
+        })?;
+    ensure!(
+        recipient_device.status() == DeviceStatus::Active,
+        AuthenticationFailed,
+        "recipient device is revoked"
+    );
+    prepare_share_to_device(
+        db,
+        root,
+        source_vault_id,
+        collection_id,
+        *recipient_vault_id,
+        recipient_device_id,
+        *recipient_device.signing_public_key(),
+        *recipient_device.hpke_public_key(),
+        permissions,
+        fingerprint_verified,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the internal boundary carries one authenticated recipient device"
+)]
+fn prepare_share_to_device(
+    db: &mut CatalogDb,
+    root: &Key,
+    source_vault_id: Id,
+    collection_id: Id,
+    recipient_vault_id: Id,
+    recipient_device_id: Id,
+    recipient_signing_public_key: [u8; 32],
+    recipient_hpke_public_key: [u8; 32],
+    permissions: PermissionProfile,
+    fingerprint_verified: bool,
+) -> Result<PreparedShare> {
     ensure!(
         recipient_vault_id != source_vault_id,
         InvalidInput,
@@ -175,8 +265,8 @@ pub fn prepare_share(
         .member(&recipient_vault_id, &recipient_device_id)
         .filter(|member| {
             member.is_active()
-                && member.signing_public_key() == recipient_enrollment.signing_public_key()
-                && member.hpke_public_key() == recipient_enrollment.hpke_public_key()
+                && member.signing_public_key() == &recipient_signing_public_key
+                && member.hpke_public_key() == &recipient_hpke_public_key
                 && member.permissions() == permissions
         })
         .map(|member| member.membership_generation());
@@ -199,8 +289,8 @@ pub fn prepare_share(
                 &collection_id,
                 recipient_vault_id,
                 recipient_device_id,
-                *recipient_enrollment.signing_public_key(),
-                *recipient_enrollment.hpke_public_key(),
+                recipient_signing_public_key,
+                recipient_hpke_public_key,
             )?;
         }
         let sequence = next_sequence(&log, &source_device_id)?;
@@ -217,8 +307,8 @@ pub fn prepare_share(
             CollectionMembershipAction::Upsert(permissions),
             recipient_vault_id,
             recipient_device_id,
-            *recipient_enrollment.signing_public_key(),
-            *recipient_enrollment.hpke_public_key(),
+            recipient_signing_public_key,
+            recipient_hpke_public_key,
             sharing_state.collection_epoch(),
             source_vault_id,
             source_device_id,
@@ -243,8 +333,8 @@ pub fn prepare_share(
                 &collection_id,
                 recipient_vault_id,
                 recipient_device_id,
-                *recipient_enrollment.signing_public_key(),
-                *recipient_enrollment.hpke_public_key(),
+                recipient_signing_public_key,
+                recipient_hpke_public_key,
             )?;
         }
         (membership, operation)
@@ -259,8 +349,8 @@ pub fn prepare_share(
             &collection_id,
             recipient_vault_id,
             recipient_device_id,
-            *recipient_enrollment.signing_public_key(),
-            *recipient_enrollment.hpke_public_key(),
+            recipient_signing_public_key,
+            recipient_hpke_public_key,
         )?;
     }
     let current_generation = sharing_state
@@ -290,7 +380,7 @@ pub fn prepare_share(
             current_generation,
             recipient_vault_id,
             recipient_device_id,
-            recipient_enrollment.hpke_public_key(),
+            &recipient_hpke_public_key,
             source_device_id,
             permissions,
             source_membership.generation(),
@@ -1300,16 +1390,105 @@ mod tests {
         )
         .expect("second enrollment")
         .sign(second.signing_key());
-        prepare_share(
+        let mut recipient_membership =
+            MembershipState::bootstrap(&second_enrollment).expect("recipient membership");
+        let recipient_operation_key = Key::new([21; 32]);
+        let recipient_selector = id(22);
+        let mut recipient_log = OperationLog::new();
+        let initial_operation = recipient_log
+            .author(
+                id(23),
+                second_vault,
+                second_device,
+                recipient_selector,
+                &recipient_operation_key,
+                Nonce::new([24; 24]),
+                b"initial",
+                second.signing_key(),
+                &recipient_membership,
+            )
+            .expect("initial operation");
+        assert!(
+            recipient_log
+                .accept(&initial_operation, &recipient_membership)
+                .is_ok()
+        );
+        let peer_device = id(25);
+        let peer = DeviceIdentity::from_seeds([26; 32], [27; 32]);
+        let peer_enrollment = EnrollmentRecord::new(
+            second_vault,
+            peer_device,
+            peer.signing_public_key(),
+            peer.hpke_public_key(),
+            2,
+            second_device,
+            2,
+            *recipient_membership.commitment(),
+            [28; 32],
+        )
+        .expect("peer enrollment")
+        .sign(second.signing_key());
+        let peer_operation = recipient_log
+            .author(
+                id(29),
+                second_vault,
+                second_device,
+                recipient_selector,
+                &recipient_operation_key,
+                Nonce::new([30; 24]),
+                b"peer",
+                second.signing_key(),
+                &recipient_membership,
+            )
+            .expect("peer operation");
+        recipient_membership
+            .accept_enrollment(&peer_enrollment, &second_device, 2)
+            .expect("accept peer");
+        let recipient_records = [
+            IssuerMembershipRecord::Enrollment(second_enrollment.clone()),
+            IssuerMembershipRecord::Enrollment(peer_enrollment),
+        ];
+        let recipient_operations = [initial_operation, peer_operation];
+        let incomplete_recipient = IssuerEvidence {
+            membership: &recipient_records,
+            operations: &recipient_operations[..1],
+        };
+        let Err(error) = prepare_share_for_device(
             &mut db,
             &root,
             source_vault,
             collection_id,
-            &second_enrollment,
+            incomplete_recipient,
+            peer_device,
+            PermissionProfile::Read,
+            true,
+        ) else {
+            panic!("incomplete recipient evidence was accepted");
+        };
+        assert_eq!(error.status(), ChurStatus::SyncHeadRollback);
+        let second_share = prepare_share_for_device(
+            &mut db,
+            &root,
+            source_vault,
+            collection_id,
+            IssuerEvidence {
+                membership: &recipient_records,
+                operations: &recipient_operations,
+            },
+            peer_device,
             PermissionProfile::Read,
             true,
         )
         .expect("second share");
+        assert_eq!(second_share.grant().recipient_device_id(), &peer_device);
+        assert_eq!(
+            second_share
+                .grant()
+                .open_collection_key(&second_vault, &peer_device, &peer, source_key)
+                .expect("peer grant")
+                .expose(),
+            collection_key.expose()
+        );
         let revoked = prepare_share_revocation(
             &mut db,
             &root,
@@ -1343,7 +1522,7 @@ mod tests {
         assert_eq!(remaining_grant.recipient_identity_vault_id(), &second_vault);
         assert_eq!(remaining_grant.collection_epoch(), 2);
         let rotated_key = remaining_grant
-            .open_collection_key(&second_vault, &second_device, &second, source_key)
+            .open_collection_key(&second_vault, &peer_device, &peer, source_key)
             .expect("rotated key");
         let rotation =
             sync_rotation::load(&db, source_vault, collection_id, &source_membership, &root)
