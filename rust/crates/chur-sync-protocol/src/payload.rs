@@ -6,6 +6,8 @@ use chur_format::codec::{Reader, Writer};
 use chur_format::envelope::{CollectionKeyEnvelope, ObjectKeyEnvelope};
 
 use crate::KeyDirectory;
+use crate::collection_membership::CollectionMembershipRecord;
+use crate::grant::CollectionGrant;
 use crate::membership::{EnrollmentRecord, RevocationRecord};
 use crate::operation::{Operation, PROTOCOL_VERSION_V1};
 
@@ -211,6 +213,10 @@ pub enum PayloadBody {
         /// Rewrapped object-key envelope.
         object_key_envelope: ObjectKeyEnvelope,
     },
+    /// Changes one recipient-device membership entry.
+    ChangeCollectionMembership(CollectionMembershipRecord),
+    /// Issues one signed HPKE collection grant.
+    IssueCollectionGrant(CollectionGrant),
 }
 
 impl PayloadBody {
@@ -232,6 +238,8 @@ impl PayloadBody {
             Self::RevokeDevice(_) => 0x0e,
             Self::CreateCollectionEpoch { .. } => 0x0f,
             Self::RewrapObjectKey { .. } => 0x10,
+            Self::ChangeCollectionMembership(_) => 0x11,
+            Self::IssueCollectionGrant(_) => 0x12,
         }
     }
 }
@@ -395,6 +403,28 @@ impl OperationPayload {
                     "collection-key envelope does not match its containing operation"
                 );
             }
+            PayloadBody::ChangeCollectionMembership(record) => {
+                ensure!(
+                    record.source_vault_id() == operation.vault_id()
+                        && record.collection_id() == &self.collection_id
+                        && record.issuer_device_id() == operation.device_id()
+                        && record.created_sequence() == operation.device_sequence(),
+                    AuthenticationFailed,
+                    "collection membership record does not match its containing operation"
+                );
+            }
+            PayloadBody::IssueCollectionGrant(grant) => {
+                ensure!(
+                    grant.grant_id() == operation.operation_id()
+                        && grant.source_vault_id() == operation.vault_id()
+                        && grant.collection_id() == &self.collection_id
+                        && grant.collection_epoch() == self.collection_epoch
+                        && grant.sender_device_id() == operation.device_id()
+                        && grant.created_sequence() == operation.device_sequence(),
+                    AuthenticationFailed,
+                    "collection grant does not match its containing operation"
+                );
+            }
             _ => {}
         }
         Ok(())
@@ -506,6 +536,27 @@ impl OperationPayload {
                 self.collection_epoch,
                 object_id,
             )?,
+            PayloadBody::ChangeCollectionMembership(record) => {
+                ensure!(
+                    record.collection_id() == &self.collection_id
+                        && match record.action() {
+                            crate::collection_membership::CollectionMembershipAction::Upsert(_) =>
+                                record.collection_epoch() == self.collection_epoch,
+                            crate::collection_membership::CollectionMembershipAction::Revoke =>
+                                self.collection_epoch
+                                    .checked_add(1)
+                                    .is_some_and(|epoch| { epoch == record.collection_epoch() }),
+                        },
+                    NonCanonicalEncoding,
+                    "collection membership record does not match the payload header"
+                );
+            }
+            PayloadBody::IssueCollectionGrant(grant) => ensure!(
+                grant.collection_id() == &self.collection_id
+                    && grant.collection_epoch() == self.collection_epoch,
+                NonCanonicalEncoding,
+                "collection grant does not match the payload header"
+            ),
             PayloadBody::AddAlbumMembership { .. }
             | PayloadBody::AddDevice(_)
             | PayloadBody::RevokeDevice(_) => {}
@@ -643,6 +694,12 @@ impl OperationPayload {
             } => {
                 writer.id(object_id).fixed(&object_key_envelope.encode());
             }
+            PayloadBody::ChangeCollectionMembership(record) => {
+                writer.fixed(&record.encode());
+            }
+            PayloadBody::IssueCollectionGrant(grant) => {
+                writer.fixed(&grant.encode());
+            }
         }
     }
 }
@@ -728,6 +785,12 @@ fn decode_body(kind: u8, reader: &mut Reader<'_>) -> Result<PayloadBody> {
                 reader.slice(envelope_bounds::OBJECT_KEY_ENVELOPE_LEN)?,
             )?,
         },
+        0x11 => PayloadBody::ChangeCollectionMembership(CollectionMembershipRecord::decode(
+            reader.slice(CollectionMembershipRecord::LEN)?,
+        )?),
+        0x12 => PayloadBody::IssueCollectionGrant(CollectionGrant::decode(
+            reader.slice(CollectionGrant::LEN)?,
+        )?),
         _ => {
             return Err(Error::new(
                 ChurStatus::UnsupportedVersion,
@@ -976,3 +1039,5 @@ fn read_tokens(reader: &mut Reader<'_>) -> Result<Vec<Id>> {
 
 const _: () = assert!(envelope_bounds::OBJECT_KEY_ENVELOPE_LEN == 142);
 const _: () = assert!(envelope_bounds::COLLECTION_KEY_ENVELOPE_LEN == 126);
+const _: () = assert!(CollectionMembershipRecord::LEN == 292);
+const _: () = assert!(CollectionGrant::LEN == 309);

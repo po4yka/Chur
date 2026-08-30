@@ -291,7 +291,9 @@ impl MaterializedState {
             PayloadBody::AddDevice(_)
             | PayloadBody::RevokeDevice(_)
             | PayloadBody::CreateCollectionEpoch { .. }
-            | PayloadBody::RewrapObjectKey { .. } => Err(Error::new(
+            | PayloadBody::RewrapObjectKey { .. }
+            | PayloadBody::ChangeCollectionMembership(_)
+            | PayloadBody::IssueCollectionGrant(_) => Err(Error::new(
                 ChurStatus::InvalidInput,
                 "security operation is not materialized as content",
             )),

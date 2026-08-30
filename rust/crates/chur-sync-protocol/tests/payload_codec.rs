@@ -5,6 +5,11 @@
 use chur_core::{ChurStatus, Id};
 use chur_crypto::{Key, Nonce};
 use chur_format::envelope::{CollectionKeyEnvelope, ObjectKeyEnvelope};
+use chur_sync_protocol::collection_membership::{
+    CollectionMembershipAction, CollectionMembershipRecord,
+};
+use chur_sync_protocol::grant::{CollectionGrant, PermissionProfile};
+use chur_sync_protocol::identity::DeviceIdentity;
 use chur_sync_protocol::membership::{EnrollmentRecord, RevocationRecord};
 use chur_sync_protocol::operation::{DeviceSigningKey, Operation};
 use chur_sync_protocol::payload::{MetadataField, MetadataFieldId, OperationPayload, PayloadBody};
@@ -25,6 +30,87 @@ fn object_envelope(vault: Id, collection: Id, epoch: u64, object: Id) -> ObjectK
         &Key::new([3; 32]),
     )
     .expect("object envelope")
+}
+
+#[test]
+fn sharing_records_round_trip_as_bounded_payload_kinds() {
+    let source_key = DeviceSigningKey::from_seed([1; 32]);
+    let recipient = DeviceIdentity::from_seeds([2; 32], [3; 32]);
+    let membership = CollectionMembershipRecord::new(
+        id(4),
+        id(5),
+        1,
+        [0; 32],
+        CollectionMembershipAction::Upsert(PermissionProfile::Read),
+        id(6),
+        id(7),
+        recipient.signing_public_key(),
+        recipient.hpke_public_key(),
+        7,
+        id(4),
+        id(8),
+        1,
+        9,
+    )
+    .expect("membership")
+    .sign(&source_key);
+    let grant = CollectionGrant::seal(
+        id(10),
+        id(4),
+        id(5),
+        7,
+        1,
+        id(6),
+        id(7),
+        &recipient.hpke_public_key(),
+        id(8),
+        PermissionProfile::Read,
+        1,
+        11,
+        &Key::new([12; 32]),
+        &source_key,
+    )
+    .expect("grant");
+
+    let payloads = [
+        PayloadBody::ChangeCollectionMembership(membership),
+        PayloadBody::IssueCollectionGrant(grant),
+    ]
+    .map(|body| OperationPayload::new(id(5), 7, body).expect("payload"));
+    for payload in &payloads {
+        assert!(OperationPayload::decode(&payload.encode()).is_ok_and(|value| &value == payload));
+    }
+
+    let membership_operation = Operation::new(
+        id(13),
+        id(4),
+        id(8),
+        9,
+        [1; 32],
+        Vec::new(),
+        id(14),
+        [vec![15; 24], vec![16; 16]].concat(),
+        [0; 64],
+    )
+    .expect("membership operation");
+    payloads[0]
+        .validate_for_operation(&membership_operation, &id(5), 7)
+        .expect("membership binding");
+    let grant_operation = Operation::new(
+        id(10),
+        id(4),
+        id(8),
+        11,
+        [1; 32],
+        Vec::new(),
+        id(14),
+        [vec![15; 24], vec![16; 16]].concat(),
+        [0; 64],
+    )
+    .expect("grant operation");
+    payloads[1]
+        .validate_for_operation(&grant_operation, &id(5), 7)
+        .expect("grant binding");
 }
 
 #[test]
