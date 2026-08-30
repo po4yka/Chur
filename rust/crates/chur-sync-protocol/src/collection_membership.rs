@@ -1,12 +1,15 @@
 //! The signed collection membership record of
 //! `docs/sync/COLLECTION_MEMBERSHIP.md`.
 
+use std::collections::BTreeMap;
+
 use chur_core::{ChurStatus, Error, Id, Result, ensure};
 use chur_crypto::{Commitment, commit, tuple::tag};
 use chur_format::codec::{Reader, Writer};
 
-use crate::grant::PermissionProfile;
+use crate::grant::{CollectionGrant, PermissionProfile, hpke_key_id};
 use crate::operation::{DeviceSigningKey, PROTOCOL_VERSION_V1, verify_ed25519};
+use crate::state::MembershipState;
 
 const PUBLIC_KEY_LEN: usize = 32;
 const SIGNATURE_LEN: usize = 64;
@@ -64,6 +67,402 @@ pub struct CollectionMembershipRecord {
     issuer_membership_generation: u64,
     created_sequence: u64,
     issuer_signature: [u8; SIGNATURE_LEN],
+}
+
+/// Result of applying one collection membership record.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CollectionMembershipOutcome {
+    /// The membership chain advanced.
+    Applied,
+    /// The exact current record was already applied.
+    Duplicate,
+}
+
+/// How one recipient key pair was accepted.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RecipientVerification {
+    /// The first observed key pair was pinned on first use.
+    TrustOnFirstUse,
+    /// The user explicitly verified this key pair.
+    Verified,
+}
+
+#[derive(Clone)]
+struct RecipientPin {
+    signing_public_key: [u8; PUBLIC_KEY_LEN],
+    hpke_public_key: [u8; PUBLIC_KEY_LEN],
+    verification: RecipientVerification,
+}
+
+#[derive(Clone)]
+/// One current or historical recipient-device membership entry.
+pub struct CollectionMember {
+    signing_public_key: [u8; PUBLIC_KEY_LEN],
+    hpke_public_key: [u8; PUBLIC_KEY_LEN],
+    permissions: PermissionProfile,
+    membership_generation: u64,
+    active: bool,
+}
+
+impl CollectionMember {
+    /// Recipient signing key accepted for shared operations.
+    #[must_use]
+    pub const fn signing_public_key(&self) -> &[u8; PUBLIC_KEY_LEN] {
+        &self.signing_public_key
+    }
+
+    /// Recipient HPKE key accepted for grants.
+    #[must_use]
+    pub const fn hpke_public_key(&self) -> &[u8; PUBLIC_KEY_LEN] {
+        &self.hpke_public_key
+    }
+
+    /// Current cumulative permission profile.
+    #[must_use]
+    pub const fn permissions(&self) -> PermissionProfile {
+        self.permissions
+    }
+
+    /// Generation that last changed this recipient device.
+    #[must_use]
+    pub const fn membership_generation(&self) -> u64 {
+        self.membership_generation
+    }
+
+    /// Whether this recipient can author or receive current state.
+    #[must_use]
+    pub const fn is_active(&self) -> bool {
+        self.active
+    }
+}
+
+/// Accepted member, permission, epoch, and recipient-pin state for one collection.
+#[derive(Clone)]
+pub struct CollectionMembershipState {
+    source_vault_id: Id,
+    collection_id: Id,
+    generation: u64,
+    commitment: Commitment,
+    collection_epoch: u64,
+    last_record: Option<Vec<u8>>,
+    pins: BTreeMap<(Id, Id), RecipientPin>,
+    members: BTreeMap<(Id, Id), CollectionMember>,
+}
+
+impl CollectionMembershipState {
+    /// Creates the empty generation-zero state for one existing collection epoch.
+    pub fn new(source_vault_id: Id, collection_id: Id, collection_epoch: u64) -> Result<Self> {
+        validate_counter(collection_epoch, "initial collection epoch is invalid")?;
+        Ok(Self {
+            source_vault_id,
+            collection_id,
+            generation: 0,
+            commitment: [0; 32],
+            collection_epoch,
+            last_record: None,
+            pins: BTreeMap::new(),
+            members: BTreeMap::new(),
+        })
+    }
+
+    /// Verifies and atomically applies one successor record.
+    pub fn accept(
+        &mut self,
+        record: &CollectionMembershipRecord,
+        issuer_membership: &MembershipState,
+    ) -> Result<CollectionMembershipOutcome> {
+        let encoded = record.encode();
+        if self
+            .last_record
+            .as_ref()
+            .is_some_and(|accepted| accepted == &encoded)
+        {
+            return Ok(CollectionMembershipOutcome::Duplicate);
+        }
+        ensure!(
+            record.source_vault_id == self.source_vault_id
+                && record.collection_id == self.collection_id,
+            AuthenticationFailed,
+            "collection membership record belongs to another collection"
+        );
+        ensure!(
+            self.generation
+                .checked_add(1)
+                .is_some_and(|generation| generation == record.collection_membership_generation)
+                && record.previous_membership_commitment == self.commitment,
+            SyncHeadRollback,
+            "collection membership record is not the next chain entry"
+        );
+        ensure!(
+            issuer_membership.vault_id() == &record.issuer_identity_vault_id
+                && issuer_membership.generation() == record.issuer_membership_generation,
+            AuthenticationFailed,
+            "collection membership issuer state does not match"
+        );
+        let issuer = issuer_membership
+            .device(&record.issuer_device_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ChurStatus::AuthenticationFailed,
+                    "collection membership issuer is unknown",
+                )
+            })?;
+        ensure!(
+            issuer_membership.is_active(&record.issuer_device_id),
+            AuthenticationFailed,
+            "collection membership issuer is revoked"
+        );
+        if record.issuer_identity_vault_id != self.source_vault_id {
+            let manager = self
+                .members
+                .get(&(record.issuer_identity_vault_id, record.issuer_device_id))
+                .ok_or_else(|| {
+                    Error::new(
+                        ChurStatus::AuthenticationFailed,
+                        "collection membership issuer is not a collection member",
+                    )
+                })?;
+            ensure!(
+                manager.active
+                    && manager.permissions == PermissionProfile::ManageMembers
+                    && manager.signing_public_key == *issuer.signing_public_key(),
+                AuthenticationFailed,
+                "collection membership issuer cannot manage members"
+            );
+        }
+        record.verify_signature(issuer.signing_public_key())?;
+
+        let mut candidate = self.clone();
+        let recipient = (
+            record.recipient_identity_vault_id,
+            record.recipient_device_id,
+        );
+        match candidate.pins.get(&recipient) {
+            Some(pin) => ensure!(
+                pin.signing_public_key == record.recipient_signing_public_key
+                    && pin.hpke_public_key == record.recipient_hpke_public_key,
+                AuthenticationFailed,
+                "collection recipient key differs from its pin"
+            ),
+            None => {
+                candidate.pins.insert(
+                    recipient,
+                    RecipientPin {
+                        signing_public_key: record.recipient_signing_public_key,
+                        hpke_public_key: record.recipient_hpke_public_key,
+                        verification: RecipientVerification::TrustOnFirstUse,
+                    },
+                );
+            }
+        }
+
+        match record.action {
+            CollectionMembershipAction::Upsert(permissions) => {
+                ensure!(
+                    record.collection_epoch == candidate.collection_epoch,
+                    SyncHeadRollback,
+                    "collection member upsert changes the collection epoch"
+                );
+                if let Some(existing) = candidate.members.get(&recipient) {
+                    ensure!(
+                        !existing.active
+                            || existing.permissions != permissions
+                            || existing.signing_public_key != record.recipient_signing_public_key
+                            || existing.hpke_public_key != record.recipient_hpke_public_key,
+                        NonCanonicalEncoding,
+                        "collection member upsert changes no state"
+                    );
+                }
+                candidate.members.insert(
+                    recipient,
+                    CollectionMember {
+                        signing_public_key: record.recipient_signing_public_key,
+                        hpke_public_key: record.recipient_hpke_public_key,
+                        permissions,
+                        membership_generation: record.collection_membership_generation,
+                        active: true,
+                    },
+                );
+            }
+            CollectionMembershipAction::Revoke => {
+                ensure!(
+                    candidate
+                        .collection_epoch
+                        .checked_add(1)
+                        .is_some_and(|epoch| { epoch == record.collection_epoch }),
+                    SyncHeadRollback,
+                    "collection revocation does not advance the epoch"
+                );
+                let member = candidate.members.get_mut(&recipient).ok_or_else(|| {
+                    Error::new(
+                        ChurStatus::AuthenticationFailed,
+                        "collection revocation names an unknown member",
+                    )
+                })?;
+                ensure!(
+                    member.active
+                        && member.signing_public_key == record.recipient_signing_public_key
+                        && member.hpke_public_key == record.recipient_hpke_public_key,
+                    AuthenticationFailed,
+                    "collection revocation does not match an active member"
+                );
+                member.active = false;
+                member.membership_generation = record.collection_membership_generation;
+                candidate.collection_epoch = record.collection_epoch;
+            }
+        }
+        candidate.generation = record.collection_membership_generation;
+        candidate.commitment = record.commitment();
+        candidate.last_record = Some(encoded);
+        *self = candidate;
+        Ok(CollectionMembershipOutcome::Applied)
+    }
+
+    /// Whether a recipient device has the required cumulative permission.
+    #[must_use]
+    pub fn is_authorized(
+        &self,
+        identity_vault_id: &Id,
+        device_id: &Id,
+        required: PermissionProfile,
+    ) -> bool {
+        self.members
+            .get(&(*identity_vault_id, *device_id))
+            .is_some_and(|member| {
+                member.active && (member.permissions as u8 & required as u8) == required as u8
+            })
+    }
+
+    /// Validates one grant against current sender and recipient membership.
+    pub fn validate_grant(
+        &self,
+        grant: &CollectionGrant,
+        sender_membership: &MembershipState,
+    ) -> Result<()> {
+        ensure!(
+            grant.source_vault_id() == &self.source_vault_id
+                && grant.collection_id() == &self.collection_id
+                && grant.collection_epoch() == self.collection_epoch,
+            AuthenticationFailed,
+            "collection grant does not match current collection state"
+        );
+        let member = self
+            .member(
+                grant.recipient_identity_vault_id(),
+                grant.recipient_device_id(),
+            )
+            .ok_or_else(|| {
+                Error::new(
+                    ChurStatus::AuthenticationFailed,
+                    "collection grant recipient is unknown",
+                )
+            })?;
+        ensure!(
+            member.active
+                && member.membership_generation == grant.collection_membership_generation()
+                && member.permissions == grant.permissions()
+                && grant.recipient_hpke_key_id()
+                    == &hpke_key_id(
+                        grant.recipient_identity_vault_id(),
+                        grant.recipient_device_id(),
+                        &member.hpke_public_key,
+                    ),
+            AuthenticationFailed,
+            "collection grant does not match current recipient membership"
+        );
+        ensure!(
+            sender_membership.vault_id() == &self.source_vault_id
+                && sender_membership.generation() == grant.sender_membership_generation(),
+            AuthenticationFailed,
+            "collection grant sender membership is stale or unrelated"
+        );
+        let sender = sender_membership
+            .device(grant.sender_device_id())
+            .ok_or_else(|| {
+                Error::new(
+                    ChurStatus::AuthenticationFailed,
+                    "collection grant sender is unknown",
+                )
+            })?;
+        ensure!(
+            sender_membership.is_active(grant.sender_device_id()),
+            AuthenticationFailed,
+            "collection grant sender is revoked"
+        );
+        grant.verify_sender_signature(sender.signing_public_key())
+    }
+
+    /// Explicitly verifies or replaces one recipient key pin.
+    pub fn verify_recipient_keys(
+        &mut self,
+        identity_vault_id: Id,
+        device_id: Id,
+        signing_public_key: [u8; PUBLIC_KEY_LEN],
+        hpke_public_key: [u8; PUBLIC_KEY_LEN],
+    ) -> Result<()> {
+        ensure!(
+            signing_public_key != [0; PUBLIC_KEY_LEN] && hpke_public_key != [0; PUBLIC_KEY_LEN],
+            InvalidInput,
+            "verified recipient key is zero"
+        );
+        self.pins.insert(
+            (identity_vault_id, device_id),
+            RecipientPin {
+                signing_public_key,
+                hpke_public_key,
+                verification: RecipientVerification::Verified,
+            },
+        );
+        Ok(())
+    }
+
+    /// How one recipient key pair was accepted.
+    #[must_use]
+    pub fn recipient_verification(
+        &self,
+        identity_vault_id: &Id,
+        device_id: &Id,
+    ) -> Option<RecipientVerification> {
+        self.pins
+            .get(&(*identity_vault_id, *device_id))
+            .map(|pin| pin.verification)
+    }
+
+    /// Accepted recipient entry, including historical revoked entries.
+    #[must_use]
+    pub fn member(&self, identity_vault_id: &Id, device_id: &Id) -> Option<&CollectionMember> {
+        self.members.get(&(*identity_vault_id, *device_id))
+    }
+
+    /// Latest accepted collection membership generation.
+    #[must_use]
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Latest accepted collection membership commitment.
+    #[must_use]
+    pub const fn commitment(&self) -> &Commitment {
+        &self.commitment
+    }
+
+    /// Current collection epoch.
+    #[must_use]
+    pub const fn collection_epoch(&self) -> u64 {
+        self.collection_epoch
+    }
+
+    /// Source vault that owns this collection.
+    #[must_use]
+    pub const fn source_vault_id(&self) -> &Id {
+        &self.source_vault_id
+    }
+
+    /// Collection governed by this state.
+    #[must_use]
+    pub const fn collection_id(&self) -> &Id {
+        &self.collection_id
+    }
 }
 
 impl CollectionMembershipRecord {
@@ -382,6 +781,9 @@ mod tests {
     #![allow(clippy::expect_used, clippy::panic)]
 
     use super::*;
+    use crate::identity::DeviceIdentity;
+    use crate::membership::EnrollmentRecord;
+    use chur_crypto::secret::Key;
 
     fn id(byte: u8) -> Id {
         Id::new([byte; 16]).expect("id")
@@ -456,5 +858,284 @@ mod tests {
         modified_signature[228] ^= 1;
         let modified = CollectionMembershipRecord::decode(&modified_signature).expect("record");
         assert!(modified.verify_signature(&signer.verifying_key()).is_err());
+    }
+
+    #[test]
+    fn the_source_adds_one_recipient_with_cumulative_permissions() {
+        let source_key = DeviceSigningKey::from_seed([1; 32]);
+        let source_enrollment =
+            EnrollmentRecord::initial(id(1), id(2), source_key.verifying_key(), [3; 32])
+                .expect("source enrollment")
+                .sign(&source_key);
+        let source_membership =
+            MembershipState::bootstrap(&source_enrollment).expect("source membership");
+        let recipient_vault_id = id(4);
+        let recipient_device_id = id(5);
+        let record = CollectionMembershipRecord::new(
+            id(1),
+            id(6),
+            1,
+            [0; 32],
+            CollectionMembershipAction::Upsert(PermissionProfile::Contribute),
+            recipient_vault_id,
+            recipient_device_id,
+            [7; 32],
+            [8; 32],
+            1,
+            id(1),
+            id(2),
+            1,
+            9,
+        )
+        .expect("record")
+        .sign(&source_key);
+        let mut state = CollectionMembershipState::new(id(1), id(6), 1).expect("state");
+
+        assert!(
+            state.accept(&record, &source_membership) == Ok(CollectionMembershipOutcome::Applied)
+        );
+        assert!(state.is_authorized(
+            &recipient_vault_id,
+            &recipient_device_id,
+            PermissionProfile::Read,
+        ));
+        assert!(state.is_authorized(
+            &recipient_vault_id,
+            &recipient_device_id,
+            PermissionProfile::Contribute,
+        ));
+        assert!(!state.is_authorized(
+            &recipient_vault_id,
+            &recipient_device_id,
+            PermissionProfile::ManageMembers,
+        ));
+    }
+
+    #[test]
+    fn a_grant_must_match_current_sender_and_recipient_membership() {
+        let source_key = DeviceSigningKey::from_seed([1; 32]);
+        let source_enrollment =
+            EnrollmentRecord::initial(id(1), id(2), source_key.verifying_key(), [3; 32])
+                .expect("source enrollment")
+                .sign(&source_key);
+        let source_membership =
+            MembershipState::bootstrap(&source_enrollment).expect("source membership");
+        let recipient = DeviceIdentity::from_seeds([7; 32], [8; 32]);
+        let recipient_vault_id = id(4);
+        let recipient_device_id = id(5);
+        let record = CollectionMembershipRecord::new(
+            id(1),
+            id(6),
+            1,
+            [0; 32],
+            CollectionMembershipAction::Upsert(PermissionProfile::Contribute),
+            recipient_vault_id,
+            recipient_device_id,
+            recipient.signing_public_key(),
+            recipient.hpke_public_key(),
+            1,
+            id(1),
+            id(2),
+            1,
+            9,
+        )
+        .expect("record")
+        .sign(&source_key);
+        let mut state = CollectionMembershipState::new(id(1), id(6), 1).expect("state");
+        state
+            .accept(&record, &source_membership)
+            .expect("membership");
+        let grant = CollectionGrant::seal(
+            id(10),
+            id(1),
+            id(6),
+            1,
+            1,
+            recipient_vault_id,
+            recipient_device_id,
+            &recipient.hpke_public_key(),
+            id(2),
+            PermissionProfile::Contribute,
+            1,
+            11,
+            &Key::new([12; 32]),
+            &source_key,
+        )
+        .expect("grant");
+
+        state
+            .validate_grant(&grant, &source_membership)
+            .expect("current grant");
+    }
+
+    #[test]
+    fn key_substitution_blocks_until_verification_and_revoke_advances_epoch() {
+        let source_key = DeviceSigningKey::from_seed([1; 32]);
+        let source_enrollment =
+            EnrollmentRecord::initial(id(1), id(2), source_key.verifying_key(), [3; 32])
+                .expect("source enrollment")
+                .sign(&source_key);
+        let source_membership =
+            MembershipState::bootstrap(&source_enrollment).expect("source membership");
+        let recipient_vault_id = id(4);
+        let recipient_device_id = id(5);
+        let first = CollectionMembershipRecord::new(
+            id(1),
+            id(6),
+            1,
+            [0; 32],
+            CollectionMembershipAction::Upsert(PermissionProfile::Read),
+            recipient_vault_id,
+            recipient_device_id,
+            [7; 32],
+            [8; 32],
+            1,
+            id(1),
+            id(2),
+            1,
+            9,
+        )
+        .expect("first")
+        .sign(&source_key);
+        let mut state = CollectionMembershipState::new(id(1), id(6), 1).expect("state");
+        state
+            .accept(&first, &source_membership)
+            .expect("first member");
+        assert!(
+            state.accept(&first, &source_membership) == Ok(CollectionMembershipOutcome::Duplicate)
+        );
+        assert!(
+            state.recipient_verification(&recipient_vault_id, &recipient_device_id)
+                == Some(RecipientVerification::TrustOnFirstUse)
+        );
+
+        let replacement = CollectionMembershipRecord::new(
+            id(1),
+            id(6),
+            2,
+            first.commitment(),
+            CollectionMembershipAction::Upsert(PermissionProfile::Contribute),
+            recipient_vault_id,
+            recipient_device_id,
+            [10; 32],
+            [11; 32],
+            1,
+            id(1),
+            id(2),
+            1,
+            12,
+        )
+        .expect("replacement")
+        .sign(&source_key);
+        assert!(state.accept(&replacement, &source_membership).is_err());
+        state
+            .verify_recipient_keys(recipient_vault_id, recipient_device_id, [10; 32], [11; 32])
+            .expect("verify replacement");
+        state
+            .accept(&replacement, &source_membership)
+            .expect("verified replacement");
+
+        let revoke = CollectionMembershipRecord::new(
+            id(1),
+            id(6),
+            3,
+            replacement.commitment(),
+            CollectionMembershipAction::Revoke,
+            recipient_vault_id,
+            recipient_device_id,
+            [10; 32],
+            [11; 32],
+            2,
+            id(1),
+            id(2),
+            1,
+            13,
+        )
+        .expect("revoke")
+        .sign(&source_key);
+        state
+            .accept(&revoke, &source_membership)
+            .expect("revoke member");
+
+        assert_eq!(state.collection_epoch(), 2);
+        assert!(!state.is_authorized(
+            &recipient_vault_id,
+            &recipient_device_id,
+            PermissionProfile::Read,
+        ));
+        assert!(
+            state.recipient_verification(&recipient_vault_id, &recipient_device_id)
+                == Some(RecipientVerification::Verified)
+        );
+        assert!(CollectionMembershipState::new(id(1), id(6), 0).is_err());
+    }
+
+    #[test]
+    fn only_a_member_manager_can_issue_the_next_membership_record() {
+        let source_key = DeviceSigningKey::from_seed([1; 32]);
+        let source_enrollment =
+            EnrollmentRecord::initial(id(1), id(2), source_key.verifying_key(), [3; 32])
+                .expect("source enrollment")
+                .sign(&source_key);
+        let source_membership =
+            MembershipState::bootstrap(&source_enrollment).expect("source membership");
+        let manager_key = DeviceSigningKey::from_seed([4; 32]);
+        let manager_enrollment =
+            EnrollmentRecord::initial(id(5), id(6), manager_key.verifying_key(), [7; 32])
+                .expect("manager enrollment")
+                .sign(&manager_key);
+        let manager_membership =
+            MembershipState::bootstrap(&manager_enrollment).expect("manager membership");
+        let manager = CollectionMembershipRecord::new(
+            id(1),
+            id(8),
+            1,
+            [0; 32],
+            CollectionMembershipAction::Upsert(PermissionProfile::ManageMembers),
+            id(5),
+            id(6),
+            manager_key.verifying_key(),
+            [7; 32],
+            1,
+            id(1),
+            id(2),
+            1,
+            9,
+        )
+        .expect("manager")
+        .sign(&source_key);
+        let mut state = CollectionMembershipState::new(id(1), id(8), 1).expect("state");
+        state
+            .accept(&manager, &source_membership)
+            .expect("add manager");
+        let next = CollectionMembershipRecord::new(
+            id(1),
+            id(8),
+            2,
+            manager.commitment(),
+            CollectionMembershipAction::Upsert(PermissionProfile::Read),
+            id(10),
+            id(11),
+            [12; 32],
+            [13; 32],
+            1,
+            id(5),
+            id(6),
+            1,
+            14,
+        )
+        .expect("next")
+        .sign(&manager_key);
+
+        let mut insufficient = state.clone();
+        insufficient
+            .members
+            .get_mut(&(id(5), id(6)))
+            .expect("manager")
+            .permissions = PermissionProfile::Contribute;
+        assert!(insufficient.accept(&next, &manager_membership).is_err());
+        state
+            .accept(&next, &manager_membership)
+            .expect("member manager");
     }
 }

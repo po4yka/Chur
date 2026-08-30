@@ -166,21 +166,11 @@ impl CollectionGrant {
                         recipient_identity_vault_id,
                         recipient_device_id,
                         &recipient_identity.hpke_public_key(),
-                    )
-                && self.sender_signing_key_id
-                    == signing_key_id(
-                        &self.source_vault_id,
-                        &self.sender_device_id,
-                        sender_signing_public_key,
                     ),
             AuthenticationFailed,
-            "collection grant identity or key identifier does not match"
+            "collection grant recipient identity or key identifier does not match"
         );
-        verify_ed25519(
-            sender_signing_public_key,
-            &self.sender_signature,
-            &self.signature_input(),
-        )?;
+        self.verify_sender_signature(sender_signing_public_key)?;
         let recipient_private_key = <X25519HkdfSha256 as KemTrait>::PrivateKey::from_bytes(
             recipient_identity.hpke_secret_bytes(),
         )
@@ -220,6 +210,97 @@ impl CollectionGrant {
             )
         })?;
         Ok(Key::new(key))
+    }
+
+    /// Verifies the sender key identifier and Ed25519 signature.
+    pub fn verify_sender_signature(&self, sender_signing_public_key: &[u8; 32]) -> Result<()> {
+        ensure!(
+            self.sender_signing_key_id
+                == signing_key_id(
+                    &self.source_vault_id,
+                    &self.sender_device_id,
+                    sender_signing_public_key,
+                ),
+            AuthenticationFailed,
+            "collection grant sender key identifier does not match"
+        );
+        verify_ed25519(
+            sender_signing_public_key,
+            &self.sender_signature,
+            &self.signature_input(),
+        )
+    }
+
+    /// Grant identifier and containing issue-operation identifier.
+    #[must_use]
+    pub const fn grant_id(&self) -> &Id {
+        &self.grant_id
+    }
+
+    /// Source vault that owns the collection.
+    #[must_use]
+    pub const fn source_vault_id(&self) -> &Id {
+        &self.source_vault_id
+    }
+
+    /// Shared security collection.
+    #[must_use]
+    pub const fn collection_id(&self) -> &Id {
+        &self.collection_id
+    }
+
+    /// Collection key epoch wrapped by this grant.
+    #[must_use]
+    pub const fn collection_epoch(&self) -> u64 {
+        self.collection_epoch
+    }
+
+    /// Membership generation that last changed this recipient.
+    #[must_use]
+    pub const fn collection_membership_generation(&self) -> u64 {
+        self.collection_membership_generation
+    }
+
+    /// Recipient identity vault.
+    #[must_use]
+    pub const fn recipient_identity_vault_id(&self) -> &Id {
+        &self.recipient_identity_vault_id
+    }
+
+    /// Recipient device.
+    #[must_use]
+    pub const fn recipient_device_id(&self) -> &Id {
+        &self.recipient_device_id
+    }
+
+    /// Recipient HPKE key identifier.
+    #[must_use]
+    pub const fn recipient_hpke_key_id(&self) -> &[u8; KEY_ID_LEN] {
+        &self.recipient_hpke_key_id
+    }
+
+    /// Sender device.
+    #[must_use]
+    pub const fn sender_device_id(&self) -> &Id {
+        &self.sender_device_id
+    }
+
+    /// Sender device-membership generation.
+    #[must_use]
+    pub const fn sender_membership_generation(&self) -> u64 {
+        self.sender_membership_generation
+    }
+
+    /// Recipient permission profile.
+    #[must_use]
+    pub const fn permissions(&self) -> PermissionProfile {
+        self.permissions
+    }
+
+    /// Containing issue-operation device sequence.
+    #[must_use]
+    pub const fn created_sequence(&self) -> u64 {
+        self.created_sequence
     }
 
     #[expect(
