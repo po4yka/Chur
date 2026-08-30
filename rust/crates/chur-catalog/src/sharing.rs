@@ -46,24 +46,35 @@ pub fn provision(
 ) -> Result<CollectionMembershipState> {
     let state = CollectionMembershipState::new(source_vault_id, collection_id, initial_epoch)?;
     db.transaction(|transaction| {
-        transaction
-            .execute(
-                "INSERT INTO sharing_collections
-                     (collection_id, source_vault_id, initial_epoch,
-                      membership_generation, membership_commitment, current_epoch)
-                 VALUES (?1, ?2, ?3, 0, ?4, ?3)",
-                params![
-                    collection_id.as_bytes().as_slice(),
-                    source_vault_id.as_bytes().as_slice(),
-                    as_sqlite_integer(initial_epoch, "the initial collection epoch is too large")?,
-                    state.commitment().as_slice(),
-                ],
-            )
-            .map_err(|error| map_sqlite(error, "sharing state could not be provisioned"))?;
+        project_provision(transaction, &state)?;
         bump_generation(transaction)?;
         Ok(())
     })?;
     Ok(state)
+}
+
+pub(crate) fn project_provision(
+    transaction: &Transaction<'_>,
+    state: &CollectionMembershipState,
+) -> Result<()> {
+    transaction
+        .execute(
+            "INSERT INTO sharing_collections
+                 (collection_id, source_vault_id, initial_epoch,
+                  membership_generation, membership_commitment, current_epoch)
+             VALUES (?1, ?2, ?3, 0, ?4, ?3)",
+            params![
+                state.collection_id().as_bytes().as_slice(),
+                state.source_vault_id().as_bytes().as_slice(),
+                as_sqlite_integer(
+                    state.collection_epoch(),
+                    "the initial collection epoch is too large"
+                )?,
+                state.commitment().as_slice(),
+            ],
+        )
+        .map_err(|error| map_sqlite(error, "sharing state could not be provisioned"))?;
+    Ok(())
 }
 
 /// Accepts one collection-membership successor atomically.

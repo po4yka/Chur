@@ -52,7 +52,7 @@ created_revision
 status
 ```
 
-Neither `policy_type` nor `status` crosses the FFI boundary, so neither is allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.4. v1 defines one `policy_type`, `0x01` `VAULT_DEFAULT`, which is the collection every object of a single-vault install belongs to; a per-album key domain takes the next value in the change that introduces it. `status` is `0x01` `ACTIVE` or `0x02` `RETIRED`, and a retired collection keeps its envelopes so an object sealed under an earlier epoch stays openable.
+Neither `policy_type` nor `status` crosses the FFI boundary, so neither is allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.4. `policy_type` is `0x01` `VAULT_DEFAULT` for the collection that receives local imports or `0x02` `SHARED` for a collection received from another identity vault. A per-album key domain takes the next value in the change that introduces it. `status` is `0x01` `ACTIVE` or `0x02` `RETIRED`, and a retired collection keeps its envelopes so an object sealed under an earlier epoch stays openable.
 
 Collection names/descriptions are private metadata. A logical album may reference a collection but is not automatically a key domain.
 

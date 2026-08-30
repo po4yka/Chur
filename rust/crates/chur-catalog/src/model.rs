@@ -21,6 +21,9 @@ use chur_format::constants::{IntegritySummary, MediaClass, ObjectState, StreamKi
 /// value for a per-album key domain.
 pub const COLLECTION_POLICY_VAULT_DEFAULT: u8 = 0x01;
 
+/// A collection received from another identity vault through Phase 4 sharing.
+pub const COLLECTION_POLICY_SHARED: u8 = 0x02;
+
 /// A collection that new objects may be sealed under, §3.
 pub const COLLECTION_STATUS_ACTIVE: u8 = 0x01;
 

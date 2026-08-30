@@ -57,65 +57,74 @@ pub fn put_collection_with_envelope(
     envelope_generation: u64,
     envelope: &[u8],
 ) -> Result<()> {
+    db.transaction(|transaction| {
+        project_collection_with_envelope(transaction, collection, envelope_generation, envelope)
+    })
+}
+
+pub(crate) fn project_collection_with_envelope(
+    transaction: &Transaction<'_>,
+    collection: &Collection,
+    envelope_generation: u64,
+    envelope: &[u8],
+) -> Result<()> {
     let epoch = as_sqlite_integer(
         collection.current_epoch,
         "the collection epoch is too large",
     )?;
     let generation =
         as_sqlite_integer(envelope_generation, "the envelope generation is too large")?;
-    db.transaction(|transaction| {
-        put_collection_in(transaction, collection)?;
-        let existing = transaction
-            .query_row(
-                "SELECT body FROM collection_key_envelopes
+    put_collection_in(transaction, collection)?;
+    let existing = transaction
+        .query_row(
+            "SELECT body FROM collection_key_envelopes
                   WHERE collection_id = ?1 AND collection_epoch = ?2 AND generation = ?3",
-                params![
-                    collection.collection_id.as_bytes().as_slice(),
-                    epoch,
-                    generation,
-                ],
-                |row| row.get::<_, Vec<u8>>(0),
-            )
-            .optional_row()?;
-        if let Some(existing) = existing {
-            ensure!(
-                existing == envelope,
-                Conflict,
-                "the collection envelope generation already has another value"
-            );
-            return Ok(());
-        }
-        let active: i64 = transaction
-            .query_row(
-                "SELECT count(*) FROM collection_key_envelopes
-                  WHERE collection_id = ?1 AND collection_epoch = ?2 AND status = 1",
-                params![collection.collection_id.as_bytes().as_slice(), epoch],
-                |row| row.get(0),
-            )
-            .map_err(|error| map_sqlite(error, "the collection envelopes could not be counted"))?;
-        let active = from_sqlite_integer(active, "a catalog count is negative")?;
+            params![
+                collection.collection_id.as_bytes().as_slice(),
+                epoch,
+                generation,
+            ],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional_row()?;
+    if let Some(existing) = existing {
         ensure!(
-            active < u64::from(limits::COLLECTION_ENVELOPES_ACTIVE_MAX),
-            ResourceLimitExceeded,
-            "the epoch holds the §21 maximum of active collection envelopes"
+            existing == envelope,
+            Conflict,
+            "the collection envelope generation already has another value"
         );
-        transaction
-            .execute(
-                "INSERT INTO collection_key_envelopes
+        return Ok(());
+    }
+    let active: i64 = transaction
+        .query_row(
+            "SELECT count(*) FROM collection_key_envelopes
+                  WHERE collection_id = ?1 AND collection_epoch = ?2 AND status = 1",
+            params![collection.collection_id.as_bytes().as_slice(), epoch],
+            |row| row.get(0),
+        )
+        .map_err(|error| map_sqlite(error, "the collection envelopes could not be counted"))?;
+    let active = from_sqlite_integer(active, "a catalog count is negative")?;
+    ensure!(
+        active < u64::from(limits::COLLECTION_ENVELOPES_ACTIVE_MAX),
+        ResourceLimitExceeded,
+        "the epoch holds the §21 maximum of active collection envelopes"
+    );
+    transaction
+        .execute(
+            "INSERT INTO collection_key_envelopes
                      (collection_id, collection_epoch, generation, status, body)
                  VALUES (?1, ?2, ?3, ?4, ?5)
                  ON CONFLICT(collection_id, collection_epoch, generation) DO NOTHING",
-                params![
-                    collection.collection_id.as_bytes().as_slice(),
-                    epoch,
-                    generation,
-                    i64::from(ENVELOPE_STATUS_ACTIVE),
-                    envelope,
-                ],
-            )
-            .map_err(|error| map_sqlite(error, "the collection envelope could not be written"))?;
-        Ok(())
-    })
+            params![
+                collection.collection_id.as_bytes().as_slice(),
+                epoch,
+                generation,
+                i64::from(ENVELOPE_STATUS_ACTIVE),
+                envelope,
+            ],
+        )
+        .map_err(|error| map_sqlite(error, "the collection envelope could not be written"))?;
+    Ok(())
 }
 
 fn put_collection_in(transaction: &Transaction<'_>, collection: &Collection) -> Result<()> {
