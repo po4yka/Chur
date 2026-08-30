@@ -9,14 +9,42 @@ use chur_crypto::Key;
 use chur_format::envelope::CollectionKeyEnvelope;
 use chur_sync_protocol::{
     KeyDirectory, KeyDomain,
-    identity::DeviceIdentityEnvelope,
+    identity::{DeviceIdentity, DeviceIdentityEnvelope},
     state::{DeviceStatus, MembershipState},
 };
 use rusqlite::{OptionalExtension, params};
 
-/// Stores the only local private device identity as a portable recovery
-/// envelope.
+/// Stores the only local private device identity as a portable recovery envelope.
 pub fn store_portable_identity_envelope(
+    db: &mut CatalogDb,
+    root: &Key,
+    membership: &MembershipState,
+    envelope: &DeviceIdentityEnvelope,
+) -> Result<()> {
+    ensure!(
+        envelope.is_recovery_only(),
+        InvalidInput,
+        "portable identity is not recovery-only"
+    );
+    store_identity_envelope(db, root, membership, envelope)
+}
+
+/// Stores the ordinary local identity used for signing and grant opening.
+pub fn store_local_identity_envelope(
+    db: &mut CatalogDb,
+    root: &Key,
+    membership: &MembershipState,
+    envelope: &DeviceIdentityEnvelope,
+) -> Result<()> {
+    ensure!(
+        !envelope.is_recovery_only(),
+        InvalidInput,
+        "local identity has recovery-only purpose"
+    );
+    store_identity_envelope(db, root, membership, envelope)
+}
+
+fn store_identity_envelope(
     db: &mut CatalogDb,
     root: &Key,
     membership: &MembershipState,
@@ -40,10 +68,13 @@ pub fn store_portable_identity_envelope(
             )
             .optional()
             .map_err(|error| map_sqlite(error, "identity envelopes could not be read"))?;
-        if latest
-            .as_ref()
-            .is_some_and(|row| row.0 == generation && row.1 == 1 && row.2 == 1 && row.3 == body)
-        {
+        if latest.as_ref().is_some_and(|row| {
+            row.0 == generation
+                && row.1 == 1
+                && crate::row::flag(row.2, "the identity purpose is not a boolean")
+                    == Ok(envelope.is_recovery_only())
+                && row.3 == body
+        }) {
             return Ok(());
         }
         let expected = match latest {
@@ -70,16 +101,56 @@ pub fn store_portable_identity_envelope(
             .execute(
                 "INSERT INTO sync_identity_envelopes
                      (device_id, identity_generation, active, recovery_only, body)
-                 VALUES (?1, ?2, 1, 1, ?3)",
-                params![device_id.as_bytes().as_slice(), generation, body],
+                 VALUES (?1, ?2, 1, ?3, ?4)",
+                params![
+                    device_id.as_bytes().as_slice(),
+                    generation,
+                    i64::from(envelope.is_recovery_only()),
+                    body
+                ],
             )
-            .map_err(|error| map_sqlite(error, "the portable identity could not be stored"))?;
+            .map_err(|error| map_sqlite(error, "the private identity could not be stored"))?;
         bump_generation(transaction)
     })
 }
 
 /// Loads and authenticates the local portable recovery identity, when present.
 pub fn portable_identity_envelope(
+    db: &CatalogDb,
+    root: &Key,
+    membership: &MembershipState,
+) -> Result<Option<DeviceIdentityEnvelope>> {
+    let envelope = active_identity_envelope(db, root, membership)?;
+    ensure!(
+        envelope
+            .as_ref()
+            .is_none_or(DeviceIdentityEnvelope::is_recovery_only),
+        CatalogCorrupt,
+        "the active identity is not recovery-only"
+    );
+    Ok(envelope)
+}
+
+/// Loads and authenticates the ordinary local identity, when present.
+pub fn local_identity(
+    db: &CatalogDb,
+    root: &Key,
+    membership: &MembershipState,
+) -> Result<Option<(Id, DeviceIdentity)>> {
+    let Some(envelope) = active_identity_envelope(db, root, membership)? else {
+        return Ok(None);
+    };
+    ensure!(
+        !envelope.is_recovery_only(),
+        CatalogCorrupt,
+        "the active identity is recovery-only"
+    );
+    let device_id = *envelope.device_id();
+    let identity = envelope.open_for_local(root).map_err(corrupt_identity)?;
+    Ok(Some((device_id, identity)))
+}
+
+fn active_identity_envelope(
     db: &CatalogDb,
     root: &Key,
     membership: &MembershipState,
@@ -121,16 +192,14 @@ pub fn portable_identity_envelope(
     );
     let device_id = crate::row::id(&device_bytes, "the identity device id is malformed")?;
     let generation = from_sqlite_integer(generation, "the identity generation is negative")?;
-    ensure!(
-        crate::row::flag(recovery_only, "the identity purpose is not a boolean")?,
-        CatalogCorrupt,
-        "the active portable identity is not recovery-only"
-    );
+    let recovery_only = crate::row::flag(recovery_only, "the identity purpose is not a boolean")?;
     let envelope = DeviceIdentityEnvelope::decode(&body).map_err(corrupt_identity)?;
     ensure!(
-        envelope.device_id() == &device_id && envelope.identity_generation() == generation,
+        envelope.device_id() == &device_id
+            && envelope.identity_generation() == generation
+            && envelope.is_recovery_only() == recovery_only,
         CatalogCorrupt,
-        "the portable identity contradicts its catalog row"
+        "the private identity contradicts its catalog row"
     );
     validate_identity_envelope(root, membership, &envelope, ChurStatus::CatalogCorrupt)?;
     Ok(Some(envelope))
@@ -151,15 +220,23 @@ fn validate_identity_envelope(
             "the portable identity is not an active identity of this vault",
         ));
     }
-    let recovered = envelope
-        .open_for_recovery(root)
-        .map_err(|_| Error::new(status, "the portable identity does not authenticate"))?;
-    if recovered.signing_public_key() != *member.signing_public_key()
-        || recovered.hpke_public_key() != *member.hpke_public_key()
+    let (signing_public_key, hpke_public_key) = if envelope.is_recovery_only() {
+        let identity = envelope
+            .open_for_recovery(root)
+            .map_err(|_| Error::new(status, "the private identity does not authenticate"))?;
+        (identity.signing_public_key(), identity.hpke_public_key())
+    } else {
+        let identity = envelope
+            .open_for_local(root)
+            .map_err(|_| Error::new(status, "the private identity does not authenticate"))?;
+        (identity.signing_public_key(), identity.hpke_public_key())
+    };
+    if signing_public_key != *member.signing_public_key()
+        || hpke_public_key != *member.hpke_public_key()
     {
         return Err(Error::new(
             status,
-            "the portable identity keys contradict membership",
+            "the private identity keys contradict membership",
         ));
     }
     Ok(())
@@ -320,5 +397,45 @@ mod tests {
             .expect("load")
             .expect("present");
         assert_eq!(restored.encode(), envelope.encode());
+    }
+
+    #[test]
+    fn local_identity_round_trips_without_exposing_seed_bytes() {
+        let root = Key::new([11; 32]);
+        let key = CatalogKey::derive(&root, &id(12)).expect("catalog key");
+        let mut db = CatalogDb::open(&CatalogLocation::Memory, &key).expect("catalog");
+        open_at_current_version(&mut db, 1).expect("schema");
+        let identity = DeviceIdentity::from_seeds([13; 32], [14; 32]);
+        let enrollment = EnrollmentRecord::initial(
+            id(12),
+            id(15),
+            identity.signing_public_key(),
+            identity.hpke_public_key(),
+        )
+        .expect("enrollment")
+        .sign(identity.signing_key());
+        let membership = sync_membership::provision(&mut db, &enrollment).expect("membership");
+        let envelope = DeviceIdentityEnvelope::seal_for_local(
+            &root,
+            id(12),
+            id(15),
+            1,
+            Nonce::new([16; 24]),
+            &identity,
+        )
+        .expect("envelope");
+
+        store_local_identity_envelope(&mut db, &root, &membership, &envelope).expect("store");
+        let (device_id, restored) = local_identity(&db, &root, &membership)
+            .expect("load")
+            .expect("present");
+        assert_eq!(device_id, id(15));
+        assert_eq!(restored.signing_public_key(), identity.signing_public_key());
+        assert_eq!(restored.hpke_public_key(), identity.hpke_public_key());
+        let error = match portable_identity_envelope(&db, &root, &membership) {
+            Ok(_) => panic!("local identity entered recovery mode"),
+            Err(error) => error,
+        };
+        assert_eq!(error.status(), ChurStatus::CatalogCorrupt);
     }
 }
