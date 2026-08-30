@@ -108,7 +108,7 @@ typedef int32_t chur_status_t;
 /* -------------------------------------------------------------------------
  * Capability bits, returned by chur_capabilities().
  *
- * An unknown set bit is ignored and never enables behaviour. Bits 7 to 63 are
+ * An unknown set bit is ignored and never enables behaviour. Bits 8 to 63 are
  * reserved and are zero in v1.
  * ---------------------------------------------------------------------- */
 

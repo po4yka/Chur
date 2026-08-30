@@ -77,12 +77,15 @@ int main(void) {
           "the independent decoy identity is declared");
     check((capabilities & CHUR_CAP_SYNC) != 0,
           "the ciphertext sync inbox is declared");
+    check((capabilities & CHUR_CAP_COLLECTION_SHARING) != 0,
+          "the collection-sharing surface is declared");
     check((capabilities & CHUR_CAP_CONCURRENT_READS) == 0,
           "no concurrent-reader capability is declared before its evidence exists");
     check((capabilities & ~(CHUR_CAP_DECOY_VAULT | CHUR_CAP_OBJECT_READER |
                             CHUR_CAP_SEQUENTIAL_READER | CHUR_CAP_INTEGRITY_SCAN |
                             CHUR_CAP_BACKUP_PACKAGE | CHUR_CAP_SYNC |
-                            CHUR_CAP_CONCURRENT_READS)) == 0,
+                            CHUR_CAP_CONCURRENT_READS |
+                            CHUR_CAP_COLLECTION_SHARING)) == 0,
           "no reserved capability bit is set");
 
     uint32_t flavor = chur_build_flavor();
@@ -167,6 +170,11 @@ int main(void) {
             (const void *)&chur_object_reader_read_at,
             (const void *)&chur_object_reader_verify_complete,
             (const void *)&chur_object_reader_close,
+            (const void *)&chur_sharing_identity,
+            (const void *)&chur_sharing_prepare,
+            (const void *)&chur_sharing_prepare_device,
+            (const void *)&chur_sharing_accept,
+            (const void *)&chur_sharing_revoke,
         };
         size_t index;
         int all_present = 1;
@@ -175,7 +183,7 @@ int main(void) {
                 all_present = 0;
             }
         }
-        check(all_present, "every section 6.2 export links");
+        check(all_present, "every section 6.2 and sharing export links");
     }
 
     if (failures != 0) {
