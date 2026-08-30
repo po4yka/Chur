@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. v1 ships 1.5: §6.5 through §6.9 each added one minor surface. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
+- native API version is the (major, minor) pair. v1 ships 1.6: §6.5 through §6.10 each added one minor surface. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -456,6 +456,23 @@ chur_status_t chur_sharing_identity(chur_handle_t session,
 ```
 
 The caller-owned result is a bounded public record: `version:u16 = 1`, `vault_id:bytes[16]`, `device_id:bytes[16]`, `signing_public_key:bytes[32]`, `hpke_public_key:bytes[32]`, then three `u32`-length-prefixed fields containing the 49-byte ASCII fingerprint, the 270-byte self-enrollment, and its canonical outer operation. Integers are big-endian. A retry returns identical bytes. A buffer that is too small receives no partial record and returns `RESOURCE_LIMIT_EXCEEDED`.
+
+### 6.10 Share preparation, ABI 1.6
+
+`chur_sharing_prepare` adds or updates one recipient and issues its HPKE collection-key grant. The input enrollment is the recipient's canonical 270-byte initial enrollment. `permissions` is the cumulative profile `1` (read), `3` (contribute), or `7` (manage members). `fingerprint_verified` is exactly `0` or `1`. Private identity and collection keys stay inside Rust.
+
+```c
+chur_status_t chur_sharing_prepare(chur_handle_t session,
+                                   const uint8_t collection_id[16],
+                                   const uint8_t *recipient_enrollment,
+                                   uint32_t recipient_enrollment_length,
+                                   uint8_t permissions,
+                                   uint8_t fingerprint_verified,
+                                   uint8_t *destination, size_t capacity,
+                                   size_t *bytes_written);
+```
+
+The caller-owned output is `version:u16 = 1` followed by four `u32`-length-prefixed canonical fields: the collection membership record, its authenticated outer operation, the HPKE grant, and its authenticated outer operation. Integers are big-endian. A retry with the same accepted state returns identical bytes. A short buffer receives no partial record, sets `bytes_written` to zero, and returns `RESOURCE_LIMIT_EXCEEDED`.
 
 ## 7. Buffer ownership
 
