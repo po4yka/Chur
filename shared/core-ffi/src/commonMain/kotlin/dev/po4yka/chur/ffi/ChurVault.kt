@@ -149,6 +149,18 @@ object ChurVault {
         decodePreparedShare(buffer.copyOut(written[0]), written[0])
     }
 
+    /** Authenticates relay evidence and atomically installs one recipient share. */
+    fun acceptShare(session: Long, share: ShareAcceptance) {
+        val encoded = encodeShareAcceptance(share)
+        withChurBuffer(encoded.size) { buffer ->
+            buffer.copyIn(encoded)
+            ChurFailure.check(
+                ChurNative.sharingAccept(session, buffer, encoded.size),
+                "sharing accept",
+            )
+        }
+    }
+
     /** Stages one opaque downloaded record without opening vault keys. */
     fun stageSync(
         runtime: Long,

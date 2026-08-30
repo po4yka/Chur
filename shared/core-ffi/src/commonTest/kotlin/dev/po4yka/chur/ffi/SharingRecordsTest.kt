@@ -2,6 +2,7 @@ package dev.po4yka.chur.ffi
 
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
+import kotlin.test.assertFailsWith
 
 class SharingRecordsTest {
     @Test
@@ -20,5 +21,48 @@ class SharingRecordsTest {
         assertContentEquals(byteArrayOf(12), share.membershipOperation)
         assertContentEquals(byteArrayOf(13), share.grant)
         assertContentEquals(byteArrayOf(14), share.grantOperation)
+    }
+
+    @Test
+    fun share_acceptance_bundle_keeps_issuer_and_pair_boundaries() {
+        val encoded = encodeShareAcceptance(
+            ShareAcceptance(
+                issuers = listOf(
+                    SharingIssuerEvidence(
+                        membership = listOf(byteArrayOf(1)),
+                        operations = listOf(byteArrayOf(2), byteArrayOf(3)),
+                    ),
+                ),
+                membership = listOf(
+                    SharingMembershipEvidence(byteArrayOf(4), byteArrayOf(5)),
+                ),
+                grant = byteArrayOf(6),
+                grantOperation = byteArrayOf(7),
+            ),
+        )
+
+        assertContentEquals(
+            byteArrayOf(
+                0, 1,
+                0, 0, 0, 1,
+                0, 0, 0, 1, 0, 0, 0, 1, 1,
+                0, 0, 0, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 3,
+                0, 0, 0, 1,
+                0, 0, 0, 1, 4, 0, 0, 0, 1, 5,
+                0, 0, 0, 1, 6,
+                0, 0, 0, 1, 7,
+            ),
+            encoded,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            encodeShareAcceptance(
+                ShareAcceptance(
+                    issuers = List(258) { SharingIssuerEvidence(emptyList(), emptyList()) },
+                    membership = emptyList(),
+                    grant = byteArrayOf(1),
+                    grantOperation = byteArrayOf(2),
+                ),
+            )
+        }
     }
 }

@@ -479,6 +479,31 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingPrepare<'local>(
     finish_written(&mut env, status, &out_written, written)
 }
 
+/// Authenticates and installs one recipient share bundle.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingAccept<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    bundle: JByteBuffer<'local>,
+    length: jint,
+) -> jint {
+    let Some((address, capacity)) = direct_buffer(&env, &bundle) else {
+        return INVALID_INPUT;
+    };
+    let Ok(length) = usize::try_from(length) else {
+        return INVALID_INPUT;
+    };
+    if length > capacity {
+        return INVALID_INPUT;
+    }
+    let Ok(length) = u32::try_from(length) else {
+        return INVALID_INPUT;
+    };
+    // SAFETY: the direct buffer covers `length` live readable bytes.
+    unsafe { chur_ffi::sharing::chur_sharing_accept(handle_of(session), address, length) }
+}
+
 // ---------------------------------------------------------------------------
 // Catalog queries
 // ---------------------------------------------------------------------------

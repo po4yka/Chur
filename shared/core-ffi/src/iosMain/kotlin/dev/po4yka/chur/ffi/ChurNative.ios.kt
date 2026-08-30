@@ -50,6 +50,7 @@ import dev.po4yka.chur.native.chur_runtime_open
 import dev.po4yka.chur.native.chur_session_close
 import dev.po4yka.chur.native.chur_sharing_identity
 import dev.po4yka.chur.native.chur_sharing_prepare
+import dev.po4yka.chur.native.chur_sharing_accept
 import dev.po4yka.chur.native.chur_status_is_known
 import dev.po4yka.chur.native.chur_sync_process
 import dev.po4yka.chur.native.chur_sync_stage
@@ -287,6 +288,9 @@ internal actual object ChurNative {
             }
         }
     }
+
+    actual fun sharingAccept(session: Long, bundle: ChurBuffer, length: Int): Int =
+        chur_sharing_accept(session.toULong(), bundle.pointer, length.toUInt())
 
     // -----------------------------------------------------------------------
     // Catalog queries

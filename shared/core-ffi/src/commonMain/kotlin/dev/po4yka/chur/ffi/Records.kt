@@ -40,6 +40,10 @@ const val WRAPPED_KEY_LENGTH: Int = 48
 /** Length of an Ed25519 or X25519 public key. */
 const val PUBLIC_KEY_LENGTH: Int = 32
 
+private const val SHARING_BUNDLE_BYTES_MAX: Long = 16L * 1024 * 1024
+private const val SHARING_RECORDS_MAX: Int = 4_096
+private const val SHARING_ISSUERS_MAX: Int = 257
+
 /**
  * The largest recovery phrase, §6.5.
  *
@@ -162,6 +166,26 @@ class PreparedShare(
     val grantOperation: ByteArray,
 )
 
+/** Public identity evidence for one issuer of sharing records. */
+class SharingIssuerEvidence(
+    val membership: List<ByteArray>,
+    val operations: List<ByteArray>,
+)
+
+/** One collection membership record and its authenticated outer operation. */
+class SharingMembershipEvidence(
+    val membership: ByteArray,
+    val operation: ByteArray,
+)
+
+/** Relay evidence consumed atomically by `chur_sharing_accept`. */
+class ShareAcceptance(
+    val issuers: List<SharingIssuerEvidence>,
+    val membership: List<SharingMembershipEvidence>,
+    val grant: ByteArray,
+    val grantOperation: ByteArray,
+)
+
 /** Decodes the collection-sharing identity record of §6.9. */
 fun decodeSharingIdentity(bytes: ByteArray, length: Int): SharingIdentity {
     val reader = RecordReader(bytes, length)
@@ -195,6 +219,65 @@ fun decodePreparedShare(bytes: ByteArray, length: Int): PreparedShare {
     )
     reader.requireExhausted()
     return share
+}
+
+/** Encodes the bounded share acceptance bundle of §6.11. */
+fun encodeShareAcceptance(share: ShareAcceptance): ByteArray {
+    require(share.issuers.size <= SHARING_ISSUERS_MAX) { "too many sharing issuers" }
+    require(share.membership.size <= SHARING_RECORDS_MAX) { "too many membership records" }
+    share.issuers.forEach { issuer ->
+        require(issuer.membership.size <= SHARING_RECORDS_MAX) { "too many issuer memberships" }
+        require(issuer.operations.size <= SHARING_RECORDS_MAX) { "too many issuer operations" }
+    }
+    val records = buildList {
+        share.issuers.forEach { issuer ->
+            addAll(issuer.membership)
+            addAll(issuer.operations)
+        }
+        share.membership.forEach { evidence ->
+            add(evidence.membership)
+            add(evidence.operation)
+        }
+        add(share.grant)
+        add(share.grantOperation)
+    }
+    val size = records.fold(2L + 4 + 4 + (share.issuers.size * 8L)) { total, record ->
+        total + 4 + record.size
+    }
+    require(size <= SHARING_BUNDLE_BYTES_MAX) { "sharing acceptance bundle is too large" }
+    val bytes = ByteArray(size.toInt())
+    var at = 0
+    fun putShort(value: Int) {
+        bytes[at++] = (value ushr 8).toByte()
+        bytes[at++] = value.toByte()
+    }
+    fun putInt(value: Int) {
+        bytes[at++] = (value ushr 24).toByte()
+        bytes[at++] = (value ushr 16).toByte()
+        bytes[at++] = (value ushr 8).toByte()
+        bytes[at++] = value.toByte()
+    }
+    fun putRecord(record: ByteArray) {
+        putInt(record.size)
+        record.copyInto(bytes, at)
+        at += record.size
+    }
+    putShort(1)
+    putInt(share.issuers.size)
+    share.issuers.forEach { issuer ->
+        putInt(issuer.membership.size)
+        issuer.membership.forEach(::putRecord)
+        putInt(issuer.operations.size)
+        issuer.operations.forEach(::putRecord)
+    }
+    putInt(share.membership.size)
+    share.membership.forEach { evidence ->
+        putRecord(evidence.membership)
+        putRecord(evidence.operation)
+    }
+    putRecord(share.grant)
+    putRecord(share.grantOperation)
+    return bytes
 }
 
 /** Decodes `ChurPageV1`, §6.4. */
