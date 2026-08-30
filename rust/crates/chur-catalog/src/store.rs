@@ -47,49 +47,7 @@ pub struct ObjectActivation {
 /// It is idempotent on the collection identifier, so provisioning may run it
 /// again after an interrupted first run.
 pub fn put_collection(db: &mut CatalogDb, collection: &Collection) -> Result<()> {
-    let epoch = as_sqlite_integer(
-        collection.current_epoch,
-        "the collection epoch is too large",
-    )?;
-    let revision = as_sqlite_integer(
-        collection.created_revision,
-        "the collection revision is too large",
-    )?;
-    db.transaction(|transaction| {
-        let present = count(transaction, "SELECT count(*) FROM collections")?;
-        let already: i64 = transaction
-            .query_row(
-                "SELECT count(*) FROM collections WHERE collection_id = ?1",
-                [collection.collection_id.as_bytes().as_slice()],
-                |row| row.get(0),
-            )
-            .map_err(|error| map_sqlite(error, "the collection could not be read"))?;
-        if already == 0 {
-            ensure!(
-                present < limits::COLLECTIONS_MAX,
-                ResourceLimitExceeded,
-                "the vault holds the §21 maximum of collections"
-            );
-        }
-        transaction
-            .execute(
-                "INSERT INTO collections
-                     (collection_id, current_epoch, policy_type, created_revision, status)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT(collection_id) DO UPDATE SET
-                     current_epoch = excluded.current_epoch,
-                     status = excluded.status",
-                params![
-                    collection.collection_id.as_bytes().as_slice(),
-                    epoch,
-                    i64::from(collection.policy_type),
-                    revision,
-                    i64::from(collection.status),
-                ],
-            )
-            .map_err(|error| map_sqlite(error, "the collection could not be written"))?;
-        Ok(())
-    })
+    db.transaction(|transaction| put_collection_in(transaction, collection))
 }
 
 /// Writes a collection and its first key envelope in one transaction, §4 and §17.
@@ -99,7 +57,6 @@ pub fn put_collection_with_envelope(
     envelope_generation: u64,
     envelope: &[u8],
 ) -> Result<()> {
-    put_collection(db, collection)?;
     let epoch = as_sqlite_integer(
         collection.current_epoch,
         "the collection epoch is too large",
@@ -107,6 +64,27 @@ pub fn put_collection_with_envelope(
     let generation =
         as_sqlite_integer(envelope_generation, "the envelope generation is too large")?;
     db.transaction(|transaction| {
+        put_collection_in(transaction, collection)?;
+        let existing = transaction
+            .query_row(
+                "SELECT body FROM collection_key_envelopes
+                  WHERE collection_id = ?1 AND collection_epoch = ?2 AND generation = ?3",
+                params![
+                    collection.collection_id.as_bytes().as_slice(),
+                    epoch,
+                    generation,
+                ],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .optional_row()?;
+        if let Some(existing) = existing {
+            ensure!(
+                existing == envelope,
+                Conflict,
+                "the collection envelope generation already has another value"
+            );
+            return Ok(());
+        }
         let active: i64 = transaction
             .query_row(
                 "SELECT count(*) FROM collection_key_envelopes
@@ -138,6 +116,48 @@ pub fn put_collection_with_envelope(
             .map_err(|error| map_sqlite(error, "the collection envelope could not be written"))?;
         Ok(())
     })
+}
+
+fn put_collection_in(transaction: &Transaction<'_>, collection: &Collection) -> Result<()> {
+    let present = count(transaction, "SELECT count(*) FROM collections")?;
+    let already: i64 = transaction
+        .query_row(
+            "SELECT count(*) FROM collections WHERE collection_id = ?1",
+            [collection.collection_id.as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .map_err(|error| map_sqlite(error, "the collection could not be read"))?;
+    if already == 0 {
+        ensure!(
+            present < limits::COLLECTIONS_MAX,
+            ResourceLimitExceeded,
+            "the vault holds the §21 maximum of collections"
+        );
+    }
+    transaction
+        .execute(
+            "INSERT INTO collections
+                 (collection_id, current_epoch, policy_type, created_revision, status)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(collection_id) DO UPDATE SET
+                 current_epoch = excluded.current_epoch,
+                 status = excluded.status",
+            params![
+                collection.collection_id.as_bytes().as_slice(),
+                as_sqlite_integer(
+                    collection.current_epoch,
+                    "the collection epoch is too large"
+                )?,
+                i64::from(collection.policy_type),
+                as_sqlite_integer(
+                    collection.created_revision,
+                    "the collection revision is too large"
+                )?,
+                i64::from(collection.status),
+            ],
+        )
+        .map_err(|error| map_sqlite(error, "the collection could not be written"))?;
+    Ok(())
 }
 
 /// The active key envelope of one collection epoch, §4.
@@ -1298,6 +1318,51 @@ mod tests {
             panic!("the catalog accepted something the specification forbids");
         };
         error.status()
+    }
+
+    #[test]
+    fn collection_and_first_envelope_commit_atomically_and_replay_exactly() {
+        let root = Key::new([1; 32]);
+        let vault = Id::new([2; 16]).expect("vault");
+        let key = CatalogKey::derive(&root, &vault).expect("key");
+        let mut db = CatalogDb::open(&CatalogLocation::Memory, &key).expect("open");
+        open_at_current_version(&mut db, 1).expect("schema");
+        let collection = Collection {
+            collection_id: Id::new([3; 16]).expect("collection"),
+            current_epoch: 1,
+            policy_type: COLLECTION_POLICY_VAULT_DEFAULT,
+            created_revision: 1,
+            status: COLLECTION_STATUS_ACTIVE,
+        };
+        db.connection()
+            .execute_batch(
+                "CREATE TRIGGER reject_collection_envelope
+                 BEFORE INSERT ON collection_key_envelopes
+                 BEGIN SELECT RAISE(ABORT, 'test rejection'); END;",
+            )
+            .expect("trigger");
+        assert!(put_collection_with_envelope(&mut db, &collection, 1, &[4]).is_err());
+        assert_eq!(
+            db.connection()
+                .query_row("SELECT count(*) FROM collections", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("collection count"),
+            0
+        );
+
+        db.connection()
+            .execute_batch("DROP TRIGGER reject_collection_envelope")
+            .expect("drop trigger");
+        put_collection_with_envelope(&mut db, &collection, 1, &[4]).expect("store");
+        put_collection_with_envelope(&mut db, &collection, 1, &[4]).expect("exact replay");
+        assert_eq!(
+            rejection(put_collection_with_envelope(&mut db, &collection, 1, &[5],)),
+            ChurStatus::Conflict
+        );
+        assert_eq!(
+            active_collection_envelope(&db, &collection.collection_id, 1).expect("envelope"),
+            vec![4]
+        );
     }
 
     #[test]
