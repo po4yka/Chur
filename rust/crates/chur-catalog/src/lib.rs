@@ -10,6 +10,7 @@
 //! - `docs/format/CATALOG_SCHEMA_V1.md` (logical entities, transactions)
 //! - `docs/format/CATALOG_SCHEMA_V2.md` (encrypted synchronization state)
 //! - `docs/format/CATALOG_SCHEMA_V3.md` (collection-sharing state)
+//! - `docs/format/CATALOG_SCHEMA_V4.md` (collection operation streams)
 //! - ADR-0004 (SQLCipher accessed directly from Rust)
 //!
 //! Two representations exist and no third: the physical SQLCipher schema of
@@ -25,6 +26,7 @@ pub mod query;
 pub(crate) mod row;
 pub mod schema;
 pub mod sharing;
+pub mod sharing_log;
 pub mod store;
 pub mod sync_engine;
 pub mod sync_keys;

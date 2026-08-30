@@ -7,9 +7,10 @@ use chur_crypto::{Commitment, Key, Nonce};
 
 use crate::collection_membership::CollectionMembershipState;
 use crate::collection_operation::{CollectionObservedHead, CollectionOperation};
+use crate::grant::PermissionProfile;
 use crate::operation::DeviceSigningKey;
 use crate::operation_log::{ApplyOutcome, ForkState};
-use crate::payload::OperationPayload;
+use crate::payload::{OperationPayload, PayloadBody};
 use crate::state::MembershipState;
 
 type Participant = (Id, Id);
@@ -167,15 +168,7 @@ impl CollectionOperationLog {
         source_membership: &MembershipState,
         collection_membership: &CollectionMembershipState,
     ) -> Result<ApplyOutcome> {
-        ensure!(
-            operation.key_selector() == &self.key_selector
-                && payload.collection_id() == &self.collection_id
-                && payload.collection_epoch() == self.collection_epoch
-                && collection_membership.collection_id() == &self.collection_id
-                && collection_membership.collection_epoch() == self.collection_epoch,
-            AuthenticationFailed,
-            "collection operation does not match this epoch log"
-        );
+        self.validate_context(operation, payload, collection_membership)?;
         collection_membership.authorize_collection_operation(
             operation,
             payload,
@@ -186,7 +179,84 @@ impl CollectionOperationLog {
             AuthenticationFailed,
             "source membership belongs to another vault"
         );
+        self.accept_chain(operation, source_membership, collection_membership, false)
+    }
 
+    /// Replays one record already committed in the protected local catalog.
+    pub fn restore_accepted(
+        &mut self,
+        operation: &CollectionOperation,
+        payload: &OperationPayload,
+        issuer_membership: &MembershipState,
+        source_membership: &MembershipState,
+        collection_membership: &CollectionMembershipState,
+    ) -> Result<ApplyOutcome> {
+        self.validate_context(operation, payload, collection_membership)?;
+        ensure!(
+            issuer_membership.vault_id() == operation.issuer_identity_vault_id()
+                && source_membership.vault_id() == collection_membership.source_vault_id(),
+            CatalogCorrupt,
+            "restored collection operation membership belongs to another vault"
+        );
+        let issuer = issuer_membership
+            .device(operation.issuer_device_id())
+            .ok_or_else(|| Error::new(ChurStatus::CatalogCorrupt, "restored issuer is unknown"))?;
+        ensure!(
+            issuer
+                .signing_public_keys()
+                .any(|key| operation.verify_signature(key).is_ok()),
+            CatalogCorrupt,
+            "restored collection operation signature is invalid"
+        );
+        if operation.issuer_identity_vault_id() != collection_membership.source_vault_id() {
+            let member = collection_membership
+                .member(
+                    operation.issuer_identity_vault_id(),
+                    operation.issuer_device_id(),
+                )
+                .ok_or_else(|| {
+                    Error::new(
+                        ChurStatus::CatalogCorrupt,
+                        "restored issuer is not a collection member",
+                    )
+                })?;
+            ensure!(
+                member.signing_public_key() == issuer.signing_public_key()
+                    && (member.permissions() as u8 & PermissionProfile::Contribute as u8)
+                        == PermissionProfile::Contribute as u8
+                    && !matches!(payload.body(), PayloadBody::RewrapObjectKey { .. }),
+                CatalogCorrupt,
+                "restored collection operation issuer is not authorized"
+            );
+        }
+        self.accept_chain(operation, source_membership, collection_membership, true)
+    }
+
+    fn validate_context(
+        &self,
+        operation: &CollectionOperation,
+        payload: &OperationPayload,
+        collection_membership: &CollectionMembershipState,
+    ) -> Result<()> {
+        ensure!(
+            operation.key_selector() == &self.key_selector
+                && payload.collection_id() == &self.collection_id
+                && payload.collection_epoch() == self.collection_epoch
+                && collection_membership.collection_id() == &self.collection_id
+                && collection_membership.collection_epoch() == self.collection_epoch,
+            AuthenticationFailed,
+            "collection operation does not match this epoch log"
+        );
+        payload.validate_for_collection_operation(&self.collection_id, self.collection_epoch)
+    }
+
+    fn accept_chain(
+        &mut self,
+        operation: &CollectionOperation,
+        source_membership: &MembershipState,
+        collection_membership: &CollectionMembershipState,
+        restore: bool,
+    ) -> Result<ApplyOutcome> {
         let participant = (
             *operation.issuer_identity_vault_id(),
             *operation.issuer_device_id(),
@@ -235,11 +305,19 @@ impl CollectionOperationLog {
                 *observed.issuer_device_id(),
             );
             ensure!(
-                participant_is_active(
-                    &observed_participant,
-                    source_membership,
-                    collection_membership,
-                ),
+                if restore {
+                    participant_is_known(
+                        &observed_participant,
+                        source_membership,
+                        collection_membership,
+                    )
+                } else {
+                    participant_is_active(
+                        &observed_participant,
+                        source_membership,
+                        collection_membership,
+                    )
+                },
                 AuthenticationFailed,
                 "collection operation observes an unauthorized participant"
             );
@@ -282,6 +360,56 @@ impl CollectionOperationLog {
     #[must_use]
     pub fn fork(&self, identity_vault_id: &Id, device_id: &Id) -> Option<&CollectionForkEvidence> {
         self.forks.get(&(*identity_vault_id, *device_id))
+    }
+
+    /// Restores fork evidence already committed in the protected catalog.
+    pub fn restore_fork(
+        &mut self,
+        identity_vault_id: Id,
+        device_id: Id,
+        state: ForkState,
+        accepted_record: Vec<u8>,
+        conflicting_record: Vec<u8>,
+    ) -> Result<()> {
+        let accepted = CollectionOperation::decode(&accepted_record)?;
+        let conflicting = CollectionOperation::decode(&conflicting_record)?;
+        ensure!(
+            accepted.key_selector() == &self.key_selector
+                && conflicting.key_selector() == &self.key_selector
+                && accepted.issuer_identity_vault_id() == &identity_vault_id
+                && conflicting.issuer_identity_vault_id() == &identity_vault_id
+                && accepted.issuer_device_id() == &device_id
+                && conflicting.issuer_device_id() == &device_id,
+            CatalogCorrupt,
+            "restored collection fork projections disagree"
+        );
+        self.forks.insert(
+            (identity_vault_id, device_id),
+            CollectionForkEvidence {
+                state,
+                accepted_record,
+                conflicting_record,
+            },
+        );
+        Ok(())
+    }
+
+    /// Collection identifier bound to this log.
+    #[must_use]
+    pub const fn collection_id(&self) -> &Id {
+        &self.collection_id
+    }
+
+    /// Collection epoch bound to this log.
+    #[must_use]
+    pub const fn collection_epoch(&self) -> u64 {
+        self.collection_epoch
+    }
+
+    /// Opaque selector bound to this log.
+    #[must_use]
+    pub const fn key_selector(&self) -> &Id {
+        &self.key_selector
     }
 
     fn freeze(&mut self, operation: &CollectionOperation) -> Result<ApplyOutcome> {
@@ -329,4 +457,18 @@ fn participant_is_active(
     collection_membership
         .member(&participant.0, &participant.1)
         .is_some_and(|member| member.is_active())
+}
+
+fn participant_is_known(
+    participant: &Participant,
+    source_membership: &MembershipState,
+    collection_membership: &CollectionMembershipState,
+) -> bool {
+    if &participant.0 == collection_membership.source_vault_id() {
+        return source_membership.vault_id() == &participant.0
+            && source_membership.device(&participant.1).is_some();
+    }
+    collection_membership
+        .member(&participant.0, &participant.1)
+        .is_some()
 }
