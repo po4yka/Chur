@@ -62,6 +62,14 @@ class ChurController(
     private val _recoveryPhrase = MutableStateFlow<String?>(null)
     private val _deviceUnlockOffered = MutableStateFlow(false)
 
+    /**
+     * How many activities the host launched and is still waiting on.
+     *
+     * Touched only from the main dispatcher, which is where both the surface
+     * callbacks and the lifecycle callbacks run, so it needs no synchronization.
+     */
+    private var hostActivities = 0
+
     /** Where the application is, `DESIGN.md` §10.3. */
     val route: StateFlow<AppRoute> = _route.asStateFlow()
 
@@ -248,9 +256,33 @@ class ChurController(
      */
     fun panic() = lock(LockReason.PANIC)
 
+    /**
+     * Marks that the host is running an activity it launched itself.
+     *
+     * The background lock cannot tell the user leaving from the application
+     * asking the platform for something: both stop the activity. The media
+     * picker of `ANDROID.md` §14.1 is the case that matters, because the whole
+     * import path goes through it — the lock fired as the picker came up, and
+     * the result arrived at a locked vault, so no import could ever finish.
+     *
+     * The cover still goes on, so the switcher entry is covered either way.
+     * What is suppressed is the lock alone, and only while the host says a
+     * launch of its own is outstanding. The idle timer is untouched and stays
+     * the backstop for a user who walks away from an open picker.
+     */
+    fun beginHostActivity() {
+        hostActivities += 1
+    }
+
+    /** Ends what [beginHostActivity] began, on the result or on a dismissal. */
+    fun endHostActivity() {
+        if (hostActivities > 0) hostActivities -= 1
+    }
+
     /** The application left the foreground. */
     suspend fun onBackground() {
         privacy.setEnabled(true)
+        if (hostActivities > 0) return
         withContext(Dispatchers.Default) { repository.onBackground() }
         if (repository.state.value !is VaultState.Unlocked) {
             clearPrivateProjections()
@@ -562,6 +594,10 @@ class ChurController(
         // `RECOVERY.md` §2 shows it exactly once, the password still opens the
         // vault, and §8 there is how a user gets another one.
         _recoveryPhrase.value = null
+        // A launch whose result never arrived belonged to the session that just
+        // ended. Carrying its count forward would suppress the background lock
+        // of the next session, so the count ends with the session.
+        hostActivities = 0
     }
 
     private suspend fun enterVault() {

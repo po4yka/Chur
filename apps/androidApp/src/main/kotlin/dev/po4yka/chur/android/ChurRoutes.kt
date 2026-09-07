@@ -179,6 +179,9 @@ private fun VaultRoute(controller: ChurController) {
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
     ) { uri ->
+        // The picker is an activity of ours, so the vault stayed open while it
+        // ran. It ends here whether the user chose something or dismissed it.
+        controller.endHostActivity()
         if (uri != null) {
             scope.launch {
                 controller.report("Importing")
@@ -293,6 +296,10 @@ private fun VaultRoute(controller: ChurController) {
                 selection = selection.toggle(projection.id)
             },
             onImport = {
+                // Announced before the launch, because the platform stops this
+                // activity as the picker comes up and the background lock would
+                // otherwise close the vault the result needs.
+                controller.beginHostActivity()
                 picker.launch(
                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo),
                 )
