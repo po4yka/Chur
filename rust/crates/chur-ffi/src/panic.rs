@@ -16,7 +16,7 @@
 //!
 //! [ADR-0037]: https://github.com/po4yka/Chur/blob/main/docs/adr/0037-contain-panics-in-channel-less-exports.md
 
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Once;
 
 use chur_core::ChurStatus;

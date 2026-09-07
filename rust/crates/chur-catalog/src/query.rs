@@ -12,14 +12,13 @@
 //! filenames across the boundary.
 
 use chur_core::{
-    bail, ensure,
-    limits::{catalog as limits, ID_LEN},
-    ChurStatus, Error, Id, Result,
+    ChurStatus, Error, Id, Result, bail, ensure,
+    limits::{ID_LEN, catalog as limits},
 };
 use chur_format::constants::{IntegritySummary, MediaClass, ObjectState};
 use rusqlite::types::Value;
 
-use crate::db::{as_sqlite_integer, from_sqlite_integer, map_sqlite, CatalogDb};
+use crate::db::{CatalogDb, as_sqlite_integer, from_sqlite_integer, map_sqlite};
 use crate::schema::{check_query_limit, generation};
 
 /// The scope a page is drawn from, §16.2.
@@ -650,12 +649,12 @@ mod tests {
     use super::*;
     use crate::db::{CatalogKey, CatalogLocation};
     use crate::model::{
-        Album, Collection, MetadataRevision, Object, Stream, Tag, COLLECTION_POLICY_VAULT_DEFAULT,
-        COLLECTION_STATUS_ACTIVE,
+        Album, COLLECTION_POLICY_VAULT_DEFAULT, COLLECTION_STATUS_ACTIVE, Collection,
+        MetadataRevision, Object, Stream, Tag,
     };
     use crate::schema::open_at_current_version;
     use crate::store;
-    use chur_crypto::{random, Key, Nonce};
+    use chur_crypto::{Key, Nonce, random};
     use chur_format::constants::StreamKind;
     use chur_format::envelope::ObjectKeyEnvelope;
 

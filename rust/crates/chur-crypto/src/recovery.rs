@@ -15,7 +15,7 @@ use zeroize::Zeroizing;
 
 use chur_core::limits::KEY_LEN;
 use chur_core::status::ChurStatus;
-use chur_core::{ensure, Error, Result};
+use chur_core::{Error, Result, ensure};
 
 use crate::secret::Key;
 

@@ -2,10 +2,11 @@
 
 use std::collections::BTreeMap;
 
-use chur_core::{ensure, ChurStatus, Error, Id, Result};
-use chur_crypto::{random, Key, Nonce};
+use chur_core::{ChurStatus, Error, Id, Result, ensure};
+use chur_crypto::{Key, Nonce, random};
 use chur_format::envelope::CollectionKeyEnvelope;
 use chur_sync_protocol::{
+    KeyDomain,
     collection_membership::{
         CollectionMembershipAction, CollectionMembershipRecord, CollectionMembershipState,
         RecipientVerification,
@@ -16,13 +17,12 @@ use chur_sync_protocol::{
     operation_log::{ApplyOutcome, OperationLog},
     payload::{OperationPayload, PayloadBody},
     state::{DeviceStatus, MembershipState},
-    KeyDomain,
 };
 
 use crate::{
-    model::{Collection, COLLECTION_POLICY_SHARED, COLLECTION_STATUS_ACTIVE},
-    schema, sharing, store, sync_keys, sync_log, sync_membership, sync_receive, sync_rotation,
     CatalogDb,
+    model::{COLLECTION_POLICY_SHARED, COLLECTION_STATUS_ACTIVE, Collection},
+    schema, sharing, store, sync_keys, sync_log, sync_membership, sync_receive, sync_rotation,
 };
 
 /// One canonical record in an issuer identity-membership chain.
@@ -1244,8 +1244,8 @@ mod tests {
     use crate::{
         db::{CatalogKey, CatalogLocation},
         model::{
-            Collection, COLLECTION_POLICY_SHARED, COLLECTION_POLICY_VAULT_DEFAULT,
-            COLLECTION_STATUS_ACTIVE,
+            COLLECTION_POLICY_SHARED, COLLECTION_POLICY_VAULT_DEFAULT, COLLECTION_STATUS_ACTIVE,
+            Collection,
         },
         schema,
     };
@@ -1433,9 +1433,11 @@ mod tests {
                 &recipient_membership,
             )
             .expect("initial operation");
-        assert!(recipient_log
-            .accept(&initial_operation, &recipient_membership)
-            .is_ok());
+        assert!(
+            recipient_log
+                .accept(&initial_operation, &recipient_membership)
+                .is_ok()
+        );
         let peer_device = id(25);
         let peer = DeviceIdentity::from_seeds([26; 32], [27; 32]);
         let peer_enrollment = EnrollmentRecord::new(
@@ -1646,15 +1648,21 @@ mod tests {
             .expect("sharing state")
             .expect("present");
         assert_eq!(final_state.collection_epoch(), 2);
-        assert!(final_state
-            .validate_grant(first.grant(), &source_membership)
-            .is_err());
-        assert!(final_state
-            .validate_grant(second_primary_share.grant(), &source_membership)
-            .is_err());
-        assert!(final_state
-            .validate_grant(second_share.grant(), &source_membership)
-            .is_err());
+        assert!(
+            final_state
+                .validate_grant(first.grant(), &source_membership)
+                .is_err()
+        );
+        assert!(
+            final_state
+                .validate_grant(second_primary_share.grant(), &source_membership)
+                .is_err()
+        );
+        assert!(
+            final_state
+                .validate_grant(second_share.grant(), &source_membership)
+                .is_err()
+        );
     }
 
     #[test]
@@ -1914,24 +1922,28 @@ mod tests {
                  BEGIN SELECT RAISE(ABORT, 'test rejection'); END;",
             )
             .expect("trigger");
-        assert!(accept_share(
-            &mut recipient,
-            &recipient_root,
-            &[evidence],
-            &membership,
-            prepared.grant(),
-            prepared.grant_operation(),
-        )
-        .is_err());
+        assert!(
+            accept_share(
+                &mut recipient,
+                &recipient_root,
+                &[evidence],
+                &membership,
+                prepared.grant(),
+                prepared.grant_operation(),
+            )
+            .is_err()
+        );
         assert_eq!(
             store::collection(&recipient, &collection_id)
                 .expect_err("failed transaction left a collection")
                 .status(),
             ChurStatus::NotFound
         );
-        assert!(sharing::load(&recipient, &collection_id)
-            .expect("sharing state")
-            .is_none());
+        assert!(
+            sharing::load(&recipient, &collection_id)
+                .expect("sharing state")
+                .is_none()
+        );
         recipient
             .connection()
             .execute_batch("DROP TRIGGER reject_received_grant")
