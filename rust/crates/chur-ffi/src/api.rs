@@ -343,9 +343,16 @@ pub unsafe extern "C" fn chur_vault_unlock(
         // SAFETY: the caller guarantees the pointers above for the call.
         let request = unsafe { read_request(request)? };
         let secret = unsafe { borrow_bytes(request.secret, request.secret_length)? };
-        let root = {
+        // §8.1: at most one unlock is in flight per runtime, and a second
+        // unlock returns CONFLICT before deriving anything, so a double-tapped
+        // unlock button never starts two derivations. The claim outlives the
+        // mutex borrow, which the derivation must not hold.
+        let (root, _in_flight) = {
             let guard = registry::lock(guarded);
-            guard.root().clone()
+            let in_flight = guard.begin_unlock().ok_or_else(|| {
+                Error::new(ChurStatus::Conflict, "an unlock is already in flight")
+            })?;
+            (guard.root().clone(), in_flight)
         };
         let now = now_ms();
         let mut session = match request.factor {
