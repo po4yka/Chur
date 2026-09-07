@@ -95,6 +95,17 @@ class ChurController(
      */
     private var hostActivities = 0
 
+    /**
+     * Whether [start] has already run.
+     *
+     * Touched only from the main dispatcher, which is where a host calls
+     * [start], so it needs no synchronization. §14 of
+     * `docs/interop/FFI_CONTRACT.md` permits one runtime per process, and a
+     * host whose window the platform recreated calls [start] again on this
+     * same controller.
+     */
+    private var started = false
+
     /** Where the application is, `DESIGN.md` §10.3. */
     val route: StateFlow<AppRoute> = _route.asStateFlow()
 
@@ -140,13 +151,45 @@ class ChurController(
     /** The repository, for a host flow that drives operations itself. */
     val vault: VaultRepository get() = repository
 
-    /** Opens the runtime, loads the public shell, and starts the idle timer. */
+    /**
+     * Opens the runtime, loads the public shell, and starts the idle timer.
+     *
+     * It runs once. An Android activity is destroyed and recreated for a
+     * locale change, a font-scale change, a display-size change and a
+     * multi-window resize, and each recreation calls this again. The timer
+     * [runIdleTimer] starts lives on [scope], which no host cancels, so a
+     * second run would leave a second one-second wakeup over the one session
+     * and keep this controller - and the window its cover holds - alive for
+     * the life of the process.
+     *
+     * It runs on [begin] rather than on a scope of the host's, so nothing
+     * cancels it part-way. A cancelled start would leave the flag unset with
+     * no timer armed, and the next launch would arm a second one.
+     */
     suspend fun start() {
+        if (started) return
         withContext(Dispatchers.Default) { repository.start() }
         _notes.value = notes.all()
         refreshDeviceUnlockOffer()
         guarded { runIdleTimer() }
+        started = true
     }
+
+    /**
+     * [start], on this controller's own scope.
+     *
+     * A host that launched it on a window-bound scope lost it to the next
+     * recreation: an Android activity's `lifecycleScope` is cancelled at
+     * `onDestroy`, so a start cancelled at one of its two suspension points
+     * armed no idle timer and left `started` unset, and the next window armed
+     * a second timer over the one session. This scope has the life of the
+     * process, which §14 of `docs/interop/FFI_CONTRACT.md` gives the runtime.
+     *
+     * [guarded] is the second reason. A refused start used to travel out of an
+     * uncaught `launch` and end the process, which is the crash
+     * `PLAINTEXT_LIFECYCLE.md` §8 replaces with an orderly lock.
+     */
+    fun begin() = guarded { start() }
 
     /**
      * The timer behind the auto-lock choices of `DESIGN.md` §14.4.
@@ -349,6 +392,20 @@ class ChurController(
             _route.value = AppRoute.PublicShell
         }
     }
+
+    /**
+     * The same transition, on this controller's own scope.
+     *
+     * A host whose window is going away cannot carry the lock: an Android
+     * activity's `lifecycleScope` is cancelled at `onDestroy`, and a back
+     * press runs `onPause` and `onDestroy` in one pass, so the lock the pause
+     * started was cancelled at its first suspension point and the session
+     * stayed open in a process the platform keeps. This scope is the
+     * controller's, which §14 of `docs/interop/FFI_CONTRACT.md` gives the life
+     * of the process, so the lock of `PLAINTEXT_LIFECYCLE.md` §8 completes
+     * whatever the window does.
+     */
+    fun background() = guarded { onBackground() }
 
     /** The idle check of `DESIGN.md` §14.4, which [runIdleTimer] drives. */
     suspend fun checkIdle() {

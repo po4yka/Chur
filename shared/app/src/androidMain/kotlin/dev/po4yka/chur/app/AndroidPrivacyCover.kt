@@ -14,17 +14,26 @@ import android.view.WindowManager
  * It also blocks the user's own screenshot. That is a deliberate cost: §1 puts
  * the switcher snapshot in the forbidden column without an exception, and a
  * setting to relax it would be a setting that turns the protection off.
+ *
+ * The activity is read through a function rather than held. The window is
+ * activity state and the session it covers is process state:
+ * `docs/interop/FFI_CONTRACT.md` §8.1 says "there is no per-scene vault
+ * state", so the platform recreates the window under one session. A cover that
+ * held the first activity would set the flag on a destroyed window and keep
+ * every destroyed activity alive. No activity means no window to cover, and
+ * the next one sets the flag from the session state as it starts.
  */
-class AndroidPrivacyCover(private val activity: Activity) : PrivacyCover {
+class AndroidPrivacyCover(private val activity: () -> Activity?) : PrivacyCover {
     override fun setEnabled(enabled: Boolean) {
-        activity.runOnUiThread {
+        val current = activity() ?: return
+        current.runOnUiThread {
             if (enabled) {
-                activity.window.setFlags(
+                current.window.setFlags(
                     WindowManager.LayoutParams.FLAG_SECURE,
                     WindowManager.LayoutParams.FLAG_SECURE,
                 )
             } else {
-                activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                current.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
             }
         }
     }

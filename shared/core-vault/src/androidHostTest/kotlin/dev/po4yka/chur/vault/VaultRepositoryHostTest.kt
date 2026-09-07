@@ -170,6 +170,26 @@ class VaultRepositoryHostTest {
     }
 
     @Test
+    fun a_second_start_keeps_the_open_session_rather_than_reporting_locked() = runBlocking {
+        val repository = repository()
+        repository.start()
+        repository.create(PASSWORD.encodeToByteArray(), offerRecovery = false)
+        assertIs<VaultState.Unlocked>(repository.state.value)
+
+        // The Android host calls `start` again whenever the platform recreates
+        // its activity - a locale change, a font-scale change, a display-size
+        // change, a multi-window resize. §8.1 of
+        // `docs/interop/FFI_CONTRACT.md` says there is no per-scene vault
+        // state, so the session outlives the window and the state has to say
+        // so: a `Locked` published here is the unlock screen in front of an
+        // unlocked vault, with the session's handles unreachable.
+        assertIs<VaultState.Unlocked>(repository.start())
+        assertIs<VaultState.Unlocked>(repository.state.value)
+        assertEquals(0, repository.page(ObjectQuery()).objects.size)
+        repository.shutdown()
+    }
+
+    @Test
     fun the_recovery_phrase_opens_the_vault_after_the_password_is_gone() = runBlocking {
         val repository = repository()
         repository.start()

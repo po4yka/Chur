@@ -21,17 +21,19 @@ import java.util.concurrent.TimeUnit
  * a process the system started for this job has no composition root yet, and
  * the one-runtime rule of `docs/interop/FFI_CONTRACT.md` §14 forbids opening a
  * second one beside `MainActivity`'s, so a cycle without a bound engine is a
- * quiet no rather than a second runtime. `MainActivity` binds the engine and
+ * quiet no rather than a second runtime. [ChurHost] binds the engine and
  * enqueues the work; from then on every periodic run, foregrounded or not,
  * pulls and stages while the vault happens to be locked and applies nothing
  * until the user unlocks.
  */
 object ChurSync {
     /**
-     * The engine the activity bound, or `null` before it did.
+     * The engine [ChurHost] bound, or `null` before a launch built one.
      *
      * It is process state rather than activity state because the worker
-     * outlives no process but can outlive the activity.
+     * outlives no process but can outlive the activity. It is set once and not
+     * cleared: [ChurHost] is process-scoped too, so the engine it bound stays
+     * correct for every later activity.
      */
     var coordinator: SyncCoordinator? = null
 

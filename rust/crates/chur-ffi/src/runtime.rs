@@ -1,9 +1,13 @@
 //! The one runtime of `docs/interop/FFI_CONTRACT.md` §14.
 //!
-//! Duplicate Rust runtimes in one process are forbidden, so a second
-//! `chur_runtime_open` returns the same handle rather than a second runtime:
-//! two runtimes would mean two registries, two Argon2id semaphores, and two
-//! writers on one catalog.
+//! Duplicate Rust runtimes in one process are forbidden, and the host is what
+//! keeps that rule: `chur_runtime_open` issues a fresh handle every call,
+//! because a test process opens several runtimes over several roots, which
+//! `registry::Entry::owner` records. The registry and the Argon2id semaphore
+//! are already one apiece for the whole process, so what two runtimes over one
+//! root would really produce is two writers on one catalog and two unlocked
+//! sessions the host can no longer reach. Each host therefore builds one
+//! runtime and gives it the life of the process.
 
 use std::path::PathBuf;
 

@@ -55,12 +55,25 @@ class VaultRepository(
     /** What the application should show. */
     val state: StateFlow<VaultState> = _state.asStateFlow()
 
-    /** Opens the runtime and reports whether a vault exists. */
+    /**
+     * Opens the runtime and reports whether a vault exists.
+     *
+     * A start that finds a session already open is a host whose window was
+     * recreated. §8.1 of `docs/interop/FFI_CONTRACT.md` says "there is no
+     * per-scene vault state", so the session this finds is the session it
+     * keeps: re-deriving the state from the descriptor would publish `Locked`
+     * while Rust still holds the session, which puts the unlock screen in
+     * front of an unlocked vault and leaves its handles unreachable.
+     */
     suspend fun start(): VaultState = mutex.withLock {
         if (runtime == 0L) {
             runtime = ChurVault.openRuntime(rootPath)
         }
-        val next = if (ChurVault.vaultPresent(runtime)) VaultState.Locked() else VaultState.NoVault
+        val next = when {
+            session != 0L -> _state.value
+            ChurVault.vaultPresent(runtime) -> VaultState.Locked()
+            else -> VaultState.NoVault
+        }
         _state.value = next
         next
     }

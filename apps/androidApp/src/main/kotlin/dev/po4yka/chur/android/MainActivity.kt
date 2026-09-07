@@ -6,30 +6,28 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import androidx.fragment.app.FragmentActivity
-import dev.po4yka.chur.app.AndroidPrivacyCover
 import dev.po4yka.chur.app.ChurApp
-import dev.po4yka.chur.app.ChurController
 import dev.po4yka.chur.app.GateResult
 import dev.po4yka.chur.app.NativeHandshake
-import dev.po4yka.chur.app.RepositorySyncBoundary
 import dev.po4yka.chur.app.gate
 import dev.po4yka.chur.ffi.ChurVault
-import dev.po4yka.chur.notes.FileNoteStore
-import dev.po4yka.chur.sync.FileSyncStateStore
-import dev.po4yka.chur.sync.SyncCoordinator
 import dev.po4yka.chur.vault.VaultState
 import kotlinx.coroutines.launch
 
 /**
- * The composition root.
+ * The window half of the composition root.
  *
  * `docs/ARCHITECTURE.md` §9 says only the composition root and adapter modules
- * bind implementations, and this is that root: it creates the one repository,
- * binds the platform privacy cover, runs the ABI gate, and holds nothing else.
+ * bind implementations. The root is split in two, because its two halves have
+ * two lifetimes: [ChurHost] holds what `docs/interop/FFI_CONTRACT.md` §14 makes
+ * process-scoped - the runtime, the repository, the controller, the engine -
+ * and this holds the window, which the platform destroys and recreates under
+ * it. §8.1 has the recreated window share the one session: "there is no
+ * per-scene vault state".
  *
  * The gate runs before anything private is composed. §2 of
  * `docs/interop/FFI_CONTRACT.md` makes a failing gate terminal for the process,
@@ -42,39 +40,31 @@ import kotlinx.coroutines.launch
  * `ComponentActivity`, so everything else here is unchanged.
  */
 class MainActivity : FragmentActivity() {
-    private lateinit var controller: ChurController
-    private lateinit var privacy: AndroidPrivacyCover
+    private lateinit var host: ChurHost
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        privacy = AndroidPrivacyCover(this)
-        // The sync engine outlives the activity in one sense only: the worker
-        // of `ChurSync` reads it for its periodic cycle, `SYNC_PROTOCOL_V1.md`
-        // §7. Its state file holds the device's transport token, so it lives
-        // in `noBackupFilesDir`, which ANDROID.md §13.4 names for exactly this
-        // kind of state and every backup rule excludes.
-        val sync = SyncCoordinator(
-            store = FileSyncStateStore(java.io.File(noBackupFilesDir, "chur-sync.json").path),
-            clock = { System.currentTimeMillis() },
-        )
-        controller = ChurController(
-            storageRoot = storageRoot(),
-            privacy = privacy,
-            exports = ExportDestinations(contentResolver),
-            clock = { System.currentTimeMillis() },
-            notes = FileNoteStore(publicShellFile("notes.json")),
-            deviceUnlock = AndroidDeviceUnlock(this),
-            sync = sync,
-        )
-        sync.bind(RepositorySyncBoundary(controller.vault))
-        ChurSync.coordinator = sync
+        host = ChurHost.of(this)
+        host.activity = this
+        // The window is new and the session it will show may already be open.
+        // §1 of `PLAINTEXT_LIFECYCLE.md` puts the switcher snapshot in the
+        // forbidden column, and the platform can take one before the collector
+        // below has run, so the cover is set from the state here rather than
+        // waiting for the first collection.
+        host.privacy.setEnabled(host.controller.vaultState.value is VaultState.Unlocked)
         ChurSync.enqueue(this)
 
+        val controller = host.controller
         val verdict = runGate()
         if (verdict is GateResult.Compatible) {
-            lifecycleScope.launch { controller.start() }
+            // It runs once per process: the controller refuses a second start,
+            // because a second one would leave a second idle timer over the one
+            // session. It runs on the controller's scope and not on this
+            // activity's, because `lifecycleScope` is cancelled at `onDestroy`
+            // and a start cancelled part-way arms no timer at all.
+            controller.begin()
         }
 
         setContent {
@@ -92,7 +82,7 @@ class MainActivity : FragmentActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 controller.vaultState.collect { current ->
-                    privacy.setEnabled(current is VaultState.Unlocked)
+                    host.privacy.setEnabled(current is VaultState.Unlocked)
                 }
             }
         }
@@ -127,52 +117,38 @@ class MainActivity : FragmentActivity() {
      * The cover goes on first and the lock follows, because the snapshot is
      * taken as the activity stops: a lock that ran first would still leave the
      * unlocked frame in the picture if the cover were late.
+     *
+     * The lock runs on the controller's scope, not on this activity's. A back
+     * press runs `onPause` and `onDestroy` in one pass, and `lifecycleScope`
+     * dies with the second, so a lock launched here used to be cancelled at its
+     * first suspension point and the session stayed open in a process the
+     * platform keeps.
      */
     override fun onPause() {
-        privacy.setEnabled(true)
+        host.privacy.setEnabled(true)
         super.onPause()
-        lifecycleScope.launch { controller.onBackground() }
+        // A configuration change is not the user leaving. The platform destroys
+        // this activity and creates another one in the same task, in the
+        // foreground, over the same session - §8.1 says there is no per-scene
+        // vault state. Locking here would put the unlock screen in front of an
+        // application that never left, which is the same false positive
+        // `beginHostActivity` answers for the media picker. The cover above
+        // still goes on, so the transition is covered either way.
+        if (isChangingConfigurations) return
+        host.controller.background()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        if (isFinishing) {
-            // The runtime closes every handle it owns, §14, and a finishing
-            // activity is the last chance to do it before the process may be
-            // reused for another launch. The engine unbinds with it: a worker
-            // cycle that fires after this point finds no vault, which is the
-            // honest answer now that the handles are gone.
-            controller.unbindSync()
-            ChurSync.coordinator = null
-            kotlinx.coroutines.runBlocking { controller.shutdown() }
+        // The window goes; the runtime, the repository and the engine stay,
+        // because §14 gives them the life of the process and §8.1 has the next
+        // activity share the one session. The two adapters that need a window
+        // find none until one is attached again.
+        if (host.activity === this) {
+            host.activity = null
         }
     }
 }
-
-/**
- * The storage root, `docs/ARCHITECTURE.md` §14.4.
- *
- * `filesDir` is app-private, and `res/xml/data_extraction_rules.xml` names only
- * `public/` and the public shell's preferences, so everything under this path
- * is excluded from every archive by the absence of a rule. That is what
- * `PLAINTEXT_LIFECYCLE.md` §5 needs of every directory the vault writes into,
- * and `docs/ANDROID.md` §13.4 makes a rule that reached one a release blocker.
- */
-private fun ComponentActivity.storageRoot(): String =
-    java.io.File(filesDir, "chur").apply { mkdirs() }.absolutePath
-
-/**
- * A file of the public shell, `docs/ANDROID.md` §13.4.
- *
- * It is under `filesDir/public/` because that is the one directory the backup
- * rules include. `DISCREET_MODE.md` puts the shell's content in the platform
- * backup deliberately: a Notes surface that loses everything on device transfer
- * is not functional, and a shell nobody would use announces what it hides. The
- * path is the whole mechanism — a note file anywhere else would be excluded by
- * the same rules that exclude the vault.
- */
-private fun ComponentActivity.publicShellFile(name: String): String =
-    java.io.File(filesDir, "public").apply { mkdirs() }.resolve(name).path
 
 /** Whether this build is debuggable, without generating a `BuildConfig`. */
 internal object BuildConfigCompat {
