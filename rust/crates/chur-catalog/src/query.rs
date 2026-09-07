@@ -436,6 +436,18 @@ impl Plan {
 
         // §16.2: a DELETING or TOMBSTONED row is never returned, and a
         // QUARANTINED row appears only in the quarantine scope.
+        //
+        // §16.3: under the capture sort the scope table drives the join, so
+        // the duplicated-sort-key index serves the page as one range scan.
+        // CROSS JOIN fixes that join order; a plain JOIN lets the planner
+        // drive from the objects table and sort the scope instead. Under the
+        // import sort the objects table must drive, so the order stays the
+        // planner's choice.
+        let scope_join = if query.sort.by_import() {
+            "JOIN"
+        } else {
+            "CROSS JOIN"
+        };
         let (from, mut params): (String, Vec<Value>) = match &query.scope {
             Scope::Timeline => (
                 format!(
@@ -451,24 +463,24 @@ impl Plan {
             ),
             Scope::Favorites => (
                 format!(
-                    "favorites f JOIN objects o ON o.object_id = f.object_id \
-                     WHERE o.state = {active} AND o.integrity_summary <> {quarantined}"
+                    "favorites f {scope_join} objects o ON o.object_id = f.object_id \
+                      WHERE o.state = {active} AND o.integrity_summary <> {quarantined}"
                 ),
                 Vec::new(),
             ),
             Scope::Album(album_id) => (
                 format!(
-                    "album_memberships m JOIN objects o ON o.object_id = m.object_id \
-                     WHERE m.album_id = ? AND o.state = {active} \
-                       AND o.integrity_summary <> {quarantined}"
+                    "album_memberships m {scope_join} objects o ON o.object_id = m.object_id \
+                      WHERE m.album_id = ? AND o.state = {active} \
+                        AND o.integrity_summary <> {quarantined}"
                 ),
                 vec![Value::Blob(album_id.as_bytes().to_vec())],
             ),
             Scope::Tag(tag_id) => (
                 format!(
-                    "object_tags g JOIN objects o ON o.object_id = g.object_id \
-                     WHERE g.tag_id = ? AND o.state = {active} \
-                       AND o.integrity_summary <> {quarantined}"
+                    "object_tags g {scope_join} objects o ON o.object_id = g.object_id \
+                      WHERE g.tag_id = ? AND o.state = {active} \
+                        AND o.integrity_summary <> {quarantined}"
                 ),
                 vec![Value::Blob(tag_id.as_bytes().to_vec())],
             ),
@@ -504,10 +516,25 @@ impl Plan {
         let count_sql = format!("SELECT count(*) FROM {from}{filter}");
         let count_params = params.clone();
 
-        let sort_column = if query.sort.by_import() {
-            "o.import_time_ms"
+        // §16.3: the album-membership, favourite, and tag rows duplicate
+        // capture_time_ms so a scope page orders by its own table's columns,
+        // and the duplicated-sort-key index serves the page as one range
+        // scan. Ordering by the objects-table columns would sort the join
+        // instead, so none of the three indexes could serve the query. The
+        // tiebreak names the driving table's object_id, the index's last
+        // column, which the join equates with the object row's. The import
+        // sort has no duplicated scope column and keeps the objects ones.
+        let (sort_column, tiebreak_column) = if query.sort.by_import() {
+            ("o.import_time_ms", "o.object_id")
         } else {
-            "o.capture_time_ms"
+            match &query.scope {
+                Scope::Album(_) => ("m.capture_time_ms", "m.object_id"),
+                Scope::Favorites => ("f.capture_time_ms", "f.object_id"),
+                Scope::Tag(_) => ("g.capture_time_ms", "g.object_id"),
+                Scope::Timeline | Scope::Quarantine | Scope::Search(_) => {
+                    ("o.capture_time_ms", "o.object_id")
+                }
+            }
         };
         let direction = if query.sort.ascending() {
             "ASC"
@@ -521,7 +548,7 @@ impl Plan {
             // §16.2: paging is keyset, so the next page selects the rows
             // ordered strictly after the pair the cursor carries. The row-value
             // comparison is what keeps it one range scan instead of an OR.
-            keyset = format!(" AND ({sort_column}, o.object_id) {comparison} (?, ?)");
+            keyset = format!(" AND ({sort_column}, {tiebreak_column}) {comparison} (?, ?)");
             params.push(Value::Integer(as_sqlite_integer(
                 cursor.sort_value,
                 "the cursor sort value is out of range",
@@ -532,7 +559,7 @@ impl Plan {
 
         let rows_sql = format!(
             "SELECT {COLUMNS} FROM {from}{filter}{keyset} \
-             ORDER BY {sort_column} {direction}, o.object_id {direction} LIMIT ?"
+             ORDER BY {sort_column} {direction}, {tiebreak_column} {direction} LIMIT ?"
         );
 
         Ok(Self {
@@ -1142,6 +1169,79 @@ mod tests {
             };
             assert_eq!(error.status(), ChurStatus::InvalidInput, "{terms:?}");
         }
+    }
+
+    #[test]
+    fn a_capture_page_in_the_joined_scopes_orders_by_the_duplicated_column() {
+        let vault = vault();
+        let scope_id = Id::new([7; 16]).expect("id");
+        // §16.3: the album-membership, favourite, and tag rows duplicate
+        // capture_time_ms so a scope page is one range scan over the
+        // duplicated-sort-key index. Ordering by the objects-table column
+        // would sort the join instead, and none of the three indexes could
+        // serve the page.
+        for (query, column, table) in [
+            (
+                ObjectQuery {
+                    scope: Scope::Album(scope_id),
+                    ..ObjectQuery::timeline()
+                },
+                "m.capture_time_ms",
+                "the album scope",
+            ),
+            (
+                ObjectQuery {
+                    scope: Scope::Favorites,
+                    ..ObjectQuery::timeline()
+                },
+                "f.capture_time_ms",
+                "the favourite scope",
+            ),
+            (
+                ObjectQuery {
+                    scope: Scope::Tag(scope_id),
+                    ..ObjectQuery::timeline()
+                },
+                "g.capture_time_ms",
+                "the tag scope",
+            ),
+        ] {
+            let plan = Plan::build(&query, 60).expect("plan");
+            assert!(
+                plan.rows_sql.contains(&format!("ORDER BY {column} DESC")),
+                "{} ordered by the objects column: {}",
+                table,
+                plan.rows_sql
+            );
+            let explained: Vec<String> = vault
+                .db
+                .connection()
+                .prepare(&format!("EXPLAIN QUERY PLAN {}", plan.rows_sql))
+                .and_then(|mut statement| {
+                    statement
+                        .query_map(rusqlite::params_from_iter(plan.row_params.iter()), |row| {
+                            row.get::<_, String>(3)
+                        })?
+                        .collect()
+                })
+                .expect("explain");
+            assert!(
+                explained.iter().all(|line| !line.contains("TEMP B-TREE")),
+                "{table} sorts instead of scanning its index: {explained:?}"
+            );
+        }
+        // §16.3 duplicates only capture_time_ms into the scope rows, so the
+        // import sort keeps the objects column.
+        let plan = Plan::build(
+            &ObjectQuery {
+                sort: Sort::ImportDesc,
+                scope: Scope::Favorites,
+                ..ObjectQuery::timeline()
+            },
+            60,
+        )
+        .expect("plan");
+        assert!(plan.rows_sql.contains("ORDER BY o.import_time_ms DESC"));
     }
 
     #[test]
