@@ -550,6 +550,18 @@ class ChurController(
         _page.value = ObjectPage(emptyList(), 0, 0, null)
         _albums.value = emptyList()
         _slots.value = emptyList()
+        // The phrase is one of them, and the most valuable: it opens the vault
+        // on its own. Both route tables draw it ahead of the route, so leaving
+        // it set kept a full credential on screen after the lock had already
+        // moved the route to the public shell — and the same transition takes
+        // the cover off, which put it in the switcher snapshot too. §8 step 7
+        // clears feature projections and step 9 shows a neutral surface; a
+        // phrase that survived the lock did neither.
+        //
+        // Losing an unacknowledged phrase to a lock is the intended cost.
+        // `RECOVERY.md` §2 shows it exactly once, the password still opens the
+        // vault, and §8 there is how a user gets another one.
+        _recoveryPhrase.value = null
     }
 
     private suspend fun enterVault() {
