@@ -273,14 +273,16 @@ class ChurController(
         var root: ByteArray? = null
         beginHostActivity()
         try {
-            for (entry in material) {
-                root = deviceUnlock.unwrap(
-                    entry.alias,
-                    entry.aad,
-                    entry.gcmNonce,
-                    entry.wrappedRootSecret,
-                )
-                if (root != null) break
+            withContext(Dispatchers.Default) {
+                for (entry in material) {
+                    root = deviceUnlock.unwrap(
+                        entry.alias,
+                        entry.aad,
+                        entry.gcmNonce,
+                        entry.wrappedRootSecret,
+                    )
+                    if (root != null) break
+                }
             }
         } finally {
             endHostActivity()
@@ -300,8 +302,15 @@ class ChurController(
     fun enrollDeviceSlot() = guarded {
         beginHostActivity()
         try {
-            repository.enrollKeystoreSlot { alias, aad, root ->
-                deviceUnlock.wrap(alias, aad, root)
+            // The only guarded action that used to stay on the main dispatcher,
+            // and the one that could least afford to: the enrolment generates a
+            // Keystore key, runs an interactive prompt and finishes an AEAD.
+            // The prompt itself hops back to the main thread on its own, which
+            // is where the platform requires it.
+            withContext(Dispatchers.Default) {
+                repository.enrollKeystoreSlot { alias, aad, root ->
+                    deviceUnlock.wrap(alias, aad, root)
+                }
             }
         } finally {
             endHostActivity()

@@ -103,10 +103,21 @@ class AndroidDeviceUnlock(
         cancel = activity.getString(R.string.device_slot_cancel),
     )
 
-    /** Turns a platform refusal into the boundary failure a feature handles. */
+    /**
+     * Turns a platform refusal into the boundary failure a feature handles.
+     *
+     * A slot exception carries its own status. An `IllegalArgumentException` is
+     * the other thing this layer produces: `DeviceSlot` rejects an identifier
+     * outside the 16 to 64 bytes `KEY_SLOT_BODIES_V1.md` allows before it
+     * reaches the Keystore. Both are normalized here, because
+     * `docs/ERROR_MODEL.md` gives that job to the platform layer rather than to
+     * the guard above it, which can only answer `INTERNAL_FAILURE`.
+     */
     private inline fun <T> normalized(body: () -> T): T = try {
         body()
     } catch (cause: DeviceSlotException) {
         throw ChurFailure(cause.status, "the device slot")
+    } catch (cause: IllegalArgumentException) {
+        throw ChurFailure(ChurStatus.INVALID_INPUT, "the device slot")
     }
 }

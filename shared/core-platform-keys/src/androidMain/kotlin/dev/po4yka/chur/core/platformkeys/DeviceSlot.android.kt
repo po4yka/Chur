@@ -252,6 +252,21 @@ public actual class DeviceSlot public actual constructor(identifier: ByteArray) 
             throw classify(cause, "the device refused the authorization prompt")
         }
         return withContext(Dispatchers.Main) {
+        // `BiometricPrompt.authenticate` commits a fragment, so it starts
+        // nothing once the host has saved its state: androidx logs a line and
+        // returns, with no callback and no exception. The continuation below
+        // would then never resume, and nothing would ever resume it - there is
+        // no timeout, and the scope that waits belongs to the process rather
+        // than to the window. A caller left there holds every lock it took, so
+        // the idle lock of `DESIGN.md` §14 never fires again and the vault
+        // stays open. The test runs on the main thread with the call, so
+        // nothing can save the state between them.
+        if (activity.supportFragmentManager.isStateSaved) {
+            throw DeviceSlotException(
+                ChurStatus.PLATFORM_KEY_UNAVAILABLE,
+                "the window cannot show an authorization prompt",
+            )
+        }
         suspendCancellableCoroutine { continuation ->
             val dialog = BiometricPrompt(
                 activity,
