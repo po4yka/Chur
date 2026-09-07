@@ -460,6 +460,27 @@ pub fn prepare_share_revocation(
         .ok_or_else(|| Error::new(ChurStatus::NotFound, "collection recipient is unknown"))?;
     let target_signing_key = *target.signing_public_key();
     let target_hpke_key = *target.hpke_public_key();
+    if target.is_active() {
+        // A new revocation mints the next epoch, and `sync_rotation::project_begin`
+        // refuses to start a second rotation while one is unfinished. Refusing
+        // there is too late: the `Revoke` record below commits in its own
+        // transaction and has already moved the sharing epoch by the time the
+        // rotation is attempted, which leaves the sharing epoch ahead of
+        // `collections.current_epoch` with a rotation nothing can finish — a
+        // state every later call, for either recipient, re-enters and fails in
+        // the same way.
+        //
+        // The guard is on `is_active` rather than on the whole function because
+        // §3.1 of `docs/sync/REVOCATION.md` resumes an unfinished walk by
+        // calling this again for the recipient already revoked, and that call
+        // must still be admitted.
+        ensure!(
+            sync_rotation::load(db, source_vault_id, collection_id, &source_membership, root)?
+                .is_complete(),
+            Conflict,
+            "the collection has an unfinished rotation from an earlier revocation"
+        );
+    }
     let mut log = sync_log::load(db, &source_membership)?;
     let (membership, membership_operation) = if target.is_active() {
         let old_key = sync_keys::collection_key(
@@ -1518,6 +1539,32 @@ mod tests {
         assert!(!revoked.rotation_complete());
         assert_eq!(revoked.rotation_operations().len(), 1);
         assert!(revoked.grants().is_empty());
+        // A second recipient cannot be revoked while the first rewrap is
+        // unfinished, and the refusal writes nothing: the `Revoke` record used
+        // to commit before the rotation was attempted, which left the sharing
+        // epoch ahead of the collection's with a rotation nothing could finish.
+        let Err(conflict) = prepare_share_revocation(
+            &mut db,
+            &root,
+            source_vault,
+            collection_id,
+            second_vault,
+            second_device,
+            1_200,
+            4_096,
+        ) else {
+            panic!("a second revocation started over an unfinished rotation");
+        };
+        assert_eq!(conflict.status(), ChurStatus::Conflict);
+        assert_eq!(
+            sharing::load(&db, &collection_id)
+                .expect("sharing state")
+                .expect("present")
+                .collection_epoch(),
+            2
+        );
+        // The pending rotation is still resumable, which the rest of this test
+        // then proves by finishing it.
         let continued = prepare_share_revocation(
             &mut db,
             &root,
