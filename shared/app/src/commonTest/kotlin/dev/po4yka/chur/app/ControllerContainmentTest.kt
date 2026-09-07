@@ -70,6 +70,35 @@ class ControllerContainmentTest {
         assertEquals(ChurStatus.NOT_FOUND.name, controller.message.value)
     }
 
+    @Test
+    fun a_throwable_the_guard_does_not_catch_still_reaches_a_message() = runTest(dispatcher) {
+        // The guard catches `Exception`, so an `Error` walks past it, and a
+        // coroutine the guard did not start walks past it as well. Both used to
+        // reach the platform default handler, which ends the process. The
+        // scope's own handler is the net under both.
+        val controller = controllerOver(
+            FailingNotes { throw AssertionError("the platform layer raised an Error") },
+        )
+
+        controller.putNote(note())
+        advanceUntilIdle()
+
+        assertEquals(ChurStatus.INTERNAL_FAILURE.name, controller.message.value)
+    }
+
+    @Test
+    fun a_host_import_report_survives_the_guard_that_now_carries_it() = runTest(dispatcher) {
+        // `reportImport` runs inside the guard, and the guard clears the
+        // message before the body. The message the host passed has to outlive
+        // that, or every import outcome disappears from the surface.
+        val controller = controllerOver(InertNotes)
+
+        controller.reportImport("Imported 3 items.")
+        advanceUntilIdle()
+
+        assertEquals("Imported 3 items.", controller.message.value)
+    }
+
     private fun controllerOver(notes: NoteStore) = ChurController(
         storageRoot = "/nonexistent",
         privacy = NoPrivacyCover,
@@ -91,6 +120,19 @@ class ControllerContainmentTest {
         override suspend fun disclosureAcknowledged(): Boolean = raise()
 
         override suspend fun acknowledgeDisclosure() = raise()
+    }
+
+    /** A store that answers rather than fails, for the tests that need no failure. */
+    private object InertNotes : NoteStore {
+        override suspend fun all(): List<Note> = emptyList()
+
+        override suspend fun put(note: Note) = Unit
+
+        override suspend fun remove(id: String) = Unit
+
+        override suspend fun disclosureAcknowledged(): Boolean = true
+
+        override suspend fun acknowledgeDisclosure() = Unit
     }
 
     /** No export can start in these tests, and none is attempted. */

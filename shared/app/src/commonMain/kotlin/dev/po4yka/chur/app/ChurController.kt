@@ -19,6 +19,7 @@ import dev.po4yka.chur.vault.LockPolicy
 import dev.po4yka.chur.vault.VaultRepository
 import dev.po4yka.chur.vault.VaultState
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -59,7 +60,21 @@ class ChurController(
      */
     private val sync: SyncCoordinator? = null,
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    /**
+     * The last net under every coroutine this controller starts.
+     *
+     * [guarded] wraps a surface action, but a `launch` of its own re-roots the
+     * work on [scope], where the guard around the caller cannot see it, and an
+     * `Error` escapes the guard as well. Either one reached the platform
+     * default handler, which ends the process — the crash `PLAINTEXT_LIFECYCLE`
+     * §8 replaces with an orderly lock. `SupervisorJob` does not help here: it
+     * stops the cancellation of a sibling, not the report of a failure.
+     */
+    private val uncaught = CoroutineExceptionHandler { _, _ ->
+        _message.value = ChurStatus.INTERNAL_FAILURE.name
+    }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main + uncaught)
     private val repository = VaultRepository(storageRoot, clock, policy)
 
     private val _route = MutableStateFlow<AppRoute>(AppRoute.PublicShell)
@@ -130,7 +145,7 @@ class ChurController(
         withContext(Dispatchers.Default) { repository.start() }
         _notes.value = notes.all()
         refreshDeviceUnlockOffer()
-        scope.launch { runIdleTimer() }
+        guarded { runIdleTimer() }
     }
 
     /**
@@ -180,7 +195,7 @@ class ChurController(
     fun acknowledgeRecoveryPhrase() {
         _recoveryPhrase.value = null
         if (repository.state.value is VaultState.Unlocked) {
-            scope.launch { enterVault() }
+            guarded { enterVault() }
         }
     }
 
@@ -639,9 +654,11 @@ class ChurController(
     }
 
     /** Reports the outcome of a host-driven import, §13 of the media pipeline. */
-    fun reportImport(message: String?) {
+    fun reportImport(message: String?) = guarded {
+        // The order is the point: `guarded` clears the message first, so the
+        // one this call carries is set after it, not before.
         _message.value = message
-        scope.launch { reload() }
+        reload()
     }
 
     /** Sets the message a host flow produced. */
@@ -701,7 +718,7 @@ class ChurController(
         // explicit unlock". Whatever the locked puller staged while the vault
         // was closed is validated and applied here, off the first frame, and
         // then a configured engine pulls what arrived since the last run.
-        scope.launch {
+        guarded {
             withContext(Dispatchers.Default) { repository.processSync() }
             sync?.let { engine ->
                 if (engine.status.value.configured) engine.syncNow()
