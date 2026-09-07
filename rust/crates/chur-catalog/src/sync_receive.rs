@@ -431,6 +431,7 @@ pub fn author_sharing_operation(
             sharing_state,
             &operation,
             &payload,
+            false,
         )? == ApplyOutcome::Applied,
         InternalFailure,
         "fresh local sharing operation was not applied"
@@ -456,9 +457,19 @@ pub fn accept_sharing_operation(
         sharing_state,
         &operation,
         &payload,
+        false,
     )
 }
 
+/// Commits one authorized sharing operation.
+///
+/// `provision` writes the collection's own sharing row in the same transaction.
+/// A peer device of the source vault holds none until the first membership
+/// record reaches it, and provisioning outside this transaction would leave an
+/// orphan row behind whenever the record then failed to apply — a state
+/// `install_share` reports as `CatalogCorrupt`. The row is written only after
+/// `authorize_operation` has verified the operation's signature, so nothing
+/// unauthenticated reaches the catalog.
 fn accept_opened_sharing_operation(
     db: &mut CatalogDb,
     log: &mut DurableOperationLog,
@@ -466,10 +477,14 @@ fn accept_opened_sharing_operation(
     sharing_state: &mut CollectionMembershipState,
     operation: &Operation,
     payload: &OperationPayload,
+    provision: bool,
 ) -> Result<ApplyOutcome> {
     sharing_state.authorize_operation(operation, payload, issuer_membership)?;
     let mut projected_sharing = None;
     let outcome = log.accept_with(db, operation, issuer_membership, |transaction| {
+        if provision {
+            sharing::project_provision(transaction, sharing_state)?;
+        }
         match payload.body() {
             PayloadBody::ChangeCollectionMembership(record) => {
                 let (candidate, membership_outcome) =
@@ -577,11 +592,63 @@ pub fn accept_operation(
         PayloadBody::CreateCollectionEpoch { .. } | PayloadBody::RewrapObjectKey { .. } => {
             accept_rotation_operation(db, log, membership, keys, root, now_ms, record)
         }
-        PayloadBody::ChangeCollectionMembership(_) | PayloadBody::IssueCollectionGrant(_) => {
-            Err(Error::new(
-                ChurStatus::InvalidInput,
-                "sharing security operation requires collection authorization state",
-            ))
+        // `COLLECTION_OPERATION_LOG.md` §1 keeps kinds 0x11 and 0x12 out of the
+        // collection stream, and `COLLECTION_MEMBERSHIP.md` §5 carries the
+        // membership record on kind 0x11 of the identity-vault log, so this is
+        // the only channel a peer device of the source vault can receive them
+        // on. Refusing them here made `InvalidInput`, which `sync_engine`
+        // classifies as a rejection: the record was deleted from the inbox and
+        // the sibling's chain stalled at that sequence for good, so a second
+        // source device learned of no member, grant or pin and would fork the
+        // chain the moment it shared the same collection.
+        PayloadBody::ChangeCollectionMembership(record) => {
+            let (mut sharing_state, provision) = match sharing::load(db, payload.collection_id())? {
+                Some(existing) => (existing, false),
+                // A sibling holds no sharing rows until the first record
+                // arrives; anything later is a gap rather than a beginning, and
+                // `NotFound` is what `sync_engine` retains rather than drops.
+                None if record.collection_membership_generation() == 1 => (
+                    CollectionMembershipState::new(
+                        *record.source_vault_id(),
+                        *record.collection_id(),
+                        record.collection_epoch(),
+                    )?,
+                    true,
+                ),
+                None => {
+                    return Err(Error::new(
+                        ChurStatus::NotFound,
+                        "collection membership predecessor is not held",
+                    ));
+                }
+            };
+            accept_opened_sharing_operation(
+                db,
+                log,
+                membership,
+                &mut sharing_state,
+                &operation,
+                &payload,
+                provision,
+            )
+        }
+        PayloadBody::IssueCollectionGrant(_) => {
+            let mut sharing_state =
+                sharing::load(db, payload.collection_id())?.ok_or_else(|| {
+                    Error::new(
+                        ChurStatus::NotFound,
+                        "collection grant precedes its collection membership",
+                    )
+                })?;
+            accept_opened_sharing_operation(
+                db,
+                log,
+                membership,
+                &mut sharing_state,
+                &operation,
+                &payload,
+                false,
+            )
         }
         _ => accept_content_operation(db, log, membership, state, keys, record),
     }

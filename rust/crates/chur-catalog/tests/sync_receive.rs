@@ -1060,3 +1060,91 @@ fn locally_authored_content_and_head_commit_together() {
     );
     assert_eq!(log.head(&id(4)), Some((1, operation.digest())));
 }
+
+/// A peer device of the source vault receives sharing records like any other.
+///
+/// `COLLECTION_OPERATION_LOG.md` §1 keeps kinds 0x11 and 0x12 out of the
+/// collection stream and `COLLECTION_MEMBERSHIP.md` §5 puts the membership
+/// record on kind 0x11 of the identity-vault log, so `accept_operation` is the
+/// only channel that can carry them to a sibling. It used to refuse both with
+/// `InvalidInput`, which `sync_engine` classifies as a rejection: the record
+/// left the inbox and the sibling's view of that device's chain stopped there.
+///
+/// The absence of a `sharing::provision` call is the point. A peer holds no
+/// sharing rows until the first record arrives, so acceptance has to write them
+/// itself, inside the operation's own transaction.
+#[test]
+fn inbound_sharing_membership_routes_through_accept_operation() {
+    let mut fixture = setup();
+    let collection_id = id(90);
+    let collection_key = Key::new([91; 32]);
+    let domain = KeyDomain::collection(&collection_key, &collection_id, 1).expect("domain");
+    let mut keys = KeyDirectory::new(&fixture.root, &id(2)).expect("keys");
+    keys.insert(KeyDomain::collection(&collection_key, &collection_id, 1).expect("domain"))
+        .expect("insert domain");
+
+    let recipient = DeviceSigningKey::from_seed([92; 32]);
+    let record = CollectionMembershipRecord::new(
+        id(2),
+        collection_id,
+        1,
+        [0; 32],
+        CollectionMembershipAction::Upsert(PermissionProfile::Read),
+        id(93),
+        id(94),
+        recipient.verifying_key(),
+        [95; 32],
+        1,
+        id(2),
+        id(4),
+        1,
+        1,
+    )
+    .expect("membership record")
+    .sign(&fixture.issuer);
+    let payload = OperationPayload::new(
+        collection_id,
+        1,
+        PayloadBody::ChangeCollectionMembership(record.clone()),
+    )
+    .expect("payload");
+    let operation = Operation::seal(
+        id(96),
+        id(2),
+        id(4),
+        1,
+        [0; 32],
+        Vec::new(),
+        *domain.selector(),
+        domain.operation_key(),
+        Nonce::new([97; 24]),
+        &payload.encode(),
+    )
+    .expect("operation")
+    .sign(&fixture.issuer);
+
+    let mut log = sync_log::load(&fixture.db, &fixture.membership).expect("log");
+    let mut state = MaterializedState::new();
+    assert_eq!(
+        sync_receive::accept_operation(
+            &mut fixture.db,
+            &mut log,
+            &mut fixture.membership,
+            &mut state,
+            &mut keys,
+            &fixture.root,
+            1,
+            &operation.encode(),
+        )
+        .expect("inbound sharing membership"),
+        ApplyOutcome::Applied
+    );
+    assert_eq!(
+        sharing::load(&fixture.db, &collection_id)
+            .expect("load")
+            .expect("sharing state")
+            .commitment(),
+        &record.commitment()
+    );
+    assert_eq!(log.head(&id(4)), Some((1, operation.digest())));
+}
