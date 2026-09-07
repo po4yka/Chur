@@ -15,7 +15,7 @@ use zeroize::Zeroizing;
 
 use chur_core::limits::KEY_LEN;
 use chur_core::status::ChurStatus;
-use chur_core::{Error, Result, ensure};
+use chur_core::{ensure, Error, Result};
 
 use crate::secret::Key;
 
@@ -173,7 +173,15 @@ pub fn decode(phrase: &str) -> Result<Key> {
 /// which are unique in the English list". A word shorter than four characters
 /// is its own prefix, and the entries shorter than four characters are matched
 /// whole by the same comparison, so one rule covers every length.
+///
+/// `RECOVERY.md` §2.2 rejects a normalized word that contains any non-ASCII
+/// character, because the list is ASCII and such a word can never match. The
+/// rejection is also what keeps the prefix slice below defined: byte-slicing a
+/// multi-byte character would panic rather than return `None`.
 fn index_of(word: &str) -> Option<usize> {
+    if !word.is_ascii() {
+        return None;
+    }
     let prefix: &str = &word[..4.min(word.len())];
     wordlist()
         .iter()
@@ -330,6 +338,23 @@ mod tests {
             rejection(decode(&words.join(" "))),
             ChurStatus::InvalidInput
         );
+    }
+
+    #[test]
+    fn a_word_with_any_non_ascii_character_is_rejected_and_does_not_panic() {
+        // `RECOVERY.md` §2.2: the wordlist is ASCII, so a normalized word that
+        // contains any non-ASCII character is rejected. Slicing its first four
+        // bytes used to split the multi-byte character and panic instead.
+        let secret = Key::new([0x11; KEY_LEN]);
+        for replacement in ["церковь", "aband\u{043e}n", "word\u{0301}"] {
+            let mut words = encode(&secret);
+            words[7] = replacement;
+            assert_eq!(
+                rejection(decode(&words.join(" "))),
+                ChurStatus::InvalidInput,
+                "{replacement}"
+            );
+        }
     }
 
     #[test]
