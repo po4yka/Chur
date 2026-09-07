@@ -2,11 +2,10 @@
 
 use std::collections::BTreeMap;
 
-use chur_core::{ChurStatus, Error, Id, Result, ensure};
-use chur_crypto::{Key, Nonce, random};
+use chur_core::{ensure, ChurStatus, Error, Id, Result};
+use chur_crypto::{random, Key, Nonce};
 use chur_format::envelope::CollectionKeyEnvelope;
 use chur_sync_protocol::{
-    KeyDomain,
     collection_membership::{
         CollectionMembershipAction, CollectionMembershipRecord, CollectionMembershipState,
         RecipientVerification,
@@ -17,12 +16,13 @@ use chur_sync_protocol::{
     operation_log::{ApplyOutcome, OperationLog},
     payload::{OperationPayload, PayloadBody},
     state::{DeviceStatus, MembershipState},
+    KeyDomain,
 };
 
 use crate::{
-    CatalogDb,
-    model::{COLLECTION_POLICY_SHARED, COLLECTION_STATUS_ACTIVE, Collection},
+    model::{Collection, COLLECTION_POLICY_SHARED, COLLECTION_STATUS_ACTIVE},
     schema, sharing, store, sync_keys, sync_log, sync_membership, sync_receive, sync_rotation,
+    CatalogDb,
 };
 
 /// One canonical record in an issuer identity-membership chain.
@@ -247,18 +247,22 @@ fn prepare_share_to_device(
             )
         })?;
     let collection = store::collection(db, &collection_id)?;
-    let collection_key = sync_keys::collection_key(
-        db,
-        root,
-        source_vault_id,
-        collection_id,
-        collection.current_epoch,
-    )?;
-    let domain = KeyDomain::collection(&collection_key, &collection_id, collection.current_epoch)?;
     let mut sharing_state = match sharing::load(db, &collection_id)? {
         Some(state) => state,
         None => sharing::provision(db, source_vault_id, collection_id, collection.current_epoch)?,
     };
+    // The membership record and the grant declare the epoch the sharing state
+    // holds, so the key they carry must be that epoch's key. `sharing::load`
+    // admits the sharing state being one epoch ahead of the collections row
+    // while a rotation is settling; sealing the collections row's key under
+    // the new epoch's grant would hand the recipient the previous epoch's key
+    // labeled as the current one, and `install_share` would store it as the
+    // collection key of that epoch. Loading the declared epoch's envelope
+    // fails closed when a rotation has not produced it yet.
+    let collection_epoch = sharing_state.collection_epoch();
+    let collection_key =
+        sync_keys::collection_key(db, root, source_vault_id, collection_id, collection_epoch)?;
+    let domain = KeyDomain::collection(&collection_key, &collection_id, collection_epoch)?;
     let mut log = sync_log::load(db, &source_membership)?;
 
     let existing = sharing_state
@@ -1240,8 +1244,8 @@ mod tests {
     use crate::{
         db::{CatalogKey, CatalogLocation},
         model::{
-            COLLECTION_POLICY_SHARED, COLLECTION_POLICY_VAULT_DEFAULT, COLLECTION_STATUS_ACTIVE,
-            Collection,
+            Collection, COLLECTION_POLICY_SHARED, COLLECTION_POLICY_VAULT_DEFAULT,
+            COLLECTION_STATUS_ACTIVE,
         },
         schema,
     };
@@ -1429,11 +1433,9 @@ mod tests {
                 &recipient_membership,
             )
             .expect("initial operation");
-        assert!(
-            recipient_log
-                .accept(&initial_operation, &recipient_membership)
-                .is_ok()
-        );
+        assert!(recipient_log
+            .accept(&initial_operation, &recipient_membership)
+            .is_ok());
         let peer_device = id(25);
         let peer = DeviceIdentity::from_seeds([26; 32], [27; 32]);
         let peer_enrollment = EnrollmentRecord::new(
@@ -1644,21 +1646,174 @@ mod tests {
             .expect("sharing state")
             .expect("present");
         assert_eq!(final_state.collection_epoch(), 2);
-        assert!(
-            final_state
-                .validate_grant(first.grant(), &source_membership)
-                .is_err()
+        assert!(final_state
+            .validate_grant(first.grant(), &source_membership)
+            .is_err());
+        assert!(final_state
+            .validate_grant(second_primary_share.grant(), &source_membership)
+            .is_err());
+        assert!(final_state
+            .validate_grant(second_share.grant(), &source_membership)
+            .is_err());
+    }
+
+    #[test]
+    fn a_share_in_a_pending_rotation_window_fails_closed_rather_than_mismatching_the_epoch() {
+        let source_vault = id(1);
+        let collection_id = id(2);
+        let root = Key::new([3; 32]);
+        let catalog_key = CatalogKey::derive(&root, &source_vault).expect("catalog key");
+        let mut db = CatalogDb::open(&CatalogLocation::Memory, &catalog_key).expect("catalog");
+        schema::open_at_current_version(&mut db, 1).expect("schema");
+        sync_receive::provision_local_identity(&mut db, &root, source_vault)
+            .expect("local identity");
+        let collection_key = Key::new([4; 32]);
+        let envelope = CollectionKeyEnvelope::seal(
+            &root,
+            source_vault,
+            collection_id,
+            1,
+            1,
+            Nonce::new([5; 24]),
+            &collection_key,
+        )
+        .expect("collection envelope");
+        store::put_collection_with_envelope(
+            &mut db,
+            &Collection {
+                collection_id,
+                current_epoch: 1,
+                policy_type: COLLECTION_POLICY_VAULT_DEFAULT,
+                created_revision: 1,
+                status: COLLECTION_STATUS_ACTIVE,
+            },
+            1,
+            &envelope.encode(),
+        )
+        .expect("collection");
+        let object_id = id(14);
+        let object_key = Key::new([15; 32]);
+        let object_envelope = ObjectKeyEnvelope::seal(
+            &collection_key,
+            source_vault,
+            collection_id,
+            1,
+            object_id,
+            1,
+            Nonce::new([16; 24]),
+            &object_key,
+        )
+        .expect("object envelope");
+        db.transaction(|transaction| {
+            transaction
+                .execute(
+                    "INSERT INTO objects VALUES (
+                         ?1, 1, ?2, ?3, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 1, 0, 1, 72
+                     )",
+                    rusqlite::params![
+                        object_id.as_bytes().as_slice(),
+                        collection_id.as_bytes().as_slice(),
+                        id(17).as_bytes().as_slice(),
+                    ],
+                )
+                .expect("object");
+            transaction
+                .execute(
+                    "INSERT INTO object_key_envelopes VALUES (?1, 1, 1, ?2)",
+                    rusqlite::params![object_id.as_bytes().as_slice(), object_envelope.encode(),],
+                )
+                .expect("object envelope");
+            transaction
+                .execute(
+                    "INSERT INTO sync_object_envelope_epochs VALUES (?1, ?2, 1, 1)",
+                    rusqlite::params![
+                        object_id.as_bytes().as_slice(),
+                        collection_id.as_bytes().as_slice(),
+                    ],
+                )
+                .expect("envelope projection");
+            Ok(())
+        })
+        .expect("object projection");
+
+        let recipient_vault = id(6);
+        let first_device = id(7);
+        let first_recipient = DeviceIdentity::from_seeds([8; 32], [9; 32]);
+        let first_enrollment = EnrollmentRecord::initial(
+            recipient_vault,
+            first_device,
+            first_recipient.signing_public_key(),
+            first_recipient.hpke_public_key(),
+        )
+        .expect("first enrollment")
+        .sign(first_recipient.signing_key());
+        let settled = prepare_share(
+            &mut db,
+            &root,
+            source_vault,
+            collection_id,
+            &first_enrollment,
+            PermissionProfile::Read,
+            true,
+        )
+        .expect("settled share");
+        assert_eq!(settled.grant().collection_epoch(), 1);
+        assert_eq!(
+            settled
+                .grant()
+                .open_collection_key(
+                    &recipient_vault,
+                    &first_device,
+                    &first_recipient,
+                    sync_membership::load(&db)
+                        .expect("membership")
+                        .expect("present")
+                        .device(settled.grant().sender_device_id())
+                        .expect("sender")
+                        .signing_public_key(),
+                )
+                .expect("grant key")
+                .expose(),
+            collection_key.expose()
         );
-        assert!(
-            final_state
-                .validate_grant(second_primary_share.grant(), &source_membership)
-                .is_err()
-        );
-        assert!(
-            final_state
-                .validate_grant(second_share.grant(), &source_membership)
-                .is_err()
-        );
+
+        // The window `sharing::load` admits: a projected revocation advanced
+        // the sharing state's epoch, while the rotation operation that carries
+        // the new epoch's envelope has not landed, so the collections row and
+        // the envelope store are still at epoch 1.
+        db.connection()
+            .execute(
+                "UPDATE sharing_collections SET current_epoch = 2 WHERE collection_id = ?1",
+                rusqlite::params![collection_id.as_bytes().as_slice()],
+            )
+            .expect("pending rotation window");
+
+        // A share prepared in that window must fail closed. The previous code
+        // sealed the collections row's epoch-1 key under the new epoch's
+        // grant; a recipient would have installed the epoch-1 key as the
+        // collection key of epoch 2 (`install_share`).
+        let second_device = id(11);
+        let second_recipient = DeviceIdentity::from_seeds([12; 32], [13; 32]);
+        let second_enrollment = EnrollmentRecord::initial(
+            recipient_vault,
+            second_device,
+            second_recipient.signing_public_key(),
+            second_recipient.hpke_public_key(),
+        )
+        .expect("second enrollment")
+        .sign(second_recipient.signing_key());
+        let Err(refused) = prepare_share(
+            &mut db,
+            &root,
+            source_vault,
+            collection_id,
+            &second_enrollment,
+            PermissionProfile::Read,
+            true,
+        ) else {
+            panic!("a share was prepared for an epoch that has no key envelope");
+        };
+        assert_eq!(refused.status(), ChurStatus::NotFound);
     }
 
     #[test]
@@ -1759,28 +1914,24 @@ mod tests {
                  BEGIN SELECT RAISE(ABORT, 'test rejection'); END;",
             )
             .expect("trigger");
-        assert!(
-            accept_share(
-                &mut recipient,
-                &recipient_root,
-                &[evidence],
-                &membership,
-                prepared.grant(),
-                prepared.grant_operation(),
-            )
-            .is_err()
-        );
+        assert!(accept_share(
+            &mut recipient,
+            &recipient_root,
+            &[evidence],
+            &membership,
+            prepared.grant(),
+            prepared.grant_operation(),
+        )
+        .is_err());
         assert_eq!(
             store::collection(&recipient, &collection_id)
                 .expect_err("failed transaction left a collection")
                 .status(),
             ChurStatus::NotFound
         );
-        assert!(
-            sharing::load(&recipient, &collection_id)
-                .expect("sharing state")
-                .is_none()
-        );
+        assert!(sharing::load(&recipient, &collection_id)
+            .expect("sharing state")
+            .is_none());
         recipient
             .connection()
             .execute_batch("DROP TRIGGER reject_received_grant")
