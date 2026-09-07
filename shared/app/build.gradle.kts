@@ -50,6 +50,8 @@ val iosHostSymbols =
         "SyncCoordinator",
         "churSyncStateStore",
         "FileSyncStateStore",
+        // Step 7: the document picker the restore route asks the host for.
+        "IosBackupPicker",
     )
 
 kotlin {

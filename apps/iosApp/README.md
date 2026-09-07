@@ -19,7 +19,7 @@ exists for Android only.
 
 ## What the project must do
 
-Five things, and each one is a requirement of a normative document rather than a
+Seven things, and each one is a requirement of a normative document rather than a
 preference.
 
 1. **Create one `ChurController`.** Its storage root is `churStorageRoot()` and
@@ -75,6 +75,42 @@ preference.
    directory excluded from iCloud and iTunes backup, because the file holds
    the device's transport token — and pass it as the controller's `sync`
    parameter.
+
+7. **Present `UIDocumentPickerViewController` for restore.** `IosBackupPicker`
+   is the seam and the framework exports it. Install it once, beside the task
+   registration of step 6:
+
+   ```swift
+   import UniformTypeIdentifiers
+
+   IosBackupPicker.shared.present = { answer in
+       let picker = UIDocumentPickerViewController(
+           forOpeningContentTypes: [UTType.data], asCopy: true)
+       // The delegate holds `answer` and calls it exactly once: with the first
+       // URL's `path` on a choice, and with `nil` on a dismissal. A delegate
+       // that answers twice restores twice; one that never answers leaves the
+       // background lock suppressed for the life of the process.
+       picker.delegate = self.backupPickerDelegate(answering: answer)
+       self.present(picker, animated: true)
+   }
+   ```
+
+   `asCopy: true` is what makes the path usable, and for two reasons. The copy
+   is in this application's temporary directory, so it needs no security-scoped
+   access held open across a restore whose end the host cannot see; and it is a
+   local file, so it seeks. §8 of
+   [`../../docs/format/BACKUP_FORMAT_V1.md`](../../docs/format/BACKUP_FORMAT_V1.md)
+   reads the package from both ends - the preamble first and the length last -
+   which a stream from a provider cannot serve.
+
+   What the copy holds is the encrypted package, not plaintext, so
+   [`../../docs/security/PLAINTEXT_LIFECYCLE.md`](../../docs/security/PLAINTEXT_LIFECYCLE.md)
+   §1 is unaffected by it. Delete it after the restore reports its result, or
+   leave it to the system's cleanup of `tmp`.
+
+   Nothing else is needed. The framework opens the descriptor, takes the
+   password from its own screen, and closes what it opened, so the password
+   never crosses into the host.
 
 ## Info.plist
 

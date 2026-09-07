@@ -60,6 +60,15 @@ public sealed interface AppRoute {
     /** Vault creation, §3 there. */
     public data object CreateVault : AppRoute
 
+    /**
+     * Restoring a backup package, `docs/format/BACKUP_FORMAT_V1.md` §8.
+     *
+     * It sits beside creation rather than inside the vault because §8 installs
+     * an identity: it runs from the runtime, with no session and, where the
+     * shell offers it, no vault at all.
+     */
+    public data object RestoreBackup : AppRoute
+
     /** The session gate, `DESIGN.md` §14. */
     public data object Unlock : AppRoute
 

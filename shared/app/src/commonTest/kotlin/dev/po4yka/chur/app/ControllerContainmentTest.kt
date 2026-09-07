@@ -4,6 +4,7 @@ import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.notes.NoteStore
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -97,6 +98,28 @@ class ControllerContainmentTest {
         advanceUntilIdle()
 
         assertEquals("Imported 3 items.", controller.message.value)
+    }
+
+    @Test
+    fun a_refused_restore_still_returns_the_source_the_host_opened() = runTest(dispatcher) {
+        // `BACKUP_FORMAT_V1.md` §8 reads a file the user picked, and the host
+        // opened its descriptor. The controller returns it on a refusal exactly
+        // as on a success: a descriptor the application keeps is a file the
+        // platform cannot reclaim, and the picker of a second attempt would be
+        // opening the same file again. This controller has no open runtime, so
+        // the repository refuses before the boundary is reached.
+        val controller = controllerOver(InertNotes)
+        val returned = CompletableDeferred<Unit>()
+
+        controller.restoreBackup(sourceFd = -1, password = "not this package's") {
+            returned.complete(Unit)
+        }
+        // The body suspends on `Dispatchers.Default`, which this scheduler does
+        // not drive, so the wait is on the lambda rather than on the queue.
+        returned.await()
+        advanceUntilIdle()
+
+        assertEquals(ChurStatus.INTERNAL_FAILURE.name, controller.message.value)
     }
 
     private fun controllerOver(notes: NoteStore) = ChurController(

@@ -38,6 +38,13 @@ import dev.po4yka.chur.app.theme.LocalChurColors
  *
  * §8 forbids stating a claim `DISCREET_MODE.md` bars, so the copy says what is
  * true and no more: no server copy exists and no support path can recover it.
+ *
+ * [onRestore] is null unless the storage root holds no vault. A restore
+ * installs an identity, `../format/BACKUP_FORMAT_V1.md` §8, so it is offered
+ * where creation is offered and nowhere else: `DECOY_VAULT.md` §8 asks the
+ * product to keep a restore away from another identity's descriptors, and §10
+ * forbids a surface that differs by whether a second identity exists. With no
+ * identity present there is none to overwrite and none to reveal.
  */
 @Composable
 fun CreateVaultScreen(
@@ -45,6 +52,7 @@ fun CreateVaultScreen(
     error: String?,
     onCreate: (password: String, offerRecovery: Boolean) -> Unit,
     onCancel: () -> Unit,
+    onRestore: (() -> Unit)? = null,
 ) {
     var password by remember { mutableStateOf("") }
     var confirmation by remember { mutableStateOf("") }
@@ -124,6 +132,11 @@ fun CreateVaultScreen(
                 ) {
                     Text(if (busy) "Creating" else "Create vault")
                 }
+                if (onRestore != null) {
+                    TextButton(onClick = onRestore, enabled = !busy) {
+                        Text("Restore from a backup")
+                    }
+                }
                 TextButton(onClick = onCancel, enabled = !busy) { Text("Not now") }
             }
         }
@@ -193,6 +206,72 @@ fun RecoveryPhraseScreen(phrase: String, onAcknowledged: () -> Unit) {
                 ) {
                     Text("Continue")
                 }
+            }
+        }
+    }
+}
+
+/**
+ * The restore route, `docs/format/BACKUP_FORMAT_V1.md` §8.
+ *
+ * The password comes before the file because §8 does: step 2 obtains the
+ * credential from the package's own portable descriptor and step 3
+ * authenticates the manifest with it, so a package the credential does not open
+ * is refused before any record of it is read.
+ *
+ * The copy names the package and never this device's vaults.
+ * `../security/DECOY_VAULT.md` §10 forbids a surface that differs by whether a
+ * second identity exists, and the hosts offer this screen only while the
+ * storage root holds no identity at all.
+ */
+@Composable
+fun RestoreBackupScreen(
+    busy: Boolean,
+    error: String?,
+    onChoose: (password: String) -> Unit,
+    onBack: () -> Unit,
+) {
+    var password by remember { mutableStateOf("") }
+    val colors = LocalChurColors.current
+    Surface(color = colors.canvas, modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                .padding(ChurSpacing.gutterExpanded),
+            verticalArrangement = Arrangement.spacedBy(ChurSpacing.three),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Column(
+                modifier = Modifier.widthIn(max = 420.dp),
+                verticalArrangement = Arrangement.spacedBy(ChurSpacing.three),
+            ) {
+                Text("Restore from a backup", style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    "Enter the password of the vault the backup came from. Then choose " +
+                        "the backup file. The file is read on this device. Chur keeps no " +
+                        "copy of the file and no copy of the password.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.inkMuted,
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    singleLine = true,
+                    enabled = !busy,
+                    label = { Text("Backup password") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (error != null) {
+                    Text(error, style = MaterialTheme.typography.bodySmall, color = colors.error)
+                }
+                Button(
+                    onClick = { onChoose(password) },
+                    enabled = !busy && password.isNotEmpty(),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (busy) "Restoring" else "Choose backup file")
+                }
+                TextButton(onClick = onBack, enabled = !busy) { Text("Back") }
             }
         }
     }

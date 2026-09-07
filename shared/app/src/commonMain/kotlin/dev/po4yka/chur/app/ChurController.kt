@@ -642,6 +642,60 @@ class ChurController(
     }
 
     /**
+     * Restores a backup package, `BACKUP_FORMAT_V1.md` §8.
+     *
+     * It is [createBackup] read backwards and differs in two things, both of
+     * them §8's. The operation runs from the runtime rather than from a
+     * session, because a restore installs an identity and there may be no
+     * session and no vault when it starts; and the credential is the package's
+     * own, taken from its portable descriptor at step 2.
+     *
+     * The source is the host's rather than the [ExportSink]'s. An export
+     * destination is one the application creates; a package is a file the user
+     * picks, which is a platform picker and not a call. Rust duplicates the
+     * descriptor at the boundary, §13 of the FFI contract, so the host may
+     * close its own as soon as this returns; [close] returns it here rather
+     * than at the host so one lambda ends the attempt on a refusal exactly as
+     * on a success, and a descriptor the application keeps is a file the
+     * platform cannot reclaim.
+     *
+     * The bracket is [enrollDeviceSlot]'s, for a longer reason. A restore is
+     * the longest operation here, and `VaultRepository.lock` publishes `Locked`
+     * whether or not a session or a vault exists, so a background transition
+     * during one would leave a storage root that holds no identity reported as
+     * locked - an unlock gate with nothing behind it, and no route back to
+     * creation.
+     *
+     * The repository published `NoVault` and nothing has asked it since;
+     * `start` is that question, it opens no runtime that is already open, and
+     * it is what moves the shell from creation to the unlock gate.
+     *
+     * The message is the status name and nothing more, as every other boundary
+     * failure is: `docs/ERROR_MODEL.md` "Safe metadata" keeps a private value
+     * out of it, and the package's password is one.
+     */
+    fun restoreBackup(sourceFd: Int, password: String, close: () -> Unit) = guarded {
+        val bytes = password.encodeToByteArray()
+        beginHostActivity()
+        try {
+            val operation = withContext(Dispatchers.Default) {
+                repository.beginRestore(sourceFd, bytes)
+            }
+            val terminal = drain(operation)
+            withContext(Dispatchers.Default) { repository.closeOperation(operation) }
+            if (terminal != 0) {
+                throw ChurFailure(ChurStatus.fromValue(terminal), "the restore")
+            }
+            withContext(Dispatchers.Default) { repository.start() }
+            _route.value = AppRoute.Unlock
+        } finally {
+            bytes.fill(0)
+            endHostActivity()
+            close()
+        }
+    }
+
+    /**
      * Provisions a second vault identity, `DECOY_VAULT.md` §3.
      *
      * It routes to the ordinary creation screen. There is no separate decoy

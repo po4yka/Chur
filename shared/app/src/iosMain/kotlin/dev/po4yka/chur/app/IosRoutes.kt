@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+
 package dev.po4yka.chur.app
 
 import androidx.compose.runtime.Composable
@@ -16,6 +18,7 @@ import dev.po4yka.chur.app.vault.CreateVaultScreen
 import dev.po4yka.chur.app.vault.LibraryTile
 import dev.po4yka.chur.app.vault.RecoveryPhraseScreen
 import dev.po4yka.chur.app.vault.RecoveryScreen
+import dev.po4yka.chur.app.vault.RestoreBackupScreen
 import dev.po4yka.chur.app.vault.ThumbnailCache
 import dev.po4yka.chur.app.vault.UnlockScreen
 import dev.po4yka.chur.app.vault.VaultActions
@@ -39,6 +42,9 @@ import dev.po4yka.chur.vault.VaultState
 import kotlinx.coroutines.launch
 import platform.Foundation.NSDate
 import platform.Foundation.timeIntervalSince1970
+import platform.posix.O_RDONLY
+import platform.posix.close
+import platform.posix.open
 
 /**
  * The iOS route table.
@@ -65,7 +71,13 @@ internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: 
             error = message,
             onCreate = controller::create,
             onCancel = { controller.goTo(AppRoute.PublicShell) },
+            onRestore = if (vaultState is VaultState.NoVault) {
+                { controller.goTo(AppRoute.RestoreBackup) }
+            } else {
+                null
+            },
         )
+        AppRoute.RestoreBackup -> IosRestoreRoute(controller)
         AppRoute.Unlock -> UnlockScreen(
             busy = false,
             failed = (vaultState as? VaultState.Locked)?.lastFailure != null,
@@ -355,3 +367,65 @@ private fun selectedObjects(
     page: ObjectPage,
     selection: Set<String>,
 ): List<ByteArray> = page.objects.filter { it.id in selection }.map { it.objectId }
+
+/**
+ * The restore route, `docs/format/BACKUP_FORMAT_V1.md` §8.
+ *
+ * The document picker belongs to the Xcode project for the reason the photo
+ * picker does: a Compose composable cannot present a UIKit view controller
+ * without the host's window. [IosBackupPicker] is that seam, and
+ * `apps/iosApp/README.md` step 7 is its specification.
+ *
+ * The password does not leave Kotlin. The host is asked for a path and answers
+ * with one; the descriptor is opened here and closed here.
+ */
+@Composable
+private fun IosRestoreRoute(controller: ChurController) {
+    val message by controller.message.collectAsState()
+    var running by remember { mutableStateOf(false) }
+
+    RestoreBackupScreen(
+        busy = running,
+        error = message,
+        onChoose = { password ->
+            val present = IosBackupPicker.present
+            if (present == null) {
+                controller.report("This build cannot open the file picker.")
+            } else {
+                running = true
+                // A file provider can take the foreground while its picker is
+                // up, and the background transition would close the route this
+                // result returns to, as it does on the other host.
+                controller.beginHostActivity()
+                present { path ->
+                    controller.endHostActivity()
+                    val descriptor = path?.let { open(it, O_RDONLY) } ?: -1
+                    if (descriptor < 0) {
+                        if (path != null) controller.report("That file could not be opened.")
+                        running = false
+                    } else {
+                        controller.restoreBackup(descriptor, password) {
+                            close(descriptor)
+                            running = false
+                        }
+                    }
+                }
+            }
+        },
+        onBack = { controller.goTo(AppRoute.PublicShell) },
+    )
+}
+
+/**
+ * The document picker the Xcode project presents, `BACKUP_FORMAT_V1.md` §8.
+ *
+ * It is a hook rather than a call for the reason the photo picker is one: the
+ * presentation needs the host's window, which no composable has. The host
+ * installs [present] once at launch, the way it registers the background task
+ * of [IosSyncBackground], and answers with the path of a file this process can
+ * open and seek. `apps/iosApp/README.md` step 7 says which file that is.
+ */
+public object IosBackupPicker {
+    /** Presents the picker, and answers with a path or `null` on a dismissal. */
+    public var present: ((answer: (String?) -> Unit) -> Unit)? = null
+}

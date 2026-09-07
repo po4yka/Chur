@@ -22,6 +22,7 @@ import dev.po4yka.chur.app.vault.CreateVaultScreen
 import dev.po4yka.chur.app.vault.LibraryTile
 import dev.po4yka.chur.app.vault.RecoveryPhraseScreen
 import dev.po4yka.chur.app.vault.RecoveryScreen
+import dev.po4yka.chur.app.vault.RestoreBackupScreen
 import dev.po4yka.chur.app.vault.ThumbnailCache
 import dev.po4yka.chur.app.vault.UnlockScreen
 import dev.po4yka.chur.app.vault.VaultActions
@@ -81,7 +82,17 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
             error = message,
             onCreate = controller::create,
             onCancel = { controller.goTo(AppRoute.PublicShell) },
+            // The offer exists only where no identity does. `DECOY_VAULT.md`
+            // §8 and §10: this screen is also where a second identity is
+            // created, and a restore offered there would reach for a registry
+            // that already holds one.
+            onRestore = if (vaultState is VaultState.NoVault) {
+                { controller.goTo(AppRoute.RestoreBackup) }
+            } else {
+                null
+            },
         )
+        AppRoute.RestoreBackup -> RestoreRoute(controller)
         AppRoute.Unlock -> UnlockScreen(
             busy = false,
             failed = (vaultState as? VaultState.Locked)?.lastFailure != null,
@@ -148,6 +159,75 @@ private fun PublicShell(controller: ChurController, route: AppRoute) {
             onOpenVault = controller::openVaultEntry,
         )
     }
+}
+
+/**
+ * The restore route, `docs/format/BACKUP_FORMAT_V1.md` §8.
+ *
+ * The picker is `OpenDocument` and its filter is unrestricted: a package has no
+ * registered media type, and one copied from another device carries whatever
+ * type the provider that holds it reports.
+ *
+ * The bracket around the launch is the media picker's, for the media picker's
+ * reason. The platform stops this activity while the documents UI is up, and
+ * the background transition would move the shell back to the public route and
+ * take this screen with it - and would mark a storage root that holds no vault
+ * as `Locked`.
+ */
+@Composable
+private fun RestoreRoute(controller: ChurController) {
+    val message by controller.message.collectAsState()
+    val context = LocalContext.current
+    var password by remember { mutableStateOf("") }
+    var running by remember { mutableStateOf(false) }
+
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        controller.endHostActivity()
+        // §8 reads the package from both ends, so the descriptor must seek. A
+        // provider that streams gives one that cannot, and the boundary refuses
+        // with its own status rather than reading a package it cannot verify.
+        //
+        // `openFileDescriptor` throws when the provider cannot open the
+        // document, and throws again when a grant has gone - which a process
+        // death while the documents UI was up produces, because the result is
+        // then delivered into a new composition. This runs on the main thread
+        // outside the controller's guard, where a throw ends the process rather
+        // than the attempt: `PLAINTEXT_LIFECYCLE.md` §8 wants the orderly lock.
+        val handle = uri?.let {
+            runCatching { context.contentResolver.openFileDescriptor(it, "r") }.getOrNull()
+        }
+        if (handle == null) {
+            // A dismissal and an unreadable file end the attempt the same way.
+            // Only the second one has anything to say.
+            if (uri != null) controller.report("That file could not be opened.")
+            running = false
+            password = ""
+        } else {
+            controller.restoreBackup(handle.fd, password) {
+                handle.close()
+                running = false
+                password = ""
+            }
+        }
+    }
+
+    RestoreBackupScreen(
+        busy = running,
+        error = message,
+        onChoose = { entered ->
+            // The flag is what stops a second package being restored on top of
+            // the first: both would pass the registry check of §11 while the
+            // first was still running, and the root would end with two
+            // identities behind one credential.
+            password = entered
+            running = true
+            controller.beginHostActivity()
+            picker.launch(arrayOf("*/*"))
+        },
+        onBack = { controller.goTo(AppRoute.PublicShell) },
+    )
 }
 
 @Composable
