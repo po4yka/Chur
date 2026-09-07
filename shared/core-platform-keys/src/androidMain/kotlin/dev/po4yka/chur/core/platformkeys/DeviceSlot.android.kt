@@ -240,9 +240,19 @@ public actual class DeviceSlot public actual constructor(identifier: ByteArray) 
         policy: DeviceSlotPolicy,
         prompt: DeviceSlotPrompt,
         crypto: BiometricPrompt.CryptoObject?,
-    ): BiometricPrompt.CryptoObject? = withContext(Dispatchers.Main) {
+    ): BiometricPrompt.CryptoObject? {
+        // The library validates the authenticator combination in `build` and
+        // answers an unsupported one with `IllegalArgumentException`. Raw, that
+        // walks past the `DeviceSlotException` catch of the host, and that is
+        // the catch which destroys the key an abandoned enrolment left behind:
+        // the slot would then answer `CONFLICT` for good.
+        val info = try {
+            promptInfo(policy, prompt)
+        } catch (cause: Exception) {
+            throw classify(cause, "the device refused the authorization prompt")
+        }
+        return withContext(Dispatchers.Main) {
         suspendCancellableCoroutine { continuation ->
-            val info = promptInfo(policy, prompt)
             val dialog = BiometricPrompt(
                 activity,
                 ContextCompat.getMainExecutor(activity),
@@ -277,6 +287,7 @@ public actual class DeviceSlot public actual constructor(identifier: ByteArray) 
             continuation.invokeOnCancellation { dialog.cancelAuthentication() }
             if (crypto == null) dialog.authenticate(info) else dialog.authenticate(info, crypto)
         }
+        }
     }
 
     private fun promptInfo(
@@ -286,17 +297,11 @@ public actual class DeviceSlot public actual constructor(identifier: ByteArray) 
         val builder = BiometricPrompt.PromptInfo.Builder()
             .setTitle(prompt.title)
             .setSubtitle(prompt.subtitle)
-        when (policy) {
-            DeviceSlotPolicy.CONVENIENT -> builder.setAllowedAuthenticators(
-                BiometricManager.Authenticators.BIOMETRIC_STRONG or
-                    BiometricManager.Authenticators.DEVICE_CREDENTIAL,
-            )
-            DeviceSlotPolicy.STRICT -> {
-                builder.setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
-                // A prompt that admits no device credential must carry its own
-                // way out, and the platform rejects one that sets neither.
-                builder.setNegativeButtonText(prompt.cancel)
-            }
+        builder.setAllowedAuthenticators(allowedAuthenticators(policy, Build.VERSION.SDK_INT))
+        if (policy == DeviceSlotPolicy.STRICT) {
+            // A prompt that admits no device credential must carry its own way
+            // out, and the platform rejects one that sets neither.
+            builder.setNegativeButtonText(prompt.cancel)
         }
         return builder.build()
     }
@@ -385,6 +390,42 @@ public class DeviceSlotPrompt(
      */
     public val cancel: String,
 )
+
+
+/**
+ * The authenticators the prompt of `KEY_SLOTS.md` §4 admits.
+ *
+ * androidx.biometric 1.1.0 validates the combination inside
+ * `PromptInfo.Builder.build`: `AuthenticatorUtils.isSupportedCombination`
+ * admits `BIOMETRIC_STRONG or DEVICE_CREDENTIAL` only below API 28 or above
+ * API 29, and answers every other level with `IllegalArgumentException`.
+ * minSdk is 29, and ADR-0017 makes API 29 the supported floor, so that
+ * combination threw before the prompt was ever shown and left `wrap` and
+ * `unwrap` unreachable on the floor device. `BIOMETRIC_WEAK or
+ * DEVICE_CREDENTIAL` is the combination the library accepts at every level,
+ * and it is the one it maps onto the framework `setDeviceCredentialAllowed`
+ * of API 29.
+ *
+ * `BIOMETRIC_WEAK` is a floor rather than a demand, so the Class 3 sensor of
+ * an ordinary API-29 device still opens the window key [DeviceSlot] builds
+ * there. A device whose only biometric is Class 2 authorizes the prompt and
+ * then fails the AEAD with `UserNotAuthenticatedException`, because a
+ * validity window admits no token a weak factor issued; that answers
+ * `PLATFORM_KEY_UNAVAILABLE`, and the device credential still opens the slot.
+ *
+ * `STRICT` takes the strong class alone at every level, which the library
+ * accepts unconditionally.
+ */
+internal fun allowedAuthenticators(policy: DeviceSlotPolicy, sdkInt: Int): Int = when (policy) {
+    DeviceSlotPolicy.STRICT -> BiometricManager.Authenticators.BIOMETRIC_STRONG
+    DeviceSlotPolicy.CONVENIENT -> if (sdkInt >= Build.VERSION_CODES.R) {
+        BiometricManager.Authenticators.BIOMETRIC_STRONG or
+            BiometricManager.Authenticators.DEVICE_CREDENTIAL
+    } else {
+        BiometricManager.Authenticators.BIOMETRIC_WEAK or
+            BiometricManager.Authenticators.DEVICE_CREDENTIAL
+    }
+}
 
 /**
  * What an Android slot body carries, `KEY_SLOT_BODIES_V1.md` section 5.
