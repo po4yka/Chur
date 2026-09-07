@@ -265,46 +265,30 @@ impl OperationLog {
                 "operation author is not enrolled",
             )
         })?;
+        // Both arms hand the operation straight to `accept_inner`, which already
+        // enforces every obligation a floor and a revocation cutoff carry.
+        //
+        // A record offered at the floor sequence with a digest other than the
+        // floor's freezes the chain as fork evidence, and that check runs ahead
+        // of the contiguity check, so it holds while the gap below is still
+        // open. Contiguity then means a chain advances by one from sequence one,
+        // so nothing above the floor is reachable until the record at the floor
+        // sequence has itself been accepted. The floor is therefore crossed only
+        // by the pinned history, whether it arrives in one slice or in many.
+        //
+        // What the discarded candidate added was atomicity of the prefix below
+        // the floor, and it cost the chain its only way forward: a floor is
+        // installed only strictly above the local head, `accept_gated_with`
+        // offers one operation per call, and a peer issues a checkpoint at the
+        // end of every session (`ROLLBACK_PROTECTION.md` §6). So an ordinary
+        // checkpoint stopped its author's chain permanently, and durably —
+        // §7 there requires the opposite, since a device restored from backup
+        // sets its floor before it accepts any operation and must then reach it
+        // one batch at a time.
         match device.status() {
-            DeviceStatus::Active => {
-                if self.floor_satisfied(operation.device_id()) {
-                    return self.accept_inner(operation, membership, None);
-                }
-                let mut candidate = self.clone();
-                let outcome = match candidate.accept_inner(operation, membership, None) {
-                    Ok(outcome) => outcome,
-                    Err(error) => {
-                        if error.status() == ChurStatus::SyncChainFork {
-                            *self = candidate;
-                        }
-                        return Err(error);
-                    }
-                };
-                if candidate.floor_satisfied(operation.device_id()) {
-                    *self = candidate;
-                    Ok(outcome)
-                } else {
-                    Ok(ApplyOutcome::PendingGap)
-                }
-            }
+            DeviceStatus::Active => self.accept_inner(operation, membership, None),
             DeviceStatus::Revoked { sequence, digest } => {
-                let mut candidate = self.clone();
-                let outcome =
-                    match candidate.accept_inner(operation, membership, Some((sequence, digest))) {
-                        Ok(outcome) => outcome,
-                        Err(error) => {
-                            if error.status() == ChurStatus::SyncChainFork {
-                                *self = candidate;
-                            }
-                            return Err(error);
-                        }
-                    };
-                if candidate.head_matches(operation.device_id(), sequence, &digest) {
-                    *self = candidate;
-                    Ok(outcome)
-                } else {
-                    Ok(ApplyOutcome::PendingGap)
-                }
+                self.accept_inner(operation, membership, Some((sequence, digest)))
             }
         }
     }
@@ -1186,10 +1170,13 @@ mod tests {
                 .expect("checkpoint")
                 == CheckpointOutcome::Raised
         );
+        // An operation below the floor builds toward it, so it is accepted:
+        // §7 of `ROLLBACK_PROTECTION.md` has a restored device set its floor
+        // before it accepts anything and then reach it one batch at a time.
         assert!(
-            log.accept(&first, &membership).expect("pending floor") == ApplyOutcome::PendingGap
+            log.accept(&first, &membership).expect("toward the floor") == ApplyOutcome::Applied
         );
-        assert!(log.head(&id(2)).is_none());
+        assert_eq!(log.head(&id(2)), Some((1, first.digest())));
         assert_eq!(
             log.accept_device_chain(&[first, second], &membership)
                 .expect("chain")
@@ -1342,8 +1329,10 @@ mod tests {
             .expect("accept revocation");
 
         let mut log = OperationLog::new();
-        assert!(log.accept(&first, &membership).expect("pending") == ApplyOutcome::PendingGap);
-        assert!(log.head(&id(6)).is_none());
+        assert!(
+            log.accept(&first, &membership).expect("toward the cutoff") == ApplyOutcome::Applied
+        );
+        assert_eq!(log.head(&id(6)), Some((1, first.digest())));
         assert_eq!(
             log.accept_revoked_chain(&[first.clone(), second.clone()], &membership)
                 .expect("chain")
