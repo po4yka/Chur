@@ -189,11 +189,19 @@ impl Operation {
         let worker = std::thread::Builder::new()
             .name(String::from("chur-operation"))
             .spawn(move || {
-                // Success is `0`, which is not a member of `ChurStatus`, so the
-                // ABI value is carried rather than the enum.
-                let status = match body(&worker_state) {
-                    Ok(()) => chur_core::CHUR_OK,
-                    Err(error) => error.as_i32(),
+                // §11: a panic inside the worker body is caught here and
+                // converted into INTERNAL_FAILURE, so a panicking body still
+                // produces the one terminal result and `chur_operation_poll`
+                // never waits forever. The payload is dropped inside the
+                // boundary, never unwound across it. Success is `0`, which is
+                // not a member of `ChurStatus`, so the ABI value is carried
+                // rather than the enum.
+                let status = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    body(&worker_state)
+                })) {
+                    Ok(Ok(())) => chur_core::CHUR_OK,
+                    Ok(Err(error)) => error.as_i32(),
+                    Err(_) => chur_core::ChurStatus::InternalFailure.as_i32(),
                 };
                 worker_state.finish(status);
             })
@@ -236,5 +244,45 @@ impl Drop for Operation {
     fn drop(&mut self) {
         self.cancel();
         self.join();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::panic)]
+
+    use super::*;
+
+    #[test]
+    fn a_panicking_worker_still_produces_a_terminal_internal_failure() {
+        // §11: the boundary converts a caught panic into INTERNAL_FAILURE, so
+        // the handle reaches its one terminal result instead of leaving
+        // `chur_operation_poll` waiting forever.
+        let operation = Operation::spawn(OperationKind::Import, 100, |_shared| {
+            panic!("the import body failed");
+        })
+        .expect("spawn");
+        operation.join();
+        let progress = operation.poll();
+        assert!(progress.terminal);
+        assert_eq!(
+            progress.status,
+            chur_core::ChurStatus::InternalFailure.as_i32()
+        );
+    }
+
+    #[test]
+    fn a_failing_worker_reports_the_error_status() {
+        let operation = Operation::spawn(OperationKind::Import, 100, |_shared| {
+            Err(chur_core::err!(InvalidInput, "the body refused its input"))
+        })
+        .expect("spawn");
+        operation.join();
+        let progress = operation.poll();
+        assert!(progress.terminal);
+        assert_eq!(
+            progress.status,
+            chur_core::ChurStatus::InvalidInput.as_i32()
+        );
     }
 }
