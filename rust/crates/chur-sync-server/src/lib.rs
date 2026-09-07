@@ -218,28 +218,12 @@ impl ReferenceServer {
             return progress(received, expected, complete);
         }
 
-        let reserved: i64 = self
-            .db
-            .query_row(
-                "SELECT
-                    COALESCE((SELECT SUM(expected_length) FROM object_transfers WHERE vault_id = ?1), 0)
-                  + COALESCE((SELECT SUM(length(record)) FROM operations WHERE vault_id = ?1), 0)
-                  + COALESCE((SELECT SUM(length(record)) FROM membership_records WHERE vault_id = ?1), 0)
-                  + COALESCE((SELECT SUM(length(record)) FROM collection_membership_records WHERE issuer_vault_id = ?1), 0)
-                  + COALESCE((SELECT SUM(length(record)) FROM collection_grants WHERE issuer_vault_id = ?1), 0)
-                  + COALESCE((SELECT SUM(length(record)) FROM checkpoints WHERE vault_id = ?1), 0)",
-                params![vault_id.as_bytes().as_slice()],
-                |row| row.get(0),
-            )
-            .map_err(|error| map_sqlite(error, "account storage usage lookup failed"))?;
+        // An upload reserves its declared ciphertext length through the one
+        // accounting query, which lives in `relay`. This block held a second
+        // copy of that query, and the copy is how two tables stayed out of the
+        // total that `docs/sync/SERVER_OPERATOR.md` caps.
+        self.ensure_account_capacity(&vault_id, expected_length)?;
         let expected = to_sqlite(expected_length, "upload length does not fit")?;
-        ensure!(
-            reserved
-                .checked_add(expected)
-                .is_some_and(|total| total <= self.max_account_bytes as i64),
-            ResourceLimitExceeded,
-            "account ciphertext quota is exceeded"
-        );
         self.db
             .execute(
                 "INSERT INTO object_transfers (

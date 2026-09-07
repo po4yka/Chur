@@ -341,7 +341,7 @@ impl ReferenceServer {
         }
         self.ensure_account_capacity(
             operation.issuer_identity_vault_id(),
-            operation.encode().len(),
+            operation.encode().len() as u64,
         )?;
         self.db
             .execute(
@@ -1494,13 +1494,14 @@ fn recipient_collections(server: &ReferenceServer, vault_id: Id, device_id: Id) 
     .collect()
 }
 
-fn added_bytes(outcome: RelayOutcome, operation: usize, sharing: usize) -> Result<usize> {
+fn added_bytes(outcome: RelayOutcome, operation: usize, sharing: usize) -> Result<u64> {
     sharing
         .checked_add(if outcome == RelayOutcome::Stored {
             operation
         } else {
             0
         })
+        .map(|bytes| bytes as u64)
         .ok_or_else(|| Error::new(ChurStatus::ResourceLimitExceeded, "relay bytes overflow"))
 }
 

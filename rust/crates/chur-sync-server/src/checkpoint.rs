@@ -113,7 +113,7 @@ impl ReferenceServer {
                 "checkpoint head is absent or differs"
             );
         }
-        self.ensure_account_capacity(checkpoint.vault_id(), checkpoint.encode().len())?;
+        self.ensure_account_capacity(checkpoint.vault_id(), checkpoint.encode().len() as u64)?;
         self.db
             .execute(
                 "INSERT INTO checkpoints (

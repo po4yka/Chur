@@ -181,7 +181,7 @@ impl ReferenceServer {
         if outcome == RelayOutcome::Duplicate {
             return Ok(outcome);
         }
-        self.ensure_account_capacity(operation.vault_id(), operation.encode().len())?;
+        self.ensure_account_capacity(operation.vault_id(), operation.encode().len() as u64)?;
         insert_operation(&self.db, operation, outcome)?;
         Ok(outcome)
     }
@@ -262,7 +262,25 @@ impl ReferenceServer {
         Ok(Some(RelayOutcome::Duplicate))
     }
 
-    pub(super) fn ensure_account_capacity(&self, vault_id: &Id, added: usize) -> Result<()> {
+    /// Enforces the reservation cap of one vault identity before new bytes land.
+    ///
+    /// `docs/sync/SERVER_OPERATOR.md` "Start" caps the reserved bytes of one
+    /// vault identity, so the sum names every schema table that retains a
+    /// record for one. `transport_tokens` is excluded: it holds one digest per
+    /// enrolled device under `PRIMARY KEY(vault_id, device_id)`, and enrolment
+    /// is already charged through `operations` and `membership_records`.
+    ///
+    /// This is the only enforcement point. A second copy of this sum lived in
+    /// `begin_upload`, and the copy is how `collection_operations` and
+    /// `deletion_requests` stayed out of the total: every byte those two tables
+    /// held was free, so an authenticated device could append opaque records
+    /// until the operator's disk was full. A table a later schema adds can now
+    /// be missed in one place only, never in two.
+    ///
+    /// `deletion_requests` counts because the retained receipt belongs to that
+    /// identity. No deletion route calls this function, so a full account can
+    /// still delete itself, which `docs/sync/SERVER_TRUST_MODEL.md` requires.
+    pub(super) fn ensure_account_capacity(&self, vault_id: &Id, added: u64) -> Result<()> {
         let used: i64 = self
             .db
             .query_row(
@@ -272,6 +290,8 @@ impl ReferenceServer {
                   + COALESCE((SELECT SUM(length(record)) FROM membership_records WHERE vault_id = ?1), 0)
                   + COALESCE((SELECT SUM(length(record)) FROM collection_membership_records WHERE issuer_vault_id = ?1), 0)
                   + COALESCE((SELECT SUM(length(record)) FROM collection_grants WHERE issuer_vault_id = ?1), 0)
+                  + COALESCE((SELECT SUM(length(record)) FROM collection_operations WHERE issuer_vault_id = ?1), 0)
+                  + COALESCE((SELECT SUM(length(record)) FROM deletion_requests WHERE vault_id = ?1), 0)
                   + COALESCE((SELECT SUM(length(record)) FROM checkpoints WHERE vault_id = ?1), 0)",
                 params![vault_id.as_bytes().as_slice()],
                 |row| row.get(0),
@@ -628,13 +648,16 @@ fn membership_count(db: &Connection, vault_id: &Id) -> Result<u64> {
     from_sqlite(count, "stored membership count is invalid")
 }
 
-fn new_record_bytes(outcome: RelayOutcome, operation: usize, membership: usize) -> Result<usize> {
+// The width changes here rather than at each call site, because
+// `ensure_account_capacity` counts bytes against the `u64` `max_account_bytes`.
+fn new_record_bytes(outcome: RelayOutcome, operation: usize, membership: usize) -> Result<u64> {
     membership
         .checked_add(if outcome == RelayOutcome::Stored {
             operation
         } else {
             0
         })
+        .map(|bytes| bytes as u64)
         .ok_or_else(|| {
             Error::new(
                 ChurStatus::ResourceLimitExceeded,
@@ -859,6 +882,72 @@ mod tests {
                 .expect_err("revoked author")
                 .status(),
             chur_core::ChurStatus::AuthenticationFailed
+        );
+    }
+
+    /// Every table the schema keys to a vault identity reaches the cap.
+    ///
+    /// `docs/sync/SERVER_OPERATOR.md` caps the reserved bytes of one vault
+    /// identity. `collection_operations` and `deletion_requests` were absent
+    /// from the sum, so their stored bytes were free and an authenticated
+    /// device could append opaque records without limit. The upload path held a
+    /// second copy of the same sum, which is why it is asserted here too.
+    #[test]
+    fn stored_sharing_and_deletion_records_occupy_the_account_reservation() {
+        let root = crate::tests::TestRoot::new();
+        let mut server = ReferenceServer::open(&root.0, 8, 1_024).expect("server");
+        let vault = id(1);
+        server
+            .ensure_account_capacity(&vault, 1_024)
+            .expect("an empty account holds the whole reservation");
+
+        server
+            .db
+            .execute(
+                "INSERT INTO collection_operations (
+                    key_selector, issuer_vault_id, issuer_device_id, device_sequence,
+                    operation_id, digest, record
+                 ) VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6)",
+                params![
+                    id(2).as_bytes().as_slice(),
+                    vault.as_bytes().as_slice(),
+                    id(3).as_bytes().as_slice(),
+                    id(4).as_bytes().as_slice(),
+                    [5u8; 32].as_slice(),
+                    vec![6u8; 512],
+                ],
+            )
+            .expect("stored collection operation");
+        server
+            .db
+            .execute(
+                "INSERT INTO deletion_requests (
+                    vault_id, request_id, target_kind, target_id, record
+                 ) VALUES (?1, ?2, 1, ?3, ?4)",
+                params![
+                    vault.as_bytes().as_slice(),
+                    id(7).as_bytes().as_slice(),
+                    id(8).as_bytes().as_slice(),
+                    vec![9u8; 512],
+                ],
+            )
+            .expect("stored deletion receipt");
+
+        assert_eq!(
+            server
+                .ensure_account_capacity(&vault, 1)
+                .expect_err("the stored records fill the reservation")
+                .status(),
+            chur_core::ChurStatus::ResourceLimitExceeded
+        );
+        // Without the shared gate this passes: the upload path's own copy of
+        // the sum reads zero for a vault holding only these two tables.
+        assert_eq!(
+            server
+                .begin_upload(vault, id(10), id(11), 1)
+                .expect_err("the stored records fill the reservation for an upload too")
+                .status(),
+            chur_core::ChurStatus::ResourceLimitExceeded
         );
     }
 
