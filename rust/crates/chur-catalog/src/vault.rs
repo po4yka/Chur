@@ -70,6 +70,45 @@ pub struct VaultCreation {
     catalog: CatalogDb,
 }
 
+/// The advisory lock `docs/interop/FFI_CONTRACT.md` §8.1 takes on a descriptor
+/// file.
+///
+/// One process opens a vault: an unlock takes an exclusive advisory lock on
+/// the descriptor file before any slot unwrap, and the session holds it for
+/// its life, so a split Android process or a second launch that cannot take
+/// the lock returns `CONFLICT` and attempts no slot unwrap. The lock lives on
+/// the open file description, so it releases when the session releases it.
+///
+/// A descriptor install replaces the file by an atomic rename, so the lock is
+/// re-taken on the inode the entry names after every install; the window
+/// between the rename and the re-take is the one moment a second process
+/// could take the lock, and no smaller window is reachable with rename-based
+/// installs.
+///
+/// The file is never read: holding the open description is the lock, and
+/// dropping it releases.
+struct DescriptorLock(#[expect(dead_code)] std::fs::File);
+
+impl DescriptorLock {
+    /// Takes the exclusive advisory lock on the descriptor file at `path`.
+    fn acquire(path: &std::path::Path) -> Result<Self> {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(|_| chur_core::err!(IoFailure, "the descriptor file could not be opened"))?;
+        file.try_lock().map_err(|error| match error {
+            std::fs::TryLockError::WouldBlock => {
+                chur_core::err!(Conflict, "the vault is open in another process")
+            }
+            std::fs::TryLockError::Error(_) => {
+                chur_core::err!(IoFailure, "the descriptor file could not be locked")
+            }
+        })?;
+        Ok(Self(file))
+    }
+}
+
 /// An unlocked vault session.
 ///
 /// Every handle above this one captures the session generation, so lock makes
@@ -90,6 +129,9 @@ pub struct Session {
     entry_name: RegistryName,
     catalog: Option<CatalogDb>,
     pending_keystore: Option<PendingKeystore>,
+    /// The §8.1 advisory lock on the descriptor file, held for the life of the
+    /// session. A creation holds none until its descriptor exists.
+    descriptor_lock: Option<DescriptorLock>,
 }
 
 /// A Keystore enrollment waiting for the platform's answer.
@@ -288,6 +330,9 @@ impl VaultCreation {
             entry_name: self.entry_name,
             catalog: Some(self.catalog),
             pending_keystore: None,
+            // The creation just installed the first descriptor of a vault no
+            // other process knows; the unlock paths take the §8.1 lock.
+            descriptor_lock: None,
         })
     }
 
@@ -330,14 +375,34 @@ pub fn unlock_with_password(root_dir: &VaultRoot, password: &[u8], now_ms: u64) 
         .map_or_else(Argon2Params::v1_default, |candidate| candidate.params);
     password::check_memory_available(profile)?;
 
+    // §8.1 of the interop contract: the advisory lock on a descriptor file is
+    // taken before any slot unwrap, so a vault open in another process
+    // conflicts here rather than double-opening. A candidate whose lock is not
+    // taken attempts no unwrap; its derivation slot runs the dummy work
+    // instead, which keeps the attempt's cost constant.
+    let mut locks: Vec<Option<DescriptorLock>> = Vec::with_capacity(candidates.len());
+    let mut conflict = false;
+    for candidate in &candidates {
+        match DescriptorLock::acquire(&root_dir.registry_entry(&candidate.entry_name)) {
+            Ok(lock) => locks.push(Some(lock)),
+            Err(error) if error.status() == ChurStatus::Conflict => {
+                locks.push(None);
+                conflict = true;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
     let mut opened: Option<(usize, Key)> = None;
     for index in 0..PASSWORD_DERIVATIONS {
         match candidates.get(index) {
-            Some(candidate) => match candidate.body.open(&candidate.binding, &canonical) {
-                Ok(root) if opened.is_none() => opened = Some((index, root)),
-                _ => {}
-            },
-            None => {
+            Some(candidate) if locks.get(index).is_some_and(Option::is_some) => {
+                match candidate.body.open(&candidate.binding, &canonical) {
+                    Ok(root) if opened.is_none() => opened = Some((index, root)),
+                    _ => {}
+                }
+            }
+            _ => {
                 // A dummy candidate runs the parameters of the first real
                 // candidate over a fresh random 16-byte salt and discards the
                 // output, §8.
@@ -350,14 +415,19 @@ pub fn unlock_with_password(root_dir: &VaultRoot, password: &[u8], now_ms: u64) 
     match opened {
         Some((index, root)) => {
             let candidate = &candidates[index];
+            let lock = locks[index].take().ok_or_else(|| {
+                chur_core::err!(InternalFailure, "the opened candidate holds no lock")
+            })?;
             finish_unlock(
                 root_dir,
                 &candidate.entry_name,
                 &candidate.bytes,
                 root,
                 now_ms,
+                lock,
             )
         }
+        None if conflict => bail!(Conflict, "the vault is open in another process"),
         None => {
             // §8 step 5 still runs over a random substitute root, so an invalid
             // credential and a credential valid for a sibling vault cost the
@@ -415,6 +485,7 @@ pub fn unlock_with_android_keystore(
     root_secret: &Key,
     now_ms: u64,
 ) -> Result<Session> {
+    let mut conflict = false;
     for name in root_dir.registry_names()? {
         let bytes = read_entry(root_dir, &name)?;
         let Ok(descriptor) = VaultDescriptor::parse(&bytes) else {
@@ -427,10 +498,23 @@ pub fn unlock_with_android_keystore(
         if !enrolled {
             continue;
         }
+        // §8.1: the advisory lock is taken before this entry's work runs, so a
+        // vault open in another process conflicts rather than double-opens.
+        let lock = match DescriptorLock::acquire(&root_dir.registry_entry(&name)) {
+            Ok(lock) => lock,
+            Err(error) if error.status() == ChurStatus::Conflict => {
+                conflict = true;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         let candidate = Key::new(*root_secret.expose());
-        if let Ok(session) = finish_unlock(root_dir, &name, &bytes, candidate, now_ms) {
+        if let Ok(session) = finish_unlock(root_dir, &name, &bytes, candidate, now_ms, lock) {
             return Ok(session);
         }
+    }
+    if conflict {
+        bail!(Conflict, "the vault is open in another process");
     }
     bail!(
         AuthenticationFailed,
@@ -478,12 +562,23 @@ fn unlock_with_slot(
     secret: &Key,
     now_ms: u64,
 ) -> Result<Session> {
+    let mut conflict = false;
     for name in root_dir.registry_names()? {
         let bytes = read_entry(root_dir, &name)?;
         let Ok(descriptor) = VaultDescriptor::parse(&bytes) else {
             // §11: an entry that fails the parser limits is skipped before any
             // credential is used, and its failure is attributed to no credential.
             continue;
+        };
+        // §8.1: the advisory lock is taken before any slot unwrap, so a vault
+        // open in another process conflicts rather than double-opens.
+        let lock = match DescriptorLock::acquire(&root_dir.registry_entry(&name)) {
+            Ok(lock) => lock,
+            Err(error) if error.status() == ChurStatus::Conflict => {
+                conflict = true;
+                continue;
+            }
+            Err(error) => return Err(error),
         };
         for entry in descriptor
             .key_slots
@@ -502,9 +597,13 @@ fn unlock_with_slot(
                 )),
             };
             if let Ok(root) = opened {
-                return finish_unlock(root_dir, &name, &bytes, root, now_ms);
+                return finish_unlock(root_dir, &name, &bytes, root, now_ms, lock);
             }
         }
+        drop(lock);
+    }
+    if conflict {
+        bail!(Conflict, "the vault is open in another process");
     }
     bail!(
         AuthenticationFailed,
@@ -513,12 +612,16 @@ fn unlock_with_slot(
 }
 
 /// Steps 5 to 7 of `KEY_SLOTS.md` §8.
+///
+/// `descriptor_lock` is the §8.1 advisory lock the caller took on this entry
+/// before any slot unwrap; the session holds it for its life.
 fn finish_unlock(
     root_dir: &VaultRoot,
     entry_name: &RegistryName,
     bytes: &[u8],
     root_secret: Key,
     now_ms: u64,
+    descriptor_lock: DescriptorLock,
 ) -> Result<Session> {
     let mut descriptor = VaultDescriptor::authenticate(bytes, Some(&root_secret))?;
     ensure!(
@@ -640,6 +743,12 @@ fn finish_unlock(
         install_authenticated_descriptor(root_dir, entry_name, &candidate, &root_secret)?;
         descriptor = candidate;
     }
+    // The installs above - a migration or the generation record - replaced the
+    // descriptor file by rename, so the advisory lock is re-taken on the inode
+    // the entry names now. A conflict there is another process winning the
+    // rename window, and the unlock conflicts rather than double-opens.
+    drop(descriptor_lock);
+    let descriptor_lock = DescriptorLock::acquire(&root_dir.registry_entry(entry_name))?;
     Ok(Session {
         root_dir: root_dir.clone(),
         root_secret: Some(root_secret),
@@ -647,6 +756,7 @@ fn finish_unlock(
         entry_name: entry_name.clone(),
         catalog: Some(catalog),
         pending_keystore: None,
+        descriptor_lock: Some(descriptor_lock),
     })
 }
 
@@ -1035,6 +1145,9 @@ impl Session {
         drop(self.root_secret.take());
         closed?;
         recorded?;
+        // The session is locked, so the §8.1 advisory lock on the descriptor
+        // file releases with it and another process may unlock the vault.
+        drop(self.descriptor_lock.take());
         // Step 8: every scratch entry, whatever its journal state.
         let scratch = self.root_dir.scratch(&self.object_store_id());
         if scratch.exists() {
@@ -1094,7 +1207,9 @@ impl Session {
         candidate.descriptor_generation = next_descriptor_generation(&self.descriptor)?;
         install_authenticated_descriptor(&self.root_dir, &self.entry_name, &candidate, root)?;
         self.descriptor = candidate;
-        Ok(())
+        // The install renamed a new file over the entry, so the §8.1 advisory
+        // lock moves to the inode the entry names now.
+        self.relock_descriptor()
     }
 
     /// Records a catalog generation in the descriptor.
@@ -1112,6 +1227,19 @@ impl Session {
         candidate.catalog.catalog_generation = generation;
         install_authenticated_descriptor(&self.root_dir, &self.entry_name, &candidate, root)?;
         self.descriptor = candidate;
+        self.relock_descriptor()
+    }
+
+    /// Re-takes the §8.1 advisory lock after a descriptor install.
+    ///
+    /// The install renamed a new file over the entry, so the held lock guards
+    /// an inode the entry no longer names. The new lock is taken before the
+    /// old one drops, so a conflict leaves the session holding its previous
+    /// lock and the caller sees the error.
+    fn relock_descriptor(&mut self) -> Result<()> {
+        let lock = DescriptorLock::acquire(&self.root_dir.registry_entry(&self.entry_name))?;
+        drop(self.descriptor_lock.take());
+        self.descriptor_lock = Some(lock);
         Ok(())
     }
 }
@@ -1558,6 +1686,31 @@ mod tests {
         std::fs::write(&catalog_path, rolled_back).expect("restore the old copy");
         let status = rejection(unlock_with_password(&root_dir, PASSWORD, 1_700_000_002_000));
         assert_eq!(status, ChurStatus::VaultCorrupt);
+    }
+
+    #[test]
+    fn an_unlock_conflicts_while_another_process_holds_the_descriptor() {
+        // §8.1: the advisory lock on the descriptor file is taken before any
+        // slot unwrap. A holder the unlock cannot displace - another open file
+        // description, which is what a second process is - makes every unlock
+        // path conflict instead of double-opening the vault.
+        let root_dir = scratch();
+        let session = make(&root_dir);
+        let entry_name = session.entry_name.clone();
+        drop(session);
+
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(root_dir.registry_entry(&entry_name))
+            .expect("open the descriptor");
+        held.try_lock().expect("hold the descriptor lock");
+        let status = rejection(unlock_with_password(&root_dir, PASSWORD, 1_700_000_001_000));
+        assert_eq!(status, ChurStatus::Conflict);
+
+        // The lock releases with its holder, and the vault unlocks again.
+        drop(held);
+        assert!(unlock_with_password(&root_dir, PASSWORD, 1_700_000_002_000).is_ok());
     }
 
     #[test]
