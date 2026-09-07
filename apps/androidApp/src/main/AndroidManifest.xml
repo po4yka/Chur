@@ -3,9 +3,14 @@
   The Android host application.
 
   docs/security/PROVISIONING.md section 8 forbids requesting a permission the
-  flow does not use, so this manifest declares none: the photo picker returns a
-  content URI the application already has permission to read, and nothing else
-  Chur does touches a permission-guarded API.
+  flow does not use. This manifest declares exactly one, INTERNET, and the sync
+  flow is what uses it: the address the user enters in settings is an https
+  endpoint, and neither the pull of `SYNC_PROTOCOL_V1.md` section 7 nor its
+  bootstrap of section 6 can run without the network. It is a normal
+  permission, so no prompt and no runtime gate exist to satisfy; the photo
+  picker needs none, returning a content URI the application already has
+  permission to read, and nothing else Chur does touches a permission-guarded
+  API.
 
   Backup is on and governed by rule files, per ANDROID.md section 13.4 and the
   "Public-shell disclosure and backup" section of docs/product/DISCREET_MODE.md.
@@ -19,9 +24,14 @@
   An <include> set makes everything else excluded, so the rules fail closed
   rather than needing to name the vault as the storage layout changes, which is
   what opting out of backup entirely used to buy. scripts/check-backup-rules.py
-  fails the build if either file ever names a vault path.
+  fails the build if either file ever names a vault path. The sync state file
+  is not named anywhere in those rules, and that is what keeps it excluded: it
+  holds the device's transport token, which section 7 of the sync protocol
+  puts in storage that never leaves the device.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:allowBackup="true"

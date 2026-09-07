@@ -1,8 +1,11 @@
-// Ciphertext-only Phase 3 transport. Canonical protocol parsing remains Rust's.
+// Ciphertext-only Phase 3 transport, plus the engine that drives it: the
+// coordinator's bootstrap, pull, and bounded backoff. Canonical protocol
+// parsing remains Rust's, so every record this module moves is opaque bytes.
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.android.kmp.library)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 kotlin {
@@ -22,6 +25,7 @@ kotlin {
             implementation(project(":shared:core-model"))
             implementation(project(":shared:core-ffi"))
             implementation(libs.kotlinx.coroutines.core)
+            implementation(libs.kotlinx.serialization.json)
             implementation(libs.ktor.client.core)
         }
         androidMain.dependencies {

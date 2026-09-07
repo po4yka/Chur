@@ -12,8 +12,11 @@ import dev.po4yka.chur.ffi.ObjectDetail
 import dev.po4yka.chur.ffi.ObjectPage
 import dev.po4yka.chur.ffi.ObjectQuery
 import dev.po4yka.chur.ffi.OperationProgress
+import dev.po4yka.chur.ffi.SharingIdentity
 import dev.po4yka.chur.ffi.SlotSummary
 import dev.po4yka.chur.ffi.StreamKind
+import dev.po4yka.chur.ffi.SyncProcessReport
+import dev.po4yka.chur.ffi.SyncRecordKind
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -395,6 +398,50 @@ class VaultRepository(
 
     /** Closes an operation handle, waiting for its worker. */
     fun closeOperation(operation: Long) = ChurVault.closeOperation(operation)
+
+    // -----------------------------------------------------------------------
+    // Sync, `docs/sync/SYNC_PROTOCOL_V1.md` §5 and §7
+    // -----------------------------------------------------------------------
+
+    /**
+     * Stages one downloaded record into the native locked inbox.
+     *
+     * Staging needs the runtime and not the session, §7, so this runs while the
+     * vault is locked: the background schedule calls it from the sync engine,
+     * and the inbox the records land in is native state no Kotlin caller reads.
+     */
+    suspend fun stageSyncRecord(
+        vaultId: ByteArray,
+        kind: SyncRecordKind,
+        stagedAtMs: Long,
+        record: ByteArray,
+    ) = mutex.withLock {
+        requireRuntime()
+        ChurVault.stageSync(runtime, vaultId, kind, stagedAtMs, record)
+    }
+
+    /**
+     * Validates and applies the retained inbox on the open session.
+     *
+     * §7: "Decrypted application occurs after explicit unlock", so this is
+     * `null` while locked and the caller treats a `null` as "not yet" rather
+     * than as a failure. The report carries only counts, which §10 of the FFI
+     * contract lets a surface show.
+     */
+    suspend fun processSync(): SyncProcessReport? = mutex.withLock {
+        if (session == 0L) null else ChurVault.processSync(session, clock())
+    }
+
+    /**
+     * The identity this vault presents to a sync server, or `null` while
+     * locked.
+     *
+     * The engine reads it once, at bootstrap, because §6 of the sync protocol
+     * enrolls exactly the identity the open session owns and nothing else.
+     */
+    suspend fun syncIdentity(): SharingIdentity? = mutex.withLock {
+        if (session == 0L) null else ChurVault.sharingIdentity(session)
+    }
 
     // -----------------------------------------------------------------------
 

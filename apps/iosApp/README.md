@@ -56,12 +56,49 @@ preference.
    keeps the decoded derivative only long enough to encrypt it, so the picker's
    temporary copy is closed as soon as the import commits.
 
+6. **Register the background refresh task.** `IosSyncBackground` is exported
+   for this. Call `IosSyncBackground.register(controller)` once in
+   `application:didFinishLaunchingWithOptions:` — the system refuses a
+   registration made later — and `IosSyncBackground.schedule()` each time the
+   scene resigns active, beside the privacy cover of step 3. The task's launch
+   runs one sync cycle through the shared controller, which
+   [`../../docs/sync/SYNC_PROTOCOL_V1.md`](../../docs/sync/SYNC_PROTOCOL_V1.md)
+   §7 permits while the vault is locked: only signed opaque bytes move, and
+   the next unlock applies what the task staged. The task must always reach
+   `setTaskCompleted`, and the exported handler does, on success, on failure,
+   and on the expiration handler the system calls when the runtime it granted
+   runs out.
+
+   The controller also needs its sync engine bound, the way Android binds one:
+   construct `SyncCoordinator(store = churSyncStateStore(), …)` — the exported
+   `churSyncStateStore()` places the file beside the vault root, in the
+   directory excluded from iCloud and iTunes backup, because the file holds
+   the device's transport token — and pass it as the controller's `sync`
+   parameter.
+
 ## Info.plist
 
 The project requests no photo-library permission. `PHPickerViewController` runs
 out of process and returns only what the user chose, so
 [`../../docs/security/PROVISIONING.md`](../../docs/security/PROVISIONING.md) §8's
 "request a permission the flow does not use" is satisfied by requesting none.
+
+Two background-sync entries belong here, because the refresh task of step 6
+needs them and nothing else provides them:
+
+```xml
+<key>BGTaskSchedulerPermittedIdentifiers</key>
+<array>
+    <string>dev.po4yka.chur.sync.refresh</string>
+</array>
+<key>UIBackgroundModes</key>
+<array>
+    <string>fetch</string>
+</array>
+```
+
+The identifier must match `IosSyncBackground.TASK_IDENTIFIER` exactly, and the
+`fetch` mode is what lets the system launch the host for the task at all.
 
 The deployment target is the one [ADR-0017](../../docs/adr/0017-freeze-the-supported-device-set.md)
 freezes, and it must match `iosDeploymentTarget` in `gradle/libs.versions.toml`:

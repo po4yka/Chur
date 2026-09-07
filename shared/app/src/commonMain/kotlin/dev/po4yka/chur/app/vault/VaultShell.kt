@@ -42,6 +42,7 @@ import dev.po4yka.chur.app.theme.SettingsGlyph
 import dev.po4yka.chur.ffi.AlbumSummary
 import dev.po4yka.chur.ffi.ObjectProjection
 import dev.po4yka.chur.ffi.SlotSummary
+import dev.po4yka.chur.sync.SyncStatus
 
 /**
  * The four vault destinations of `DESIGN.md` §10.1.
@@ -87,6 +88,14 @@ data class VaultUiState(
     val deviceSlotAvailable: Boolean = false,
     /** How many tiles the selection holds, §11.4. */
     val selectedCount: Int = 0,
+    /**
+     * The sync engine's state, or `null` when the host bound no engine.
+     *
+     * A `null` hides the whole section rather than showing an empty one: a
+     * surface that offered "Sync now" with no engine behind it would promise
+     * something nothing can deliver.
+     */
+    val sync: SyncStatus? = null,
 )
 
 /** What the shell can ask the application to do. */
@@ -138,6 +147,12 @@ data class VaultActions(
     val onRemoveSelectionFromAlbum: () -> Unit = {},
     /** Delete every selected object from this vault, §11.4. */
     val onDeleteSelection: () -> Unit = {},
+    /** Connect the vault to the server the user named, `SYNC_PROTOCOL_V1.md` §6. */
+    val onConfigureSync: (serverUrl: String, bootstrapSecret: String) -> Unit = { _, _ -> },
+    /** Run one sync cycle now. */
+    val onSyncNow: () -> Unit = {},
+    /** Forget the configured server. */
+    val onDisconnectSync: () -> Unit = {},
 )
 
 /**
@@ -457,6 +472,44 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
         }
         item {
             SettingsAction("Verify every object", actions.onVerifyAll)
+        }
+        state.sync?.let { sync ->
+            item {
+                Text("Sync", style = MaterialTheme.typography.titleMedium)
+            }
+            if (!sync.configured) {
+                item {
+                    SyncSetupCard(onConfigure = actions.onConfigureSync)
+                }
+            } else {
+                item {
+                    SettingsAction("Sync now", actions.onSyncNow)
+                }
+                sync.message?.let { message ->
+                    item {
+                        Text(
+                            message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.inkMuted,
+                            modifier = Modifier.padding(horizontal = ChurSpacing.three),
+                        )
+                    }
+                }
+                item {
+                    Text(
+                        // The address is the one fact of the configuration a
+                        // user needs to see; the token this hides is a bearer
+                        // credential and never reaches a surface.
+                        "Connected to ${sync.serverUrl}.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.inkMuted,
+                        modifier = Modifier.padding(horizontal = ChurSpacing.three),
+                    )
+                }
+                item {
+                    SettingsAction("Stop using the server", actions.onDisconnectSync)
+                }
+            }
         }
         // The entry is always here, and never conditional on whether a second
         // identity already exists. `DECOY_VAULT.md` §10 forbids a setting that

@@ -15,9 +15,12 @@ import dev.po4yka.chur.app.ChurApp
 import dev.po4yka.chur.app.ChurController
 import dev.po4yka.chur.app.GateResult
 import dev.po4yka.chur.app.NativeHandshake
+import dev.po4yka.chur.app.RepositorySyncBoundary
 import dev.po4yka.chur.app.gate
 import dev.po4yka.chur.ffi.ChurVault
 import dev.po4yka.chur.notes.FileNoteStore
+import dev.po4yka.chur.sync.FileSyncStateStore
+import dev.po4yka.chur.sync.SyncCoordinator
 import dev.po4yka.chur.vault.VaultState
 import kotlinx.coroutines.launch
 
@@ -47,6 +50,15 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
 
         privacy = AndroidPrivacyCover(this)
+        // The sync engine outlives the activity in one sense only: the worker
+        // of `ChurSync` reads it for its periodic cycle, `SYNC_PROTOCOL_V1.md`
+        // §7. Its state file holds the device's transport token, so it lives
+        // in `noBackupFilesDir`, which ANDROID.md §13.4 names for exactly this
+        // kind of state and every backup rule excludes.
+        val sync = SyncCoordinator(
+            store = FileSyncStateStore(java.io.File(noBackupFilesDir, "chur-sync.json").path),
+            clock = { System.currentTimeMillis() },
+        )
         controller = ChurController(
             storageRoot = storageRoot(),
             privacy = privacy,
@@ -54,7 +66,11 @@ class MainActivity : FragmentActivity() {
             clock = { System.currentTimeMillis() },
             notes = FileNoteStore(publicShellFile("notes.json")),
             deviceUnlock = AndroidDeviceUnlock(this),
+            sync = sync,
         )
+        sync.bind(RepositorySyncBoundary(controller.vault))
+        ChurSync.coordinator = sync
+        ChurSync.enqueue(this)
 
         val verdict = runGate()
         if (verdict is GateResult.Compatible) {
@@ -123,7 +139,11 @@ class MainActivity : FragmentActivity() {
         if (isFinishing) {
             // The runtime closes every handle it owns, §14, and a finishing
             // activity is the last chance to do it before the process may be
-            // reused for another launch.
+            // reused for another launch. The engine unbinds with it: a worker
+            // cycle that fires after this point finds no vault, which is the
+            // honest answer now that the handles are gone.
+            controller.unbindSync()
+            ChurSync.coordinator = null
             kotlinx.coroutines.runBlocking { controller.shutdown() }
         }
     }

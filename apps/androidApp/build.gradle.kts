@@ -51,11 +51,15 @@ dependencies {
     implementation(project(":shared:app"))
     implementation(project(":shared:core-vault"))
     implementation(project(":shared:core-platform-keys"))
+    implementation(project(":shared:core-sync"))
     implementation(project(":shared:feature-import"))
     implementation(project(":shared:feature-notes"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    // The background schedule of `SYNC_PROTOCOL_V1.md` §7: the worker pulls
+    // and stages while locked, and the next unlock applies what it staged.
+    implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.compose.runtime)
     implementation(libs.compose.foundation)
     implementation(libs.compose.material3)

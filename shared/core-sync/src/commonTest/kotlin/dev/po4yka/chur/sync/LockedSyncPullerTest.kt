@@ -34,7 +34,11 @@ class LockedSyncPullerTest {
             9,
         )
 
-        assertEquals(LockedPullReport(1, 1), report)
+        // `DeviceCursor` carries a `ByteArray`, so equality is field-wise here.
+        assertEquals(1, report.operations)
+        assertEquals(1, report.checkpoints)
+        assertContentEquals(ByteArray(16) { 2 }, report.cursors.single().deviceId)
+        assertEquals(8uL, report.cursors.single().after)
         assertEquals(listOf(SyncRecordKind.OPERATION, SyncRecordKind.CHECKPOINT), staged.map { it.first })
         assertContentEquals(operation, staged[0].second)
         assertContentEquals(checkpoint, staged[1].second)

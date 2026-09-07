@@ -129,6 +129,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     val albums by controller.albums.collectAsState()
     val slots by controller.slots.collectAsState()
     val message by controller.message.collectAsState()
+    val syncStatus by controller.syncStatus.collectAsState()
     var destination by remember { mutableStateOf(VaultDestination.LIBRARY) }
     var terms by remember { mutableStateOf("") }
     var openAlbum by remember { mutableStateOf<AlbumSummary?>(null) }
@@ -190,6 +191,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             widthDp = 400,
             progress = message,
             selectedCount = selection.size,
+            sync = syncStatus,
         ),
         actions = VaultActions(
             onDestination = {
@@ -248,6 +250,9 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 controller.deleteAll(selectedObjects(page, selection))
                 selection = emptySet()
             },
+            onConfigureSync = controller::configureSync,
+            onSyncNow = controller::syncNow,
+            onDisconnectSync = controller::disconnectSync,
         ),
     )
 

@@ -6,7 +6,7 @@ import dev.po4yka.chur.ffi.SyncRecordKind
 /** Downloads only opaque records and writes them to the native locked inbox. */
 public class LockedSyncPuller internal constructor(
     private val client: SyncClient,
-    private val stage: (ByteArray, SyncRecordKind, Long, ByteArray) -> Unit,
+    private val stage: suspend (ByteArray, SyncRecordKind, Long, ByteArray) -> Unit,
 ) {
     /** Uses the process runtime that owns the locked inbox. */
     public constructor(client: SyncClient, runtime: Long) : this(
@@ -31,25 +31,36 @@ public class LockedSyncPuller internal constructor(
         }
 
         var operationCount = 0
+        val next = ArrayList<DeviceCursor>(cursors.size)
         for (cursor in cursors) {
+            var pulled = 0
             for (record in client.operations(vaultId, cursor.deviceId, cursor.after)) {
                 stage(vaultId, SyncRecordKind.OPERATION, stagedAtMs, record)
+                pulled++
                 operationCount++
             }
+            // §5: the caller's cursor for this chain advances by what this page
+            // held, and only once every record of the page reached the stage.
+            next += DeviceCursor(cursor.deviceId, cursor.after + pulled.toULong())
         }
         val checkpoints = client.checkpoints(vaultId)
         for (record in checkpoints) {
             stage(vaultId, SyncRecordKind.CHECKPOINT, stagedAtMs, record)
         }
-        return LockedPullReport(operationCount, checkpoints.size)
+        return LockedPullReport(operationCount, checkpoints.size, next)
     }
 }
 
 /** Last accepted sequence for one device, obtained while the vault was unlocked. */
 public data class DeviceCursor(public val deviceId: ByteArray, public val after: ULong)
 
-/** Opaque records handed to the bounded native inbox. */
-public data class LockedPullReport(public val operations: Int, public val checkpoints: Int)
+/** Opaque records handed to the bounded native inbox, with where they leave the cursors. */
+public data class LockedPullReport(
+    public val operations: Int,
+    public val checkpoints: Int,
+    /** The cursors the next run pulls from, one per input cursor, in order. */
+    public val cursors: List<DeviceCursor> = emptyList(),
+)
 
 private fun ByteArray.hex(): String = buildString(size * 2) {
     for (byte in this@hex) {

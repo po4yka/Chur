@@ -45,6 +45,10 @@ kotlin {
             implementation(project(":shared:core-model"))
             api(project(":shared:core-vault"))
             api(project(":shared:feature-notes"))
+            // The sync engine and its status are part of this shell's public
+            // surface: the settings screen shows the state and the hosts bind
+            // the background schedules that drive it.
+            api(project(":shared:core-sync"))
             // The waveform record of `MEDIA_PIPELINE.md` §6.1 is written by the
             // import pipeline and drawn here, so the reader that parses it and
             // the accumulator that produces it stay in one module.

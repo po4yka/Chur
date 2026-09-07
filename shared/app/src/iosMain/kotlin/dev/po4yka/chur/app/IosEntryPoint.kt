@@ -7,6 +7,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.window.ComposeUIViewController
 import dev.po4yka.chur.notes.FileNoteStore
 import dev.po4yka.chur.notes.NoteStore
+import dev.po4yka.chur.sync.FileSyncStateStore
 import platform.Foundation.NSDocumentDirectory
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSSearchPathForDirectoriesInDomains
@@ -79,4 +80,22 @@ fun churNoteStore(): NoteStore {
         true,
     ).first() as String
     return FileNoteStore("$documents/notes.json")
+}
+
+/**
+ * Where the sync engine keeps its configuration and pull cursors.
+ *
+ * It returns the bound store rather than the path, for the reason
+ * [churNoteStore] does. The file holds the device's transport token — a bearer
+ * credential — so it lives beside the vault root, in the directory the Xcode
+ * project marks excluded from iCloud and iTunes backup, which
+ * `SYNC_PROTOCOL_V1.md` §7 (SEC-034) requires of sync state.
+ */
+fun churSyncStateStore(): FileSyncStateStore {
+    val documents = NSSearchPathForDirectoriesInDomains(
+        NSDocumentDirectory,
+        NSUserDomainMask,
+        true,
+    ).first() as String
+    return FileSyncStateStore("$documents/chur-sync.json")
 }

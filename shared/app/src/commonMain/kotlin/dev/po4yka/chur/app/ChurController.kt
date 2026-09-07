@@ -8,6 +8,8 @@ import dev.po4yka.chur.ffi.ObjectDetail
 import dev.po4yka.chur.ffi.ObjectPage
 import dev.po4yka.chur.ffi.ObjectQuery
 import dev.po4yka.chur.ffi.QueryScope
+import dev.po4yka.chur.sync.SyncCoordinator
+import dev.po4yka.chur.sync.SyncStatus
 import dev.po4yka.chur.ffi.SlotSummary
 import dev.po4yka.chur.ffi.StreamKind
 import dev.po4yka.chur.notes.InMemoryNoteStore
@@ -48,6 +50,14 @@ class ChurController(
     private val clock: () -> Long,
     private val notes: NoteStore = InMemoryNoteStore(),
     policy: LockPolicy = LockPolicy(),
+    /**
+     * The sync engine, when the host binds one.
+     *
+     * A host that passes none gets no sync surface at all: the settings
+     * section reads a `null` status and renders nothing, so an unbound
+     * controller is unchanged rather than half-configured.
+     */
+    private val sync: SyncCoordinator? = null,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val repository = VaultRepository(storageRoot, clock, policy)
@@ -93,6 +103,15 @@ class ChurController(
 
     /** The recovery phrase, held only until the user acknowledges it. */
     val recoveryPhrase: StateFlow<String?> = _recoveryPhrase.asStateFlow()
+
+    /**
+     * The sync engine's state, or a constant `null` when no engine is bound.
+     *
+     * A settings surface renders the section from this: `null` means the host
+     * bound no engine, so the section is absent rather than empty, and a
+     * non-null status is already bounded by `SyncStatus`'s contract.
+     */
+    val syncStatus: StateFlow<SyncStatus?> = sync?.status ?: MutableStateFlow(null)
 
     /**
      * Whether the unlock screen may offer the device slot.
@@ -405,6 +424,54 @@ class ChurController(
         _albums.value = withContext(Dispatchers.Default) { repository.albums() }
     }
 
+    // -----------------------------------------------------------------------
+    // Sync, `docs/sync/SYNC_PROTOCOL_V1.md`
+    // -----------------------------------------------------------------------
+
+    /**
+     * Connects the open vault to the server the user named, §6.
+     *
+     * The secret is the operator bootstrap secret and lives only for this
+     * call. A refusal lands in [message] the way every other boundary failure
+     * does, and the engine's own status keeps whatever it showed before.
+     */
+    fun configureSync(serverUrl: String, bootstrapSecret: String) = guarded {
+        sync?.configure(serverUrl, bootstrapSecret)
+    }
+
+    /** Runs one sync cycle now, which the settings entry offers. */
+    fun syncNow() = guarded {
+        sync?.syncNow()
+    }
+
+    /** Forgets the server, which the settings entry offers beside the run. */
+    fun disconnectSync() = guarded {
+        sync?.disconnect()
+    }
+
+    /**
+     * One sync cycle a background schedule asked for.
+     *
+     * The iOS host calls this from a BGTask handler, a context where nothing
+     * waits on a screen; the result is the engine's status, not a return
+     * value. It runs regardless of lock state: staging is allowed locked, §7,
+     * and application happens at the next unlock.
+     */
+    suspend fun runBackgroundSync() {
+        sync?.syncNow()
+    }
+
+    /**
+     * Unbinds the engine from the vault, which a finishing host does.
+     *
+     * After the repository's runtime closes, a staged record has nowhere to
+     * land, so the engine learns "no vault" rather than calling into closed
+     * handles.
+     */
+    fun unbindSync() {
+        sync?.bind(null)
+    }
+
     /** Adds a recovery slot and shows the phrase once. */
     fun addRecoverySlot() = guarded {
         _recoveryPhrase.value = withContext(Dispatchers.Default) { repository.addRecoverySlot() }
@@ -630,6 +697,16 @@ class ChurController(
         privacy.setEnabled(true)
         _route.value = AppRoute.Vault
         _page.value = withContext(Dispatchers.Default) { repository.page(ObjectQuery()) }
+        // `SYNC_PROTOCOL_V1.md` §7: "Decrypted application occurs after
+        // explicit unlock". Whatever the locked puller staged while the vault
+        // was closed is validated and applied here, off the first frame, and
+        // then a configured engine pulls what arrived since the last run.
+        scope.launch {
+            withContext(Dispatchers.Default) { repository.processSync() }
+            sync?.let { engine ->
+                if (engine.status.value.configured) engine.syncNow()
+            }
+        }
     }
 
     /**

@@ -157,6 +157,7 @@ private fun VaultRoute(controller: ChurController) {
     val slots by controller.slots.collectAsState()
     val message by controller.message.collectAsState()
     val vaultState by controller.vaultState.collectAsState()
+    val syncStatus by controller.syncStatus.collectAsState()
     val configuration = LocalConfiguration.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -275,6 +276,7 @@ private fun VaultRoute(controller: ChurController) {
             progress = message,
             selectedCount = selection.size,
             deviceSlotAvailable = true,
+            sync = syncStatus,
         ),
         actions = VaultActions(
             onDestination = {
@@ -343,6 +345,9 @@ private fun VaultRoute(controller: ChurController) {
                 selection = emptySet()
             },
             onAddDeviceSlot = controller::enrollDeviceSlot,
+            onConfigureSync = controller::configureSync,
+            onSyncNow = controller::syncNow,
+            onDisconnectSync = controller::disconnectSync,
         ),
     )
 }
