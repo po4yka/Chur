@@ -16,7 +16,7 @@
 //!
 //! [ADR-0037]: https://github.com/po4yka/Chur/blob/main/docs/adr/0037-contain-panics-in-channel-less-exports.md
 
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Once;
 
 use chur_core::ChurStatus;
@@ -66,6 +66,27 @@ pub(crate) fn guard_status(body: impl FnOnce() -> chur_core::Result<()>) -> i32 
         Ok(Ok(())) => chur_core::CHUR_OK,
         Ok(Err(error)) => error.as_i32(),
         Err(_) => ChurStatus::InternalFailure.as_i32(),
+    }
+}
+
+/// Runs the body of an export that returns `chur_status_t` and owns a handle.
+///
+/// §11 is unconditional about both halves: a caught panic becomes
+/// [`ChurStatus::InternalFailure`], and the handle that owned the call is
+/// invalidated so a later call on it also fails. An ordinary error result is
+/// not a panic, so the handle survives it.
+pub(crate) fn guard_status_for(
+    handle: crate::registry::Handle,
+    body: impl FnOnce() -> chur_core::Result<()>,
+) -> i32 {
+    install_hook();
+    match catch_unwind(AssertUnwindSafe(body)) {
+        Ok(Ok(())) => chur_core::CHUR_OK,
+        Ok(Err(error)) => error.as_i32(),
+        Err(_) => {
+            crate::registry::invalidate(handle);
+            ChurStatus::InternalFailure.as_i32()
+        }
     }
 }
 
@@ -121,5 +142,53 @@ mod tests {
         let secret = "a value a caller passed in";
         let observed = quietly(|| guard(0u32, move || panic!("{secret}")));
         assert_eq!(observed, 0);
+    }
+
+    /// Registers one operation handle the test owns and closes at the end.
+    fn registered_handle() -> crate::registry::Handle {
+        let operation = crate::operation::Operation::spawn(
+            crate::operation::OperationKind::Import,
+            0,
+            |_shared| Ok(()),
+        )
+        .expect("spawn");
+        crate::registry::insert(crate::registry::Entry::Operation {
+            owner: crate::registry::NULL_HANDLE,
+            operation,
+        })
+        .expect("insert")
+    }
+
+    #[test]
+    fn a_panicking_call_invalidates_the_handle_that_owned_it() {
+        let handle = registered_handle();
+        assert_eq!(
+            quietly(|| guard_status_for(handle, || panic!("injected"))),
+            ChurStatus::InternalFailure.as_i32()
+        );
+        // §11: a later call on the invalidated handle also fails.
+        assert_eq!(
+            crate::registry::get(handle, crate::registry::Kind::Operation)
+                .err()
+                .map(|error| error.status()),
+            Some(ChurStatus::SessionExpired)
+        );
+    }
+
+    #[test]
+    fn an_ordinary_error_does_not_invalidate_the_handle() {
+        let handle = registered_handle();
+        assert_eq!(
+            guard_status_for(handle, || Err(chur_core::err!(
+                AuthenticationFailed,
+                "an ordinary refusal"
+            ))),
+            ChurStatus::AuthenticationFailed.as_i32()
+        );
+        assert!(
+            crate::registry::get(handle, crate::registry::Kind::Operation).is_ok(),
+            "an ordinary error must not invalidate the handle"
+        );
+        drop(crate::registry::close(handle).expect("close"));
     }
 }

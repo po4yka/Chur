@@ -7,7 +7,7 @@ use chur_core::{ChurStatus, Error, Id, Result, ensure};
 use chur_crypto::Key;
 
 use crate::api::{Status, borrow_large, write_out};
-use crate::panic::guard_status;
+use crate::panic::guard_status_for;
 use crate::registry::{self, Entry, Handle, Kind};
 
 /// Caller-owned summary written by [`chur_sync_process`].
@@ -47,7 +47,7 @@ pub unsafe extern "C" fn chur_sync_stage(
     record: *const u8,
     record_length: u32,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(runtime, || {
         let entry = registry::get(runtime, Kind::Runtime)?;
         let Entry::Runtime(guarded) = entry.as_ref() else {
             return Err(Error::new(
@@ -94,7 +94,7 @@ pub unsafe extern "C" fn chur_sync_process(
     now_ms: u64,
     out_report: *mut ChurSyncReportV1,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         // SAFETY: the caller guarantees the writable out-parameter above.
         unsafe { write_out(out_report, ffi_report(&ProcessReport::default()))? };
         let entry = registry::get(session, Kind::Session)?;

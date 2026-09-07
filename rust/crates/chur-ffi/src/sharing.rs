@@ -12,7 +12,7 @@ use chur_sync_protocol::{
 };
 
 use crate::api::{Status, borrow_bytes, borrow_bytes_mut, borrow_large, write_out};
-use crate::panic::guard_status;
+use crate::panic::guard_status_for;
 use crate::registry::{self, Entry, Handle, Kind};
 
 const RECORD_VERSION_V1: u16 = 1;
@@ -54,7 +54,7 @@ pub unsafe extern "C" fn chur_sharing_identity(
     capacity: usize,
     bytes_written: *mut usize,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         // SAFETY: the caller guarantees the writable out-parameter above.
         let _ = unsafe { write_out(bytes_written, 0usize) };
         let entry = registry::get(session, Kind::Session)?;
@@ -127,7 +127,7 @@ pub unsafe extern "C" fn chur_sharing_prepare(
     capacity: usize,
     bytes_written: *mut usize,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         // SAFETY: the caller guarantees the writable out-parameter above.
         let _ = unsafe { write_out(bytes_written, 0usize) };
         // SAFETY: the caller guarantees the fixed input range above.
@@ -206,7 +206,7 @@ pub unsafe extern "C" fn chur_sharing_prepare_device(
     capacity: usize,
     bytes_written: *mut usize,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         // SAFETY: the caller guarantees the writable out-parameter above.
         let _ = unsafe { write_out(bytes_written, 0usize) };
         ensure!(
@@ -300,7 +300,7 @@ pub unsafe extern "C" fn chur_sharing_revoke(
     capacity: usize,
     bytes_written: *mut usize,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         // SAFETY: the caller guarantees the writable out-parameter above.
         unsafe { write_out(bytes_written, 0usize)? };
         ensure!(
@@ -399,7 +399,7 @@ pub unsafe extern "C" fn chur_sharing_accept(
     bundle: *const u8,
     bundle_length: u32,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         ensure!(
             bundle_length <= BUNDLE_BYTES_MAX,
             ResourceLimitExceeded,

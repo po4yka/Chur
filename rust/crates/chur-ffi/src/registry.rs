@@ -349,10 +349,30 @@ pub fn live() -> usize {
 
 /// Locks a mutex, recovering a poisoned one.
 ///
-/// A poisoned mutex means a call panicked while holding it, which §11 already
-/// contained. Refusing every later call on the handle would turn one contained
-/// failure into a permanently unusable session, so the lock is recovered and
-/// the handle's own state checks decide whether the value is still usable.
+/// A poisoned mutex means a call panicked while holding it. §11 invalidates
+/// the handle that owned that call, and the boundary can only perform that
+/// invalidation while the registry and the entry's mutexes are still usable,
+/// so the lock is recovered rather than refused. Whether the value itself is
+/// still usable is decided by the handle's own state checks, and a handle
+/// whose call panicked is gone from the registry before any of that matters.
 pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Removes the entry a panicked call owned, §11 of the interop contract.
+///
+/// The boundary caught the panic and reports `INTERNAL_FAILURE`; the handle
+/// that owned the call is invalidated so a later call on it also fails. The
+/// teardown is the walk a close uses, because a session that died mid-call
+/// must leave no reader or operation holding catalog state behind it, and it
+/// runs before the entry itself is taken so the ownership walk still sees it.
+///
+/// Every failure path is ignored by construction: the value may already be
+/// closed, and the boundary is reporting a panic rather than a status, so
+/// there is nothing to propagate into.
+pub fn invalidate(handle: Handle) {
+    let owned = drain_owned_by(handle);
+    drop(owned);
+    let taken = close(handle);
+    drop(taken);
 }

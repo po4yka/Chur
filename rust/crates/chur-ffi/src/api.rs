@@ -24,7 +24,7 @@ use chur_media::import::{CanonicalMedia, SourceCapability};
 use chur_media::{export, import, integrity, reader};
 
 use crate::operation::{Operation, OperationKind, Stage};
-use crate::panic::guard_status;
+use crate::panic::{guard_status, guard_status_for};
 use crate::records::{
     ChurContentInfoV1, ChurImportRequestV1, ChurObjectRefV1, ChurProgressV1, ChurQueryV1,
     ChurRuntimeConfigV1, ChurScanRequestV1, ChurUnlockRequestV1, encode_page, query_from,
@@ -284,7 +284,7 @@ pub unsafe extern "C" fn chur_runtime_open(
     reason = "ADR-0016: the v1 C ABI requires an exported symbol"
 )]
 pub unsafe extern "C" fn chur_runtime_close(runtime: Handle) -> Status {
-    guard_status(|| {
+    guard_status_for(runtime, || {
         // Closing the runtime closes everything: §3 says no handle revives
         // after lock, and a runtime close is a stronger event than a lock.
         // §14 permits one runtime per process, so closing it ends every
@@ -332,7 +332,7 @@ pub unsafe extern "C" fn chur_vault_unlock(
     request: *const ChurUnlockRequestV1,
     out_session: *mut Handle,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(runtime, || {
         let entry = registry::get(runtime, Kind::Runtime)?;
         let Entry::Runtime(guarded) = entry.as_ref() else {
             return Err(Error::new(
@@ -424,7 +424,7 @@ pub unsafe extern "C" fn chur_vault_unlock(
     reason = "ADR-0016: the v1 C ABI requires an exported symbol"
 )]
 pub unsafe extern "C" fn chur_vault_lock(session: Handle, reason: u32) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         let _ = reason;
         let entry = registry::get(session, Kind::Session)?;
         // Steps 1 to 4 of §8: cancel every operation and invalidate every
@@ -467,7 +467,7 @@ pub unsafe extern "C" fn chur_vault_lock(session: Handle, reason: u32) -> Status
     reason = "ADR-0016: the v1 C ABI requires an exported symbol"
 )]
 pub unsafe extern "C" fn chur_session_close(session: Handle) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         let owned = registry::drain_owned_by(session);
         drop(owned);
         let taken = registry::close(session)?;
@@ -498,7 +498,7 @@ pub unsafe extern "C" fn chur_catalog_query(
     capacity: usize,
     bytes_written: *mut usize,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         // §6.3's rule for a byte count applies here too: it is set on every
         // call, including every failure.
         // SAFETY: the caller guarantees `bytes_written` is writable.
@@ -575,7 +575,7 @@ pub unsafe extern "C" fn chur_import_begin(
     request: *const ChurImportRequestV1,
     out_import: *mut Handle,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         let entry = registry::get(session, Kind::Session)?;
         // SAFETY: the caller guarantees the pointers above for the call.
         let request = unsafe { read_request(request)? };
@@ -655,7 +655,7 @@ pub unsafe extern "C" fn chur_export_begin(
     destination_fd: c_int,
     out_export: *mut Handle,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         let entry = registry::get(session, Kind::Session)?;
         // SAFETY: the caller guarantees the pointers above for the call.
         let object = unsafe { read_request(object)? };
@@ -689,7 +689,7 @@ pub unsafe extern "C" fn chur_integrity_scan_begin(
     request: *const ChurScanRequestV1,
     out_scan: *mut Handle,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         let entry = registry::get(session, Kind::Session)?;
         // SAFETY: the caller guarantees the pointers above for the call.
         let request = unsafe { read_request(request)? };
@@ -729,7 +729,7 @@ pub unsafe extern "C" fn chur_operation_poll(
     operation: Handle,
     out_progress: *mut ChurProgressV1,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(operation, || {
         let entry = registry::get(operation, Kind::Operation)?;
         let Entry::Operation { operation, .. } = entry.as_ref() else {
             return Err(Error::new(
@@ -767,7 +767,7 @@ pub unsafe extern "C" fn chur_operation_poll(
     reason = "ADR-0016: the v1 C ABI requires an exported symbol"
 )]
 pub unsafe extern "C" fn chur_operation_cancel(operation: Handle) -> Status {
-    guard_status(|| {
+    guard_status_for(operation, || {
         let entry = registry::get(operation, Kind::Operation)?;
         let Entry::Operation { operation, .. } = entry.as_ref() else {
             return Err(Error::new(
@@ -791,7 +791,7 @@ pub unsafe extern "C" fn chur_operation_cancel(operation: Handle) -> Status {
     reason = "ADR-0016: the v1 C ABI requires an exported symbol"
 )]
 pub unsafe extern "C" fn chur_operation_close(operation: Handle) -> Status {
-    guard_status(|| {
+    guard_status_for(operation, || {
         let taken = registry::close(operation)?;
         drop(taken);
         Ok(())
@@ -819,7 +819,7 @@ pub unsafe extern "C" fn chur_object_reader_open(
     stream_kind: u32,
     out_reader: *mut Handle,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         let entry = registry::get(session, Kind::Session)?;
         // SAFETY: the caller guarantees the pointers above for the call.
         let object = unsafe { read_request(object)? };
@@ -865,7 +865,7 @@ pub unsafe extern "C" fn chur_object_reader_open(
     reason = "ADR-0016: the v1 C ABI requires an exported symbol"
 )]
 pub unsafe extern "C" fn chur_object_reader_size(reader: Handle, out_size: *mut u64) -> Status {
-    guard_status(|| {
+    guard_status_for(reader, || {
         let entry = registry::get(reader, Kind::Reader)?;
         let Entry::Reader {
             reader: guarded, ..
@@ -896,7 +896,7 @@ pub unsafe extern "C" fn chur_object_reader_content_info(
     reader: Handle,
     out_info: *mut ChurContentInfoV1,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(reader, || {
         let entry = registry::get(reader, Kind::Reader)?;
         let Entry::Reader {
             reader: guarded, ..
@@ -951,7 +951,7 @@ pub unsafe extern "C" fn chur_object_reader_read_at(
     capacity: usize,
     bytes_written: *mut usize,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(reader, || {
         // SAFETY: the caller guarantees `bytes_written` is writable.
         let _ = unsafe { write_out(bytes_written, 0usize) };
         let entry = registry::get(reader, Kind::Reader)?;
@@ -988,7 +988,7 @@ pub unsafe extern "C" fn chur_object_reader_verify_complete(
     reader: Handle,
     out_state: *mut u32,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(reader, || {
         let entry = registry::get(reader, Kind::Reader)?;
         let Entry::Reader {
             reader: guarded, ..
@@ -1016,7 +1016,7 @@ pub unsafe extern "C" fn chur_object_reader_verify_complete(
     reason = "ADR-0016: the v1 C ABI requires an exported symbol"
 )]
 pub unsafe extern "C" fn chur_object_reader_close(reader: Handle) -> Status {
-    guard_status(|| {
+    guard_status_for(reader, || {
         let taken = registry::close(reader)?;
         drop(taken);
         Ok(())

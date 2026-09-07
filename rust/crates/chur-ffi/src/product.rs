@@ -19,7 +19,7 @@ use chur_format::constants::StreamKind;
 use zeroize::Zeroizing;
 
 use crate::api::Status;
-use crate::panic::guard_status;
+use crate::panic::guard_status_for;
 use crate::records::{
     ChurCreateRequestV1, ChurObjectRefV1, ChurUnlockRequestV1, KEYSTORE_ENROLLMENT_MAX,
     KEYSTORE_MATERIAL_ENTRY_MAX,
@@ -57,7 +57,7 @@ pub const RECOVERY_PHRASE_MAX: usize = 24 * 9;
     reason = "ADR-0016: the v1 C ABI requires an exported symbol"
 )]
 pub unsafe extern "C" fn chur_vault_present(runtime: Handle, out_present: *mut u8) -> Status {
-    guard_status(|| {
+    guard_status_for(runtime, || {
         let entry = registry::get(runtime, Kind::Runtime)?;
         let Entry::Runtime(guarded) = entry.as_ref() else {
             return Err(wrong_type());
@@ -87,7 +87,7 @@ pub unsafe extern "C" fn chur_vault_create_begin(
     request: *const ChurCreateRequestV1,
     out_creation: *mut Handle,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(runtime, || {
         let entry = registry::get(runtime, Kind::Runtime)?;
         // SAFETY: the caller guarantees the pointers above for the call.
         let request = unsafe { crate::api::read_request(request)? };
@@ -157,7 +157,7 @@ pub unsafe extern "C" fn chur_vault_creation_add_recovery_slot(
     capacity: usize,
     bytes_written: *mut usize,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(creation, || {
         // SAFETY: the caller guarantees `bytes_written` is writable.
         let _ = unsafe { crate::api::write_out(bytes_written, 0usize) };
         let entry = registry::get(creation, Kind::Creation)?;
@@ -195,7 +195,7 @@ pub unsafe extern "C" fn chur_vault_creation_activate(
     creation: Handle,
     out_session: *mut Handle,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(creation, || {
         let entry = registry::get(creation, Kind::Creation)?;
         let Entry::Creation {
             runtime,
@@ -234,7 +234,7 @@ pub unsafe extern "C" fn chur_vault_creation_activate(
     reason = "ADR-0016: the v1 C ABI requires an exported symbol"
 )]
 pub unsafe extern "C" fn chur_vault_creation_abandon(creation: Handle) -> Status {
-    guard_status(|| {
+    guard_status_for(creation, || {
         let taken = registry::close(creation)?;
         if let Some(Entry::Creation { creation, .. }) = taken.as_deref() {
             registry::lock(creation)
@@ -268,7 +268,7 @@ pub unsafe extern "C" fn chur_vault_add_recovery_slot(
     capacity: usize,
     bytes_written: *mut usize,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         // SAFETY: the caller guarantees `bytes_written` is writable.
         let _ = unsafe { crate::api::write_out(bytes_written, 0usize) };
         let entry = registry::get(session, Kind::Session)?;
@@ -295,7 +295,7 @@ pub unsafe extern "C" fn chur_vault_add_device_slot(
     item_id: *const u8,
     out_secret: *mut u8,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         let entry = registry::get(session, Kind::Session)?;
         // SAFETY: the caller guarantees 16 readable bytes.
         let bytes = unsafe { crate::api::borrow_bytes(item_id, 16)? };
@@ -334,7 +334,7 @@ pub unsafe extern "C" fn chur_vault_keystore_begin(
     capacity: usize,
     bytes_written: *mut usize,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         // SAFETY: the caller guarantees `bytes_written` is writable.
         let _ = unsafe { crate::api::write_out(bytes_written, 0usize) };
         let entry = registry::get(session, Kind::Session)?;
@@ -364,7 +364,7 @@ pub unsafe extern "C" fn chur_vault_keystore_commit(
     gcm_nonce: *const u8,
     wrapped_root_secret: *const u8,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         let entry = registry::get(session, Kind::Session)?;
         // SAFETY: the caller guarantees the two lengths above.
         let nonce = unsafe { crate::api::borrow_bytes(gcm_nonce, 12)? };
@@ -406,7 +406,7 @@ pub unsafe extern "C" fn chur_vault_keystore_material(
     capacity: usize,
     bytes_written: *mut usize,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(runtime, || {
         // SAFETY: the caller guarantees `bytes_written` is writable.
         let _ = unsafe { crate::api::write_out(bytes_written, 0usize) };
         let entry = registry::get(runtime, Kind::Runtime)?;
@@ -453,7 +453,7 @@ fn push_bounded(destination: &mut Vec<u8>, source: &[u8]) {
     reason = "ADR-0016: the v1 C ABI requires an exported symbol"
 )]
 pub unsafe extern "C" fn chur_vault_remove_slot(session: Handle, slot_id: *const u8) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         let entry = registry::get(session, Kind::Session)?;
         // SAFETY: the caller guarantees 16 readable bytes.
         let bytes = unsafe { crate::api::borrow_bytes(slot_id, 16)? };
@@ -477,7 +477,7 @@ pub unsafe extern "C" fn chur_vault_change_password(
     session: Handle,
     request: *const ChurUnlockRequestV1,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         let entry = registry::get(session, Kind::Session)?;
         // SAFETY: the caller guarantees the pointers above for the call.
         let request = unsafe { crate::api::read_request(request)? };
@@ -511,7 +511,7 @@ pub unsafe extern "C" fn chur_vault_slots(
     capacity: usize,
     bytes_written: *mut usize,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         // SAFETY: the caller guarantees `bytes_written` is writable.
         let _ = unsafe { crate::api::write_out(bytes_written, 0usize) };
         let entry = registry::get(session, Kind::Session)?;
@@ -550,7 +550,7 @@ pub unsafe extern "C" fn chur_object_set_favorite(
     object: *const ChurObjectRefV1,
     favorite: u8,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         let entry = registry::get(session, Kind::Session)?;
         // SAFETY: the caller guarantees the pointer above for the call.
         let object_id = unsafe { object_id_of(object)? };
@@ -580,7 +580,7 @@ pub unsafe extern "C" fn chur_object_delete(
     session: Handle,
     object: *const ChurObjectRefV1,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         let entry = registry::get(session, Kind::Session)?;
         // SAFETY: the caller guarantees the pointer above for the call.
         let object_id = unsafe { object_id_of(object)? };
@@ -612,7 +612,7 @@ pub unsafe extern "C" fn chur_object_metadata(
     capacity: usize,
     bytes_written: *mut usize,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         // SAFETY: the caller guarantees `bytes_written` is writable.
         let _ = unsafe { crate::api::write_out(bytes_written, 0usize) };
         let entry = registry::get(session, Kind::Session)?;
@@ -655,7 +655,7 @@ pub unsafe extern "C" fn chur_album_create(
     name_length: u32,
     out_album_id: *mut u8,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         let entry = registry::get(session, Kind::Session)?;
         // SAFETY: the caller guarantees the pointer above for the call.
         let text = unsafe { crate::api::borrow_bytes(name, name_length)? };
@@ -690,7 +690,7 @@ pub unsafe extern "C" fn chur_album_set_membership(
     object: *const ChurObjectRefV1,
     member: u8,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         let entry = registry::get(session, Kind::Session)?;
         // SAFETY: the caller guarantees the pointers above for the call.
         let album = Id::from_slice(unsafe { crate::api::borrow_bytes(album_id, 16)? })?;
@@ -719,7 +719,7 @@ pub unsafe extern "C" fn chur_album_list(
     capacity: usize,
     bytes_written: *mut usize,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         // SAFETY: the caller guarantees `bytes_written` is writable.
         let _ = unsafe { crate::api::write_out(bytes_written, 0usize) };
         let entry = registry::get(session, Kind::Session)?;
@@ -756,7 +756,7 @@ pub unsafe extern "C" fn chur_tag_create(
     name_length: u32,
     out_tag_id: *mut u8,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         let entry = registry::get(session, Kind::Session)?;
         // SAFETY: the caller guarantees the pointer above for the call.
         let text = unsafe { crate::api::borrow_bytes(name, name_length)? };
@@ -790,7 +790,7 @@ pub unsafe extern "C" fn chur_object_set_tag(
     object: *const ChurObjectRefV1,
     tagged: u8,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         let entry = registry::get(session, Kind::Session)?;
         // SAFETY: the caller guarantees the pointers above for the call.
         let tag = Id::from_slice(unsafe { crate::api::borrow_bytes(tag_id, 16)? })?;
@@ -829,7 +829,7 @@ pub unsafe extern "C" fn chur_derived_put(
     bytes: *const u8,
     length: u32,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         let entry = registry::get(session, Kind::Session)?;
         // SAFETY: the caller guarantees the pointers above for the call.
         let object_id = unsafe { object_id_of(object)? };
@@ -866,7 +866,7 @@ pub unsafe extern "C" fn chur_derived_read(
     capacity: usize,
     bytes_written: *mut usize,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         // SAFETY: the caller guarantees `bytes_written` is writable.
         let _ = unsafe { crate::api::write_out(bytes_written, 0usize) };
         let entry = registry::get(session, Kind::Session)?;
@@ -1020,7 +1020,7 @@ pub unsafe extern "C" fn chur_backup_create(
     destination_fd: i32,
     out_operation: *mut Handle,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(session, || {
         let entry = registry::get(session, Kind::Session)?;
         let Entry::Session { .. } = entry.as_ref() else {
             return Err(wrong_type());
@@ -1087,7 +1087,7 @@ pub unsafe extern "C" fn chur_backup_restore(
     password_length: u32,
     out_operation: *mut Handle,
 ) -> Status {
-    guard_status(|| {
+    guard_status_for(runtime, || {
         let entry = registry::get(runtime, Kind::Runtime)?;
         let Entry::Runtime(guarded) = entry.as_ref() else {
             return Err(wrong_type());
