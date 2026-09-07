@@ -30,6 +30,13 @@ androidxCoreKtx = "1.19.0"
 androidxActivityCompose = "1.13.0"
 androidxLifecycle = "2.11.0"
 androidxBiometric = "1.1.0"
+# `androidx.biometric` 1.1.0 asks for a fragment version whose `FragmentActivity`
+# still overrides `startActivityForResult` and rejects a request code above 16
+# bits. The Activity Result API generates exactly those, so every
+# `rememberLauncherForActivityResult` launch — the photo picker included — throws
+# `IllegalArgumentException` on an activity built from it. The override is gone
+# from 1.3.0 onwards; this pins a current one rather than inheriting that.
+androidxFragment = "1.8.9"
 # Media3 plays the decrypted ranges a vault-backed data source hands it.
 # MEDIA_PIPELINE.md section 1 puts codec work on the platform, and this is the
 # platform's player on Android.
@@ -44,6 +51,7 @@ androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidx
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidxActivityCompose" }
 androidx-lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "androidxLifecycle" }
 androidx-biometric = { module = "androidx.biometric:biometric", version.ref = "androidxBiometric" }
+androidx-fragment = { module = "androidx.fragment:fragment", version.ref = "androidxFragment" }
 androidx-media3-exoplayer = { module = "androidx.media3:media3-exoplayer", version.ref = "androidxMedia3" }
 androidx-media3-datasource = { module = "androidx.media3:media3-datasource", version.ref = "androidxMedia3" }
 androidx-media3-ui = { module = "androidx.media3:media3-ui", version.ref = "androidxMedia3" }

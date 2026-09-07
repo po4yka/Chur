@@ -43,6 +43,10 @@ kotlin {
             // alone. It is `api` because the authorization takes the host's
             // `FragmentActivity`: a caller cannot name the argument otherwise.
             api(libs.androidx.biometric)
+            // Pinned ahead of what biometric 1.1.0 asks for: its fragment still
+            // rejects the request codes the Activity Result API generates, so a
+            // host built on that `FragmentActivity` cannot launch a picker.
+            api(libs.androidx.fragment)
             implementation(libs.kotlinx.coroutines.core)
         }
         commonTest.dependencies {
