@@ -154,3 +154,15 @@ val generateVectorFixtures =
 kotlin.sourceSets.named("commonTest") {
     kotlin.srcDir(generateVectorFixtures)
 }
+
+// A source directory registered from a task carries the dependency for the
+// compilation that consumes it, and Android Lint's model writer is not one: it
+// reads the same directory to describe the source set and never learns who
+// produces it. Gradle rejects that as an implicit dependency, which fails any
+// build that runs lint, and the ordering it warns about is real — a lint model
+// written before the generator has run describes a source set that is missing
+// the generated file.
+tasks.matching { task -> task.name.startsWith("lint") || task.name.contains("Lint") }
+    .configureEach {
+        dependsOn(generateVectorFixtures)
+    }
