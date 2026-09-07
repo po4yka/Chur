@@ -78,6 +78,13 @@ pub fn process_staged(
     let mut state = sync_receive::load_materialized_state(db, &keys)?;
     let mut report = ProcessReport::default();
 
+    // A pass that removes nothing can still teach the log something: a held
+    // record of a revoked device carries one step of the branch its revocation
+    // point pins (`REVOCATION.md` §7), and the record below it becomes
+    // admissible only on the pass after that. So one more pass runs after a
+    // pass that removed nothing, and the loop ends when that pass removes
+    // nothing either.
+    let mut settled = false;
     loop {
         let records = staging.records(now_ms)?;
         if records.is_empty() {
@@ -118,8 +125,12 @@ pub fn process_staged(
             }
         }
         report.pending = pending;
-        if !removed {
+        if removed {
+            settled = false;
+        } else if settled {
             break;
+        } else {
+            settled = true;
         }
     }
     Ok(report)

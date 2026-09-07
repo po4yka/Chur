@@ -91,6 +91,15 @@ pub struct OperationLog {
     floors: BTreeMap<Id, AcceptedHead>,
     checkpoints: BTreeMap<Id, Commitment>,
     forks: BTreeMap<Id, ForkEvidence>,
+    /// Where each received record of a revoked device sits, and what it chains
+    /// to, keyed by the digest of that record.
+    ///
+    /// `REVOCATION.md` §7 accepts a record at or below a revocation point only
+    /// on the branch that point pins. This map lets the receiver walk that
+    /// branch back from the point through records it holds but has not yet
+    /// accepted. It is a cache of received records, not accepted state, so it
+    /// is never persisted and never restored.
+    revoked_links: BTreeMap<(Id, Commitment), (u64, Commitment)>,
 }
 
 impl OperationLog {
@@ -265,8 +274,8 @@ impl OperationLog {
                 "operation author is not enrolled",
             )
         })?;
-        // Both arms hand the operation straight to `accept_inner`, which already
-        // enforces every obligation a floor and a revocation cutoff carry.
+        // An active device hands the operation straight to `accept_inner`, which
+        // already enforces every obligation a checkpoint floor carries.
         //
         // A record offered at the floor sequence with a digest other than the
         // floor's freezes the chain as fork evidence, and that check runs ahead
@@ -276,19 +285,50 @@ impl OperationLog {
         // sequence has itself been accepted. The floor is therefore crossed only
         // by the pinned history, whether it arrives in one slice or in many.
         //
-        // What the discarded candidate added was atomicity of the prefix below
-        // the floor, and it cost the chain its only way forward: a floor is
-        // installed only strictly above the local head, `accept_gated_with`
+        // What a discarded candidate added there was atomicity of the prefix
+        // below the floor, and it cost the chain its only way forward: a floor
+        // is installed only strictly above the local head, `accept_gated_with`
         // offers one operation per call, and a peer issues a checkpoint at the
         // end of every session (`ROLLBACK_PROTECTION.md` §6). So an ordinary
         // checkpoint stopped its author's chain permanently, and durably —
         // §7 there requires the opposite, since a device restored from backup
         // sets its floor before it accepts any operation and must then reach it
         // one batch at a time.
+        //
+        // A revocation point is different. `REVOCATION.md` §7 accepts a record
+        // at or below the point only when the chain forward from it reaches
+        // `final_accepted_operation_digest`, and `accept_inner` cannot see that:
+        // it looks backwards, and a record at sequence one needs no predecessor
+        // at all. A revoked device keeps its signing key, so without the forward
+        // condition it can author a fresh branch below the point that the issuer
+        // never saw and no other rule refuses. The candidate below therefore
+        // holds a record it cannot place on the pinned branch, while it still
+        // learns the branch from every record it holds.
         match device.status() {
             DeviceStatus::Active => self.accept_inner(operation, membership, None),
             DeviceStatus::Revoked { sequence, digest } => {
-                self.accept_inner(operation, membership, Some((sequence, digest)))
+                let pinned = self.revoked_branch_holds(operation, sequence, &digest);
+                let mut candidate = self.clone();
+                match candidate.accept_inner(operation, membership, Some((sequence, digest))) {
+                    // `accept_inner` verified the signature before it reached
+                    // this outcome, so the held record is authentic and its own
+                    // digest names the step it contributes to the branch.
+                    Ok(ApplyOutcome::Applied) if !pinned => {
+                        self.note_revoked_link(operation);
+                        Ok(ApplyOutcome::PendingGap)
+                    }
+                    Ok(outcome) => {
+                        *self = candidate;
+                        self.note_revoked_link(operation);
+                        Ok(outcome)
+                    }
+                    Err(error) => {
+                        if error.status() == ChurStatus::SyncChainFork {
+                            *self = candidate;
+                        }
+                        Err(error)
+                    }
+                }
             }
         }
     }
@@ -742,6 +782,73 @@ impl OperationLog {
             ChurStatus::SyncChainFork,
             "signed operation conflicts with the accepted device chain",
         ))
+    }
+
+    /// Remembers what one received record of a revoked device chains to.
+    ///
+    /// The key is the digest of the record, and that digest binds both the
+    /// sequence and the previous hash it is stored with. A fabricated record
+    /// therefore describes only itself: it enters no branch it does not already
+    /// belong to.
+    fn note_revoked_link(&mut self, operation: &Operation) {
+        self.revoked_links.insert(
+            (*operation.device_id(), operation.digest()),
+            (
+                operation.device_sequence(),
+                *operation.previous_operation_hash(),
+            ),
+        );
+    }
+
+    /// Whether the record sits on the branch its revocation point pins.
+    ///
+    /// `REVOCATION.md` §7 accepts a record at or below the point only when the
+    /// chain forward from it reaches `final_accepted_operation_digest`. The
+    /// receiver gets one record at a time and cannot look forward, so it tests
+    /// the same condition backwards: it starts at the pinned digest and follows
+    /// `previous_operation_hash` down through the records it holds. Each step
+    /// is named by the digest of the record that carries it, so the walk
+    /// follows the pinned branch alone. A receiver that does not hold every
+    /// record between the point and this one gets `false` and holds this one,
+    /// so the whole span from the point down must reach one inbox together.
+    ///
+    /// The walk decides one record only, and every accepted record still enters
+    /// through the ordinary contiguity rule, so an accepted chain still starts
+    /// at sequence one and `sync_log::load` still replays it upward.
+    // ponytail: one descent per offered record, so a tail of length L costs
+    // O(L^2) map reads to admit. Cache the highest proven sequence per device
+    // if a long revoked import ever shows up in a profile.
+    fn revoked_branch_holds(
+        &self,
+        operation: &Operation,
+        cutoff_sequence: u64,
+        cutoff_digest: &Commitment,
+    ) -> bool {
+        let device_id = *operation.device_id();
+        let target = operation.device_sequence();
+        if target > cutoff_sequence {
+            return false;
+        }
+        let mut sequence = cutoff_sequence;
+        let mut digest = *cutoff_digest;
+        // The walk descends by one sequence per step and visits each held link
+        // at most once, so the map length bounds it.
+        for _ in 0..=self.revoked_links.len() {
+            if sequence == target {
+                return digest == operation.digest();
+            }
+            match self.revoked_links.get(&(device_id, digest)) {
+                Some(&(linked_sequence, previous)) if linked_sequence == sequence => {
+                    let Some(next) = sequence.checked_sub(1) else {
+                        return false;
+                    };
+                    sequence = next;
+                    digest = previous;
+                }
+                _ => return false,
+            }
+        }
+        false
     }
 
     fn head_matches(&self, device_id: &Id, sequence: u64, digest: &Commitment) -> bool {
@@ -1287,15 +1394,20 @@ mod tests {
         );
     }
 
-    #[test]
-    fn revoked_device_chain_is_atomic_through_its_pinned_digest() {
+    /// Membership with device 6 enrolled and active, and the keys to revoke it.
+    fn enrolled_second_device() -> (
+        MembershipState,
+        DeviceSigningKey,
+        DeviceSigningKey,
+        Commitment,
+    ) {
         let issuer_key = DeviceSigningKey::from_seed([3; 32]);
         let initial = EnrollmentRecord::initial(id(1), id(2), issuer_key.verifying_key(), [4; 32])
             .expect("initial")
             .sign(&issuer_key);
         let mut membership = MembershipState::bootstrap(&initial).expect("membership");
         let revoked_key = DeviceSigningKey::from_seed([5; 32]);
-        let enrollment = crate::membership::EnrollmentRecord::new(
+        let enrollment = EnrollmentRecord::new(
             id(1),
             id(6),
             revoked_key.verifying_key(),
@@ -1311,38 +1423,67 @@ mod tests {
         membership
             .accept_enrollment(&enrollment, &id(2), 2)
             .expect("accept enrollment");
-        let first = operation_for(&revoked_key, id(6), 1, [0; 32], 10);
-        let second = operation_for(&revoked_key, id(6), 2, first.digest(), 11);
-        let revocation = crate::membership::RevocationRecord::new(
+        (membership, issuer_key, revoked_key, enrollment.commitment())
+    }
+
+    /// Accepts the revocation of device 6 at one signed revocation point.
+    fn revoke_second_device(
+        membership: &mut MembershipState,
+        issuer_key: &DeviceSigningKey,
+        enrollment_commitment: Commitment,
+        sequence: u64,
+        digest: Commitment,
+    ) {
+        let revocation = RevocationRecord::new(
             id(1),
             id(6),
-            2,
-            second.digest(),
+            sequence,
+            digest,
             3,
             id(2),
-            enrollment.commitment(),
+            enrollment_commitment,
         )
         .expect("revocation")
-        .sign(&issuer_key);
+        .sign(issuer_key);
         membership
             .accept_revocation(&revocation, &id(2))
             .expect("accept revocation");
+    }
+
+    #[test]
+    fn revoked_device_chain_is_atomic_through_its_pinned_digest() {
+        let (mut membership, issuer_key, revoked_key, enrollment_commitment) =
+            enrolled_second_device();
+        let first = operation_for(&revoked_key, id(6), 1, [0; 32], 10);
+        let second = operation_for(&revoked_key, id(6), 2, first.digest(), 11);
+        revoke_second_device(
+            &mut membership,
+            &issuer_key,
+            enrollment_commitment,
+            2,
+            second.digest(),
+        );
 
         let mut log = OperationLog::new();
+        // `REVOCATION.md` §7: the receiver holds no record between this one and
+        // the revocation point, so it cannot see the chain reach the point.
+        assert!(log.accept(&first, &membership).expect("unpinned") == ApplyOutcome::PendingGap);
+        assert!(log.head(&id(6)).is_none());
+        // The record at the point names the record below it. The branch is then
+        // known, and the chain is admitted one operation per call.
         assert!(
-            log.accept(&first, &membership).expect("toward the cutoff") == ApplyOutcome::Applied
+            log.accept(&second, &membership).expect("at the point") == ApplyOutcome::PendingGap
         );
+        assert!(log.accept(&first, &membership).expect("pinned") == ApplyOutcome::Applied);
         assert_eq!(log.head(&id(6)), Some((1, first.digest())));
+        assert!(log.accept(&second, &membership).expect("to the point") == ApplyOutcome::Applied);
         assert_eq!(
             log.accept_revoked_chain(&[first.clone(), second.clone()], &membership)
                 .expect("chain")
                 .len(),
             2
         );
-        assert_eq!(
-            log.head(&id(6)),
-            Some((2, revocation.final_accepted_operation_digest().to_owned()))
-        );
+        assert_eq!(log.head(&id(6)), Some((2, second.digest())));
         let mut restored = OperationLog::new();
         assert_eq!(
             restored
@@ -1361,18 +1502,84 @@ mod tests {
             .restore_floor(&id(6), 2, second.digest(), &membership)
             .expect("restore floor");
         assert_eq!(restored.floor(&id(6)), Some((2, second.digest())));
-        let above = operation_for(
-            &revoked_key,
-            id(6),
-            3,
-            *revocation.final_accepted_operation_digest(),
-            12,
-        );
+        let above = operation_for(&revoked_key, id(6), 3, second.digest(), 12);
         assert_eq!(
             log.accept(&above, &membership)
                 .expect_err("above cutoff")
                 .status(),
             ChurStatus::AuthenticationFailed
         );
+    }
+
+    #[test]
+    fn a_revoked_device_cannot_apply_a_branch_the_point_does_not_pin() {
+        let (mut membership, issuer_key, revoked_key, enrollment_commitment) =
+            enrolled_second_device();
+        let first = operation_for(&revoked_key, id(6), 1, [0; 32], 10);
+        let second = operation_for(&revoked_key, id(6), 2, first.digest(), 11);
+        revoke_second_device(
+            &mut membership,
+            &issuer_key,
+            enrollment_commitment,
+            2,
+            second.digest(),
+        );
+        // The revoked device keeps its signing key and authors a first
+        // operation on a branch the issuer never saw. A receiver enrolled after
+        // the revocation holds the point and no record of this device.
+        let fabricated = operation_for(&revoked_key, id(6), 1, [0; 32], 13);
+        assert!(fabricated.digest() != first.digest());
+
+        let mut log = OperationLog::new();
+        assert!(
+            log.accept(&fabricated, &membership).expect("unpinned") == ApplyOutcome::PendingGap
+        );
+        assert!(log.head(&id(6)).is_none());
+        // The record at the point pins one branch. The fabricated record is not
+        // on it, however often the server offers it.
+        assert!(
+            log.accept(&second, &membership).expect("at the point") == ApplyOutcome::PendingGap
+        );
+        assert!(
+            log.accept(&fabricated, &membership)
+                .expect("still unpinned")
+                == ApplyOutcome::PendingGap
+        );
+        assert!(log.head(&id(6)).is_none());
+        assert!(log.accept(&first, &membership).expect("pinned") == ApplyOutcome::Applied);
+        assert_eq!(log.head(&id(6)), Some((1, first.digest())));
+    }
+
+    #[test]
+    fn a_revoked_device_cannot_extend_an_accepted_head_off_the_pinned_branch() {
+        let (mut membership, issuer_key, revoked_key, enrollment_commitment) =
+            enrolled_second_device();
+        let first = operation_for(&revoked_key, id(6), 1, [0; 32], 10);
+        let second = operation_for(&revoked_key, id(6), 2, first.digest(), 11);
+        let third = operation_for(&revoked_key, id(6), 3, second.digest(), 12);
+        // The receiver took the first operation while the device was active.
+        let mut log = OperationLog::new();
+        assert!(log.accept(&first, &membership).expect("active") == ApplyOutcome::Applied);
+        revoke_second_device(
+            &mut membership,
+            &issuer_key,
+            enrollment_commitment,
+            3,
+            third.digest(),
+        );
+        // The revoked device forges a successor of the accepted head and never
+        // offers the rest of its real chain.
+        let forged = operation_for(&revoked_key, id(6), 2, first.digest(), 14);
+        assert!(forged.digest() != second.digest());
+        assert!(log.accept(&forged, &membership).expect("unpinned") == ApplyOutcome::PendingGap);
+        assert_eq!(log.head(&id(6)), Some((1, first.digest())));
+        // The genuine tail still applies, one operation per call.
+        assert!(log.accept(&third, &membership).expect("at the point") == ApplyOutcome::PendingGap);
+        assert!(
+            log.accept(&forged, &membership).expect("still unpinned") == ApplyOutcome::PendingGap
+        );
+        assert!(log.accept(&second, &membership).expect("pinned") == ApplyOutcome::Applied);
+        assert!(log.accept(&third, &membership).expect("to the point") == ApplyOutcome::Applied);
+        assert_eq!(log.head(&id(6)), Some((3, third.digest())));
     }
 }

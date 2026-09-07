@@ -249,7 +249,16 @@ impl DurableOperationLog {
                 self.log = candidate;
                 Ok(ApplyOutcome::Applied)
             }
-            Ok(outcome) => Ok(outcome),
+            // A pending outcome commits no accepted state, so the candidate
+            // differs from the log only in what the protocol learned from the
+            // record it now holds. `REVOCATION.md` §7 places a revoked device's
+            // record by walking its branch back from the revocation point
+            // through held records, so keeping the candidate is what lets the
+            // next inbox pass admit the tail instead of holding it for ever.
+            Ok(outcome) => {
+                self.log = candidate;
+                Ok(outcome)
+            }
             Err(error) if error.status() == ChurStatus::SyncChainFork => {
                 let evidence = candidate.fork(operation.device_id()).ok_or_else(|| {
                     Error::new(
@@ -1062,7 +1071,7 @@ mod tests {
     use chur_crypto::{Key, Nonce, random};
     use chur_sync_protocol::{
         checkpoint::{Checkpoint, CheckpointHead},
-        membership::EnrollmentRecord,
+        membership::{EnrollmentRecord, RevocationRecord},
         operation::{DeviceSigningKey, ObservedHead},
         operation_log::CheckpointOutcome,
     };
@@ -1090,10 +1099,20 @@ mod tests {
         previous: Commitment,
         marker: u8,
     ) -> Operation {
+        operation_from(id(3), key, sequence, previous, marker)
+    }
+
+    fn operation_from(
+        device_id: Id,
+        key: &DeviceSigningKey,
+        sequence: u64,
+        previous: Commitment,
+        marker: u8,
+    ) -> Operation {
         Operation::seal(
             id(marker),
             id(1),
-            id(3),
+            device_id,
             sequence,
             previous,
             Vec::<ObservedHead>::new(),
@@ -1157,6 +1176,64 @@ mod tests {
                 .expect("empty outbound page")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn a_pending_offer_keeps_the_revoked_branch_the_protocol_learned() {
+        let (mut db, membership, key) = setup();
+        let revoked_key = DeviceSigningKey::from_seed([7; 32]);
+        let enrollment = EnrollmentRecord::new(
+            id(1),
+            id(6),
+            revoked_key.verifying_key(),
+            [4; 32],
+            2,
+            id(3),
+            2,
+            *membership.commitment(),
+            [8; 32],
+        )
+        .expect("enrollment")
+        .sign(&key);
+        sync_membership::accept_enrollment(&mut db, &enrollment, &id(3), 2)
+            .expect("accept enrollment");
+        let first = operation_from(id(6), &revoked_key, 1, [0; 32], 20);
+        let second = operation_from(id(6), &revoked_key, 2, first.digest(), 21);
+        let revocation = RevocationRecord::new(
+            id(1),
+            id(6),
+            2,
+            second.digest(),
+            3,
+            id(3),
+            enrollment.commitment(),
+        )
+        .expect("revocation")
+        .sign(&key);
+        let membership = sync_membership::accept_revocation(&mut db, &revocation, &id(3))
+            .expect("accept revocation");
+
+        let mut log = load(&db, &membership).expect("empty log");
+        // `REVOCATION.md` §7 holds a record this receiver cannot place on the
+        // branch the revocation point pins. The record at the point names the
+        // one below it, and that knowledge must outlive the pending offer that
+        // carried it, or the tail waits for ever.
+        assert_eq!(
+            log.accept_with(&mut db, &first, &membership, |_| Ok(()))
+                .expect("unpinned"),
+            ApplyOutcome::PendingGap
+        );
+        assert_eq!(
+            log.accept_with(&mut db, &second, &membership, |_| Ok(()))
+                .expect("at the point"),
+            ApplyOutcome::PendingGap
+        );
+        assert_eq!(
+            log.accept_with(&mut db, &first, &membership, |_| Ok(()))
+                .expect("pinned"),
+            ApplyOutcome::Applied
+        );
+        assert_eq!(log.head(&id(6)), Some((1, first.digest())));
     }
 
     #[test]
