@@ -36,7 +36,7 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
     );
     let mut direct = chur_catalog::vault::unlock_with_password(&root, PASSWORD, 1).expect("unlock");
     let source_vault_id = direct.vault_id();
-    let root_key = chur_crypto::Key::new(*direct.root_secret().expose());
+    let root_key = chur_crypto::Key::new(*direct.root_secret().expect("root").expose());
     let collection_id = chur_crypto::random::id().expect("collection");
     let collection_key = chur_crypto::Key::new([31; 32]);
     let envelope = CollectionKeyEnvelope::seal(
@@ -422,7 +422,7 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
             .policy_type,
         chur_catalog::model::COLLECTION_POLICY_SHARED
     );
-    let received_root = chur_crypto::Key::new(*received.root_secret().expose());
+    let received_root = chur_crypto::Key::new(*received.root_secret().expect("root").expose());
     let received_envelope = CollectionKeyEnvelope::decode(
         &chur_catalog::store::active_collection_envelope(
             received.catalog().expect("catalog"),

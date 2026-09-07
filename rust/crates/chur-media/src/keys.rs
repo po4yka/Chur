@@ -18,7 +18,7 @@ pub fn collection_key(session: &Session, collection_id: &Id, epoch: u64) -> Resu
         collection_id,
         epoch,
     )?;
-    CollectionKeyEnvelope::decode(&body)?.open(session.root_secret())
+    CollectionKeyEnvelope::decode(&body)?.open(session.root_secret()?)
 }
 
 /// Opens the object key of one object.
@@ -67,7 +67,7 @@ pub fn ensure_default_collection(session: &mut Session) -> Result<Id> {
     }
     let collection_id = random::id()?;
     let collection_key: Key = random::secret::<32>()?;
-    let root = session.root_secret().duplicate();
+    let root = session.root_secret()?.duplicate();
     let vault_id = session.vault_id();
     let envelope = CollectionKeyEnvelope::seal(
         &root,

@@ -59,8 +59,8 @@ fn the_two_identities_share_no_key_and_no_namespace() {
 
     assert_ne!(real.vault_id(), decoy.vault_id());
     assert_ne!(
-        real.root_secret().expose(),
-        decoy.root_secret().expose(),
+        real.root_secret().expect("root").expose(),
+        decoy.root_secret().expect("root").expose(),
         "the two identities share a root secret"
     );
     assert_ne!(

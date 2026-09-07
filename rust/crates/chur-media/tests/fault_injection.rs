@@ -394,7 +394,7 @@ fn a_vault_this_build_cannot_read_fails_closed() {
             .expect("activate");
         let vault_id = session.vault_id();
         let store_id = session.object_store_id();
-        let key = CatalogKey::derive(session.root_secret(), &vault_id).expect("catalog key");
+        let key = CatalogKey::derive(session.root_secret().expect("root"), &vault_id).expect("catalog key");
         drop(session);
 
         match point {

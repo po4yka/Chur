@@ -76,7 +76,16 @@ pub struct VaultCreation {
 /// them all fail in one step, `docs/interop/FFI_CONTRACT.md` §4.
 pub struct Session {
     root_dir: VaultRoot,
-    root_secret: Key,
+    /// The vault root, present only while the session is unlocked.
+    ///
+    /// It is an `Option` and not a `Key` because step 6 of
+    /// `docs/security/PLAINTEXT_LIFECYCLE.md` §8 zeroizes the root at lock and
+    /// SEC-032 requires that erasure to be real rather than deferred. Taking
+    /// the `Option` drops the `Key`, and `chur_crypto::Secret` zeroizes on
+    /// drop. Overwriting a `Key` in place would instead leave a valid-looking
+    /// all-zero root that every method below would still seal a slot under;
+    /// `None` is the state none of them can read.
+    root_secret: Option<Key>,
     descriptor: VaultDescriptor,
     entry_name: RegistryName,
     catalog: Option<CatalogDb>,
@@ -274,7 +283,7 @@ impl VaultCreation {
         sync_directory(&self.root_dir.registry())?;
         Ok(Session {
             root_dir: self.root_dir,
-            root_secret: self.root_secret,
+            root_secret: Some(self.root_secret),
             descriptor: self.descriptor,
             entry_name: self.entry_name,
             catalog: Some(self.catalog),
@@ -612,7 +621,7 @@ fn finish_unlock(
     );
     Ok(Session {
         root_dir: root_dir.clone(),
-        root_secret,
+        root_secret: Some(root_secret),
         descriptor,
         entry_name: entry_name.clone(),
         catalog: Some(catalog),
@@ -731,9 +740,18 @@ impl Session {
     /// `docs/interop/FFI_CONTRACT.md` §12 keeps object, collection, and root
     /// keys away from application feature code; nothing above `chur-ffi` can
     /// reach this, because `Session` is never handed out across the boundary.
-    #[must_use]
-    pub fn root_secret(&self) -> &Key {
-        &self.root_secret
+    /// This is the one place the root is read, so it is the one place the lock
+    /// is checked. Every root-backed method below goes through it rather than
+    /// through the field.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ChurStatus::VaultLocked`] once [`Session::lock`] has run step
+    /// 6 of `docs/security/PLAINTEXT_LIFECYCLE.md` §8.
+    pub fn root_secret(&self) -> Result<&Key> {
+        self.root_secret
+            .as_ref()
+            .ok_or_else(|| chur_core::err!(VaultLocked, "the session is locked"))
     }
 
     /// The descriptor, for the backup package that copies it.
@@ -764,7 +782,7 @@ impl Session {
     /// §8 tag covers the body, and a body with slots removed is a different
     /// body.
     pub fn seal_descriptor(&self, descriptor: &VaultDescriptor) -> Result<Vec<u8>> {
-        descriptor.encode(&self.root_secret)
+        descriptor.encode(self.root_secret()?)
     }
 
     /// Makes every committed catalog page durable, `BACKUP_FORMAT_V1.md` §7.
@@ -783,7 +801,7 @@ impl Session {
         let slot = seal_recovery_slot(
             &self.descriptor.vault_id,
             &secret,
-            &self.root_secret,
+            self.root_secret()?,
             generation,
         )?;
         self.commit_slots(|slots| slots.push(slot))?;
@@ -812,7 +830,7 @@ impl Session {
             &secret,
             keychain_item_id,
             Nonce::random()?,
-            &self.root_secret,
+            self.root_secret()?,
         )?;
         let slot =
             KeySlotDescriptor::v1(slot_id, SlotType::AppleKeychain, generation, body.encode())?;
@@ -832,6 +850,11 @@ impl Session {
     /// is the one that hands it out, and the caller must destroy its copy as
     /// soon as the wrap returns.
     pub fn begin_android_keystore_slot(&mut self) -> Result<KeystoreEnrollment> {
+        // ADR-0041 makes this the one export that hands the root itself to the
+        // platform, so the lock is checked before anything is drawn or
+        // recorded: a locked session must neither release the root nor leave a
+        // half-opened enrollment behind.
+        let root_secret = Key::new(*self.root_secret()?.expose());
         let slot_id = random::id()?;
         let generation = self.next_slot_generation(SlotType::AndroidKeystore);
         let alias = random::array::<KEYSTORE_ALIAS_LEN>()?.to_vec();
@@ -850,7 +873,7 @@ impl Session {
         Ok(KeystoreEnrollment {
             alias,
             aad,
-            root_secret: Key::new(*self.root_secret.expose()),
+            root_secret,
         })
     }
 
@@ -923,6 +946,9 @@ impl Session {
     /// is why the whole change is one descriptor generation: an intermediate
     /// generation carrying neither slot would be a vault nobody can open.
     pub fn replace_password(&mut self, password: &[u8], params: Argon2Params) -> Result<()> {
+        // Before the Argon2id work, not after: a locked session is refused
+        // without spending the derivation `PASSWORD_PROFILE.md` §4 sizes.
+        let root = self.root_secret()?;
         password::check_memory_available(params)?;
         let canonical = password::canonical_bytes(password)?;
         let generation = self.next_slot_generation(SlotType::Password);
@@ -930,13 +956,13 @@ impl Session {
             &self.descriptor.vault_id,
             &canonical,
             params,
-            &self.root_secret,
+            root,
             generation,
         )?;
         let binding = slot.binding(self.descriptor.vault_id);
         let verified = PasswordSlotBody::decode(&slot.slot_body)?.open(&binding, &canonical)?;
         ensure!(
-            verified.expose() == self.root_secret.expose(),
+            verified.expose() == root.expose(),
             VaultIncomplete,
             "the replacement password slot did not return the committed root"
         );
@@ -949,14 +975,31 @@ impl Session {
     /// The lock sequence of `PLAINTEXT_LIFECYCLE.md` §8.
     ///
     /// Steps 1 to 4 and 7 belong to the caller: the session generation and the
-    /// decoded caches live above this crate. Steps 5, 6, and 8 are here, and
-    /// their order is the point. The catalog closes before the key is dropped,
-    /// because a connection that outlived the key would still hold decrypted
-    /// pages.
+    /// decoded caches live above this crate. Steps 5, 6, and 8 are here, in
+    /// that order. The catalog closes before the root goes, because a
+    /// connection that outlived the key would still hold decrypted pages,
+    /// which is the order ADR-0004 fixes.
+    ///
+    /// Locking twice is not a failure: both `Option`s are already empty.
     pub fn lock(&mut self) -> Result<()> {
-        if let Some(catalog) = self.catalog.take() {
-            catalog.close()?;
-        }
+        // Step 5. The outcome is held rather than propagated, because closing
+        // a SQLCipher connection fails on a live system — a busy or unwritable
+        // database maps to a status — and step 6 below has no precondition and
+        // must still run when it does.
+        let closed = match self.catalog.take() {
+            Some(catalog) => catalog.close(),
+            None => Ok(()),
+        };
+        // Step 6, and it happens here rather than at drop. `chur_vault_lock`
+        // leaves the session in the FFI registry until a separate
+        // `chur_session_close`, so a root this call did not take would still be
+        // readable by every slot mutator above: `add_recovery_slot` would mint
+        // a portable credential for a locked vault, and
+        // `begin_android_keystore_slot` would hand the root out. Taking the
+        // `Option` drops the `Key`, and `chur_crypto::Secret` zeroizes on drop,
+        // which is SEC-032.
+        drop(self.root_secret.take());
+        closed?;
         // Step 8: every scratch entry, whatever its journal state.
         let scratch = self.root_dir.scratch(&self.object_store_id());
         if scratch.exists() {
@@ -967,9 +1010,6 @@ impl Session {
                 chur_core::err!(IoFailure, "the scratch directory could not be recreated")
             })?;
         }
-        // Step 6: the root is zeroized when this session drops, which the
-        // caller does immediately after locking. Overwriting it here would
-        // leave a `Session` whose `root_secret` is a valid-looking zero key.
         Ok(())
     }
 
@@ -1010,15 +1050,14 @@ impl Session {
     /// leaves the previous descriptor installed, which is the one the vault was
     /// already openable with.
     fn commit_slots(&mut self, change: impl FnOnce(&mut Vec<KeySlotDescriptor>)) -> Result<()> {
+        // Every slot transaction is authenticated under the root, so this is
+        // the funnel all of them pass and the lock is checked once here rather
+        // than in each caller. §8 step 6 has already taken the key.
+        let root = self.root_secret()?;
         let mut candidate = self.descriptor.clone();
         change(&mut candidate.key_slots);
         candidate.descriptor_generation = next_descriptor_generation(&self.descriptor)?;
-        install_authenticated_descriptor(
-            &self.root_dir,
-            &self.entry_name,
-            &candidate,
-            &self.root_secret,
-        )?;
+        install_authenticated_descriptor(&self.root_dir, &self.entry_name, &candidate, root)?;
         self.descriptor = candidate;
         Ok(())
     }
@@ -1331,7 +1370,7 @@ mod tests {
             &session.root_dir,
             &session.entry_name,
             &descriptor,
-            &session.root_secret,
+            session.root_secret().expect("root"),
         )
         .expect("install v1 descriptor");
         descriptor
@@ -1346,7 +1385,7 @@ mod tests {
             &session.root_dir,
             &session.entry_name,
             &descriptor,
-            &session.root_secret,
+            session.root_secret().expect("root"),
         )
         .expect("install v2 descriptor");
         descriptor
@@ -1361,7 +1400,7 @@ mod tests {
             &session.root_dir,
             &session.entry_name,
             &descriptor,
-            &session.root_secret,
+            session.root_secret().expect("root"),
         )
         .expect("install v3 descriptor");
         descriptor
@@ -1435,7 +1474,7 @@ mod tests {
                 &root_dir,
                 &session.entry_name,
                 &migrating,
-                &session.root_secret,
+                session.root_secret().expect("root"),
             )
             .expect("install migrating descriptor");
             if sql_committed {
@@ -1470,7 +1509,7 @@ mod tests {
                 &root_dir,
                 &session.entry_name,
                 &migrating,
-                &session.root_secret,
+                session.root_secret().expect("root"),
             )
             .expect("install migrating descriptor");
             if sql_committed {
@@ -1504,7 +1543,7 @@ mod tests {
                 &root_dir,
                 &session.entry_name,
                 &migrating,
-                &session.root_secret,
+                session.root_secret().expect("root"),
             )
             .expect("install migrating descriptor");
             if sql_committed {
@@ -1928,6 +1967,36 @@ mod tests {
         let mut session = make(&root_dir);
         session.lock().expect("lock");
         session.lock().expect("lock again");
+    }
+
+    /// A locked session mints no credential and releases no root.
+    ///
+    /// `PLAINTEXT_LIFECYCLE.md` §8 step 6 zeroizes the root at lock, and step 2
+    /// prevents new private operations. `lock` used to do neither: it took the
+    /// catalog and left the root, so `is_unlocked()` answered false while every
+    /// slot mutator still worked. A recovery secret minted here opens the vault
+    /// from any device, and the Keystore enrolment hands out the root itself.
+    #[test]
+    fn a_locked_session_mints_no_credential() {
+        let root_dir = scratch();
+        let mut session = make(&root_dir);
+        session.lock().expect("lock");
+        assert!(!session.is_unlocked());
+        assert_eq!(
+            rejection(session.add_recovery_slot()),
+            ChurStatus::VaultLocked,
+            "a locked session minted a recovery secret"
+        );
+        assert_eq!(
+            rejection(session.begin_android_keystore_slot()),
+            ChurStatus::VaultLocked,
+            "a locked session handed out the vault root"
+        );
+        assert_eq!(
+            rejection(session.root_secret()),
+            ChurStatus::VaultLocked,
+            "a locked session released the root"
+        );
     }
 
     #[test]

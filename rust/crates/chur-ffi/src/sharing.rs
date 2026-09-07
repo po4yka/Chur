@@ -67,7 +67,7 @@ pub unsafe extern "C" fn chur_sharing_identity(
         let encoded = {
             let mut session = registry::lock(session);
             let vault_id = session.vault_id();
-            let root = Key::new(*session.root_secret().expose());
+            let root = Key::new(*session.root_secret()?.expose());
             let (enrollment, operation) = chur_catalog::sync_receive::provision_local_identity(
                 session.catalog()?,
                 &root,
@@ -157,7 +157,7 @@ pub unsafe extern "C" fn chur_sharing_prepare(
         let encoded = {
             let mut session = registry::lock(session);
             let source_vault_id = session.vault_id();
-            let root = Key::new(*session.root_secret().expose());
+            let root = Key::new(*session.root_secret()?.expose());
             let prepared = chur_catalog::sharing_service::prepare_share(
                 session.catalog()?,
                 &root,
@@ -249,7 +249,7 @@ pub unsafe extern "C" fn chur_sharing_prepare_device(
         let encoded = {
             let mut session = registry::lock(session);
             let source_vault_id = session.vault_id();
-            let root = Key::new(*session.root_secret().expose());
+            let root = Key::new(*session.root_secret()?.expose());
             let prepared = chur_catalog::sharing_service::prepare_share_for_device(
                 session.catalog()?,
                 &root,
@@ -327,7 +327,7 @@ pub unsafe extern "C" fn chur_sharing_revoke(
         let encoded = {
             let mut session = registry::lock(session);
             let source_vault_id = session.vault_id();
-            let root = Key::new(*session.root_secret().expose());
+            let root = Key::new(*session.root_secret()?.expose());
             let prepared = chur_catalog::sharing_service::prepare_share_revocation(
                 session.catalog()?,
                 &root,
@@ -428,7 +428,7 @@ pub unsafe extern "C" fn chur_sharing_accept(
             ));
         };
         let mut session = registry::lock(session);
-        let root = Key::new(*session.root_secret().expose());
+        let root = Key::new(*session.root_secret()?.expose());
         chur_catalog::sharing_service::accept_share(
             session.catalog()?,
             &root,

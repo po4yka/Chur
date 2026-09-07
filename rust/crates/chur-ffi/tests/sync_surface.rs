@@ -34,7 +34,7 @@ fn locked_stage_is_validated_and_removed_after_unlock() {
     )
     .expect("enrollment")
     .sign(identity.signing_key());
-    let root_secret = chur_crypto::Key::new(*session.root_secret().expose());
+    let root_secret = chur_crypto::Key::new(*session.root_secret().expect("root").expose());
     let (_, _, operation) = sync_receive::provision_initial_membership(
         session.catalog().expect("catalog"),
         &root_secret,

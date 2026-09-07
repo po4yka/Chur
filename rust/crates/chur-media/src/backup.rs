@@ -185,7 +185,7 @@ pub fn create(
         Some(membership) => {
             let envelope = chur_catalog::sync_keys::portable_identity_envelope(
                 session.catalog_ref()?,
-                session.root_secret(),
+                session.root_secret()?,
                 &membership,
             )?
             .ok_or_else(|| {
@@ -251,7 +251,7 @@ pub fn create(
             .saturating_add(catalog_length)
             .saturating_add(bounds::RESTORE_HEADROOM),
     };
-    let key = manifest_key(session.root_secret(), &vault_id)?;
+    let key = manifest_key(session.root_secret()?, &vault_id)?;
     let manifest_payload = manifest.seal(&key, &Nonce::random()?)?;
     ensure!(
         manifest_payload.len() <= bounds::MANIFEST_PAYLOAD_MAX,

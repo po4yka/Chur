@@ -184,7 +184,7 @@ fn a_sync_backup_requires_a_portable_identity() {
 #[test]
 fn a_sync_backup_authenticates_and_restores_its_recovery_identity() {
     let (_root, mut session) = new_vault();
-    let root = session.root_secret().duplicate();
+    let root = session.root_secret().expect("root").duplicate();
     let vault_id = session.vault_id();
     let device_id = Id::new([11; 16]).expect("device");
     let identity = DeviceIdentity::from_seeds([12; 32], [13; 32]);
@@ -269,7 +269,7 @@ fn a_sync_backup_authenticates_and_restores_its_recovery_identity() {
     assert!(
         chur_catalog::sync_keys::portable_identity_envelope(
             opened.catalog_ref().expect("catalog"),
-            opened.root_secret(),
+            opened.root_secret().expect("root"),
             &membership,
         )
         .expect("identity")

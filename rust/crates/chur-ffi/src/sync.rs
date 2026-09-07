@@ -107,7 +107,7 @@ pub unsafe extern "C" fn chur_sync_process(
         let mut session = registry::lock(session);
         let vault_id = session.vault_id();
         let root_dir = session.root_dir().clone();
-        let root = Key::new(*session.root_secret().expose());
+        let root = Key::new(*session.root_secret()?.expose());
         let mut staging = LockedStaging::open(root_dir.sync_inbox(&vault_id))?;
         let report =
             sync_engine::process_staged(session.catalog()?, &root, vault_id, &mut staging, now_ms)?;
