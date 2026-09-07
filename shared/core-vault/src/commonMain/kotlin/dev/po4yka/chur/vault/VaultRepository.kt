@@ -228,7 +228,11 @@ class VaultRepository(
      * wrapped bytes the Keystore produced. It must not keep either argument.
      */
     suspend fun enrollKeystoreSlot(
-        wrap: (alias: ByteArray, aad: ByteArray, rootSecret: ByteArray) -> Pair<ByteArray, ByteArray>,
+        wrap: suspend (
+            alias: ByteArray,
+            aad: ByteArray,
+            rootSecret: ByteArray,
+        ) -> Pair<ByteArray, ByteArray>,
     ) = withSession { session ->
         val enrollment = ChurVault.beginKeystoreSlot(session)
         try {

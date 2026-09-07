@@ -8,4 +8,15 @@
 -->
 <resources>
     <string name="app_name">Notes</string>
+
+    <!--
+      The device-slot authorization of docs/security/KEY_SLOTS.md section 4.
+
+      The words name the vault, which the public shell does not: this prompt
+      only ever appears after the user has already opened the vault route, so
+      it discloses nothing the surface behind it has not.
+    -->
+    <string name="device_slot_title">Vault</string>
+    <string name="device_slot_subtitle">Confirm it\'s you to use this device\'s screen lock for the vault.</string>
+    <string name="device_slot_cancel">Cancel</string>
 </resources>

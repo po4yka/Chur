@@ -37,6 +37,14 @@ kotlin {
         commonMain.dependencies {
             implementation(project(":shared:core-model"))
         }
+        androidMain.dependencies {
+            // §4 makes the key usable only after the user authenticates, and
+            // the Keystore accepts that authorization from `BiometricPrompt`
+            // alone. It is `api` because the authorization takes the host's
+            // `FragmentActivity`: a caller cannot name the argument otherwise.
+            api(libs.androidx.biometric)
+            implementation(libs.kotlinx.coroutines.core)
+        }
         commonTest.dependencies {
             implementation(kotlin("test"))
         }

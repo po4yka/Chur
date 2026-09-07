@@ -23,7 +23,11 @@ interface DeviceUnlock {
      *
      * @return the 12-byte GCM nonce and the 48 wrapped bytes.
      */
-    fun wrap(alias: ByteArray, aad: ByteArray, rootSecret: ByteArray): Pair<ByteArray, ByteArray>
+    suspend fun wrap(
+        alias: ByteArray,
+        aad: ByteArray,
+        rootSecret: ByteArray,
+    ): Pair<ByteArray, ByteArray>
 
     /**
      * Unwraps the vault root, or returns `null` when this slot is not this
@@ -33,7 +37,7 @@ interface DeviceUnlock {
      * every identity the registry admits, so a caller walks them and most do
      * not belong to the key this device holds.
      */
-    fun unwrap(
+    suspend fun unwrap(
         alias: ByteArray,
         aad: ByteArray,
         gcmNonce: ByteArray,
@@ -45,13 +49,13 @@ interface DeviceUnlock {
 object NoDeviceUnlock : DeviceUnlock {
     override val available: Boolean = false
 
-    override fun wrap(
+    override suspend fun wrap(
         alias: ByteArray,
         aad: ByteArray,
         rootSecret: ByteArray,
     ): Pair<ByteArray, ByteArray> = throw UnsupportedOperationException("no device slot here")
 
-    override fun unwrap(
+    override suspend fun unwrap(
         alias: ByteArray,
         aad: ByteArray,
         gcmNonce: ByteArray,

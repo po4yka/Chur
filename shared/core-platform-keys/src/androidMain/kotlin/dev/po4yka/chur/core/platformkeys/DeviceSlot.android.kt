@@ -6,12 +6,21 @@ import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
 import android.security.keystore.UserNotAuthenticatedException
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
 import dev.po4yka.chur.core.model.ChurStatus
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import java.security.KeyStore
 import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.spec.GCMParameterSpec
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * The Android Keystore slot prototype, `docs/security/KEY_SLOTS.md` section 4.
@@ -128,15 +137,28 @@ public actual class DeviceSlot public actual constructor(identifier: ByteArray) 
     /**
      * Wraps a root secret under the Keystore key.
      *
+     * The user authorizes the operation first. [provision] builds the key with
+     * `setUserAuthenticationRequired`, so the Keystore refuses the AEAD until a
+     * `BiometricPrompt` has authorized it; without that step every call here
+     * failed with `KEY_USER_NOT_AUTHENTICATED`, which is what made the whole
+     * slot family unreachable on a device.
+     *
      * @param root the 32-byte `VaultRootSecret`.
      * @param slotAad the canonical AAD Rust produced for this slot generation.
      * @return the GCM nonce the cipher chose and the 48 wrapped bytes.
      */
-    public fun wrap(root: ByteArray, slotAad: ByteArray): KeystoreWrapped {
+    public suspend fun wrap(
+        activity: FragmentActivity,
+        policy: DeviceSlotPolicy,
+        prompt: DeviceSlotPrompt,
+        root: ByteArray,
+        slotAad: ByteArray,
+    ): KeystoreWrapped {
         require(root.size == ROOT_BYTES) { "a root secret is 32 bytes" }
-        val cipher = cipher()
+        val cipher = authorized(activity, policy, prompt) {
+            Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, key()) }
+        }
         try {
-            cipher.init(Cipher.ENCRYPT_MODE, key())
             cipher.updateAAD(slotAad)
             val wrapped = cipher.doFinal(root)
             return KeystoreWrapped(gcmNonce = cipher.iv.copyOf(), wrappedRootSecret = wrapped)
@@ -146,20 +168,25 @@ public actual class DeviceSlot public actual constructor(identifier: ByteArray) 
     }
 
     /**
-     * Unwraps a root secret.
+     * Unwraps a root secret, after the same authorization [wrap] requires.
      *
      * @throws DeviceSlotException with [ChurStatus.AUTHENTICATION_FAILED] when
      * the tag does not verify, which is the same external result a wrong
      * password produces.
      */
-    public fun unwrap(wrapped: KeystoreWrapped, slotAad: ByteArray): ByteArray {
-        val cipher = cipher()
+    public suspend fun unwrap(
+        activity: FragmentActivity,
+        policy: DeviceSlotPolicy,
+        prompt: DeviceSlotPrompt,
+        wrapped: KeystoreWrapped,
+        slotAad: ByteArray,
+    ): ByteArray {
+        val cipher = authorized(activity, policy, prompt) {
+            Cipher.getInstance(TRANSFORMATION).apply {
+                init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(TAG_BITS, wrapped.gcmNonce))
+            }
+        }
         try {
-            cipher.init(
-                Cipher.DECRYPT_MODE,
-                key(),
-                GCMParameterSpec(TAG_BITS, wrapped.gcmNonce),
-            )
             cipher.updateAAD(slotAad)
             return cipher.doFinal(wrapped.wrappedRootSecret)
         } catch (cause: Exception) {
@@ -167,7 +194,126 @@ public actual class DeviceSlot public actual constructor(identifier: ByteArray) 
         }
     }
 
-    private fun cipher(): Cipher = Cipher.getInstance(TRANSFORMATION)
+    /**
+     * Runs the prompt and returns a cipher the Keystore will accept.
+     *
+     * Which half runs depends on how [generate] built the key, and the two are
+     * not interchangeable. A key with `setUserAuthenticationParameters(0, …)`
+     * authorizes one operation, so the cipher must travel into the prompt as a
+     * `CryptoObject` and come back out of it. The API 29 `CONVENIENT` key is
+     * the other kind: a validity window is the only way that level admits the
+     * device credential, and a window key cannot carry a `CryptoObject` at all,
+     * so the prompt runs first and the cipher is built inside the window it
+     * opened.
+     */
+    private suspend fun authorized(
+        activity: FragmentActivity,
+        policy: DeviceSlotPolicy,
+        prompt: DeviceSlotPrompt,
+        init: () -> Cipher,
+    ): Cipher {
+        if (!authorizesPerUse(policy)) {
+            authenticate(activity, policy, prompt, crypto = null)
+            return initializing(init)
+        }
+        val crypto = BiometricPrompt.CryptoObject(initializing(init))
+        return authenticate(activity, policy, prompt, crypto)?.cipher
+            ?: throw DeviceSlotException(
+                ChurStatus.PLATFORM_KEY_UNAVAILABLE,
+                "the device authorization returned no cipher",
+            )
+    }
+
+    /** Whether [generate] gave this policy a key that authorizes one use. */
+    private fun authorizesPerUse(policy: DeviceSlotPolicy): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R || policy == DeviceSlotPolicy.STRICT
+
+    private fun initializing(init: () -> Cipher): Cipher = try {
+        init()
+    } catch (cause: Exception) {
+        throw classify(cause, "the Keystore refused to start a slot operation")
+    }
+
+    /** Shows the prompt and suspends until the platform decides. */
+    private suspend fun authenticate(
+        activity: FragmentActivity,
+        policy: DeviceSlotPolicy,
+        prompt: DeviceSlotPrompt,
+        crypto: BiometricPrompt.CryptoObject?,
+    ): BiometricPrompt.CryptoObject? = withContext(Dispatchers.Main) {
+        suspendCancellableCoroutine { continuation ->
+            val info = promptInfo(policy, prompt)
+            val dialog = BiometricPrompt(
+                activity,
+                ContextCompat.getMainExecutor(activity),
+                object : BiometricPrompt.AuthenticationCallback() {
+                    override fun onAuthenticationSucceeded(
+                        result: BiometricPrompt.AuthenticationResult,
+                    ) {
+                        if (continuation.isActive) continuation.resume(result.cryptoObject)
+                    }
+
+                    override fun onAuthenticationError(code: Int, message: CharSequence) {
+                        // The message is the platform's and may name the user's
+                        // enrolled factor, so it is dropped: `ERROR_MODEL.md`
+                        // keeps a private value out of a failure, and the code
+                        // carries everything a caller may branch on.
+                        if (continuation.isActive) {
+                            continuation.resumeWithException(
+                                DeviceSlotException(
+                                    statusOf(code),
+                                    "the device authorization did not complete",
+                                ),
+                            )
+                        }
+                    }
+
+                    // One mismatch does not end the prompt: the platform keeps
+                    // it up and the user tries again, and only an error above
+                    // is terminal.
+                    override fun onAuthenticationFailed() = Unit
+                },
+            )
+            continuation.invokeOnCancellation { dialog.cancelAuthentication() }
+            if (crypto == null) dialog.authenticate(info) else dialog.authenticate(info, crypto)
+        }
+    }
+
+    private fun promptInfo(
+        policy: DeviceSlotPolicy,
+        prompt: DeviceSlotPrompt,
+    ): BiometricPrompt.PromptInfo {
+        val builder = BiometricPrompt.PromptInfo.Builder()
+            .setTitle(prompt.title)
+            .setSubtitle(prompt.subtitle)
+        when (policy) {
+            DeviceSlotPolicy.CONVENIENT -> builder.setAllowedAuthenticators(
+                BiometricManager.Authenticators.BIOMETRIC_STRONG or
+                    BiometricManager.Authenticators.DEVICE_CREDENTIAL,
+            )
+            DeviceSlotPolicy.STRICT -> {
+                builder.setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+                // A prompt that admits no device credential must carry its own
+                // way out, and the platform rejects one that sets neither.
+                builder.setNegativeButtonText(prompt.cancel)
+            }
+        }
+        return builder.build()
+    }
+
+    /** The stable code behind a `BiometricPrompt` error. */
+    private fun statusOf(code: Int): ChurStatus = when (code) {
+        BiometricPrompt.ERROR_NEGATIVE_BUTTON,
+        BiometricPrompt.ERROR_USER_CANCELED,
+        BiometricPrompt.ERROR_CANCELED,
+        -> ChurStatus.CANCELLED
+        // The factor is spent for now, which is a refusal rather than an
+        // absence: the slot still exists and a later attempt can open it.
+        BiometricPrompt.ERROR_LOCKOUT,
+        BiometricPrompt.ERROR_LOCKOUT_PERMANENT,
+        -> ChurStatus.AUTHENTICATION_FAILED
+        else -> ChurStatus.PLATFORM_KEY_UNAVAILABLE
+    }
 
     private fun key(): javax.crypto.SecretKey {
         val entry = keyStore().getEntry(alias, null) as? KeyStore.SecretKeyEntry
@@ -218,6 +364,27 @@ public actual class DeviceSlot public actual constructor(identifier: ByteArray) 
         const val LEGACY_CREDENTIAL_WINDOW_SECONDS = 10
     }
 }
+
+/**
+ * The words the device authorization shows.
+ *
+ * The host supplies them because the host is what has resources: a string
+ * frozen in this module could not be translated and would put the vault's own
+ * vocabulary in a module that `docs/ARCHITECTURE.md` §9 keeps free of it.
+ */
+public class DeviceSlotPrompt(
+    /** The prompt's title. */
+    public val title: String,
+    /** One line under it, saying what the authorization opens. */
+    public val subtitle: String,
+    /**
+     * The way out.
+     *
+     * Shown only under [DeviceSlotPolicy.STRICT]: that policy admits no device
+     * credential, and a prompt offering neither is one the platform rejects.
+     */
+    public val cancel: String,
+)
 
 /**
  * What an Android slot body carries, `KEY_SLOT_BODIES_V1.md` section 5.

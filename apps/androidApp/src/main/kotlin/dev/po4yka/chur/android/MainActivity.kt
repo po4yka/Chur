@@ -9,6 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.fragment.app.FragmentActivity
 import dev.po4yka.chur.app.AndroidPrivacyCover
 import dev.po4yka.chur.app.ChurApp
 import dev.po4yka.chur.app.ChurController
@@ -31,7 +32,13 @@ import kotlinx.coroutines.launch
  * `docs/interop/FFI_CONTRACT.md` makes a failing gate terminal for the process,
  * so the shell says so and composes no vault route rather than degrading.
  */
-class MainActivity : ComponentActivity() {
+/*
+ * It is a `FragmentActivity` rather than a bare `ComponentActivity` because
+ * `BiometricPrompt` requires one, and the device slot of `KEY_SLOTS.md` §4
+ * cannot be authorized without it. `FragmentActivity` extends
+ * `ComponentActivity`, so everything else here is unchanged.
+ */
+class MainActivity : FragmentActivity() {
     private lateinit var controller: ChurController
     private lateinit var privacy: AndroidPrivacyCover
 
@@ -46,7 +53,7 @@ class MainActivity : ComponentActivity() {
             exports = ExportDestinations(contentResolver),
             clock = { System.currentTimeMillis() },
             notes = FileNoteStore(publicShellFile("notes.json")),
-            deviceUnlock = AndroidDeviceUnlock(),
+            deviceUnlock = AndroidDeviceUnlock(this),
         )
 
         val verdict = runGate()

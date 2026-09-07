@@ -191,17 +191,43 @@ class ChurController(
      */
     fun unlockWithDevice() = guarded {
         val material = withContext(Dispatchers.Default) { repository.keystoreMaterial() }
-        val root = material.firstNotNullOfOrNull { entry ->
-            deviceUnlock.unwrap(entry.alias, entry.aad, entry.gcmNonce, entry.wrappedRootSecret)
-        } ?: throw ChurFailure(ChurStatus.AUTHENTICATION_FAILED, "no device slot opened")
-        withContext(Dispatchers.Default) { repository.unlockWithKeystoreRoot(root) }
+        // Not `firstNotNullOfOrNull`: the unwrap suspends now, because the
+        // platform asks the user to authorize it first.
+        var root: ByteArray? = null
+        beginHostActivity()
+        try {
+            for (entry in material) {
+                root = deviceUnlock.unwrap(
+                    entry.alias,
+                    entry.aad,
+                    entry.gcmNonce,
+                    entry.wrappedRootSecret,
+                )
+                if (root != null) break
+            }
+        } finally {
+            endHostActivity()
+        }
+        val opened = root ?: throw ChurFailure(ChurStatus.AUTHENTICATION_FAILED, "no device slot opened")
+        withContext(Dispatchers.Default) { repository.unlockWithKeystoreRoot(opened) }
         enterVault()
     }
 
-    /** Enrolls the platform device slot on the open session. */
+    /**
+     * Enrolls the platform device slot on the open session.
+     *
+     * The enrolment is bracketed the way an import is: authorizing the platform
+     * key can put a system credential screen in front of this one, and the
+     * background lock would otherwise close the session the enrolment needs.
+     */
     fun enrollDeviceSlot() = guarded {
-        withContext(Dispatchers.Default) {
-            repository.enrollKeystoreSlot { alias, aad, root -> deviceUnlock.wrap(alias, aad, root) }
+        beginHostActivity()
+        try {
+            repository.enrollKeystoreSlot { alias, aad, root ->
+                deviceUnlock.wrap(alias, aad, root)
+            }
+        } finally {
+            endHostActivity()
         }
         _message.value = "This device can now open the vault."
         loadSlots()
