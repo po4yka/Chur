@@ -299,12 +299,28 @@ impl ReferenceServer {
             "collection operation identifier was reused"
         );
         for observed in operation.observed_heads() {
-            let present: i64 = self
+            // COLLECTION_OPERATION_LOG.md section 4 makes an observed head a
+            // presence test, not a currency test: the head names the sequence
+            // its author had accepted, which lags this relay's tip as soon as
+            // that participant authors again. Section 3 keeps each issuer chain
+            // contiguous from one, and the head check above enforces it, so
+            // counting the rows at or above the named sequence and demanding
+            // exactly one accepted a head only while it was still the tip and
+            // rejected every ordinary concurrent write. Section 2 signs the
+            // heads, so such an author could never re-sign a fresher one and
+            // the rejection was permanent.
+            //
+            // The "at least the named sequence" form matches the receiver in
+            // collection_operation_log.rs and lets the primary-key index
+            // short-circuit.
+            let held: bool = self
                 .db
                 .query_row(
-                    "SELECT count(*) FROM collection_operations
-                  WHERE key_selector = ?1 AND issuer_vault_id = ?2
-                    AND issuer_device_id = ?3 AND device_sequence >= ?4",
+                    "SELECT EXISTS(
+                        SELECT 1 FROM collection_operations
+                        WHERE key_selector = ?1 AND issuer_vault_id = ?2
+                          AND issuer_device_id = ?3 AND device_sequence >= ?4
+                     )",
                     params![
                         operation.key_selector().as_bytes().as_slice(),
                         observed.issuer_identity_vault_id().as_bytes().as_slice(),
@@ -318,7 +334,7 @@ impl ReferenceServer {
                 )
                 .map_err(|error| map_sqlite(error, "collection observed head lookup failed"))?;
             ensure!(
-                present == 1,
+                held,
                 SyncHeadRollback,
                 "collection operation has a missing cause"
             );
@@ -1529,7 +1545,7 @@ mod tests {
     use chur_sync_protocol::collection_membership::{
         CollectionMembershipAction, CollectionMembershipRecord,
     };
-    use chur_sync_protocol::collection_operation::CollectionOperation;
+    use chur_sync_protocol::collection_operation::{CollectionObservedHead, CollectionOperation};
     use chur_sync_protocol::grant::{CollectionGrant, PermissionProfile};
     use chur_sync_protocol::identity::DeviceIdentity;
     use chur_sync_protocol::membership::EnrollmentRecord;
@@ -2122,6 +2138,199 @@ mod tests {
                 .collection_grants_for_recipient(id(15), id(16))
                 .expect("unrelated grants")
                 .is_empty()
+        );
+    }
+
+    /// An observed head below the relay tip is a cause that is present.
+    ///
+    /// `COLLECTION_OPERATION_LOG.md` section 4 holds an operation until every
+    /// named head is present. The relay demanded that the head still be the
+    /// issuer's tip, so an ordinary concurrent write was refused, and section 2
+    /// puts the heads inside the signature, so the author could never re-sign a
+    /// fresher one. The contributor's chain stopped for good.
+    #[test]
+    fn collection_operation_accepts_an_observed_head_below_the_relay_tip() {
+        let root = crate::tests::TestRoot::new();
+        let source_vault = id(1);
+        let source_device = id(2);
+        let source_key = DeviceSigningKey::from_seed([3; 32]);
+        let source_enrollment = EnrollmentRecord::initial(
+            source_vault,
+            source_device,
+            source_key.verifying_key(),
+            [4; 32],
+        )
+        .expect("source enrollment")
+        .sign(&source_key);
+        let source_initial = operation(source_vault, source_device, id(5), 1, [0; 32], &source_key);
+        let recipient_vault = id(6);
+        let recipient_device = id(7);
+        let recipient = DeviceIdentity::from_seeds([8; 32], [9; 32]);
+        let recipient_enrollment = EnrollmentRecord::initial(
+            recipient_vault,
+            recipient_device,
+            recipient.signing_public_key(),
+            recipient.hpke_public_key(),
+        )
+        .expect("recipient enrollment")
+        .sign(recipient.signing_key());
+        let recipient_initial = operation(
+            recipient_vault,
+            recipient_device,
+            id(10),
+            1,
+            [0; 32],
+            recipient.signing_key(),
+        );
+        let collection_id = id(11);
+        // CONTRIBUTE, because a cross-vault observed cause needs a second
+        // authorized issuer chain under one selector, and a reader authors none.
+        let membership = CollectionMembershipRecord::new(
+            source_vault,
+            collection_id,
+            1,
+            [0; 32],
+            CollectionMembershipAction::Upsert(PermissionProfile::Contribute),
+            recipient_vault,
+            recipient_device,
+            recipient.signing_public_key(),
+            recipient.hpke_public_key(),
+            1,
+            source_vault,
+            source_device,
+            1,
+            2,
+        )
+        .expect("collection membership")
+        .sign(&source_key);
+        let membership_outer = operation(
+            source_vault,
+            source_device,
+            id(12),
+            2,
+            source_initial.digest(),
+            &source_key,
+        );
+        let collection_key = Key::new([13; 32]);
+        let grant = CollectionGrant::seal(
+            id(14),
+            source_vault,
+            collection_id,
+            1,
+            1,
+            recipient_vault,
+            recipient_device,
+            &recipient.hpke_public_key(),
+            source_device,
+            PermissionProfile::Contribute,
+            1,
+            3,
+            &collection_key,
+            &source_key,
+        )
+        .expect("grant");
+        let grant_outer = operation(
+            source_vault,
+            source_device,
+            id(14),
+            3,
+            membership_outer.digest(),
+            &source_key,
+        );
+
+        let mut server = ReferenceServer::open(&root.0, 1_024, 65_536).expect("server");
+        server
+            .accept_initial_membership(&source_enrollment, &source_initial)
+            .expect("source bootstrap");
+        server
+            .accept_initial_membership(&recipient_enrollment, &recipient_initial)
+            .expect("recipient bootstrap");
+        server
+            .accept_collection_membership(&membership, &membership_outer)
+            .expect("membership");
+        server
+            .accept_collection_grant(&grant, &grant_outer)
+            .expect("grant");
+
+        let selector = *grant_outer.key_selector();
+        let payload_key = Key::new([31; 32]);
+        let first = CollectionOperation::seal(
+            id(30),
+            source_vault,
+            source_device,
+            1,
+            [0; 32],
+            Vec::new(),
+            selector,
+            &payload_key,
+            Nonce::new([32; 24]),
+            b"first source payload",
+        )
+        .expect("first source operation")
+        .sign(&source_key);
+        server
+            .accept_collection_operation(&first)
+            .expect("first source operation");
+        let second = CollectionOperation::seal(
+            id(31),
+            source_vault,
+            source_device,
+            2,
+            first.digest(),
+            Vec::new(),
+            selector,
+            &payload_key,
+            Nonce::new([33; 24]),
+            b"second source payload",
+        )
+        .expect("second source operation")
+        .sign(&source_key);
+        server
+            .accept_collection_operation(&second)
+            .expect("second source operation");
+
+        // The contributor signed its heads when it had accepted sequence one
+        // only, so the named head lags the relay tip of two.
+        let lagging = CollectionOperation::seal(
+            id(32),
+            recipient_vault,
+            recipient_device,
+            1,
+            [0; 32],
+            vec![CollectionObservedHead::new(source_vault, source_device, 1)],
+            selector,
+            &payload_key,
+            Nonce::new([34; 24]),
+            b"lagging observed cause",
+        )
+        .expect("lagging operation")
+        .sign(recipient.signing_key());
+        assert_eq!(
+            server
+                .accept_collection_operation(&lagging)
+                .expect("lagging observed head"),
+            RelayOutcome::Stored
+        );
+
+        // A head above the relay tip is still a missing cause.
+        let missing = CollectionOperation::seal(
+            id(33),
+            recipient_vault,
+            recipient_device,
+            2,
+            lagging.digest(),
+            vec![CollectionObservedHead::new(source_vault, source_device, 3)],
+            selector,
+            &payload_key,
+            Nonce::new([35; 24]),
+            b"missing observed cause",
+        )
+        .expect("missing cause operation")
+        .sign(recipient.signing_key());
+        assert!(
+            server
+                .accept_collection_operation(&missing)
+                .is_err_and(|error| error.status() == ChurStatus::SyncHeadRollback)
         );
     }
 
