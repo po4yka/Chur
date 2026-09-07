@@ -10,15 +10,15 @@
 //! zeroizing the key. Nothing above this module ever holds a root secret.
 
 use chur_core::limits::{GCM_NONCE_LEN, WRAPPED_KEY_LEN};
-use chur_core::{ChurStatus, Error, Id, Result, bail, ensure};
+use chur_core::{bail, ensure, ChurStatus, Error, Id, Result};
 use chur_crypto::{
-    Key, Nonce, commit,
+    commit,
     password::{self, Argon2Params},
-    random, recovery,
+    random, recovery, Key, Nonce,
 };
 use chur_format::constants::{
-    CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V3,
-    CATALOG_FORMAT_VERSION_V4, DESCRIPTOR_VERSION_V1, SlotType, VaultState,
+    SlotType, VaultState, CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2,
+    CATALOG_FORMAT_VERSION_V3, CATALOG_FORMAT_VERSION_V4, DESCRIPTOR_VERSION_V1,
 };
 use chur_format::descriptor::{
     CatalogDescriptor, KeySlotDescriptor, MigrationDescriptor, ObjectStoreDescriptor,
@@ -619,6 +619,27 @@ fn finish_unlock(
         CatalogCorrupt,
         "the catalog format version disagrees with the descriptor"
     );
+    let catalog_generation = schema::generation(&catalog)?;
+    // §5 of the descriptor specification: catalog_generation is checked at
+    // every unlock. The header commitment above cannot detect a rollback to an
+    // older copy of the same file, because the committed header never changes;
+    // the generation can. A catalog older than the generation the descriptor
+    // last recorded is a restored old copy and must not open.
+    ensure!(
+        catalog_generation >= descriptor.catalog.catalog_generation,
+        VaultCorrupt,
+        "the catalog is older than the generation the descriptor records"
+    );
+    if catalog_generation != descriptor.catalog.catalog_generation {
+        // The catalog ran ahead of the descriptor: the session that wrote
+        // those states died before its lock could record them. Record the
+        // generation the catalog actually holds before the session starts.
+        let mut candidate = descriptor.clone();
+        candidate.descriptor_generation = next_descriptor_generation(&descriptor)?;
+        candidate.catalog.catalog_generation = catalog_generation;
+        install_authenticated_descriptor(root_dir, entry_name, &candidate, &root_secret)?;
+        descriptor = candidate;
+    }
     Ok(Session {
         root_dir: root_dir.clone(),
         root_secret: Some(root_secret),
@@ -982,6 +1003,19 @@ impl Session {
     ///
     /// Locking twice is not a failure: both `Option`s are already empty.
     pub fn lock(&mut self) -> Result<()> {
+        // Step 4: the descriptor records the catalog generation this session
+        // leaves behind, §5 of the descriptor specification. The next unlock
+        // compares the catalog against it, which is what detects a catalog
+        // file rolled back to an older copy. The root is still held here, and
+        // the outcome is held rather than propagated, because step 6 below has
+        // no precondition and must still run.
+        let recorded = match self.catalog.as_ref().map(schema::generation).transpose() {
+            Ok(Some(generation)) if generation > self.descriptor.catalog.catalog_generation => {
+                self.record_catalog_generation(generation).map(|_| ())
+            }
+            Ok(_) => Ok(()),
+            Err(error) => Err(error),
+        };
         // Step 5. The outcome is held rather than propagated, because closing
         // a SQLCipher connection fails on a live system — a busy or unwritable
         // database maps to a status — and step 6 below has no precondition and
@@ -1000,6 +1034,7 @@ impl Session {
         // which is SEC-032.
         drop(self.root_secret.take());
         closed?;
+        recorded?;
         // Step 8: every scratch entry, whatever its journal state.
         let scratch = self.root_dir.scratch(&self.object_store_id());
         if scratch.exists() {
@@ -1057,6 +1092,24 @@ impl Session {
         let mut candidate = self.descriptor.clone();
         change(&mut candidate.key_slots);
         candidate.descriptor_generation = next_descriptor_generation(&self.descriptor)?;
+        install_authenticated_descriptor(&self.root_dir, &self.entry_name, &candidate, root)?;
+        self.descriptor = candidate;
+        Ok(())
+    }
+
+    /// Records a catalog generation in the descriptor.
+    ///
+    /// §5 of the descriptor specification: the descriptor carries the catalog
+    /// generation it was last written against, which is what the unlock-time
+    /// check compares against the catalog. A state transition writes a new
+    /// descriptor generation rather than mutating authenticated fields in
+    /// place, so the rewrite bumps the generation and is authenticated under
+    /// the root.
+    fn record_catalog_generation(&mut self, generation: u64) -> Result<()> {
+        let root = self.root_secret()?;
+        let mut candidate = self.descriptor.clone();
+        candidate.descriptor_generation = next_descriptor_generation(&self.descriptor)?;
+        candidate.catalog.catalog_generation = generation;
         install_authenticated_descriptor(&self.root_dir, &self.entry_name, &candidate, root)?;
         self.descriptor = candidate;
         Ok(())
@@ -1335,7 +1388,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::panic, clippy::expect_used)]
 
     use super::*;
-    use crate::query::{ObjectQuery, page};
+    use crate::query::{page, ObjectQuery};
 
     /// A private directory for one test.
     fn scratch() -> VaultRoot {
@@ -1441,6 +1494,70 @@ mod tests {
             &ObjectQuery::timeline(),
         )
         .expect("query");
+    }
+
+    #[test]
+    fn a_lock_records_the_catalog_generation_the_session_leaves_behind() {
+        let root_dir = scratch();
+        let mut session = make(&root_dir);
+        session
+            .catalog()
+            .expect("catalog")
+            .transaction(schema::bump_generation)
+            .expect("bump");
+        session.lock().expect("lock");
+        assert_eq!(session.descriptor.catalog.catalog_generation, 2);
+    }
+
+    #[test]
+    fn an_unlock_records_the_generation_a_dead_session_left_behind() {
+        let root_dir = scratch();
+        let mut session = make(&root_dir);
+        session
+            .catalog()
+            .expect("catalog")
+            .transaction(schema::bump_generation)
+            .expect("bump");
+        // The session dies without lock(): the descriptor still records the
+        // creation generation, so the unlock tolerates the catalog running
+        // ahead and records what it actually holds.
+        drop(session);
+        let mut session =
+            unlock_with_password(&root_dir, PASSWORD, 1_700_000_001_000).expect("unlock");
+        assert_eq!(session.descriptor.catalog.catalog_generation, 2);
+        session.lock().expect("lock");
+        assert!(unlock_with_password(&root_dir, PASSWORD, 1_700_000_002_000).is_ok());
+    }
+
+    #[test]
+    fn a_catalog_older_than_the_descriptor_records_is_refused_at_unlock() {
+        let root_dir = scratch();
+        let mut session = make(&root_dir);
+        let catalog_path = root_dir.catalog(
+            &session.descriptor.object_store.opaque_root_path_id,
+            &session.descriptor.catalog.opaque_catalog_path_id,
+        );
+        // Checkpoint the creation state into the file, then keep it: a valid
+        // older copy of the same catalog, whose header commitment matches
+        // every later generation. That is why §5 needs catalog_generation and
+        // cannot rely on the header.
+        session.lock().expect("lock");
+        let rolled_back = std::fs::read(&catalog_path).expect("read the catalog");
+
+        let mut session =
+            unlock_with_password(&root_dir, PASSWORD, 1_700_000_001_000).expect("unlock");
+        session
+            .catalog()
+            .expect("catalog")
+            .transaction(schema::bump_generation)
+            .expect("bump");
+        session.lock().expect("lock");
+        assert_eq!(session.descriptor.catalog.catalog_generation, 2);
+        drop(session);
+
+        std::fs::write(&catalog_path, rolled_back).expect("restore the old copy");
+        let status = rejection(unlock_with_password(&root_dir, PASSWORD, 1_700_000_002_000));
+        assert_eq!(status, ChurStatus::VaultCorrupt);
     }
 
     #[test]
@@ -1859,11 +1976,9 @@ mod tests {
         session.begin_android_keystore_slot().expect("begin");
         drop(session);
 
-        assert!(
-            android_keystore_material(&root_dir)
-                .expect("material")
-                .is_empty()
-        );
+        assert!(android_keystore_material(&root_dir)
+            .expect("material")
+            .is_empty());
         let reopened = unlock_with_password(&root_dir, PASSWORD, 1).expect("unlock");
         assert_eq!(reopened.slots().len(), before);
     }
@@ -1896,11 +2011,9 @@ mod tests {
             .replace_password(b"a new password", Argon2Params::v1_default())
             .expect("replace");
         drop(session);
-        assert!(
-            unlock_with_password(&root_dir, b"a new password", 1)
-                .expect("unlock")
-                .is_unlocked()
-        );
+        assert!(unlock_with_password(&root_dir, b"a new password", 1)
+            .expect("unlock")
+            .is_unlocked());
         assert_eq!(
             rejection(unlock_with_password(&root_dir, PASSWORD, 1)),
             ChurStatus::AuthenticationFailed
