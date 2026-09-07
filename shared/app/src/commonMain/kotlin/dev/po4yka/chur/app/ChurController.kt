@@ -16,6 +16,7 @@ import dev.po4yka.chur.notes.NoteStore
 import dev.po4yka.chur.vault.LockPolicy
 import dev.po4yka.chur.vault.VaultRepository
 import dev.po4yka.chur.vault.VaultState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -562,14 +563,30 @@ class ChurController(
      *
      * `docs/ERROR_MODEL.md` keeps a private value out of a message, and the
      * boundary carries only a status, so the message is the status name.
+     *
+     * The second catch is the backstop. Every action a surface can invoke goes
+     * through here, and a platform adapter that raised something other than a
+     * [ChurFailure] would otherwise leave an uncaught exception in a coroutine
+     * and take the process with it — a crash that ends the session without the
+     * orderly lock `PLAINTEXT_LIFECYCLE.md` §8 describes, reached by tapping an
+     * ordinary settings row. `ERROR_MODEL.md` requires a platform layer to
+     * normalize before a feature sees it; this says what happens when one did
+     * not, and folds the unknown into [ChurStatus.INTERNAL_FAILURE] the same
+     * way `fromValue` folds an unrecognized code. `CancellationException` is
+     * re-thrown ahead of it, because swallowing it would break the cancellation
+     * of the scope itself.
      */
     private fun guarded(body: suspend () -> Unit) {
         scope.launch {
             try {
                 _message.value = null
                 body()
+            } catch (cancellation: CancellationException) {
+                throw cancellation
             } catch (failure: ChurFailure) {
                 _message.value = failure.status.name
+            } catch (_: Exception) {
+                _message.value = ChurStatus.INTERNAL_FAILURE.name
             }
         }
     }

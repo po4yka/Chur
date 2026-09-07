@@ -65,6 +65,9 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
+            // `ChurController` launches on `Dispatchers.Main`, so a test that
+            // drives one has to supply that dispatcher.
+            implementation(libs.kotlinx.coroutines.test)
         }
     }
 }
