@@ -1,7 +1,7 @@
 # Fuzz targets for the Chur parsers.
 #
 # `docs/assurance/FUZZING.md` §2 lists the initial Rust targets. A target lands
-# here when its subject exists; the catalog, backup, and sync targets named
+# here when its subject exists; the catalog and sync targets named
 # there are absent because their parsers are.
 #
 # This is its own workspace on purpose. libFuzzer needs a nightly toolchain and
@@ -24,6 +24,7 @@ arbitrary = { version = "1", features = ["derive"] }
 chur-core = { path = "../crates/chur-core" }
 chur-crypto = { path = "../crates/chur-crypto" }
 chur-format = { path = "../crates/chur-format" }
+chur-ffi = { path = "../crates/chur-ffi" }
 
 [[bin]]
 name = "parse_canonical_value"
@@ -91,6 +92,27 @@ bench = false
 [[bin]]
 name = "read_plaintext_range"
 path = "fuzz_targets/read_plaintext_range.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_backup_package"
+path = "fuzz_targets/parse_backup_package.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_waveform"
+path = "fuzz_targets/parse_waveform.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "validate_ffi_input"
+path = "fuzz_targets/validate_ffi_input.rs"
 test = false
 doc = false
 bench = false

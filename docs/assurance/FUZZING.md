@@ -15,7 +15,7 @@ Fuzzing targets every parser, decoder boundary, state machine, and FFI entry tha
 
 ## 2. Initial Rust targets
 
-Ten targets exist in `rust/fuzz/fuzz_targets/`, one per parser whose subject is implemented:
+Thirteen targets exist in `rust/fuzz/fuzz_targets/`, one per parser whose subject is implemented:
 
 ```text
 parse_canonical_value
@@ -28,15 +28,16 @@ parse_manifest_record
 parse_chunk_record
 parse_final_commit
 read_plaintext_range
+parse_backup_package
+parse_waveform
+validate_ffi_input
 ```
 
-Four more are named by this section and do not exist, because their parsers do not:
+Two more are named by this section and do not exist, because their parsers do not:
 
 ```text
 parse_catalog_snapshot
 apply_catalog_migration
-parse_backup_package
-validate_ffi_input
 ```
 
 A target lands with its parser. `rust/fuzz` is its own Cargo workspace: libFuzzer needs a nightly toolchain and sanitizer flags that must not reach the library build, and a fuzz binary must not enter the release dependency graph.
