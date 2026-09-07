@@ -12,13 +12,14 @@
 //! filenames across the boundary.
 
 use chur_core::{
-    ChurStatus, Error, Id, Result, bail, ensure,
-    limits::{ID_LEN, catalog as limits},
+    bail, ensure,
+    limits::{catalog as limits, ID_LEN},
+    ChurStatus, Error, Id, Result,
 };
 use chur_format::constants::{IntegritySummary, MediaClass, ObjectState};
 use rusqlite::types::Value;
 
-use crate::db::{CatalogDb, as_sqlite_integer, from_sqlite_integer, map_sqlite};
+use crate::db::{as_sqlite_integer, from_sqlite_integer, map_sqlite, CatalogDb};
 use crate::schema::{check_query_limit, generation};
 
 /// The scope a page is drawn from, §16.2.
@@ -355,6 +356,16 @@ pub fn page(db: &CatalogDb, query: &ObjectQuery) -> Result<Page> {
             ResourceLimitExceeded,
             "the search query exceeds its catalog bound"
         );
+        // An empty or whitespace-only term quotes into an empty FTS5 MATCH
+        // phrase, which SQLite refuses as a syntax error, and the refusal
+        // surfaced as INTERNAL_FAILURE. A search that names nothing to match
+        // is the caller's mistake, so it is rejected here, before any SQL
+        // runs, as INVALID_INPUT.
+        ensure!(
+            !terms.trim().is_empty(),
+            InvalidInput,
+            "the search terms name nothing to match"
+        );
     }
 
     let catalog_generation = generation(db)?;
@@ -612,12 +623,12 @@ mod tests {
     use super::*;
     use crate::db::{CatalogKey, CatalogLocation};
     use crate::model::{
-        Album, COLLECTION_POLICY_VAULT_DEFAULT, COLLECTION_STATUS_ACTIVE, Collection,
-        MetadataRevision, Object, Stream, Tag,
+        Album, Collection, MetadataRevision, Object, Stream, Tag, COLLECTION_POLICY_VAULT_DEFAULT,
+        COLLECTION_STATUS_ACTIVE,
     };
     use crate::schema::open_at_current_version;
     use crate::store;
-    use chur_crypto::{Key, Nonce, random};
+    use chur_crypto::{random, Key, Nonce};
     use chur_format::constants::StreamKind;
     use chur_format::envelope::ObjectKeyEnvelope;
 
@@ -1114,6 +1125,23 @@ mod tests {
             panic!("an over-long search query ran");
         };
         assert_eq!(error.status(), ChurStatus::ResourceLimitExceeded);
+    }
+
+    #[test]
+    fn an_empty_search_term_is_refused_as_invalid_input() {
+        let vault = vault();
+        for terms in ["", "   ", " \t\n "] {
+            let Err(error) = page(
+                &vault.db,
+                &ObjectQuery {
+                    scope: Scope::Search(String::from(terms)),
+                    ..ObjectQuery::timeline()
+                },
+            ) else {
+                panic!("an empty search term {terms:?} ran an FTS5 MATCH query");
+            };
+            assert_eq!(error.status(), ChurStatus::InvalidInput, "{terms:?}");
+        }
     }
 
     #[test]
