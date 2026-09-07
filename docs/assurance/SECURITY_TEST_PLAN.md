@@ -196,7 +196,7 @@ Thirty-one rows now name a test target rather than a section of this plan: ninet
 | SEC-021 | `chur-format` `envelope::tests::the_whole_chain_recovers_the_object_key` |
 | SEC-022 | §4 |
 | SEC-023 | `chur-catalog` `store::tests::an_activation_commits_the_object_stream_envelope_and_revision_together` |
-| SEC-024 | `chur-media` `tests/pipeline.rs::reconciliation_kills_an_import_a_crash_left_behind` |
+| SEC-024 | `chur-media` `tests/pipeline.rs::reconciliation_kills_an_import_a_crash_left_behind`; `chur-ffi` `tests/control_plane.rs::unlocking_reconciles_the_import_journal` |
 | SEC-025 | §4; §10 |
 | SEC-026 | `chur-catalog` `deletion::tests::step_two_destroys_every_envelope_and_writes_the_tombstone` |
 | SEC-027 | `chur-catalog` `paths::tests::no_path_carries_a_name_that_is_not_hexadecimal` |

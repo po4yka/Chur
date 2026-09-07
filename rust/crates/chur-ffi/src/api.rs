@@ -301,6 +301,23 @@ pub unsafe extern "C" fn chur_runtime_close(runtime: Handle) -> Status {
 
 /// Unlocks a vault and opens a session, `KEY_SLOTS.md` §8.
 ///
+/// It reconciles the import journal before the session becomes a handle.
+/// `ARCHITECTURE.md` §21.3 puts that scan after a crash, and
+/// `OBJECT_CONTAINER_V1.md` §14.4 fixes what the cleanup destroys and in
+/// which order. This is the one export that opens a session over a vault this
+/// process did not create, so it is the one place that runs: an interrupted
+/// import keeps a live `ContentKey` envelope and a partial container until
+/// the reconciliation kills them. v1 declares every interrupted import dead,
+/// because no export resumes one, although §21.3 also permits the resume of
+/// §14.3.
+///
+/// The host sees two consequences. A correct credential can return a storage
+/// status and open no session, `ERROR_MODEL.md`; that is not an
+/// authentication failure. And the reconciliation kills a live import that
+/// another session of the same vault is running, which `FFI_CONTRACT.md`
+/// §8.1 already forbids: one process opens a vault, and one runtime shares
+/// one session.
+///
 /// # Safety
 ///
 /// `request` points to a valid `ChurUnlockRequestV1` whose `secret` covers
@@ -331,7 +348,7 @@ pub unsafe extern "C" fn chur_vault_unlock(
             guard.root().clone()
         };
         let now = now_ms();
-        let session = match request.factor {
+        let mut session = match request.factor {
             1 => vault::unlock_with_password(&root, secret, now),
             2 => {
                 let phrase = core::str::from_utf8(secret).map_err(|_| {
@@ -368,6 +385,23 @@ pub unsafe extern "C" fn chur_vault_unlock(
                 "the unlock request names an unallocated factor",
             )),
         }?;
+        // `ARCHITECTURE.md` §21.3 scans the journal after a crash, and
+        // `OBJECT_CONTAINER_V1.md` §14.4 gives the cleanup its order. It runs
+        // here rather than at each call site, so no unlock path can skip it,
+        // and it runs before the session becomes a handle, so no host call
+        // reaches a vault whose journal still holds a dead transaction. The
+        // other dead form of §14.4, a temporary container with no journal
+        // record, has no sweep in v1.
+        if let Err(error) = import::reconcile(&mut session, now) {
+            // The session is not a handle yet, so no `chur_vault_lock` can
+            // reach it, and `Session` has no `Drop`. A plain drop closes the
+            // catalog through `rusqlite` alone, which discards the outcome of
+            // step 5 of `PLAINTEXT_LIFECYCLE.md` §8, and runs step 8 not at
+            // all. The lock outcome is discarded here, because the
+            // reconciliation failure is the one the host must see.
+            let _ = session.lock();
+            return Err(error);
+        }
         let handle = registry::insert(Entry::Session {
             runtime,
             session: std::sync::Mutex::new(session),

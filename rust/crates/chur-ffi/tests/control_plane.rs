@@ -694,3 +694,70 @@ fn no_error_string_carries_a_value_the_caller_supplied() {
     assert_eq!(absent, wrong);
     assert_eq!(status(absent), ChurStatus::AuthenticationFailed);
 }
+
+#[test]
+fn unlocking_reconciles_the_import_journal() {
+    // `docs/format/OBJECT_CONTAINER_V1.md` §14.4: an import that a process
+    // death interrupted holds a live `ContentKey` envelope and a partial
+    // container until an unlock reconciles it. The CLI runs the reconciliation
+    // at its own unlock, and Android and iOS reach a vault only through this
+    // export, so the export owes the same property.
+    let path = scratch();
+    let root = chur_catalog::paths::VaultRoot::new(path.clone());
+    let mut session = chur_catalog::vault::create(&root, PASSWORD, 1_700_000_000_000)
+        .expect("create")
+        .activate()
+        .expect("activate");
+    let store_id = session.object_store_id();
+    let running = chur_media::import::begin(
+        &mut session,
+        chur_media::import::SourceCapability {
+            seekable: true,
+            known_length: Some(4_096),
+            content_type_hint: String::from("image/jpeg"),
+            original_filename: Some(String::from("a.jpg")),
+            capture_time_ms: Some(1_700_000_000_000),
+        },
+        chur_media::import::CanonicalMedia {
+            media_class: chur_format::constants::MediaClass::Image,
+            width: 1_200,
+            height: 900,
+            duration_ms: 0,
+        },
+        1_700_000_000_000,
+    )
+    .expect("begin");
+    // The process died mid-import: no commit, no abandon, no lock.
+    drop(running);
+    let live = chur_catalog::journal::live(session.catalog_ref().unwrap()).unwrap();
+    assert_eq!(live.len(), 1, "the interrupted import is live on disk");
+    assert!(
+        live[0].envelope_body.is_some(),
+        "the envelope that opens the partial ciphertext is live"
+    );
+    let container = root.temporary_container(&store_id, &live[0].temp_path_id);
+    assert!(container.exists(), "the partial container is durable");
+    drop(session);
+
+    let runtime = open_runtime(&path);
+    let (code, opened) = unlock(runtime, PASSWORD, 1);
+    assert_eq!(code, OK, "the vault did not unlock");
+    assert_ne!(opened, 0);
+    assert!(
+        !container.exists(),
+        "the unlock left the partial ciphertext on disk"
+    );
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+
+    let reopened = chur_catalog::vault::unlock_with_password(&root, PASSWORD, 1_700_000_000_000)
+        .expect("unlock");
+    let catalog = reopened.catalog_ref().unwrap();
+    assert!(
+        chur_catalog::journal::live(catalog).unwrap().is_empty(),
+        "the unlock left a live transaction and its envelope in the journal"
+    );
+    assert!(
+        chur_catalog::journal::dead(catalog).unwrap().is_empty(),
+        "a reconciled transaction leaves no record behind"
+    );
+}
