@@ -11,7 +11,7 @@ use chur_sync_protocol::{
     operation::Operation,
 };
 
-use crate::api::{Status, borrow_bytes, borrow_bytes_mut, write_out};
+use crate::api::{Status, borrow_bytes, borrow_bytes_mut, borrow_large, write_out};
 use crate::panic::guard_status;
 use crate::registry::{self, Entry, Handle, Kind};
 
@@ -219,9 +219,14 @@ pub unsafe extern "C" fn chur_sharing_prepare_device(
         // SAFETY: the caller guarantees the fixed input range above.
         let recipient_device_id =
             Id::from_slice(unsafe { borrow_bytes(recipient_device_id, 16)? })?;
+        // FFI_CONTRACT.md section 6.13 admits 16 MiB of evidence, so the
+        // `ensure!` above is the operative bound; `borrow_bytes` would refuse
+        // anything over its own 64 KiB argument bound first, which makes the
+        // documented ceiling unreachable. Section 6.8's `chur_sync_stage` has
+        // the same shape.
         // SAFETY: the caller guarantees the variable input range above.
         let evidence = decode_recipient_evidence(unsafe {
-            borrow_bytes(recipient_evidence, recipient_evidence_length)?
+            borrow_large(recipient_evidence, recipient_evidence_length)?
         })?;
         let permissions = permission_profile(permissions)?;
         let fingerprint_verified = match fingerprint_verified {
@@ -400,8 +405,13 @@ pub unsafe extern "C" fn chur_sharing_accept(
             ResourceLimitExceeded,
             "the sharing acceptance bundle exceeds the ABI limit"
         );
+        // FFI_CONTRACT.md section 6.11 admits a 16 MiB bundle, so the `ensure!`
+        // above is the operative bound; `borrow_bytes` would refuse anything
+        // over its own 64 KiB argument bound first, which makes the documented
+        // ceiling unreachable. Section 6.8's `chur_sync_stage` has the same
+        // shape.
         // SAFETY: the caller guarantees the readable input range above.
-        let bytes = unsafe { borrow_bytes(bundle, bundle_length)? };
+        let bytes = unsafe { borrow_large(bundle, bundle_length)? };
         let (issuers, membership, grant, grant_operation) = decode_accept_bundle(bytes)?;
         let evidence = issuers
             .iter()

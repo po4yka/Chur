@@ -79,12 +79,14 @@ pub(crate) unsafe fn write_id(out: *mut u8, value: &Id) -> Result<()> {
     Ok(())
 }
 
-/// Borrows a caller's byte range that may hold media rather than a control
-/// value.
+/// Borrows a caller's data-plane byte range rather than a control value.
 ///
 /// The bound is the derivative bound of `docs/interop/MEDIA_PIPELINE.md` §12
 /// rather than the control-plane bound, because a screen preview is larger than
-/// any argument [`borrow_bytes`] admits and is still bounded.
+/// any argument [`borrow_bytes`] admits and is still bounded. It is the ceiling
+/// for every data-plane record, so a caller whose own contract section states a
+/// smaller one — the 16 MiB of `docs/interop/FFI_CONTRACT.md` §6.11 and §6.13,
+/// the sync response bound of §6.8 — checks that bound itself before it borrows.
 ///
 /// # Safety
 ///

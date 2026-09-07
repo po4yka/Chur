@@ -444,3 +444,48 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
     std::fs::remove_dir_all(path).expect("cleanup");
     std::fs::remove_dir_all(recipient_path).expect("cleanup recipient");
 }
+
+/// A data-plane record above the control-plane argument bound reaches the parser.
+///
+/// `FFI_CONTRACT.md` section 6.11 admits an acceptance bundle of up to 16 MiB
+/// and section 6.13 admits recipient evidence of up to 16 MiB. Both borrowed
+/// through the control-plane helper, whose own bound is 64 KiB, so every input
+/// between the two ceilings failed as `INVALID_INPUT` before it was parsed and
+/// the documented ceiling was unreachable.
+///
+/// No session is needed: in both exports the length check, the borrow and the
+/// decode all precede the registry lookup, so handle zero never reaches it. The
+/// buffer is one byte past the argument bound rather than 16 MiB, because the
+/// bound being proved is the argument one. A zeroed record decodes as version
+/// zero, so the parser answers `UNSUPPORTED_VERSION` — a status neither
+/// rejected size can produce, which is what makes the assertion discriminate:
+/// the old 64 KiB refusal is `INVALID_INPUT` and the 16 MiB refusal is
+/// `RESOURCE_LIMIT_EXCEEDED`.
+#[test]
+fn a_sharing_record_above_the_argument_bound_reaches_the_parser() {
+    let oversize = vec![0u8; 65_537];
+    let length = u32::try_from(oversize.len()).expect("length fits the ABI");
+
+    // SAFETY: the buffer outlives the call and the length describes it.
+    let accepted = unsafe { chur_sharing_accept(0, oversize.as_ptr(), length) };
+    assert_eq!(accepted, chur_core::ChurStatus::UnsupportedVersion.as_i32());
+
+    let mut destination = [0u8; 64];
+    let mut written: usize = 0;
+    // SAFETY: every pointer is to a live local and every length describes one.
+    let prepared = unsafe {
+        chur_sharing_prepare_device(
+            0,
+            [7u8; 16].as_ptr(),
+            oversize.as_ptr(),
+            length,
+            [9u8; 16].as_ptr(),
+            PermissionProfile::Read as u8,
+            0,
+            destination.as_mut_ptr(),
+            destination.len(),
+            &raw mut written,
+        )
+    };
+    assert_eq!(prepared, chur_core::ChurStatus::UnsupportedVersion.as_i32());
+}
