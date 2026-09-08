@@ -1,5 +1,6 @@
 package dev.po4yka.chur.app
 
+import dev.po4yka.chur.app.vault.ThumbnailCache
 import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.AlbumSummary
 import dev.po4yka.chur.ffi.ChurFailure
@@ -86,6 +87,20 @@ class ChurController(
     private val _message = MutableStateFlow<String?>(null)
     private val _recoveryPhrase = MutableStateFlow<String?>(null)
     private val _deviceUnlockOffered = MutableStateFlow(false)
+
+    /**
+     * The decoded-image cache of `PLAINTEXT_LIFECYCLE.md` §4, which the
+     * lock transitions below clear.
+     *
+     * It lives here rather than in a composition because a lock does not
+     * wait for a library screen: the background lock fires while the host
+     * is stopped, and a cache owned by composition would keep decoded
+     * private pixels in exactly the locked process §8 step 7 is about.
+     */
+    private val thumbnails = ThumbnailCache()
+
+    /** The cache the library renders from, cleared on every lock. */
+    val thumbnailCache: ThumbnailCache get() = thumbnails
 
     /**
      * How many activities the host launched and is still waiting on.
@@ -806,9 +821,11 @@ class ChurController(
         }
     }
 
-    private fun clearPrivateProjections() {
+    private suspend fun clearPrivateProjections() {
         // §10.3: a lock transition destroys private back-stack projections, and
-        // these flows are that projection.
+        // these flows are that projection. §4 of `PLAINTEXT_LIFECYCLE.md` and
+        // §8 step 7 add the decoded-image cache, which leaves with them.
+        thumbnails.clear()
         _page.value = ObjectPage(emptyList(), 0, 0, null)
         _albums.value = emptyList()
         _slots.value = emptyList()

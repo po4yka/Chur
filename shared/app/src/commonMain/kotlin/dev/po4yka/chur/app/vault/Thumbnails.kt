@@ -64,7 +64,7 @@ class ThumbnailCache(private val capacity: Int = DEFAULT_CAPACITY) {
     }
 
     /**
-     * Clears the cache, which lock does, §8 step 7.
+     * Clears the cache, which the controller's lock transitions do, §8 step 7.
      *
      * The generation in the key already makes a stale entry unreachable after a
      * new session opens; this is what makes it unreachable while the process is

@@ -249,12 +249,12 @@ private fun VaultRoute(controller: ChurController) {
     var selection by remember { mutableStateOf(setOf<String>()) }
     var creatingAlbum by remember { mutableStateOf(false) }
 
-    val cache = remember { ThumbnailCache() }
+    // The cache is the controller's: its lock transitions clear it whether
+    // or not this screen is composed, §4 of `PLAINTEXT_LIFECYCLE.md`. The
+    // session generation in the key is what makes a stale entry unreachable
+    // after a new session opens.
+    val cache = controller.thumbnailCache
     val generation = (vaultState as? VaultState.Unlocked)?.generation ?: 0L
-    // §4 of `PLAINTEXT_LIFECYCLE.md`: the decoded cache is cleared on lock, and
-    // the session generation is what makes a stale entry unreachable after a
-    // new session opens.
-    LaunchedEffect(generation) { cache.clear() }
 
     val importer = remember { ChurImporter(AndroidMediaCodec(context.contentResolver)) }
     val picker = rememberLauncherForActivityResult(

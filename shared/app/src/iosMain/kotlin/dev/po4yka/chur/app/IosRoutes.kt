@@ -161,12 +161,12 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     }
 
     val scope = rememberCoroutineScope()
-    val cache = remember { ThumbnailCache() }
+    // The cache is the controller's: its lock transitions clear it whether
+    // or not this screen is composed, §4 of `PLAINTEXT_LIFECYCLE.md`. The
+    // session generation in the key is what makes a stale entry unreachable
+    // after a new session opens.
+    val cache = controller.thumbnailCache
     val generation = (vaultState as? VaultState.Unlocked)?.generation ?: 0L
-    // §4 of `PLAINTEXT_LIFECYCLE.md`: the decoded cache is cleared on lock, and
-    // the session generation is what makes a stale entry unreachable after a
-    // new session opens.
-    LaunchedEffect(generation) { cache.clear() }
 
     // The tiles carry whatever the cache already holds, and a tile whose
     // thumbnail is missing loads it. §11.1 keeps the geometry stable while it
