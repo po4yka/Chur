@@ -1,6 +1,6 @@
 //! The fixed collection grant of `docs/sync/COLLECTION_GRANTS.md`.
 
-use chur_core::{ChurStatus, Error, Id, Result, ensure};
+use chur_core::{ensure, ChurStatus, Error, Id, Result};
 use chur_crypto::secret::Key;
 use chur_crypto::{commit::commit, tuple::tag};
 use chur_format::codec::{Reader, Writer};
@@ -8,9 +8,10 @@ use hpke::aead::ChaCha20Poly1305;
 use hpke::kdf::HkdfSha256;
 use hpke::kem::X25519HkdfSha256;
 use hpke::{Deserializable, Kem as KemTrait, OpModeR, OpModeS, Serializable};
+use zeroize::Zeroizing;
 
 use crate::identity::DeviceIdentity;
-use crate::operation::{DeviceSigningKey, verify_ed25519};
+use crate::operation::{verify_ed25519, DeviceSigningKey};
 
 const KEY_ID_LEN: usize = 16;
 const HPKE_PROFILE_V1: u16 = 1;
@@ -230,21 +231,27 @@ impl CollectionGrant {
                     )
                 })?;
         let context = self.context_bytes();
-        let plaintext = hpke::single_shot_open::<ChaCha20Poly1305, HkdfSha256, X25519HkdfSha256>(
-            &OpModeR::Base,
-            &recipient_private_key,
-            &encapsulated_key,
-            &grant_info(&context),
-            &self.wrapped_collection_key,
-            &grant_aad(&context),
-        )
-        .map_err(|_| {
-            Error::new(
-                ChurStatus::ObjectCorrupt,
-                "collection grant HPKE authentication failed",
+        // The HPKE plaintext is the collection key itself. It leaves the HPKE
+        // library as a heap `Vec<u8>`, so it is zeroized on every drop path —
+        // both when the key is copied out and when the length check fails —
+        // instead of staying in freed-but-unwiped memory.
+        let plaintext = Zeroizing::new(
+            hpke::single_shot_open::<ChaCha20Poly1305, HkdfSha256, X25519HkdfSha256>(
+                &OpModeR::Base,
+                &recipient_private_key,
+                &encapsulated_key,
+                &grant_info(&context),
+                &self.wrapped_collection_key,
+                &grant_aad(&context),
             )
-        })?;
-        let key: [u8; 32] = plaintext.try_into().map_err(|_| {
+            .map_err(|_| {
+                Error::new(
+                    ChurStatus::ObjectCorrupt,
+                    "collection grant HPKE authentication failed",
+                )
+            })?,
+        );
+        let key: [u8; 32] = plaintext.as_slice().try_into().map_err(|_| {
             Error::new(
                 ChurStatus::ObjectCorrupt,
                 "collection grant plaintext is not 32 bytes",
@@ -824,39 +831,33 @@ mod tests {
             let mut modified = grant.encode();
             modified[offset] ^= if offset == 148 { 0x02 } else { 0x01 };
             let modified = CollectionGrant::decode(&modified).expect("canonical grant");
-            assert!(
-                modified
-                    .open_collection_key(
-                        &recipient_vault_id,
-                        &recipient_device_id,
-                        &recipient,
-                        &sender.verifying_key(),
-                    )
-                    .is_err()
-            );
-        }
-
-        let substitute = DeviceIdentity::from_seeds([11; 32], [12; 32]);
-        assert!(
-            grant
-                .open_collection_key(
-                    &recipient_vault_id,
-                    &recipient_device_id,
-                    &substitute,
-                    &sender.verifying_key(),
-                )
-                .is_err()
-        );
-        assert!(
-            grant
+            assert!(modified
                 .open_collection_key(
                     &recipient_vault_id,
                     &recipient_device_id,
                     &recipient,
-                    &DeviceSigningKey::from_seed([13; 32]).verifying_key(),
+                    &sender.verifying_key(),
                 )
-                .is_err()
-        );
+                .is_err());
+        }
+
+        let substitute = DeviceIdentity::from_seeds([11; 32], [12; 32]);
+        assert!(grant
+            .open_collection_key(
+                &recipient_vault_id,
+                &recipient_device_id,
+                &substitute,
+                &sender.verifying_key(),
+            )
+            .is_err());
+        assert!(grant
+            .open_collection_key(
+                &recipient_vault_id,
+                &recipient_device_id,
+                &recipient,
+                &DeviceSigningKey::from_seed([13; 32]).verifying_key(),
+            )
+            .is_err());
     }
 
     #[cfg(feature = "test-vectors")]
