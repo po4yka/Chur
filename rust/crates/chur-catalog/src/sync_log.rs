@@ -3,22 +3,22 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chur_core::limits::{catalog as catalog_bounds, sync as bounds};
-use chur_core::{ChurStatus, Error, Id, Result, bail, ensure};
+use chur_core::{bail, ensure, ChurStatus, Error, Id, Result};
 use chur_crypto::{Commitment, Key, Nonce};
 use chur_sync_protocol::{
     checkpoint::{
-        Checkpoint, CheckpointHead, UNCOMPACTED_CATALOG_STATE_COMMITMENT,
-        collection_epoch_commitment,
+        collection_epoch_commitment, Checkpoint, CheckpointHead,
+        UNCOMPACTED_CATALOG_STATE_COMMITMENT,
     },
     convergence::CausalStamp,
     operation::{DeviceSigningKey, Operation},
     operation_log::{ApplyOutcome, CheckpointOutcome, ForkEvidence, ForkState, OperationLog},
     state::{DeviceStatus, MembershipState},
 };
-use rusqlite::{OptionalExtension, Transaction, params};
+use rusqlite::{params, OptionalExtension, Transaction};
 
 use crate::{
-    db::{CatalogDb, as_sqlite_integer, from_sqlite_integer, map_sqlite},
+    db::{as_sqlite_integer, from_sqlite_integer, map_sqlite, CatalogDb},
     schema::bump_generation,
 };
 
@@ -194,15 +194,27 @@ impl DurableOperationLog {
                 "the device chain is frozen after a durable fork"
             );
         }
-        let mut candidate = self.log.clone();
-        match candidate.accept(operation, membership) {
+        // The log takes the operation in place. `check_inner` runs every check
+        // before any write, so the exact inverse of one commit restores
+        // whatever the paths below refuse, and the whole-log deep clone this
+        // replaced - one per operation, over a log that holds every accepted
+        // record - is gone with its O(n^2) accept cost.
+        match self.log.accept(operation, membership) {
             Ok(ApplyOutcome::Applied) => {
-                if !gate()? {
+                let admitted = match gate() {
+                    Ok(admitted) => admitted,
+                    Err(error) => {
+                        self.log.undo_accept(operation);
+                        return Err(error);
+                    }
+                };
+                if !admitted {
+                    self.log.undo_accept(operation);
                     return Ok(ApplyOutcome::PendingCause);
                 }
                 let record = operation.encode();
                 let digest = operation.digest();
-                db.transaction(|transaction| {
+                let committed = db.transaction(|transaction| {
                     apply(transaction)?;
                     transaction
                         .execute(
@@ -245,29 +257,33 @@ impl DurableOperationLog {
                             map_sqlite(error, "the accepted head could not be written")
                         })?;
                     bump_generation(transaction)
-                })?;
-                self.log = candidate;
+                });
+                if let Err(error) = committed {
+                    // The transaction rolled back, so the durable state is
+                    // exactly the state the operation found: rebuild the log
+                    // from it rather than carry an accepted record no row
+                    // backs. This is the storage-failure path, and the replay
+                    // is its cost.
+                    *self = load(db, membership)?;
+                    return Err(error);
+                }
                 Ok(ApplyOutcome::Applied)
             }
-            // A pending outcome commits no accepted state, so the candidate
-            // differs from the log only in what the protocol learned from the
-            // record it now holds. `REVOCATION.md` §7 places a revoked device's
-            // record by walking its branch back from the revocation point
-            // through held records, so keeping the candidate is what lets the
-            // next inbox pass admit the tail instead of holding it for ever.
-            Ok(outcome) => {
-                self.log = candidate;
-                Ok(outcome)
-            }
+            // A pending outcome commits no accepted state, so the log differs
+            // from before only in what the protocol learned from the record it
+            // now holds. `REVOCATION.md` §7 places a revoked device's record by
+            // walking its branch back from the revocation point through held
+            // records, so keeping that learning is what lets the next inbox
+            // pass admit the tail instead of holding it for ever.
+            Ok(outcome) => Ok(outcome),
             Err(error) if error.status() == ChurStatus::SyncChainFork => {
-                let evidence = candidate.fork(operation.device_id()).ok_or_else(|| {
+                let evidence = self.log.fork(operation.device_id()).ok_or_else(|| {
                     Error::new(
                         ChurStatus::InternalFailure,
                         "the protocol reported a fork without evidence",
                     )
                 })?;
                 persist_fork(db, operation.device_id(), evidence, None)?;
-                self.log = candidate;
                 self.forked_devices.insert(*operation.device_id());
                 Err(error)
             }
@@ -284,28 +300,30 @@ impl DurableOperationLog {
         own: bool,
         now_ms: u64,
     ) -> Result<CheckpointOutcome> {
-        let mut candidate = self.log.clone();
-        match candidate.accept_checkpoint(checkpoint, membership) {
+        let commitment = checkpoint.commitment();
+        // The own-checkpoint rule is checked before the protocol sees the
+        // checkpoint, so a refused checkpoint leaves the log where it was and
+        // the trial clone this ordering replaced is gone with it.
+        let existing_own: Option<Vec<u8>> = db
+            .connection()
+            .query_row(
+                "SELECT commitment FROM sync_checkpoints
+                  WHERE issuer_device_id = ?1 AND own = 1",
+                [checkpoint.issuer_device_id().as_bytes().as_slice()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| map_sqlite(error, "the own checkpoint could not be read"))?;
+        ensure!(
+            own || existing_own
+                .as_deref()
+                .is_none_or(|stored| stored == commitment),
+            SyncHeadRollback,
+            "a remote checkpoint cannot replace the latest own checkpoint"
+        );
+        match self.log.accept_checkpoint(checkpoint, membership) {
             Ok(outcome) => {
-                let commitment = checkpoint.commitment();
-                let existing_own: Option<Vec<u8>> = db
-                    .connection()
-                    .query_row(
-                        "SELECT commitment FROM sync_checkpoints
-                          WHERE issuer_device_id = ?1 AND own = 1",
-                        [checkpoint.issuer_device_id().as_bytes().as_slice()],
-                        |row| row.get(0),
-                    )
-                    .optional()
-                    .map_err(|error| map_sqlite(error, "the own checkpoint could not be read"))?;
-                ensure!(
-                    own || existing_own
-                        .as_deref()
-                        .is_none_or(|stored| stored == commitment),
-                    SyncHeadRollback,
-                    "a remote checkpoint cannot replace the latest own checkpoint"
-                );
-                db.transaction(|transaction| {
+                let committed = db.transaction(|transaction| {
                     transaction
                         .execute(
                             "INSERT INTO sync_checkpoints
@@ -331,7 +349,7 @@ impl DurableOperationLog {
                             map_sqlite(error, "the checkpoint could not be written")
                         })?;
                     for head in checkpoint.heads() {
-                        let Some((sequence, digest)) = candidate.floor(head.device_id()) else {
+                        let Some((sequence, digest)) = self.log.floor(head.device_id()) else {
                             continue;
                         };
                         transaction
@@ -374,8 +392,14 @@ impl DurableOperationLog {
                         );
                     }
                     bump_generation(transaction)
-                })?;
-                self.log = candidate;
+                });
+                if let Err(error) = committed {
+                    // As in `accept_gated_with`: the transaction rolled back,
+                    // so the durable state is the state the checkpoint found,
+                    // and the log is rebuilt from it.
+                    *self = load(db, membership)?;
+                    return Err(error);
+                }
                 Ok(outcome)
             }
             Err(error) if error.status() == ChurStatus::SyncChainFork => {
@@ -383,14 +407,14 @@ impl DurableOperationLog {
                     .heads()
                     .iter()
                     .map(|head| head.device_id())
-                    .find(|device_id| candidate.fork(device_id).is_some())
+                    .find(|device_id| self.log.fork(device_id).is_some())
                     .ok_or_else(|| {
                         Error::new(
                             ChurStatus::InternalFailure,
                             "the protocol reported a checkpoint fork without evidence",
                         )
                     })?;
-                let evidence = candidate.fork(device_id).ok_or_else(|| {
+                let evidence = self.log.fork(device_id).ok_or_else(|| {
                     Error::new(
                         ChurStatus::InternalFailure,
                         "the protocol reported a checkpoint fork without evidence",
@@ -408,7 +432,6 @@ impl DurableOperationLog {
                     None
                 };
                 persist_fork(db, device_id, evidence, fallback.as_deref())?;
-                self.log = candidate;
                 self.forked_devices.insert(*device_id);
                 Err(error)
             }
@@ -1064,11 +1087,11 @@ mod tests {
     use super::*;
     use crate::{
         db::{CatalogKey, CatalogLocation},
-        model::{COLLECTION_POLICY_VAULT_DEFAULT, COLLECTION_STATUS_ACTIVE, Collection},
+        model::{Collection, COLLECTION_POLICY_VAULT_DEFAULT, COLLECTION_STATUS_ACTIVE},
         schema::open_at_current_version,
         store, sync_membership,
     };
-    use chur_crypto::{Key, Nonce, random};
+    use chur_crypto::{random, Key, Nonce};
     use chur_sync_protocol::{
         checkpoint::{Checkpoint, CheckpointHead},
         membership::{EnrollmentRecord, RevocationRecord},
@@ -1171,11 +1194,9 @@ mod tests {
             records_after(&db, &id(3), 1).expect("tail outbound page"),
             vec![second.encode()]
         );
-        assert!(
-            records_after(&db, &id(3), 2)
-                .expect("empty outbound page")
-                .is_empty()
-        );
+        assert!(records_after(&db, &id(3), 2)
+            .expect("empty outbound page")
+            .is_empty());
     }
 
     #[test]
@@ -1246,12 +1267,44 @@ mod tests {
         });
         assert!(outcome.is_err());
         assert!(log.head(&id(3)).is_none());
-        assert!(
-            load(&db, &membership)
-                .expect("restore")
-                .head(&id(3))
-                .is_none()
+        assert!(load(&db, &membership)
+            .expect("restore")
+            .head(&id(3))
+            .is_none());
+    }
+
+    #[test]
+    fn a_gated_refusal_leaves_no_accepted_trace_and_the_reoffer_applies() {
+        let (mut db, membership, key) = setup();
+        let mut log = load(&db, &membership).expect("empty log");
+        let first = operation(&key, 1, [0; 32], 5);
+        assert_eq!(
+            log.accept_gated_with(&mut db, &first, &membership, || Ok(false), |_| Ok(()))
+                .expect("refused"),
+            ApplyOutcome::PendingCause
         );
+        assert!(log.head(&id(3)).is_none());
+        // The undo returned the log to the state the record found, so the
+        // sequence above it is a gap again rather than an accepted head, and
+        // the same sequence can carry a different record once the gate admits.
+        let second = operation(&key, 2, first.digest(), 6);
+        assert_eq!(
+            log.accept_gated_with(&mut db, &second, &membership, || Ok(false), |_| Ok(()))
+                .expect("gap"),
+            ApplyOutcome::PendingGap
+        );
+        assert_eq!(
+            log.accept_gated_with(&mut db, &first, &membership, || Ok(true), |_| Ok(()))
+                .expect("admitted"),
+            ApplyOutcome::Applied
+        );
+        assert_eq!(
+            log.accept_gated_with(&mut db, &second, &membership, || Ok(true), |_| Ok(()))
+                .expect("admitted tail"),
+            ApplyOutcome::Applied
+        );
+        let restored = load(&db, &membership).expect("restore");
+        assert_eq!(restored.head(&id(3)), Some((2, second.digest())));
     }
 
     #[test]
@@ -1340,25 +1393,22 @@ mod tests {
         let first = operation(&key, 1, [0; 32], 5);
         log.accept_with(&mut db, &first, &membership, |_| Ok(()))
             .expect("first");
-        assert!(
-            !log.own_checkpoint_covers_current_heads(&db)
-                .expect("no checkpoint")
-        );
+        assert!(!log
+            .own_checkpoint_covers_current_heads(&db)
+            .expect("no checkpoint"));
         let current = checkpoint(&key, 1, first.digest(), &membership);
         log.accept_checkpoint(&mut db, &current, &membership, true, 9)
             .expect("current checkpoint");
-        assert!(
-            log.own_checkpoint_covers_current_heads(&db)
-                .expect("covered")
-        );
+        assert!(log
+            .own_checkpoint_covers_current_heads(&db)
+            .expect("covered"));
 
         let second = operation(&key, 2, first.digest(), 6);
         log.accept_with(&mut db, &second, &membership, |_| Ok(()))
             .expect("second");
-        assert!(
-            !log.own_checkpoint_covers_current_heads(&db)
-                .expect("stale checkpoint")
-        );
+        assert!(!log
+            .own_checkpoint_covers_current_heads(&db)
+            .expect("stale checkpoint"));
     }
 
     #[test]
@@ -1405,10 +1455,9 @@ mod tests {
         );
         assert_eq!(checkpoint.heads().len(), 1);
         assert_eq!(checkpoint.heads()[0].operation_digest(), &first.digest());
-        assert!(
-            log.own_checkpoint_covers_current_heads(&db)
-                .expect("coverage")
-        );
+        assert!(log
+            .own_checkpoint_covers_current_heads(&db)
+            .expect("coverage"));
     }
 
     #[test]

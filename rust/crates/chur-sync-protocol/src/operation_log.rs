@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use chur_core::{ChurStatus, Error, Id, Result, ensure};
+use chur_core::{bail, ensure, ChurStatus, Error, Id, Result};
 use chur_crypto::{Commitment, Key, Nonce};
 
 use crate::{
@@ -181,9 +181,8 @@ impl OperationLog {
             plaintext,
         )?
         .sign(signing_key);
-        let mut candidate = self.clone();
         ensure!(
-            candidate.accept(&operation, membership)? == ApplyOutcome::Applied,
+            self.check_inner(&operation, membership, None)? == ApplyOutcome::Applied,
             SyncHeadRollback,
             "local operation chain is not ready to advance"
         );
@@ -297,37 +296,36 @@ impl OperationLog {
         //
         // A revocation point is different. `REVOCATION.md` §7 accepts a record
         // at or below the point only when the chain forward from it reaches
-        // `final_accepted_operation_digest`, and `accept_inner` cannot see that:
+        // `final_accepted_operation_digest`, and `check_inner` cannot see that:
         // it looks backwards, and a record at sequence one needs no predecessor
         // at all. A revoked device keeps its signing key, so without the forward
         // condition it can author a fresh branch below the point that the issuer
-        // never saw and no other rule refuses. The candidate below therefore
-        // holds a record it cannot place on the pinned branch, while it still
-        // learns the branch from every record it holds.
+        // never saw and no other rule refuses. The path below therefore takes a
+        // record it cannot place on the pinned branch as branch learning alone,
+        // through the received-record cache and not through accepted state.
         match device.status() {
             DeviceStatus::Active => self.accept_inner(operation, membership, None),
             DeviceStatus::Revoked { sequence, digest } => {
                 let pinned = self.revoked_branch_holds(operation, sequence, &digest);
-                let mut candidate = self.clone();
-                match candidate.accept_inner(operation, membership, Some((sequence, digest))) {
-                    // `accept_inner` verified the signature before it reached
-                    // this outcome, so the held record is authentic and its own
-                    // digest names the step it contributes to the branch.
+                match self.check_inner(operation, membership, Some((sequence, digest))) {
+                    // `check_inner` verified the signature before it reached
+                    // this outcome, so the held record is authentic and its
+                    // own digest names the step it contributes to the branch.
                     Ok(ApplyOutcome::Applied) if !pinned => {
                         self.note_revoked_link(operation);
                         Ok(ApplyOutcome::PendingGap)
                     }
                     Ok(outcome) => {
-                        *self = candidate;
+                        if outcome == ApplyOutcome::Applied {
+                            self.commit_inner(operation);
+                        }
                         self.note_revoked_link(operation);
                         Ok(outcome)
                     }
-                    Err(error) => {
-                        if error.status() == ChurStatus::SyncChainFork {
-                            *self = candidate;
-                        }
-                        Err(error)
+                    Err(error) if error.status() == ChurStatus::SyncChainFork => {
+                        return self.freeze(operation)
                     }
+                    Err(error) => Err(error),
                 }
             }
         }
@@ -373,80 +371,73 @@ impl OperationLog {
             ));
         }
 
-        let mut candidate = self.clone();
-        let mut outcome = CheckpointOutcome::Unchanged;
+        // One pure pass names every floor the checkpoint raises and catches
+        // every conflict before any state moves. A checkpoint that fails
+        // therefore changes nothing, and one that succeeds changes exactly
+        // the floors and the issuer commitment, which is what lets the
+        // durable layer take the outcome in place instead of trial-cloning
+        // the whole log per checkpoint.
+        let mut pending: BTreeMap<Id, AcceptedHead> = BTreeMap::new();
+        let mut raised = false;
         for checkpoint_head in checkpoint.heads() {
             ensure!(
                 membership.device(checkpoint_head.device_id()).is_some(),
                 AuthenticationFailed,
                 "checkpoint names an unknown device"
             );
+            let device_id = *checkpoint_head.device_id();
             let offered = AcceptedHead {
                 sequence: checkpoint_head.device_sequence(),
                 digest: *checkpoint_head.operation_digest(),
             };
             if matches!(
-                candidate
-                    .accepted
-                    .get(&(*checkpoint_head.device_id(), offered.sequence)),
+                self.accepted.get(&(device_id, offered.sequence)),
                 Some(record) if record.digest != offered.digest
             ) {
-                return self.reject_checkpoint_fork(
-                    candidate,
-                    checkpoint_head.device_id(),
-                    checkpoint,
-                );
+                return self.reject_checkpoint_fork(device_id, checkpoint);
             }
-            if let Some(current) = candidate.floors.get(checkpoint_head.device_id()) {
+            let floor = pending
+                .get(&device_id)
+                .or_else(|| self.floors.get(&device_id));
+            if let Some(current) = floor {
                 if offered.sequence < current.sequence {
                     continue;
                 }
                 if offered.sequence == current.sequence {
                     if offered.digest != current.digest {
-                        return self.reject_checkpoint_fork(
-                            candidate,
-                            checkpoint_head.device_id(),
-                            checkpoint,
-                        );
+                        return self.reject_checkpoint_fork(device_id, checkpoint);
                     }
                     continue;
                 }
             }
-            if let Some(current) = candidate.heads.get(checkpoint_head.device_id()) {
+            if let Some(current) = self.heads.get(&device_id) {
                 if offered.sequence < current.sequence {
                     continue;
                 }
                 if offered.sequence == current.sequence {
                     if offered.digest != current.digest {
-                        return self.reject_checkpoint_fork(
-                            candidate,
-                            checkpoint_head.device_id(),
-                            checkpoint,
-                        );
+                        return self.reject_checkpoint_fork(device_id, checkpoint);
                     }
                     continue;
                 }
             }
-            candidate
-                .floors
-                .insert(*checkpoint_head.device_id(), offered);
-            outcome = CheckpointOutcome::Raised;
+            pending.insert(device_id, offered);
+            raised = true;
         }
+        self.floors.extend(pending);
         // Retain the latest checkpoint, not the last offered one: floors only
         // move up, so a replayed older checkpoint raises nothing and must not
         // displace the commitment a fresher checkpoint installed - a regressed
         // commitment is what breaks fork reporting against the issuer.
-        if outcome == CheckpointOutcome::Raised
-            || !candidate
-                .checkpoints
-                .contains_key(checkpoint.issuer_device_id())
-        {
-            candidate
-                .checkpoints
+        if raised || !self.checkpoints.contains_key(checkpoint.issuer_device_id()) {
+            self.checkpoints
                 .insert(*checkpoint.issuer_device_id(), checkpoint.commitment());
         }
-        *self = candidate;
-        Ok(outcome)
+        Ok(if raised {
+            CheckpointOutcome::Raised
+        } else {
+            CheckpointOutcome::Unchanged
+        })
     }
 
     /// Establishes a new device's first freshness floor from its enrollment.
@@ -667,6 +658,35 @@ impl OperationLog {
         membership: &MembershipState,
         cutoff: Option<(u64, Commitment)>,
     ) -> Result<ApplyOutcome> {
+        match self.check_inner(operation, membership, cutoff) {
+            Ok(outcome) => {
+                if outcome == ApplyOutcome::Applied {
+                    self.commit_inner(operation);
+                }
+                Ok(outcome)
+            }
+            Err(error) if error.status() == ChurStatus::SyncChainFork => {
+                return self.freeze(operation)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Validates one offered operation against the accepted log, §4, and
+    /// touches nothing.
+    ///
+    /// Every check precedes every write, which is what lets the durable layer
+    /// take an accepted operation in place and undo the commit it could not
+    /// persist, and what lets [`Self::author`] trial an operation without
+    /// cloning the log. A conflict returns a bare
+    /// [`ChurStatus::SyncChainFork`]; a caller that keeps state turns it into
+    /// evidence with [`Self::freeze`], and one that does not lets it bubble.
+    fn check_inner(
+        &self,
+        operation: &Operation,
+        membership: &MembershipState,
+        cutoff: Option<(u64, Commitment)>,
+    ) -> Result<ApplyOutcome> {
         ensure!(
             operation.vault_id() == membership.vault_id(),
             AuthenticationFailed,
@@ -701,7 +721,10 @@ impl OperationLog {
                 "operation is above the accepted revocation point"
             );
             if operation.device_sequence() == sequence && digest != pinned_digest {
-                return self.freeze(operation);
+                bail!(
+                    SyncChainFork,
+                    "signed operation conflicts with the accepted device chain"
+                );
             }
         }
 
@@ -710,12 +733,18 @@ impl OperationLog {
             if digest == accepted.digest {
                 return Ok(ApplyOutcome::Duplicate);
             }
-            return self.freeze(operation);
+            bail!(
+                SyncChainFork,
+                "signed operation conflicts with the accepted device chain"
+            );
         }
         if self.floors.get(operation.device_id()).is_some_and(|floor| {
             operation.device_sequence() == floor.sequence && digest != floor.digest
         }) {
-            return self.freeze(operation);
+            bail!(
+                SyncChainFork,
+                "signed operation conflicts with the accepted device chain"
+            );
         }
         ensure!(
             self.operation_ids
@@ -735,7 +764,10 @@ impl OperationLog {
                 return Ok(ApplyOutcome::PendingGap);
             }
             if operation.previous_operation_hash() != &head.digest {
-                return self.freeze(operation);
+                bail!(
+                    SyncChainFork,
+                    "signed operation conflicts with the accepted device chain"
+                );
             }
         } else if operation.device_sequence() != 1 {
             return Ok(ApplyOutcome::PendingGap);
@@ -768,9 +800,23 @@ impl OperationLog {
                 return Ok(ApplyOutcome::PendingCause);
             }
         }
-        let bytes = operation.encode();
-        self.accepted
-            .insert(record_key, AcceptedRecord { digest, bytes });
+        Ok(ApplyOutcome::Applied)
+    }
+
+    /// Commits one operation [`Self::check_inner`] has just accepted.
+    ///
+    /// A commit only appends: one accepted record, one operation identifier,
+    /// and one head that replaces exactly the predecessor the operation
+    /// chains to. That shape is what makes [`Self::undo_accept`] exact.
+    fn commit_inner(&mut self, operation: &Operation) {
+        let digest = operation.digest();
+        self.accepted.insert(
+            (*operation.device_id(), operation.device_sequence()),
+            AcceptedRecord {
+                digest,
+                bytes: operation.encode(),
+            },
+        );
         self.operation_ids.insert(*operation.operation_id(), digest);
         self.heads.insert(
             *operation.device_id(),
@@ -779,7 +825,48 @@ impl OperationLog {
                 digest,
             },
         );
-        Ok(ApplyOutcome::Applied)
+    }
+
+    /// Exactly undoes the commit of one operation the caller did not, or no
+    /// longer can, persist or admit.
+    ///
+    /// The durable layer takes an accepted operation in before its catalog
+    /// transaction, so a gate that refuses the record and a transaction that
+    /// fails both have to give the log back the state the operation found.
+    /// The inverse is exact because [`Self::commit_inner`] only appends: the
+    /// accepted record and the operation identifier are removed by key, and
+    /// the head returns to the predecessor the operation itself chains to, or
+    /// disappears when the operation was the device's first. The contract is
+    /// that the last commit for this exact operation is the one being undone,
+    /// which the debug assertion states; anything else is a caller bug.
+    /// A [`Self::note_revoked_link`] learning is a received-record cache and
+    /// not accepted state, so it survives the undo.
+    pub fn undo_accept(&mut self, operation: &Operation) {
+        let device_id = *operation.device_id();
+        let sequence = operation.device_sequence();
+        debug_assert_eq!(
+            self.accepted
+                .get(&(device_id, sequence))
+                .map(|record| record.digest),
+            Some(operation.digest()),
+            "undo_accept names an operation that was not committed"
+        );
+        self.accepted.remove(&(device_id, sequence));
+        self.operation_ids.remove(operation.operation_id());
+        match sequence.checked_sub(1) {
+            None | Some(0) => {
+                self.heads.remove(&device_id);
+            }
+            Some(previous) => {
+                self.heads.insert(
+                    device_id,
+                    AcceptedHead {
+                        sequence: previous,
+                        digest: *operation.previous_operation_hash(),
+                    },
+                );
+            }
+        }
     }
 
     fn freeze(&mut self, operation: &Operation) -> Result<ApplyOutcome> {
@@ -890,25 +977,26 @@ impl OperationLog {
 
     fn reject_checkpoint_fork(
         &mut self,
-        mut candidate: Self,
-        device_id: &Id,
+        device_id: Id,
         checkpoint: &Checkpoint,
     ) -> Result<CheckpointOutcome> {
+        // The pure pass that names this rejection has moved no state, so the
+        // accepted records this log holds are exactly the ones the checkpoint
+        // conflicts against.
         let accepted_record = checkpoint
             .heads()
             .iter()
-            .find(|head| head.device_id() == device_id)
-            .and_then(|head| self.accepted.get(&(*device_id, head.device_sequence())))
+            .find(|head| *head.device_id() == device_id)
+            .and_then(|head| self.accepted.get(&(device_id, head.device_sequence())))
             .map_or_else(Vec::new, |record| record.bytes.clone());
-        candidate.forks.insert(
-            *device_id,
+        self.forks.insert(
+            device_id,
             ForkEvidence {
                 state: ForkState::Detected,
                 accepted_record,
                 conflicting_record: checkpoint.encode(),
             },
         );
-        *self = candidate;
         Err(Error::new(
             ChurStatus::SyncChainFork,
             "checkpoint conflicts with accepted device history",
@@ -1094,6 +1182,37 @@ mod tests {
             ChurStatus::AuthenticationFailed
         );
         assert_eq!(log.head(&id(2)), Some((1, first.digest())));
+    }
+
+    #[test]
+    fn an_undo_makes_room_for_a_different_record_at_the_same_sequence() {
+        let key = DeviceSigningKey::from_seed([3; 32]);
+        let enrollment = EnrollmentRecord::initial(id(1), id(2), key.verifying_key(), [4; 32])
+            .expect("enrollment")
+            .sign(&key);
+        let membership = MembershipState::bootstrap(&enrollment).expect("membership");
+        let first = operation(&key, 1, [0; 32], 5);
+        let mut log = OperationLog::new();
+        assert!(log.accept(&first, &membership).expect("first") == ApplyOutcome::Applied);
+
+        // The durable layer takes an applied operation in before its catalog
+        // transaction, so a gate refusal undoes the commit, and the device may
+        // then offer a different record at the same sequence against the same
+        // predecessor.
+        let refused = operation(&key, 2, first.digest(), 6);
+        assert!(log.accept(&refused, &membership).expect("refused") == ApplyOutcome::Applied);
+        log.undo_accept(&refused);
+        assert_eq!(log.head(&id(2)), Some((1, first.digest())));
+
+        let admitted = operation(&key, 2, first.digest(), 7);
+        assert!(log.accept(&admitted, &membership).expect("admitted") == ApplyOutcome::Applied);
+        assert_eq!(log.head(&id(2)), Some((2, admitted.digest())));
+
+        // The inverse is exact down to a device's first record, whose commit
+        // also created the head the undo removes.
+        log.undo_accept(&admitted);
+        log.undo_accept(&first);
+        assert_eq!(log.head(&id(2)), None);
     }
 
     #[test]
