@@ -3,12 +3,12 @@ package dev.po4yka.chur.core.platformkeys
 import dev.po4yka.chur.core.model.ChurStatus
 import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
-import kotlinx.cinterop.addressOf
-import kotlinx.cinterop.usePinned
 import kotlinx.cinterop.reinterpret
+import kotlinx.cinterop.usePinned
 import kotlinx.cinterop.value
 import platform.CoreFoundation.CFDictionaryCreateMutable
 import platform.CoreFoundation.CFDictionarySetValue
@@ -38,9 +38,9 @@ import platform.Security.kSecClass
 import platform.Security.kSecClassGenericPassword
 import platform.Security.kSecMatchLimit
 import platform.Security.kSecMatchLimitOne
+import platform.Security.kSecRandomDefault
 import platform.Security.kSecReturnData
 import platform.Security.kSecValueData
-import platform.Security.kSecRandomDefault
 import platform.posix.memcpy
 
 /**
@@ -56,7 +56,9 @@ import platform.posix.memcpy
  * its own ADR. This is 0x0001.
  */
 @OptIn(ExperimentalForeignApi::class)
-public actual class DeviceSlot public actual constructor(identifier: ByteArray) {
+public actual class DeviceSlot public actual constructor(
+    identifier: ByteArray,
+) {
     private val account: String = platformAlias(identifier)
 
     /**
@@ -70,6 +72,11 @@ public actual class DeviceSlot public actual constructor(identifier: ByteArray) 
      * The item is `WhenUnlockedThisDeviceOnly`, so it never enters an encrypted
      * backup or another device, which is why `KEY_SLOTS.md` section 10 marks
      * this family not portable.
+     *
+     * The secret is zeroized on every exit, and every Core Foundation object
+     * the call creates is released on every exit: a provision that fails at
+     * the access-control object, at the query, or at `SecItemAdd` leaves no
+     * copy of the secret and no retained object behind.
      */
     public actual fun provision(policy: DeviceSlotPolicy) {
         if (isProvisioned()) {
@@ -79,56 +86,71 @@ public actual class DeviceSlot public actual constructor(identifier: ByteArray) 
             )
         }
         val secret = randomBytes(SECRET_BYTES)
-        val flags = when (policy) {
-            DeviceSlotPolicy.CONVENIENT -> kSecAccessControlUserPresence
-            DeviceSlotPolicy.STRICT -> kSecAccessControlBiometryCurrentSet
-        }
-        memScoped {
-            val error = alloc<CFTypeRefVar>()
-            val access = SecAccessControlCreateWithFlags(
-                kCFAllocatorDefault,
-                kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-                flags,
-                error.ptr.reinterpret(),
-            ) ?: throw DeviceSlotException(
-                ChurStatus.PLATFORM_KEY_UNAVAILABLE,
-                "the device offers no factor for the requested policy",
-            )
-
-            val query = newQuery()
-            CFDictionarySetValue(query, kSecAttrAccessControl, access)
-            val data = CFBridgingRetain(secret.toNSData())
-            CFDictionarySetValue(query, kSecValueData, data)
-            val status = SecItemAdd(query, null)
-            CFRelease(data)
-            CFRelease(access)
-            CFRelease(query)
-            secret.fill(0)
-            if (status != errSecSuccess) {
-                throw DeviceSlotException(
-                    ChurStatus.PLATFORM_KEY_UNAVAILABLE,
-                    "the Keychain refused to store a slot secret",
-                )
+        try {
+            val flags =
+                when (policy) {
+                    DeviceSlotPolicy.CONVENIENT -> kSecAccessControlUserPresence
+                    DeviceSlotPolicy.STRICT -> kSecAccessControlBiometryCurrentSet
+                }
+            memScoped {
+                val error = alloc<CFTypeRefVar>()
+                val access =
+                    SecAccessControlCreateWithFlags(
+                        kCFAllocatorDefault,
+                        kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+                        flags,
+                        error.ptr.reinterpret(),
+                    ) ?: run {
+                        // The failed call leaves its `CFError` where `error` points,
+                        // and the object is ours to release.
+                        error.value?.let { CFRelease(it) }
+                        throw DeviceSlotException(
+                            ChurStatus.PLATFORM_KEY_UNAVAILABLE,
+                            "the device offers no factor for the requested policy",
+                        )
+                    }
+                try {
+                    withKeychainQuery(
+                        { query -> CFDictionarySetValue(query, kSecAttrAccessControl, access) },
+                    ) { query ->
+                        val data = CFBridgingRetain(secret.toNSData())
+                        try {
+                            CFDictionarySetValue(query, kSecValueData, data)
+                            val status = SecItemAdd(query, null)
+                            if (status != errSecSuccess) {
+                                throw DeviceSlotException(
+                                    ChurStatus.PLATFORM_KEY_UNAVAILABLE,
+                                    "the Keychain refused to store a slot secret",
+                                )
+                            }
+                        } finally {
+                            CFRelease(data)
+                        }
+                    }
+                } finally {
+                    CFRelease(access)
+                }
             }
+        } finally {
+            secret.fill(0)
         }
     }
 
     public actual fun isProvisioned(): Boolean {
-        val query = newQuery()
-        val status = memScoped {
-            val result = alloc<CFTypeRefVar>()
-            val code = SecItemCopyMatching(query, result.ptr)
-            result.value?.let { CFRelease(it) }
-            code
-        }
-        CFRelease(query)
+        val status =
+            withKeychainQuery({ }) { query ->
+                memScoped {
+                    val result = alloc<CFTypeRefVar>()
+                    val code = SecItemCopyMatching(query, result.ptr)
+                    result.value?.let { CFRelease(it) }
+                    code
+                }
+            }
         return status == errSecSuccess
     }
 
     public actual fun destroy() {
-        val query = newQuery()
-        val status = SecItemDelete(query)
-        CFRelease(query)
+        val status = withKeychainQuery({ }) { query -> SecItemDelete(query) }
         if (status != errSecSuccess && status != errSecItemNotFound) {
             throw DeviceSlotException(
                 ChurStatus.PLATFORM_KEY_UNAVAILABLE,
@@ -149,32 +171,43 @@ public actual class DeviceSlot public actual constructor(identifier: ByteArray) 
      * when the factor is absent or the user did not authorize.
      */
     public fun releaseSecret(): ByteArray {
-        val query = newQuery()
-        CFDictionarySetValue(query, kSecReturnData, kCFBooleanTrue)
-        CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitOne)
-        val bytes = memScoped {
-            val result = alloc<CFTypeRefVar>()
-            val status = SecItemCopyMatching(query, result.ptr)
-            when (status) {
-                errSecSuccess -> {
-                    val data = CFBridgingRelease(result.value) as? NSData
-                        ?: throw DeviceSlotException(
-                            ChurStatus.PLATFORM_KEY_UNAVAILABLE,
-                            "the Keychain returned no slot secret",
-                        )
-                    data.toByteArray()
+        val bytes =
+            withKeychainQuery(
+                { query ->
+                    CFDictionarySetValue(query, kSecReturnData, kCFBooleanTrue)
+                    CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitOne)
+                },
+            ) { query ->
+                memScoped {
+                    val result = alloc<CFTypeRefVar>()
+                    val status = SecItemCopyMatching(query, result.ptr)
+                    when (status) {
+                        errSecSuccess -> {
+                            val data =
+                                CFBridgingRelease(result.value) as? NSData
+                                    ?: throw DeviceSlotException(
+                                        ChurStatus.PLATFORM_KEY_UNAVAILABLE,
+                                        "the Keychain returned no slot secret",
+                                    )
+                            data.toByteArray()
+                        }
+
+                        errSecItemNotFound -> {
+                            throw DeviceSlotException(
+                                ChurStatus.PLATFORM_KEY_INVALIDATED,
+                                "the Keychain no longer holds this slot secret",
+                            )
+                        }
+
+                        else -> {
+                            throw DeviceSlotException(
+                                ChurStatus.PLATFORM_KEY_UNAVAILABLE,
+                                "the Keychain refused to release a slot secret",
+                            )
+                        }
+                    }
                 }
-                errSecItemNotFound -> throw DeviceSlotException(
-                    ChurStatus.PLATFORM_KEY_INVALIDATED,
-                    "the Keychain no longer holds this slot secret",
-                )
-                else -> throw DeviceSlotException(
-                    ChurStatus.PLATFORM_KEY_UNAVAILABLE,
-                    "the Keychain refused to release a slot secret",
-                )
             }
-        }
-        CFRelease(query)
         if (bytes.size != SECRET_BYTES) {
             bytes.fill(0)
             throw DeviceSlotException(
@@ -185,23 +218,46 @@ public actual class DeviceSlot public actual constructor(identifier: ByteArray) 
         return bytes
     }
 
-    private fun newQuery(): CFMutableDictionaryRef {
-        val query = CFDictionaryCreateMutable(kCFAllocatorDefault, 0, null, null)
-            ?: throw DeviceSlotException(
-                ChurStatus.INTERNAL_FAILURE,
-                "could not allocate a Keychain query",
-            )
-        CFDictionarySetValue(query, kSecClass, kSecClassGenericPassword)
-        CFDictionarySetValue(query, kSecAttrService, CFBridgingRetain(SERVICE))
-        CFDictionarySetValue(query, kSecAttrAccount, CFBridgingRetain(account))
-        return query
+    /**
+     * Runs [body] with a Keychain query, releasing everything it holds.
+     *
+     * The dictionary is created with no call-backs, so it owns nothing: the
+     * service and account values this bridges retain a `+1` that stays ours,
+     * and the release order here — values first, dictionary last — is what
+     * leaves neither alive after the call. [configure] runs inside the `try`,
+     * so a throw from any step releases the same set.
+     */
+    private inline fun <T> withKeychainQuery(
+        configure: (CFMutableDictionaryRef) -> Unit,
+        body: (CFMutableDictionaryRef) -> T,
+    ): T {
+        val query =
+            CFDictionaryCreateMutable(kCFAllocatorDefault, 0, null, null)
+                ?: throw DeviceSlotException(
+                    ChurStatus.INTERNAL_FAILURE,
+                    "could not allocate a Keychain query",
+                )
+        val service = CFBridgingRetain(SERVICE)
+        val account = CFBridgingRetain(account)
+        try {
+            CFDictionarySetValue(query, kSecClass, kSecClassGenericPassword)
+            CFDictionarySetValue(query, kSecAttrService, service)
+            CFDictionarySetValue(query, kSecAttrAccount, account)
+            configure(query)
+            return body(query)
+        } finally {
+            CFRelease(account)
+            CFRelease(service)
+            CFRelease(query)
+        }
     }
 
     private fun randomBytes(count: Int): ByteArray {
         val out = ByteArray(count)
-        val status = out.usePinned { pinned ->
-            SecRandomCopyBytes(kSecRandomDefault, count.toULong(), pinned.addressOf(0))
-        }
+        val status =
+            out.usePinned { pinned ->
+                SecRandomCopyBytes(kSecRandomDefault, count.toULong(), pinned.addressOf(0))
+            }
         if (status != errSecSuccess) {
             // CRYPTOGRAPHY.md section 9: an RNG failure aborts the operation.
             // There is no fallback generator.
