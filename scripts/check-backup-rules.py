@@ -60,7 +60,7 @@ def check(path: Path) -> list[str]:
             continue
         domain = element.get("domain", "")
         rule_path = element.get("path", "")
-        where = f"{path}: <{element.tag} domain=\"{domain}\" path=\"{rule_path}\">"
+        where = f'{path}: <{element.tag} domain="{domain}" path="{rule_path}">'
 
         if domain in FORBIDDEN_DOMAINS:
             failures.append(f"{where} reaches outside the application's files")
@@ -69,6 +69,14 @@ def check(path: Path) -> list[str]:
         if element.tag == "include":
             seen.add((domain, rule_path))
             fragments = [part for part in rule_path.split("/") if part]
+            # An include whose path is empty, ".", or ".." names no directory
+            # of its own and therefore covers every file of the domain, which
+            # is how vault storage enters an archive without any fragment of
+            # its path appearing in the rule. Section 13.4 makes that a
+            # release blocker by the same reasoning as a literal vault path.
+            if not fragments or fragments in (["."], [".."]):
+                failures.append(f"{where} includes every file of the domain")
+                continue
             for fragment in fragments:
                 if fragment in FORBIDDEN_PATHS:
                     failures.append(f"{where} names vault storage")
