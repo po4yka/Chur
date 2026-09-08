@@ -16,12 +16,13 @@ use chur_catalog::model::{MetadataRevision, Object, Stream};
 use chur_catalog::store::{self, ObjectActivation};
 use chur_catalog::vault::Session;
 use chur_core::{
-    Id, Result, bail, ensure,
+    bail, ensure,
     limits::{container as container_bounds, media as media_bounds},
+    Id, Result,
 };
-use chur_crypto::{Key, Nonce, random};
+use chur_crypto::{random, Key, Nonce};
 use chur_format::constants::{
-    CONTAINER_VERSION_V1, IntegritySummary, MediaClass, ObjectState, SUITE_V1, StreamKind,
+    IntegritySummary, MediaClass, ObjectState, StreamKind, CONTAINER_VERSION_V1, SUITE_V1,
 };
 use chur_format::container::{
     CanonicalManifest, ContainerWriter, Layout, MediaProperties, ReadAt, StreamIdentity,
@@ -254,8 +255,14 @@ pub fn begin(
     let manifest = CanonicalManifest::new(identity, None, chunk_size, nonce_prefix, 1, properties)?;
     let manifest_length = manifest.record_length();
 
+    // One identifier names the temporary container before the rename and the
+    // committed container after it. The journal record carries exactly this
+    // identifier, so a death between the atomic rename of §14 and the
+    // activation leaves a file reconciliation can still name; two independent
+    // identifiers would orphan the renamed container for ever, because the
+    // record would hold only the temporary name the rename vacated.
     let temp_path_id = random::id()?;
-    let container_path_id = random::id()?;
+    let container_path_id = temp_path_id;
     let store_id = session.object_store_id();
     let mut container = TemporaryContainer::open(session.root_dir(), &store_id, &temp_path_id)?;
     container.truncate_to(0)?;
@@ -494,6 +501,15 @@ pub fn reconcile(session: &mut Session, now_ms: u64) -> Result<usize> {
         killed += 1;
     }
     for record in journal::live(session.catalog_ref()?)? {
+        if store::object_present(session.catalog_ref()?, &record.object_id)? {
+            // A death between the activation and the journal close left a
+            // finished import with an open record. The container, the
+            // envelope, and the catalog row agree; only the record lingers,
+            // so closing it completes what the process died before finishing
+            // rather than destroying an activated object.
+            journal::close(session.catalog()?, &record.transaction_id)?;
+            continue;
+        }
         journal::mark_dead(session.catalog()?, &record.transaction_id)?;
         finish_abandonment(session, &root_dir, &store_id, &record)?;
         killed += 1;
@@ -513,6 +529,16 @@ fn finish_abandonment(
     let path = root_dir.temporary_container(store_id, &record.temp_path_id);
     if path.exists() {
         std::fs::remove_file(&path)
+            .map_err(|_| chur_core::err!(IoFailure, "a dead container could not be deleted"))?;
+    }
+    // The same identifier names the committed container, so a record the
+    // rename of §14 already moved into the store is found here too. Without
+    // this deletion the abandoned container would sit in the store with no
+    // catalog row and no journal record naming it - an orphan nothing could
+    // ever reach again.
+    let committed = root_dir.container(store_id, &record.temp_path_id);
+    if committed.exists() {
+        std::fs::remove_file(&committed)
             .map_err(|_| chur_core::err!(IoFailure, "a dead container could not be deleted"))?;
     }
     journal::close(session.catalog()?, &record.transaction_id)
