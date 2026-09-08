@@ -55,7 +55,7 @@ Gate 1 may be declared once the two approvals are recorded.
 | encrypted metadata, thumbnails, and previews | done. All three are derived, encrypted, and read back by Rust, and both hosts decode them through one cache whose only per-platform part is the decode |
 | timeline, albums, favorites, viewer, and export | done |
 | catalog search as bounded by [`docs/format/CATALOG_SCHEMA_V1.md`](docs/format/CATALOG_SCHEMA_V1.md) §16, over the in-database FTS5 table of §16.4 | done |
-| immediate, timed, background, and panic lock | **partly done.** All four transitions run, and three of them are reachable from a screen. The panic transition has no gesture bound to it, because [`docs/product/DISCREET_MODE.md`](docs/product/DISCREET_MODE.md) records the gesture as an open specification item and reserves the decision to itself |
+| immediate, timed, background, and panic lock | done. All four transitions run and each is reachable from a screen: panic is the long press on the lock control that [`docs/product/DISCREET_MODE.md`](docs/product/DISCREET_MODE.md) "The panic gesture" fixes, with "Lock immediately" as its accessibility action |
 | app-switcher privacy handling | done: `FLAG_SECURE` and a cover on Android, the cover on iOS |
 | interrupted-import recovery and integrity inspection | done: the journal ordering of [`docs/format/OBJECT_CONTAINER_V1.md`](docs/format/OBJECT_CONTAINER_V1.md) §14.2, resumption on the next unlock, and a whole-vault integrity scan |
 
