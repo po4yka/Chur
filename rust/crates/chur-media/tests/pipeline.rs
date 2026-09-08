@@ -10,7 +10,7 @@
 
 use chur_catalog::journal::{ImportTransaction, Stage};
 use chur_catalog::paths::VaultRoot;
-use chur_catalog::query::{page, ObjectQuery, Scope};
+use chur_catalog::query::{ObjectQuery, Scope, page};
 use chur_catalog::vault::{self, Session};
 use chur_catalog::{deletion, journal, store};
 use chur_core::{ChurStatus, Id, Result};
@@ -172,12 +172,16 @@ fn read_at_follows_the_ffi_contract_end_of_stream_rules() {
 fn a_committed_import_leaves_no_journal_record_and_no_temporary_container() {
     let (root, mut session) = new_vault();
     let (_object_id, _) = import_photo(&mut session, 5_000, "a.jpg");
-    assert!(journal::live(session.catalog_ref().unwrap())
-        .unwrap()
-        .is_empty());
-    assert!(journal::dead(session.catalog_ref().unwrap())
-        .unwrap()
-        .is_empty());
+    assert!(
+        journal::live(session.catalog_ref().unwrap())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        journal::dead(session.catalog_ref().unwrap())
+            .unwrap()
+            .is_empty()
+    );
     let incoming = root.incoming(&session.object_store_id());
     assert_eq!(std::fs::read_dir(&incoming).unwrap().count(), 0);
 }
@@ -251,12 +255,16 @@ fn reconciliation_kills_an_import_a_crash_left_behind() {
         !temporary.exists(),
         "a dead container survived reconciliation"
     );
-    assert!(journal::live(session.catalog_ref().unwrap())
-        .unwrap()
-        .is_empty());
-    assert!(journal::dead(session.catalog_ref().unwrap())
-        .unwrap()
-        .is_empty());
+    assert!(
+        journal::live(session.catalog_ref().unwrap())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        journal::dead(session.catalog_ref().unwrap())
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -296,9 +304,11 @@ fn reconciliation_removes_a_container_the_rename_committed_but_nothing_activated
             .objects
             .is_empty()
     );
-    assert!(journal::live(session.catalog_ref().unwrap())
-        .unwrap()
-        .is_empty());
+    assert!(
+        journal::live(session.catalog_ref().unwrap())
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -337,9 +347,11 @@ fn reconciliation_completes_a_record_the_activation_outlived_instead_of_destroyi
         committed.exists(),
         "reconciliation destroyed the container of an activated object"
     );
-    assert!(journal::live(session.catalog_ref().unwrap())
-        .unwrap()
-        .is_empty());
+    assert!(
+        journal::live(session.catalog_ref().unwrap())
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(
         page(session.catalog_ref().unwrap(), &ObjectQuery::timeline())
             .unwrap()
@@ -682,16 +694,18 @@ fn a_flipped_ciphertext_bit_is_proven_corruption() {
     );
     // §16.2: a corrupt row is in no scope.
     for scope in [Scope::Timeline, Scope::Quarantine] {
-        assert!(page(
-            session.catalog_ref().unwrap(),
-            &ObjectQuery {
-                scope,
-                ..ObjectQuery::timeline()
-            }
-        )
-        .unwrap()
-        .objects
-        .is_empty());
+        assert!(
+            page(
+                session.catalog_ref().unwrap(),
+                &ObjectQuery {
+                    scope,
+                    ..ObjectQuery::timeline()
+                }
+            )
+            .unwrap()
+            .objects
+            .is_empty()
+        );
     }
 }
 
@@ -782,9 +796,11 @@ fn an_empty_source_is_refused_and_leaves_nothing_behind() {
         )),
         ChurStatus::InvalidInput
     );
-    assert!(journal::live(session.catalog_ref().unwrap())
-        .unwrap()
-        .is_empty());
+    assert!(
+        journal::live(session.catalog_ref().unwrap())
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(
         std::fs::read_dir(root.incoming(&session.object_store_id()))
             .unwrap()
@@ -802,9 +818,11 @@ fn a_source_above_the_object_bound_is_refused_before_any_work() {
         rejection(import::begin(&mut session, oversized, photo(), NOW)),
         ChurStatus::ResourceLimitExceeded
     );
-    assert!(journal::live(session.catalog_ref().unwrap())
-        .unwrap()
-        .is_empty());
+    assert!(
+        journal::live(session.catalog_ref().unwrap())
+            .unwrap()
+            .is_empty()
+    );
 }
 
 /// A caller that cancels once it has seen `after` bytes.
