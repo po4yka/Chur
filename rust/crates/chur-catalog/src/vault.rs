@@ -10,16 +10,16 @@
 //! zeroizing the key. Nothing above this module ever holds a root secret.
 
 use chur_core::limits::{GCM_NONCE_LEN, WRAPPED_KEY_LEN};
-use chur_core::{bail, ensure, ChurStatus, Error, Id, Result};
+use chur_core::{ChurStatus, Error, Id, Result, bail, ensure};
 use chur_crypto::{
-    commit,
+    Key, Nonce, commit,
     password::{self, Argon2Params},
-    random, recovery, Key, Nonce,
+    random, recovery,
 };
 use chur_format::constants::{
-    SlotType, VaultState, CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2,
-    CATALOG_FORMAT_VERSION_V3, CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V5,
-    DESCRIPTOR_VERSION_V1,
+    CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V3,
+    CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V5, DESCRIPTOR_VERSION_V1, SlotType,
+    VaultState,
 };
 use chur_format::descriptor::{
     CatalogDescriptor, KeySlotDescriptor, MigrationDescriptor, ObjectStoreDescriptor,
@@ -1532,7 +1532,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::panic, clippy::expect_used)]
 
     use super::*;
-    use crate::query::{page, ObjectQuery};
+    use crate::query::{ObjectQuery, page};
 
     /// A private directory for one test.
     fn scratch() -> VaultRoot {
@@ -2145,9 +2145,11 @@ mod tests {
         session.begin_android_keystore_slot().expect("begin");
         drop(session);
 
-        assert!(android_keystore_material(&root_dir)
-            .expect("material")
-            .is_empty());
+        assert!(
+            android_keystore_material(&root_dir)
+                .expect("material")
+                .is_empty()
+        );
         let reopened = unlock_with_password(&root_dir, PASSWORD, 1).expect("unlock");
         assert_eq!(reopened.slots().len(), before);
     }
@@ -2180,9 +2182,11 @@ mod tests {
             .replace_password(b"a new password", Argon2Params::v1_default())
             .expect("replace");
         drop(session);
-        assert!(unlock_with_password(&root_dir, b"a new password", 1)
-            .expect("unlock")
-            .is_unlocked());
+        assert!(
+            unlock_with_password(&root_dir, b"a new password", 1)
+                .expect("unlock")
+                .is_unlocked()
+        );
         assert_eq!(
             rejection(unlock_with_password(&root_dir, PASSWORD, 1)),
             ChurStatus::AuthenticationFailed

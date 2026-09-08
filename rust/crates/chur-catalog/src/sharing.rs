@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use chur_core::{bail, ensure, ChurStatus, Error, Id, Result};
+use chur_core::{ChurStatus, Error, Id, Result, bail, ensure};
 use chur_sync_protocol::{
     collection_membership::{
         CollectionMembershipOutcome, CollectionMembershipRecord, CollectionMembershipState,
@@ -11,10 +11,10 @@ use chur_sync_protocol::{
     grant::CollectionGrant,
     state::MembershipState,
 };
-use rusqlite::{params, OptionalExtension, Transaction};
+use rusqlite::{OptionalExtension, Transaction, params};
 
 use crate::{
-    db::{as_sqlite_integer, from_sqlite_integer, map_sqlite, CatalogDb},
+    db::{CatalogDb, as_sqlite_integer, from_sqlite_integer, map_sqlite},
     schema::bump_generation,
 };
 
@@ -884,7 +884,7 @@ mod tests {
         db::{CatalogKey, CatalogLocation},
         schema::open_at_current_version,
     };
-    use chur_crypto::{random, Key};
+    use chur_crypto::{Key, random};
     use chur_sync_protocol::{
         collection_membership::{CollectionMembershipAction, RecipientVerification},
         grant::PermissionProfile,

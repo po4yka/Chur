@@ -13,20 +13,20 @@
 //! because a damaged descriptor and a wrong credential must share one external
 //! failure.
 
-use chur_core::limits::{descriptor as bounds, slot as slot_bounds, COMMITMENT_LEN, ID_LEN};
+use chur_core::limits::{COMMITMENT_LEN, ID_LEN, descriptor as bounds, slot as slot_bounds};
 use chur_core::status::ChurStatus;
-use chur_core::{ensure, Error, Id, Result};
+use chur_core::{Error, Id, Result, ensure};
 use chur_crypto::commit::{self, Commitment};
 use chur_crypto::kdf::{self, Context, Label};
-use chur_crypto::secret::{constant_time_eq, Key};
+use chur_crypto::secret::{Key, constant_time_eq};
 use chur_crypto::tuple::tag;
 
 use crate::codec::{Reader, Writer};
 use crate::constants::{
-    SlotType, VaultState, CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2,
-    CATALOG_FORMAT_VERSION_V3, CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V5,
-    CONTAINER_VERSION_V1, CRYPTO_POLICY_V1, DESCRIPTOR_VERSION_V1, ENCODING_PROFILE_V1, FLAGS_V1,
-    MAGIC_VAULT, NAMING_PROFILE_V1, OBJECT_STORE_FORMAT_VERSION_V1, SLOT_VERSION_V1, SUITE_V1,
+    CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V3,
+    CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V5, CONTAINER_VERSION_V1, CRYPTO_POLICY_V1,
+    DESCRIPTOR_VERSION_V1, ENCODING_PROFILE_V1, FLAGS_V1, MAGIC_VAULT, NAMING_PROFILE_V1,
+    OBJECT_STORE_FORMAT_VERSION_V1, SLOT_VERSION_V1, SUITE_V1, SlotType, VaultState,
 };
 use crate::slot::{SlotBinding, WRAP_SUITE_ANDROID_KEYSTORE, WRAP_SUITE_RUST};
 

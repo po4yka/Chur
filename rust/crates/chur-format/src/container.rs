@@ -15,20 +15,20 @@ use std::io::Write;
 
 use zeroize::Zeroizing;
 
-use chur_core::limits::{container as bounds, COMMITMENT_LEN, ID_LEN, NONCE_LEN, TAG_LEN};
+use chur_core::limits::{COMMITMENT_LEN, ID_LEN, NONCE_LEN, TAG_LEN, container as bounds};
 use chur_core::status::ChurStatus;
-use chur_core::{ensure, Error, Id, Result};
+use chur_core::{Error, Id, Result, ensure};
 use chur_crypto::aead::{self, Nonce};
 use chur_crypto::commit::{self, Commitment, Committer};
 use chur_crypto::kdf::{self, Context, Label};
 use chur_crypto::secret::Key;
-use chur_crypto::tuple::{tag, Tuple};
+use chur_crypto::tuple::{Tuple, tag};
 
 use crate::codec::{Reader, Writer};
 use crate::constants::{
-    ContainerRecordType, MediaClass, StreamKind, CHUNK_RECORD_PROFILE_V1, COMMITMENT_PROFILE_V1,
-    CONTAINER_VERSION_V1, ENCODING_PROFILE_V1, FLAGS_V1, MAGIC_OBJECT, RECORD_VERSION_V1,
-    RESERVED_V1, SUITE_V1,
+    CHUNK_RECORD_PROFILE_V1, COMMITMENT_PROFILE_V1, CONTAINER_VERSION_V1, ContainerRecordType,
+    ENCODING_PROFILE_V1, FLAGS_V1, MAGIC_OBJECT, MediaClass, RECORD_VERSION_V1, RESERVED_V1,
+    SUITE_V1, StreamKind,
 };
 
 /// Length of the per-stream-revision chunk nonce prefix, §7.
@@ -2898,40 +2898,46 @@ mod tests {
                 "chunk size {size}"
             );
         }
-        assert!(CanonicalManifest::new(
-            identity(),
-            None,
-            8_388_608,
-            [0; NONCE_PREFIX_LEN],
-            1,
-            MediaProperties::opaque(),
-        )
-        .is_ok());
+        assert!(
+            CanonicalManifest::new(
+                identity(),
+                None,
+                8_388_608,
+                [0; NONCE_PREFIX_LEN],
+                1,
+                MediaProperties::opaque(),
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn the_source_content_revision_is_present_exactly_for_a_derived_kind() {
-        assert!(CanonicalManifest::new(
-            identity(),
-            Some(1),
-            CHUNK,
-            [0; NONCE_PREFIX_LEN],
-            1,
-            MediaProperties::opaque(),
-        )
-        .is_err());
-        assert!(CanonicalManifest::new(
-            StreamIdentity {
-                stream_kind: StreamKind::GridPreview,
-                ..identity()
-            },
-            None,
-            CHUNK,
-            [0; NONCE_PREFIX_LEN],
-            1,
-            MediaProperties::opaque(),
-        )
-        .is_err());
+        assert!(
+            CanonicalManifest::new(
+                identity(),
+                Some(1),
+                CHUNK,
+                [0; NONCE_PREFIX_LEN],
+                1,
+                MediaProperties::opaque(),
+            )
+            .is_err()
+        );
+        assert!(
+            CanonicalManifest::new(
+                StreamIdentity {
+                    stream_kind: StreamKind::GridPreview,
+                    ..identity()
+                },
+                None,
+                CHUNK,
+                [0; NONCE_PREFIX_LEN],
+                1,
+                MediaProperties::opaque(),
+            )
+            .is_err()
+        );
     }
 
     #[test]

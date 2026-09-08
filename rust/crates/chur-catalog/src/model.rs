@@ -12,7 +12,7 @@
 //!
 //! [`Error`]: chur_core::Error
 
-use chur_core::{bail, limits::catalog as limits, limits::media, Id, Result};
+use chur_core::{Id, Result, bail, limits::catalog as limits, limits::media};
 use chur_format::constants::{IntegritySummary, MediaClass, ObjectState, StreamKind};
 
 /// The v1 collection policy: every object of a single-vault install.

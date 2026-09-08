@@ -1,6 +1,6 @@
 //! The fixed collection grant of `docs/sync/COLLECTION_GRANTS.md`.
 
-use chur_core::{ensure, ChurStatus, Error, Id, Result};
+use chur_core::{ChurStatus, Error, Id, Result, ensure};
 use chur_crypto::secret::Key;
 use chur_crypto::{commit::commit, tuple::tag};
 use chur_format::codec::{Reader, Writer};
@@ -11,7 +11,7 @@ use hpke::{Deserializable, Kem as KemTrait, OpModeR, OpModeS, Serializable};
 use zeroize::Zeroizing;
 
 use crate::identity::DeviceIdentity;
-use crate::operation::{verify_ed25519, DeviceSigningKey};
+use crate::operation::{DeviceSigningKey, verify_ed25519};
 
 const KEY_ID_LEN: usize = 16;
 const HPKE_PROFILE_V1: u16 = 1;
@@ -831,33 +831,39 @@ mod tests {
             let mut modified = grant.encode();
             modified[offset] ^= if offset == 148 { 0x02 } else { 0x01 };
             let modified = CollectionGrant::decode(&modified).expect("canonical grant");
-            assert!(modified
+            assert!(
+                modified
+                    .open_collection_key(
+                        &recipient_vault_id,
+                        &recipient_device_id,
+                        &recipient,
+                        &sender.verifying_key(),
+                    )
+                    .is_err()
+            );
+        }
+
+        let substitute = DeviceIdentity::from_seeds([11; 32], [12; 32]);
+        assert!(
+            grant
+                .open_collection_key(
+                    &recipient_vault_id,
+                    &recipient_device_id,
+                    &substitute,
+                    &sender.verifying_key(),
+                )
+                .is_err()
+        );
+        assert!(
+            grant
                 .open_collection_key(
                     &recipient_vault_id,
                     &recipient_device_id,
                     &recipient,
-                    &sender.verifying_key(),
+                    &DeviceSigningKey::from_seed([13; 32]).verifying_key(),
                 )
-                .is_err());
-        }
-
-        let substitute = DeviceIdentity::from_seeds([11; 32], [12; 32]);
-        assert!(grant
-            .open_collection_key(
-                &recipient_vault_id,
-                &recipient_device_id,
-                &substitute,
-                &sender.verifying_key(),
-            )
-            .is_err());
-        assert!(grant
-            .open_collection_key(
-                &recipient_vault_id,
-                &recipient_device_id,
-                &recipient,
-                &DeviceSigningKey::from_seed([13; 32]).verifying_key(),
-            )
-            .is_err());
+                .is_err()
+        );
     }
 
     #[cfg(feature = "test-vectors")]

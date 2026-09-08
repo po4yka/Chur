@@ -10,7 +10,7 @@
 //! after an album would put a private word in a page an attacker can see the
 //! size of.
 
-use chur_core::{bail, ensure, err, limits::catalog as limits, Id, Result};
+use chur_core::{Id, Result, bail, ensure, err, limits::catalog as limits};
 use chur_format::{
     constants::{
         CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V3,
@@ -18,9 +18,9 @@ use chur_format::{
     },
     envelope::ObjectKeyEnvelope,
 };
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 
-use crate::db::{as_sqlite_integer, from_sqlite_integer, map_sqlite, CatalogDb};
+use crate::db::{CatalogDb, as_sqlite_integer, from_sqlite_integer, map_sqlite};
 
 /// One schema step: the version it produces and the statements that produce it.
 #[cfg(test)]
@@ -890,9 +890,11 @@ pub fn check_query_limit(limit: u32) -> Result<u32> {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::panic, clippy::expect_used)]
 
+    use rusqlite::OptionalExtension;
+
     use super::*;
     use crate::db::{CatalogKey, CatalogLocation};
-    use chur_crypto::{random, Key, Nonce};
+    use chur_crypto::{Key, Nonce, random};
     use chur_format::envelope::ObjectKeyEnvelope;
 
     fn open() -> CatalogDb {

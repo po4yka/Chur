@@ -28,12 +28,12 @@ use std::path::Path;
 use chur_catalog::paths::{RegistryName, VaultRoot};
 use chur_catalog::vault::{self, Session};
 use chur_catalog::{schema, store};
-use chur_core::{bail, ensure, limits::backup as bounds, Id, Result};
-use chur_crypto::{random, Key, Nonce};
+use chur_core::{Id, Result, bail, ensure, limits::backup as bounds};
+use chur_crypto::{Key, Nonce, random};
 use chur_format::backup::{
-    framing_of, manifest_key, BackupManifest, FinalBackupCommit, Framing, InventoryCommitter,
-    PublicPreamble, RecordHeader, RecordType, SlotInventoryEntry, StreamInventoryEntry,
-    RECORD_HEADER_LEN,
+    BackupManifest, FinalBackupCommit, Framing, InventoryCommitter, PublicPreamble,
+    RECORD_HEADER_LEN, RecordHeader, RecordType, SlotInventoryEntry, StreamInventoryEntry,
+    framing_of, manifest_key,
 };
 use chur_format::constants::{SlotType, VaultState};
 use chur_format::container::PublicPreamble as ContainerPreamble;
