@@ -519,13 +519,9 @@ fn accept_opened_sharing_operation(
         // §5. The application transaction rolled back, so the durable freeze
         // is recorded in its own transaction before the rejection returns.
         Err(error) if error.status() == ChurStatus::Conflict => {
-            let identifier_reused = match payload.body() {
-                PayloadBody::IssueCollectionGrant(grant) => {
-                    sharing::grant_identifier_conflicts(db, grant)?
-                }
-                _ => false,
-            };
-            if identifier_reused {
+            if let PayloadBody::IssueCollectionGrant(grant) = payload.body()
+                && sharing::grant_identifier_conflicts(db, grant)?
+            {
                 sharing::record_grant_freeze(db, grant.collection_id())?;
             }
             return Err(error);
