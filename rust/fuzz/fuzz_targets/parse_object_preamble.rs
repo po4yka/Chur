@@ -30,4 +30,14 @@ fuzz_target!(|data: &[u8]| {
                 | ChurStatus::UnsupportedSuite
         ));
     }
+    // §11 also requires the decoder to reject trailing bytes: an input longer
+    // than the preamble is never accepted, whatever its prefix holds.
+    if data.len() > PublicPreamble::LEN {
+        assert!(
+            PublicPreamble::decode(data).is_err(),
+            "a {len}-byte input whose first {preamble} bytes are a preamble was accepted",
+            len = data.len(),
+            preamble = PublicPreamble::LEN,
+        );
+    }
 });

@@ -15,20 +15,20 @@ use std::io::Write;
 
 use zeroize::Zeroizing;
 
-use chur_core::limits::{COMMITMENT_LEN, ID_LEN, NONCE_LEN, TAG_LEN, container as bounds};
+use chur_core::limits::{container as bounds, COMMITMENT_LEN, ID_LEN, NONCE_LEN, TAG_LEN};
 use chur_core::status::ChurStatus;
-use chur_core::{Error, Id, Result, ensure};
+use chur_core::{ensure, Error, Id, Result};
 use chur_crypto::aead::{self, Nonce};
 use chur_crypto::commit::{self, Commitment, Committer};
 use chur_crypto::kdf::{self, Context, Label};
 use chur_crypto::secret::Key;
-use chur_crypto::tuple::{Tuple, tag};
+use chur_crypto::tuple::{tag, Tuple};
 
 use crate::codec::{Reader, Writer};
 use crate::constants::{
-    CHUNK_RECORD_PROFILE_V1, COMMITMENT_PROFILE_V1, CONTAINER_VERSION_V1, ContainerRecordType,
-    ENCODING_PROFILE_V1, FLAGS_V1, MAGIC_OBJECT, MediaClass, RECORD_VERSION_V1, RESERVED_V1,
-    SUITE_V1, StreamKind,
+    ContainerRecordType, MediaClass, StreamKind, CHUNK_RECORD_PROFILE_V1, COMMITMENT_PROFILE_V1,
+    CONTAINER_VERSION_V1, ENCODING_PROFILE_V1, FLAGS_V1, MAGIC_OBJECT, RECORD_VERSION_V1,
+    RESERVED_V1, SUITE_V1,
 };
 
 /// Length of the per-stream-revision chunk nonce prefix, §7.
@@ -104,7 +104,8 @@ impl PublicPreamble {
     ///
     /// An unknown version, profile, or suite fails as `UNSUPPORTED_*`. A fixed
     /// field holding any other value fails as `OBJECT_CORRUPT` and is never
-    /// ignored.
+    /// ignored. Trailing bytes fail as `NON_CANONICAL_ENCODING`, like every
+    /// decoder of authenticated bytes.
     ///
     /// # Errors
     ///
@@ -152,6 +153,7 @@ impl PublicPreamble {
             ObjectCorrupt,
             "container reserved field is not zero"
         );
+        reader.finish()?;
         Self::new(manifest_record_length)
     }
 }
@@ -2396,6 +2398,21 @@ mod tests {
         assert_eq!(&bytes[0x1a..0x1c], &[0, 0]);
     }
 
+    #[test]
+    fn the_preamble_rejects_trailing_bytes() {
+        // §11: a decoder for authenticated bytes rejects trailing bytes, and
+        // the preamble is the one container decoder every other record walks
+        // past, so a longer slice must not silently parse as its prefix.
+        let bytes = build(b"");
+        assert!(PublicPreamble::decode(&bytes[..PublicPreamble::LEN]).is_ok());
+        let mut padded = bytes[..PublicPreamble::LEN + 1].to_vec();
+        padded[PublicPreamble::LEN] ^= 0xff;
+        assert_eq!(
+            PublicPreamble::decode(&padded).unwrap_err().status(),
+            ChurStatus::NonCanonicalEncoding
+        );
+    }
+
     // -- the three §13 shapes ---------------------------------------------
 
     #[test]
@@ -2823,46 +2840,40 @@ mod tests {
                 "chunk size {size}"
             );
         }
-        assert!(
-            CanonicalManifest::new(
-                identity(),
-                None,
-                8_388_608,
-                [0; NONCE_PREFIX_LEN],
-                1,
-                MediaProperties::opaque(),
-            )
-            .is_ok()
-        );
+        assert!(CanonicalManifest::new(
+            identity(),
+            None,
+            8_388_608,
+            [0; NONCE_PREFIX_LEN],
+            1,
+            MediaProperties::opaque(),
+        )
+        .is_ok());
     }
 
     #[test]
     fn the_source_content_revision_is_present_exactly_for_a_derived_kind() {
-        assert!(
-            CanonicalManifest::new(
-                identity(),
-                Some(1),
-                CHUNK,
-                [0; NONCE_PREFIX_LEN],
-                1,
-                MediaProperties::opaque(),
-            )
-            .is_err()
-        );
-        assert!(
-            CanonicalManifest::new(
-                StreamIdentity {
-                    stream_kind: StreamKind::GridPreview,
-                    ..identity()
-                },
-                None,
-                CHUNK,
-                [0; NONCE_PREFIX_LEN],
-                1,
-                MediaProperties::opaque(),
-            )
-            .is_err()
-        );
+        assert!(CanonicalManifest::new(
+            identity(),
+            Some(1),
+            CHUNK,
+            [0; NONCE_PREFIX_LEN],
+            1,
+            MediaProperties::opaque(),
+        )
+        .is_err());
+        assert!(CanonicalManifest::new(
+            StreamIdentity {
+                stream_kind: StreamKind::GridPreview,
+                ..identity()
+            },
+            None,
+            CHUNK,
+            [0; NONCE_PREFIX_LEN],
+            1,
+            MediaProperties::opaque(),
+        )
+        .is_err());
     }
 
     #[test]
