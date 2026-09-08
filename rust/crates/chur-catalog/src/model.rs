@@ -12,7 +12,7 @@
 //!
 //! [`Error`]: chur_core::Error
 
-use chur_core::{Id, Result, bail, limits::catalog as limits, limits::media};
+use chur_core::{bail, limits::catalog as limits, limits::media, Id, Result};
 use chur_format::constants::{IntegritySummary, MediaClass, ObjectState, StreamKind};
 
 /// The v1 collection policy: every object of a single-vault install.
@@ -604,9 +604,14 @@ mod tests {
             ChurStatus::InvalidInput
         );
         assert_eq!(
-            rejection(album(&"a".repeat(513)).check()),
+            rejection(album(&"a".repeat(limits::ALBUM_NAME_MAX + 1)).check()),
             ChurStatus::ResourceLimitExceeded
         );
+        // The accepted bound is the sync protocol's own name bound, so a
+        // replicated name of exactly that length still fits the catalog.
+        album(&"a".repeat(limits::ALBUM_NAME_MAX))
+            .check()
+            .expect("a name the sync protocol accepts");
     }
 
     #[test]

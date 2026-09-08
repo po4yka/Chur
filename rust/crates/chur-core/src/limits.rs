@@ -209,11 +209,16 @@ pub mod catalog {
     /// into a different scope detectable rather than silently valid.
     pub const CURSOR_LEN: usize = 8 + super::ID_LEN + 1 + 1 + super::ID_LEN;
 
-    /// Longest album name the catalog accepts, in bytes.
-    pub const ALBUM_NAME_MAX: usize = 512;
-    /// Longest tag name the catalog accepts, in bytes.
-    pub const TAG_NAME_MAX: usize = 256;
-    /// Longest search query the catalog accepts, in bytes.
+    /// Longest album name the catalog accepts, in bytes,
+    /// `docs/format/CATALOG_SCHEMA_V1.md` §21. The sync protocol's canonical
+    /// payloads bound an album name at 4096 bytes, so the catalog accepts the
+    /// same bound and a replicated name always fits.
+    pub const ALBUM_NAME_MAX: usize = 4_096;
+    /// Longest tag name the catalog accepts, in bytes,
+    /// `docs/format/CATALOG_SCHEMA_V1.md` §21; the sync payload bound again.
+    pub const TAG_NAME_MAX: usize = 4_096;
+    /// Longest search query the catalog accepts, in bytes,
+    /// `docs/format/CATALOG_SCHEMA_V1.md` §21.
     pub const SEARCH_TERMS_MAX: usize = 512;
 }
 

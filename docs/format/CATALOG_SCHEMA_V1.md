@@ -392,7 +392,7 @@ Catalog v1 allocates no physical sync tables. Phase 3 state is the forward catal
 
 ## 21. Limits
 
-Catalog policy bounds, enforced on insert and re-checked on restore:
+Catalog policy bounds, enforced on insert and re-checked on restore, the search-query bound at query time:
 
 - at most 1000000 media objects per vault;
 - at most 16 streams per object: one original and at most 15 derived;
@@ -402,6 +402,8 @@ Catalog policy bounds, enforced on insert and re-checked on restore:
 - at most 10000 albums per vault and at most 100000 memberships per album;
 - at most 10000 tags per vault and at most 128 tags per object;
 - at most 1024 metadata revisions per object;
-- at most 128 concurrent `ImportTransaction` rows.
+- at most 128 concurrent `ImportTransaction` rows;
+- at most 4096 bytes per album name and per tag name, which is the bound the sync protocol's canonical payloads enforce, so a replicated name always fits;
+- at most 512 bytes per search query.
 
 A value above any bound is `RESOURCE_LIMIT_EXCEEDED`. These are catalog policy, not encoded field widths, so raising one is a `catalog_format_version` change only when it changes a stored width.
