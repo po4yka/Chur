@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use chur_core::limits::sync as bounds;
-use chur_core::{ChurStatus, Error, Id, Result, ensure};
+use chur_core::{ensure, ChurStatus, Error, Id, Result};
 use chur_format::codec::Writer;
 use chur_sync_protocol::collection_membership::{
     CollectionMembershipAction, CollectionMembershipOutcome, CollectionMembershipRecord,
@@ -11,12 +11,19 @@ use chur_sync_protocol::collection_operation::CollectionOperation;
 use chur_sync_protocol::grant::{CollectionGrant, PermissionProfile};
 use chur_sync_protocol::membership::{EnrollmentRecord, RevocationRecord};
 use chur_sync_protocol::operation::Operation;
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{params, OptionalExtension};
 
-use super::{ReferenceServer, RelayOutcome, map_sqlite, relay, to_sqlite};
+use super::{map_sqlite, relay, to_sqlite, ReferenceServer, RelayOutcome};
 
 const PACKAGE_ISSUERS_MAX: usize = 257;
 const PACKAGE_RECORDS_MAX: usize = 4_096;
+
+/// Membership generations one collection-state restore replays.
+///
+/// A chain longer than the acceptance-package bound cannot complete grant
+/// acceptance either, so the restore fails closed instead of decoding and
+/// Ed25519-verifying an unbounded chain on every sharing request.
+const MEMBERSHIP_CHAIN_MAX: usize = PACKAGE_RECORDS_MAX;
 
 pub(super) fn migrate_outer_associations(db: &mut rusqlite::Connection) -> Result<()> {
     for (table, column, definition) in [
@@ -1381,22 +1388,28 @@ fn collection_state(
     server: &ReferenceServer,
     collection_id: &Id,
 ) -> Result<Option<CollectionMembershipState>> {
+    let limit = i64::try_from(MEMBERSHIP_CHAIN_MAX).map_or(i64::MAX, |bound| bound + 1);
     let mut statement = server
         .db
         .prepare(
             "SELECT issuer_signing_public_key, record
-             FROM collection_membership_records
-             WHERE collection_id = ?1 ORDER BY membership_generation",
+              FROM collection_membership_records
+             WHERE collection_id = ?1 ORDER BY membership_generation LIMIT ?2",
         )
         .map_err(|error| map_sqlite(error, "collection membership restore prepare failed"))?;
     let rows = statement
-        .query_map([collection_id.as_bytes().as_slice()], |row| {
+        .query_map(params![collection_id.as_bytes().as_slice(), limit], |row| {
             Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
         })
         .map_err(|error| map_sqlite(error, "collection membership restore query failed"))?;
     let rows = rows
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|error| map_sqlite(error, "collection membership restore row failed"))?;
+    ensure!(
+        rows.len() <= MEMBERSHIP_CHAIN_MAX,
+        ResourceLimitExceeded,
+        "collection membership chain exceeds the replay bound"
+    );
     let Some((_, first_bytes)) = rows.first() else {
         return Ok(None);
     };
@@ -1541,7 +1554,7 @@ fn corrupt_sharing(_: Error) -> Error {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use chur_crypto::{Nonce, secret::Key};
+    use chur_crypto::{secret::Key, Nonce};
     use chur_format::codec::Reader;
     use chur_sync_protocol::collection_membership::{
         CollectionMembershipAction, CollectionMembershipRecord,
@@ -1833,22 +1846,18 @@ mod tests {
                 grant_outer.encode(),
             ]
         );
-        assert!(
-            server
-                .issuer_memberships_for_recipient(second_vault, second_device, source_vault, 0,)
-                .is_err_and(|error| error.status() == ChurStatus::AuthenticationFailed)
-        );
-        assert!(
-            server
-                .issuer_operations_for_recipient(
-                    second_vault,
-                    second_device,
-                    source_vault,
-                    source_device,
-                    0,
-                )
-                .is_err_and(|error| error.status() == ChurStatus::AuthenticationFailed)
-        );
+        assert!(server
+            .issuer_memberships_for_recipient(second_vault, second_device, source_vault, 0,)
+            .is_err_and(|error| error.status() == ChurStatus::AuthenticationFailed));
+        assert!(server
+            .issuer_operations_for_recipient(
+                second_vault,
+                second_device,
+                source_vault,
+                source_device,
+                0,
+            )
+            .is_err_and(|error| error.status() == ChurStatus::AuthenticationFailed));
         let second_operation = CollectionOperation::seal(
             id(35),
             source_vault,
@@ -1891,11 +1900,9 @@ mod tests {
         )
         .expect("unauthorized operation")
         .sign(recipient.signing_key());
-        assert!(
-            server
-                .accept_collection_operation(&unauthorized)
-                .is_err_and(|error| error.status() == ChurStatus::AuthenticationFailed)
-        );
+        assert!(server
+            .accept_collection_operation(&unauthorized)
+            .is_err_and(|error| error.status() == ChurStatus::AuthenticationFailed));
         let conflicting_grant = CollectionGrant::seal(
             id(14),
             source_vault,
@@ -2048,16 +2055,9 @@ mod tests {
         server
             .accept_collection_membership(&revocation, &revocation_outer)
             .expect("recipient revocation");
-        assert!(
-            server
-                .issuer_memberships_for_recipient(
-                    recipient_vault,
-                    recipient_device,
-                    second_vault,
-                    0,
-                )
-                .is_err_and(|error| error.status() == ChurStatus::AuthenticationFailed)
-        );
+        assert!(server
+            .issuer_memberships_for_recipient(recipient_vault, recipient_device, second_vault, 0,)
+            .is_err_and(|error| error.status() == ChurStatus::AuthenticationFailed));
         let current_grant = CollectionGrant::seal(
             id(28),
             source_vault,
@@ -2128,18 +2128,14 @@ mod tests {
                 &current_grant_outer.encode()
             )]
         );
-        assert!(
-            server
-                .collection_memberships_for_recipient(id(15), id(16))
-                .expect("unrelated inbox")
-                .is_empty()
-        );
-        assert!(
-            server
-                .collection_grants_for_recipient(id(15), id(16))
-                .expect("unrelated grants")
-                .is_empty()
-        );
+        assert!(server
+            .collection_memberships_for_recipient(id(15), id(16))
+            .expect("unrelated inbox")
+            .is_empty());
+        assert!(server
+            .collection_grants_for_recipient(id(15), id(16))
+            .expect("unrelated grants")
+            .is_empty());
     }
 
     /// An observed head below the relay tip is a cause that is present.
@@ -2328,11 +2324,9 @@ mod tests {
         )
         .expect("missing cause operation")
         .sign(recipient.signing_key());
-        assert!(
-            server
-                .accept_collection_operation(&missing)
-                .is_err_and(|error| error.status() == ChurStatus::SyncHeadRollback)
-        );
+        assert!(server
+            .accept_collection_operation(&missing)
+            .is_err_and(|error| error.status() == ChurStatus::SyncHeadRollback));
     }
 
     #[test]
@@ -2436,11 +2430,9 @@ mod tests {
                 .collect::<rusqlite::Result<Vec<_>>>()
                 .expect("column rows");
             assert!(columns.iter().any(|column| column == "outer_device_id"));
-            assert!(
-                columns
-                    .iter()
-                    .any(|column| column == "outer_device_sequence")
-            );
+            assert!(columns
+                .iter()
+                .any(|column| column == "outer_device_sequence"));
         }
         let membership_outer: (Vec<u8>, i64) = server
             .db
@@ -2461,6 +2453,66 @@ mod tests {
             )
             .expect("migrated grant");
         assert_eq!(grant_outer, (id(8).as_bytes().to_vec(), 11));
+    }
+
+    #[test]
+    fn a_collection_chain_beyond_the_replay_bound_fails_closed() {
+        let root = crate::tests::TestRoot::new();
+        let source_vault = id(1);
+        let collection = id(40);
+        let issuer_key = DeviceSigningKey::from_seed([3; 32]);
+        let mut server = ReferenceServer::open(&root.0, 32, 32_768).expect("server");
+        let mut previous = [0u8; 32];
+        let transaction = server.db.transaction().expect("chain transaction");
+        for generation in 1..=(MEMBERSHIP_CHAIN_MAX as u64) + 1 {
+            let record = CollectionMembershipRecord::new(
+                source_vault,
+                collection,
+                generation,
+                previous,
+                CollectionMembershipAction::Upsert(PermissionProfile::Read),
+                id(6),
+                id(7),
+                [8u8; 32],
+                [9u8; 32],
+                1,
+                source_vault,
+                id(2),
+                1,
+                generation,
+            )
+            .expect("chain record")
+            .sign(&issuer_key);
+            previous = record.commitment();
+            transaction
+                .execute(
+                    "INSERT INTO collection_membership_records (
+                         collection_id, membership_generation, issuer_vault_id,
+                         issuer_signing_public_key, recipient_vault_id, recipient_device_id,
+                         outer_device_id, outer_device_sequence, record
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![
+                        collection.as_bytes().as_slice(),
+                        to_sqlite(generation, "chain generation does not fit")
+                            .expect("chain generation"),
+                        source_vault.as_bytes().as_slice(),
+                        issuer_key.verifying_key().as_slice(),
+                        id(6).as_bytes().as_slice(),
+                        id(7).as_bytes().as_slice(),
+                        id(2).as_bytes().as_slice(),
+                        to_sqlite(generation, "chain sequence does not fit")
+                            .expect("chain sequence"),
+                        record.encode(),
+                    ],
+                )
+                .expect("chain row");
+        }
+        transaction.commit().expect("chain commit");
+        let error = match collection_state(&server, &collection) {
+            Err(error) => error,
+            Ok(_) => panic!("the chain bound did not fail closed"),
+        };
+        assert_eq!(error.status(), ChurStatus::ResourceLimitExceeded);
     }
 
     fn id(byte: u8) -> Id {
