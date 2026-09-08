@@ -251,7 +251,7 @@ Old backups retain old portable slots. Rotating a password or recovery secret do
 - nesting: a native record never contains a native record, and §2.3 permits exactly zero or one `age` layer;
 - v1 defines no compression inside the package, so no declared output size can exceed its input and no decompression bomb is representable;
 - the key-slot and Argon2 bounds of [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §11 are validated before any derivation runs;
-- restore refuses to begin unless free space at the destination is at least the package length plus 67108864 bytes (64 MiB).
+- restore performs no free-space preflight of its own: the backup manifest carries `free_space_required` — the package length plus 67108864 bytes (64 MiB) — for a caller that can ask, and a destination that fills fails on the write and takes the partial vault directory with it, so nothing openable survives;
 
 ## 14. Test vectors
 
