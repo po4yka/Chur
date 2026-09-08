@@ -144,7 +144,7 @@ Every exported symbol is `chur_` followed by lower snake case. An operation on a
 
 The Phase-1 surface is frozen. Adding an export raises the minor ABI version; changing or removing one raises the major version. `chur.h`, checked in with the first `chur-ffi` export, is the deliverable both platform teams build against, and every binding derives from it.
 
-The list below is the surface at ABI 1.0. §6.5 adds the exports Phase 1's own product scope requires and raises the minor version to 1; nothing in this list changed.
+The list below is the surface at ABI 1.0. §6.5 adds the exports Phase 1's own product scope requires and raises the minor version to 1; nothing in this list changed. The channel-less diagnostic of [ADR-0037](../adr/0037-contain-panics-in-channel-less-exports.md) is part of this surface as well, and the same minor-version rule covers it.
 
 ```c
 /* handshake: any thread, before initialization, cannot fail (§2) */
@@ -156,6 +156,9 @@ uint16_t chur_object_format_max(void);
 uint16_t chur_key_slot_format_min(void);
 uint16_t chur_key_slot_format_max(void);
 uint32_t chur_build_flavor(void);
+
+/* status diagnostics: no handle, cannot fail (ADR-0037) */
+bool chur_status_is_known(int32_t value);
 
 /* runtime and session */
 chur_status_t chur_runtime_open(const ChurRuntimeConfigV1 *config, chur_handle_t *out_runtime);
