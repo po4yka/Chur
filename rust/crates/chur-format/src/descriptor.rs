@@ -24,9 +24,9 @@ use chur_crypto::tuple::tag;
 use crate::codec::{Reader, Writer};
 use crate::constants::{
     SlotType, VaultState, CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2,
-    CATALOG_FORMAT_VERSION_V3, CATALOG_FORMAT_VERSION_V4, CONTAINER_VERSION_V1, CRYPTO_POLICY_V1,
-    DESCRIPTOR_VERSION_V1, ENCODING_PROFILE_V1, FLAGS_V1, MAGIC_VAULT, NAMING_PROFILE_V1,
-    OBJECT_STORE_FORMAT_VERSION_V1, SLOT_VERSION_V1, SUITE_V1,
+    CATALOG_FORMAT_VERSION_V3, CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V5,
+    CONTAINER_VERSION_V1, CRYPTO_POLICY_V1, DESCRIPTOR_VERSION_V1, ENCODING_PROFILE_V1, FLAGS_V1,
+    MAGIC_VAULT, NAMING_PROFILE_V1, OBJECT_STORE_FORMAT_VERSION_V1, SLOT_VERSION_V1, SUITE_V1,
 };
 use crate::slot::{SlotBinding, WRAP_SUITE_ANDROID_KEYSTORE, WRAP_SUITE_RUST};
 
@@ -72,6 +72,7 @@ impl CatalogDescriptor {
                     | CATALOG_FORMAT_VERSION_V2
                     | CATALOG_FORMAT_VERSION_V3
                     | CATALOG_FORMAT_VERSION_V4
+                    | CATALOG_FORMAT_VERSION_V5
             ),
             UnsupportedVersion,
             "catalog format version is not supported"
@@ -573,6 +574,7 @@ impl VaultDescriptor {
                     | CATALOG_FORMAT_VERSION_V2
                     | CATALOG_FORMAT_VERSION_V3
                     | CATALOG_FORMAT_VERSION_V4
+                    | CATALOG_FORMAT_VERSION_V5
             ),
             UnsupportedVersion,
             "catalog format version is not supported"
@@ -783,9 +785,13 @@ mod tests {
         let encoded = descriptor.encode(&root()).expect("catalog v4 descriptor");
         assert_eq!(VaultDescriptor::parse(&encoded).expect("parse"), descriptor);
 
-        descriptor.catalog.catalog_format_version = 5;
+        descriptor.catalog.catalog_format_version = CATALOG_FORMAT_VERSION_V5;
+        let encoded = descriptor.encode(&root()).expect("catalog v5 descriptor");
+        assert_eq!(VaultDescriptor::parse(&encoded).expect("parse"), descriptor);
+
+        descriptor.catalog.catalog_format_version = 6;
         assert_eq!(
-            descriptor.encode(&root()).expect_err("catalog v5").status(),
+            descriptor.encode(&root()).expect_err("catalog v6").status(),
             ChurStatus::UnsupportedVersion
         );
     }

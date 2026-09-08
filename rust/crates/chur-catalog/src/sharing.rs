@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use chur_core::{ChurStatus, Error, Id, Result, bail, ensure};
+use chur_core::{bail, ensure, ChurStatus, Error, Id, Result};
 use chur_sync_protocol::{
     collection_membership::{
         CollectionMembershipOutcome, CollectionMembershipRecord, CollectionMembershipState,
@@ -11,10 +11,10 @@ use chur_sync_protocol::{
     grant::CollectionGrant,
     state::MembershipState,
 };
-use rusqlite::{OptionalExtension, Transaction, params};
+use rusqlite::{params, OptionalExtension, Transaction};
 
 use crate::{
-    db::{CatalogDb, as_sqlite_integer, from_sqlite_integer, map_sqlite},
+    db::{as_sqlite_integer, from_sqlite_integer, map_sqlite, CatalogDb},
     schema::bump_generation,
 };
 
@@ -467,13 +467,65 @@ pub fn store_grant(
             "collection sharing is not provisioned",
         )
     })?;
-    db.transaction(|transaction| {
+    let outcome = db.transaction(|transaction| {
         let outcome = project_grant(transaction, &state, grant, sender_membership)?;
         if outcome == GrantStoreOutcome::Stored {
             bump_generation(transaction)?;
         }
         Ok(outcome)
+    });
+    match outcome {
+        Err(error) if error.status() == ChurStatus::Conflict => {
+            // The application transaction rolled back, so the freeze is
+            // recorded afterwards, in a transaction of its own. It triggers
+            // only on the observed reuse of one grant identifier with
+            // different bytes, not on a concurrent head change or an already
+            // standing freeze.
+            if grant_identifier_conflicts(db, grant)? {
+                record_grant_freeze(db, grant.collection_id())?;
+            }
+            Err(error)
+        }
+        outcome => outcome,
+    }
+}
+
+/// Records the durable grant-acceptance freeze for one collection.
+///
+/// The freeze is client state about a detected security conflict, not part of
+/// any authenticated record, so it lives in its own committed transaction
+/// rather than inside one a rejection rolls back.
+pub(crate) fn record_grant_freeze(db: &mut CatalogDb, collection_id: &Id) -> Result<()> {
+    db.transaction(|transaction| {
+        let changed = transaction
+            .execute(
+                "UPDATE sharing_collections SET grants_frozen = 1 WHERE collection_id = ?1",
+                [collection_id.as_bytes().as_slice()],
+            )
+            .map_err(|error| {
+                map_sqlite(error, "the grant-acceptance freeze could not be recorded")
+            })?;
+        ensure!(
+            changed == 1,
+            CatalogCorrupt,
+            "the collection whose grants were frozen has no row"
+        );
+        Ok(())
     })
+}
+
+/// Whether one stored grant already holds this identifier with different bytes.
+pub(crate) fn grant_identifier_conflicts(db: &CatalogDb, grant: &CollectionGrant) -> Result<bool> {
+    let existing: Option<Vec<u8>> = db
+        .connection()
+        .query_row(
+            "SELECT record FROM sharing_grants WHERE grant_id = ?1",
+            [grant.grant_id().as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| map_sqlite(error, "an existing collection grant could not be read"))?;
+    Ok(existing.is_some_and(|bytes| bytes != grant.encode()))
 }
 
 /// Loads and validates all stored grants for one collection.
@@ -578,13 +630,33 @@ pub fn project_grant(
         .optional()
         .map_err(|error| map_sqlite(error, "an existing collection grant could not be read"))?;
     if let Some(existing) = existing {
-        ensure!(
-            existing == encoded,
-            Conflict,
-            "a grant identifier names different canonical bytes"
-        );
+        if existing != encoded {
+            // COLLECTION_MEMBERSHIP.md §5: a grant identifier reused with
+            // different bytes is a security conflict. This projection runs
+            // inside the caller's application transaction, whose error rolls
+            // the transaction back, so the caller records the durable freeze
+            // once the rollback has completed.
+            bail!(
+                Conflict,
+                "a grant identifier names different canonical bytes"
+            );
+        }
         return Ok(GrantStoreOutcome::Duplicate);
     }
+    // An identical replay stays idempotent even in a frozen collection; every
+    // other grant is refused while the freeze stands.
+    let frozen: i64 = transaction
+        .query_row(
+            "SELECT grants_frozen FROM sharing_collections WHERE collection_id = ?1",
+            [grant.collection_id().as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .map_err(|error| map_sqlite(error, "the grant-acceptance freeze could not be read"))?;
+    ensure!(
+        frozen == 0,
+        Conflict,
+        "grant acceptance is frozen for this collection"
+    );
     current.validate_grant(grant, sender_membership)?;
     check_head(transaction, current)?;
     transaction
@@ -812,7 +884,7 @@ mod tests {
         db::{CatalogKey, CatalogLocation},
         schema::open_at_current_version,
     };
-    use chur_crypto::{Key, random};
+    use chur_crypto::{random, Key};
     use chur_sync_protocol::{
         collection_membership::{CollectionMembershipAction, RecipientVerification},
         grant::PermissionProfile,
@@ -1059,6 +1131,45 @@ mod tests {
         .expect("conflicting grant");
         let Err(error) = store_grant(&mut db, &conflicting, &source) else {
             panic!("conflicting grant id was accepted")
+        };
+        assert!(error.status() == ChurStatus::Conflict);
+
+        // COLLECTION_MEMBERSHIP.md §5: the identifier conflict freezes grant
+        // acceptance for the collection, durably, in the row this transaction
+        // guards. Identical replay stays idempotent; a different new grant is
+        // refused while the freeze stands.
+        let frozen: i64 = db
+            .connection()
+            .query_row(
+                "SELECT grants_frozen FROM sharing_collections WHERE collection_id = ?1",
+                [id(4).as_bytes().as_slice()],
+                |row| row.get(0),
+            )
+            .expect("freeze state");
+        assert_eq!(frozen, 1);
+        assert!(
+            store_grant(&mut db, &grant, &source).expect("identical replay")
+                == GrantStoreOutcome::Duplicate
+        );
+        let later = CollectionGrant::seal(
+            id(11),
+            id(1),
+            id(4),
+            7,
+            1,
+            id(7),
+            id(8),
+            &recipient.hpke_public_key(),
+            id(2),
+            PermissionProfile::Read,
+            1,
+            4,
+            &collection_key,
+            &source_key,
+        )
+        .expect("later grant");
+        let Err(error) = store_grant(&mut db, &later, &source) else {
+            panic!("a frozen collection accepted a new grant")
         };
         assert!(error.status() == ChurStatus::Conflict);
 

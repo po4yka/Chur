@@ -17,12 +17,12 @@
 
 use chur_catalog::db::{CatalogDb, CatalogKey, CatalogLocation};
 use chur_catalog::paths::VaultRoot;
-use chur_catalog::query::{ObjectQuery, page};
+use chur_catalog::query::{page, ObjectQuery};
 use chur_catalog::vault;
 use chur_catalog::{journal, store};
 use chur_core::{ChurStatus, Result};
 use chur_crypto::random;
-use chur_format::constants::{CATALOG_FORMAT_VERSION_V4, MediaClass, ObjectState};
+use chur_format::constants::{MediaClass, ObjectState, CATALOG_FORMAT_VERSION_V5};
 use chur_media::import::{self, CanonicalMedia, SourceCapability};
 
 const PASSWORD: &[u8] = b"correct horse battery staple";
@@ -251,11 +251,9 @@ fn an_interrupted_import_is_recoverable_and_exposes_no_partial_object() {
             !temporary.exists(),
             "reconciliation left the container behind at {point:?}"
         );
-        assert!(
-            journal::live(reopened.catalog_ref().unwrap())
-                .unwrap()
-                .is_empty()
-        );
+        assert!(journal::live(reopened.catalog_ref().unwrap())
+            .unwrap()
+            .is_empty());
         assert_eq!(
             import::reconcile(&mut reopened, NOW).expect("reconcile"),
             0,
@@ -411,7 +409,7 @@ fn a_vault_this_build_cannot_read_fails_closed() {
                     transaction
                         .execute(
                             "UPDATE vault_state SET catalog_format_version = ?1 WHERE only_row = 1",
-                            [i64::from(CATALOG_FORMAT_VERSION_V4) + 1],
+                            [i64::from(CATALOG_FORMAT_VERSION_V5) + 1],
                         )
                         .map(|_| ())
                         .map_err(|_| {

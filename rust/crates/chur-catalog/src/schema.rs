@@ -10,17 +10,17 @@
 //! after an album would put a private word in a page an attacker can see the
 //! size of.
 
-use chur_core::{Id, Result, bail, ensure, err, limits::catalog as limits};
+use chur_core::{bail, ensure, err, limits::catalog as limits, Id, Result};
 use chur_format::{
     constants::{
         CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V3,
-        CATALOG_FORMAT_VERSION_V4,
+        CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V5,
     },
     envelope::ObjectKeyEnvelope,
 };
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
-use crate::db::{CatalogDb, as_sqlite_integer, from_sqlite_integer, map_sqlite};
+use crate::db::{as_sqlite_integer, from_sqlite_integer, map_sqlite, CatalogDb};
 
 /// One schema step: the version it produces and the statements that produce it.
 #[cfg(test)]
@@ -42,6 +42,9 @@ const STEPS: &[Step] = &[
     },
     Step {
         version: CATALOG_FORMAT_VERSION_V4,
+    },
+    Step {
+        version: CATALOG_FORMAT_VERSION_V5,
     },
 ];
 
@@ -491,6 +494,18 @@ CREATE INDEX sharing_operations_by_participant
     );
 "#;
 
+/// Catalog v5 adds only the durable grant-acceptance freeze.
+///
+/// [`COLLECTION_MEMBERSHIP.md`](../../../docs/sync/COLLECTION_MEMBERSHIP.md) §5
+/// freezes grant acceptance for a collection whose grant identifier arrives
+/// again with different bytes, and a freeze that one reopen forgets protects
+/// nobody. The column is client state about a detected security conflict; it
+/// carries no canonical meaning and never enters an authenticated record.
+const V5_DDL: &str = r#"
+ALTER TABLE sharing_collections
+    ADD COLUMN grants_frozen INTEGER NOT NULL DEFAULT 0 CHECK (grants_frozen IN (0, 1));
+"#;
+
 /// Creates the current schema or opens it without performing an implicit migration.
 ///
 /// `docs/format/CATALOG_SCHEMA_V1.md` §18 forbids skipping an untested step, so
@@ -500,15 +515,15 @@ pub fn open_at_current_version(db: &mut CatalogDb, now_ms: u64) -> Result<u16> {
     let present = recorded_version(db.connection())?;
     let Some(present) = present else {
         install(db, now_ms)?;
-        return Ok(CATALOG_FORMAT_VERSION_V4);
+        return Ok(CATALOG_FORMAT_VERSION_V5);
     };
-    if present != CATALOG_FORMAT_VERSION_V4 {
+    if present != CATALOG_FORMAT_VERSION_V5 {
         bail!(
             MigrationRequired,
             "the catalog requires an authenticated schema migration"
         );
     }
-    Ok(CATALOG_FORMAT_VERSION_V4)
+    Ok(CATALOG_FORMAT_VERSION_V5)
 }
 
 /// The version the database records, or `None` when the schema is absent.
@@ -555,13 +570,16 @@ fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
             )
         })?;
         transaction
+            .execute_batch(V5_DDL)
+            .map_err(|error| map_sqlite(error, "the grant freeze schema could not be created"))?;
+        transaction
             .execute(
                 "INSERT INTO vault_state (
                      only_row, catalog_format_version, catalog_generation,
                      active_migration_target, object_store_checkpoint,
                      integrity_checkpoint_ms, capability_flags
                  ) VALUES (1, ?1, 1, NULL, 0, ?2, 0)",
-                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V4), checkpoint],
+                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V5), checkpoint],
             )
             .map_err(|error| map_sqlite(error, "the catalog state row could not be written"))?;
         Ok(())
@@ -625,9 +643,18 @@ pub(crate) fn reset_to_v3(db: &mut CatalogDb) -> Result<()> {
                 "DROP TABLE sharing_operation_forks;
                  DROP TABLE sharing_operations;
                  DROP TABLE sharing_operation_streams;
+                 DROP TABLE sharing_grants;
+                 DROP TABLE sharing_recipient_pins;
+                 DROP TABLE sharing_membership_records;
+                 DROP TABLE sharing_collections;
                  UPDATE vault_state SET catalog_format_version = 3 WHERE only_row = 1;",
             )
             .map_err(|error| map_sqlite(error, "the test catalog could not be reset to v3"))?;
+        // The v3 sharing tables come back in their canonical shape, without
+        // anything a later version added.
+        transaction
+            .execute_batch(V3_DDL)
+            .map_err(|error| map_sqlite(error, "the v3 sharing state could not be rebuilt"))?;
         Ok(())
     })
 }
@@ -719,6 +746,34 @@ pub(crate) fn migrate_v3_to_v4(db: &mut CatalogDb) -> Result<()> {
                     SET catalog_format_version = ?1, active_migration_target = NULL
                   WHERE only_row = 1",
                 [i64::from(CATALOG_FORMAT_VERSION_V4)],
+            )
+            .map_err(|error| map_sqlite(error, "the migrated version could not be recorded"))?;
+        Ok(())
+    })
+}
+
+pub(crate) fn migrate_v4_to_v5(db: &mut CatalogDb) -> Result<()> {
+    ensure!(
+        recorded_version(db.connection())? == Some(CATALOG_FORMAT_VERSION_V4),
+        MigrationRequired,
+        "the catalog is not at the supported migration source"
+    );
+    db.transaction(|transaction| {
+        transaction
+            .execute(
+                "UPDATE vault_state SET active_migration_target = ?1 WHERE only_row = 1",
+                [i64::from(CATALOG_FORMAT_VERSION_V5)],
+            )
+            .map_err(|error| map_sqlite(error, "the migration target could not be recorded"))?;
+        transaction
+            .execute_batch(V5_DDL)
+            .map_err(|error| map_sqlite(error, "a migration step failed"))?;
+        transaction
+            .execute(
+                "UPDATE vault_state
+                    SET catalog_format_version = ?1, active_migration_target = NULL
+                  WHERE only_row = 1",
+                [i64::from(CATALOG_FORMAT_VERSION_V5)],
             )
             .map_err(|error| map_sqlite(error, "the migrated version could not be recorded"))?;
         Ok(())
@@ -837,7 +892,7 @@ mod tests {
 
     use super::*;
     use crate::db::{CatalogKey, CatalogLocation};
-    use chur_crypto::{Key, Nonce, random};
+    use chur_crypto::{random, Key, Nonce};
     use chur_format::envelope::ObjectKeyEnvelope;
 
     fn open() -> CatalogDb {
@@ -866,11 +921,11 @@ mod tests {
     }
 
     #[test]
-    fn a_new_catalog_installs_version_four() {
+    fn a_new_catalog_installs_version_five() {
         let mut db = open();
         assert_eq!(
             open_at_current_version(&mut db, 1_700_000_000_000).expect("install"),
-            CATALOG_FORMAT_VERSION_V4
+            CATALOG_FORMAT_VERSION_V5
         );
         let sharing_tables: i64 = db
             .connection()
@@ -882,6 +937,18 @@ mod tests {
             )
             .expect("sharing tables");
         assert_eq!(sharing_tables, 7);
+        let frozen: i64 = db
+            .connection()
+            .query_row(
+                "SELECT grants_frozen FROM sharing_collections LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| map_sqlite(error, "the freeze column could not be read"))
+            .expect("freeze column readable")
+            .unwrap_or(0);
+        assert_eq!(frozen, 0);
         assert_eq!(generation(&db).expect("generation"), 1);
     }
 
@@ -930,8 +997,53 @@ mod tests {
         }
         assert_eq!(
             STEPS.last().map(|step| step.version),
+            Some(CATALOG_FORMAT_VERSION_V5)
+        );
+    }
+
+    #[test]
+    fn v4_migration_installs_the_grant_acceptance_freeze() {
+        let mut db = open();
+        open_at_current_version(&mut db, 1).expect("install");
+        reset_to_v1(&mut db).expect("reset to v1");
+        let vault_id = Id::new([7; 16]).expect("id");
+        migrate_v1_to_v2(&mut db, &vault_id).expect("migrate v2");
+        migrate_v2_to_v3(&mut db).expect("migrate v3");
+        migrate_v3_to_v4(&mut db).expect("migrate v4");
+        assert_eq!(
+            recorded_version(db.connection()).expect("version"),
             Some(CATALOG_FORMAT_VERSION_V4)
         );
+
+        migrate_v4_to_v5(&mut db).expect("migrate v5");
+
+        assert_eq!(
+            recorded_version(db.connection()).expect("version"),
+            Some(CATALOG_FORMAT_VERSION_V5)
+        );
+        // The freeze defaults to unfrozen and rejects anything else, so a
+        // collection cannot enter the state by accident.
+        let outcome = db.connection().execute(
+            "INSERT INTO sharing_collections (
+                 collection_id, source_vault_id, initial_epoch,
+                 membership_generation, membership_commitment, current_epoch,
+                 grants_frozen
+             ) VALUES (x'01010101010101010101010101010101',
+                       x'02020202020202020202020202020202', 1, 0,
+                       x'0303030303030303030303030303030303030303030303030303030303030303', 1, 1)",
+            [],
+        );
+        assert!(outcome.is_ok(), "a frozen collection row was rejected");
+        let outcome = db.connection().execute(
+            "INSERT INTO sharing_collections (
+                 collection_id, source_vault_id, initial_epoch,
+                 membership_generation, membership_commitment, current_epoch,
+                 grants_frozen
+             ) VALUES (x'04040404040404040404040404040404',
+                       x'02020202020202020202020202020202', 1, 0, x'03', 1, 2)",
+            [],
+        );
+        assert!(outcome.is_err(), "a non-boolean freeze value was accepted");
     }
 
     #[test]
@@ -992,7 +1104,10 @@ mod tests {
         let collection = [1u8; 16];
         db.connection()
             .execute(
-                "INSERT INTO sharing_collections VALUES (?1, ?2, 1, 0, ?3, 1)",
+                "INSERT INTO sharing_collections (
+                     collection_id, source_vault_id, initial_epoch,
+                     membership_generation, membership_commitment, current_epoch
+                 ) VALUES (?1, ?2, 1, 0, ?3, 1)",
                 rusqlite::params![collection, [2u8; 16], [0u8; 32]],
             )
             .expect("collection");

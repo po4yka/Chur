@@ -45,6 +45,8 @@ pub const CATALOG_FORMAT_VERSION_V2: u16 = 0x0002;
 pub const CATALOG_FORMAT_VERSION_V3: u16 = 0x0003;
 /// §15.2: private catalog v4 with durable collection-operation streams.
 pub const CATALOG_FORMAT_VERSION_V4: u16 = 0x0004;
+/// §15.2: private catalog v5 with the durable grant-acceptance freeze.
+pub const CATALOG_FORMAT_VERSION_V5: u16 = 0x0005;
 /// §15.2: `object_store_format_version`.
 pub const OBJECT_STORE_FORMAT_VERSION_V1: u16 = 0x0001;
 /// §15.2: `slot_version` of the v1 key-slot families.

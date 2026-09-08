@@ -10,15 +10,16 @@
 //! zeroizing the key. Nothing above this module ever holds a root secret.
 
 use chur_core::limits::{GCM_NONCE_LEN, WRAPPED_KEY_LEN};
-use chur_core::{ChurStatus, Error, Id, Result, bail, ensure};
+use chur_core::{bail, ensure, ChurStatus, Error, Id, Result};
 use chur_crypto::{
-    Key, Nonce, commit,
+    commit,
     password::{self, Argon2Params},
-    random, recovery,
+    random, recovery, Key, Nonce,
 };
 use chur_format::constants::{
-    CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V3,
-    CATALOG_FORMAT_VERSION_V4, DESCRIPTOR_VERSION_V1, SlotType, VaultState,
+    SlotType, VaultState, CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2,
+    CATALOG_FORMAT_VERSION_V3, CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V5,
+    DESCRIPTOR_VERSION_V1,
 };
 use chur_format::descriptor::{
     CatalogDescriptor, KeySlotDescriptor, MigrationDescriptor, ObjectStoreDescriptor,
@@ -255,7 +256,7 @@ pub fn create_with_params(
         descriptor_generation: 0,
         state: VaultState::Initializing,
         catalog: CatalogDescriptor {
-            catalog_format_version: CATALOG_FORMAT_VERSION_V4,
+            catalog_format_version: CATALOG_FORMAT_VERSION_V5,
             opaque_catalog_path_id: catalog_path_id,
             catalog_generation,
             catalog_header_commitment: header_commitment,
@@ -653,7 +654,10 @@ fn finish_unlock(
         if descriptor.state == VaultState::Active {
             let (to, migration_generation) =
                 match (descriptor.catalog.catalog_format_version, version) {
-                    (CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V4) => break,
+                    (CATALOG_FORMAT_VERSION_V5, CATALOG_FORMAT_VERSION_V5) => break,
+                    (CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V4) => {
+                        (CATALOG_FORMAT_VERSION_V5, 4)
+                    }
                     (CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V1) => {
                         (CATALOG_FORMAT_VERSION_V2, 1)
                     }
@@ -699,6 +703,9 @@ fn finish_unlock(
                 (CATALOG_FORMAT_VERSION_V3, CATALOG_FORMAT_VERSION_V4) => {
                     schema::migrate_v3_to_v4(&mut catalog)?;
                 }
+                (CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V5) => {
+                    schema::migrate_v4_to_v5(&mut catalog)?;
+                }
                 _ => unreachable!("validated migration"),
             }
         }
@@ -717,8 +724,8 @@ fn finish_unlock(
     let version = schema::open_at_current_version(&mut catalog, now_ms)?;
     ensure!(
         descriptor.state == VaultState::Active
-            && descriptor.catalog.catalog_format_version == CATALOG_FORMAT_VERSION_V4
-            && version == CATALOG_FORMAT_VERSION_V4,
+            && descriptor.catalog.catalog_format_version == CATALOG_FORMAT_VERSION_V5
+            && version == CATALOG_FORMAT_VERSION_V5,
         CatalogCorrupt,
         "the catalog format version disagrees with the descriptor"
     );
@@ -800,6 +807,7 @@ fn validate_catalog_migration(descriptor: &VaultDescriptor) -> Result<MigrationD
                 (CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, 1)
                     | (CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V3, 2)
                     | (CATALOG_FORMAT_VERSION_V3, CATALOG_FORMAT_VERSION_V4, 3)
+                    | (CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V5, 4)
             ),
         MigrationRequired,
         "the descriptor names an unsupported migration"
@@ -1388,21 +1396,29 @@ pub fn prepare_restored_catalog(
             schema::migrate_v1_to_v2(catalog, &descriptor.vault_id)?;
             schema::migrate_v2_to_v3(catalog)?;
             schema::migrate_v3_to_v4(catalog)?;
+            schema::migrate_v4_to_v5(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
         (CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V2) => {
             schema::migrate_v2_to_v3(catalog)?;
             schema::migrate_v3_to_v4(catalog)?;
+            schema::migrate_v4_to_v5(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
         (CATALOG_FORMAT_VERSION_V3, CATALOG_FORMAT_VERSION_V3) => {
             schema::migrate_v3_to_v4(catalog)?;
+            schema::migrate_v4_to_v5(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
-        (CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V4) => Ok(false),
+        (CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V4) => {
+            schema::migrate_v4_to_v5(catalog)?;
+            catalog.checkpoint()?;
+            Ok(true)
+        }
+        (CATALOG_FORMAT_VERSION_V5, CATALOG_FORMAT_VERSION_V5) => Ok(false),
         _ => bail!(
             MigrationRequired,
             "the restored descriptor and catalog versions are unsupported"
@@ -1516,7 +1532,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::panic, clippy::expect_used)]
 
     use super::*;
-    use crate::query::{ObjectQuery, page};
+    use crate::query::{page, ObjectQuery};
 
     /// A private directory for one test.
     fn scratch() -> VaultRoot {
@@ -1723,18 +1739,18 @@ mod tests {
         let reopened = unlock_with_password(&root_dir, PASSWORD, 2).expect("migrate and unlock");
         assert_eq!(
             reopened.descriptor.catalog.catalog_format_version,
-            CATALOG_FORMAT_VERSION_V4
+            CATALOG_FORMAT_VERSION_V5
         );
         assert_eq!(reopened.descriptor.state, VaultState::Active);
         assert!(reopened.descriptor.migration.is_none());
         assert_eq!(
             reopened.descriptor.descriptor_generation,
-            source.descriptor_generation + 6
+            source.descriptor_generation + 8
         );
     }
 
     #[test]
-    fn a_v1_to_v2_migration_resumes_then_reaches_v4() {
+    fn a_v1_to_v2_migration_resumes_then_reaches_v5() {
         for sql_committed in [false, true] {
             let root_dir = scratch();
             let mut session = make(&root_dir);
@@ -1758,18 +1774,18 @@ mod tests {
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V4
+                CATALOG_FORMAT_VERSION_V5
             );
             assert!(reopened.descriptor.migration.is_none());
             assert_eq!(
                 reopened.descriptor.descriptor_generation,
-                migrating.descriptor_generation + 5
+                migrating.descriptor_generation + 7
             );
         }
     }
 
     #[test]
-    fn a_v2_to_v3_migration_resumes_then_reaches_v4() {
+    fn a_v2_to_v3_migration_resumes_then_reaches_v5() {
         for sql_committed in [false, true] {
             let root_dir = scratch();
             let mut session = make(&root_dir);
@@ -1792,12 +1808,12 @@ mod tests {
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V4
+                CATALOG_FORMAT_VERSION_V5
             );
             assert!(reopened.descriptor.migration.is_none());
             assert_eq!(
                 reopened.descriptor.descriptor_generation,
-                migrating.descriptor_generation + 3
+                migrating.descriptor_generation + 5
             );
         }
     }
@@ -1826,12 +1842,12 @@ mod tests {
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V4
+                CATALOG_FORMAT_VERSION_V5
             );
             assert!(reopened.descriptor.migration.is_none());
             assert_eq!(
                 reopened.descriptor.descriptor_generation,
-                migrating.descriptor_generation + 1
+                migrating.descriptor_generation + 3
             );
         }
     }
@@ -2129,11 +2145,9 @@ mod tests {
         session.begin_android_keystore_slot().expect("begin");
         drop(session);
 
-        assert!(
-            android_keystore_material(&root_dir)
-                .expect("material")
-                .is_empty()
-        );
+        assert!(android_keystore_material(&root_dir)
+            .expect("material")
+            .is_empty());
         let reopened = unlock_with_password(&root_dir, PASSWORD, 1).expect("unlock");
         assert_eq!(reopened.slots().len(), before);
     }
@@ -2166,11 +2180,9 @@ mod tests {
             .replace_password(b"a new password", Argon2Params::v1_default())
             .expect("replace");
         drop(session);
-        assert!(
-            unlock_with_password(&root_dir, b"a new password", 1)
-                .expect("unlock")
-                .is_unlocked()
-        );
+        assert!(unlock_with_password(&root_dir, b"a new password", 1)
+            .expect("unlock")
+            .is_unlocked());
         assert_eq!(
             rejection(unlock_with_password(&root_dir, PASSWORD, 1)),
             ChurStatus::AuthenticationFailed
