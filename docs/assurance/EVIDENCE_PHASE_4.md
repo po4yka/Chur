@@ -56,11 +56,14 @@
 
 ## 5. What has no enforcing job
 
+[`RELEASE_GATES.md`](RELEASE_GATES.md#evidence-package) requires this list rather than permitting it.
+
 - **independent sharing-protocol audit.** This is the remaining Phase 4 exit criterion and cannot be supplied by the implementation team;
 - **physical multi-device interoperability.** No job verifies sender and recipient flows across supported Android and iOS devices through a deployed service;
 - **operating-system background execution.** The transport primitives build and are tested, but no Android scheduler or iOS background session runs on a device;
 - **an operator deployment.** No job tests reverse-proxy TLS, persistent-volume backup and restore, process supervision, disk exhaustion, or disaster recovery;
-- **recipient erasure.** No protocol can prove deletion of plaintext, keys, screenshots, exports, or backups already controlled by a recipient;
+- **recipient erasure, the claim half of SEC-045.** No protocol can prove deletion of plaintext, keys, screenshots, exports, or backups already controlled by a recipient, and the product wording that states this limit is the half of the invariant [`../security/SECURITY_TEST_PLAN.md`](../security/SECURITY_TEST_PLAN.md) §13 marks audit-only; no job checks a claim only review can judge;
+- **deduplication design review, SEC-046.** The invariant that global deduplication never uses an unkeyed plaintext content hash has no automated evidence and no enforcing job; [`SECURITY_TEST_PLAN.md`](SECURITY_TEST_PLAN.md) §13 marks it audit-only, to be discharged by a design review of any deduplication proposal, and none has been commissioned;
 - **production approval.** Passing this package does not approve Gate 6 while the separate audit and earlier release-gate gaps remain open.
 
 ## 6. Known limitations

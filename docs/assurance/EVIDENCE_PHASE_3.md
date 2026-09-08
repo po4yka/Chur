@@ -57,11 +57,15 @@
 
 ## 5. What has no enforcing job
 
+[`RELEASE_GATES.md`](RELEASE_GATES.md#evidence-package) requires this list rather than permitting it.
+
 - **protocol-focused independent review.** This is the remaining Phase 3 exit criterion and cannot be supplied by the implementation team;
 - **two physical devices.** No job enrolls, revokes, recovers, and converges two supported phones through a deployed server;
 - **operating-system background execution.** The locked transfer primitive builds and is tested with a mock transport, but no Android scheduler or iOS background session runs on a device;
 - **an operator deployment.** No job tests reverse-proxy TLS, persistent-volume backup and restore, process supervision, disk exhaustion, or disaster recovery;
 - **global omission detection.** A checkpoint can prove rollback relative to known authenticated state, but an untrusted server can keep devices in separate consistent views without a trusted witness. [`../sync/SERVER_TRUST_MODEL.md`](../sync/SERVER_TRUST_MODEL.md) §5 states this limit;
+- **deduplication design review, SEC-046.** The invariant that global deduplication never uses an unkeyed plaintext content hash has no automated evidence and no enforcing job; [`../security/SECURITY_TEST_PLAN.md`](../security/SECURITY_TEST_PLAN.md) §13 marks it audit-only, to be discharged by a design review of any deduplication proposal, and none has been commissioned;
+- **the claim half of SEC-045.** That revocation never claims to erase keys or plaintext already obtained is half behavior, tested by the malicious-server harness, and half product claim wording, which only the independent review can judge; [`SECURITY_TEST_PLAN.md`](SECURITY_TEST_PLAN.md) §13 marks that half audit-only;
 - **production approval.** Passing this package does not approve Gate 5 while independent review and the earlier release-gate gaps remain open.
 
 ## 6. Known limitations
