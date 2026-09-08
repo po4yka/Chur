@@ -432,9 +432,19 @@ impl OperationLog {
                 .insert(*checkpoint_head.device_id(), offered);
             outcome = CheckpointOutcome::Raised;
         }
-        candidate
-            .checkpoints
-            .insert(*checkpoint.issuer_device_id(), checkpoint.commitment());
+        // Retain the latest checkpoint, not the last offered one: floors only
+        // move up, so a replayed older checkpoint raises nothing and must not
+        // displace the commitment a fresher checkpoint installed - a regressed
+        // commitment is what breaks fork reporting against the issuer.
+        if outcome == CheckpointOutcome::Raised
+            || !candidate
+                .checkpoints
+                .contains_key(checkpoint.issuer_device_id())
+        {
+            candidate
+                .checkpoints
+                .insert(*checkpoint.issuer_device_id(), checkpoint.commitment());
+        }
         *self = candidate;
         Ok(outcome)
     }
@@ -1621,6 +1631,66 @@ mod tests {
         assert!(
             log.accept(&below, &membership).expect("legal claim") == ApplyOutcome::PendingCause
         );
+    }
+
+    #[test]
+    fn a_replayed_checkpoint_cannot_displace_the_retained_commitment() {
+        let key = DeviceSigningKey::from_seed([3; 32]);
+        let enrollment = EnrollmentRecord::initial(id(1), id(2), key.verifying_key(), [4; 32])
+            .expect("enrollment")
+            .sign(&key);
+        let membership = MembershipState::bootstrap(&enrollment).expect("membership");
+        let first = operation(&key, 1, [0; 32], 5);
+        let second = operation(&key, 2, first.digest(), 6);
+        let third = operation(&key, 3, second.digest(), 7);
+        let older = crate::checkpoint::Checkpoint::new(
+            id(1),
+            id(2),
+            2,
+            1,
+            enrollment.commitment(),
+            vec![crate::checkpoint::CheckpointHead::new(
+                id(2),
+                2,
+                second.digest(),
+            )],
+            [7; 32],
+            [0; 32],
+        )
+        .expect("older checkpoint")
+        .sign(&key);
+        let newer = crate::checkpoint::Checkpoint::new(
+            id(1),
+            id(2),
+            3,
+            1,
+            enrollment.commitment(),
+            vec![crate::checkpoint::CheckpointHead::new(
+                id(2),
+                3,
+                third.digest(),
+            )],
+            [8; 32],
+            [0; 32],
+        )
+        .expect("newer checkpoint")
+        .sign(&key);
+        let mut log = OperationLog::new();
+        assert!(
+            log.accept_checkpoint(&older, &membership).expect("older") == CheckpointOutcome::Raised
+        );
+        assert_eq!(log.checkpoint_commitment(&id(2)), Some(&older.commitment()));
+        assert!(
+            log.accept_checkpoint(&newer, &membership).expect("newer") == CheckpointOutcome::Raised
+        );
+        assert_eq!(log.checkpoint_commitment(&id(2)), Some(&newer.commitment()));
+        // The replayed older checkpoint raises no floor and must leave the
+        // retained commitment alone.
+        assert!(
+            log.accept_checkpoint(&older, &membership).expect("replay")
+                == CheckpointOutcome::Unchanged
+        );
+        assert_eq!(log.checkpoint_commitment(&id(2)), Some(&newer.commitment()));
     }
 
     #[test]
