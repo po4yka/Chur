@@ -15,7 +15,7 @@ Fuzzing targets every parser, decoder boundary, state machine, and FFI entry tha
 
 ## 2. Initial Rust targets
 
-Thirteen targets exist in `rust/fuzz/fuzz_targets/`, one per parser whose subject is implemented:
+Sixteen targets exist in `rust/fuzz/fuzz_targets/`, one per parser whose subject is implemented:
 
 ```text
 parse_canonical_value
@@ -31,26 +31,30 @@ read_plaintext_range
 parse_backup_package
 parse_waveform
 validate_ffi_input
+parse_signed_operation
+parse_collection_grant
+parse_device_identity
 ```
 
-Two more are named by this section and do not exist, because their parsers do not:
+One more is named by this section and does not exist, because its parser does not:
 
 ```text
 parse_catalog_snapshot
-apply_catalog_migration
 ```
 
 A target lands with its parser. `rust/fuzz` is its own Cargo workspace: libFuzzer needs a nightly toolchain and sanitizer flags that must not reach the library build, and a fuzz binary must not enter the release dependency graph.
 
+The three sync-protocol parsers shipped in Phase 2 and Phase 4, and their targets exercise the same properties as every other one: a hard input cap, deterministic rejection, and no panic on arbitrary bytes.
+
 Future:
 
 ```text
-parse_device_identity
-parse_signed_operation
+apply_catalog_migration
 apply_operation_log
-parse_collection_grant
 sync_state_machine
 ```
+
+These are durable-state transitions rather than byte parsers, so their targets follow the structured and state-machine methods of §4 and land with the harness that builds their state.
 
 ## 3. Harness rules
 

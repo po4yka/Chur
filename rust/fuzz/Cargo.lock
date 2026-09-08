@@ -232,6 +232,7 @@ dependencies = [
  "chur-crypto",
  "chur-ffi",
  "chur-format",
+ "chur-sync-protocol",
  "libfuzzer-sys",
 ]
 

@@ -1,8 +1,8 @@
 # Fuzz targets for the Chur parsers.
 #
 # `docs/assurance/FUZZING.md` §2 lists the initial Rust targets. A target lands
-# here when its subject exists; the catalog and sync targets named
-# there are absent because their parsers are.
+# here when its subject exists; the catalog snapshot target named
+# there is absent because its parser is.
 #
 # This is its own workspace on purpose. libFuzzer needs a nightly toolchain and
 # sanitizer flags that must not reach the library build, and the fuzz binaries
@@ -25,6 +25,7 @@ chur-core = { path = "../crates/chur-core" }
 chur-crypto = { path = "../crates/chur-crypto" }
 chur-format = { path = "../crates/chur-format" }
 chur-ffi = { path = "../crates/chur-ffi" }
+chur-sync-protocol = { path = "../crates/chur-sync-protocol" }
 
 [[bin]]
 name = "parse_canonical_value"
@@ -113,6 +114,27 @@ bench = false
 [[bin]]
 name = "validate_ffi_input"
 path = "fuzz_targets/validate_ffi_input.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_signed_operation"
+path = "fuzz_targets/parse_signed_operation.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_collection_grant"
+path = "fuzz_targets/parse_collection_grant.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_device_identity"
+path = "fuzz_targets/parse_device_identity.rs"
 test = false
 doc = false
 bench = false
