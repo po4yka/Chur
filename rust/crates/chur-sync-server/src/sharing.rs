@@ -610,6 +610,36 @@ impl ReferenceServer {
             "only the source vault can relay a newer collection epoch"
         );
         state.validate_grant(grant, &issuer)?;
+        // One key selector routes shared operations to exactly one
+        // (collection, epoch). A second collection storing the same selector
+        // would make that lookup ambiguous and block the first collection's
+        // operation relay, so a member of one collection cannot poison the
+        // selector of another.
+        let epoch_sql = to_sqlite(grant.collection_epoch(), "collection epoch does not fit")?;
+        let conflicting = {
+            let mut statement = self
+                .db
+                .prepare(
+                    "SELECT DISTINCT collection_id, collection_epoch
+                       FROM collection_grants WHERE key_selector = ?1",
+                )
+                .map_err(|error| map_sqlite(error, "selector uniqueness prepare failed"))?;
+            let rows = statement
+                .query_map([outer.key_selector().as_bytes().as_slice()], |row| {
+                    Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?))
+                })
+                .map_err(|error| map_sqlite(error, "selector uniqueness query failed"))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|error| map_sqlite(error, "selector uniqueness row failed"))?;
+            rows.into_iter().any(|(collection, epoch)| {
+                collection != grant.collection_id().as_bytes().as_slice() || epoch != epoch_sql
+            })
+        };
+        ensure!(
+            !conflicting,
+            Conflict,
+            "collection key selector already names another collection epoch"
+        );
         self.ensure_account_capacity(
             outer.vault_id(),
             added_bytes(
@@ -2069,14 +2099,21 @@ mod tests {
             &source_key,
         )
         .expect("current grant");
-        let current_grant_outer = operation(
+        // The rotation grant's selector derives from the epoch-2 collection
+        // key, so it must not reuse the epoch-1 selector of the first grant.
+        let current_grant_outer = Operation::new(
+            id(28),
             source_vault,
             source_device,
-            id(28),
             7,
             revocation_outer.digest(),
-            &source_key,
-        );
+            Vec::new(),
+            id(43),
+            [vec![18; 24], vec![19; 16]].concat(),
+            [0; 64],
+        )
+        .expect("current grant outer")
+        .sign(&source_key);
         server
             .accept_collection_grant(&current_grant, &current_grant_outer)
             .expect("current grant");
@@ -2519,6 +2556,277 @@ mod tests {
             server
                 .accept_collection_operation(&shared_operation)
                 .expect("shared operation after inflation"),
+            RelayOutcome::Stored
+        );
+    }
+
+    #[test]
+    fn a_grant_selector_cannot_be_reused_by_another_collection() {
+        let root = crate::tests::TestRoot::new();
+        let source_vault = id(1);
+        let source_device = id(2);
+        let source_key = DeviceSigningKey::from_seed([3; 32]);
+        let source_enrollment = EnrollmentRecord::initial(
+            source_vault,
+            source_device,
+            source_key.verifying_key(),
+            [4; 32],
+        )
+        .expect("source enrollment")
+        .sign(&source_key);
+        let source_initial = operation(source_vault, source_device, id(5), 1, [0; 32], &source_key);
+        let recipient_vault = id(6);
+        let recipient_device = id(7);
+        let recipient = DeviceIdentity::from_seeds([8; 32], [9; 32]);
+        let recipient_enrollment = EnrollmentRecord::initial(
+            recipient_vault,
+            recipient_device,
+            recipient.signing_public_key(),
+            recipient.hpke_public_key(),
+        )
+        .expect("recipient enrollment")
+        .sign(recipient.signing_key());
+        let recipient_initial = operation(
+            recipient_vault,
+            recipient_device,
+            id(10),
+            1,
+            [0; 32],
+            recipient.signing_key(),
+        );
+        let collection_a = id(45);
+        let collection_b = id(46);
+        let membership_a = CollectionMembershipRecord::new(
+            source_vault,
+            collection_a,
+            1,
+            [0; 32],
+            CollectionMembershipAction::Upsert(PermissionProfile::Read),
+            recipient_vault,
+            recipient_device,
+            recipient.signing_public_key(),
+            recipient.hpke_public_key(),
+            1,
+            source_vault,
+            source_device,
+            1,
+            2,
+        )
+        .expect("collection A membership")
+        .sign(&source_key);
+        let membership_a_outer = operation(
+            source_vault,
+            source_device,
+            id(11),
+            2,
+            source_initial.digest(),
+            &source_key,
+        );
+        let grant_a = CollectionGrant::seal(
+            id(13),
+            source_vault,
+            collection_a,
+            1,
+            1,
+            recipient_vault,
+            recipient_device,
+            &recipient.hpke_public_key(),
+            source_device,
+            PermissionProfile::Read,
+            1,
+            3,
+            &Key::new([20; 32]),
+            &source_key,
+        )
+        .expect("collection A grant");
+        // Every helper operation carries the shared `id(17)` selector, so
+        // collection A's grants route under it.
+        let grant_a_outer = operation(
+            source_vault,
+            source_device,
+            id(13),
+            3,
+            membership_a_outer.digest(),
+            &source_key,
+        );
+        let membership_b = CollectionMembershipRecord::new(
+            source_vault,
+            collection_b,
+            1,
+            [0; 32],
+            CollectionMembershipAction::Upsert(PermissionProfile::Read),
+            recipient_vault,
+            recipient_device,
+            recipient.signing_public_key(),
+            recipient.hpke_public_key(),
+            1,
+            source_vault,
+            source_device,
+            1,
+            4,
+        )
+        .expect("collection B membership")
+        .sign(&source_key);
+        let membership_b_outer = operation(
+            source_vault,
+            source_device,
+            id(15),
+            4,
+            grant_a_outer.digest(),
+            &source_key,
+        );
+        let grant_b = CollectionGrant::seal(
+            id(16),
+            source_vault,
+            collection_b,
+            1,
+            1,
+            recipient_vault,
+            recipient_device,
+            &recipient.hpke_public_key(),
+            source_device,
+            PermissionProfile::Read,
+            1,
+            5,
+            &Key::new([21; 32]),
+            &source_key,
+        )
+        .expect("collection B grant");
+        let grant_b_outer = Operation::new(
+            id(16),
+            source_vault,
+            source_device,
+            5,
+            membership_b_outer.digest(),
+            Vec::new(),
+            id(42),
+            [vec![18; 24], vec![19; 16]].concat(),
+            [0; 64],
+        )
+        .expect("collection B grant outer")
+        .sign(&source_key);
+        // A collection B grant whose outer operation claims collection A's
+        // selector: storing it would make A's selector ambiguous.
+        let poisoned = CollectionGrant::seal(
+            id(18),
+            source_vault,
+            collection_b,
+            1,
+            1,
+            recipient_vault,
+            recipient_device,
+            &recipient.hpke_public_key(),
+            source_device,
+            PermissionProfile::Read,
+            1,
+            6,
+            &Key::new([22; 32]),
+            &source_key,
+        )
+        .expect("poisoned grant");
+        let poisoned_outer = Operation::new(
+            id(18),
+            source_vault,
+            source_device,
+            6,
+            grant_b_outer.digest(),
+            Vec::new(),
+            id(17),
+            [vec![18; 24], vec![19; 16]].concat(),
+            [0; 64],
+        )
+        .expect("poisoned outer")
+        .sign(&source_key);
+        // A second collection B grant reusing B's own selector stays honest.
+        let repeat = CollectionGrant::seal(
+            id(19),
+            source_vault,
+            collection_b,
+            1,
+            1,
+            recipient_vault,
+            recipient_device,
+            &recipient.hpke_public_key(),
+            source_device,
+            PermissionProfile::Read,
+            1,
+            6,
+            &Key::new([23; 32]),
+            &source_key,
+        )
+        .expect("repeated grant");
+        let repeat_outer = Operation::new(
+            id(19),
+            source_vault,
+            source_device,
+            6,
+            grant_b_outer.digest(),
+            Vec::new(),
+            id(42),
+            [vec![18; 24], vec![19; 16]].concat(),
+            [0; 64],
+        )
+        .expect("repeated outer")
+        .sign(&source_key);
+
+        let mut server = ReferenceServer::open(&root.0, 1_024, 65_536).expect("server");
+        server
+            .accept_initial_membership(&source_enrollment, &source_initial)
+            .expect("source bootstrap");
+        server
+            .accept_initial_membership(&recipient_enrollment, &recipient_initial)
+            .expect("recipient bootstrap");
+        assert!(
+            server
+                .accept_collection_membership(&membership_a, &membership_a_outer)
+                .expect("membership A")
+                == RelayOutcome::Stored
+        );
+        assert!(
+            server
+                .accept_collection_grant(&grant_a, &grant_a_outer)
+                .expect("grant A")
+                == RelayOutcome::Stored
+        );
+        assert!(
+            server
+                .accept_collection_membership(&membership_b, &membership_b_outer)
+                .expect("membership B")
+                == RelayOutcome::Stored
+        );
+        assert!(
+            server
+                .accept_collection_grant(&grant_b, &grant_b_outer)
+                .expect("grant B")
+                == RelayOutcome::Stored
+        );
+        assert!(server
+            .accept_collection_grant(&poisoned, &poisoned_outer)
+            .is_err_and(|error| error.status() == ChurStatus::Conflict));
+        assert!(
+            server
+                .accept_collection_grant(&repeat, &repeat_outer)
+                .expect("same-collection selector reuse")
+                == RelayOutcome::Stored
+        );
+        let shared_operation = CollectionOperation::seal(
+            id(30),
+            source_vault,
+            source_device,
+            1,
+            [0; 32],
+            Vec::new(),
+            id(17),
+            &Key::new([31; 32]),
+            Nonce::new([32; 24]),
+            b"opaque shared payload",
+        )
+        .expect("shared operation")
+        .sign(&source_key);
+        assert_eq!(
+            server
+                .accept_collection_operation(&shared_operation)
+                .expect("collection A relay still resolves"),
             RelayOutcome::Stored
         );
     }
