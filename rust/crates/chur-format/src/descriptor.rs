@@ -13,20 +13,20 @@
 //! because a damaged descriptor and a wrong credential must share one external
 //! failure.
 
-use chur_core::limits::{COMMITMENT_LEN, ID_LEN, descriptor as bounds, slot as slot_bounds};
+use chur_core::limits::{descriptor as bounds, slot as slot_bounds, COMMITMENT_LEN, ID_LEN};
 use chur_core::status::ChurStatus;
-use chur_core::{Error, Id, Result, ensure};
+use chur_core::{ensure, Error, Id, Result};
 use chur_crypto::commit::{self, Commitment};
 use chur_crypto::kdf::{self, Context, Label};
-use chur_crypto::secret::{Key, constant_time_eq};
+use chur_crypto::secret::{constant_time_eq, Key};
 use chur_crypto::tuple::tag;
 
 use crate::codec::{Reader, Writer};
 use crate::constants::{
-    CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V3,
-    CATALOG_FORMAT_VERSION_V4, CONTAINER_VERSION_V1, CRYPTO_POLICY_V1, DESCRIPTOR_VERSION_V1,
-    ENCODING_PROFILE_V1, FLAGS_V1, MAGIC_VAULT, NAMING_PROFILE_V1, OBJECT_STORE_FORMAT_VERSION_V1,
-    SLOT_VERSION_V1, SUITE_V1, SlotType, VaultState,
+    SlotType, VaultState, CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2,
+    CATALOG_FORMAT_VERSION_V3, CATALOG_FORMAT_VERSION_V4, CONTAINER_VERSION_V1, CRYPTO_POLICY_V1,
+    DESCRIPTOR_VERSION_V1, ENCODING_PROFILE_V1, FLAGS_V1, MAGIC_VAULT, NAMING_PROFILE_V1,
+    OBJECT_STORE_FORMAT_VERSION_V1, SLOT_VERSION_V1, SUITE_V1,
 };
 use crate::slot::{SlotBinding, WRAP_SUITE_ANDROID_KEYSTORE, WRAP_SUITE_RUST};
 
@@ -562,6 +562,11 @@ impl VaultDescriptor {
             "descriptor generation has no successor"
         );
         ensure!(
+            self.catalog.catalog_generation != u64::MAX,
+            VaultCorrupt,
+            "catalog generation has no successor"
+        );
+        ensure!(
             matches!(
                 self.catalog.catalog_format_version,
                 CATALOG_FORMAT_VERSION_V1
@@ -585,6 +590,13 @@ impl VaultDescriptor {
             VaultCorrupt,
             "migration descriptor is not present exactly for MIGRATING or RECOVERING"
         );
+        if let Some(migration) = &self.migration {
+            ensure!(
+                migration.migration_generation != u64::MAX,
+                VaultCorrupt,
+                "migration generation has no successor"
+            );
+        }
 
         let mut total_body = 0u32;
         let mut password_identities = 0usize;
@@ -898,6 +910,48 @@ mod tests {
 
         descriptor.state = VaultState::Active;
         assert!(descriptor.encode(&root()).is_err());
+    }
+
+    #[test]
+    fn a_generation_without_a_successor_is_rejected_in_every_generation_field() {
+        // §13: `0xFFFFFFFFFFFFFFFF` is rejected in every generation field so an
+        // increment always exists. `descriptor_generation` and
+        // `slot_generation` were checked before; `catalog_generation` and
+        // `migration_generation` complete the rule.
+        let mut descriptor = minimal();
+        descriptor.catalog.catalog_generation = u64::MAX;
+        assert_eq!(
+            descriptor.encode(&root()).unwrap_err().status(),
+            ChurStatus::VaultCorrupt
+        );
+
+        let mut descriptor = minimal();
+        descriptor.state = VaultState::Migrating;
+        descriptor.migration = Some(MigrationDescriptor {
+            from_descriptor_version: 1,
+            to_descriptor_version: 1,
+            from_catalog_format_version: 1,
+            to_catalog_format_version: 1,
+            migration_generation: u64::MAX,
+            checkpoint_id: id(0x0a),
+        });
+        assert_eq!(
+            descriptor.encode(&root()).unwrap_err().status(),
+            ChurStatus::VaultCorrupt
+        );
+
+        // The parser applies the same rule to the wire bytes. `parse` does not
+        // verify the tag, so flipping the field reaches the §13 check.
+        let mut encoded = minimal().encode(&root()).unwrap();
+        // catalog_generation sits after the 40-byte head, the descriptor
+        // generation, the state byte, the catalog version and suite, and the
+        // 16-byte catalog path id.
+        let generation_offset = 0x28 + 8 + 1 + 2 + 2 + 16;
+        encoded[generation_offset..generation_offset + 8].copy_from_slice(&u64::MAX.to_be_bytes());
+        assert_eq!(
+            VaultDescriptor::parse(&encoded).unwrap_err().status(),
+            ChurStatus::VaultCorrupt
+        );
     }
 
     #[test]
