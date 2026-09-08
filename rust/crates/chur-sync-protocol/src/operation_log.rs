@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use chur_core::{ChurStatus, Error, Id, Result, ensure};
+use chur_core::{ensure, ChurStatus, Error, Id, Result};
 use chur_crypto::{Commitment, Key, Nonce};
 
 use crate::{
@@ -732,11 +732,24 @@ impl OperationLog {
         }
 
         for observed in operation.observed_heads() {
-            ensure!(
-                membership.device(observed.device_id()).is_some(),
-                AuthenticationFailed,
-                "operation observes an unknown device"
-            );
+            let device = membership.device(observed.device_id()).ok_or_else(|| {
+                Error::new(
+                    ChurStatus::AuthenticationFailed,
+                    "operation observes an unknown device",
+                )
+            })?;
+            if let DeviceStatus::Revoked { sequence, .. } = device.status() {
+                // `OPERATION_LOG.md` §4.4: a record above the revocation point
+                // is rejected unconditionally, so an observed head above it is
+                // non-canonical. Waiting for it as a missing cause would stall
+                // the author's chain forever, because the named record can
+                // never be accepted.
+                ensure!(
+                    observed.device_sequence() <= sequence,
+                    AuthenticationFailed,
+                    "operation observes a revoked device above its revocation point"
+                );
+            }
             if self
                 .heads
                 .get(observed.device_id())
@@ -1548,6 +1561,66 @@ mod tests {
         assert!(log.head(&id(6)).is_none());
         assert!(log.accept(&first, &membership).expect("pinned") == ApplyOutcome::Applied);
         assert_eq!(log.head(&id(6)), Some((1, first.digest())));
+    }
+
+    #[test]
+    fn an_operation_cannot_observe_a_revoked_device_above_its_revocation_point() {
+        let (mut membership, issuer_key, _revoked_key, enrollment_commitment) =
+            enrolled_second_device();
+        let first = operation_for(&_revoked_key, id(6), 1, [0; 32], 10);
+        let second = operation_for(&_revoked_key, id(6), 2, first.digest(), 11);
+        revoke_second_device(
+            &mut membership,
+            &issuer_key,
+            enrollment_commitment,
+            2,
+            second.digest(),
+        );
+
+        // OPERATION_LOG.md §4.4: an entry above the accepted revocation point
+        // is non-canonical. The old receive path answered PendingCause, so a
+        // third device whose author had accepted records the issuer never saw
+        // stalled forever instead of learning the claim is impossible.
+        let above = Operation::seal(
+            id(20),
+            id(1),
+            id(2),
+            1,
+            [0; 32],
+            vec![crate::operation::ObservedHead::new(id(6), 3)],
+            id(9),
+            &Key::new([8; 32]),
+            Nonce::new([21; 24]),
+            &[21],
+        )
+        .expect("operation")
+        .sign(&issuer_key);
+        let mut log = OperationLog::new();
+        let error = log
+            .accept(&above, &membership)
+            .expect_err("observed head above the revocation point");
+        assert_eq!(error.status(), ChurStatus::AuthenticationFailed);
+        assert!(log.fork(&id(2)).is_none());
+
+        // An author that had not yet observed the revocation may still name
+        // the device at or below the point; that op waits for its cause.
+        let below = Operation::seal(
+            id(22),
+            id(1),
+            id(2),
+            1,
+            [0; 32],
+            vec![crate::operation::ObservedHead::new(id(6), 2)],
+            id(9),
+            &Key::new([8; 32]),
+            Nonce::new([23; 24]),
+            &[23],
+        )
+        .expect("operation")
+        .sign(&issuer_key);
+        assert!(
+            log.accept(&below, &membership).expect("legal claim") == ApplyOutcome::PendingCause
+        );
     }
 
     #[test]
