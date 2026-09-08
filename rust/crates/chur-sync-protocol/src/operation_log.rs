@@ -323,7 +323,7 @@ impl OperationLog {
                         Ok(outcome)
                     }
                     Err(error) if error.status() == ChurStatus::SyncChainFork => {
-                        return self.freeze(operation);
+                        self.freeze(operation)
                     }
                     Err(error) => Err(error),
                 }
@@ -665,9 +665,7 @@ impl OperationLog {
                 }
                 Ok(outcome)
             }
-            Err(error) if error.status() == ChurStatus::SyncChainFork => {
-                return self.freeze(operation);
-            }
+            Err(error) if error.status() == ChurStatus::SyncChainFork => self.freeze(operation),
             Err(error) => Err(error),
         }
     }
