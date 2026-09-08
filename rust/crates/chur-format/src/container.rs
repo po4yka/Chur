@@ -1883,6 +1883,10 @@ impl Geometry {
     /// so with `body = file_length - H - F`, `body - 37 = (n - 1) * C + (last - 1)`
     /// and `last - 1` lies in `0..C`, which makes `n - 1` exactly `(body - 37) / C`.
     ///
+    /// A zero-byte stream is the `n = 0` case: §13 puts the final commit record
+    /// directly after the manifest record, so `body` is zero and no chunk field
+    /// is derived.
+    ///
     /// # Errors
     ///
     /// Returns [`ChurStatus::ObjectIncomplete`] when the file is shorter than
@@ -1902,6 +1906,19 @@ impl Geometry {
                     "the container is shorter than one record sequence",
                 )
             })?;
+        if body == 0 {
+            // §13 zero-byte stream: the final commit record follows the manifest
+            // record directly, with chunk count, total plaintext length, and
+            // last chunk length all zero.
+            return Ok(Self {
+                first_chunk_offset,
+                chunk_size,
+                chunk_count: 0,
+                last_chunk_plaintext_length: 0,
+                total_plaintext_length: 0,
+                final_commit_offset: file_length - FINAL_COMMIT_RECORD_LEN,
+            });
+        }
         ensure!(
             body > overhead,
             ObjectIncomplete,
@@ -2326,6 +2343,29 @@ mod tests {
         (0..length).map(|index| (index % 251) as u8).collect()
     }
 
+    struct InMemory(Vec<u8>);
+
+    impl ReadAt for InMemory {
+        fn length(&self) -> u64 {
+            self.0.len() as u64
+        }
+
+        fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> Result<()> {
+            let start = usize::try_from(offset).map_err(|_| corrupt("the offset is negative"))?;
+            let end = start
+                .checked_add(buffer.len())
+                .ok_or_else(|| corrupt("the range overflows usize"))?;
+            let slice = self.0.get(start..end).ok_or_else(|| {
+                Error::new(
+                    ChurStatus::ObjectIncomplete,
+                    "the range passes the container end",
+                )
+            })?;
+            buffer.copy_from_slice(slice);
+            Ok(())
+        }
+    }
+
     // -- frozen lengths ----------------------------------------------------
 
     #[test]
@@ -2435,6 +2475,24 @@ mod tests {
         );
         assert_eq!(reader.verify_complete().unwrap(), 0);
         assert!(reader.read_range(0, 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_derived_geometry_and_the_stream_reader_accept_a_zero_byte_stream() {
+        // §13 defines the zero-byte stream and the walked `ContainerReader`
+        // accepts it; the computed `Geometry` behind `StreamReader` must
+        // therefore derive a zero-chunk layout from the same bytes.
+        let bytes = build(b"");
+        let preamble = PublicPreamble::decode(&bytes[..PublicPreamble::LEN]).unwrap();
+        let geometry =
+            Geometry::derive(bytes.len() as u64, preamble.manifest_record_length(), CHUNK).unwrap();
+        assert_eq!(geometry.chunk_count(), 0);
+        assert_eq!(geometry.total_plaintext_length(), 0);
+        assert!(geometry.chunk_plaintext_length(0).is_err());
+
+        let mut source = InMemory(bytes);
+        let mut reader = StreamReader::open(&mut source, &object_key(), &identity()).unwrap();
+        assert_eq!(reader.verify_complete().unwrap(), 0);
     }
 
     #[test]
