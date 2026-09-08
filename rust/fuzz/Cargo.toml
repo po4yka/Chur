@@ -18,14 +18,17 @@ license = "BSD-3-Clause"
 [package.metadata]
 cargo-fuzz = true
 
+# The version beside the path keeps the `wildcards = "deny"` rule of
+# rust/deny.toml true for this graph too: a path-only requirement is a
+# wildcard to it. These are workspace members carrying 0.1.0.
 [dependencies]
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
-chur-core = { path = "../crates/chur-core" }
-chur-crypto = { path = "../crates/chur-crypto" }
-chur-format = { path = "../crates/chur-format" }
-chur-ffi = { path = "../crates/chur-ffi" }
-chur-sync-protocol = { path = "../crates/chur-sync-protocol" }
+chur-core = { path = "../crates/chur-core", version = "0.1.0" }
+chur-crypto = { path = "../crates/chur-crypto", version = "0.1.0" }
+chur-format = { path = "../crates/chur-format", version = "0.1.0" }
+chur-ffi = { path = "../crates/chur-ffi", version = "0.1.0" }
+chur-sync-protocol = { path = "../crates/chur-sync-protocol", version = "0.1.0" }
 
 [[bin]]
 name = "parse_canonical_value"

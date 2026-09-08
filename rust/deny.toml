@@ -1,4 +1,5 @@
-# cargo-deny policy for the Chur Rust workspace.
+# cargo-deny policy for the Chur Rust workspaces: the release graph of rust/
+# and the fuzz graph of rust/fuzz, which CI checks with the same file.
 #
 # DEPENDENCY_POLICY.md requires license review, advisory checks, and a small
 # reviewed dependency surface. ADR-0031 makes `cargo deny check` one of the
@@ -25,6 +26,10 @@ allow = [
     "CC0-1.0",
     "ISC",
     "MIT",
+    # libfuzzer-sys bundles the LLVM fuzzing runtime, which carries NCSA. It
+    # links only into the fuzz workspace's own binaries and never reaches a
+    # release artifact.
+    "NCSA",
     "Unicode-3.0",
     "Zlib",
 ]

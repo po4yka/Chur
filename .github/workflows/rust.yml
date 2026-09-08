@@ -339,7 +339,12 @@ jobs:
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cargo
-          key: deny-${{ hashFiles('rust/Cargo.lock') }}
+          key: deny-${{ hashFiles('rust/Cargo.lock', 'rust/fuzz/Cargo.lock') }}
       # The cache holds all of `~/.cargo`, the installed binary with it.
       - run: command -v cargo-deny || cargo install --locked cargo-deny
       - run: cargo deny check
+      # The fuzz workspace is its own dependency graph: libfuzzer and its
+      # bridge join it only there, so the same policy checks it explicitly.
+      - name: cargo deny (fuzz workspace)
+        working-directory: rust/fuzz
+        run: cargo deny check --config ../deny.toml
