@@ -236,9 +236,9 @@ impl ReferenceServer {
             Error::new(ChurStatus::CatalogCorrupt, "selector collection is absent")
         })?;
         ensure!(
-            state.collection_epoch() == collection_epoch,
+            collection_epoch >= state.collection_epoch(),
             AuthenticationFailed,
-            "collection selector is not current"
+            "collection selector is stale"
         );
         let issuer = relay::membership_state(&self.db, operation.issuer_identity_vault_id())?;
         let device = issuer.device(operation.issuer_device_id()).ok_or_else(|| {
@@ -386,9 +386,9 @@ impl ReferenceServer {
             Error::new(ChurStatus::CatalogCorrupt, "selector collection is absent")
         })?;
         ensure!(
-            state.collection_epoch() == collection_epoch,
+            collection_epoch >= state.collection_epoch(),
             AuthenticationFailed,
-            "collection selector is not current"
+            "collection selector is stale"
         );
         if requester_vault_id == *state.source_vault_id() {
             ensure!(
@@ -595,9 +595,20 @@ impl ReferenceServer {
         );
         let issuer = relay::membership_state(&self.db, outer.vault_id())?;
         let operation_outcome = relay::validate_operation(&self.db, outer, &issuer)?;
-        let mut state = collection_state(self, grant.collection_id())?
+        let state = collection_state(self, grant.collection_id())?
             .ok_or_else(|| Error::new(ChurStatus::NotFound, "collection membership is absent"))?;
-        restore_relayed_epoch(&mut state, grant.collection_epoch(), outer.vault_id())?;
+        // The grant is validated against the epoch the membership records
+        // establish. A grant may name a newer epoch only when the source vault,
+        // the authority that rotates collection keys, signed it, and no stored
+        // grant may raise that epoch by itself: one grant with an arbitrary
+        // epoch would otherwise lift the restored state above every real epoch
+        // and freeze the collection's grants and operation relay below it.
+        ensure!(
+            grant.collection_epoch() > state.collection_epoch()
+                || outer.vault_id() == state.source_vault_id(),
+            AuthenticationFailed,
+            "only the source vault can relay a newer collection epoch"
+        );
         state.validate_grant(grant, &issuer)?;
         self.ensure_account_capacity(
             outer.vault_id(),
@@ -766,7 +777,7 @@ impl ReferenceServer {
                 let (record, outer) =
                     row.map_err(|error| map_sqlite(error, "grant inbox row failed"))?;
                 let grant = CollectionGrant::decode(&record).map_err(corrupt_sharing)?;
-                if grant.collection_epoch() != state.collection_epoch()
+                if grant.collection_epoch() < state.collection_epoch()
                     || grant.collection_membership_generation() != membership_generation
                 {
                     continue;
@@ -970,7 +981,7 @@ fn current_grant_pairs(
             CatalogCorrupt,
             "acceptance grant pair is inconsistent"
         );
-        if grant.collection_epoch() == collection_epoch
+        if grant.collection_epoch() >= collection_epoch
             && grant.collection_membership_generation() == membership_generation
         {
             ensure!(
@@ -1460,23 +1471,6 @@ fn collection_state(
             CatalogCorrupt,
             "stored collection membership is not a successor"
         );
-    }
-    let grant_epoch: Option<i64> = server
-        .db
-        .query_row(
-            "SELECT MAX(collection_epoch) FROM collection_grants WHERE collection_id = ?1",
-            [collection_id.as_bytes().as_slice()],
-            |row| row.get(0),
-        )
-        .map_err(|error| map_sqlite(error, "collection grant epoch lookup failed"))?;
-    if let Some(grant_epoch) = grant_epoch {
-        let grant_epoch =
-            super::from_sqlite(grant_epoch, "stored collection grant epoch is invalid")?;
-        if grant_epoch > state.collection_epoch() {
-            state
-                .restore_collection_epoch(grant_epoch)
-                .map_err(corrupt_sharing)?;
-        }
     }
     Ok(Some(state))
 }
@@ -2327,6 +2321,206 @@ mod tests {
         assert!(server
             .accept_collection_operation(&missing)
             .is_err_and(|error| error.status() == ChurStatus::SyncHeadRollback));
+    }
+
+    #[test]
+    fn a_stored_grant_cannot_lift_the_epoch_the_collection_view_restores_to() {
+        let root = crate::tests::TestRoot::new();
+        let source_vault = id(1);
+        let source_device = id(2);
+        let source_key = DeviceSigningKey::from_seed([3; 32]);
+        let source_enrollment = EnrollmentRecord::initial(
+            source_vault,
+            source_device,
+            source_key.verifying_key(),
+            [4; 32],
+        )
+        .expect("source enrollment")
+        .sign(&source_key);
+        let source_initial = operation(source_vault, source_device, id(5), 1, [0; 32], &source_key);
+        let recipient_vault = id(6);
+        let recipient_device = id(7);
+        let recipient = DeviceIdentity::from_seeds([8; 32], [9; 32]);
+        let recipient_enrollment = EnrollmentRecord::initial(
+            recipient_vault,
+            recipient_device,
+            recipient.signing_public_key(),
+            recipient.hpke_public_key(),
+        )
+        .expect("recipient enrollment")
+        .sign(recipient.signing_key());
+        let recipient_initial = operation(
+            recipient_vault,
+            recipient_device,
+            id(10),
+            1,
+            [0; 32],
+            recipient.signing_key(),
+        );
+        let collection_id = id(11);
+        let membership = CollectionMembershipRecord::new(
+            source_vault,
+            collection_id,
+            1,
+            [0; 32],
+            CollectionMembershipAction::Upsert(PermissionProfile::Read),
+            recipient_vault,
+            recipient_device,
+            recipient.signing_public_key(),
+            recipient.hpke_public_key(),
+            1,
+            source_vault,
+            source_device,
+            1,
+            2,
+        )
+        .expect("collection membership")
+        .sign(&source_key);
+        let membership_outer = operation(
+            source_vault,
+            source_device,
+            id(12),
+            2,
+            source_initial.digest(),
+            &source_key,
+        );
+        let collection_key = Key::new([13; 32]);
+        let grant = CollectionGrant::seal(
+            id(14),
+            source_vault,
+            collection_id,
+            1,
+            1,
+            recipient_vault,
+            recipient_device,
+            &recipient.hpke_public_key(),
+            source_device,
+            PermissionProfile::Read,
+            1,
+            3,
+            &collection_key,
+            &source_key,
+        )
+        .expect("grant");
+        let grant_outer = operation(
+            source_vault,
+            source_device,
+            id(14),
+            3,
+            membership_outer.digest(),
+            &source_key,
+        );
+        // A grant carrying an epoch no rotation produced, on a selector of its
+        // own so the key-selector routing rule is out of the way.
+        let inflated = CollectionGrant::seal(
+            id(51),
+            source_vault,
+            collection_id,
+            (1u64 << 60) + 1,
+            1,
+            recipient_vault,
+            recipient_device,
+            &recipient.hpke_public_key(),
+            source_device,
+            PermissionProfile::Read,
+            1,
+            4,
+            &Key::new([51; 32]),
+            &source_key,
+        )
+        .expect("inflated grant");
+        let inflated_outer = Operation::new(
+            id(51),
+            source_vault,
+            source_device,
+            4,
+            grant_outer.digest(),
+            Vec::new(),
+            id(41),
+            [vec![18; 24], vec![19; 16]].concat(),
+            [0; 64],
+        )
+        .expect("inflated outer")
+        .sign(&source_key);
+        let current = CollectionGrant::seal(
+            id(52),
+            source_vault,
+            collection_id,
+            1,
+            1,
+            recipient_vault,
+            recipient_device,
+            &recipient.hpke_public_key(),
+            source_device,
+            PermissionProfile::Read,
+            1,
+            5,
+            &Key::new([53; 32]),
+            &source_key,
+        )
+        .expect("current grant");
+        let current_outer = operation(
+            source_vault,
+            source_device,
+            id(52),
+            5,
+            inflated_outer.digest(),
+            &source_key,
+        );
+
+        let mut server = ReferenceServer::open(&root.0, 1_024, 65_536).expect("server");
+        server
+            .accept_initial_membership(&source_enrollment, &source_initial)
+            .expect("source bootstrap");
+        server
+            .accept_initial_membership(&recipient_enrollment, &recipient_initial)
+            .expect("recipient bootstrap");
+        assert!(
+            server
+                .accept_collection_membership(&membership, &membership_outer)
+                .expect("membership")
+                == RelayOutcome::Stored
+        );
+        assert!(
+            server
+                .accept_collection_grant(&grant, &grant_outer)
+                .expect("grant")
+                == RelayOutcome::Stored
+        );
+        assert!(
+            server
+                .accept_collection_grant(&inflated, &inflated_outer)
+                .expect("inflated grant is stored, but anchors nothing")
+                == RelayOutcome::Stored
+        );
+        // The inflated row must not raise the epoch the restored state carries:
+        // a current-epoch grant and a current-epoch shared operation still work.
+        assert!(
+            server
+                .accept_collection_grant(&current, &current_outer)
+                .expect("current grant after inflation")
+                == RelayOutcome::Stored
+        );
+        let shared_operation = CollectionOperation::seal(
+            id(30),
+            source_vault,
+            source_device,
+            1,
+            [0; 32],
+            Vec::new(),
+            *grant_outer.key_selector(),
+            &Key::new([31; 32]),
+            Nonce::new([32; 24]),
+            b"opaque shared payload",
+        )
+        .expect("shared operation")
+        .sign(&source_key);
+        assert_eq!(
+            server
+                .accept_collection_operation(&shared_operation)
+                .expect("shared operation after inflation"),
+            RelayOutcome::Stored
+        );
     }
 
     #[test]

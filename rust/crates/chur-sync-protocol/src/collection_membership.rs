@@ -3,13 +3,13 @@
 
 use std::collections::BTreeMap;
 
-use chur_core::{ChurStatus, Error, Id, Result, ensure};
-use chur_crypto::{Commitment, commit, tuple::tag};
+use chur_core::{ensure, ChurStatus, Error, Id, Result};
+use chur_crypto::{commit, tuple::tag, Commitment};
 use chur_format::codec::{Reader, Writer};
 
 use crate::collection_operation::CollectionOperation;
-use crate::grant::{CollectionGrant, PermissionProfile, hpke_key_id};
-use crate::operation::{DeviceSigningKey, Operation, PROTOCOL_VERSION_V1, verify_ed25519};
+use crate::grant::{hpke_key_id, CollectionGrant, PermissionProfile};
+use crate::operation::{verify_ed25519, DeviceSigningKey, Operation, PROTOCOL_VERSION_V1};
 use crate::payload::{OperationPayload, PayloadBody};
 use crate::state::MembershipState;
 
@@ -475,7 +475,7 @@ impl CollectionMembershipState {
         ensure!(
             grant.source_vault_id() == &self.source_vault_id
                 && grant.collection_id() == &self.collection_id
-                && grant.collection_epoch() == self.collection_epoch,
+                && grant.collection_epoch() >= self.collection_epoch,
             AuthenticationFailed,
             "collection grant does not match current collection state"
         );
@@ -1062,8 +1062,8 @@ mod tests {
     use super::*;
     use crate::identity::DeviceIdentity;
     use crate::membership::EnrollmentRecord;
-    use chur_crypto::Nonce;
     use chur_crypto::secret::Key;
+    use chur_crypto::Nonce;
 
     fn id(byte: u8) -> Id {
         Id::new([byte; 16]).expect("id")
@@ -1512,11 +1512,9 @@ mod tests {
         )
         .expect("operation")
         .sign(&manager_key);
-        assert!(
-            insufficient
-                .authorize_operation(&operation, &payload, &manager_membership)
-                .is_err()
-        );
+        assert!(insufficient
+            .authorize_operation(&operation, &payload, &manager_membership)
+            .is_err());
         state
             .authorize_operation(&operation, &payload, &manager_membership)
             .expect("manager operation");
@@ -1571,16 +1569,12 @@ mod tests {
             .get_mut(&(id(5), id(6)))
             .expect("manager")
             .permissions = PermissionProfile::Contribute;
-        assert!(
-            grant_insufficient
-                .validate_grant(&grant, &manager_membership)
-                .is_err()
-        );
-        assert!(
-            grant_insufficient
-                .authorize_operation(&grant_operation, &grant_payload, &manager_membership)
-                .is_err()
-        );
+        assert!(grant_insufficient
+            .validate_grant(&grant, &manager_membership)
+            .is_err());
+        assert!(grant_insufficient
+            .authorize_operation(&grant_operation, &grant_payload, &manager_membership)
+            .is_err());
     }
 
     #[test]
@@ -1645,11 +1639,9 @@ mod tests {
         .expect("operation")
         .sign(&recipient_key);
 
-        assert!(
-            state
-                .authorize_operation(&operation, &payload, &recipient_membership)
-                .is_err()
-        );
+        assert!(state
+            .authorize_operation(&operation, &payload, &recipient_membership)
+            .is_err());
         let upgrade = CollectionMembershipRecord::new(
             id(1),
             id(8),
