@@ -2,12 +2,12 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 
-use chur_core::{ensure, ChurStatus, Error, Id, Result};
+use chur_core::{ChurStatus, Error, Id, Result, ensure};
 use chur_sync_protocol::deletion::{DeletionTargetKind, ServerDeletionAuthorization};
 use chur_sync_protocol::state::DeviceStatus;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 
-use super::{map_sqlite, ReferenceServer};
+use super::{ReferenceServer, map_sqlite};
 
 /// Durable result of applying one signed deletion request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -435,9 +435,11 @@ mod tests {
             DeletionOutcome::Duplicate
         );
         assert!(server.accept_operation(&operation).is_err());
-        assert!(server
-            .accept_initial_membership(&enrollment, &operation)
-            .is_err());
+        assert!(
+            server
+                .accept_initial_membership(&enrollment, &operation)
+                .is_err()
+        );
     }
 
     fn id(byte: u8) -> Id {

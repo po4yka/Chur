@@ -7,9 +7,9 @@
 //! argument can be null in ways a C caller's cannot.
 
 use chur_ffi::api::Status;
+use jni::JNIEnv;
 use jni::objects::{JByteArray, JByteBuffer, JIntArray, JLongArray, JString};
 use jni::sys::{jint, jlong};
-use jni::JNIEnv;
 use zeroize::Zeroizing;
 
 /// `CHUR_INVALID_INPUT` of `docs/ERROR_MODEL.md`.

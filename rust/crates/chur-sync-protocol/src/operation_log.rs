@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use chur_core::{ensure, ChurStatus, Error, Id, Result};
+use chur_core::{ChurStatus, Error, Id, Result, ensure};
 use chur_crypto::{Commitment, Key, Nonce};
 
 use crate::{

@@ -6,8 +6,8 @@ use chur_core::{ChurStatus, Error, Id, Result};
 use chur_format::envelope::ObjectKeyEnvelope;
 
 use crate::convergence::{
-    causal_relation, CausalRelation, CausalStamp, MergeOutcome, ObjectLifecycle, ObservedRemoveSet,
-    ScalarRegister,
+    CausalRelation, CausalStamp, MergeOutcome, ObjectLifecycle, ObservedRemoveSet, ScalarRegister,
+    causal_relation,
 };
 use crate::operation::Operation;
 use crate::payload::{MetadataFieldId, OperationPayload, PayloadBody};

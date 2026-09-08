@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use chur_core::limits::sync as bounds;
-use chur_core::{ensure, ChurStatus, Error, Id, Result};
+use chur_core::{ChurStatus, Error, Id, Result, ensure};
 use chur_format::codec::Writer;
 use chur_sync_protocol::collection_membership::{
     CollectionMembershipAction, CollectionMembershipOutcome, CollectionMembershipRecord,
@@ -11,9 +11,9 @@ use chur_sync_protocol::collection_operation::CollectionOperation;
 use chur_sync_protocol::grant::{CollectionGrant, PermissionProfile};
 use chur_sync_protocol::membership::{EnrollmentRecord, RevocationRecord};
 use chur_sync_protocol::operation::Operation;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{OptionalExtension, params};
 
-use super::{map_sqlite, relay, to_sqlite, ReferenceServer, RelayOutcome};
+use super::{ReferenceServer, RelayOutcome, map_sqlite, relay, to_sqlite};
 
 const PACKAGE_ISSUERS_MAX: usize = 257;
 const PACKAGE_RECORDS_MAX: usize = 4_096;
@@ -1578,7 +1578,7 @@ fn corrupt_sharing(_: Error) -> Error {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use chur_crypto::{secret::Key, Nonce};
+    use chur_crypto::{Nonce, secret::Key};
     use chur_format::codec::Reader;
     use chur_sync_protocol::collection_membership::{
         CollectionMembershipAction, CollectionMembershipRecord,
@@ -1870,18 +1870,22 @@ mod tests {
                 grant_outer.encode(),
             ]
         );
-        assert!(server
-            .issuer_memberships_for_recipient(second_vault, second_device, source_vault, 0,)
-            .is_err_and(|error| error.status() == ChurStatus::AuthenticationFailed));
-        assert!(server
-            .issuer_operations_for_recipient(
-                second_vault,
-                second_device,
-                source_vault,
-                source_device,
-                0,
-            )
-            .is_err_and(|error| error.status() == ChurStatus::AuthenticationFailed));
+        assert!(
+            server
+                .issuer_memberships_for_recipient(second_vault, second_device, source_vault, 0,)
+                .is_err_and(|error| error.status() == ChurStatus::AuthenticationFailed)
+        );
+        assert!(
+            server
+                .issuer_operations_for_recipient(
+                    second_vault,
+                    second_device,
+                    source_vault,
+                    source_device,
+                    0,
+                )
+                .is_err_and(|error| error.status() == ChurStatus::AuthenticationFailed)
+        );
         let second_operation = CollectionOperation::seal(
             id(35),
             source_vault,
@@ -1924,9 +1928,11 @@ mod tests {
         )
         .expect("unauthorized operation")
         .sign(recipient.signing_key());
-        assert!(server
-            .accept_collection_operation(&unauthorized)
-            .is_err_and(|error| error.status() == ChurStatus::AuthenticationFailed));
+        assert!(
+            server
+                .accept_collection_operation(&unauthorized)
+                .is_err_and(|error| error.status() == ChurStatus::AuthenticationFailed)
+        );
         let conflicting_grant = CollectionGrant::seal(
             id(14),
             source_vault,
@@ -2079,9 +2085,16 @@ mod tests {
         server
             .accept_collection_membership(&revocation, &revocation_outer)
             .expect("recipient revocation");
-        assert!(server
-            .issuer_memberships_for_recipient(recipient_vault, recipient_device, second_vault, 0,)
-            .is_err_and(|error| error.status() == ChurStatus::AuthenticationFailed));
+        assert!(
+            server
+                .issuer_memberships_for_recipient(
+                    recipient_vault,
+                    recipient_device,
+                    second_vault,
+                    0,
+                )
+                .is_err_and(|error| error.status() == ChurStatus::AuthenticationFailed)
+        );
         let current_grant = CollectionGrant::seal(
             id(28),
             source_vault,
@@ -2159,14 +2172,18 @@ mod tests {
                 &current_grant_outer.encode()
             )]
         );
-        assert!(server
-            .collection_memberships_for_recipient(id(15), id(16))
-            .expect("unrelated inbox")
-            .is_empty());
-        assert!(server
-            .collection_grants_for_recipient(id(15), id(16))
-            .expect("unrelated grants")
-            .is_empty());
+        assert!(
+            server
+                .collection_memberships_for_recipient(id(15), id(16))
+                .expect("unrelated inbox")
+                .is_empty()
+        );
+        assert!(
+            server
+                .collection_grants_for_recipient(id(15), id(16))
+                .expect("unrelated grants")
+                .is_empty()
+        );
     }
 
     /// An observed head below the relay tip is a cause that is present.
@@ -2355,9 +2372,11 @@ mod tests {
         )
         .expect("missing cause operation")
         .sign(recipient.signing_key());
-        assert!(server
-            .accept_collection_operation(&missing)
-            .is_err_and(|error| error.status() == ChurStatus::SyncHeadRollback));
+        assert!(
+            server
+                .accept_collection_operation(&missing)
+                .is_err_and(|error| error.status() == ChurStatus::SyncHeadRollback)
+        );
     }
 
     #[test]
@@ -2800,9 +2819,11 @@ mod tests {
                 .expect("grant B")
                 == RelayOutcome::Stored
         );
-        assert!(server
-            .accept_collection_grant(&poisoned, &poisoned_outer)
-            .is_err_and(|error| error.status() == ChurStatus::Conflict));
+        assert!(
+            server
+                .accept_collection_grant(&poisoned, &poisoned_outer)
+                .is_err_and(|error| error.status() == ChurStatus::Conflict)
+        );
         assert!(
             server
                 .accept_collection_grant(&repeat, &repeat_outer)
@@ -2932,9 +2953,11 @@ mod tests {
                 .collect::<rusqlite::Result<Vec<_>>>()
                 .expect("column rows");
             assert!(columns.iter().any(|column| column == "outer_device_id"));
-            assert!(columns
-                .iter()
-                .any(|column| column == "outer_device_sequence"));
+            assert!(
+                columns
+                    .iter()
+                    .any(|column| column == "outer_device_sequence")
+            );
         }
         let membership_outer: (Vec<u8>, i64) = server
             .db
@@ -3010,11 +3033,10 @@ mod tests {
                 .expect("chain row");
         }
         transaction.commit().expect("chain commit");
-        let error = match collection_state(&server, &collection) {
-            Err(error) => error,
-            Ok(_) => panic!("the chain bound did not fail closed"),
-        };
-        assert_eq!(error.status(), ChurStatus::ResourceLimitExceeded);
+        assert!(matches!(
+            collection_state(&server, &collection),
+            Err(ref error) if error.status() == ChurStatus::ResourceLimitExceeded
+        ));
     }
 
     fn id(byte: u8) -> Id {

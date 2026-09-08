@@ -158,13 +158,14 @@ fn remove_cannot_name_an_add_token_it_did_not_causally_observe() {
     set.add(element, CausalStamp::from_operation(&add))
         .expect("add");
 
-    assert!(set
-        .remove(
+    assert!(
+        set.remove(
             element,
             CausalStamp::from_operation(&concurrent_remove),
             &removed,
         )
-        .is_err());
+        .is_err()
+    );
     assert!(set.contains(&element));
 }
 
@@ -212,7 +213,9 @@ fn delete_restore_and_retention_follow_causality_not_delivery_time() {
         &latest,
         true,
     ));
-    assert!(lifecycle.eligible_for_gc(authored_at + (30 * DAY_MS), &[id(2), id(3)], &latest, true,));
+    assert!(
+        lifecycle.eligible_for_gc(authored_at + (30 * DAY_MS), &[id(2), id(3)], &latest, true,)
+    );
     assert!(!lifecycle.eligible_for_gc(
         authored_at + (180 * DAY_MS),
         &[id(2), id(3)],
