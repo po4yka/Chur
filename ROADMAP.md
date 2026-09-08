@@ -15,12 +15,12 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 | Item | State |
 | --- | --- |
 | complete the normative documentation set | done |
-| create architecture decision records | done, 43 |
+| create architecture decision records | done, 57 |
 | scaffold KMP/CMP and Rust workspaces | done. `:shared:app` is a Compose Multiplatform module holding the one screen Phase 0 owns, the ABI gate; the Notes public shell and every private screen are Phase 1 |
 | pin toolchains and dependencies | done: `rust-toolchain.toml`, `gradle/libs.versions.toml`, a wrapper distribution SHA-256, `Cargo.lock`, and the four mobile Rust targets built and symbol-checked on every pull request |
 | establish canonical encoding and byte-exact v1 formats | done |
 | implement `chur-cli` foundations | done: vector generation and verification, container inspection, the two benchmarks, the ABI handshake |
-| publish deterministic positive and negative vectors | done, 78. It was 62 at the end of Phase 0; Phase 2 added the backup structures its own format needed |
+| publish deterministic positive and negative vectors | done, 99. It was 62 at the end of Phase 0; Phase 2 added the backup structures its own format needed, and Phase 3 the sync structures its protocol needed |
 | add fuzzing, corruption, migration, and FFI harnesses | done: ten fuzz targets, a bitwise corruption sweep, a version-domain migration harness, a header-consistency harness, and a C ABI harness |
 | land the continuous-integration workflow that enforces the release gates | done, [ADR-0031](docs/adr/0031-continuous-integration-owns-gate-enforcement.md) |
 | prototype Android Keystore and iOS Keychain slots | done |
@@ -128,7 +128,7 @@ None of these is started, which is the intent:
 | --- | --- |
 | server trust model and sync protocol finalized | met. The accepted v1 documents define the server's observable data, client trust rules, canonical records, limits, deletion authorization, and locked behavior |
 | malicious-server test harness operational | met. `chur-sync-protocol` `tests/malicious_server.rs` exercises replay, omission, key substitution, rollback, and equivocation |
-| protocol vectors published | met. The v1 set has 94 vectors and two fixtures, including accepted and rejected sync records, and the reference server consumes them |
+| protocol vectors published | met. The v1 set has 99 vectors and two fixtures, including accepted and rejected sync records, and the reference server consumes them |
 | independent review of identity, log, and rollback design | **outstanding.** [`docs/assurance/SECURITY_REVIEW_SCOPE.md`](docs/assurance/SECURITY_REVIEW_SCOPE.md) defines the engagement; no repository job can supply an independent reviewer |
 
 [`docs/assurance/EVIDENCE_PHASE_3.md`](docs/assurance/EVIDENCE_PHASE_3.md) records the observed implementation and verification evidence.
