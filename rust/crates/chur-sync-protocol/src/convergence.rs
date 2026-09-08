@@ -281,7 +281,15 @@ impl ObjectLifecycle {
         )
     }
 
-    /// Applies an explicit restore that observes every current delete branch.
+    /// Applies an explicit restore that names one retained tombstone.
+    ///
+    /// The restore waits for the tombstone it names and supersedes every
+    /// tombstone the state holds when it applies, including concurrent ones.
+    /// The supersession is what keeps the final catalog independent of arrival
+    /// order: a restore that refused a concurrent delete branch would apply
+    /// when it arrived first and stall the author's chain forever when it
+    /// arrived second, and a delete of the superseded generation that arrives
+    /// late is `Obsolete` either way.
     pub fn restore(
         &mut self,
         tombstone_id: &Id,
@@ -294,20 +302,16 @@ impl ObjectLifecycle {
         if new_generation == self.generation {
             return self.apply_concurrent_restore(tombstone_id, &stamp);
         }
-        if self.generation.checked_add(1) != Some(new_generation) {
+        if self.generation.checked_add(1) != Some(new_generation)
+            || !self
+                .tombstones
+                .versions
+                .iter()
+                .any(|version| version.stamp.operation_id() == tombstone_id)
+        {
+            // Either a middle generation is missing, or the delete this
+            // restore undoes has not been materialized yet; both wait.
             return Ok(MergeOutcome::PendingCause);
-        }
-        let selected = self.selected_tombstone().ok_or_else(|| {
-            Error::new(
-                ChurStatus::AuthenticationFailed,
-                "restore names an object with no tombstone",
-            )
-        })?;
-        if &selected.operation_id != tombstone_id {
-            return Err(Error::new(
-                ChurStatus::AuthenticationFailed,
-                "restore does not name the displayed tombstone",
-            ));
         }
         let delete_stamps = self
             .tombstones
@@ -315,7 +319,6 @@ impl ObjectLifecycle {
             .iter()
             .map(|version| version.stamp.clone())
             .collect::<Vec<_>>();
-        ensure_after_all_deletes(&stamp, &delete_stamps)?;
         self.tombstones.versions.clear();
         self.generation = new_generation;
         self.activations.clear();
@@ -390,7 +393,11 @@ impl ObjectLifecycle {
         if last.generation != self.generation || &last.tombstone_id != tombstone_id {
             return Ok(MergeOutcome::Obsolete);
         }
-        ensure_after_all_deletes(stamp, &last.delete_stamps)?;
+        if !observes_all_deletes(stamp, &last.delete_stamps)? {
+            // A concurrent restore that does not dominate the deletes the
+            // first restore removed cannot re-activate the generation.
+            return Ok(MergeOutcome::Obsolete);
+        }
         for active in &self.activations {
             match causal_relation(active, stamp)? {
                 CausalRelation::Same => return Ok(MergeOutcome::Duplicate),
@@ -403,16 +410,11 @@ impl ObjectLifecycle {
     }
 }
 
-fn ensure_after_all_deletes(restore: &CausalStamp, deletes: &[CausalStamp]) -> Result<()> {
-    if deletes.iter().try_fold(true, |all, delete| {
+/// Whether the restore causally dominates every delete stamp it supersedes.
+fn observes_all_deletes(restore: &CausalStamp, deletes: &[CausalStamp]) -> Result<bool> {
+    deletes.iter().try_fold(true, |all, delete| {
         Ok::<_, Error>(all && causal_relation(delete, restore)? == CausalRelation::Before)
-    })? {
-        return Ok(());
-    }
-    Err(Error::new(
-        ChurStatus::AuthenticationFailed,
-        "restore does not observe every current tombstone branch",
-    ))
+    })
 }
 
 fn tombstone_retention_elapsed(

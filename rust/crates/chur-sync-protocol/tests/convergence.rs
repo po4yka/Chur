@@ -158,14 +158,13 @@ fn remove_cannot_name_an_add_token_it_did_not_causally_observe() {
     set.add(element, CausalStamp::from_operation(&add))
         .expect("add");
 
-    assert!(
-        set.remove(
+    assert!(set
+        .remove(
             element,
             CausalStamp::from_operation(&concurrent_remove),
             &removed,
         )
-        .is_err()
-    );
+        .is_err());
     assert!(set.contains(&element));
 }
 
@@ -213,9 +212,7 @@ fn delete_restore_and_retention_follow_causality_not_delivery_time() {
         &latest,
         true,
     ));
-    assert!(
-        lifecycle.eligible_for_gc(authored_at + (30 * DAY_MS), &[id(2), id(3)], &latest, true,)
-    );
+    assert!(lifecycle.eligible_for_gc(authored_at + (30 * DAY_MS), &[id(2), id(3)], &latest, true,));
     assert!(!lifecycle.eligible_for_gc(
         authored_at + (180 * DAY_MS),
         &[id(2), id(3)],
@@ -244,7 +241,7 @@ fn delete_restore_and_retention_follow_causality_not_delivery_time() {
 }
 
 #[test]
-fn restore_must_observe_every_concurrent_delete_branch() {
+fn restore_supersedes_the_tombstones_it_finds_and_both_orders_agree() {
     let key_a = DeviceSigningKey::from_seed([2; 32]);
     let key_b = DeviceSigningKey::from_seed([3; 32]);
     let key_c = DeviceSigningKey::from_seed([4; 32]);
@@ -258,7 +255,9 @@ fn restore_must_observe_every_concurrent_delete_branch() {
         [0; 32],
         vec![ObservedHead::new(id(2), 1)],
     );
-    let incomplete_restore = operation(
+    // The restoring device observed delete A only, so its signed restore
+    // names A's tombstone and cannot observe the concurrent branch B made.
+    let restore = operation(
         &key_c,
         19,
         id(4),
@@ -266,39 +265,67 @@ fn restore_must_observe_every_concurrent_delete_branch() {
         [0; 32],
         vec![ObservedHead::new(id(2), 2)],
     );
-    let complete_restore = operation(
-        &key_c,
-        20,
-        id(4),
-        1,
-        [0; 32],
-        vec![ObservedHead::new(id(2), 2), ObservedHead::new(id(3), 1)],
-    );
-    let mut lifecycle =
+    let restore_stamp = CausalStamp::from_operation(&restore);
+    let mut ordered =
         ObjectLifecycle::new(1, CausalStamp::from_operation(&created)).expect("lifecycle");
-    lifecycle
+    ordered
         .delete(1, 1, CausalStamp::from_operation(&delete_a))
         .expect("delete a");
-    lifecycle
+    ordered
         .delete(1, 1, CausalStamp::from_operation(&delete_b))
         .expect("delete b");
-    let displayed = *lifecycle.tombstone_id().expect("tombstone");
-
     assert!(
-        lifecycle
-            .restore(
-                &displayed,
-                2,
-                CausalStamp::from_operation(&incomplete_restore),
-            )
-            .is_err()
+        ordered
+            .restore(delete_a.operation_id(), 2, restore_stamp.clone())
+            .expect("restore")
+            == MergeOutcome::Applied
     );
-    lifecycle
-        .restore(
-            &displayed,
-            2,
-            CausalStamp::from_operation(&complete_restore),
-        )
-        .expect("complete restore");
-    assert!(lifecycle.is_visible());
+    assert!(ordered.is_visible());
+    assert_eq!(ordered.generation(), 2);
+
+    // The permuted delivery reaches the same visibility: the restore applies
+    // first and the concurrent delete of the superseded generation arrives
+    // late as Obsolete. Refusing the restore for the branch it could not
+    // observe instead froze the restoring device's chain forever.
+    let mut permuted =
+        ObjectLifecycle::new(1, CausalStamp::from_operation(&created)).expect("lifecycle");
+    permuted
+        .delete(1, 1, CausalStamp::from_operation(&delete_a))
+        .expect("delete a");
+    permuted
+        .restore(delete_a.operation_id(), 2, restore_stamp)
+        .expect("restore first");
+    assert!(
+        permuted
+            .delete(1, 1, CausalStamp::from_operation(&delete_b))
+            .expect("late delete")
+            == MergeOutcome::Obsolete
+    );
+    assert!(permuted.is_visible());
+    assert_eq!(permuted.generation(), 2);
+
+    // A restore still waits for the tombstone it names and for the missing
+    // middle generation instead of hard-erroring the receiver.
+    let mut waiting =
+        ObjectLifecycle::new(1, CausalStamp::from_operation(&created)).expect("lifecycle");
+    assert!(
+        waiting
+            .restore(
+                delete_a.operation_id(),
+                2,
+                CausalStamp::from_operation(&restore)
+            )
+            .expect("waiting restore")
+            == MergeOutcome::PendingCause
+    );
+    assert!(
+        waiting
+            .restore(
+                delete_a.operation_id(),
+                3,
+                CausalStamp::from_operation(&restore)
+            )
+            .expect("skipped generation")
+            == MergeOutcome::PendingCause
+    );
 }
