@@ -12,7 +12,7 @@
 | Sharing protocol | v1 canonical collection grant, membership, and operation records; grants are 309 bytes and membership records are 292 bytes |
 | Cryptography | X25519 HPKE with HKDF-SHA-256 and ChaCha20-Poly1305; Ed25519 signatures bind the complete canonical records |
 | FFI ABI | 1.9, capabilities `0x00000000000000BF`; `CHUR_CAP_COLLECTION_SHARING` is bit 7 and concurrent reads remain clear |
-| Catalog | schema v4 stores recipient pins, membership history, grants, shared operation heads, and resumable rewrap state |
+| Catalog | schema v5 stores recipient pins, membership history, grants, the grant-acceptance freeze, shared operation heads, and resumable rewrap state |
 | Vector-set digest | `14029a3e8b1e7c60cbba1550818b2e879d4ab6655f53fff908bcf7e42fc5413e`; 99 vectors and two fixtures, including five sharing vectors |
 | Rust dependencies | exact `hpke` 0.14.0, `ed25519-dalek` 3.0.0, and `x25519-dalek` 3.0.0 pins |
 | Mobile transport | exact Ktor Client 3.5.2 pin, with OkHttp on Android and Darwin on iOS |
@@ -41,7 +41,7 @@
 | permissions and membership | canonical cumulative `READ`, `CONTRIBUTE`, and `MANAGE_MEMBERS` profiles fail closed; signed membership records authorize grants and shared operations against the current recipient-device state |
 | epochs, rewrap, and revocation | [`../sync/REVOCATION.md`](../sync/REVOCATION.md), `chur-catalog::sharing_service`, and rotation tests advance the epoch before replacement grants, resume bounded rewrap work, omit the revoked device, and reject stale grants |
 | recovery and device loss | `sharing_service::multi_recipient_device_loss_rotates_forward_and_replays` covers two recipient vaults, multiple recipient devices, loss of one device, forward rotation, retained object access, and idempotent retry |
-| durable recipient state | catalog schema v4 and the sharing, sharing-log, sync-log, and recovery tests restore pins, membership, grants, heads, epochs, and rewrap progress after reopen |
+| durable recipient state | catalog schema v5 and the sharing, sharing-log, sync-log, and recovery tests restore pins, membership, grants, heads, epochs, and rewrap progress after reopen |
 | native and mobile boundary | ABI 1.9 prepares, accepts, and revokes shares through panic-contained C and JNI exports; Android and iOS use the same bounded record codecs and Kotlin surface |
 | reference HTTP interoperability | `chur-sync-server` relays bounded issuer evidence and ready-to-accept packages; `SharingPusher` publishes dependencies before grants and `SharingPuller` accepts opaque packages in order |
 
