@@ -13,7 +13,7 @@
 use chur_catalog::model::{Album, Tag};
 use chur_catalog::vault::{self, Session};
 use chur_catalog::{deletion, store};
-use chur_core::{ChurStatus, Error, Id, Result, ensure};
+use chur_core::{ensure, ChurStatus, Error, Id, Result};
 use chur_crypto::password::Argon2Params;
 use chur_format::constants::StreamKind;
 use zeroize::Zeroizing;
@@ -160,6 +160,16 @@ pub unsafe extern "C" fn chur_vault_creation_add_recovery_slot(
     guard_status_for(creation, || {
         // SAFETY: the caller guarantees `bytes_written` is writable.
         let _ = unsafe { crate::api::write_out(bytes_written, 0usize) };
+        // The destination is validated before the slot is staged: a refusal
+        // here must leave the creation as it was, because a caller that
+        // cannot receive the phrase has no way to learn it afterwards.
+        ensure!(
+            capacity >= RECOVERY_PHRASE_MAX,
+            ResourceLimitExceeded,
+            "the destination buffer is smaller than CHUR_RECOVERY_PHRASE_MAX"
+        );
+        // SAFETY: the caller guarantees `destination` covers `capacity` bytes.
+        let buffer = unsafe { crate::api::borrow_bytes_mut(destination, capacity)? };
         let entry = registry::get(creation, Kind::Creation)?;
         let Entry::Creation { creation, .. } = entry.as_ref() else {
             return Err(wrong_type());
@@ -175,8 +185,6 @@ pub unsafe extern "C" fn chur_vault_creation_add_recovery_slot(
             pending.add_recovery_slot()?
         };
         let phrase = chur_crypto::recovery::to_phrase(&secret);
-        // SAFETY: the caller guarantees `destination` covers `capacity` bytes.
-        let buffer = unsafe { crate::api::borrow_bytes_mut(destination, capacity)? };
         write_record(phrase.as_bytes(), buffer, bytes_written)
     })
 }
@@ -271,11 +279,19 @@ pub unsafe extern "C" fn chur_vault_add_recovery_slot(
     guard_status_for(session, || {
         // SAFETY: the caller guarantees `bytes_written` is writable.
         let _ = unsafe { crate::api::write_out(bytes_written, 0usize) };
+        // The destination is validated before the slot is committed: a
+        // refusal here must leave the descriptor as it was, because a caller
+        // that cannot receive the phrase has no way to learn it afterwards.
+        ensure!(
+            capacity >= RECOVERY_PHRASE_MAX,
+            ResourceLimitExceeded,
+            "the destination buffer is smaller than CHUR_RECOVERY_PHRASE_MAX"
+        );
+        // SAFETY: the caller guarantees `destination` covers `capacity` bytes.
+        let buffer = unsafe { crate::api::borrow_bytes_mut(destination, capacity)? };
         let entry = registry::get(session, Kind::Session)?;
         let secret = with_session_mut(&entry, Session::add_recovery_slot)?;
         let phrase = chur_crypto::recovery::to_phrase(&secret);
-        // SAFETY: the caller guarantees `destination` covers `capacity` bytes.
-        let buffer = unsafe { crate::api::borrow_bytes_mut(destination, capacity)? };
         write_record(phrase.as_bytes(), buffer, bytes_written)
     })
 }

@@ -450,6 +450,18 @@ fn the_last_portable_slot_cannot_be_removed_through_the_boundary() {
         "KEY_SLOTS.md §9 keeps a verified recovery path through every update"
     );
 
+    // A destination smaller than the contract's bound is refused before the
+    // slot is committed: a caller that cannot receive the phrase must find
+    // the descriptor as it was, and the successful call below proves the
+    // refused one added nothing.
+    let mut short = [0u8; 8];
+    assert_eq!(
+        status(unsafe {
+            chur_vault_add_recovery_slot(session, short.as_mut_ptr(), short.len(), &mut written)
+        }),
+        ChurStatus::ResourceLimitExceeded
+    );
+
     // With a recovery slot present it becomes removable.
     let mut phrase = vec![0u8; RECOVERY_PHRASE_MAX];
     assert_eq!(
