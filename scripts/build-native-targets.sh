@@ -18,6 +18,13 @@
 # ANDROID_NDK_ROOT, then the NDK version the version catalog pins through
 # CHUR_NDK_VERSION, and falls back to the newest NDK under ANDROID_HOME/ndk.
 # Apple targets need Xcode and run on macOS only.
+#
+# Every Android shared library is linked with 16 KiB page alignment, per
+# ANDROID.md "Native library packaging": a device with a 16 KiB page size
+# refuses to map a library whose PT_LOAD segments demand 4 KiB, and the
+# release checklist names such a library as a release blocker. The linker
+# flag is stated rather than left to an NDK default, and build_jni verifies
+# the p_align of every PT_LOAD segment in the artifact it produces.
 
 set -euo pipefail
 
@@ -129,6 +136,50 @@ target_directory() {
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])'
 }
 
+# The 16 KiB page alignment ANDROID.md requires for every packaged Android
+# library. `-z max-page-size` is stated here rather than inherited from an NDK
+# default, so the layout does not change when the pinned NDK does.
+readonly PAGE_ALIGNMENT_RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384"
+
+# Verifies the p_align of every PT_LOAD segment of one ELF artifact against
+# the 16 KiB page size. The flag above asks for the layout; this proves it
+# held, because a release blocker that is only requested and never checked is
+# a release blocker that one silent toolchain change disables.
+check_page_alignment() {
+  local artifact="$1" readelf
+  [[ -f "$artifact" ]] || die "no artifact at $artifact"
+  readelf="$(dirname "$NM_TOOL")/llvm-readelf"
+  [[ -x "$readelf" ]] || die "no llvm-readelf at $readelf"
+  ARTIFACT="$artifact" READELF="$readelf" python3 <<'PAGE_ALIGNMENT'
+import os
+import subprocess
+import sys
+
+artifact = os.environ["ARTIFACT"]
+listing = subprocess.run(
+    [os.environ["READELF"], "-lW", artifact],
+    capture_output=True,
+    text=True,
+).stdout
+segments = 0
+for line in listing.splitlines():
+    fields = line.split()
+    if fields and fields[0] == "LOAD":
+        segments += 1
+        if int(fields[-1], 16) < 0x4000:
+            sys.exit(
+                f"error: {artifact}: a PT_LOAD segment aligns to {fields[-1]}, "
+                "below the 16 KiB page size"
+            )
+if segments == 0:
+    sys.exit(f"error: {artifact}: no PT_LOAD segment found")
+print(
+    f"   {os.path.basename(artifact)} aligns {segments} PT_LOAD segments "
+    "to at least 16 KiB"
+)
+PAGE_ALIGNMENT
+}
+
 build_target() {
   local target="$1"
   local installed directory
@@ -160,6 +211,7 @@ build_jni() {
     | awk '{ print $NF }' | grep -c '^Java_dev_po4yka_chur_ffi_ChurJni_' || true)"
   [[ "$count" -ge 40 ]] || die "$artifact exports $count JNI symbols, which is too few"
   printf '   %s exports %s JNI symbols\n' "$(basename "$artifact")" "$count"
+  check_page_alignment "$artifact"
 }
 
 build_android() {
@@ -177,6 +229,9 @@ build_android() {
   export RANLIB="$prebuilt/bin/llvm-ranlib"
   NM_TOOL="$prebuilt/bin/llvm-nm"
   [[ -x "$NM_TOOL" ]] || die "no llvm-nm at $NM_TOOL"
+  # Shared across every Android build in this run, so the static library and
+  # the JNI adapter compile one dependency graph rather than two.
+  export RUSTFLAGS="${RUSTFLAGS:-} $PAGE_ALIGNMENT_RUSTFLAGS"
   for target in "${ANDROID_TARGETS[@]}"; do
     local clang="$prebuilt/bin/${target}${ANDROID_API}-clang"
     [[ -x "$clang" ]] || die "no linker at $clang"
