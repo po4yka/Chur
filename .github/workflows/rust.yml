@@ -296,6 +296,15 @@ jobs:
       # Android host defect is more often a manifest or a resource than a type
       # error.
       - run: ./gradlew --no-daemon :apps:androidApp:assembleDebug :apps:androidApp:lintDebug
+      # DEFAULT locking honors the committed lockfile but does not fail on a
+      # drift, so the pin is enforced here: a full re-resolution with
+      # --write-locks must reproduce the committed files byte for byte, and a
+      # diff is a red pull request. The assemble and lint runs above are what
+      # resolve the configurations a bare `dependencies` report never reaches.
+      - name: the Gradle lockfiles pin the resolution
+        run: |
+          ./gradlew --no-daemon :apps:androidApp:assembleDebug :apps:androidApp:lintDebug --write-locks --quiet
+          git diff --exit-code -- '**/gradle.lockfile'
 
   kotlin-native:
     name: kotlin/native tests
@@ -330,6 +339,12 @@ jobs:
       # application's; linking here proves the framework and the static library
       # agree on every symbol cinterop generated a binding for.
       - run: ./gradlew --no-daemon linkDebugFrameworkIosSimulatorArm64
+      # The same lockfile pin the Android job enforces, for the Kotlin/Native
+      # configurations that only a macOS job resolves.
+      - name: the Gradle lockfiles pin the resolution
+        run: |
+          ./gradlew --no-daemon iosSimulatorArm64Test compileKotlinIosArm64 linkDebugFrameworkIosSimulatorArm64 --write-locks --quiet
+          git diff --exit-code -- '**/gradle.lockfile'
 
   deny:
     name: cargo deny

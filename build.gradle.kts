@@ -1,5 +1,3 @@
-import org.gradle.api.artifacts.dsl.LockMode
-
 // The root build declares plugins without applying them, so each module opts in
 // and a plugin never reaches a module that does not need it.
 //
@@ -74,12 +72,13 @@ subprojects {
     }
 
     // `docs/DEPENDENCY_POLICY.md` "Lockfiles": the committed gradle.lockfile
-    // beside each module's build script pins its Maven resolution, and a
-    // resolution that drifts from it fails the build rather than silently
-    // updating the lock. Updating a dependency is a deliberate `--write-locks`
-    // change, the same discipline the Cargo lockfile follows.
+    // beside each module's build script pins its Maven resolution. Resolution
+    // honors the lock; the enforcing workflow re-resolves with --write-locks
+    // and fails on any diff, so a graph that drifts from the lock is a red
+    // pull request rather than a silent update. Updating a dependency is a
+    // deliberate `--write-locks` change, the same discipline the Cargo
+    // lockfile follows.
     dependencyLocking {
         lockAllConfigurations()
-        lockMode = LockMode.STRICT
     }
 }
