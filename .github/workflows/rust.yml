@@ -54,7 +54,7 @@ jobs:
             rust/target
           key: clippy-${{ hashFiles('rust/Cargo.lock', 'rust/rust-toolchain.toml') }}
       - run: rustup component add clippy
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
   test:
     name: cargo test
@@ -68,7 +68,7 @@ jobs:
             ~/.cargo/git
             rust/target
           key: test-${{ hashFiles('rust/Cargo.lock', 'rust/rust-toolchain.toml') }}
-      - run: cargo test --workspace
+      - run: cargo test --locked --workspace
 
   vectors:
     name: vector set
@@ -85,13 +85,13 @@ jobs:
       # TEST_VECTORS.md section 8: a generator update must reproduce historical
       # vectors byte for byte. `verify` rebuilds the whole set and compares it,
       # so a change that alters one fails here rather than shipping.
-      - run: cargo run -p chur-cli -- vectors verify --dir ../test-vectors/v1
+      - run: cargo run --locked -p chur-cli -- vectors verify --dir ../test-vectors/v1
       # The same section has release CI archive the vector-set digest. The
       # formula lives in chur-cli rather than in a shell pipeline, so the value
       # does not depend on how a platform orders `find` or formats a checksum
       # line.
       - name: record the vector-set digest
-        run: cargo run -p chur-cli -- vectors digest --dir ../test-vectors/v1
+        run: cargo run --locked -p chur-cli -- vectors digest --dir ../test-vectors/v1
           | tee ../vector-set-digest.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -114,7 +114,7 @@ jobs:
       # checks before a vault opens. Linking a C program against the real
       # static library proves the symbols exist with C linkage and the declared
       # types, which a Rust test cannot.
-      - run: cargo build -p chur-ffi --release
+      - run: cargo build --locked -p chur-ffi --release
       - name: build and run the handshake harness
         run: |
           set -euo pipefail
