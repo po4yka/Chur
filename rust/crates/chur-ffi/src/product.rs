@@ -13,7 +13,7 @@
 use chur_catalog::model::{Album, Tag};
 use chur_catalog::vault::{self, Session};
 use chur_catalog::{deletion, store};
-use chur_core::{ensure, ChurStatus, Error, Id, Result};
+use chur_core::{ChurStatus, Error, Id, Result, ensure};
 use chur_crypto::password::Argon2Params;
 use chur_format::constants::StreamKind;
 use zeroize::Zeroizing;

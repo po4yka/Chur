@@ -27,7 +27,7 @@ use jni::objects::{JByteArray, JByteBuffer, JClass, JIntArray, JLongArray, JStri
 use jni::sys::{jboolean, jint, jlong};
 
 use crate::convert::{
-    INTERNAL_FAILURE, INVALID_INPUT, byte_array, contain, direct_buffer, fixed_array, string_bytes,
+    INTERNAL_FAILURE, INVALID_INPUT, byte_array, direct_buffer, fixed_array, string_bytes,
     write_bytes, write_ints, write_long, write_longs,
 };
 

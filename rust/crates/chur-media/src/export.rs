@@ -7,7 +7,7 @@
 use std::io::Write;
 
 use chur_catalog::vault::Session;
-use chur_core::{ensure, limits::scratch as scratch_bounds, Id, Result};
+use chur_core::{Id, Result, ensure, limits::scratch as scratch_bounds};
 use chur_crypto::random;
 use chur_format::constants::StreamKind;
 
@@ -247,7 +247,7 @@ pub fn sweep_expired(directory: &std::path::Path, now: u64) -> Result<usize> {
                     return Err(chur_core::err!(
                         IoFailure,
                         "an expired scratch entry could not be deleted"
-                    ))
+                    ));
                 }
             }
             continue;
@@ -284,7 +284,7 @@ fn journal_rows(directory: &std::path::Path) -> Result<Vec<(String, u64)>> {
             return Err(chur_core::err!(
                 IoFailure,
                 "the scratch journal could not be read"
-            ))
+            ));
         }
     };
     Ok(text

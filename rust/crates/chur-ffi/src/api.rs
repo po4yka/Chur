@@ -26,8 +26,8 @@ use chur_media::{export, import, integrity, reader};
 use crate::operation::{Operation, OperationKind, Stage};
 use crate::panic::{guard_status, guard_status_for};
 use crate::records::{
-    encode_page, query_from, ChurContentInfoV1, ChurImportRequestV1, ChurObjectRefV1,
-    ChurProgressV1, ChurQueryV1, ChurRuntimeConfigV1, ChurScanRequestV1, ChurUnlockRequestV1,
+    ChurContentInfoV1, ChurImportRequestV1, ChurObjectRefV1, ChurProgressV1, ChurQueryV1,
+    ChurRuntimeConfigV1, ChurScanRequestV1, ChurUnlockRequestV1, encode_page, query_from,
 };
 use crate::registry::{self, Entry, Handle, Kind};
 use crate::runtime::Runtime;
