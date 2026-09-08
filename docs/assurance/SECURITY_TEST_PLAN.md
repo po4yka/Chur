@@ -165,11 +165,11 @@ Release evidence includes:
 
 ## 13. Coverage mapping
 
-Every `SEC-*` invariant of [`../security/SECURITY_INVARIANTS.md`](../security/SECURITY_INVARIANTS.md) maps below to the procedure that produces its evidence: a section of this plan, a named harness, or an explicit audit-only marker. A bare section number is a section of this plan. A concrete test target replaces the section reference in a row when it lands, and a row carries at most one, so the mapping stays readable in both directions. Missing mapping blocks the release gate for the affected feature.
+Every `SEC-*` invariant of [`../security/SECURITY_INVARIANTS.md`](../security/SECURITY_INVARIANTS.md) maps below to the procedure that produces its evidence: a section of this plan, a named harness, or an explicit audit-only marker. A bare section number is a section of this plan. A concrete test target names the code that produces a row's evidence, and a row that more than one target carries names each of them, so the mapping stays readable in both directions. Missing mapping blocks the release gate for the affected feature.
 
 A row states what would produce the evidence, not that it runs today. Whether it runs is governed by [`RELEASE_GATES.md`](RELEASE_GATES.md#enforcement): until a job executes the procedure, the row is unenforced whatever it names.
 
-Thirty-one rows now name a test target rather than a section of this plan: nineteen at the end of Phase 0, seven more in Phase 1, and four in Phase 2 — SEC-031, SEC-034, SEC-035, and SEC-036. Each one runs in the `test`, `gradle`, `kotlin-native`, `backup-rules`, or `fuzz` job of that workflow, so all thirty-one are enforced. Every remaining row names a procedure that no job executes.
+Thirty-four rows now name a concrete target — a Rust test, a Kotlin test, or the checked-in backup-rules script — rather than a section of this plan, and Phase 2 gave four of them theirs: SEC-031, SEC-034, SEC-035, and SEC-036. SEC-047 names the fuzz target set of [`FUZZING.md`](FUZZING.md) §2 instead of a single row-specific target. Each named target runs in the `cargo test`, `gradle check`, `kotlin/native tests`, `android backup rules`, or `fuzz smoke` job of that workflow, so all thirty-four are enforced. Every remaining row names a procedure that no job executes.
 
 | Invariant | Evidence procedure |
 | --- | --- |
@@ -219,7 +219,7 @@ Thirty-one rows now name a test target rather than a section of this plan: ninet
 | SEC-044 | §2 |
 | SEC-045 | SERVER_TRUST_MODEL §10 harness for the behaviour; audit-only for the claim wording |
 | SEC-046 | audit-only; design review of any deduplication proposal |
-| SEC-047 | [`FUZZING.md`](FUZZING.md) §2 targets, ten of which exist |
+| SEC-047 | [`FUZZING.md`](FUZZING.md) §2 targets, sixteen of which exist |
 | SEC-048 | `chur-format` `codec::tests::a_boolean_other_than_zero_or_one_is_non_canonical` |
 | SEC-049 | `chur-format` `container::tests::the_seek_formula_matches_the_walked_record_offsets` |
 | SEC-050 | `chur-ffi` `panic::tests::a_panic_carrying_a_value_does_not_return_it` |
