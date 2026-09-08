@@ -29,6 +29,18 @@ plugins {
  * `Core_syncSyncCoordinator` and the line the README gives does not compile.
  * A declaration no exported signature refers to is absent from the header.
  */
+// The Apple triples and the Cargo output directory the framework links.
+// `shared/core-ffi/build.gradle.kts` builds `libchur_ffi.a` per triple and per
+// profile; which archive a framework binary links is decided below by the
+// binary's build type, so a release framework links the release archive
+// rather than the debug one the cinterop klib records.
+val appleTriples =
+    mapOf(
+        "iosArm64" to "aarch64-apple-ios",
+        "iosSimulatorArm64" to "aarch64-apple-ios-sim",
+    )
+val cargoTargetDirectory = rootProject.layout.projectDirectory.dir("rust/target")
+
 val iosHostSymbols =
     listOf(
         // Step 1: the controller, its two stores, and its device-unlock binding.
@@ -55,12 +67,22 @@ val iosHostSymbols =
     )
 
 kotlin {
-    jvmToolchain(libs.versions.jdk.get().toInt())
+    jvmToolchain(
+        libs.versions.jdk
+            .get()
+            .toInt(),
+    )
 
     android {
         namespace = "dev.po4yka.chur.app"
-        compileSdk = libs.versions.androidCompileSdk.get().toInt()
-        minSdk = libs.versions.androidMinSdk.get().toInt()
+        compileSdk =
+            libs.versions.androidCompileSdk
+                .get()
+                .toInt()
+        minSdk =
+            libs.versions.androidMinSdk
+                .get()
+                .toInt()
         withHostTest {}
     }
     iosArm64()
@@ -85,9 +107,26 @@ kotlin {
     // is `api` below. `export` is also not transitive, so each module appears
     // here on its own line.
     targets.withType<org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget>().configureEach {
+        val targetName = name
         binaries.framework {
             baseName = "ChurApp"
             isStatic = true
+
+            // The archive this binary links, named by its build type. The
+            // cinterop klib carries the debug archive for every binary of the
+            // compilation, so the release framework would link the debug one
+            // without this: the linker takes the first archive that satisfies
+            // the symbols, and an explicit input is the only ordering the
+            // build controls. The link also depends on the Cargo task that
+            // produces exactly the archive it names.
+            val isRelease = "Release" in linkTaskName
+            val archive =
+                cargoTargetDirectory
+                    .file(
+                        "${appleTriples.getValue(targetName)}/" +
+                            "${if (isRelease) "release" else "debug"}/libchur_ffi.a",
+                    )
+            linkerOpts(archive.asFile.absolutePath)
 
             // `LockPolicy`, which the `ChurController` initializer takes. The
             // header carries no default argument, so the host writes one.
@@ -156,8 +195,40 @@ kotlin {
                         }
                     }
                 }
-            linkTaskProvider.configure { finalizedBy(verifyExports) }
+            linkTaskProvider.configure {
+                // The archive is a linker option, not a klib the task would
+                // track on its own, so declaring it as an input is what makes
+                // a rebuilt Rust archive relink the framework instead of
+                // leaving a stale one in place.
+                inputs.file(archive)
+                dependsOn(
+                    ":shared:core-ffi:cargoBuildFfi" +
+                        targetName.replaceFirstChar { it.uppercase() } +
+                        if (isRelease) "Release" else "",
+                )
+                finalizedBy(verifyExports)
+            }
         }
+
+        binaries
+            .withType<org.jetbrains.kotlin.gradle.plugin.mpp.TestExecutable>()
+            .configureEach {
+                // Native tests link the same C ABI the framework does, and the
+                // klib names no archive any more, so the test executable names
+                // the debug archive explicitly - tests run in the debug build
+                // type on both platforms.
+                val archive =
+                    cargoTargetDirectory
+                        .file("${appleTriples.getValue(targetName)}/debug/libchur_ffi.a")
+                linkerOpts(archive.asFile.absolutePath)
+                linkTaskProvider.configure {
+                    inputs.file(archive)
+                    dependsOn(
+                        ":shared:core-ffi:cargoBuildFfi" +
+                            targetName.replaceFirstChar { it.uppercase() },
+                    )
+                }
+            }
     }
 
     sourceSets {

@@ -9,6 +9,10 @@
 headers = chur.h
 package = dev.po4yka.chur.native
 
-# The static library the framework links. It is built by Cargo for the target
-# triple; the library path is supplied by the Gradle task that builds it.
-staticLibraries = libchur_ffi.a
+// No `staticLibraries` here. A declaration in this file is resolved once, at
+// cinterop time, and baked into the klib the compilation shares with every
+// binary, so every framework and test executable would link the same archive
+// - the debug one, whatever the binary's build type. The consuming build
+// links the archive instead: `shared/app/build.gradle.kts` gives each
+// framework binary and each test executable the archive of its own build
+// type, and depends on the Cargo task that produces it.
