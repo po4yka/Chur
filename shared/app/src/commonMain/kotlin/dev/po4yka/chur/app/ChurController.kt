@@ -49,6 +49,14 @@ class ChurController(
     private val privacy: PrivacyCover,
     private val exports: ExportSink,
     private val deviceUnlock: DeviceUnlock = NoDeviceUnlock,
+    /**
+     * The per-vault device-slot policy of `KEY_SLOTS.md` §1.
+     *
+     * A host without a device slot keeps the unset default, and the
+     * settings row never appears, because [deviceUnlockAvailable] is
+     * false with it.
+     */
+    private val deviceSlotPolicy: DeviceSlotPolicySetting = DeviceSlotPolicySetting.unset(),
     private val clock: () -> Long,
     private val notes: NoteStore = InMemoryNoteStore(),
     policy: LockPolicy = LockPolicy(),
@@ -101,6 +109,14 @@ class ChurController(
 
     /** The cache the library renders from, cleared on every lock. */
     val thumbnailCache: ThumbnailCache get() = thumbnails
+
+    private val _deviceSlotStrict = MutableStateFlow(false)
+
+    /** Whether the device slot requires biometry only, `KEY_SLOTS.md` §1. */
+    val deviceSlotStrict: StateFlow<Boolean> = _deviceSlotStrict.asStateFlow()
+
+    /** Whether this platform can hold a device slot at all. */
+    val deviceUnlockAvailable: Boolean get() = deviceUnlock.available
 
     /**
      * How many activities the host launched and is still waiting on.
@@ -185,6 +201,8 @@ class ChurController(
         if (started) return
         withContext(Dispatchers.Default) { repository.start() }
         _notes.value = notes.all()
+        _deviceSlotStrict.value =
+            withContext(Dispatchers.Default) { deviceSlotPolicy.read() }
         refreshDeviceUnlockOffer()
         guarded { runIdleTimer() }
         started = true
@@ -347,6 +365,20 @@ class ChurController(
             }.getOrDefault(false)
         }
     }
+
+    /**
+     * Switches the device-slot policy of `KEY_SLOTS.md` §1.
+     *
+     * §1 shows the choice at device-slot creation, so the next enrollment
+     * and the next unlock read what this wrote; a slot enrolled under the
+     * other policy keeps the key it has until it is removed.
+     */
+    fun toggleDeviceSlotPolicy() =
+        guarded {
+            val next = !_deviceSlotStrict.value
+            withContext(Dispatchers.Default) { deviceSlotPolicy.write(next) }
+            _deviceSlotStrict.value = next
+        }
 
     /** Whether the public-shell disclosure is owed to the user right now. */
     val disclosureDue: StateFlow<Boolean> = _disclosureDue.asStateFlow()

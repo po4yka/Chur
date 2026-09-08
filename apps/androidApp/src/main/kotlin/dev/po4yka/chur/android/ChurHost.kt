@@ -4,7 +4,9 @@ import android.content.Context
 import androidx.fragment.app.FragmentActivity
 import dev.po4yka.chur.app.AndroidPrivacyCover
 import dev.po4yka.chur.app.ChurController
+import dev.po4yka.chur.app.DeviceSlotPolicySetting
 import dev.po4yka.chur.app.RepositorySyncBoundary
+import dev.po4yka.chur.core.platformkeys.DeviceSlotPolicy
 import dev.po4yka.chur.notes.FileNoteStore
 import dev.po4yka.chur.sync.FileSyncStateStore
 import dev.po4yka.chur.sync.SyncCoordinator
@@ -60,6 +62,25 @@ internal class ChurHost private constructor(context: Context) {
         clock = { System.currentTimeMillis() },
     )
 
+    /**
+     * The per-vault device-slot policy of `KEY_SLOTS.md` §1.
+     *
+     * It is a public-shell choice - which factor may open the device slot -
+     * so it lives beside the notes in the backed-up public directory, as
+     * one word. A missing or unreadable file is the convenient default.
+     */
+    private val deviceSlotPolicy =
+        DeviceSlotPolicySetting(
+            reader = {
+                val file = File(context.publicShellFile("device-slot-policy.txt"))
+                file.exists() && file.readText().trim() == "strict"
+            },
+            writer = { strict ->
+                File(context.publicShellFile("device-slot-policy.txt"))
+                    .writeText(if (strict) "strict" else "convenient")
+            },
+        )
+
     /** The one controller, over the one repository, over the one runtime. */
     val controller = ChurController(
         storageRoot = context.storageRoot(),
@@ -67,7 +88,18 @@ internal class ChurHost private constructor(context: Context) {
         exports = ExportDestinations(context.contentResolver),
         clock = { System.currentTimeMillis() },
         notes = FileNoteStore(context.publicShellFile("notes.json")),
-        deviceUnlock = AndroidDeviceUnlock(host = { activity }),
+        deviceUnlock =
+            AndroidDeviceUnlock(
+                host = { activity },
+                policy = {
+                    if (deviceSlotPolicy.read()) {
+                        DeviceSlotPolicy.STRICT
+                    } else {
+                        DeviceSlotPolicy.CONVENIENT
+                    }
+                },
+            ),
+        deviceSlotPolicy = deviceSlotPolicy,
         sync = sync,
     )
 

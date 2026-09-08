@@ -238,6 +238,7 @@ private fun VaultRoute(controller: ChurController) {
     val message by controller.message.collectAsState()
     val vaultState by controller.vaultState.collectAsState()
     val syncStatus by controller.syncStatus.collectAsState()
+    val deviceSlotStrict by controller.deviceSlotStrict.collectAsState()
     val configuration = LocalConfiguration.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -356,6 +357,7 @@ private fun VaultRoute(controller: ChurController) {
             progress = message,
             selectedCount = selection.size,
             deviceSlotAvailable = true,
+            deviceSlotStrict = deviceSlotStrict,
             sync = syncStatus,
         ),
         actions = VaultActions(
@@ -393,17 +395,8 @@ private fun VaultRoute(controller: ChurController) {
             onOpenAlbum = { openAlbum = it },
             onCloseAlbum = { openAlbum = null },
             onCreateAlbum = { creatingAlbum = true },
-            onLock = {
-                // §8 step 7 clears the decoded cache. The lock does not wait
-                // for it, because the cache holds no handle: what matters is
-                // that the pixels go, not the order they go in.
-                scope.launch { cache.clear() }
-                controller.lock()
-            },
-            onPanic = {
-                scope.launch { cache.clear() }
-                controller.panic()
-            },
+            onLock = { controller.lock() },
+            onPanic = { controller.panic() },
             onVerifyAll = { controller.verifyEverything() },
             onAddRecoverySlot = controller::addRecoverySlot,
             onCreateBackup = controller::createBackup,
@@ -425,6 +418,7 @@ private fun VaultRoute(controller: ChurController) {
                 selection = emptySet()
             },
             onAddDeviceSlot = controller::enrollDeviceSlot,
+            onToggleDeviceSlotPolicy = controller::toggleDeviceSlotPolicy,
             onConfigureSync = controller::configureSync,
             onSyncNow = controller::syncNow,
             onDisconnectSync = controller::disconnectSync,

@@ -233,15 +233,8 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             onOpenAlbum = { openAlbum = it },
             onCloseAlbum = { openAlbum = null },
             onCreateAlbum = { controller.createAlbum("Album") },
-            onLock = {
-                // §8 step 7 clears the decoded cache, as the Android host does.
-                scope.launch { cache.clear() }
-                controller.lock()
-            },
-            onPanic = {
-                scope.launch { cache.clear() }
-                controller.panic()
-            },
+            onLock = { controller.lock() },
+            onPanic = { controller.panic() },
             onVerifyAll = { controller.verifyEverything() },
             onAddRecoverySlot = controller::addRecoverySlot,
             onCreateBackup = controller::createBackup,

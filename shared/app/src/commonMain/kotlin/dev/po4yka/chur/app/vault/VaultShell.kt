@@ -86,6 +86,11 @@ data class VaultUiState(
     val progress: String? = null,
     /** Whether this platform can hold a device slot at all. */
     val deviceSlotAvailable: Boolean = false,
+    /**
+     * The device-slot policy of `KEY_SLOTS.md` §1, or `null` where this
+     * platform has no device slot and no row can act on one.
+     */
+    val deviceSlotStrict: Boolean? = null,
     /** How many tiles the selection holds, §11.4. */
     val selectedCount: Int = 0,
     /**
@@ -137,6 +142,8 @@ data class VaultActions(
     val onCreateSecondIdentity: () -> Unit = {},
     /** Enroll this device's platform key slot. */
     val onAddDeviceSlot: () -> Unit = {},
+    /** Switch the device-slot policy of `KEY_SLOTS.md` §1. */
+    val onToggleDeviceSlotPolicy: () -> Unit = {},
     /** Select every tile the current scope shows. */
     val onSelectAll: () -> Unit = {},
     /** Leave selection mode without acting. */
@@ -445,6 +452,22 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
         if (state.deviceSlotAvailable) {
             item {
                 SettingsAction("Unlock with this device's screen lock", actions.onAddDeviceSlot)
+            }
+            state.deviceSlotStrict?.let { strict ->
+                item {
+                    // `KEY_SLOTS.md` §1: the policy is a per-vault setting shown
+                    // at device-slot creation, and strict is the only
+                    // configuration that resists an adversary who knows the
+                    // device unlock code. The label names what toggling does.
+                    SettingsAction(
+                        if (strict) {
+                            "Allow the device screen lock to unlock"
+                        } else {
+                            "Require biometrics only to unlock"
+                        },
+                        actions.onToggleDeviceSlotPolicy,
+                    )
+                }
             }
         }
         item {

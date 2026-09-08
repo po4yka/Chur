@@ -35,7 +35,14 @@ import dev.po4yka.chur.core.platformkeys.KeystoreWrapped
  */
 class AndroidDeviceUnlock(
     private val host: () -> FragmentActivity?,
-    private val policy: DeviceSlotPolicy = DeviceSlotPolicy.CONVENIENT,
+    /**
+     * The per-vault policy of `KEY_SLOTS.md` §1, read at every call.
+     *
+     * §1 shows the choice at device-slot creation, so reading it per call
+     * is what carries a settings change into the next enrollment and
+     * unlock without a restart.
+     */
+    private val policy: () -> DeviceSlotPolicy = { DeviceSlotPolicy.CONVENIENT },
 ) : DeviceUnlock {
     override val available: Boolean = true
 
@@ -46,9 +53,9 @@ class AndroidDeviceUnlock(
     ): Pair<ByteArray, ByteArray> = normalized {
         val activity = activity()
         val slot = DeviceSlot(alias)
-        slot.provision(policy)
+        slot.provision(policy())
         try {
-            val wrapped = slot.wrap(activity, policy, prompt(activity), rootSecret, aad)
+            val wrapped = slot.wrap(activity, policy(), prompt(activity), rootSecret, aad)
             wrapped.gcmNonce to wrapped.wrappedRootSecret
         } catch (cause: DeviceSlotException) {
             // The key exists and the slot does not, which is a state nothing
@@ -72,7 +79,7 @@ class AndroidDeviceUnlock(
         try {
             slot.unwrap(
                 activity,
-                policy,
+                policy(),
                 prompt(activity),
                 KeystoreWrapped(gcmNonce, wrappedRootSecret),
                 aad,
