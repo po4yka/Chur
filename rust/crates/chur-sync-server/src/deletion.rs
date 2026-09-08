@@ -2,12 +2,12 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 
-use chur_core::{ChurStatus, Error, Id, Result, ensure};
+use chur_core::{ensure, ChurStatus, Error, Id, Result};
 use chur_sync_protocol::deletion::{DeletionTargetKind, ServerDeletionAuthorization};
 use chur_sync_protocol::state::DeviceStatus;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 
-use super::{ReferenceServer, map_sqlite};
+use super::{map_sqlite, ReferenceServer};
 
 /// Durable result of applying one signed deletion request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,6 +152,11 @@ impl ReferenceServer {
             "DELETE FROM membership_records WHERE vault_id = ?1",
             "DELETE FROM checkpoints WHERE vault_id = ?1",
             "DELETE FROM transport_tokens WHERE vault_id = ?1",
+            "DELETE FROM collection_operations WHERE issuer_vault_id = ?1",
+            "DELETE FROM collection_grants
+              WHERE issuer_vault_id = ?1 OR recipient_vault_id = ?1",
+            "DELETE FROM collection_membership_records
+              WHERE issuer_vault_id = ?1 OR recipient_vault_id = ?1",
         ] {
             transaction
                 .execute(sql, params![authorization.vault_id().as_bytes().as_slice()])
@@ -288,6 +293,77 @@ mod tests {
             .finish_upload(vault, transfer, Sha256::digest(bytes).into())
             .expect("finish");
 
+        // Phase-4 sharing rows of the account, both as an issuer and as a
+        // recipient, must go with the account rows.
+        server
+            .db
+            .execute(
+                "INSERT INTO collection_membership_records (
+                     collection_id, membership_generation, issuer_vault_id,
+                     issuer_signing_public_key, recipient_vault_id, recipient_device_id,
+                     outer_device_id, outer_device_sequence, record
+                 ) VALUES (?1, 1, ?1, ?2, ?3, ?4, ?4, 1, X'00')",
+                params![
+                    id(30).as_bytes().as_slice(),
+                    key.verifying_key().as_slice(),
+                    id(31).as_bytes().as_slice(),
+                    id(32).as_bytes().as_slice(),
+                ],
+            )
+            .expect("issuer-side sharing row");
+        server
+            .db
+            .execute(
+                "INSERT INTO collection_membership_records (
+                     collection_id, membership_generation, issuer_vault_id,
+                     issuer_signing_public_key, recipient_vault_id, recipient_device_id,
+                     outer_device_id, outer_device_sequence, record
+                 ) VALUES (?1, 1, ?2, ?3, ?4, ?5, ?5, 1, X'00')",
+                params![
+                    id(33).as_bytes().as_slice(),
+                    id(34).as_bytes().as_slice(),
+                    &[7u8; 32],
+                    vault.as_bytes().as_slice(),
+                    device.as_bytes().as_slice(),
+                ],
+            )
+            .expect("recipient-side sharing row");
+        server
+            .db
+            .execute(
+                "INSERT INTO collection_grants (
+                     grant_id, collection_id, collection_epoch, issuer_vault_id,
+                     recipient_vault_id, recipient_device_id, outer_device_id,
+                     outer_device_sequence, key_selector, record
+                 ) VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, 1, ?7, X'00')",
+                params![
+                    id(35).as_bytes().as_slice(),
+                    id(30).as_bytes().as_slice(),
+                    vault.as_bytes().as_slice(),
+                    id(31).as_bytes().as_slice(),
+                    id(32).as_bytes().as_slice(),
+                    device.as_bytes().as_slice(),
+                    id(36).as_bytes().as_slice(),
+                ],
+            )
+            .expect("grant sharing row");
+        server
+            .db
+            .execute(
+                "INSERT INTO collection_operations (
+                     key_selector, issuer_vault_id, issuer_device_id, device_sequence,
+                     operation_id, digest, record
+                 ) VALUES (?1, ?2, ?3, 1, ?4, ?5, X'00')",
+                params![
+                    id(36).as_bytes().as_slice(),
+                    vault.as_bytes().as_slice(),
+                    device.as_bytes().as_slice(),
+                    id(37).as_bytes().as_slice(),
+                    &[0u8; 32],
+                ],
+            )
+            .expect("collection operation sharing row");
+
         let forged =
             ServerDeletionAuthorization::object(id(13), vault, device, store, operation.digest())
                 .expect("forged authorization")
@@ -337,6 +413,19 @@ mod tests {
             )
             .expect("token count");
         assert_eq!(token_count, 0);
+        for sql in [
+            "SELECT count(*) FROM collection_membership_records
+             WHERE issuer_vault_id = ?1 OR recipient_vault_id = ?1",
+            "SELECT count(*) FROM collection_grants
+             WHERE issuer_vault_id = ?1 OR recipient_vault_id = ?1",
+            "SELECT count(*) FROM collection_operations WHERE issuer_vault_id = ?1",
+        ] {
+            let sharing_count: i64 = server
+                .db
+                .query_row(sql, [vault.as_bytes().as_slice()], |row| row.get(0))
+                .expect("sharing row count");
+            assert_eq!(sharing_count, 0);
+        }
         drop(server);
         let mut server = ReferenceServer::open(&root.0, 32, 32_768).expect("reopen");
         assert_eq!(
@@ -346,11 +435,9 @@ mod tests {
             DeletionOutcome::Duplicate
         );
         assert!(server.accept_operation(&operation).is_err());
-        assert!(
-            server
-                .accept_initial_membership(&enrollment, &operation)
-                .is_err()
-        );
+        assert!(server
+            .accept_initial_membership(&enrollment, &operation)
+            .is_err());
     }
 
     fn id(byte: u8) -> Id {
