@@ -20,7 +20,7 @@ This document describes the intended development environment and workflow. The r
 
 Do not rely on globally mutable defaults for JDK, NDK, Rust target, Xcode, or code-generation versions.
 
-Every row except Xcode and Swift is enforced today by the workflow of [`docs/assurance/RELEASE_GATES.md`](docs/assurance/RELEASE_GATES.md#enforcement). The Xcode and Swift rows stay planned until an iOS application target exists; the Kotlin/Native iOS targets already build and test in that workflow. The version catalog is [`gradle/libs.versions.toml`](gradle/libs.versions.toml) and it pins the JDK, Kotlin, Compose Multiplatform, Gradle, and Android rows exactly. The Gradle wrapper records the distribution SHA-256, so the pinned Gradle version is the one that runs. The Xcode and Swift rows stay planned until an iOS application target exists.
+Every row except Xcode and Swift is enforced today by the workflow of [`docs/assurance/RELEASE_GATES.md`](docs/assurance/RELEASE_GATES.md#enforcement). The Xcode and Swift rows stay planned until an iOS application target exists; the Kotlin/Native iOS targets already build and test in that workflow. The version catalog is [`gradle/libs.versions.toml`](gradle/libs.versions.toml) and it pins the JDK, Kotlin, Compose Multiplatform, Gradle, Android, and NDK rows exactly. The Gradle wrapper records the distribution SHA-256, so the pinned Gradle version is the one that runs. The Xcode and Swift rows stay planned until an iOS application target exists.
 
 ## Repository layout
 

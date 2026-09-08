@@ -19,12 +19,25 @@ plugins {
 
 android {
     namespace = "dev.po4yka.chur.android"
-    compileSdk = libs.versions.androidCompileSdk.get().toInt()
+    compileSdk =
+        libs.versions.androidCompileSdk
+            .get()
+            .toInt()
+    // The pinned NDK of the version catalog: AGP uses it for its own tasks
+    // and installs it when it is missing, and the native build script below
+    // resolves the same version, so no machine picks a newest installed one.
+    ndkVersion = libs.versions.ndk.get()
 
     defaultConfig {
         applicationId = "dev.po4yka.chur"
-        minSdk = libs.versions.androidMinSdk.get().toInt()
-        targetSdk = libs.versions.androidTargetSdk.get().toInt()
+        minSdk =
+            libs.versions.androidMinSdk
+                .get()
+                .toInt()
+        targetSdk =
+            libs.versions.androidTargetSdk
+                .get()
+                .toInt()
         versionCode = 1
         versionName = "0.1.0"
     }
@@ -75,10 +88,11 @@ val rustDirectory = rootProject.layout.projectDirectory.dir("rust")
 val cargoTargetDirectory = rustDirectory.dir("target")
 
 /** The Android ABIs and the Rust triple each one is built from. */
-val androidAbis = mapOf(
-    "arm64-v8a" to "aarch64-linux-android",
-    "x86_64" to "x86_64-linux-android",
-)
+val androidAbis =
+    mapOf(
+        "arm64-v8a" to "aarch64-linux-android",
+        "x86_64" to "x86_64-linux-android",
+    )
 
 /**
  * Builds `libchur_jni` for every Android ABI.
@@ -88,18 +102,23 @@ val androidAbis = mapOf(
  * OpenSSL needs, and the symbol check already live; duplicating them here would
  * mean two places to fix when an NDK layout changes.
  */
-val cargoBuildAndroid = tasks.register<Exec>("cargoBuildAndroid") {
-    group = "build"
-    description = "Builds libchur_jni for every Android ABI"
-    workingDir = rootProject.layout.projectDirectory.asFile
-    commandLine("scripts/build-native-targets.sh", "android")
-    environment("CARGO_TARGET_DIR", cargoTargetDirectory.asFile.absolutePath)
-    inputs.dir(rustDirectory.dir("crates"))
-    inputs.file(rustDirectory.file("Cargo.toml"))
-    androidAbis.values.forEach { triple ->
-        outputs.file(cargoTargetDirectory.file("$triple/release/libchur_jni.so"))
+val cargoBuildAndroid =
+    tasks.register<Exec>("cargoBuildAndroid") {
+        group = "build"
+        description = "Builds libchur_jni for every Android ABI"
+        workingDir = rootProject.layout.projectDirectory.asFile
+        commandLine("scripts/build-native-targets.sh", "android")
+        environment("CARGO_TARGET_DIR", cargoTargetDirectory.asFile.absolutePath)
+        // The pinned NDK of the version catalog: the script prefers exactly
+        // this one over the newest installed, so the cross-compilation does
+        // not change with the machine that runs it.
+        environment("CHUR_NDK_VERSION", libs.versions.ndk.get())
+        inputs.dir(rustDirectory.dir("crates"))
+        inputs.file(rustDirectory.file("Cargo.toml"))
+        androidAbis.values.forEach { triple ->
+            outputs.file(cargoTargetDirectory.file("$triple/release/libchur_jni.so"))
+        }
     }
-}
 
 /**
  * Stages the built libraries into the layout the packager expects.
@@ -146,15 +165,17 @@ abstract class StageJniLibraries : DefaultTask() {
     }
 }
 
-val stageJniLibraries = tasks.register<StageJniLibraries>("stageJniLibraries") {
-    dependsOn(cargoBuildAndroid)
-    val byAbi = androidAbis.mapValues { (_, triple) ->
-        cargoTargetDirectory.file("$triple/release/libchur_jni.so").asFile.absolutePath
+val stageJniLibraries =
+    tasks.register<StageJniLibraries>("stageJniLibraries") {
+        dependsOn(cargoBuildAndroid)
+        val byAbi =
+            androidAbis.mapValues { (_, triple) ->
+                cargoTargetDirectory.file("$triple/release/libchur_jni.so").asFile.absolutePath
+            }
+        librariesByAbi.set(byAbi)
+        libraries.setFrom(byAbi.values)
+        output.set(layout.buildDirectory.dir("chur-jni"))
     }
-    librariesByAbi.set(byAbi)
-    libraries.setFrom(byAbi.values)
-    output.set(layout.buildDirectory.dir("chur-jni"))
-}
 
 androidComponents {
     onVariants { variant ->

@@ -15,8 +15,9 @@
 #   scripts/build-native-targets.sh all
 #
 # Android needs an NDK. The script reads ANDROID_NDK_HOME, then
-# ANDROID_NDK_ROOT, then the newest NDK under ANDROID_HOME/ndk. Apple targets
-# need Xcode and run on macOS only.
+# ANDROID_NDK_ROOT, then the NDK version the version catalog pins through
+# CHUR_NDK_VERSION, and falls back to the newest NDK under ANDROID_HOME/ndk.
+# Apple targets need Xcode and run on macOS only.
 
 set -euo pipefail
 
@@ -62,6 +63,12 @@ find_ndk() {
   fi
   local sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
   [[ -n "$sdk" && -d "$sdk/ndk" ]] || die "no NDK: set ANDROID_NDK_HOME"
+  # The version catalog pins the NDK (gradle/libs.versions.toml) and the
+  # Gradle build exports it as CHUR_NDK_VERSION. Prefer exactly that one over
+  # the newest installed, so the build does not change with the machine.
+  if [[ -n "${CHUR_NDK_VERSION:-}" && -d "$sdk/ndk/$CHUR_NDK_VERSION" ]]; then
+    printf '%s' "$sdk/ndk/$CHUR_NDK_VERSION"; return
+  fi
   local newest
   newest="$(find "$sdk/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
   [[ -n "$newest" ]] || die "no NDK under $sdk/ndk"

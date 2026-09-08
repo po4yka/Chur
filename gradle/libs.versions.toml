@@ -19,6 +19,12 @@ androidMinSdk = "29"
 androidCompileSdk = "37"
 androidTargetSdk = "37"
 
+# The NDK that builds and strips the native libraries, pinned so a machine
+# with a newer one installed cannot silently change the toolchain. AGP uses
+# exactly this version for its own tasks, and the native build script
+# resolves it from the same value.
+ndk = "29.0.14206865"
+
 # iOS, frozen by ADR-0017. The Rust link and the vendored C of ADR-0038 must
 # agree on it, or the link fails on a symbol the older target does not provide.
 iosDeploymentTarget = "18.0"
