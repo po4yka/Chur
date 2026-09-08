@@ -26,8 +26,8 @@ use chur_media::{export, import, integrity, reader};
 use crate::operation::{Operation, OperationKind, Stage};
 use crate::panic::{guard_status, guard_status_for};
 use crate::records::{
-    ChurContentInfoV1, ChurImportRequestV1, ChurObjectRefV1, ChurProgressV1, ChurQueryV1,
-    ChurRuntimeConfigV1, ChurScanRequestV1, ChurUnlockRequestV1, encode_page, query_from,
+    encode_page, query_from, ChurContentInfoV1, ChurImportRequestV1, ChurObjectRefV1,
+    ChurProgressV1, ChurQueryV1, ChurRuntimeConfigV1, ChurScanRequestV1, ChurUnlockRequestV1,
 };
 use crate::registry::{self, Entry, Handle, Kind};
 use crate::runtime::Runtime;
@@ -409,6 +409,12 @@ pub unsafe extern "C" fn chur_vault_unlock(
             let _ = session.lock();
             return Err(error);
         }
+        // `PLAINTEXT_LIFECYCLE.md` §5: startup cleanup deletes every scratch
+        // entry a previous process abandoned. It runs beside the import
+        // reconciliation and before this session becomes a handle, so no host
+        // call observes an entry that is about to be deleted and a crash the
+        // previous process died in leaves no readable plaintext behind it.
+        export::clear_scratch(&session)?;
         let handle = registry::insert(Entry::Session {
             runtime,
             session: std::sync::Mutex::new(session),

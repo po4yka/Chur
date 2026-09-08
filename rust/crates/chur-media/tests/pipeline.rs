@@ -10,7 +10,7 @@
 
 use chur_catalog::journal::{ImportTransaction, Stage};
 use chur_catalog::paths::VaultRoot;
-use chur_catalog::query::{ObjectQuery, Scope, page};
+use chur_catalog::query::{page, ObjectQuery, Scope};
 use chur_catalog::vault::{self, Session};
 use chur_catalog::{deletion, journal, store};
 use chur_core::{ChurStatus, Id, Result};
@@ -172,16 +172,12 @@ fn read_at_follows_the_ffi_contract_end_of_stream_rules() {
 fn a_committed_import_leaves_no_journal_record_and_no_temporary_container() {
     let (root, mut session) = new_vault();
     let (_object_id, _) = import_photo(&mut session, 5_000, "a.jpg");
-    assert!(
-        journal::live(session.catalog_ref().unwrap())
-            .unwrap()
-            .is_empty()
-    );
-    assert!(
-        journal::dead(session.catalog_ref().unwrap())
-            .unwrap()
-            .is_empty()
-    );
+    assert!(journal::live(session.catalog_ref().unwrap())
+        .unwrap()
+        .is_empty());
+    assert!(journal::dead(session.catalog_ref().unwrap())
+        .unwrap()
+        .is_empty());
     let incoming = root.incoming(&session.object_store_id());
     assert_eq!(std::fs::read_dir(&incoming).unwrap().count(), 0);
 }
@@ -255,16 +251,12 @@ fn reconciliation_kills_an_import_a_crash_left_behind() {
         !temporary.exists(),
         "a dead container survived reconciliation"
     );
-    assert!(
-        journal::live(session.catalog_ref().unwrap())
-            .unwrap()
-            .is_empty()
-    );
-    assert!(
-        journal::dead(session.catalog_ref().unwrap())
-            .unwrap()
-            .is_empty()
-    );
+    assert!(journal::live(session.catalog_ref().unwrap())
+        .unwrap()
+        .is_empty());
+    assert!(journal::dead(session.catalog_ref().unwrap())
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -304,11 +296,9 @@ fn reconciliation_removes_a_container_the_rename_committed_but_nothing_activated
             .objects
             .is_empty()
     );
-    assert!(
-        journal::live(session.catalog_ref().unwrap())
-            .unwrap()
-            .is_empty()
-    );
+    assert!(journal::live(session.catalog_ref().unwrap())
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -347,11 +337,9 @@ fn reconciliation_completes_a_record_the_activation_outlived_instead_of_destroyi
         committed.exists(),
         "reconciliation destroyed the container of an activated object"
     );
-    assert!(
-        journal::live(session.catalog_ref().unwrap())
-            .unwrap()
-            .is_empty()
-    );
+    assert!(journal::live(session.catalog_ref().unwrap())
+        .unwrap()
+        .is_empty());
     assert_eq!(
         page(session.catalog_ref().unwrap(), &ObjectQuery::timeline())
             .unwrap()
@@ -468,9 +456,74 @@ fn a_scratch_entry_is_created_and_released() {
     .expect("scratch");
     assert_eq!(std::fs::read(entry.path()).unwrap(), expected.as_slice());
     let directory = root.scratch(&session.object_store_id());
-    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+    assert_eq!(scratch_entries(&directory), 1);
     entry.release().expect("release");
-    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
+    assert_eq!(scratch_entries(&directory), 0);
+}
+
+/// Counts scratch entries, which excludes the journal the lifecycle keeps.
+fn scratch_entries(directory: &std::path::Path) -> usize {
+    std::fs::read_dir(directory)
+        .unwrap()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy() != "scratch-journal")
+        .count()
+}
+
+#[test]
+fn a_materialization_journals_its_entry() {
+    let (root, mut session) = new_vault();
+    let (object_id, _) = import_photo(&mut session, 4_096, "a.jpg");
+    let entry = export::materialize(
+        &session,
+        &object_id,
+        StreamKind::Original,
+        &mut Uninterrupted,
+    )
+    .expect("scratch");
+    let directory = root.scratch(&session.object_store_id());
+    let entry_id = entry.entry_id().to_hex();
+    let journal = std::fs::read_to_string(directory.join("scratch-journal")).unwrap();
+    assert!(
+        journal.contains(&entry_id),
+        "the journal names the entry it was created for"
+    );
+    entry.release().expect("release");
+    let journal = std::fs::read_to_string(directory.join("scratch-journal"));
+    assert!(
+        journal.map_or(true, |text| !text.contains(&entry_id)),
+        "the released entry is no longer in the journal"
+    );
+}
+
+#[test]
+fn an_entry_expires_after_its_hold_bound() {
+    let (root, mut session) = new_vault();
+    let (object_id, _) = import_photo(&mut session, 4_096, "a.jpg");
+    let entry = export::materialize(
+        &session,
+        &object_id,
+        StreamKind::Original,
+        &mut Uninterrupted,
+    )
+    .expect("scratch");
+    let directory = root.scratch(&session.object_store_id());
+    let journal = std::fs::read_to_string(directory.join("scratch-journal")).unwrap();
+    let (_, created_at_ms) = journal.trim_end().rsplit_once(' ').unwrap();
+    let created_at_ms: u64 = created_at_ms.parse().unwrap();
+    // Inside the hold bound the sweep keeps the entry and its row.
+    export::sweep_expired(&directory, created_at_ms).expect("sweep");
+    assert!(entry.path().exists());
+    // At the bound it deletes the entry and drops the row.
+    let removed = export::sweep_expired(
+        &directory,
+        created_at_ms + chur_core::limits::scratch::HOLD_MS_MAX,
+    )
+    .expect("sweep");
+    assert_eq!(removed, 1);
+    assert!(!entry.path().exists());
+    let journal = std::fs::read_to_string(directory.join("scratch-journal")).unwrap();
+    assert!(!journal.contains(&entry.entry_id().to_hex()));
 }
 
 #[test]
@@ -629,18 +682,16 @@ fn a_flipped_ciphertext_bit_is_proven_corruption() {
     );
     // §16.2: a corrupt row is in no scope.
     for scope in [Scope::Timeline, Scope::Quarantine] {
-        assert!(
-            page(
-                session.catalog_ref().unwrap(),
-                &ObjectQuery {
-                    scope,
-                    ..ObjectQuery::timeline()
-                }
-            )
-            .unwrap()
-            .objects
-            .is_empty()
-        );
+        assert!(page(
+            session.catalog_ref().unwrap(),
+            &ObjectQuery {
+                scope,
+                ..ObjectQuery::timeline()
+            }
+        )
+        .unwrap()
+        .objects
+        .is_empty());
     }
 }
 
@@ -731,11 +782,9 @@ fn an_empty_source_is_refused_and_leaves_nothing_behind() {
         )),
         ChurStatus::InvalidInput
     );
-    assert!(
-        journal::live(session.catalog_ref().unwrap())
-            .unwrap()
-            .is_empty()
-    );
+    assert!(journal::live(session.catalog_ref().unwrap())
+        .unwrap()
+        .is_empty());
     assert_eq!(
         std::fs::read_dir(root.incoming(&session.object_store_id()))
             .unwrap()
@@ -753,11 +802,9 @@ fn a_source_above_the_object_bound_is_refused_before_any_work() {
         rejection(import::begin(&mut session, oversized, photo(), NOW)),
         ChurStatus::ResourceLimitExceeded
     );
-    assert!(
-        journal::live(session.catalog_ref().unwrap())
-            .unwrap()
-            .is_empty()
-    );
+    assert!(journal::live(session.catalog_ref().unwrap())
+        .unwrap()
+        .is_empty());
 }
 
 /// A caller that cancels once it has seen `after` bytes.
