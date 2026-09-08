@@ -18,6 +18,26 @@ pub const INVALID_INPUT: Status = 201;
 /// `CHUR_INTERNAL_FAILURE`.
 pub const INTERNAL_FAILURE: Status = 900;
 
+/// Runs `body` with a panic contained, `docs/interop/FFI_CONTRACT.md` §11.
+///
+/// `libchur_jni` exports with `extern "system"`, and a panic that crosses that
+/// boundary aborts the JVM instead of reaching the redacted failure
+/// `chur-ffi`'s own guard returns for the exports it defines. The argument
+/// conversions and result writes of this module run before and after those
+/// calls, so the adapter contains its own. The payload is dropped here, no
+/// payload text crosses the boundary, and the export returns the §11 default:
+/// `INTERNAL_FAILURE` for a status export, or the value ADR-0037 fixes for a
+/// channel-less one.
+pub(crate) fn contain<R>(default: R, body: impl FnOnce() -> R) -> R {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        Ok(value) => value,
+        Err(payload) => {
+            drop(payload);
+            default
+        }
+    }
+}
+
 /// Reads a Java string as UTF-8 bytes.
 ///
 /// The heap copy is zeroized on drop: a password, recovery secret, or device
@@ -126,4 +146,21 @@ pub fn direct_buffer(env: &JNIEnv<'_>, buffer: &JByteBuffer<'_>) -> Option<(*mut
     let address = env.get_direct_buffer_address(buffer).ok()?;
     let capacity = env.get_direct_buffer_capacity(buffer).ok()?;
     Some((address, capacity))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::panic, clippy::expect_used)]
+
+    use super::contain;
+
+    #[test]
+    fn contain_returns_the_body_value() {
+        assert_eq!(contain(7, || 3), 3);
+    }
+
+    #[test]
+    fn contain_maps_a_panic_to_the_default() {
+        assert_eq!(contain(9, || panic!("contained")), 9);
+    }
 }
