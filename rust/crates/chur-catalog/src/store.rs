@@ -10,16 +10,16 @@
 //! second writer, because §8.1 of `docs/interop/FFI_CONTRACT.md` serializes
 //! catalog writes behind one mutex per session.
 
-use chur_core::{bail, ensure, limits::catalog as limits, Id, Result};
+use chur_core::{Id, Result, bail, ensure, limits::catalog as limits};
 use chur_format::{
     constants::{IntegritySummary, ObjectState, StreamKind},
     envelope::ObjectKeyEnvelope,
 };
-use rusqlite::{params, OptionalExtension, Transaction};
+use rusqlite::{OptionalExtension, Transaction, params};
 
-use crate::db::{as_sqlite_integer, from_sqlite_integer, map_sqlite, CatalogDb};
+use crate::db::{CatalogDb, as_sqlite_integer, from_sqlite_integer, map_sqlite};
 use crate::model::{
-    Album, Collection, DerivedAsset, MetadataRevision, Object, Stream, Tag, ENVELOPE_STATUS_ACTIVE,
+    Album, Collection, DerivedAsset, ENVELOPE_STATUS_ACTIVE, MetadataRevision, Object, Stream, Tag,
 };
 use crate::schema::bump_generation;
 
@@ -1241,7 +1241,7 @@ mod tests {
     use crate::model::{COLLECTION_POLICY_VAULT_DEFAULT, COLLECTION_STATUS_ACTIVE};
     use crate::schema::open_at_current_version;
     use chur_core::ChurStatus;
-    use chur_crypto::{random, Key, Nonce};
+    use chur_crypto::{Key, Nonce, random};
     use chur_format::constants::MediaClass;
 
     struct Fixture {

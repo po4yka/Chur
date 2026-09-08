@@ -3,22 +3,22 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chur_core::limits::{catalog as catalog_bounds, sync as bounds};
-use chur_core::{bail, ensure, ChurStatus, Error, Id, Result};
+use chur_core::{ChurStatus, Error, Id, Result, bail, ensure};
 use chur_crypto::{Commitment, Key, Nonce};
 use chur_sync_protocol::{
     checkpoint::{
-        collection_epoch_commitment, Checkpoint, CheckpointHead,
-        UNCOMPACTED_CATALOG_STATE_COMMITMENT,
+        Checkpoint, CheckpointHead, UNCOMPACTED_CATALOG_STATE_COMMITMENT,
+        collection_epoch_commitment,
     },
     convergence::CausalStamp,
     operation::{DeviceSigningKey, Operation},
     operation_log::{ApplyOutcome, CheckpointOutcome, ForkEvidence, ForkState, OperationLog},
     state::{DeviceStatus, MembershipState},
 };
-use rusqlite::{params, OptionalExtension, Transaction};
+use rusqlite::{OptionalExtension, Transaction, params};
 
 use crate::{
-    db::{as_sqlite_integer, from_sqlite_integer, map_sqlite, CatalogDb},
+    db::{CatalogDb, as_sqlite_integer, from_sqlite_integer, map_sqlite},
     schema::bump_generation,
 };
 
@@ -1087,11 +1087,11 @@ mod tests {
     use super::*;
     use crate::{
         db::{CatalogKey, CatalogLocation},
-        model::{Collection, COLLECTION_POLICY_VAULT_DEFAULT, COLLECTION_STATUS_ACTIVE},
+        model::{COLLECTION_POLICY_VAULT_DEFAULT, COLLECTION_STATUS_ACTIVE, Collection},
         schema::open_at_current_version,
         store, sync_membership,
     };
-    use chur_crypto::{random, Key, Nonce};
+    use chur_crypto::{Key, Nonce, random};
     use chur_sync_protocol::{
         checkpoint::{Checkpoint, CheckpointHead},
         membership::{EnrollmentRecord, RevocationRecord},
@@ -1194,9 +1194,11 @@ mod tests {
             records_after(&db, &id(3), 1).expect("tail outbound page"),
             vec![second.encode()]
         );
-        assert!(records_after(&db, &id(3), 2)
-            .expect("empty outbound page")
-            .is_empty());
+        assert!(
+            records_after(&db, &id(3), 2)
+                .expect("empty outbound page")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1267,10 +1269,12 @@ mod tests {
         });
         assert!(outcome.is_err());
         assert!(log.head(&id(3)).is_none());
-        assert!(load(&db, &membership)
-            .expect("restore")
-            .head(&id(3))
-            .is_none());
+        assert!(
+            load(&db, &membership)
+                .expect("restore")
+                .head(&id(3))
+                .is_none()
+        );
     }
 
     #[test]
@@ -1393,22 +1397,25 @@ mod tests {
         let first = operation(&key, 1, [0; 32], 5);
         log.accept_with(&mut db, &first, &membership, |_| Ok(()))
             .expect("first");
-        assert!(!log
-            .own_checkpoint_covers_current_heads(&db)
-            .expect("no checkpoint"));
+        assert!(
+            !log.own_checkpoint_covers_current_heads(&db)
+                .expect("no checkpoint")
+        );
         let current = checkpoint(&key, 1, first.digest(), &membership);
         log.accept_checkpoint(&mut db, &current, &membership, true, 9)
             .expect("current checkpoint");
-        assert!(log
-            .own_checkpoint_covers_current_heads(&db)
-            .expect("covered"));
+        assert!(
+            log.own_checkpoint_covers_current_heads(&db)
+                .expect("covered")
+        );
 
         let second = operation(&key, 2, first.digest(), 6);
         log.accept_with(&mut db, &second, &membership, |_| Ok(()))
             .expect("second");
-        assert!(!log
-            .own_checkpoint_covers_current_heads(&db)
-            .expect("stale checkpoint"));
+        assert!(
+            !log.own_checkpoint_covers_current_heads(&db)
+                .expect("stale checkpoint")
+        );
     }
 
     #[test]
@@ -1455,9 +1462,10 @@ mod tests {
         );
         assert_eq!(checkpoint.heads().len(), 1);
         assert_eq!(checkpoint.heads()[0].operation_digest(), &first.digest());
-        assert!(log
-            .own_checkpoint_covers_current_heads(&db)
-            .expect("coverage"));
+        assert!(
+            log.own_checkpoint_covers_current_heads(&db)
+                .expect("coverage")
+        );
     }
 
     #[test]

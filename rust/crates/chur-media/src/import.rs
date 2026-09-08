@@ -16,13 +16,12 @@ use chur_catalog::model::{MetadataRevision, Object, Stream};
 use chur_catalog::store::{self, ObjectActivation};
 use chur_catalog::vault::Session;
 use chur_core::{
-    bail, ensure,
+    Id, Result, bail, ensure,
     limits::{container as container_bounds, media as media_bounds},
-    Id, Result,
 };
-use chur_crypto::{random, Key, Nonce};
+use chur_crypto::{Key, Nonce, random};
 use chur_format::constants::{
-    IntegritySummary, MediaClass, ObjectState, StreamKind, CONTAINER_VERSION_V1, SUITE_V1,
+    CONTAINER_VERSION_V1, IntegritySummary, MediaClass, ObjectState, SUITE_V1, StreamKind,
 };
 use chur_format::container::{
     CanonicalManifest, ContainerWriter, Layout, MediaProperties, ReadAt, StreamIdentity,

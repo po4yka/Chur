@@ -11,8 +11,8 @@ use libfuzzer_sys::fuzz_target;
 
 use chur_core::ChurStatus;
 use chur_format::backup::{
-    framing_of, BackupManifest, FinalBackupCommit, PublicPreamble, RecordHeader,
-    StreamInventoryEntry,
+    BackupManifest, FinalBackupCommit, PublicPreamble, RecordHeader, StreamInventoryEntry,
+    framing_of,
 };
 
 fuzz_target!(|data: &[u8]| {

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use chur_core::{bail, ensure, ChurStatus, Error, Id, Result};
+use chur_core::{ChurStatus, Error, Id, Result, bail, ensure};
 use chur_crypto::{Commitment, Key, Nonce};
 
 use crate::{
@@ -323,7 +323,7 @@ impl OperationLog {
                         Ok(outcome)
                     }
                     Err(error) if error.status() == ChurStatus::SyncChainFork => {
-                        return self.freeze(operation)
+                        return self.freeze(operation);
                     }
                     Err(error) => Err(error),
                 }
@@ -666,7 +666,7 @@ impl OperationLog {
                 Ok(outcome)
             }
             Err(error) if error.status() == ChurStatus::SyncChainFork => {
-                return self.freeze(operation)
+                return self.freeze(operation);
             }
             Err(error) => Err(error),
         }

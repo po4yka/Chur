@@ -23,7 +23,8 @@ fuzz_target!(|input: Input| {
     if input.password.len() > 2048 {
         return;
     }
-    if let Ok(params) = Argon2Params::validated(input.memory_kib, input.iterations, input.parallelism)
+    if let Ok(params) =
+        Argon2Params::validated(input.memory_kib, input.iterations, input.parallelism)
     {
         assert!((65_536..=524_288).contains(&params.memory_kib()));
         assert!((3..=10).contains(&params.iterations()));

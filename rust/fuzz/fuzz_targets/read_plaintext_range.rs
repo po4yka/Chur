@@ -46,7 +46,8 @@ fuzz_target!(|input: Input| {
     let Ok(properties) = MediaProperties::new(MediaClass::Opaque, 0, 0, 0) else {
         return;
     };
-    let Ok(manifest) = CanonicalManifest::new(identity, None, CHUNK_SIZE, [0x35; 16], 1, properties)
+    let Ok(manifest) =
+        CanonicalManifest::new(identity, None, CHUNK_SIZE, [0x35; 16], 1, properties)
     else {
         return;
     };
@@ -84,7 +85,11 @@ fuzz_target!(|input: Input| {
     assert_eq!(verified, input.plaintext.len() as u64);
 
     let total = input.plaintext.len() as u64;
-    let offset = if total == 0 { 0 } else { input.offset % (total + 1) };
+    let offset = if total == 0 {
+        0
+    } else {
+        input.offset % (total + 1)
+    };
     let length = if total == 0 {
         0
     } else {

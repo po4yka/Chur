@@ -18,13 +18,13 @@ use chur_ffi::records::{
     ChurQueryV1, ChurRuntimeConfigV1, ChurScanRequestV1, ChurUnlockRequestV1,
 };
 use chur_ffi::sync::ChurSyncReportV1;
+use jni::JNIEnv;
 use jni::objects::{JByteArray, JByteBuffer, JClass, JIntArray, JLongArray, JString};
 use jni::sys::{jboolean, jint, jlong};
-use jni::JNIEnv;
 
 use crate::convert::{
-    byte_array, direct_buffer, fixed_array, string_bytes, write_bytes, write_ints, write_long,
-    write_longs, INTERNAL_FAILURE, INVALID_INPUT,
+    INTERNAL_FAILURE, INVALID_INPUT, byte_array, direct_buffer, fixed_array, string_bytes,
+    write_bytes, write_ints, write_long, write_longs,
 };
 
 /// The identifier length of `docs/format/CANONICAL_ENCODING_V1.md` §8.

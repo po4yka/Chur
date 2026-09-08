@@ -10,7 +10,7 @@
 //! whichever padding the host's compiler chose.
 
 use chur_catalog::query::{Cursor, ObjectProjection, ObjectQuery, Page, Scope, Sort};
-use chur_core::{ensure, limits::catalog as limits, ChurStatus, Error, Id, Result};
+use chur_core::{ChurStatus, Error, Id, Result, ensure, limits::catalog as limits};
 
 /// The exact length of the page header of §6.4.
 pub const PAGE_HEADER_LEN: usize = 8 + 8 + 4 + 1 + limits::CURSOR_LEN;
