@@ -7,9 +7,10 @@
 //! argument can be null in ways a C caller's cannot.
 
 use chur_ffi::api::Status;
-use jni::JNIEnv;
 use jni::objects::{JByteArray, JByteBuffer, JIntArray, JLongArray, JString};
 use jni::sys::{jint, jlong};
+use jni::JNIEnv;
+use zeroize::Zeroizing;
 
 /// `CHUR_INVALID_INPUT` of `docs/ERROR_MODEL.md`.
 pub const INVALID_INPUT: Status = 201;
@@ -18,29 +19,40 @@ pub const INVALID_INPUT: Status = 201;
 pub const INTERNAL_FAILURE: Status = 900;
 
 /// Reads a Java string as UTF-8 bytes.
-pub fn string_bytes(env: &mut JNIEnv<'_>, value: &JString<'_>) -> Option<Vec<u8>> {
+///
+/// The heap copy is zeroized on drop: a password, recovery secret, or device
+/// secret can arrive through this path, and `docs/interop/FFI_CONTRACT.md` §12
+/// requires a Rust secret wrapper on receipt.
+pub fn string_bytes(env: &mut JNIEnv<'_>, value: &JString<'_>) -> Option<Zeroizing<Vec<u8>>> {
     if value.is_null() {
         return None;
     }
     env.get_string(value)
         .ok()
-        .map(|text| String::from(text).into_bytes())
+        .map(|text| Zeroizing::new(String::from(text).into_bytes()))
 }
 
-/// Copies a `byte[]` into a `Vec`.
+/// Copies a `byte[]` into a zeroized `Vec`.
 ///
 /// A copy rather than a pin: these arrays are identifiers, secrets, names, and
 /// search terms, all bounded well below a kilobyte by the catalog, and a pinned
-/// array would hold the JVM heap still for the length of the call.
-pub fn byte_array(env: &mut JNIEnv<'_>, value: &JByteArray<'_>) -> Option<Vec<u8>> {
+/// array would hold the JVM heap still for the length of the call. The copy is
+/// [`Zeroizing`], because passwords, recovery secrets, and the 32-byte device
+/// secret travel through this path and `docs/interop/FFI_CONTRACT.md` §12
+/// requires that the JVM-to-Rust copy never outlives the call as plaintext.
+pub fn byte_array(env: &mut JNIEnv<'_>, value: &JByteArray<'_>) -> Option<Zeroizing<Vec<u8>>> {
     if value.is_null() {
         return None;
     }
-    env.convert_byte_array(value).ok()
+    env.convert_byte_array(value).ok().map(Zeroizing::new)
 }
 
 /// Copies a `byte[]` of exactly `length` bytes.
-pub fn fixed_array(env: &mut JNIEnv<'_>, value: &JByteArray<'_>, length: usize) -> Option<Vec<u8>> {
+pub fn fixed_array(
+    env: &mut JNIEnv<'_>,
+    value: &JByteArray<'_>,
+    length: usize,
+) -> Option<Zeroizing<Vec<u8>>> {
     let bytes = byte_array(env, value)?;
     (bytes.len() == length).then_some(bytes)
 }

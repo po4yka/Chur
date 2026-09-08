@@ -15,6 +15,8 @@ chur-ffi.workspace = true
 
 jni.workspace = true
 
+zeroize.workspace = true
+
 # `chur-jni` is the second crate permitted to contain `unsafe`, under ADR-0040.
 # JNI requires a native function whose symbol name encodes the Java class and
 # method, and FFI_CONTRACT.md section 6.2 forbids such a symbol in the Chur
