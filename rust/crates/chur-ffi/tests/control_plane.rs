@@ -175,6 +175,7 @@ fn zeroed_progress() -> ChurProgressV1 {
         terminal: 0,
         reserved: [0; 3],
         status: 0,
+        object_id: [0; 16],
     }
 }
 

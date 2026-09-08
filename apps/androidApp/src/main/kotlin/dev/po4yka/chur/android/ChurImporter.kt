@@ -4,8 +4,7 @@ import android.content.ContentResolver
 import android.net.Uri
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.ImportRequest
-import dev.po4yka.chur.ffi.ObjectQuery
-import dev.po4yka.chur.ffi.QueryScope
+import dev.po4yka.chur.ffi.OperationProgress
 import dev.po4yka.chur.imports.AndroidMediaCodec
 import dev.po4yka.chur.imports.MediaBounds
 import dev.po4yka.chur.imports.requiredDerivatives
@@ -24,26 +23,33 @@ import dev.po4yka.chur.vault.VaultRepository
  * than a boolean: a codec failure must not commit a catalog entry claiming the
  * derivatives exist, and an over-large source is not a corrupt one.
  */
-class ChurImporter(private val codec: AndroidMediaCodec) {
-
+class ChurImporter(
+    private val codec: AndroidMediaCodec,
+) {
     /** What an import attempt ended as, §13. */
     sealed interface Outcome {
         /** The object is in the vault, with the derivatives it needed. */
-        data class Imported(val objectId: ByteArray, val derivatives: Int) : Outcome {
-            override fun equals(other: Any?): Boolean =
-                other is Imported && objectId.contentEquals(other.objectId)
+        data class Imported(
+            val objectId: ByteArray,
+            val derivatives: Int,
+        ) : Outcome {
+            override fun equals(other: Any?): Boolean = other is Imported && objectId.contentEquals(other.objectId)
 
             override fun hashCode(): Int = objectId.contentHashCode()
         }
 
         /** The source is outside the bounds of §12, and nothing was written. */
-        data class TooLarge(val reason: String) : Outcome
+        data class TooLarge(
+            val reason: String,
+        ) : Outcome
 
         /** The provider could not open the source. */
         data object Unreadable : Outcome
 
         /** The boundary refused, carrying its stable status. */
-        data class Refused(val status: String) : Outcome
+        data class Refused(
+            val status: String,
+        ) : Outcome
     }
 
     /** Runs one import. */
@@ -56,34 +62,39 @@ class ChurImporter(private val codec: AndroidMediaCodec) {
         try {
             // §2 stage 3, before stage 4: an over-large source is refused
             // before an object key exists.
-            val probe = codec.probe(media)
-                ?: return Outcome.Refused("UNSUPPORTED_VERSION")
+            val probe =
+                codec.probe(media)
+                    ?: return Outcome.Refused("UNSUPPORTED_VERSION")
             MediaBounds.check(probe)?.let { return Outcome.TooLarge(it) }
 
-            val operation = repository.beginImport(
-                sourceFd = media.descriptor,
-                request = ImportRequest(
-                    contentType = probe.contentType,
-                    mediaClass = probe.mediaClass,
-                    width = probe.width,
-                    height = probe.height,
-                    durationMs = probe.durationMs,
-                    knownLength = media.knownLength,
-                    captureTimeMs = media.captureTimeMs,
-                    originalFilename = media.originalFilename,
-                ),
-            )
+            val operation =
+                repository.beginImport(
+                    sourceFd = media.descriptor,
+                    request =
+                        ImportRequest(
+                            contentType = probe.contentType,
+                            mediaClass = probe.mediaClass,
+                            width = probe.width,
+                            height = probe.height,
+                            durationMs = probe.durationMs,
+                            knownLength = media.knownLength,
+                            captureTimeMs = media.captureTimeMs,
+                            originalFilename = media.originalFilename,
+                        ),
+                )
             val terminal = drain(repository, operation)
             repository.closeOperation(operation)
-            if (terminal != 0) {
-                return Outcome.Refused(statusName(terminal))
+            if (terminal.status != 0) {
+                return Outcome.Refused(statusName(terminal.status))
             }
 
-            // The object the import just activated is the newest row of the
-            // timeline, which is what the default sort of §16.2 puts first.
-            val objectId = repository.page(ObjectQuery(QueryScope.TIMELINE, limit = 1))
-                .objects.firstOrNull()?.objectId
-                ?: return Outcome.Refused("NOT_FOUND")
+            // §10 of the FFI contract: the terminal snapshot names the object
+            // the import activated, so the derivatives of stage 7 attach to
+            // the object this import created rather than to whichever row the
+            // timeline happens to put first.
+            val objectId =
+                terminal.importedObjectId()
+                    ?: return Outcome.Refused("NOT_FOUND")
 
             // §2 stage 7 and §13: a codec failure here leaves the object
             // imported with fewer derivatives rather than failing the import,
@@ -118,16 +129,21 @@ class ChurImporter(private val codec: AndroidMediaCodec) {
      * it already runs on an I/O dispatcher and an import of a large file is
      * bounded by the disk rather than by this loop.
      */
-    private suspend fun drain(repository: VaultRepository, operation: Long): Int {
+    private suspend fun drain(
+        repository: VaultRepository,
+        operation: Long,
+    ): OperationProgress {
         while (true) {
             val progress = repository.poll(operation)
-            if (progress.terminal) return progress.status
+            if (progress.terminal) return progress
             kotlinx.coroutines.delay(POLL_INTERVAL_MS)
         }
     }
 
     private fun statusName(code: Int): String =
-        dev.po4yka.chur.core.model.ChurStatus.fromValue(code).name
+        dev.po4yka.chur.core.model.ChurStatus
+            .fromValue(code)
+            .name
 
     private companion object {
         /** Fast enough to feel immediate, slow enough not to spin a core. */

@@ -149,7 +149,7 @@ mod tests {
         let operation = crate::operation::Operation::spawn(
             crate::operation::OperationKind::Import,
             0,
-            |_shared| Ok(()),
+            |_shared| Ok(None),
         )
         .expect("spawn");
         crate::registry::insert(crate::registry::Entry::Operation {

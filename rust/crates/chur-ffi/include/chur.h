@@ -308,6 +308,7 @@ typedef struct ChurProgressV1 {
   uint8_t terminal;
   uint8_t reserved[3];
   int32_t status;
+  uint8_t object_id[16];
 } ChurProgressV1;
 
 typedef struct ChurContentInfoV1 {

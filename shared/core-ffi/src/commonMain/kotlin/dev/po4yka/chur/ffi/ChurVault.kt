@@ -19,22 +19,22 @@ import dev.po4yka.chur.core.model.ChurStatus
  * them on an I/O dispatcher.
  */
 object ChurVault {
-
     // -----------------------------------------------------------------------
     // Handshake, §2
     // -----------------------------------------------------------------------
 
     /** The ABI the loaded library answers. */
-    fun handshake(): NativeHandshake = NativeHandshake(
-        major = ChurNative.abiVersionMajor(),
-        minor = ChurNative.abiVersionMinor(),
-        capabilities = ChurNative.capabilities(),
-        objectFormatMin = ChurNative.objectFormatMin(),
-        objectFormatMax = ChurNative.objectFormatMax(),
-        keySlotFormatMin = ChurNative.keySlotFormatMin(),
-        keySlotFormatMax = ChurNative.keySlotFormatMax(),
-        buildFlavor = ChurNative.buildFlavor(),
-    )
+    fun handshake(): NativeHandshake =
+        NativeHandshake(
+            major = ChurNative.abiVersionMajor(),
+            minor = ChurNative.abiVersionMinor(),
+            capabilities = ChurNative.capabilities(),
+            objectFormatMin = ChurNative.objectFormatMin(),
+            objectFormatMax = ChurNative.objectFormatMax(),
+            keySlotFormatMin = ChurNative.keySlotFormatMin(),
+            keySlotFormatMax = ChurNative.keySlotFormatMax(),
+            buildFlavor = ChurNative.buildFlavor(),
+        )
 
     /** Whether a status value is one this build allocates. */
     fun statusIsKnown(value: Int): Boolean = ChurNative.statusIsKnown(value)
@@ -44,9 +44,10 @@ object ChurVault {
     // -----------------------------------------------------------------------
 
     /** Opens the one runtime of §14 over a storage root. */
-    fun openRuntime(root: String): Long = handleOf("runtime open") { out ->
-        ChurNative.runtimeOpen(root, out)
-    }
+    fun openRuntime(root: String): Long =
+        handleOf("runtime open") { out ->
+            ChurNative.runtimeOpen(root, out)
+        }
 
     /** Closes the runtime and every handle it owns. */
     fun closeRuntime(runtime: Long) {
@@ -61,7 +62,10 @@ object ChurVault {
     }
 
     /** Begins vault creation, `PROVISIONING.md` §3 steps 3 and 4. */
-    fun beginCreation(runtime: Long, password: ByteArray): Long =
+    fun beginCreation(
+        runtime: Long,
+        password: ByteArray,
+    ): Long =
         handleOf("vault create") { out ->
             ChurNative.vaultCreateBegin(runtime, password, 0, 0, 0, out)
         }
@@ -73,15 +77,16 @@ object ChurVault {
      * it exactly once, and nothing here keeps a copy: a user who loses it
      * rotates the slot under §8 there rather than asking for it again.
      */
-    fun creationAddRecoverySlot(creation: Long): String = phraseOf("creation recovery slot") {
-        buffer, written ->
-        ChurNative.vaultCreationAddRecoverySlot(creation, buffer, written)
-    }
+    fun creationAddRecoverySlot(creation: Long): String =
+        phraseOf("creation recovery slot") { buffer, written ->
+            ChurNative.vaultCreationAddRecoverySlot(creation, buffer, written)
+        }
 
     /** Reaches `ACTIVE` and opens the session, step 6. */
-    fun activateCreation(creation: Long): Long = handleOf("vault activate") { out ->
-        ChurNative.vaultCreationActivate(creation, out)
-    }
+    fun activateCreation(creation: Long): Long =
+        handleOf("vault activate") { out ->
+            ChurNative.vaultCreationActivate(creation, out)
+        }
 
     /** Abandons a creation, leaving nothing openable. */
     fun abandonCreation(creation: Long) {
@@ -89,23 +94,34 @@ object ChurVault {
     }
 
     /** Unlocks with a password, `KEY_SLOTS.md` §8. */
-    fun unlockWithPassword(runtime: Long, password: ByteArray): Long =
-        handleOf("unlock") { out -> ChurNative.vaultUnlock(runtime, FACTOR_PASSWORD, password, out) }
+    fun unlockWithPassword(
+        runtime: Long,
+        password: ByteArray,
+    ): Long = handleOf("unlock") { out -> ChurNative.vaultUnlock(runtime, FACTOR_PASSWORD, password, out) }
 
     /** Unlocks with a recovery phrase. */
-    fun unlockWithRecovery(runtime: Long, phrase: String): Long =
+    fun unlockWithRecovery(
+        runtime: Long,
+        phrase: String,
+    ): Long =
         handleOf("recover") { out ->
             ChurNative.vaultUnlock(runtime, FACTOR_RECOVERY, phrase.encodeToByteArray(), out)
         }
 
     /** Unlocks with a `DeviceUnlockSecret` the platform keystore returned. */
-    fun unlockWithDeviceSecret(runtime: Long, secret: ByteArray): Long =
+    fun unlockWithDeviceSecret(
+        runtime: Long,
+        secret: ByteArray,
+    ): Long =
         handleOf("device unlock") { out ->
             ChurNative.vaultUnlock(runtime, FACTOR_DEVICE, secret, out)
         }
 
     /** Locks a session, `PLAINTEXT_LIFECYCLE.md` §8. */
-    fun lock(session: Long, reason: LockReason) {
+    fun lock(
+        session: Long,
+        reason: LockReason,
+    ) {
         ChurFailure.check(ChurNative.vaultLock(session, reason.code), "lock")
     }
 
@@ -132,22 +148,23 @@ object ChurVault {
         recipientEnrollment: ByteArray,
         permissions: SharingPermission,
         fingerprintVerified: Boolean,
-    ): PreparedShare = withChurBuffer(PREPARED_SHARE_CAPACITY) { buffer ->
-        val written = IntArray(1)
-        ChurFailure.check(
-            ChurNative.sharingPrepare(
-                session,
-                collectionId,
-                recipientEnrollment,
-                permissions.code,
-                fingerprintVerified,
-                buffer,
-                written,
-            ),
-            "sharing prepare",
-        )
-        decodePreparedShare(buffer.copyOut(written[0]), written[0])
-    }
+    ): PreparedShare =
+        withChurBuffer(PREPARED_SHARE_CAPACITY) { buffer ->
+            val written = IntArray(1)
+            ChurFailure.check(
+                ChurNative.sharingPrepare(
+                    session,
+                    collectionId,
+                    recipientEnrollment,
+                    permissions.code,
+                    fingerprintVerified,
+                    buffer,
+                    written,
+                ),
+                "sharing prepare",
+            )
+            decodePreparedShare(buffer.copyOut(written[0]), written[0])
+        }
 
     /** Prepares a grant for one device in an authenticated recipient vault. */
     fun prepareShareForDevice(
@@ -183,11 +200,16 @@ object ChurVault {
     }
 
     /** Authenticates relay evidence and atomically installs one recipient share. */
-    fun acceptShare(session: Long, share: ShareAcceptance) =
-        acceptSharePackage(session, encodeShareAcceptance(share))
+    fun acceptShare(
+        session: Long,
+        share: ShareAcceptance,
+    ) = acceptSharePackage(session, encodeShareAcceptance(share))
 
     /** Passes one complete opaque relay package to the native sharing verifier. */
-    fun acceptSharePackage(session: Long, packageBytes: ByteArray) {
+    fun acceptSharePackage(
+        session: Long,
+        packageBytes: ByteArray,
+    ) {
         withChurBuffer(packageBytes.size) { buffer ->
             buffer.copyIn(packageBytes)
             ChurFailure.check(
@@ -242,7 +264,10 @@ object ChurVault {
     }
 
     /** Validates and applies the retained inbox after unlock. */
-    fun processSync(session: Long, nowMs: Long): SyncProcessReport {
+    fun processSync(
+        session: Long,
+        nowMs: Long,
+    ): SyncProcessReport {
         val counts = LongArray(4)
         val status = IntArray(1)
         ChurFailure.check(ChurNative.syncProcess(session, nowMs, counts, status), "sync process")
@@ -254,12 +279,16 @@ object ChurVault {
     // -----------------------------------------------------------------------
 
     /** Adds a recovery slot to an active vault and returns the phrase, §8. */
-    fun addRecoverySlot(session: Long): String = phraseOf("add recovery slot") { buffer, written ->
-        ChurNative.vaultAddRecoverySlot(session, buffer, written)
-    }
+    fun addRecoverySlot(session: Long): String =
+        phraseOf("add recovery slot") { buffer, written ->
+            ChurNative.vaultAddRecoverySlot(session, buffer, written)
+        }
 
     /** Adds the Apple Keychain slot, `KEY_SLOTS.md` §5. */
-    fun addDeviceSlot(session: Long, keychainItemId: ByteArray): ByteArray =
+    fun addDeviceSlot(
+        session: Long,
+        keychainItemId: ByteArray,
+    ): ByteArray =
         secretOf("add device slot") { out ->
             ChurNative.vaultAddDeviceSlot(session, keychainItemId, out)
         }
@@ -282,7 +311,11 @@ object ChurVault {
         }
 
     /** Stores what the Keystore wrap returned, completing the slot. */
-    fun commitKeystoreSlot(session: Long, gcmNonce: ByteArray, wrappedRootSecret: ByteArray) {
+    fun commitKeystoreSlot(
+        session: Long,
+        gcmNonce: ByteArray,
+        wrappedRootSecret: ByteArray,
+    ) {
         ChurFailure.check(
             ChurNative.vaultKeystoreCommit(session, gcmNonce, wrappedRootSecret),
             "keystore commit",
@@ -301,34 +334,47 @@ object ChurVault {
         }
 
     /** Unlocks with the root an Android Keystore unwrap returned. */
-    fun unlockWithKeystoreRoot(runtime: Long, rootSecret: ByteArray): Long =
+    fun unlockWithKeystoreRoot(
+        runtime: Long,
+        rootSecret: ByteArray,
+    ): Long =
         handleOf("keystore unlock") { out ->
             ChurNative.vaultUnlock(runtime, FACTOR_KEYSTORE, rootSecret, out)
         }
 
     /** Removes one slot, `KEY_SLOTS.md` §9. */
-    fun removeSlot(session: Long, slotId: ByteArray) {
+    fun removeSlot(
+        session: Long,
+        slotId: ByteArray,
+    ) {
         ChurFailure.check(ChurNative.vaultRemoveSlot(session, slotId), "remove slot")
     }
 
     /** Replaces the password slot. */
-    fun changePassword(session: Long, password: ByteArray) {
+    fun changePassword(
+        session: Long,
+        password: ByteArray,
+    ) {
         ChurFailure.check(ChurNative.vaultChangePassword(session, password), "change password")
     }
 
     /** The slots this vault carries. */
-    fun slots(session: Long): List<SlotSummary> = withChurBuffer(SLOT_LIST_CAPACITY) { buffer ->
-        val written = IntArray(1)
-        ChurFailure.check(ChurNative.vaultSlots(session, buffer, written), "slots")
-        decodeSlotList(buffer.copyOut(written[0]), written[0])
-    }
+    fun slots(session: Long): List<SlotSummary> =
+        withChurBuffer(SLOT_LIST_CAPACITY) { buffer ->
+            val written = IntArray(1)
+            ChurFailure.check(ChurNative.vaultSlots(session, buffer, written), "slots")
+            decodeSlotList(buffer.copyOut(written[0]), written[0])
+        }
 
     // -----------------------------------------------------------------------
     // Library
     // -----------------------------------------------------------------------
 
     /** Reads one page of a scope, `CATALOG_SCHEMA_V1.md` §16.2. */
-    fun query(session: Long, query: ObjectQuery): ObjectPage {
+    fun query(
+        session: Long,
+        query: ObjectQuery,
+    ): ObjectPage {
         val limit = if (query.limit == 0) DEFAULT_PAGE_LIMIT else query.limit
         val capacity = PAGE_HEADER_LENGTH + PROJECTION_LENGTH * limit
         return withChurBuffer(capacity) { buffer ->
@@ -353,7 +399,10 @@ object ChurVault {
     }
 
     /** One object's detail record, §6.5. */
-    fun detail(session: Long, objectId: ByteArray): ObjectDetail =
+    fun detail(
+        session: Long,
+        objectId: ByteArray,
+    ): ObjectDetail =
         withChurBuffer(DETAIL_CAPACITY) { buffer ->
             val written = IntArray(1)
             ChurFailure.check(
@@ -364,7 +413,11 @@ object ChurVault {
         }
 
     /** Sets or clears the favourite flag. */
-    fun setFavorite(session: Long, objectId: ByteArray, favorite: Boolean) {
+    fun setFavorite(
+        session: Long,
+        objectId: ByteArray,
+        favorite: Boolean,
+    ) {
         ChurFailure.check(
             ChurNative.objectSetFavorite(session, objectId, favorite),
             "set favourite",
@@ -372,19 +425,30 @@ object ChurVault {
     }
 
     /** Deletes an object, `CATALOG_SCHEMA_V1.md` §14.1. */
-    fun deleteObject(session: Long, objectId: ByteArray) {
+    fun deleteObject(
+        session: Long,
+        objectId: ByteArray,
+    ) {
         ChurFailure.check(ChurNative.objectDelete(session, objectId), "delete object")
     }
 
     /** Creates an album and returns its identifier. */
-    fun createAlbum(session: Long, name: String): ByteArray {
+    fun createAlbum(
+        session: Long,
+        name: String,
+    ): ByteArray {
         val out = ByteArray(ID_LENGTH)
         ChurFailure.check(ChurNative.albumCreate(session, name, out), "create album")
         return out
     }
 
     /** Adds or removes one album membership. */
-    fun setAlbumMembership(session: Long, albumId: ByteArray, objectId: ByteArray, member: Boolean) {
+    fun setAlbumMembership(
+        session: Long,
+        albumId: ByteArray,
+        objectId: ByteArray,
+        member: Boolean,
+    ) {
         ChurFailure.check(
             ChurNative.albumSetMembership(session, albumId, objectId, member),
             "album membership",
@@ -392,21 +456,30 @@ object ChurVault {
     }
 
     /** Every album, with its membership count. */
-    fun albums(session: Long): List<AlbumSummary> = withChurBuffer(ALBUM_LIST_CAPACITY) { buffer ->
-        val written = IntArray(1)
-        ChurFailure.check(ChurNative.albumList(session, buffer, written), "album list")
-        decodeAlbumList(buffer.copyOut(written[0]), written[0])
-    }
+    fun albums(session: Long): List<AlbumSummary> =
+        withChurBuffer(ALBUM_LIST_CAPACITY) { buffer ->
+            val written = IntArray(1)
+            ChurFailure.check(ChurNative.albumList(session, buffer, written), "album list")
+            decodeAlbumList(buffer.copyOut(written[0]), written[0])
+        }
 
     /** Creates a tag and returns its identifier. */
-    fun createTag(session: Long, name: String): ByteArray {
+    fun createTag(
+        session: Long,
+        name: String,
+    ): ByteArray {
         val out = ByteArray(ID_LENGTH)
         ChurFailure.check(ChurNative.tagCreate(session, name, out), "create tag")
         return out
     }
 
     /** Applies or removes one tag on one object. */
-    fun setObjectTag(session: Long, tagId: ByteArray, objectId: ByteArray, tagged: Boolean) {
+    fun setObjectTag(
+        session: Long,
+        tagId: ByteArray,
+        objectId: ByteArray,
+        tagged: Boolean,
+    ) {
         ChurFailure.check(ChurNative.objectSetTag(session, tagId, objectId, tagged), "set tag")
     }
 
@@ -441,7 +514,11 @@ object ChurVault {
     }
 
     /** Reads one derived asset, which the timeline does for every visible row. */
-    fun readDerived(session: Long, objectId: ByteArray, kind: StreamKind): ByteArray =
+    fun readDerived(
+        session: Long,
+        objectId: ByteArray,
+        kind: StreamKind,
+    ): ByteArray =
         withChurBuffer(DERIVED_CAPACITY) { buffer ->
             val written = IntArray(1)
             ChurFailure.check(
@@ -452,7 +529,11 @@ object ChurVault {
         }
 
     /** Opens a random-access reader on one stream. */
-    fun openReader(session: Long, objectId: ByteArray, kind: StreamKind): Long =
+    fun openReader(
+        session: Long,
+        objectId: ByteArray,
+        kind: StreamKind,
+    ): Long =
         handleOf("open reader") { out ->
             ChurNative.objectReaderOpen(session, objectId, kind.code, out)
         }
@@ -490,7 +571,11 @@ object ChurVault {
      * rather than a precaution: a caller that read once and trusted the count
      * would silently truncate.
      */
-    fun readRange(reader: Long, offset: Long, length: Int): ByteArray {
+    fun readRange(
+        reader: Long,
+        offset: Long,
+        length: Int,
+    ): ByteArray {
         val out = ByteArray(length)
         withChurBuffer(length) { buffer ->
             val written = IntArray(1)
@@ -535,7 +620,11 @@ object ChurVault {
     // -----------------------------------------------------------------------
 
     /** Starts an import from a file descriptor the platform opened. */
-    fun beginImport(session: Long, sourceFd: Int, request: ImportRequest): Long =
+    fun beginImport(
+        session: Long,
+        sourceFd: Int,
+        request: ImportRequest,
+    ): Long =
         handleOf("import begin") { out ->
             ChurNative.importBegin(
                 session,
@@ -553,7 +642,11 @@ object ChurVault {
         }
 
     /** Starts an export to a file descriptor the platform opened. */
-    fun beginExport(session: Long, objectId: ByteArray, destinationFd: Int): Long =
+    fun beginExport(
+        session: Long,
+        objectId: ByteArray,
+        destinationFd: Int,
+    ): Long =
         handleOf("export begin") { out ->
             ChurNative.exportBegin(session, objectId, destinationFd, out)
         }
@@ -567,7 +660,10 @@ object ChurVault {
      * a pipe is not a destination. An application that uploads a package writes
      * it to a file and uploads that.
      */
-    fun beginBackup(session: Long, destinationFd: Int): Long =
+    fun beginBackup(
+        session: Long,
+        destinationFd: Int,
+    ): Long =
         handleOf("backup create") { out ->
             ChurNative.backupCreate(session, destinationFd, out)
         }
@@ -580,13 +676,20 @@ object ChurVault {
      * all, and §8 obtains the credential from the package's own portable
      * descriptor.
      */
-    fun beginRestore(runtime: Long, sourceFd: Int, password: ByteArray): Long =
+    fun beginRestore(
+        runtime: Long,
+        sourceFd: Int,
+        password: ByteArray,
+    ): Long =
         handleOf("backup restore") { out ->
             ChurNative.backupRestore(runtime, sourceFd, password, out)
         }
 
     /** Starts an integrity scan; a null identifier scans every object. */
-    fun beginIntegrityScan(session: Long, objectId: ByteArray?): Long =
+    fun beginIntegrityScan(
+        session: Long,
+        objectId: ByteArray?,
+    ): Long =
         handleOf("scan begin") { out ->
             ChurNative.integrityScanBegin(session, objectId, out)
         }
@@ -595,7 +698,8 @@ object ChurVault {
     fun poll(operation: Long): OperationProgress {
         val counts = LongArray(2)
         val states = IntArray(4)
-        ChurFailure.check(ChurNative.operationPoll(operation, counts, states), "poll")
+        val objectId = ByteArray(16)
+        ChurFailure.check(ChurNative.operationPoll(operation, counts, states, objectId), "poll")
         return OperationProgress(
             processed = counts[0],
             total = counts[1],
@@ -603,6 +707,7 @@ object ChurVault {
             stage = states[1],
             terminal = states[2] == 1,
             status = states[3],
+            objectId = objectId,
         )
     }
 
@@ -618,7 +723,10 @@ object ChurVault {
 
     // -----------------------------------------------------------------------
 
-    private inline fun handleOf(where: String, body: (LongArray) -> Int): Long {
+    private inline fun handleOf(
+        where: String,
+        body: (LongArray) -> Int,
+    ): Long {
         val out = LongArray(1)
         ChurFailure.check(body(out), where)
         return out[0]
@@ -631,14 +739,20 @@ object ChurVault {
      * native memory only for the call and in the returned string until the
      * caller drops it.
      */
-    private inline fun phraseOf(where: String, body: (ChurBuffer, IntArray) -> Int): String =
+    private inline fun phraseOf(
+        where: String,
+        body: (ChurBuffer, IntArray) -> Int,
+    ): String =
         withChurBuffer(RECOVERY_PHRASE_MAX) { buffer ->
             val written = IntArray(1)
             ChurFailure.check(body(buffer, written), where)
             buffer.copyOut(written[0]).decodeToString()
         }
 
-    private inline fun secretOf(where: String, body: (ByteArray) -> Int): ByteArray {
+    private inline fun secretOf(
+        where: String,
+        body: (ByteArray) -> Int,
+    ): ByteArray {
         val out = ByteArray(SECRET_LENGTH)
         val code = body(out)
         if (code != 0) {
@@ -694,7 +808,9 @@ object ChurVault {
 }
 
 /** Opaque record families accepted by the locked sync inbox. */
-enum class SyncRecordKind(internal val code: Int) {
+enum class SyncRecordKind(
+    internal val code: Int,
+) {
     OPERATION(1),
     CHECKPOINT(2),
 }
@@ -729,7 +845,14 @@ data class ContentInfo(
     val complete: Boolean,
 )
 
-/** One progress snapshot, §10. */
+/**
+ * One progress snapshot, §10.
+ *
+ * [objectId] is the object a terminal successful import activated, and zero
+ * for every other kind, stage, and outcome. [importedObjectId] is how a
+ * caller reads it, because a zeroed array means "no identifier" and no caller
+ * should compare raw bytes against that convention itself.
+ */
 data class OperationProgress(
     val processed: Long,
     val total: Long,
@@ -737,10 +860,30 @@ data class OperationProgress(
     val stage: Int,
     val terminal: Boolean,
     val status: Int,
-)
+    val objectId: ByteArray = ByteArray(16),
+) {
+    /** The object a terminal successful import activated, or `null`. */
+    fun importedObjectId(): ByteArray? = objectId.takeIf { id -> id.any { byte -> byte != 0.toByte() } }
+
+    override fun equals(other: Any?): Boolean =
+        other is OperationProgress &&
+            processed == other.processed &&
+            total == other.total &&
+            kind == other.kind &&
+            stage == other.stage &&
+            terminal == other.terminal &&
+            status == other.status &&
+            objectId.contentEquals(other.objectId)
+
+    override fun hashCode(): Int =
+        processed.hashCode() * 31 + total.hashCode() * 31 + kind * 31 + stage * 31 +
+            terminal.hashCode() * 31 + status * 31 + objectId.contentHashCode()
+}
 
 /** The reason a session locked, which reaches no private state. */
-enum class LockReason(val code: Int) {
+enum class LockReason(
+    val code: Int,
+) {
     /** The user asked. */
     USER(1),
 
@@ -755,7 +898,9 @@ enum class LockReason(val code: Int) {
 }
 
 /** The query scopes of §16.2. */
-enum class QueryScope(val code: Int) {
+enum class QueryScope(
+    val code: Int,
+) {
     /** Every listable object. */
     TIMELINE(1),
 
@@ -776,7 +921,9 @@ enum class QueryScope(val code: Int) {
 }
 
 /** The sorts of §16.2. */
-enum class QuerySort(val code: Int) {
+enum class QuerySort(
+    val code: Int,
+) {
     /** Capture time descending, the default. */
     CAPTURE_DESC(1),
 
@@ -788,7 +935,9 @@ enum class QuerySort(val code: Int) {
 }
 
 /** The stream kinds of `CANONICAL_ENCODING_V1.md` §15.4. */
-enum class StreamKind(val code: Int) {
+enum class StreamKind(
+    val code: Int,
+) {
     /** The imported bytes as received. */
     ORIGINAL(1),
 

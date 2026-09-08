@@ -87,6 +87,7 @@ fn drain(operation: u64) -> i32 {
             terminal: 0,
             reserved: [0; 3],
             status: 0,
+            object_id: [0; 16],
         };
         assert_eq!(unsafe { chur_operation_poll(operation, &mut progress) }, OK);
         if progress.terminal == 1 {

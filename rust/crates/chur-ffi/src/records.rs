@@ -10,7 +10,7 @@
 //! whichever padding the host's compiler chose.
 
 use chur_catalog::query::{Cursor, ObjectProjection, ObjectQuery, Page, Scope, Sort};
-use chur_core::{ChurStatus, Error, Id, Result, ensure, limits::catalog as limits};
+use chur_core::{ensure, limits::catalog as limits, ChurStatus, Error, Id, Result};
 
 /// The exact length of the page header of §6.4.
 pub const PAGE_HEADER_LEN: usize = 8 + 8 + 4 + 1 + limits::CURSOR_LEN;
@@ -147,6 +147,8 @@ pub struct ChurProgressV1 {
     pub reserved: [u8; 3],
     /// The terminal status, meaningful only once `terminal` is `1`.
     pub status: i32,
+    /// The object a terminal successful import activated, zero otherwise, §10.
+    pub object_id: [u8; 16],
 }
 
 /// The content information of §6.1.

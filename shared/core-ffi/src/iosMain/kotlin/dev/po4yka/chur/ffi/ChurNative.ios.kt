@@ -17,13 +17,13 @@ import dev.po4yka.chur.native.chur_abi_version_minor
 import dev.po4yka.chur.native.chur_album_create
 import dev.po4yka.chur.native.chur_album_list
 import dev.po4yka.chur.native.chur_album_set_membership
+import dev.po4yka.chur.native.chur_backup_create
+import dev.po4yka.chur.native.chur_backup_restore
 import dev.po4yka.chur.native.chur_build_flavor
 import dev.po4yka.chur.native.chur_capabilities
 import dev.po4yka.chur.native.chur_catalog_query
 import dev.po4yka.chur.native.chur_derived_put
 import dev.po4yka.chur.native.chur_derived_read
-import dev.po4yka.chur.native.chur_backup_create
-import dev.po4yka.chur.native.chur_backup_restore
 import dev.po4yka.chur.native.chur_export_begin
 import dev.po4yka.chur.native.chur_handle_tVar
 import dev.po4yka.chur.native.chur_import_begin
@@ -48,10 +48,10 @@ import dev.po4yka.chur.native.chur_operation_poll
 import dev.po4yka.chur.native.chur_runtime_close
 import dev.po4yka.chur.native.chur_runtime_open
 import dev.po4yka.chur.native.chur_session_close
+import dev.po4yka.chur.native.chur_sharing_accept
 import dev.po4yka.chur.native.chur_sharing_identity
 import dev.po4yka.chur.native.chur_sharing_prepare
 import dev.po4yka.chur.native.chur_sharing_prepare_device
-import dev.po4yka.chur.native.chur_sharing_accept
 import dev.po4yka.chur.native.chur_sharing_revoke
 import dev.po4yka.chur.native.chur_status_is_known
 import dev.po4yka.chur.native.chur_sync_process
@@ -76,8 +76,8 @@ import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.MemScope
 import kotlinx.cinterop.UByteVar
-import kotlinx.cinterop.ULongVar
 import kotlinx.cinterop.UIntVar
+import kotlinx.cinterop.ULongVar
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.allocArray
@@ -103,7 +103,6 @@ import kotlinx.cinterop.value
  * as a pointer rather than as a value that can be assigned.
  */
 internal actual object ChurNative {
-
     // -----------------------------------------------------------------------
     // Handshake
     // -----------------------------------------------------------------------
@@ -130,15 +129,19 @@ internal actual object ChurNative {
     // Runtime, session, and creation
     // -----------------------------------------------------------------------
 
-    actual fun runtimeOpen(root: String, outRuntime: LongArray): Int = memScoped {
-        val bytes = root.encodeToByteArray()
-        bytes.pinnedPointer { pointer ->
-            val config = alloc<ChurRuntimeConfigV1>()
-            config.root_path = pointer
-            config.root_path_length = bytes.size.toUInt()
-            handleCall(outRuntime) { out -> chur_runtime_open(config.ptr, out) }
+    actual fun runtimeOpen(
+        root: String,
+        outRuntime: LongArray,
+    ): Int =
+        memScoped {
+            val bytes = root.encodeToByteArray()
+            bytes.pinnedPointer { pointer ->
+                val config = alloc<ChurRuntimeConfigV1>()
+                config.root_path = pointer
+                config.root_path_length = bytes.size.toUInt()
+                handleCall(outRuntime) { out -> chur_runtime_open(config.ptr, out) }
+            }
         }
-    }
 
     actual fun runtimeClose(runtime: Long): Int = chur_runtime_close(runtime.toULong())
 
@@ -149,41 +152,47 @@ internal actual object ChurNative {
         stagedAtMs: Long,
         record: ChurBuffer,
         length: Int,
-    ): Int = vaultId.pinnedPointer { vaultPointer ->
-        chur_sync_stage(
-            runtime.toULong(),
-            vaultPointer,
-            kind.toUByte(),
-            stagedAtMs.toULong(),
-            record.pointer,
-            length.toUInt(),
-        )
-    }
+    ): Int =
+        vaultId.pinnedPointer { vaultPointer ->
+            chur_sync_stage(
+                runtime.toULong(),
+                vaultPointer,
+                kind.toUByte(),
+                stagedAtMs.toULong(),
+                record.pointer,
+                length.toUInt(),
+            )
+        }
 
     actual fun syncProcess(
         session: Long,
         nowMs: Long,
         outCounts: LongArray,
         outStatus: IntArray,
-    ): Int = memScoped {
-        val report = alloc<ChurSyncReportV1>()
-        val status = chur_sync_process(session.toULong(), nowMs.toULong(), report.ptr)
-        if (status == 0) {
-            outCounts[0] = report.applied.toLong()
-            outCounts[1] = report.duplicates.toLong()
-            outCounts[2] = report.pending.toLong()
-            outCounts[3] = report.rejected.toLong()
-            outStatus[0] = report.first_rejection
+    ): Int =
+        memScoped {
+            val report = alloc<ChurSyncReportV1>()
+            val status = chur_sync_process(session.toULong(), nowMs.toULong(), report.ptr)
+            if (status == 0) {
+                outCounts[0] = report.applied.toLong()
+                outCounts[1] = report.duplicates.toLong()
+                outCounts[2] = report.pending.toLong()
+                outCounts[3] = report.rejected.toLong()
+                outStatus[0] = report.first_rejection
+            }
+            status
         }
-        status
-    }
 
-    actual fun vaultPresent(runtime: Long, outPresent: ByteArray): Int = memScoped {
-        val present = alloc<UByteVar>()
-        val status = chur_vault_present(runtime.toULong(), present.ptr)
-        if (status == 0) outPresent[0] = present.value.toByte()
-        status
-    }
+    actual fun vaultPresent(
+        runtime: Long,
+        outPresent: ByteArray,
+    ): Int =
+        memScoped {
+            val present = alloc<UByteVar>()
+            val status = chur_vault_present(runtime.toULong(), present.ptr)
+            if (status == 0) outPresent[0] = present.value.toByte()
+            status
+        }
 
     actual fun vaultCreateBegin(
         runtime: Long,
@@ -192,59 +201,67 @@ internal actual object ChurNative {
         iterations: Int,
         parallelism: Int,
         outCreation: LongArray,
-    ): Int = memScoped {
-        password.pinnedPointer { pointer ->
-            val request = alloc<ChurCreateRequestV1>()
-            request.password = pointer
-            request.password_length = password.size.toUInt()
-            request.memory_kib = memoryKib.toUInt()
-            request.iterations = iterations.toUInt()
-            request.parallelism = parallelism.toUInt()
-            handleCall(outCreation) { out ->
-                chur_vault_create_begin(runtime.toULong(), request.ptr, out)
+    ): Int =
+        memScoped {
+            password.pinnedPointer { pointer ->
+                val request = alloc<ChurCreateRequestV1>()
+                request.password = pointer
+                request.password_length = password.size.toUInt()
+                request.memory_kib = memoryKib.toUInt()
+                request.iterations = iterations.toUInt()
+                request.parallelism = parallelism.toUInt()
+                handleCall(outCreation) { out ->
+                    chur_vault_create_begin(runtime.toULong(), request.ptr, out)
+                }
             }
         }
-    }
 
     actual fun vaultCreationAddRecoverySlot(
         creation: Long,
         destination: ChurBuffer,
         outWritten: IntArray,
-    ): Int = memScoped {
-        writtenCall(outWritten) { written ->
-            chur_vault_creation_add_recovery_slot(
-                creation.toULong(),
-                destination.pointer,
-                destination.size.toULong(),
-                written,
-            )
+    ): Int =
+        memScoped {
+            writtenCall(outWritten) { written ->
+                chur_vault_creation_add_recovery_slot(
+                    creation.toULong(),
+                    destination.pointer,
+                    destination.size.toULong(),
+                    written,
+                )
+            }
         }
-    }
 
-    actual fun vaultCreationActivate(creation: Long, outSession: LongArray): Int = memScoped {
-        handleCall(outSession) { out -> chur_vault_creation_activate(creation.toULong(), out) }
-    }
+    actual fun vaultCreationActivate(
+        creation: Long,
+        outSession: LongArray,
+    ): Int =
+        memScoped {
+            handleCall(outSession) { out -> chur_vault_creation_activate(creation.toULong(), out) }
+        }
 
-    actual fun vaultCreationAbandon(creation: Long): Int =
-        chur_vault_creation_abandon(creation.toULong())
+    actual fun vaultCreationAbandon(creation: Long): Int = chur_vault_creation_abandon(creation.toULong())
 
     actual fun vaultUnlock(
         runtime: Long,
         factor: Int,
         secret: ByteArray,
         outSession: LongArray,
-    ): Int = memScoped {
-        secret.pinnedPointer { pointer ->
-            val request = alloc<ChurUnlockRequestV1>()
-            request.factor = factor.toUByte()
-            request.secret = pointer
-            request.secret_length = secret.size.toUInt()
-            handleCall(outSession) { out -> chur_vault_unlock(runtime.toULong(), request.ptr, out) }
+    ): Int =
+        memScoped {
+            secret.pinnedPointer { pointer ->
+                val request = alloc<ChurUnlockRequestV1>()
+                request.factor = factor.toUByte()
+                request.secret = pointer
+                request.secret_length = secret.size.toUInt()
+                handleCall(outSession) { out -> chur_vault_unlock(runtime.toULong(), request.ptr, out) }
+            }
         }
-    }
 
-    actual fun vaultLock(session: Long, reason: Int): Int =
-        chur_vault_lock(session.toULong(), reason.toUInt())
+    actual fun vaultLock(
+        session: Long,
+        reason: Int,
+    ): Int = chur_vault_lock(session.toULong(), reason.toUInt())
 
     actual fun sessionClose(session: Long): Int = chur_session_close(session.toULong())
 
@@ -252,16 +269,17 @@ internal actual object ChurNative {
         session: Long,
         destination: ChurBuffer,
         outWritten: IntArray,
-    ): Int = memScoped {
-        writtenCall(outWritten) { written ->
-            chur_sharing_identity(
-                session.toULong(),
-                destination.pointer,
-                destination.size.toULong(),
-                written,
-            )
+    ): Int =
+        memScoped {
+            writtenCall(outWritten) { written ->
+                chur_sharing_identity(
+                    session.toULong(),
+                    destination.pointer,
+                    destination.size.toULong(),
+                    written,
+                )
+            }
         }
-    }
 
     actual fun sharingPrepare(
         session: Long,
@@ -271,25 +289,26 @@ internal actual object ChurNative {
         fingerprintVerified: Boolean,
         destination: ChurBuffer,
         outWritten: IntArray,
-    ): Int = memScoped {
-        collectionId.pinnedPointer { collection ->
-            recipientEnrollment.pinnedPointer { enrollment ->
-                writtenCall(outWritten) { written ->
-                    chur_sharing_prepare(
-                        session.toULong(),
-                        collection,
-                        enrollment,
-                        recipientEnrollment.size.toUInt(),
-                        permissions.toUByte(),
-                        if (fingerprintVerified) 1u.toUByte() else 0u.toUByte(),
-                        destination.pointer,
-                        destination.size.toULong(),
-                        written,
-                    )
+    ): Int =
+        memScoped {
+            collectionId.pinnedPointer { collection ->
+                recipientEnrollment.pinnedPointer { enrollment ->
+                    writtenCall(outWritten) { written ->
+                        chur_sharing_prepare(
+                            session.toULong(),
+                            collection,
+                            enrollment,
+                            recipientEnrollment.size.toUInt(),
+                            permissions.toUByte(),
+                            if (fingerprintVerified) 1u.toUByte() else 0u.toUByte(),
+                            destination.pointer,
+                            destination.size.toULong(),
+                            written,
+                        )
+                    }
                 }
             }
         }
-    }
 
     actual fun sharingPrepareDevice(
         session: Long,
@@ -301,29 +320,33 @@ internal actual object ChurNative {
         fingerprintVerified: Boolean,
         destination: ChurBuffer,
         outWritten: IntArray,
-    ): Int = memScoped {
-        collectionId.pinnedPointer { collection ->
-            recipientDeviceId.pinnedPointer { recipientDevice ->
-                writtenCall(outWritten) { written ->
-                    chur_sharing_prepare_device(
-                        session.toULong(),
-                        collection,
-                        recipientEvidence.pointer,
-                        recipientEvidenceLength.toUInt(),
-                        recipientDevice,
-                        permissions.toUByte(),
-                        if (fingerprintVerified) 1u.toUByte() else 0u.toUByte(),
-                        destination.pointer,
-                        destination.size.toULong(),
-                        written,
-                    )
+    ): Int =
+        memScoped {
+            collectionId.pinnedPointer { collection ->
+                recipientDeviceId.pinnedPointer { recipientDevice ->
+                    writtenCall(outWritten) { written ->
+                        chur_sharing_prepare_device(
+                            session.toULong(),
+                            collection,
+                            recipientEvidence.pointer,
+                            recipientEvidenceLength.toUInt(),
+                            recipientDevice,
+                            permissions.toUByte(),
+                            if (fingerprintVerified) 1u.toUByte() else 0u.toUByte(),
+                            destination.pointer,
+                            destination.size.toULong(),
+                            written,
+                        )
+                    }
                 }
             }
         }
-    }
 
-    actual fun sharingAccept(session: Long, bundle: ChurBuffer, length: Int): Int =
-        chur_sharing_accept(session.toULong(), bundle.pointer, length.toUInt())
+    actual fun sharingAccept(
+        session: Long,
+        bundle: ChurBuffer,
+        length: Int,
+    ): Int = chur_sharing_accept(session.toULong(), bundle.pointer, length.toUInt())
 
     actual fun sharingRevoke(
         session: Long,
@@ -333,26 +356,27 @@ internal actual object ChurNative {
         acceptedAtMs: Long,
         destination: ChurBuffer,
         outWritten: IntArray,
-    ): Int = memScoped {
-        collectionId.pinnedPointer { collection ->
-            recipientVaultId.pinnedPointer { recipientVault ->
-                recipientDeviceId.pinnedPointer { recipientDevice ->
-                    writtenCall(outWritten) { written ->
-                        chur_sharing_revoke(
-                            session.toULong(),
-                            collection,
-                            recipientVault,
-                            recipientDevice,
-                            acceptedAtMs.toULong(),
-                            destination.pointer,
-                            destination.size.toULong(),
-                            written,
-                        )
+    ): Int =
+        memScoped {
+            collectionId.pinnedPointer { collection ->
+                recipientVaultId.pinnedPointer { recipientVault ->
+                    recipientDeviceId.pinnedPointer { recipientDevice ->
+                        writtenCall(outWritten) { written ->
+                            chur_sharing_revoke(
+                                session.toULong(),
+                                collection,
+                                recipientVault,
+                                recipientDevice,
+                                acceptedAtMs.toULong(),
+                                destination.pointer,
+                                destination.size.toULong(),
+                                written,
+                            )
+                        }
                     }
                 }
             }
         }
-    }
 
     // -----------------------------------------------------------------------
     // Catalog queries
@@ -369,30 +393,31 @@ internal actual object ChurNative {
         terms: ByteArray?,
         destination: ChurBuffer,
         outWritten: IntArray,
-    ): Int = memScoped {
-        val termBytes = terms ?: ByteArray(0)
-        termBytes.pinnedPointer { termPointer ->
-            val query = alloc<ChurQueryV1>()
-            query.scope = scope.toUByte()
-            query.sort = sort.toUByte()
-            query.kinds = kinds.toUShort()
-            query.limit = limit.toUInt()
-            query.scope_id.fill(scopeId)
-            query.cursor_present = if (cursor != null) 1u else 0u
-            query.cursor.fill(cursor ?: ByteArray(CURSOR_LENGTH))
-            query.terms = termPointer
-            query.terms_length = termBytes.size.toUInt()
-            writtenCall(outWritten) { written ->
-                chur_catalog_query(
-                    session.toULong(),
-                    query.ptr,
-                    destination.pointer,
-                    destination.size.toULong(),
-                    written,
-                )
+    ): Int =
+        memScoped {
+            val termBytes = terms ?: ByteArray(0)
+            termBytes.pinnedPointer { termPointer ->
+                val query = alloc<ChurQueryV1>()
+                query.scope = scope.toUByte()
+                query.sort = sort.toUByte()
+                query.kinds = kinds.toUShort()
+                query.limit = limit.toUInt()
+                query.scope_id.fill(scopeId)
+                query.cursor_present = if (cursor != null) 1u else 0u
+                query.cursor.fill(cursor ?: ByteArray(CURSOR_LENGTH))
+                query.terms = termPointer
+                query.terms_length = termBytes.size.toUInt()
+                writtenCall(outWritten) { written ->
+                    chur_catalog_query(
+                        session.toULong(),
+                        query.ptr,
+                        destination.pointer,
+                        destination.size.toULong(),
+                        written,
+                    )
+                }
             }
         }
-    }
 
     // -----------------------------------------------------------------------
     // Operations
@@ -410,45 +435,51 @@ internal actual object ChurNative {
         contentType: String,
         originalFilename: String?,
         outImport: LongArray,
-    ): Int = memScoped {
-        val typeBytes = contentType.encodeToByteArray()
-        val nameBytes = originalFilename?.encodeToByteArray()
-        typeBytes.pinnedPointer { typePointer ->
-            (nameBytes ?: ByteArray(0)).pinnedPointer { namePointer ->
-                val request = alloc<ChurImportRequestV1>()
-                request.seekable = 1u
-                request.known_length_present = if (knownLength >= 0) 1u else 0u
-                request.media_class = mediaClass.toUByte()
-                request.width = width.toUInt()
-                request.height = height.toUInt()
-                request.duration_ms = maxOf(durationMs, 0L).toULong()
-                request.known_length = maxOf(knownLength, 0L).toULong()
-                request.capture_time_ms = maxOf(captureTimeMs, 0L).toULong()
-                request.capture_time_present = if (captureTimeMs >= 0) 1u else 0u
-                request.content_type = typePointer
-                request.content_type_length = typeBytes.size.toUInt()
-                request.original_filename = if (nameBytes == null) null else namePointer
-                request.original_filename_length = (nameBytes?.size ?: 0).toUInt()
-                handleCall(outImport) { out ->
-                    chur_import_begin(session.toULong(), sourceFd, request.ptr, out)
+    ): Int =
+        memScoped {
+            val typeBytes = contentType.encodeToByteArray()
+            val nameBytes = originalFilename?.encodeToByteArray()
+            typeBytes.pinnedPointer { typePointer ->
+                (nameBytes ?: ByteArray(0)).pinnedPointer { namePointer ->
+                    val request = alloc<ChurImportRequestV1>()
+                    request.seekable = 1u
+                    request.known_length_present = if (knownLength >= 0) 1u else 0u
+                    request.media_class = mediaClass.toUByte()
+                    request.width = width.toUInt()
+                    request.height = height.toUInt()
+                    request.duration_ms = maxOf(durationMs, 0L).toULong()
+                    request.known_length = maxOf(knownLength, 0L).toULong()
+                    request.capture_time_ms = maxOf(captureTimeMs, 0L).toULong()
+                    request.capture_time_present = if (captureTimeMs >= 0) 1u else 0u
+                    request.content_type = typePointer
+                    request.content_type_length = typeBytes.size.toUInt()
+                    request.original_filename = if (nameBytes == null) null else namePointer
+                    request.original_filename_length = (nameBytes?.size ?: 0).toUInt()
+                    handleCall(outImport) { out ->
+                        chur_import_begin(session.toULong(), sourceFd, request.ptr, out)
+                    }
                 }
             }
         }
-    }
 
     actual fun exportBegin(
         session: Long,
         objectId: ByteArray,
         destinationFd: Int,
         outExport: LongArray,
-    ): Int = memScoped {
-        val reference = objectReference(objectId)
-        handleCall(outExport) { out ->
-            chur_export_begin(session.toULong(), reference.ptr, destinationFd, out)
+    ): Int =
+        memScoped {
+            val reference = objectReference(objectId)
+            handleCall(outExport) { out ->
+                chur_export_begin(session.toULong(), reference.ptr, destinationFd, out)
+            }
         }
-    }
 
-    actual fun backupCreate(session: Long, destinationFd: Int, outOperation: LongArray): Int =
+    actual fun backupCreate(
+        session: Long,
+        destinationFd: Int,
+        outOperation: LongArray,
+    ): Int =
         memScoped {
             handleCall(outOperation) { out ->
                 chur_backup_create(session.toULong(), destinationFd, out)
@@ -460,21 +491,26 @@ internal actual object ChurNative {
         sourceFd: Int,
         password: ByteArray,
         outOperation: LongArray,
-    ): Int = memScoped {
-        password.pinnedPointer { pointer ->
-            handleCall(outOperation) { out ->
-                chur_backup_restore(
-                    runtime.toULong(),
-                    sourceFd,
-                    pointer,
-                    password.size.toUInt(),
-                    out,
-                )
+    ): Int =
+        memScoped {
+            password.pinnedPointer { pointer ->
+                handleCall(outOperation) { out ->
+                    chur_backup_restore(
+                        runtime.toULong(),
+                        sourceFd,
+                        pointer,
+                        password.size.toUInt(),
+                        out,
+                    )
+                }
             }
         }
-    }
 
-    actual fun integrityScanBegin(session: Long, objectId: ByteArray?, outScan: LongArray): Int =
+    actual fun integrityScanBegin(
+        session: Long,
+        objectId: ByteArray?,
+        outScan: LongArray,
+    ): Int =
         memScoped {
             val request = alloc<ChurScanRequestV1>()
             request.single_object = if (objectId != null) 1u else 0u
@@ -484,7 +520,12 @@ internal actual object ChurNative {
             }
         }
 
-    actual fun operationPoll(operation: Long, outCounts: LongArray, outStates: IntArray): Int =
+    actual fun operationPoll(
+        operation: Long,
+        outCounts: LongArray,
+        outStates: IntArray,
+        outObjectId: ByteArray,
+    ): Int =
         memScoped {
             val progress = alloc<ChurProgressV1>()
             val status = chur_operation_poll(operation.toULong(), progress.ptr)
@@ -495,6 +536,9 @@ internal actual object ChurNative {
                 outStates[1] = progress.stage.toInt()
                 outStates[2] = progress.terminal.toInt()
                 outStates[3] = progress.status
+                for (index in outObjectId.indices) {
+                    outObjectId[index] = progress.object_id[index].toByte()
+                }
             }
             status
         }
@@ -512,63 +556,74 @@ internal actual object ChurNative {
         objectId: ByteArray,
         streamKind: Int,
         outReader: LongArray,
-    ): Int = memScoped {
-        val reference = objectReference(objectId)
-        handleCall(outReader) { out ->
-            chur_object_reader_open(session.toULong(), reference.ptr, streamKind.toUInt(), out)
+    ): Int =
+        memScoped {
+            val reference = objectReference(objectId)
+            handleCall(outReader) { out ->
+                chur_object_reader_open(session.toULong(), reference.ptr, streamKind.toUInt(), out)
+            }
         }
-    }
 
-    actual fun objectReaderSize(reader: Long, outSize: LongArray): Int = memScoped {
-        val size = alloc<ULongVar>()
-        val status = chur_object_reader_size(reader.toULong(), size.ptr)
-        if (status == 0) outSize[0] = size.value.toLong()
-        status
-    }
+    actual fun objectReaderSize(
+        reader: Long,
+        outSize: LongArray,
+    ): Int =
+        memScoped {
+            val size = alloc<ULongVar>()
+            val status = chur_object_reader_size(reader.toULong(), size.ptr)
+            if (status == 0) outSize[0] = size.value.toLong()
+            status
+        }
 
     actual fun objectReaderContentInfo(
         reader: Long,
         outNumbers: LongArray,
         outContentType: ByteArray,
-    ): Int = memScoped {
-        val info = alloc<ChurContentInfoV1>()
-        val status = chur_object_reader_content_info(reader.toULong(), info.ptr)
-        if (status == 0) {
-            outNumbers[0] = info.plaintext_size.toLong()
-            outNumbers[1] = info.media_kind.toLong()
-            outNumbers[2] = info.byte_range_supported.toLong()
-            outNumbers[3] = info.complete.toLong()
-            for (index in outContentType.indices) {
-                outContentType[index] =
-                    if (index < CONTENT_TYPE_LENGTH) info.content_type[index].toByte() else 0
+    ): Int =
+        memScoped {
+            val info = alloc<ChurContentInfoV1>()
+            val status = chur_object_reader_content_info(reader.toULong(), info.ptr)
+            if (status == 0) {
+                outNumbers[0] = info.plaintext_size.toLong()
+                outNumbers[1] = info.media_kind.toLong()
+                outNumbers[2] = info.byte_range_supported.toLong()
+                outNumbers[3] = info.complete.toLong()
+                for (index in outContentType.indices) {
+                    outContentType[index] =
+                        if (index < CONTENT_TYPE_LENGTH) info.content_type[index].toByte() else 0
+                }
             }
+            status
         }
-        status
-    }
 
     actual fun objectReaderReadAt(
         reader: Long,
         offset: Long,
         destination: ChurBuffer,
         outWritten: IntArray,
-    ): Int = memScoped {
-        writtenCall(outWritten) { written ->
-            chur_object_reader_read_at(
-                reader.toULong(),
-                offset.toULong(),
-                destination.pointer,
-                destination.size.toULong(),
-                written,
-            )
+    ): Int =
+        memScoped {
+            writtenCall(outWritten) { written ->
+                chur_object_reader_read_at(
+                    reader.toULong(),
+                    offset.toULong(),
+                    destination.pointer,
+                    destination.size.toULong(),
+                    written,
+                )
+            }
         }
-    }
 
-    actual fun objectReaderVerifyComplete(reader: Long, outState: IntArray): Int = memScoped {
-        val state = alloc<UIntVar>()
-        val status = chur_object_reader_verify_complete(reader.toULong(), state.ptr)
-        if (status == 0) outState[0] = state.value.toInt()
-        status
-    }
+    actual fun objectReaderVerifyComplete(
+        reader: Long,
+        outState: IntArray,
+    ): Int =
+        memScoped {
+            val state = alloc<UIntVar>()
+            val status = chur_object_reader_verify_complete(reader.toULong(), state.ptr)
+            if (status == 0) outState[0] = state.value.toInt()
+            status
+        }
 
     actual fun objectReaderClose(reader: Long): Int = chur_object_reader_close(reader.toULong())
 
@@ -580,38 +635,53 @@ internal actual object ChurNative {
         session: Long,
         destination: ChurBuffer,
         outWritten: IntArray,
-    ): Int = memScoped {
-        writtenCall(outWritten) { written ->
-            chur_vault_add_recovery_slot(
-                session.toULong(),
-                destination.pointer,
-                destination.size.toULong(),
-                written,
-            )
+    ): Int =
+        memScoped {
+            writtenCall(outWritten) { written ->
+                chur_vault_add_recovery_slot(
+                    session.toULong(),
+                    destination.pointer,
+                    destination.size.toULong(),
+                    written,
+                )
+            }
         }
-    }
 
-    actual fun vaultAddDeviceSlot(session: Long, itemId: ByteArray, outSecret: ByteArray): Int =
+    actual fun vaultAddDeviceSlot(
+        session: Long,
+        itemId: ByteArray,
+        outSecret: ByteArray,
+    ): Int =
         itemId.pinnedPointer { item ->
             secretCall(outSecret) { pointer ->
                 chur_vault_add_device_slot(session.toULong(), item, pointer)
             }
         }
 
-    actual fun vaultRemoveSlot(session: Long, slotId: ByteArray): Int =
-        slotId.pinnedPointer { pointer -> chur_vault_remove_slot(session.toULong(), pointer) }
+    actual fun vaultRemoveSlot(
+        session: Long,
+        slotId: ByteArray,
+    ): Int = slotId.pinnedPointer { pointer -> chur_vault_remove_slot(session.toULong(), pointer) }
 
-    actual fun vaultChangePassword(session: Long, password: ByteArray): Int = memScoped {
-        password.pinnedPointer { pointer ->
-            val request = alloc<ChurUnlockRequestV1>()
-            request.factor = 1u
-            request.secret = pointer
-            request.secret_length = password.size.toUInt()
-            chur_vault_change_password(session.toULong(), request.ptr)
+    actual fun vaultChangePassword(
+        session: Long,
+        password: ByteArray,
+    ): Int =
+        memScoped {
+            password.pinnedPointer { pointer ->
+                val request = alloc<ChurUnlockRequestV1>()
+                request.factor = 1u
+                request.secret = pointer
+                request.secret_length = password.size.toUInt()
+                chur_vault_change_password(session.toULong(), request.ptr)
+            }
         }
-    }
 
-    actual fun vaultSlots(session: Long, destination: ChurBuffer, outWritten: IntArray): Int =
+    actual fun vaultSlots(
+        session: Long,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int =
         memScoped {
             writtenCall(outWritten) { written ->
                 chur_vault_slots(
@@ -625,7 +695,11 @@ internal actual object ChurNative {
 
     // The Keystore is Android's. These exist so one `expect` serves both
     // platforms; an iOS host has no Keystore and calls none of them.
-    actual fun vaultKeystoreBegin(session: Long, destination: ChurBuffer, outWritten: IntArray): Int =
+    actual fun vaultKeystoreBegin(
+        session: Long,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int =
         memScoped {
             writtenCall(outWritten) { written ->
                 chur_vault_keystore_begin(
@@ -637,14 +711,22 @@ internal actual object ChurNative {
             }
         }
 
-    actual fun vaultKeystoreCommit(session: Long, gcmNonce: ByteArray, wrappedRootSecret: ByteArray): Int =
+    actual fun vaultKeystoreCommit(
+        session: Long,
+        gcmNonce: ByteArray,
+        wrappedRootSecret: ByteArray,
+    ): Int =
         gcmNonce.pinnedPointer { nonce ->
             wrappedRootSecret.pinnedPointer { wrapped ->
                 chur_vault_keystore_commit(session.toULong(), nonce, wrapped)
             }
         }
 
-    actual fun vaultKeystoreMaterial(runtime: Long, destination: ChurBuffer, outWritten: IntArray): Int =
+    actual fun vaultKeystoreMaterial(
+        runtime: Long,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int =
         memScoped {
             writtenCall(outWritten) { written ->
                 chur_vault_keystore_material(
@@ -656,7 +738,11 @@ internal actual object ChurNative {
             }
         }
 
-    actual fun objectSetFavorite(session: Long, objectId: ByteArray, favorite: Boolean): Int =
+    actual fun objectSetFavorite(
+        session: Long,
+        objectId: ByteArray,
+        favorite: Boolean,
+    ): Int =
         memScoped {
             val reference = objectReference(objectId)
             chur_object_set_favorite(
@@ -666,30 +752,39 @@ internal actual object ChurNative {
             )
         }
 
-    actual fun objectDelete(session: Long, objectId: ByteArray): Int = memScoped {
-        val reference = objectReference(objectId)
-        chur_object_delete(session.toULong(), reference.ptr)
-    }
+    actual fun objectDelete(
+        session: Long,
+        objectId: ByteArray,
+    ): Int =
+        memScoped {
+            val reference = objectReference(objectId)
+            chur_object_delete(session.toULong(), reference.ptr)
+        }
 
     actual fun objectMetadata(
         session: Long,
         objectId: ByteArray,
         destination: ChurBuffer,
         outWritten: IntArray,
-    ): Int = memScoped {
-        val reference = objectReference(objectId)
-        writtenCall(outWritten) { written ->
-            chur_object_metadata(
-                session.toULong(),
-                reference.ptr,
-                destination.pointer,
-                destination.size.toULong(),
-                written,
-            )
+    ): Int =
+        memScoped {
+            val reference = objectReference(objectId)
+            writtenCall(outWritten) { written ->
+                chur_object_metadata(
+                    session.toULong(),
+                    reference.ptr,
+                    destination.pointer,
+                    destination.size.toULong(),
+                    written,
+                )
+            }
         }
-    }
 
-    actual fun albumCreate(session: Long, name: String, outAlbumId: ByteArray): Int {
+    actual fun albumCreate(
+        session: Long,
+        name: String,
+        outAlbumId: ByteArray,
+    ): Int {
         val bytes = name.encodeToByteArray()
         return bytes.pinnedPointer { pointer ->
             identifierCall(outAlbumId) { out ->
@@ -703,19 +798,24 @@ internal actual object ChurNative {
         albumId: ByteArray,
         objectId: ByteArray,
         member: Boolean,
-    ): Int = memScoped {
-        val reference = objectReference(objectId)
-        albumId.pinnedPointer { album ->
-            chur_album_set_membership(
-                session.toULong(),
-                album,
-                reference.ptr,
-                if (member) 1u else 0u,
-            )
+    ): Int =
+        memScoped {
+            val reference = objectReference(objectId)
+            albumId.pinnedPointer { album ->
+                chur_album_set_membership(
+                    session.toULong(),
+                    album,
+                    reference.ptr,
+                    if (member) 1u else 0u,
+                )
+            }
         }
-    }
 
-    actual fun albumList(session: Long, destination: ChurBuffer, outWritten: IntArray): Int =
+    actual fun albumList(
+        session: Long,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int =
         memScoped {
             writtenCall(outWritten) { written ->
                 chur_album_list(
@@ -727,7 +827,11 @@ internal actual object ChurNative {
             }
         }
 
-    actual fun tagCreate(session: Long, name: String, outTagId: ByteArray): Int {
+    actual fun tagCreate(
+        session: Long,
+        name: String,
+        outTagId: ByteArray,
+    ): Int {
         val bytes = name.encodeToByteArray()
         return bytes.pinnedPointer { pointer ->
             identifierCall(outTagId) { out ->
@@ -741,12 +845,13 @@ internal actual object ChurNative {
         tagId: ByteArray,
         objectId: ByteArray,
         tagged: Boolean,
-    ): Int = memScoped {
-        val reference = objectReference(objectId)
-        tagId.pinnedPointer { tag ->
-            chur_object_set_tag(session.toULong(), tag, reference.ptr, if (tagged) 1u else 0u)
+    ): Int =
+        memScoped {
+            val reference = objectReference(objectId)
+            tagId.pinnedPointer { tag ->
+                chur_object_set_tag(session.toULong(), tag, reference.ptr, if (tagged) 1u else 0u)
+            }
         }
-    }
 
     actual fun derivedPut(
         session: Long,
@@ -756,18 +861,19 @@ internal actual object ChurNative {
         height: Int,
         source: ChurBuffer,
         length: Int,
-    ): Int = memScoped {
-        val reference = objectReference(objectId)
-        chur_derived_put(
-            session.toULong(),
-            reference.ptr,
-            kind.toUInt(),
-            width.toUInt(),
-            height.toUInt(),
-            source.pointer,
-            length.toUInt(),
-        )
-    }
+    ): Int =
+        memScoped {
+            val reference = objectReference(objectId)
+            chur_derived_put(
+                session.toULong(),
+                reference.ptr,
+                kind.toUInt(),
+                width.toUInt(),
+                height.toUInt(),
+                source.pointer,
+                length.toUInt(),
+            )
+        }
 
     actual fun derivedRead(
         session: Long,
@@ -775,19 +881,20 @@ internal actual object ChurNative {
         kind: Int,
         destination: ChurBuffer,
         outWritten: IntArray,
-    ): Int = memScoped {
-        val reference = objectReference(objectId)
-        writtenCall(outWritten) { written ->
-            chur_derived_read(
-                session.toULong(),
-                reference.ptr,
-                kind.toUInt(),
-                destination.pointer,
-                destination.size.toULong(),
-                written,
-            )
+    ): Int =
+        memScoped {
+            val reference = objectReference(objectId)
+            writtenCall(outWritten) { written ->
+                chur_derived_read(
+                    session.toULong(),
+                    reference.ptr,
+                    kind.toUInt(),
+                    destination.pointer,
+                    destination.size.toULong(),
+                    written,
+                )
+            }
         }
-    }
 
     // -----------------------------------------------------------------------
     // Conversions
@@ -847,7 +954,10 @@ internal actual object ChurNative {
     }
 
     /** Runs a call whose result is a 32-byte secret, and clears the native copy. */
-    private inline fun secretCall(out: ByteArray, body: (CPointer<UByteVar>) -> Int): Int =
+    private inline fun secretCall(
+        out: ByteArray,
+        body: (CPointer<UByteVar>) -> Int,
+    ): Int =
         memScoped {
             val secret = allocArray<UByteVar>(SECRET_LENGTH)
             val status = body(secret)
@@ -863,7 +973,10 @@ internal actual object ChurNative {
         }
 
     /** Runs a call whose result is a 16-byte identifier. */
-    private inline fun identifierCall(out: ByteArray, body: (CPointer<UByteVar>) -> Int): Int =
+    private inline fun identifierCall(
+        out: ByteArray,
+        body: (CPointer<UByteVar>) -> Int,
+    ): Int =
         memScoped {
             val value = allocArray<UByteVar>(ID_LENGTH)
             val status = body(value)

@@ -13,7 +13,7 @@
 use chur_catalog::model::{Album, Tag};
 use chur_catalog::vault::{self, Session};
 use chur_catalog::{deletion, store};
-use chur_core::{ChurStatus, Error, Id, Result, ensure};
+use chur_core::{ensure, ChurStatus, Error, Id, Result};
 use chur_crypto::password::Argon2Params;
 use chur_format::constants::StreamKind;
 use zeroize::Zeroizing;
@@ -1045,9 +1045,12 @@ pub unsafe extern "C" fn chur_backup_create(
                 // file performs the step — here, and in `chur-cli` for its own
                 // path. A package that is not durable is a package a power loss
                 // turns into a file that parses and is missing its tail.
-                destination.sync_all().map_err(|_| {
-                    chur_core::err!(IoFailure, "the package could not be made durable")
-                })
+                destination
+                    .sync_all()
+                    .map_err(|_| {
+                        chur_core::err!(IoFailure, "the package could not be made durable")
+                    })
+                    .map(|_| None)
             },
         )?;
         let handle = registry::insert(Entry::Operation {
@@ -1110,7 +1113,8 @@ pub unsafe extern "C" fn chur_backup_restore(
             move |shared| {
                 let mut progress =
                     crate::operation::SharedProgress::new(shared, crate::operation::Stage::Running);
-                chur_media::backup::restore(&root, &mut source, &secret, &mut progress).map(|_| ())
+                chur_media::backup::restore(&root, &mut source, &secret, &mut progress)
+                    .map(|_| None)
             },
         )?;
         let handle = registry::insert(Entry::Operation {

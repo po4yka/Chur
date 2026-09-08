@@ -26,8 +26,8 @@ use chur_media::{export, import, integrity, reader};
 use crate::operation::{Operation, OperationKind, Stage};
 use crate::panic::{guard_status, guard_status_for};
 use crate::records::{
-    ChurContentInfoV1, ChurImportRequestV1, ChurObjectRefV1, ChurProgressV1, ChurQueryV1,
-    ChurRuntimeConfigV1, ChurScanRequestV1, ChurUnlockRequestV1, encode_page, query_from,
+    encode_page, query_from, ChurContentInfoV1, ChurImportRequestV1, ChurObjectRefV1,
+    ChurProgressV1, ChurQueryV1, ChurRuntimeConfigV1, ChurScanRequestV1, ChurUnlockRequestV1,
 };
 use crate::registry::{self, Entry, Handle, Kind};
 use crate::runtime::Runtime;
@@ -745,6 +745,10 @@ pub unsafe extern "C" fn chur_operation_poll(
             ));
         };
         let progress = operation.poll();
+        let mut object_id = [0u8; 16];
+        if let Some(id) = progress.object_id {
+            object_id.copy_from_slice(id.as_bytes());
+        }
         let record = ChurProgressV1 {
             kind: progress.kind as u32,
             stage: progress.stage as u32,
@@ -757,6 +761,7 @@ pub unsafe extern "C" fn chur_operation_poll(
             } else {
                 OK
             },
+            object_id,
         };
         // SAFETY: the caller guarantees `out_progress` is writable.
         unsafe { write_out(out_progress, record) }
@@ -1052,12 +1057,12 @@ fn run_import(
     content_type: &str,
     now_ms: u64,
     shared: &crate::operation::Shared,
-) -> Result<()> {
+) -> Result<Option<Id>> {
     let guarded = session_of(entry)?;
     let mut session = registry::lock(guarded);
     let running = import::begin(&mut session, capability, media, now_ms)?;
     let mut progress = crate::operation::SharedProgress::new(shared, Stage::Running);
-    import::stream_into(
+    let object_id = import::stream_into(
         running,
         &mut session,
         &mut source,
@@ -1066,7 +1071,7 @@ fn run_import(
         &mut progress,
     )?;
     shared.advance(0, Stage::Committing);
-    Ok(())
+    Ok(Some(object_id))
 }
 
 fn run_export(
@@ -1074,7 +1079,7 @@ fn run_export(
     object_id: &Id,
     mut destination: std::fs::File,
     shared: &crate::operation::Shared,
-) -> Result<()> {
+) -> Result<Option<Id>> {
     let guarded = session_of(entry)?;
     let session = registry::lock(guarded);
     shared.advance(0, Stage::Running);
@@ -1087,7 +1092,7 @@ fn run_export(
         &mut progress,
     )?;
     shared.advance(written, Stage::Committing);
-    Ok(())
+    Ok(None)
 }
 
 fn run_scan(
@@ -1095,7 +1100,7 @@ fn run_scan(
     single: Option<Id>,
     now_ms: u64,
     shared: &crate::operation::Shared,
-) -> Result<()> {
+) -> Result<Option<Id>> {
     let guarded = session_of(entry)?;
     let targets = match single {
         Some(object_id) => vec![object_id],
@@ -1131,7 +1136,7 @@ fn run_scan(
         shared.advance(index as u64 + 1, Stage::Running);
     }
     let _ = total;
-    Ok(())
+    Ok(None)
 }
 
 /// Duplicates a caller's descriptor, §13.

@@ -18,13 +18,13 @@ use chur_ffi::records::{
     ChurQueryV1, ChurRuntimeConfigV1, ChurScanRequestV1, ChurUnlockRequestV1,
 };
 use chur_ffi::sync::ChurSyncReportV1;
-use jni::JNIEnv;
 use jni::objects::{JByteArray, JByteBuffer, JClass, JIntArray, JLongArray, JString};
 use jni::sys::{jboolean, jint, jlong};
+use jni::JNIEnv;
 
 use crate::convert::{
-    INTERNAL_FAILURE, INVALID_INPUT, byte_array, direct_buffer, fixed_array, string_bytes,
-    write_bytes, write_ints, write_long, write_longs,
+    byte_array, direct_buffer, fixed_array, string_bytes, write_bytes, write_ints, write_long,
+    write_longs, INTERNAL_FAILURE, INVALID_INPUT,
 };
 
 /// The identifier length of `docs/format/CANONICAL_ENCODING_V1.md` §8.
@@ -819,6 +819,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_operationPoll<'local>(
     operation: jlong,
     out_counts: JLongArray<'local>,
     out_states: JIntArray<'local>,
+    out_object_id: JByteArray<'local>,
 ) -> jint {
     let mut progress = ChurProgressV1 {
         kind: 0,
@@ -828,6 +829,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_operationPoll<'local>(
         terminal: 0,
         reserved: [0; 3],
         status: 0,
+        object_id: [0; 16],
     };
     // SAFETY: `progress` is a live local.
     let status = unsafe { chur_ffi::api::chur_operation_poll(handle_of(operation), &mut progress) };
@@ -841,7 +843,9 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_operationPoll<'local>(
         jint::from(progress.terminal),
         progress.status,
     ];
-    if write_longs(&mut env, &out_counts, &counts, 0) && write_ints(&mut env, &out_states, &states)
+    if write_longs(&mut env, &out_counts, &counts, 0)
+        && write_ints(&mut env, &out_states, &states)
+        && write_bytes(&mut env, &out_object_id, &progress.object_id)
     {
         0
     } else {

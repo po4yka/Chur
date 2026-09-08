@@ -18,7 +18,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use chur_core::Result;
+use chur_core::{Id, Result};
 
 /// What kind of work an operation handle drives, for the progress snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,7 +53,11 @@ pub enum Stage {
 /// The snapshot `chur_operation_poll` copies.
 ///
 /// §10: it contains only bounded non-private numbers. No filename, path,
-/// album, object identifier, or real-or-decoy identity appears in it.
+/// album, or real-or-decoy identity appears in it. The one identifier §10
+/// admits is the object a terminal successful import activated: the caller
+/// that began the import needs it to attach the derivatives the media
+/// pipeline produces next, and it is an opaque value the caller's own object
+/// queries already return for that object.
 #[derive(Debug, Clone, Copy)]
 pub struct Progress {
     /// The kind of work.
@@ -74,6 +78,9 @@ pub struct Progress {
     /// success the absence of an error code, and folding it into the enum turns
     /// every completed operation into `INTERNAL_FAILURE`.
     pub status: i32,
+    /// The object a terminal successful import activated, `None` for every
+    /// other kind, stage, and outcome.
+    pub object_id: Option<Id>,
 }
 
 impl Progress {
@@ -85,6 +92,7 @@ impl Progress {
             stage: Stage::Starting,
             terminal: false,
             status: chur_core::CHUR_OK,
+            object_id: None,
         }
     }
 }
@@ -118,8 +126,9 @@ impl Shared {
     ///
     /// §9: exactly one terminal result is observable. A second call is ignored,
     /// so a worker that fails while unwinding cannot overwrite the status the
-    /// caller already saw.
-    pub fn finish(&self, status: i32) {
+    /// caller already saw. A successful import names the object it activated;
+    /// every other terminal result carries no identifier.
+    pub fn finish(&self, status: i32, object_id: Option<Id>) {
         let mut progress = crate::registry::lock(&self.progress);
         if progress.terminal {
             return;
@@ -127,6 +136,7 @@ impl Shared {
         progress.stage = Stage::Terminal;
         progress.terminal = true;
         progress.status = status;
+        progress.object_id = object_id;
     }
 
     /// The current snapshot.
@@ -175,11 +185,13 @@ impl Operation {
     /// Starts an operation on a worker thread.
     ///
     /// The body receives the shared state so it can report progress and observe
-    /// cancellation, and its result becomes the one terminal status.
+    /// cancellation, and its result becomes the one terminal status. A
+    /// successful import returns the object it activated; every other body
+    /// returns `Ok(None)`.
     pub fn spawn(
         kind: OperationKind,
         total: u64,
-        body: impl FnOnce(&Shared) -> Result<()> + Send + 'static,
+        body: impl FnOnce(&Shared) -> Result<Option<Id>> + Send + 'static,
     ) -> Result<Self> {
         let shared = Arc::new(Shared {
             progress: Mutex::new(Progress::starting(kind, total)),
@@ -196,14 +208,14 @@ impl Operation {
                 // boundary, never unwound across it. Success is `0`, which is
                 // not a member of `ChurStatus`, so the ABI value is carried
                 // rather than the enum.
-                let status = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    body(&worker_state)
-                })) {
-                    Ok(Ok(())) => chur_core::CHUR_OK,
-                    Ok(Err(error)) => error.as_i32(),
-                    Err(_) => chur_core::ChurStatus::InternalFailure.as_i32(),
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(&worker_state)))
+                {
+                    Ok(Ok(object_id)) => worker_state.finish(chur_core::CHUR_OK, object_id),
+                    Ok(Err(error)) => worker_state.finish(error.as_i32(), None),
+                    Err(_) => {
+                        worker_state.finish(chur_core::ChurStatus::InternalFailure.as_i32(), None)
+                    }
                 };
-                worker_state.finish(status);
             })
             .map_err(|_| chur_core::err!(InternalFailure, "an operation worker could not start"))?;
         Ok(Self {
@@ -269,6 +281,7 @@ mod tests {
             progress.status,
             chur_core::ChurStatus::InternalFailure.as_i32()
         );
+        assert_eq!(progress.object_id, None);
     }
 
     #[test]
@@ -284,5 +297,33 @@ mod tests {
             progress.status,
             chur_core::ChurStatus::InvalidInput.as_i32()
         );
+        assert_eq!(progress.object_id, None);
+    }
+
+    #[test]
+    fn a_successful_import_reports_the_object_it_activated() {
+        // §10: the terminal snapshot of an import names the object it
+        // activated, which is what the caller attaches its derivatives to.
+        let activated = chur_core::Id::new([7; 16]).expect("id");
+        let operation = Operation::spawn(OperationKind::Import, 100, move |_shared| {
+            Ok(Some(activated))
+        })
+        .expect("spawn");
+        operation.join();
+        let progress = operation.poll();
+        assert!(progress.terminal);
+        assert_eq!(progress.status, chur_core::CHUR_OK);
+        assert_eq!(progress.object_id, Some(activated));
+    }
+
+    #[test]
+    fn a_successful_non_import_operation_names_no_object() {
+        let operation =
+            Operation::spawn(OperationKind::Export, 100, |_shared| Ok(None)).expect("spawn");
+        operation.join();
+        let progress = operation.poll();
+        assert!(progress.terminal);
+        assert_eq!(progress.status, chur_core::CHUR_OK);
+        assert_eq!(progress.object_id, None);
     }
 }

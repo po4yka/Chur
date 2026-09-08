@@ -615,10 +615,10 @@ chur_operation_poll(operation, out_progress) -> chur_status_t
 
 - polling is synchronous and cheap: it takes the per-slot lock only long enough to copy a snapshot, and never waits on the operation;
 - the caller polls on its own dispatcher or queue, at a rate it chooses, and republishes to the UI on the platform's main thread. The delivery thread is therefore the caller's, by construction;
-- `ChurProgressV1` contains only bounded non-private numbers: operation kind, encrypted or plain bytes processed when safe, total bytes if known, stage code, terminal flag, and the terminal status;
+- `ChurProgressV1` contains only bounded non-private numbers: operation kind, encrypted or plain bytes processed when safe, total bytes if known, stage code, terminal flag, and the terminal status. A terminal successful import also carries the object identifier it activated;
 - once the terminal flag is set the snapshot is frozen; every later poll returns the same terminal result until the handle is closed, so exactly one terminal result is observable;
 - polling a stale-generation handle returns `SESSION_EXPIRED` rather than a partial snapshot;
-- no filename, path, album, object ID, or real/decoy identity appears in progress.
+- no filename, path, album, or real/decoy identity appears in progress. The one identifier this section admits is the object a terminal successful import activated: the caller that began the import needs it to attach the derivatives the media pipeline produces next, and it is an opaque value the caller's own object queries already return for that object.
 
 A callback data plane would need a delivery-thread contract, a re-entrancy rule, and a release race against a disappearing consumer. Adding callbacks later is a minor-version addition behind a capability bit.
 
