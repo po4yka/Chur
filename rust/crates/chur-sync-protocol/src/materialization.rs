@@ -6,8 +6,8 @@ use chur_core::{ChurStatus, Error, Id, Result};
 use chur_format::envelope::ObjectKeyEnvelope;
 
 use crate::convergence::{
-    CausalRelation, CausalStamp, MergeOutcome, ObjectLifecycle, ObservedRemoveSet, ScalarRegister,
-    causal_relation,
+    causal_relation, CausalRelation, CausalStamp, MergeOutcome, ObjectLifecycle, ObservedRemoveSet,
+    ScalarRegister,
 };
 use crate::operation::Operation;
 use crate::payload::{MetadataFieldId, OperationPayload, PayloadBody};
@@ -142,9 +142,11 @@ impl MaterializedState {
                 if *object_generation > object.lifecycle.generation() {
                     return Ok(MergeOutcome::PendingCause);
                 }
-                if *object_generation < object.lifecycle.generation() {
-                    return Ok(MergeOutcome::Obsolete);
-                }
+                // A commit for a generation the object has already been
+                // restored past still fills the one immutable commit slot:
+                // discarding it as Obsolete made the catalog depend on
+                // arrival order, because the same commit applied before the
+                // restore and then survived it.
                 if object.store_id != *store_id
                     || causal_relation(&object.created, &stamp)? != CausalRelation::Before
                     || object.committed.is_some()
@@ -174,9 +176,11 @@ impl MaterializedState {
                 if *object_generation > object.lifecycle.generation() {
                     return Ok(MergeOutcome::PendingCause);
                 }
-                if *object_generation < object.lifecycle.generation() {
-                    return Ok(MergeOutcome::Obsolete);
-                }
+                // An edit of a superseded generation still reaches the
+                // register: the register resolves causal ordering on its own,
+                // and CONFLICT_RESOLUTION.md §6 keeps a concurrent edit in the
+                // retained state so a later restore shows it. Discarding it
+                // here made the catalog depend on arrival order.
                 object
                     .metadata
                     .entry(field.id())

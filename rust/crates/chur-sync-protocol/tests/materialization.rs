@@ -201,6 +201,149 @@ fn remove_waits_for_its_observed_add() {
 }
 
 #[test]
+fn a_commit_and_edit_of_an_older_generation_land_in_both_arrival_orders() {
+    let key_a = DeviceSigningKey::from_seed([2; 32]);
+    let key_b = DeviceSigningKey::from_seed([3; 32]);
+    let create = OperationPayload::new(
+        id(10),
+        1,
+        PayloadBody::CreateObject {
+            object_id: id(60),
+            object_generation: 1,
+            store_id: id(61),
+            stream_id: id(62),
+            metadata_fields: Vec::new(),
+        },
+    )
+    .expect("create");
+    let create_operation = operation(&key_a, 63, id(2), 1, [0; 32], Vec::new(), &create);
+    let edit = OperationPayload::new(
+        id(10),
+        1,
+        PayloadBody::UpdateMetadata {
+            object_id: id(60),
+            object_generation: 1,
+            field: MetadataField::new(MetadataFieldId::Caption, b"Edited".to_vec()).expect("field"),
+        },
+    )
+    .expect("edit");
+    let edit_operation = operation(
+        &key_a,
+        64,
+        id(2),
+        2,
+        create_operation.digest(),
+        Vec::new(),
+        &edit,
+    );
+    let envelope = ObjectKeyEnvelope::seal(
+        &Key::new([44; 32]),
+        id(1),
+        id(10),
+        1,
+        id(60),
+        1,
+        Nonce::new([45; 24]),
+        &Key::new([46; 32]),
+    )
+    .expect("envelope");
+    let commit = OperationPayload::new(
+        id(10),
+        1,
+        PayloadBody::CommitObject {
+            object_id: id(60),
+            object_generation: 1,
+            store_id: id(61),
+            container_length: 100,
+            container_commitment: [47; 32],
+            object_key_envelope: envelope,
+        },
+    )
+    .expect("commit");
+    let commit_operation = operation(
+        &key_a,
+        65,
+        id(2),
+        3,
+        edit_operation.digest(),
+        Vec::new(),
+        &commit,
+    );
+    let delete = OperationPayload::new(
+        id(10),
+        1,
+        PayloadBody::DeleteObject {
+            object_id: id(60),
+            object_generation: 1,
+            authored_at_ms: 1,
+        },
+    )
+    .expect("delete");
+    let delete_operation = operation(
+        &key_b,
+        66,
+        id(3),
+        1,
+        [0; 32],
+        vec![ObservedHead::new(id(2), 1)],
+        &delete,
+    );
+    let restore = OperationPayload::new(
+        id(10),
+        1,
+        PayloadBody::RestoreObject {
+            object_id: id(60),
+            tombstone_operation_id: *delete_operation.operation_id(),
+            new_object_generation: 2,
+        },
+    )
+    .expect("restore");
+    let restore_operation = operation(
+        &key_b,
+        67,
+        id(3),
+        2,
+        delete_operation.digest(),
+        vec![ObservedHead::new(id(2), 1)],
+        &restore,
+    );
+
+    // The edit and the commit are concurrent with the delete-and-restore pair
+    // on the second device. Whichever order the operations arrive in, the
+    // retained state must end up the same: gating the older generation as
+    // Obsolete silently dropped them whenever the restore replayed first.
+    let mut ordered = MaterializedState::new();
+    for (op, payload) in [
+        (&create_operation, &create),
+        (&edit_operation, &edit),
+        (&commit_operation, &commit),
+        (&delete_operation, &delete),
+        (&restore_operation, &restore),
+    ] {
+        ordered.apply(op, payload).expect("ordered apply");
+    }
+    let mut permuted = MaterializedState::new();
+    for (op, payload) in [
+        (&create_operation, &create),
+        (&delete_operation, &delete),
+        (&restore_operation, &restore),
+        (&edit_operation, &edit),
+        (&commit_operation, &commit),
+    ] {
+        permuted.apply(op, payload).expect("permuted apply");
+    }
+
+    for state in [&ordered, &permuted] {
+        assert_eq!(
+            state.metadata(&id(60), MetadataFieldId::Caption),
+            Some(b"Edited".as_slice())
+        );
+        assert!(state.committed_object(&id(60)).is_some());
+        assert!(state.is_presentable(&id(60)));
+    }
+}
+
+#[test]
 fn committed_object_keeps_the_stream_identity_needed_for_download() {
     let key = DeviceSigningKey::from_seed([5; 32]);
     let create = OperationPayload::new(
