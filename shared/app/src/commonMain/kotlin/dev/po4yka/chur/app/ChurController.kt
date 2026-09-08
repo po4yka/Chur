@@ -740,7 +740,10 @@ class ChurController(
         val operation = withContext(Dispatchers.Default) { repository.beginIntegrityScan(null) }
         try {
             while (true) {
-                val progress = repository.poll(operation)
+                // §8 of the FFI contract: every native call runs off the
+                // main thread, and a poll is one, however short it is.
+                val progress =
+                    withContext(Dispatchers.Default) { repository.poll(operation) }
                 if (progress.terminal) {
                     _message.value = if (progress.status == 0) {
                         "Verified ${progress.processed} object(s)."
@@ -803,13 +806,14 @@ class ChurController(
 
     /** Closes the runtime, which a finishing host does. */
     suspend fun shutdown() {
-        repository.shutdown()
+        withContext(Dispatchers.Default) { repository.shutdown() }
     }
 
     /** Polls one operation to its terminal status. */
     suspend fun drain(operation: Long): Int {
         while (true) {
-            val progress = repository.poll(operation)
+            val progress =
+                withContext(Dispatchers.Default) { repository.poll(operation) }
             if (progress.terminal) return progress.status
             delay(POLL_INTERVAL_MS)
         }
