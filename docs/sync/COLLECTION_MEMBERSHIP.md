@@ -48,6 +48,8 @@ A permission downgrade that retains `READ` uses `UPSERT` at the current epoch. I
 
 Revoking a device of the source vault can also advance the collection epoch through an authenticated `CreateCollectionEpoch` operation without changing collection membership generation. The client commits that accepted epoch to collection-sharing state in the same transaction that starts eager rewrap. This keeps later grants bound to the current key after source-device loss.
 
+A recipient that does not hold the source vault's operation log — every external recipient — never observes that operation. The next authenticated membership record names the issuer's current epoch, and the recipient follows the advance from that record; an epoch below the locally accepted one stays a rollback.
+
 ## 3. Issuer authorization
 
 An issuer is accepted only when its signature key and `issuer_membership_generation` select authenticated current state:

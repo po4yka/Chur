@@ -602,6 +602,82 @@ fn collection_epoch_and_log_head_commit_together() {
 }
 
 #[test]
+fn a_membership_record_carries_a_source_rotation_the_recipient_never_observed() {
+    let mut fixture = setup();
+    let collection_id = id(17);
+    sharing::provision(&mut fixture.db, id(2), collection_id, 1).expect("sharing");
+    // The source rotated to epoch 2 through a `CreateCollectionEpoch`
+    // operation that travels in the source vault's own log; an external
+    // recipient only ever sees the collection stream, so the next membership
+    // record is what tells it the epoch moved.
+    let new_key = Key::new([19; 32]);
+    let new_domain = KeyDomain::collection(&new_key, &collection_id, 2).expect("new domain");
+    let record = CollectionMembershipRecord::new(
+        id(2),
+        collection_id,
+        1,
+        [0; 32],
+        CollectionMembershipAction::Upsert(PermissionProfile::Read),
+        id(7),
+        id(8),
+        [9; 32],
+        [10; 32],
+        2,
+        id(2),
+        id(4),
+        fixture.membership.generation(),
+        1,
+    )
+    .expect("record")
+    .sign(&fixture.issuer);
+    let payload = OperationPayload::new(
+        collection_id,
+        2,
+        PayloadBody::ChangeCollectionMembership(record),
+    )
+    .expect("payload");
+    let operation = Operation::seal(
+        id(31),
+        id(2),
+        id(4),
+        1,
+        [0; 32],
+        Vec::new(),
+        *new_domain.selector(),
+        new_domain.operation_key(),
+        Nonce::new([32; 24]),
+        &payload.encode(),
+    )
+    .expect("operation")
+    .sign(&fixture.issuer);
+    let mut keys = KeyDirectory::new(&fixture.root, &id(2)).expect("keys");
+    keys.check_insert(&new_domain).expect("check the epoch key");
+    keys.insert(new_domain).expect("insert the epoch key");
+    let mut log = sync_log::load(&fixture.db, &fixture.membership).expect("log");
+    let mut materialized = MaterializedState::new();
+
+    assert_eq!(
+        sync_receive::accept_operation(
+            &mut fixture.db,
+            &mut log,
+            &mut fixture.membership,
+            &mut materialized,
+            &mut keys,
+            &fixture.root,
+            1_000,
+            &operation.encode(),
+        )
+        .expect("accept"),
+        ApplyOutcome::Applied
+    );
+    let state = sharing::load(&fixture.db, &collection_id)
+        .expect("sharing")
+        .expect("sharing state");
+    assert_eq!(state.collection_epoch(), 2);
+    assert_eq!(state.generation(), 1);
+}
+
+#[test]
 fn locally_authored_rotation_rewraps_the_collection_and_commits_log_heads() {
     let mut fixture = setup();
     let collection_id = id(71);

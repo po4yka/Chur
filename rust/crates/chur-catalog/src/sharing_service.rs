@@ -740,6 +740,194 @@ pub fn prepare_share_revocation(
     })
 }
 
+/// The operations one source-device-loss epoch rotation publishes.
+pub struct PreparedCollectionEpochRotation {
+    operations: Vec<Operation>,
+    complete: bool,
+}
+
+impl PreparedCollectionEpochRotation {
+    /// Newly authored epoch and object-key rewrap operations.
+    #[must_use]
+    pub fn operations(&self) -> &[Operation] {
+        &self.operations
+    }
+
+    /// Whether eager object-key rewrap reached the end.
+    #[must_use]
+    pub const fn complete(&self) -> bool {
+        self.complete
+    }
+}
+
+/// Rotates one shared collection after a device of the source vault was lost.
+///
+/// [`REVOCATION.md`](../../../docs/sync/REVOCATION.md) §2 rotates affected
+/// collection epochs when a vault device is revoked, and
+/// [`COLLECTION_MEMBERSHIP.md`](../../../docs/sync/COLLECTION_MEMBERSHIP.md) §2
+/// names the authenticated `CreateCollectionEpoch` operation that carries the
+/// advance without changing collection membership generation. A recipient
+/// revocation advances the epoch through its own revocation record; a lost
+/// source device has no record of its own, so the caller invokes this once per
+/// shared collection when the vault observes the loss, and the operations
+/// publish like any other authored operation.
+pub fn prepare_collection_epoch_rotation_after_device_loss(
+    db: &mut CatalogDb,
+    root: &Key,
+    source_vault_id: Id,
+    collection_id: Id,
+    accepted_at_ms: u64,
+    rotation_operation_limit: usize,
+) -> Result<PreparedCollectionEpochRotation> {
+    ensure!(
+        rotation_operation_limit != 0,
+        InvalidInput,
+        "the rotation batch limit is zero"
+    );
+    let source_membership = sync_membership::load(db)?.ok_or_else(|| {
+        Error::new(
+            ChurStatus::RecoveryRequired,
+            "collection rotation has no local device membership",
+        )
+    })?;
+    ensure!(
+        source_membership.vault_id() == &source_vault_id,
+        CatalogCorrupt,
+        "local membership belongs to another vault"
+    );
+    let (source_device_id, identity) = sync_keys::local_identity(db, root, &source_membership)?
+        .ok_or_else(|| {
+            Error::new(
+                ChurStatus::RecoveryRequired,
+                "collection rotation has no ordinary local identity",
+            )
+        })?;
+    let sharing_state = sharing::load(db, &collection_id)?
+        .ok_or_else(|| Error::new(ChurStatus::NotFound, "collection has no sharing membership"))?;
+    ensure!(
+        sharing_state.source_vault_id() == &source_vault_id,
+        AuthenticationFailed,
+        "collection belongs to another source vault"
+    );
+    ensure!(
+        sync_rotation::load(db, source_vault_id, collection_id, &source_membership, root)?
+            .is_complete(),
+        Conflict,
+        "the collection has an unfinished rotation from an earlier loss"
+    );
+    let target_epoch = sharing_state.collection_epoch();
+    let previous_epoch = target_epoch.checked_sub(1).ok_or_else(|| {
+        Error::new(
+            ChurStatus::CatalogCorrupt,
+            "shared collection has no previous epoch",
+        )
+    })?;
+    let previous_key =
+        sync_keys::collection_key(db, root, source_vault_id, collection_id, previous_epoch)?;
+    let previous_domain = KeyDomain::collection(&previous_key, &collection_id, previous_epoch)?;
+    let mut keys = sync_keys::key_directory(db, root, source_vault_id)?;
+    let collection = store::collection(db, &collection_id)?;
+    ensure!(
+        collection.current_epoch == previous_epoch,
+        SyncHeadRollback,
+        "collection epoch is outside the pending rotation"
+    );
+    let mut log = sync_log::load(db, &source_membership)?;
+    let mut operations = Vec::new();
+    let current_key: Key = random::secret::<32>()?;
+    let envelope = CollectionKeyEnvelope::seal(
+        root,
+        source_vault_id,
+        collection_id,
+        target_epoch,
+        target_epoch,
+        Nonce::random()?,
+        &current_key,
+    )?;
+    operations.push(sync_receive::author_rotation_operation(
+        db,
+        &mut log,
+        &source_membership,
+        &mut keys,
+        root,
+        &previous_domain,
+        source_device_id,
+        identity.signing_key(),
+        accepted_at_ms,
+        &OperationPayload::new(
+            collection_id,
+            previous_epoch,
+            PayloadBody::CreateCollectionEpoch {
+                previous_collection_epoch: previous_epoch,
+                membership_generation: source_membership.generation(),
+                collection_key_envelope: envelope,
+            },
+        )?,
+    )?);
+    let current_domain = KeyDomain::collection(&current_key, &collection_id, target_epoch)?;
+    while operations.len() < rotation_operation_limit {
+        let rotation =
+            sync_rotation::load(db, source_vault_id, collection_id, &source_membership, root)?;
+        let Some(object_id) = rotation.next_missing_object().copied() else {
+            ensure!(
+                rotation.is_complete(),
+                InternalFailure,
+                "collection rotation stopped before eager rewrap completed"
+            );
+            break;
+        };
+        let old_envelope = rotation.envelope(&object_id).ok_or_else(|| {
+            Error::new(
+                ChurStatus::CatalogCorrupt,
+                "rotation target has no object-key envelope",
+            )
+        })?;
+        let generation = old_envelope
+            .envelope_generation()
+            .checked_add(1)
+            .ok_or_else(|| {
+                Error::new(
+                    ChurStatus::ResourceLimitExceeded,
+                    "object envelope generation has no successor",
+                )
+            })?;
+        let envelope = old_envelope.rewrap(
+            &previous_key,
+            &current_key,
+            collection_id,
+            target_epoch,
+            generation,
+            Nonce::random()?,
+        )?;
+        operations.push(sync_receive::author_rotation_operation(
+            db,
+            &mut log,
+            &source_membership,
+            &mut keys,
+            root,
+            &current_domain,
+            source_device_id,
+            identity.signing_key(),
+            accepted_at_ms,
+            &OperationPayload::new(
+                collection_id,
+                target_epoch,
+                PayloadBody::RewrapObjectKey {
+                    object_id,
+                    object_key_envelope: envelope,
+                },
+            )?,
+        )?);
+    }
+    let complete =
+        sync_rotation::load(db, source_vault_id, collection_id, &source_membership, root)?
+            .is_complete();
+    Ok(PreparedCollectionEpochRotation {
+        operations,
+        complete,
+    })
+}
+
 /// Authenticates and installs one current grant for the local recipient device.
 ///
 /// Issuer operation logs are checked in memory and are not mixed into the local

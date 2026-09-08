@@ -367,11 +367,19 @@ impl CollectionMembershipState {
 
         match record.action {
             CollectionMembershipAction::Upsert(permissions) => {
+                // The record carries the issuer's current epoch. A recipient
+                // that does not hold the source vault's operation log — every
+                // external recipient — never observes the
+                // `CreateCollectionEpoch` operation a source-device-loss
+                // rotation publishes, so an epoch above the locally accepted
+                // one is the authenticated evidence of that advance and the
+                // replay follows it. Anything below is a rollback.
                 ensure!(
-                    record.collection_epoch == candidate.collection_epoch,
+                    record.collection_epoch >= candidate.collection_epoch,
                     SyncHeadRollback,
-                    "collection member upsert changes the collection epoch"
+                    "collection member upsert rolls back the collection epoch"
                 );
+                candidate.collection_epoch = record.collection_epoch;
                 if let Some(existing) = candidate.members.get(&recipient) {
                     ensure!(
                         !existing.active
@@ -409,11 +417,12 @@ impl CollectionMembershipState {
                 );
             }
             CollectionMembershipAction::Revoke => {
+                // The issuer advances the epoch by exactly one from its own
+                // current epoch, which a recipient that missed an out-of-chain
+                // rotation may sit below; any forward epoch is followable and
+                // anything at or below the local epoch is not.
                 ensure!(
-                    candidate
-                        .collection_epoch
-                        .checked_add(1)
-                        .is_some_and(|epoch| { epoch == record.collection_epoch }),
+                    record.collection_epoch > candidate.collection_epoch,
                     SyncHeadRollback,
                     "collection revocation does not advance the epoch"
                 );
@@ -548,7 +557,21 @@ impl CollectionMembershipState {
         payload: &OperationPayload,
         issuer_membership: &MembershipState,
     ) -> Result<()> {
-        payload.validate_for_operation(operation, &self.collection_id, self.collection_epoch)?;
+        // The payload names the issuer's current epoch. A recipient that never
+        // observes the source vault's own operation log — every external
+        // recipient — can be behind it after a source-device-loss rotation
+        // (COLLECTION_MEMBERSHIP.md §2), so the epoch is a forward bound here
+        // rather than an equality; the equality is the author-side check.
+        payload.validate_for_operation(
+            operation,
+            &self.collection_id,
+            payload.collection_epoch(),
+        )?;
+        ensure!(
+            payload.collection_epoch() >= self.collection_epoch,
+            SyncHeadRollback,
+            "shared operation rolls back the collection epoch"
+        );
         ensure!(
             issuer_membership.vault_id() == operation.vault_id(),
             AuthenticationFailed,
@@ -1189,6 +1212,116 @@ mod tests {
             &recipient_device_id,
             PermissionProfile::ManageMembers,
         ));
+    }
+
+    #[test]
+    fn a_member_record_follows_a_source_rotation_the_recipient_never_observed() {
+        let source_key = DeviceSigningKey::from_seed([1; 32]);
+        let source_enrollment =
+            EnrollmentRecord::initial(id(1), id(2), source_key.verifying_key(), [3; 32])
+                .expect("source enrollment")
+                .sign(&source_key);
+        let source_membership =
+            MembershipState::bootstrap(&source_enrollment).expect("source membership");
+        // The recipient accepted epoch 3 and one member.
+        let mut state = CollectionMembershipState::new(id(1), id(6), 3).expect("state");
+        let first = CollectionMembershipRecord::new(
+            id(1),
+            id(6),
+            1,
+            [0; 32],
+            CollectionMembershipAction::Upsert(PermissionProfile::Read),
+            id(4),
+            id(5),
+            [7; 32],
+            [8; 32],
+            3,
+            id(1),
+            id(2),
+            1,
+            9,
+        )
+        .expect("record")
+        .sign(&source_key);
+        assert!(
+            state.accept(&first, &source_membership) == Ok(CollectionMembershipOutcome::Applied)
+        );
+        assert_eq!(state.collection_epoch(), 3);
+
+        // The source loses a device and rotates to epoch 5 through a
+        // `CreateCollectionEpoch` operation this recipient never receives; the
+        // next membership record is the authenticated evidence of the advance.
+        let after_rotation = CollectionMembershipRecord::new(
+            id(1),
+            id(6),
+            2,
+            first.commitment(),
+            CollectionMembershipAction::Upsert(PermissionProfile::Contribute),
+            id(4),
+            id(5),
+            [7; 32],
+            [8; 32],
+            5,
+            id(1),
+            id(2),
+            1,
+            10,
+        )
+        .expect("record")
+        .sign(&source_key);
+        assert!(
+            state.accept(&after_rotation, &source_membership)
+                == Ok(CollectionMembershipOutcome::Applied)
+        );
+        assert_eq!(state.collection_epoch(), 5);
+        assert!(state.is_authorized(&id(4), &id(5), PermissionProfile::Contribute));
+
+        // A later revocation advances the issuer's epoch again, two above the
+        // epoch the recipient last saw in a record, and still follows.
+        let revoke = CollectionMembershipRecord::new(
+            id(1),
+            id(6),
+            3,
+            after_rotation.commitment(),
+            CollectionMembershipAction::Revoke,
+            id(4),
+            id(5),
+            [7; 32],
+            [8; 32],
+            6,
+            id(1),
+            id(2),
+            1,
+            11,
+        )
+        .expect("record")
+        .sign(&source_key);
+        assert!(
+            state.accept(&revoke, &source_membership) == Ok(CollectionMembershipOutcome::Applied)
+        );
+        assert_eq!(state.collection_epoch(), 6);
+
+        // An epoch below the locally accepted one stays a rollback.
+        let stale = CollectionMembershipRecord::new(
+            id(1),
+            id(6),
+            4,
+            revoke.commitment(),
+            CollectionMembershipAction::Upsert(PermissionProfile::Read),
+            id(4),
+            id(12),
+            [13; 32],
+            [14; 32],
+            5,
+            id(1),
+            id(2),
+            1,
+            12,
+        )
+        .expect("record")
+        .sign(&source_key);
+        assert!(state.accept(&stale, &source_membership).is_err());
+        assert_eq!(state.collection_epoch(), 6);
     }
 
     #[test]

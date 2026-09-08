@@ -2,8 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use chur_core::{ensure, ChurStatus, Error, Id, Result};
-use chur_crypto::{random, Key, Nonce};
+use chur_core::{ChurStatus, Error, Id, Result, ensure};
+use chur_crypto::{Key, Nonce, random};
 use chur_sync_protocol::collection_membership::CollectionMembershipState;
 use chur_sync_protocol::convergence::MergeOutcome;
 use chur_sync_protocol::identity::{DeviceIdentity, DeviceIdentityEnvelope};
@@ -15,9 +15,9 @@ use chur_sync_protocol::payload::{OperationPayload, PayloadBody};
 use chur_sync_protocol::state::MembershipState;
 use chur_sync_protocol::{KeyDirectory, KeyDomain};
 
+use crate::CatalogDb;
 use crate::db::{from_sqlite_integer, map_sqlite};
 use crate::sync_log::DurableOperationLog;
-use crate::CatalogDb;
 use crate::{sharing, sync_keys, sync_log, sync_membership, sync_rotation};
 
 /// Provisions generation-one membership and its outer operation atomically.
@@ -519,10 +519,14 @@ fn accept_opened_sharing_operation(
         // §5. The application transaction rolled back, so the durable freeze
         // is recorded in its own transaction before the rejection returns.
         Err(error) if error.status() == ChurStatus::Conflict => {
-            if let PayloadBody::IssueCollectionGrant(grant) = payload.body() {
-                if sharing::grant_identifier_conflicts(db, grant)? {
-                    sharing::record_grant_freeze(db, grant.collection_id())?;
+            let identifier_reused = match payload.body() {
+                PayloadBody::IssueCollectionGrant(grant) => {
+                    sharing::grant_identifier_conflicts(db, grant)?
                 }
+                _ => false,
+            };
+            if identifier_reused {
+                sharing::record_grant_freeze(db, grant.collection_id())?;
             }
             return Err(error);
         }
