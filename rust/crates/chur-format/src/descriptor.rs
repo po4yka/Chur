@@ -37,6 +37,20 @@ use crate::slot::{SlotBinding, WRAP_SUITE_ANDROID_KEYSTORE, WRAP_SUITE_RUST};
 /// authentication result.
 const STRUCTURAL: ChurStatus = ChurStatus::VaultCorrupt;
 
+/// An identifier read from a descriptor.
+///
+/// [`Id::new`] reports the reserved all-zero value as `INVALID_INPUT`, the
+/// status of a bad caller argument. Inside a descriptor the value is a
+/// malformed field, so the parser reports it as `VAULT_CORRUPT`.
+fn descriptor_id(bytes: [u8; ID_LEN]) -> Result<Id> {
+    Id::new(bytes).map_err(|_| {
+        Error::new(
+            STRUCTURAL,
+            "the descriptor carries the reserved all-zero identifier",
+        )
+    })
+}
+
 /// The catalog sub-descriptor of §5: exactly 60 bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CatalogDescriptor {
@@ -84,7 +98,7 @@ impl CatalogDescriptor {
         );
         Ok(Self {
             catalog_format_version,
-            opaque_catalog_path_id: reader.id()?,
+            opaque_catalog_path_id: descriptor_id(reader.fixed()?)?,
             catalog_generation: reader.u64()?,
             catalog_header_commitment: reader.fixed::<COMMITMENT_LEN>()?,
         })
@@ -131,7 +145,7 @@ impl ObjectStoreDescriptor {
             UnsupportedVersion,
             "object store format version is not supported"
         );
-        let opaque_root_path_id = reader.id()?;
+        let opaque_root_path_id = descriptor_id(reader.fixed()?)?;
         ensure!(
             reader.u16()? == NAMING_PROFILE_V1,
             UnsupportedVersion,
@@ -196,7 +210,7 @@ impl MigrationDescriptor {
             from_catalog_format_version: reader.u16()?,
             to_catalog_format_version: reader.u16()?,
             migration_generation: reader.u64()?,
-            checkpoint_id: reader.id()?,
+            checkpoint_id: descriptor_id(reader.fixed()?)?,
         })
     }
 }
@@ -305,7 +319,7 @@ impl KeySlotDescriptor {
     }
 
     fn read(reader: &mut Reader<'_>) -> Result<Self> {
-        let slot_id = reader.id()?;
+        let slot_id = descriptor_id(reader.fixed()?)?;
         let slot_type = SlotType::from_value(reader.u8()?)
             .ok_or_else(|| Error::new(STRUCTURAL, "slot type is unallocated"))?;
         ensure!(
@@ -459,7 +473,8 @@ impl VaultDescriptor {
     /// # Errors
     ///
     /// Returns [`ChurStatus::VaultCorrupt`] for a malformed descriptor,
-    /// `UNSUPPORTED_*` for an unknown identifier, and
+    /// including a reserved all-zero identifier, `UNSUPPORTED_*` for an
+    /// unknown version, profile, policy, or suite identifier, and
     /// [`ChurStatus::ResourceLimitExceeded`] for a §13 bound violation.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         ensure!(
@@ -505,7 +520,7 @@ impl VaultDescriptor {
             VaultCorrupt,
             "declared descriptor length does not match the encoded bytes"
         );
-        let vault_id = reader.id()?;
+        let vault_id = descriptor_id(reader.fixed()?)?;
 
         let descriptor_generation = reader.u64()?;
         ensure!(
@@ -916,6 +931,41 @@ mod tests {
 
         descriptor.state = VaultState::Active;
         assert!(descriptor.encode(&root()).is_err());
+    }
+
+    /// `CANONICAL_ENCODING_V1.md` §8 reserves the all-zero identifier, and §2,
+    /// §5, §6, and §7 repeat the rule here. The codec reports the reserved
+    /// value as `INVALID_INPUT`, the status of a bad caller argument. Inside a
+    /// descriptor it is a malformed field, and `parse` documents
+    /// `VAULT_CORRUPT` for that.
+    #[test]
+    fn a_reserved_identifier_in_the_descriptor_is_vault_corrupt() {
+        let mut descriptor = minimal();
+        descriptor.state = VaultState::Migrating;
+        descriptor.migration = Some(MigrationDescriptor {
+            from_descriptor_version: 1,
+            to_descriptor_version: 1,
+            from_catalog_format_version: 1,
+            to_catalog_format_version: 1,
+            migration_generation: 1,
+            checkpoint_id: id(0x0a),
+        });
+        let encoded = descriptor.encode(&root()).unwrap();
+        // The vault, catalog path, object-store root, slot, and checkpoint
+        // identifiers of `minimal` and the migration above.
+        for byte in [0x01, 0x02, 0x04, 0x05, 0x0a] {
+            let at = encoded
+                .windows(ID_LEN)
+                .position(|window| window == [byte; ID_LEN])
+                .unwrap();
+            let mut bytes = encoded.clone();
+            bytes[at..at + ID_LEN].fill(0);
+            assert_eq!(
+                VaultDescriptor::parse(&bytes).unwrap_err().status(),
+                ChurStatus::VaultCorrupt,
+                "identifier {byte:#04x}"
+            );
+        }
     }
 
     #[test]

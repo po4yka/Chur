@@ -827,9 +827,7 @@ pub fn for_each_stream_ordered(
         let object_bytes: Vec<u8> = row
             .get(12)
             .map_err(|error| map_sqlite(error, "a stream row carried no object"))?;
-        let object_id = Id::new(object_bytes.as_slice().try_into().map_err(|_| {
-            chur_core::err!(CatalogCorrupt, "a stream row's object id is malformed")
-        })?)?;
+        let object_id = crate::row::id(&object_bytes, "a stream row's object id is malformed")?;
         let stream = crate::row::stream(&object_id, row)
             .map_err(|error| map_sqlite(error, "a stream row could not be read"))??;
         visit(&object_id, &stream)?;
@@ -1570,6 +1568,27 @@ mod tests {
             )),
             ChurStatus::NotFound,
             "a corrupt object still accepted a verification verdict"
+        );
+    }
+
+    /// A stored all-zero `object_id` is a malformed row, which `row` reports as
+    /// `CATALOG_CORRUPT`. `Id::new` alone would report `INVALID_INPUT`, the
+    /// status of a bad caller argument, to a backup that passed no argument.
+    #[test]
+    fn a_reserved_object_id_in_the_stream_walk_is_catalog_corrupt() {
+        let Fixture { db, .. } = fixture();
+        db.connection()
+            .execute_batch(
+                "PRAGMA foreign_keys = OFF;
+                 INSERT INTO object_streams VALUES (
+                     x'01010101010101010101010101010101', zeroblob(16), 0, 1, 0,
+                     x'02020202020202020202020202020202', 1, 1, 0, 0, 65536, NULL,
+                     zeroblob(32));",
+            )
+            .expect("zero object id row");
+        assert_eq!(
+            rejection(for_each_stream_ordered(&db, |_, _| Ok(()))),
+            ChurStatus::CatalogCorrupt
         );
     }
 

@@ -41,6 +41,15 @@ fn corrupt(context: &'static str) -> Error {
     Error::new(ChurStatus::ObjectCorrupt, context)
 }
 
+/// An identifier read from a sealed record.
+///
+/// [`Id::new`] reports the reserved all-zero value as `INVALID_INPUT`, the
+/// status of a bad caller argument. Inside a sealed record the value is a
+/// malformed field, so every decoder here reports it as `OBJECT_CORRUPT`.
+fn record_id(bytes: [u8; ID_LEN]) -> Result<Id> {
+    Id::new(bytes).map_err(|_| corrupt("a sealed record carries the reserved all-zero identifier"))
+}
+
 // ---------------------------------------------------------------------------
 // Public preamble
 // ---------------------------------------------------------------------------
@@ -396,13 +405,14 @@ impl CanonicalManifest {
     ///
     /// # Errors
     ///
-    /// Returns [`ChurStatus::ObjectCorrupt`] for any field that violates §5, and
+    /// Returns [`ChurStatus::ObjectCorrupt`] for any field that violates §5,
+    /// including a reserved all-zero identifier, and
     /// [`ChurStatus::NonCanonicalEncoding`] for a bad presence byte or trailing
     /// bytes.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let mut reader = Reader::new(bytes, ChurStatus::ObjectCorrupt);
-        let object_id = reader.id()?;
-        let stream_id = reader.id()?;
+        let object_id = record_id(reader.fixed()?)?;
+        let stream_id = record_id(reader.fixed()?)?;
         let stream_kind = StreamKind::from_value(reader.u8()?)
             .ok_or_else(|| corrupt("manifest stream kind is unallocated"))?;
         let stream_revision = reader.u32()?;
@@ -710,12 +720,13 @@ impl CanonicalFinalCommit {
     ///
     /// # Errors
     ///
-    /// Returns [`ChurStatus::ObjectCorrupt`] for a bound violation and
-    /// [`ChurStatus::NonCanonicalEncoding`] for trailing bytes.
+    /// Returns [`ChurStatus::ObjectCorrupt`] for a bound violation or a reserved
+    /// all-zero identifier, and [`ChurStatus::NonCanonicalEncoding`] for
+    /// trailing bytes.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let mut reader = Reader::new(bytes, ChurStatus::ObjectCorrupt);
-        let object_id = reader.id()?;
-        let stream_id = reader.id()?;
+        let object_id = record_id(reader.fixed()?)?;
+        let stream_id = record_id(reader.fixed()?)?;
         let stream_revision = reader.u32()?;
         let manifest_commitment = reader.fixed::<COMMITMENT_LEN>()?;
         let chunk_count = reader.u64()?;
@@ -2948,14 +2959,8 @@ mod tests {
         assert!(MediaProperties::new(MediaClass::Video, 1920, 1080, 5000).is_ok());
     }
 
-    #[test]
-    fn a_manifest_round_trips_through_encode_and_decode() {
-        let manifest = manifest();
-        assert_eq!(
-            CanonicalManifest::decode(&manifest.encode()).unwrap(),
-            manifest
-        );
-        let commit = CanonicalFinalCommit {
+    fn final_commit() -> CanonicalFinalCommit {
+        CanonicalFinalCommit {
             object_id: id(1),
             stream_id: id(2),
             stream_revision: 3,
@@ -2965,11 +2970,46 @@ mod tests {
             last_chunk_plaintext_length: 7,
             ordered_chunk_commitment: [8; COMMITMENT_LEN],
             commit_generation: 9,
-        };
+        }
+    }
+
+    #[test]
+    fn a_manifest_round_trips_through_encode_and_decode() {
+        let manifest = manifest();
+        assert_eq!(
+            CanonicalManifest::decode(&manifest.encode()).unwrap(),
+            manifest
+        );
+        let commit = final_commit();
         assert_eq!(
             CanonicalFinalCommit::decode(&commit.encode()).unwrap(),
             commit
         );
+    }
+
+    /// §5 marks `object_id` and `stream_id` "never all zero", and §11 requires
+    /// the final commit to repeat the manifest values. The codec
+    /// reports the reserved value as `INVALID_INPUT`, the status of a bad
+    /// caller argument. Inside a sealed record it is a malformed field, and
+    /// both decoders document `OBJECT_CORRUPT` for that.
+    #[test]
+    fn a_reserved_identifier_in_a_sealed_record_is_object_corrupt() {
+        let manifest = manifest().encode();
+        let commit = final_commit().encode();
+        for field in [0..ID_LEN, ID_LEN..2 * ID_LEN] {
+            let mut bytes = manifest.clone();
+            bytes[field.clone()].fill(0);
+            assert_eq!(
+                CanonicalManifest::decode(&bytes).unwrap_err().status(),
+                ChurStatus::ObjectCorrupt
+            );
+            let mut bytes = commit.clone();
+            bytes[field].fill(0);
+            assert_eq!(
+                CanonicalFinalCommit::decode(&bytes).unwrap_err().status(),
+                ChurStatus::ObjectCorrupt
+            );
+        }
     }
 
     #[test]
