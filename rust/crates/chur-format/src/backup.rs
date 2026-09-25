@@ -96,6 +96,20 @@ impl RecordType {
     }
 }
 
+/// An identifier read from a package record.
+///
+/// [`Id::new`] reports the reserved all-zero value as `INVALID_INPUT`, the
+/// status of a bad caller argument. Inside a package the value is a malformed
+/// record, so every decoder here reports it as `VAULT_CORRUPT`.
+fn package_id(bytes: [u8; 16]) -> Result<Id> {
+    Id::new(bytes).map_err(|_| {
+        Error::new(
+            ChurStatus::VaultCorrupt,
+            "the package carries the reserved all-zero identifier",
+        )
+    })
+}
+
 // ---------------------------------------------------------------------------
 // §2.3 Outer framing
 // ---------------------------------------------------------------------------
@@ -365,8 +379,8 @@ impl StreamInventoryEntry {
     ///
     /// # Errors
     ///
-    /// Returns [`ChurStatus::VaultCorrupt`] for a short entry or an unallocated
-    /// `stream_kind`.
+    /// Returns [`ChurStatus::VaultCorrupt`] for a short entry, an unallocated
+    /// `stream_kind`, or a reserved all-zero identifier.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         ensure!(
             bytes.len() == STREAM_ENTRY_LEN,
@@ -374,8 +388,8 @@ impl StreamInventoryEntry {
             "the stream inventory entry is not its canonical length"
         );
         let mut reader = Reader::new(bytes, ChurStatus::VaultCorrupt);
-        let object_id = reader.id()?;
-        let stream_id = reader.id()?;
+        let object_id = package_id(reader.fixed()?)?;
+        let stream_id = package_id(reader.fixed()?)?;
         let stream_kind = StreamKind::from_value(reader.u8()?)
             .ok_or_else(|| Error::new(ChurStatus::VaultCorrupt, "an unallocated stream kind"))?;
         let stream_revision = reader.u32()?;
@@ -658,9 +672,9 @@ impl BackupManifest {
     ///
     /// Returns [`ChurStatus::VaultCorrupt`] for a wrong length, a
     /// `backup_version` differing from the public preamble's, an absent-base
-    /// discriminant that is neither 0 nor 1, or a base identifier present under
-    /// a zero discriminant. Returns [`ChurStatus::ResourceLimitExceeded`] above
-    /// the §13 entry bounds.
+    /// discriminant that is neither 0 nor 1, a base identifier present under
+    /// a zero discriminant, or a reserved all-zero identifier. Returns
+    /// [`ChurStatus::ResourceLimitExceeded`] above the §13 entry bounds.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         ensure!(
             bytes.len() == MANIFEST_PLAINTEXT_LEN,
@@ -668,9 +682,9 @@ impl BackupManifest {
             "the backup manifest is not its canonical length"
         );
         let mut reader = Reader::new(bytes, ChurStatus::VaultCorrupt);
-        let backup_id = reader.id()?;
+        let backup_id = package_id(reader.fixed()?)?;
         let backup_version = reader.u16()?;
-        let vault_id = reader.id()?;
+        let vault_id = package_id(reader.fixed()?)?;
         let created_time_ms = reader.u64()?;
         let base_present = reader.u8()?;
         let base_bytes = reader.fixed::<16>()?;
@@ -697,7 +711,7 @@ impl BackupManifest {
                 );
                 None
             }
-            1 => Some(Id::new(base_bytes)?),
+            1 => Some(package_id(base_bytes)?),
             _ => bail!(
                 VaultCorrupt,
                 "the manifest's base discriminant is neither zero nor one"
@@ -815,7 +829,8 @@ impl FinalBackupCommit {
     ///
     /// # Errors
     ///
-    /// Returns [`ChurStatus::VaultCorrupt`] for a wrong length.
+    /// Returns [`ChurStatus::VaultCorrupt`] for a wrong length or a reserved
+    /// all-zero `backup_id`.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         ensure!(
             bytes.len() == FINAL_COMMIT_PLAINTEXT_LEN,
@@ -824,7 +839,7 @@ impl FinalBackupCommit {
         );
         let mut reader = Reader::new(bytes, ChurStatus::VaultCorrupt);
         Ok(Self {
-            backup_id: reader.id()?,
+            backup_id: package_id(reader.fixed()?)?,
             record_count: reader.u64()?,
             stream_entry_count: reader.u32()?,
             slot_entry_count: reader.u32()?,
@@ -1173,6 +1188,53 @@ mod tests {
         unallocated[32] = 0x7f;
         assert_eq!(
             status(StreamInventoryEntry::decode(&unallocated)),
+            ChurStatus::VaultCorrupt
+        );
+    }
+
+    /// The codec reports the reserved all-zero identifier as `INVALID_INPUT`,
+    /// the status of a bad caller argument. Inside a package it is a malformed
+    /// record, and every decoder here documents `VAULT_CORRUPT` for that. The
+    /// all-zero stream entry is the input the `parse_backup_package` fuzz
+    /// target found.
+    #[test]
+    fn a_reserved_identifier_in_a_package_record_is_vault_corrupt() {
+        assert_eq!(
+            status(StreamInventoryEntry::decode(&[0u8; STREAM_ENTRY_LEN])),
+            ChurStatus::VaultCorrupt
+        );
+        let mut entry = vec![0x41; STREAM_ENTRY_LEN];
+        entry[16..32].fill(0);
+        assert_eq!(
+            status(StreamInventoryEntry::decode(&entry)),
+            ChurStatus::VaultCorrupt
+        );
+
+        let (vault_id, backup_id) = ids();
+        let bytes = manifest(vault_id, backup_id).encode();
+        let mut zero_backup = bytes.clone();
+        zero_backup[..16].fill(0);
+        assert_eq!(
+            status(BackupManifest::decode(&zero_backup)),
+            ChurStatus::VaultCorrupt
+        );
+        let mut zero_vault = bytes.clone();
+        zero_vault[18..34].fill(0);
+        assert_eq!(
+            status(BackupManifest::decode(&zero_vault)),
+            ChurStatus::VaultCorrupt
+        );
+        let mut zero_base = bytes;
+        zero_base[42] = 0x01;
+        assert_eq!(
+            status(BackupManifest::decode(&zero_base)),
+            ChurStatus::VaultCorrupt
+        );
+
+        assert_eq!(
+            status(FinalBackupCommit::decode(
+                &[0u8; FINAL_COMMIT_PLAINTEXT_LEN]
+            )),
             ChurStatus::VaultCorrupt
         );
     }
