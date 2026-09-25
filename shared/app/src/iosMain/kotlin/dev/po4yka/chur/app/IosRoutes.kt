@@ -534,10 +534,12 @@ private fun IosRestoreRoute(controller: ChurController) {
                     val descriptor = path?.let { open(it, O_RDONLY) } ?: -1
                     if (descriptor < 0) {
                         if (path != null) controller.report("That file could not be opened.")
+                        path?.let { unlink(it) }
                         running = false
                     } else {
                         controller.restoreBackup(descriptor, password) {
                             close(descriptor)
+                            path?.let { unlink(it) }
                             running = false
                         }
                     }

@@ -1,0 +1,66 @@
+name: Chur
+options:
+  createIntermediateGroups: true
+targets:
+  Chur:
+    type: application
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - Sources
+    info:
+      path: Info.plist
+      properties:
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        CADisableMinimumFrameDurationOnPhone: true
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default Configuration
+                UISceneDelegateClassName: "$(PRODUCT_MODULE_NAME).SceneDelegate"
+        BGTaskSchedulerPermittedIdentifiers:
+          - dev.po4yka.chur.sync.refresh
+        UIBackgroundModes:
+          - fetch
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.po4yka.chur
+        ARCHS: arm64
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "5.0"
+        FRAMEWORK_SEARCH_PATHS: "$(inherited) $(DERIVED_FILE_DIR)"
+        OTHER_LDFLAGS: "$(inherited) $(DERIVED_FILE_DIR)/ChurApp.framework/ChurApp $(DERIVED_FILE_DIR)/libchur_ffi.a"
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        CODE_SIGNING_ALLOWED: NO
+      configs:
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+    preBuildScripts:
+      - name: Build shared framework
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          cd "$SRCROOT/../.."
+          case "$PLATFORM_NAME" in
+            iphonesimulator) target=IosSimulatorArm64; directory=iosSimulatorArm64; triple=aarch64-apple-ios-sim ;;
+            iphoneos) target=IosArm64; directory=iosArm64; triple=aarch64-apple-ios ;;
+            *) echo "Unsupported Apple platform: $PLATFORM_NAME" >&2; exit 1 ;;
+          esac
+          case "$CONFIGURATION" in
+            Debug|Release) ;;
+            *) echo "Unsupported configuration: $CONFIGURATION" >&2; exit 1 ;;
+          esac
+          ./gradlew ":shared:app:link${CONFIGURATION}Framework${target}"
+          variant="$(printf '%s' "$CONFIGURATION" | tr '[:upper:]' '[:lower:]')Framework"
+          mkdir -p "$DERIVED_FILE_DIR"
+          ditto "shared/app/build/bin/$directory/$variant/ChurApp.framework" "$DERIVED_FILE_DIR/ChurApp.framework"
+          ditto "rust/target/$triple/${variant%Framework}/libchur_ffi.a" "$DERIVED_FILE_DIR/libchur_ffi.a"

@@ -5,13 +5,17 @@ package dev.po4yka.chur.app
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.window.ComposeUIViewController
+import dev.po4yka.chur.ffi.ChurVault
 import dev.po4yka.chur.notes.FileNoteStore
 import dev.po4yka.chur.notes.NoteStore
 import dev.po4yka.chur.sync.FileSyncStateStore
+import dev.po4yka.chur.sync.SyncCoordinator
 import platform.Foundation.NSDocumentDirectory
 import platform.Foundation.NSFileManager
+import platform.Foundation.NSDate
 import platform.Foundation.NSSearchPathForDirectoriesInDomains
 import platform.Foundation.NSUserDomainMask
+import platform.Foundation.timeIntervalSince1970
 import platform.UIKit.UIViewController
 
 /**
@@ -36,6 +40,40 @@ fun ChurViewController(controller: ChurController, gate: GateResult): UIViewCont
             IosRoutes(controller = controller, route = route, vaultState = state)
         }
     }
+
+/** Check the linked native library before opening a runtime. */
+fun churNativeGate(releaseApplication: Boolean): GateResult {
+    val handshake = ChurVault.handshake()
+    return gate(
+        NativeHandshake(
+            abiVersionMajor = handshake.major.toUInt(),
+            abiVersionMinor = handshake.minor.toUInt(),
+            capabilities = handshake.capabilities.toULong(),
+            objectFormatMin = handshake.objectFormatMin.toUInt(),
+            objectFormatMax = handshake.objectFormatMax.toUInt(),
+            keySlotFormatMin = handshake.keySlotFormatMin.toUInt(),
+            keySlotFormatMax = handshake.keySlotFormatMax.toUInt(),
+            buildFlavor = handshake.buildFlavor.toUInt(),
+        ),
+        releaseApplication = releaseApplication,
+    )
+}
+
+/** Bind the one controller and sync engine used by the scene and background task. */
+fun churController(privacy: IosPrivacyCover, exports: ExportSink): ChurController {
+    val clock = { (NSDate().timeIntervalSince1970 * 1000).toLong() }
+    val sync = SyncCoordinator(store = churSyncStateStore(), clock = clock)
+    val controller = ChurController(
+        storageRoot = churStorageRoot(),
+        privacy = privacy,
+        exports = exports,
+        clock = clock,
+        notes = churNoteStore(),
+        sync = sync,
+    )
+    sync.bind(RepositorySyncBoundary(controller.vault))
+    return controller
+}
 
 /**
  * The storage root, `docs/ARCHITECTURE.md` §14.4.
@@ -91,11 +129,20 @@ fun churNoteStore(): NoteStore {
  * project marks excluded from iCloud and iTunes backup, which
  * `SYNC_PROTOCOL_V1.md` §7 (SEC-034) requires of sync state.
  */
-fun churSyncStateStore(): FileSyncStateStore {
+fun churSyncStateRoot(): String {
     val documents = NSSearchPathForDirectoriesInDomains(
         NSDocumentDirectory,
         NSUserDomainMask,
         true,
     ).first() as String
-    return FileSyncStateStore("$documents/chur-sync.json")
+    val root = "$documents/chur-sync"
+    NSFileManager.defaultManager.createDirectoryAtPath(
+        path = root,
+        withIntermediateDirectories = true,
+        attributes = null,
+        error = null,
+    )
+    return root
 }
+
+fun churSyncStateStore(): FileSyncStateStore = FileSyncStateStore("${churSyncStateRoot()}/state.json")

@@ -281,7 +281,7 @@ adapter is the only module that names a handle.
 Chur/
 ├── apps/
 │   ├── androidApp/          composition root, JNI packaging, pickers, exports
-│   └── iosApp/              the Xcode project's specification, README.md
+│   └── iosApp/              Xcode project, UIKit host, and framework binding
 │
 ├── shared/
 │   ├── app/                 design system, screens, and the shared controller

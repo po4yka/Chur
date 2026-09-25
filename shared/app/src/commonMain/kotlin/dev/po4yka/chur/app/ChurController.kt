@@ -745,6 +745,7 @@ class ChurController(
      * and application happens at the next unlock.
      */
     suspend fun runBackgroundSync() {
+        withContext(Dispatchers.Default) { repository.start() }
         sync?.syncNow()
     }
 
