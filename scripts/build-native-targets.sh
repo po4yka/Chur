@@ -14,9 +14,10 @@
 #   scripts/build-native-targets.sh apple
 #   scripts/build-native-targets.sh all
 #
-# Android needs an NDK. The script reads ANDROID_NDK_HOME, then
-# ANDROID_NDK_ROOT, then the NDK version the version catalog pins through
-# CHUR_NDK_VERSION, and falls back to the newest NDK under ANDROID_HOME/ndk.
+# Android needs an NDK. Gradle supplies CHUR_NDK_VERSION from the version
+# catalog; that exact version wins over ambient NDK paths and must exist.
+# Direct script use falls back to ANDROID_NDK_HOME, ANDROID_NDK_ROOT, then the
+# newest NDK under ANDROID_HOME/ndk.
 # Apple targets need Xcode and run on macOS only.
 #
 # Every Android shared library is linked with 16 KiB page alignment, per
@@ -62,20 +63,19 @@ log() { printf '== %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 find_ndk() {
+  local sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+  if [[ -n "${CHUR_NDK_VERSION:-}" ]]; then
+    [[ -n "$sdk" && -d "$sdk/ndk/$CHUR_NDK_VERSION" ]] \
+      || die "pinned NDK $CHUR_NDK_VERSION is missing under ANDROID_HOME/ndk"
+    printf '%s' "$sdk/ndk/$CHUR_NDK_VERSION"; return
+  fi
   if [[ -n "${ANDROID_NDK_HOME:-}" && -d "${ANDROID_NDK_HOME}" ]]; then
     printf '%s' "$ANDROID_NDK_HOME"; return
   fi
   if [[ -n "${ANDROID_NDK_ROOT:-}" && -d "${ANDROID_NDK_ROOT}" ]]; then
     printf '%s' "$ANDROID_NDK_ROOT"; return
   fi
-  local sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
   [[ -n "$sdk" && -d "$sdk/ndk" ]] || die "no NDK: set ANDROID_NDK_HOME"
-  # The version catalog pins the NDK (gradle/libs.versions.toml) and the
-  # Gradle build exports it as CHUR_NDK_VERSION. Prefer exactly that one over
-  # the newest installed, so the build does not change with the machine.
-  if [[ -n "${CHUR_NDK_VERSION:-}" && -d "$sdk/ndk/$CHUR_NDK_VERSION" ]]; then
-    printf '%s' "$sdk/ndk/$CHUR_NDK_VERSION"; return
-  fi
   local newest
   newest="$(find "$sdk/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
   [[ -n "$newest" ]] || die "no NDK under $sdk/ndk"
@@ -132,14 +132,13 @@ check_symbols() {
 }
 
 target_directory() {
-  cargo metadata --format-version 1 --no-deps \
+  cargo metadata --locked --format-version 1 --no-deps \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])'
 }
 
-# The 16 KiB page alignment ANDROID.md requires for every packaged Android
-# library. `-z max-page-size` is stated here rather than inherited from an NDK
-# default, so the layout does not change when the pinned NDK does.
-readonly PAGE_ALIGNMENT_RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384"
+# The 16 KiB page alignment ANDROID.md requires and a stable build ID for
+# matching shipped libraries to their symbol files.
+readonly ANDROID_RELEASE_RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-Wl,--build-id=sha1"
 
 # Verifies the p_align of every PT_LOAD segment of one ELF artifact against
 # the 16 KiB page size. The flag above asks for the layout; this proves it
@@ -187,7 +186,7 @@ build_target() {
   grep -qxF "$target" <<<"$installed" \
     || die "target $target is not installed: rustup target add $target"
   log "building $target"
-  cargo build -p chur-ffi --release --target "$target"
+  cargo build --locked -p chur-ffi --release --target "$target"
   directory="$(target_directory)"
   check_symbols "$directory/$target/release/libchur_ffi.a"
 }
@@ -203,7 +202,7 @@ build_target() {
 build_jni() {
   local target="$1" directory artifact count
   log "building the JNI adapter for $target"
-  cargo build -p chur-jni --release --target "$target"
+  cargo build --locked -p chur-jni --release --target "$target"
   directory="$(target_directory)"
   artifact="$directory/$target/release/libchur_jni.so"
   [[ -f "$artifact" ]] || die "no JNI adapter at $artifact"
@@ -231,7 +230,10 @@ build_android() {
   [[ -x "$NM_TOOL" ]] || die "no llvm-nm at $NM_TOOL"
   # Shared across every Android build in this run, so the static library and
   # the JNI adapter compile one dependency graph rather than two.
-  export RUSTFLAGS="${RUSTFLAGS:-} $PAGE_ALIGNMENT_RUSTFLAGS"
+  # Retain line tables in the unstripped input. AGP strips the APK copy and
+  # writes the matching native symbol archive for crash symbolication.
+  export CARGO_PROFILE_RELEASE_DEBUG=1
+  export RUSTFLAGS="${RUSTFLAGS:-} $ANDROID_RELEASE_RUSTFLAGS"
   for target in "${ANDROID_TARGETS[@]}"; do
     local clang="$prebuilt/bin/${target}${ANDROID_API}-clang"
     [[ -x "$clang" ]] || die "no linker at $clang"

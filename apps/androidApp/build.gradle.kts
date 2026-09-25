@@ -17,6 +17,13 @@ plugins {
     alias(libs.plugins.compose.multiplatform)
 }
 
+/** The only Android ABIs the Rust adapter is built for and the APK may ship. */
+val androidAbis =
+    mapOf(
+        "arm64-v8a" to "aarch64-linux-android",
+        "x86_64" to "x86_64-linux-android",
+    )
+
 android {
     namespace = "dev.po4yka.chur.android"
     compileSdk =
@@ -41,17 +48,11 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk.abiFilters += androidAbis.keys
     }
 
     buildFeatures {
         compose = true
-    }
-
-    packaging {
-        // `docs/DEPENDENCY_POLICY.md` "Provenance and releases" wants the
-        // native architecture inventory to be exactly what was built, so
-        // nothing here is stripped or filtered by the packager.
-        jniLibs.keepDebugSymbols += "**/libchur_jni.so"
     }
 
     signingConfigs {
@@ -68,7 +69,12 @@ android {
 
     buildTypes {
         getByName("release") {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+            ndk.debugSymbolLevel = "FULL"
             signingConfig = signingConfigs.getByName("release")
         }
     }
@@ -103,13 +109,6 @@ dependencies {
 val rustDirectory = rootProject.layout.projectDirectory.dir("rust")
 val cargoTargetDirectory = rustDirectory.dir("target")
 
-/** The Android ABIs and the Rust triple each one is built from. */
-val androidAbis =
-    mapOf(
-        "arm64-v8a" to "aarch64-linux-android",
-        "x86_64" to "x86_64-linux-android",
-    )
-
 /**
  * Builds `libchur_jni` for every Android ABI.
  *
@@ -131,6 +130,9 @@ val cargoBuildAndroid =
         environment("CHUR_NDK_VERSION", libs.versions.ndk.get())
         inputs.dir(rustDirectory.dir("crates"))
         inputs.file(rustDirectory.file("Cargo.toml"))
+        inputs.file(rustDirectory.file("Cargo.lock"))
+        inputs.file(rustDirectory.file("rust-toolchain.toml"))
+        inputs.file(rootProject.layout.projectDirectory.file("scripts/build-native-targets.sh"))
         androidAbis.values.forEach { triple ->
             outputs.file(cargoTargetDirectory.file("$triple/release/libchur_jni.so"))
         }

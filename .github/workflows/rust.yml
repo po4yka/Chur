@@ -273,13 +273,9 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-            rust/target
-          key: android-app-${{ hashFiles('gradle/libs.versions.toml', 'gradle/wrapper/gradle-wrapper.properties', 'rust/Cargo.lock') }}
+      # This job receives the release signing password on main. Do not save a
+      # build cache that a pull request could restore after Cargo or Gradle ran
+      # with that environment.
       - name: install the pinned toolchain
         working-directory: rust
         run: rustup show
@@ -317,17 +313,53 @@ jobs:
           test -n "$CHUR_RELEASE_PASSWORD"
           umask 077
           printf '%s' "$CHUR_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/chur-release.p12"
-          echo "CHUR_RELEASE_KEYSTORE=$RUNNER_TEMP/chur-release.p12" >> "$GITHUB_ENV"
-          echo "CHUR_RELEASE_PASSWORD=$CHUR_RELEASE_PASSWORD" >> "$GITHUB_ENV"
-      - name: assemble and verify signed release APK
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+          {
+            echo "CHUR_RELEASE_KEYSTORE=$RUNNER_TEMP/chur-release.p12"
+            echo "CHUR_RELEASE_PASSWORD=$CHUR_RELEASE_PASSWORD"
+            echo "CHUR_RELEASE_CERT_SHA256=747ec3a4cad129e9bde4437c389c138c84933cbfb1a2a34253b6c4d1c6513c8d"
+          } >> "$GITHUB_ENV"
+      - name: prepare disposable signing for pull requests
+        if: github.event_name == 'pull_request'
         run: |
           set -euo pipefail
-          ./gradlew --no-daemon :apps:androidApp:assembleRelease
-          "$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner" verify --verbose --print-certs \
-            apps/androidApp/build/outputs/apk/release/androidApp-release.apk | tee "$RUNNER_TEMP/chur-release-signature.txt"
-          grep -Fq 'certificate SHA-256 digest: 747ec3a4cad129e9bde4437c389c138c84933cbfb1a2a34253b6c4d1c6513c8d' \
-            "$RUNNER_TEMP/chur-release-signature.txt"
+          umask 077
+          keytool -genkeypair -alias chur-release -keyalg RSA -keysize 3072 -validity 2 \
+            -dname 'CN=Pull Request Smoke' -storetype PKCS12 -storepass local-smoke-only \
+            -keystore "$RUNNER_TEMP/chur-release-smoke.p12"
+          keytool -exportcert -alias chur-release -keystore "$RUNNER_TEMP/chur-release-smoke.p12" \
+            -storepass local-smoke-only -rfc > "$RUNNER_TEMP/chur-release-smoke.pem"
+          digest=$(openssl x509 -in "$RUNNER_TEMP/chur-release-smoke.pem" -noout -fingerprint -sha256 \
+            | cut -d= -f2 | tr -d : | tr '[:upper:]' '[:lower:]')
+          {
+            echo "CHUR_RELEASE_KEYSTORE=$RUNNER_TEMP/chur-release-smoke.p12"
+            echo "CHUR_RELEASE_PASSWORD=local-smoke-only"
+            echo "CHUR_RELEASE_CERT_SHA256=$digest"
+          } >> "$GITHUB_ENV"
+      - name: assemble and inspect Android release
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon :apps:androidApp:assembleRelease :apps:androidApp:bundleRelease :apps:androidApp:lintRelease
+          {
+            echo "source_commit=$(git rev-parse HEAD)"
+            echo "cargo_lock_sha256=$(sha256sum rust/Cargo.lock | cut -d' ' -f1)"
+            python3 scripts/check-android-release.py \
+              apps/androidApp/build/outputs/apk/release/androidApp-release.apk \
+              apps/androidApp/build/outputs/bundle/release/androidApp-release.aab \
+              apps/androidApp/build/outputs/native-debug-symbols/release/native-debug-symbols.zip \
+              "$CHUR_RELEASE_CERT_SHA256"
+          } | tee android-release-checks.txt
+      - name: upload signed Android release candidate
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-release-candidate-${{ github.sha }}
+          path: |
+            apps/androidApp/build/outputs/apk/release/androidApp-release.apk
+            apps/androidApp/build/outputs/bundle/release/androidApp-release.aab
+            apps/androidApp/build/outputs/native-debug-symbols/release/native-debug-symbols.zip
+            apps/androidApp/build/outputs/mapping/release/mapping.txt
+            android-release-checks.txt
+          if-no-files-found: error
 
   kotlin-native:
     name: kotlin/native tests
