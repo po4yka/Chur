@@ -5,7 +5,7 @@ use chur_sync_protocol::operation::Operation;
 use chur_sync_protocol::state::{DeviceStatus, MembershipState};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
-use super::{ReferenceServer, from_sqlite, map_sqlite, to_sqlite};
+use super::{ReferenceServer, corrupt_row, from_sqlite, map_sqlite, to_sqlite};
 
 const ENROLLMENT_KIND: i64 = 1;
 const REVOCATION_KIND: i64 = 2;
@@ -590,8 +590,10 @@ pub(super) fn membership_state(db: &Connection, vault_id: &Id) -> Result<Members
         CatalogCorrupt,
         "initial membership kind is invalid"
     );
-    let initial = EnrollmentRecord::decode(&record)?;
-    let mut state = MembershipState::bootstrap(&initial)?;
+    let initial = EnrollmentRecord::decode(&record)
+        .map_err(corrupt_row("stored initial membership is invalid"))?;
+    let mut state = MembershipState::bootstrap(&initial)
+        .map_err(corrupt_row("stored initial membership does not replay"))?;
     ensure!(
         initial.vault_id() == vault_id
             && initial.device_id().as_bytes() == outer_device.as_slice()
@@ -601,16 +603,23 @@ pub(super) fn membership_state(db: &Connection, vault_id: &Id) -> Result<Members
         "initial membership association is invalid"
     );
     for (kind, outer_device, outer_sequence, record) in records {
-        let outer_device = Id::from_slice(&outer_device)?;
+        let outer_device = Id::from_slice(&outer_device)
+            .map_err(corrupt_row("stored outer device id is invalid"))?;
         let outer_sequence = from_sqlite(outer_sequence, "stored outer sequence is invalid")?;
         match kind {
             ENROLLMENT_KIND => {
-                let enrollment = EnrollmentRecord::decode(&record)?;
-                state.accept_enrollment(&enrollment, &outer_device, outer_sequence)?;
+                let enrollment = EnrollmentRecord::decode(&record)
+                    .map_err(corrupt_row("stored enrollment is invalid"))?;
+                state
+                    .accept_enrollment(&enrollment, &outer_device, outer_sequence)
+                    .map_err(corrupt_row("stored enrollment does not replay"))?;
             }
             REVOCATION_KIND => {
-                let revocation = RevocationRecord::decode(&record)?;
-                state.accept_revocation(&revocation, &outer_device)?;
+                let revocation = RevocationRecord::decode(&record)
+                    .map_err(corrupt_row("stored revocation is invalid"))?;
+                state
+                    .accept_revocation(&revocation, &outer_device)
+                    .map_err(corrupt_row("stored revocation does not replay"))?;
             }
             _ => {
                 return Err(Error::new(
@@ -645,7 +654,10 @@ fn membership_count(db: &Connection, vault_id: &Id) -> Result<u64> {
             |row| row.get(0),
         )
         .map_err(|error| map_sqlite(error, "membership count failed"))?;
-    from_sqlite(count, "stored membership count is invalid")
+    // SQLite computes this count, and no row stores it, so a negative value is
+    // an implementation failure and not a damaged row.
+    u64::try_from(count)
+        .map_err(|_| Error::new(ChurStatus::InternalFailure, "membership count is invalid"))
 }
 
 // The width changes here rather than at each call site, because

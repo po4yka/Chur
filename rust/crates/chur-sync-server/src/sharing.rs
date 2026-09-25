@@ -1526,7 +1526,7 @@ fn recipient_collections(server: &ReferenceServer, vault_id: Id, device_id: Id) 
         .map_err(|error| map_sqlite(error, "recipient collection lookup failed"))?;
     rows.map(|row| {
         let bytes = row.map_err(|error| map_sqlite(error, "recipient collection row failed"))?;
-        Id::from_slice(&bytes)
+        Id::from_slice(&bytes).map_err(corrupt_sharing)
     })
     .collect()
 }

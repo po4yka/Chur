@@ -535,7 +535,8 @@ impl AppleKeychainSlotBody {
     ///
     /// # Errors
     ///
-    /// As [`RecoverySlotBody::decode`].
+    /// As [`RecoverySlotBody::decode`], and [`ChurStatus::InvalidInput`] for a
+    /// reserved all-zero `keychain_item_id`, as the key envelope decoders do.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         ensure!(
             bytes.len() == Self::LEN,
@@ -940,6 +941,30 @@ mod tests {
             root().expose()
         );
         assert!(body.open(&binding, &Key::new([0xbc; 32])).is_err());
+    }
+
+    /// `CANONICAL_ENCODING_V1.md` §8 reserves the all-zero identifier and the
+    /// vector `canonical-encoding-v1-all-zero-identifier` pins `INVALID_INPUT`
+    /// for it. The key-slot specification names no other code, and a slot body
+    /// has no corrupt status of its own.
+    #[test]
+    fn a_reserved_keychain_item_id_is_invalid_input() {
+        let body = AppleKeychainSlotBody::seal(
+            &bind(SlotType::AppleKeychain),
+            &Key::new([0xbb; 32]),
+            id(0xcc),
+            Nonce::new([0xdd; NONCE_LEN]),
+            &root(),
+        )
+        .unwrap();
+        let mut encoded = body.encode();
+        encoded[2..2 + ID_LEN].fill(0);
+        assert_eq!(
+            AppleKeychainSlotBody::decode(&encoded)
+                .unwrap_err()
+                .status(),
+            ChurStatus::InvalidInput
+        );
     }
 
     #[test]

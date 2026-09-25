@@ -7,7 +7,7 @@ use chur_sync_protocol::deletion::{DeletionTargetKind, ServerDeletionAuthorizati
 use chur_sync_protocol::state::DeviceStatus;
 use rusqlite::{Connection, OptionalExtension, params};
 
-use super::{ReferenceServer, map_sqlite};
+use super::{ReferenceServer, corrupt_row, map_sqlite};
 
 /// Durable result of applying one signed deletion request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,7 +102,8 @@ impl ReferenceServer {
             .optional()
             .map_err(|error| map_sqlite(error, "deletion object lookup failed"))?
             .ok_or_else(|| Error::new(ChurStatus::NotFound, "deletion object is absent"))?;
-        let transfer_id = Id::from_slice(&transfer_id)?;
+        let transfer_id =
+            Id::from_slice(&transfer_id).map_err(corrupt_row("stored transfer id is invalid"))?;
         remove_file_if_present(
             &self.object_path(*authorization.vault_id(), *authorization.target_id()),
         )?;
