@@ -656,6 +656,7 @@ object ChurVault {
             ChurNative.importBegin(
                 session,
                 sourceFd,
+                request.seekable,
                 request.mediaClass,
                 request.width,
                 request.height,
@@ -1017,6 +1018,7 @@ data class ObjectQuery(
 /** What the platform reports about an import source, `MEDIA_PIPELINE.md` §3. */
 data class ImportRequest(
     val contentType: String,
+    val seekable: Boolean,
     val mediaClass: Int,
     val width: Int = 0,
     val height: Int = 0,

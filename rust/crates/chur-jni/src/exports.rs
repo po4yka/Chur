@@ -800,6 +800,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_importBegin<'local>(
     _class: JClass<'local>,
     session: jlong,
     source_fd: jint,
+    seekable: jboolean,
     media_class: jint,
     width: jint,
     height: jint,
@@ -825,7 +826,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_importBegin<'local>(
         // A negative value is the JVM's way of saying absent, because a Kotlin
         // `Long?` would box on every call.
         let request = ChurImportRequestV1 {
-            seekable: 1,
+            seekable: u8::from(seekable),
             known_length_present: u8::from(known_length >= 0),
             media_class,
             reserved: 0,

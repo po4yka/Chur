@@ -9,6 +9,9 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
+import android.system.ErrnoException
+import android.system.Os
+import android.system.OsConstants
 import dev.po4yka.chur.ffi.StreamKind
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
@@ -40,6 +43,12 @@ class AndroidMediaCodec(private val resolver: ContentResolver) : MediaCodec {
             return null
         }
         try {
+            val seekable = try {
+                Os.lseek(descriptor.fileDescriptor, 0, OsConstants.SEEK_CUR)
+                true
+            } catch (failure: ErrnoException) {
+                if (failure.errno == OsConstants.ESPIPE) false else throw failure
+            }
             var name: String? = null
             var size: Long? = null
             resolver.query(uri, null, null, null, null)?.use { cursor ->
@@ -50,13 +59,13 @@ class AndroidMediaCodec(private val resolver: ContentResolver) : MediaCodec {
                     }
                     val sizeColumn = cursor.getColumnIndex(OpenableColumns.SIZE)
                     if (sizeColumn >= 0 && !cursor.isNull(sizeColumn)) {
-                        size = cursor.getLong(sizeColumn)
+                        size = cursor.getLong(sizeColumn).takeIf { it >= 0 }
                     }
                 }
             }
             return PickedMedia(
                 descriptor = descriptor.fd,
-                seekable = true,
+                seekable = seekable,
                 knownLength = size,
                 contentTypeHint = resolver.getType(uri) ?: "application/octet-stream",
                 originalFilename = name,
@@ -279,15 +288,20 @@ class AndroidMediaCodec(private val resolver: ContentResolver) : MediaCodec {
         return read(uri) { BitmapFactory.decodeStream(it, null, options) }
     }
 
-    private fun <T> read(uri: Uri, body: (InputStream) -> T): T? =
+    private fun <T> read(uri: Uri, body: (InputStream) -> T): T? = try {
         resolver.openInputStream(uri)?.use(body)
+    } catch (_: Exception) {
+        null
+    }
 
     private fun <T> withRetriever(uri: Uri, body: (MediaMetadataRetriever) -> T): T? {
         val retriever = MediaMetadataRetriever()
         return try {
-            retriever.setDataSource(resolver.openFileDescriptor(uri, "r")?.fileDescriptor ?: return null)
-            body(retriever)
-        } catch (_: RuntimeException) {
+            resolver.openFileDescriptor(uri, "r")?.use { descriptor ->
+                retriever.setDataSource(descriptor.fileDescriptor)
+                body(retriever)
+            }
+        } catch (_: Exception) {
             // §13: an unsupported codec is a distinct outcome, and the caller
             // decides whether to import the object as opaque.
             null

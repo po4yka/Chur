@@ -452,6 +452,7 @@ internal actual object ChurNative {
     actual fun importBegin(
         session: Long,
         sourceFd: Int,
+        seekable: Boolean,
         mediaClass: Int,
         width: Int,
         height: Int,
@@ -468,7 +469,7 @@ internal actual object ChurNative {
             typeBytes.pinnedPointer { typePointer ->
                 (nameBytes ?: ByteArray(0)).pinnedPointer { namePointer ->
                     val request = alloc<ChurImportRequestV1>()
-                    request.seekable = 1u
+                    request.seekable = if (seekable) 1u else 0u
                     request.known_length_present = if (knownLength >= 0) 1u else 0u
                     request.media_class = mediaClass.toUByte()
                     request.width = width.toUInt()

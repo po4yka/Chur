@@ -174,6 +174,7 @@ internal actual object ChurNative {
     actual fun importBegin(
         session: Long,
         sourceFd: Int,
+        seekable: Boolean,
         mediaClass: Int,
         width: Int,
         height: Int,
@@ -187,6 +188,7 @@ internal actual object ChurNative {
         ChurJni.importBegin(
             session,
             sourceFd,
+            seekable,
             mediaClass,
             width,
             height,

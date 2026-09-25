@@ -67,6 +67,7 @@ class ChurVaultHostTest {
                 descriptor,
                 ImportRequest(
                     contentType = "image/jpeg",
+                    seekable = true,
                     mediaClass = 1,
                     width = 1200,
                     height = 900,

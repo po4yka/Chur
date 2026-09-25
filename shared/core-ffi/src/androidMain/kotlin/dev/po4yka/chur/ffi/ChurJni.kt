@@ -176,6 +176,7 @@ internal object ChurJni {
     external fun importBegin(
         session: Long,
         sourceFd: Int,
+        seekable: Boolean,
         mediaClass: Int,
         width: Int,
         height: Int,

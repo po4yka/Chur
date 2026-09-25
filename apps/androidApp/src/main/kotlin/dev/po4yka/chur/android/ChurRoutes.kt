@@ -1,5 +1,6 @@
 package dev.po4yka.chur.android
 
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -11,6 +12,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import dev.po4yka.chur.app.AppRoute
@@ -257,6 +261,7 @@ private fun VaultRoute(controller: ChurController) {
     var choosingAlbum by remember { mutableStateOf(false) }
     var choosingTag by remember { mutableStateOf(false) }
     var confirmingDelete by remember { mutableStateOf(false) }
+    var choosingImport by remember { mutableStateOf(false) }
     var importAlbumId by remember { mutableStateOf<ByteArray?>(null) }
 
     // The cache is the controller's: its lock transitions clear it whether
@@ -268,12 +273,12 @@ private fun VaultRoute(controller: ChurController) {
 
     val codec = remember { AndroidMediaCodec(context.contentResolver) }
     val importer = remember { MediaImporter(codec) }
-    val picker = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickVisualMedia(),
-    ) { uri ->
+    val onPicked: (Uri?) -> Unit = { uri ->
         // The picker is an activity of ours, so the vault stayed open while it
         // ran. It ends here whether the user chose something or dismissed it.
         controller.endHostActivity()
+        val albumId = importAlbumId
+        importAlbumId = null
         if (uri != null) {
             scope.launch {
                 controller.report("Importing")
@@ -282,7 +287,6 @@ private fun VaultRoute(controller: ChurController) {
                 }
                 when (outcome) {
                     is MediaImporter.Outcome.Imported -> {
-                        val albumId = importAlbumId
                         controller.reportImport(if (albumId == null) "Imported into vault." else null)
                         if (albumId != null) {
                             controller.putAllInAlbum(albumId, listOf(outcome.objectId)) {
@@ -297,6 +301,8 @@ private fun VaultRoute(controller: ChurController) {
             }
         }
     }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), onPicked)
+    val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), onPicked)
 
     LaunchedEffect(destination, openAlbum, page.catalogGeneration) {
         when {
@@ -344,6 +350,30 @@ private fun VaultRoute(controller: ChurController) {
             },
         )
         return
+    }
+
+    if (choosingImport) {
+        AlertDialog(
+            onDismissRequest = { choosingImport = false },
+            title = { Text("Import media") },
+            text = { Text("Choose photos and videos or an audio file.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    choosingImport = false
+                    importAlbumId = openAlbum?.albumId
+                    controller.beginHostActivity()
+                    picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+                }) { Text("Photos and videos") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    choosingImport = false
+                    importAlbumId = openAlbum?.albumId
+                    controller.beginHostActivity()
+                    audioPicker.launch(arrayOf("audio/*"))
+                }) { Text("Audio files") }
+            },
+        )
     }
 
     if (creatingAlbum) {
@@ -452,16 +482,7 @@ private fun VaultRoute(controller: ChurController) {
             onToggleSelection = { projection ->
                 selection = selection.toggle(projection.id)
             },
-            onImport = {
-                // Announced before the launch, because the platform stops this
-                // activity as the picker comes up and the background lock would
-                // otherwise close the vault the result needs.
-                controller.beginHostActivity()
-                importAlbumId = openAlbum?.albumId
-                picker.launch(
-                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo),
-                )
-            },
+            onImport = { choosingImport = true },
             onSearch = {
                 terms = it
                 controller.search(it)

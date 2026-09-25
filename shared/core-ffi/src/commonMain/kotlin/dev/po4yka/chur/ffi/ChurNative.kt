@@ -173,6 +173,7 @@ internal expect object ChurNative {
     fun importBegin(
         session: Long,
         sourceFd: Int,
+        seekable: Boolean,
         mediaClass: Int,
         width: Int,
         height: Int,

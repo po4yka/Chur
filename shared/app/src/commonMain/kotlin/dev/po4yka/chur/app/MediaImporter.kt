@@ -72,6 +72,7 @@ class MediaImporter(
                     request =
                         ImportRequest(
                             contentType = probe.contentType,
+                            seekable = media.seekable,
                             mediaClass = probe.mediaClass,
                             width = probe.width,
                             height = probe.height,

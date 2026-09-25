@@ -129,6 +129,59 @@ fn import(session: u64, bytes: &[u8], filename: &[u8]) -> [u8; 16] {
     latest_object(session)
 }
 
+#[cfg(unix)]
+#[test]
+fn an_unknown_length_pipe_imports_without_seeking() {
+    use std::net::Shutdown;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixStream;
+
+    let root = scratch();
+    let runtime = open_runtime(&root);
+    let mut creation = 0;
+    let request = create_request(PASSWORD);
+    assert_eq!(
+        unsafe { chur_vault_create_begin(runtime, &request, &mut creation) },
+        OK
+    );
+    let mut session = 0;
+    assert_eq!(
+        unsafe { chur_vault_creation_activate(creation, &mut session) },
+        OK
+    );
+
+    let (source, mut writer) = UnixStream::pair().unwrap();
+    writer.write_all(&[0x5a; 4_096]).unwrap();
+    writer.shutdown(Shutdown::Write).unwrap();
+    let content_type = b"audio/wav";
+    let request = ChurImportRequestV1 {
+        seekable: 0,
+        known_length_present: 0,
+        media_class: 3,
+        reserved: 0,
+        width: 0,
+        height: 0,
+        duration_ms: 1_000,
+        known_length: 0,
+        capture_time_ms: 0,
+        capture_time_present: 0,
+        reserved_two: [0; 7],
+        content_type: content_type.as_ptr(),
+        content_type_length: content_type.len() as u32,
+        original_filename: std::ptr::null(),
+        original_filename_length: 0,
+    };
+    let mut operation = 0;
+    assert_eq!(
+        unsafe { chur_import_begin(session, source.as_raw_fd(), &request, &mut operation) },
+        OK
+    );
+    assert_eq!(drain(operation), OK);
+    assert_eq!(unsafe { chur_operation_close(operation) }, OK);
+    assert_eq!(page(session, 1, [0; 16], b"").objects.len(), 1);
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+}
+
 fn page(session: u64, scope: u8, scope_id: [u8; 16], terms: &[u8]) -> DecodedPage {
     let query = ChurQueryV1 {
         scope,
