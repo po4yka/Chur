@@ -360,6 +360,8 @@ jobs:
       - run: cargo deny check
       # The fuzz workspace is its own dependency graph: libfuzzer and its
       # bridge join it only there, so the same policy checks it explicitly.
+      # cargo-deny 0.20 takes `--config` before the subcommand and rejects it
+      # after `check`.
       - name: cargo deny (fuzz workspace)
         working-directory: rust/fuzz
-        run: cargo deny check --config ../deny.toml
+        run: cargo deny --config ../deny.toml check
