@@ -49,7 +49,7 @@ hpke = { version = "=0.14.0", default-features = false, features = ["alloc", "ge
 x25519-dalek = { version = "=3.0.0", default-features = false, features = ["static_secrets", "zeroize"] }
 getrandom = "0.3"
 hkdf = "0.12"
-sha2 = { version = "0.10", default-features = false }
+sha2 = { version = "0.11", default-features = false }
 subtle = { version = "2", default-features = false }
 zeroize = { version = "1", default-features = false, features = ["alloc"] }
 # NFKD for recovery-phrase re-entry, which ADR-0029 requires. Data tables only,
