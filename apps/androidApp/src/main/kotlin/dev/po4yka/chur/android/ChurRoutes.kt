@@ -1,6 +1,7 @@
 package dev.po4yka.chur.android
 
 import android.net.Uri
+import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -20,6 +21,7 @@ import androidx.compose.ui.platform.LocalContext
 import dev.po4yka.chur.app.AppRoute
 import dev.po4yka.chur.app.ActiveOperation
 import dev.po4yka.chur.app.ChurController
+import dev.po4yka.chur.app.ExportTarget
 import dev.po4yka.chur.app.MediaImporter
 import dev.po4yka.chur.app.notes.NoteEditorScreen
 import dev.po4yka.chur.app.notes.NotesScreen
@@ -28,6 +30,8 @@ import dev.po4yka.chur.app.vault.CreateVaultScreen
 import dev.po4yka.chur.app.vault.LibraryTile
 import dev.po4yka.chur.app.vault.AlbumPickerDialog
 import dev.po4yka.chur.app.vault.DeleteSelectionDialog
+import dev.po4yka.chur.app.vault.ExportOptionsDialog
+import dev.po4yka.chur.app.vault.canSaveToPhotos
 import dev.po4yka.chur.app.vault.NewAlbumDialog
 import dev.po4yka.chur.app.vault.TagPickerDialog
 import dev.po4yka.chur.app.vault.RecoveryPhraseScreen
@@ -266,6 +270,7 @@ private fun VaultRoute(controller: ChurController) {
     var choosingAlbum by remember { mutableStateOf(false) }
     var choosingTag by remember { mutableStateOf(false) }
     var confirmingDelete by remember { mutableStateOf(false) }
+    var choosingExport by remember { mutableStateOf(false) }
     var choosingImport by remember { mutableStateOf(false) }
     var importAlbumId by remember { mutableStateOf<ByteArray?>(null) }
 
@@ -452,6 +457,20 @@ private fun VaultRoute(controller: ChurController) {
             onDismiss = { confirmingDelete = false },
         )
     }
+    if (choosingExport) {
+        val selected = page.objects.filter { it.id in selection }
+        ExportOptionsDialog(
+            media = selected.isNotEmpty() && selected.all { canSaveToPhotos(it.mediaKind) },
+            files = false,
+            share = false,
+            downloads = true,
+            onChoose = { target ->
+                choosingExport = false
+                controller.exportAll(selectedObjects(page, selection), target) { selection = emptySet() }
+            },
+            onDismiss = { choosingExport = false },
+        )
+    }
 
     VaultShell(
         state = VaultUiState(
@@ -514,9 +533,7 @@ private fun VaultRoute(controller: ChurController) {
             onCreateSecondIdentity = controller::createSecondIdentity,
             onSelectAll = { selection = page.objects.map { it.id }.toSet() },
             onClearSelection = { selection = emptySet() },
-            onExportSelection = {
-                controller.exportAll(selectedObjects(page, selection)) { selection = emptySet() }
-            },
+            onExportSelection = { choosingExport = true },
             onOrganizeSelection = {
                 controller.loadAlbums()
                 choosingAlbum = true
@@ -573,6 +590,18 @@ private fun ViewerRoute(
     var showDetail by remember(projection.id) { mutableStateOf(false) }
     var waveform by remember(projection.id) { mutableStateOf<ByteArray?>(null) }
     var confirmingDelete by remember(projection.id) { mutableStateOf(false) }
+    var choosingExport by remember(projection.id) { mutableStateOf(false) }
+    val context = LocalContext.current
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        controller.endHostActivity()
+        result.data?.data?.let { uri ->
+            if (controller.vaultState.value is VaultState.Unlocked) {
+                controller.export(projection.objectId, ExportTarget.FILES, uri.toString())
+            } else {
+                runCatching { context.contentResolver.delete(uri, null, null) }
+            }
+        }
+    }
 
     LaunchedEffect(projection.id, generation) {
         // A video's still is its poster frame, which `MEDIA_PIPELINE.md` §6
@@ -618,7 +647,7 @@ private fun ViewerRoute(
         onToggleFavorite = {
             controller.setFavorite(projection.objectId, !projection.favorite)
         },
-        onExport = { controller.export(projection.objectId) },
+        onExport = { choosingExport = true },
         onDelete = { confirmingDelete = true },
         onToggleDetail = { showDetail = !showDetail },
         player = playback?.let { source ->
@@ -637,6 +666,28 @@ private fun ViewerRoute(
                 controller.delete(projection.objectId, onDeleted)
             },
             onDismiss = { confirmingDelete = false },
+        )
+    }
+    if (choosingExport) {
+        ExportOptionsDialog(
+            media = canSaveToPhotos(projection.mediaKind),
+            files = true,
+            share = true,
+            downloads = true,
+            onChoose = { target ->
+                choosingExport = false
+                if (target == ExportTarget.FILES) {
+                    controller.beginHostActivity()
+                    filePicker.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = detail?.contentType ?: "application/octet-stream"
+                        putExtra(Intent.EXTRA_TITLE, detail?.filename?.ifBlank { "chur-export" } ?: "chur-export")
+                    })
+                } else {
+                    controller.export(projection.objectId, target)
+                }
+            },
+            onDismiss = { choosingExport = false },
         )
     }
 }

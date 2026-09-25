@@ -15,6 +15,7 @@ targets:
         CFBundleVersion: "1"
         CADisableMinimumFrameDurationOnPhone: true
         LSRequiresIPhoneOS: true
+        NSPhotoLibraryAddUsageDescription: "Save selected vault media to your photo library."
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false

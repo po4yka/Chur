@@ -161,5 +161,11 @@ class ControllerContainmentTest {
     /** No export can start in these tests, and none is attempted. */
     private object NoExports : ExportSink {
         override fun create(displayName: String, contentType: String): ExportSink.Destination? = null
+        override fun create(
+            displayName: String,
+            contentType: String,
+            target: ExportTarget,
+            uri: String?,
+        ): ExportSink.Destination? = null
     }
 }

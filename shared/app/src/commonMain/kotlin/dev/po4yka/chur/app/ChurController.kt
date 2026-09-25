@@ -791,18 +791,25 @@ class ChurController(
      * boundary, and recipients, editors, and share extensions persist plaintext
      * under their own policies from here on.
      */
-    fun export(objectId: ByteArray) = guarded { tracked("export") { token -> exportOne(objectId, token) } }
+    fun export(objectId: ByteArray, target: ExportTarget = ExportTarget.DEFAULT, uri: String? = null) =
+        guarded { tracked("export") { token -> exportOne(objectId, token, target, uri) } }
 
-    private suspend fun exportOne(objectId: ByteArray, token: Long) {
-        val detail = withContext(Dispatchers.Default) { repository.detail(objectId) }
-        val destination = exports.create(
-            detail.filename.ifBlank { "chur-export" },
-            detail.contentType,
-        ) ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the export destination")
+    private suspend fun exportOne(objectId: ByteArray, token: Long, target: ExportTarget, uri: String?) {
+        // A SAF document exists as soon as the picker returns. Own it before
+        // reading catalog metadata so even an invalidated object deletes it.
+        var destination = if (target == ExportTarget.FILES && uri != null) {
+            exports.create("", "", target, uri)
+                ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the export destination")
+        } else null
         var published = false
         try {
+            val detail = withContext(Dispatchers.Default) { repository.detail(objectId) }
+            val output = destination ?: exports.create(
+                detail.filename.ifBlank { "chur-export" }, detail.contentType, target, uri,
+            ) ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the export destination")
+            destination = output
             val operation = withContext(Dispatchers.Default) {
-                repository.beginExport(objectId, destination.descriptor)
+                repository.beginExport(objectId, output.descriptor)
             }
             val terminal = try {
                 drain(operation, token)
@@ -815,14 +822,14 @@ class ChurController(
             if (_activeOperation.value?.id != token) {
                 throw ChurFailure(ChurStatus.CANCELLED, "the export")
             }
-            destination.publish()
+            output.publish()
             published = true
-            _message.value = "Exported. The copy is outside the vault."
+            _message.value = "Export prepared. The destination may keep a plaintext copy."
         } finally {
             try {
-                if (!published) destination.discard()
+                if (!published) destination?.discard()
             } finally {
-                destination.close()
+                destination?.close()
             }
         }
     }
@@ -841,7 +848,11 @@ class ChurController(
      * `CANONICAL_ENCODING_V1.md` §13 does not admit, so the loop is the design
      * rather than a simplification.
      */
-    fun exportAll(objectIds: List<ByteArray>, onSuccess: () -> Unit = {}) = guarded {
+    fun exportAll(
+        objectIds: List<ByteArray>,
+        target: ExportTarget = ExportTarget.DEFAULT,
+        onSuccess: () -> Unit = {},
+    ) = guarded {
         var exported = 0
         try {
             tracked("export") { token ->
@@ -849,7 +860,7 @@ class ChurController(
                     if (cancellationRequested(token)) {
                         throw ChurFailure(ChurStatus.CANCELLED, "the export")
                     }
-                    exportOne(it, token)
+                    exportOne(it, token, target, null)
                     exported += 1
                 }
                 if (cancellationRequested(token)) {
@@ -1257,12 +1268,10 @@ class ChurController(
 /**
  * Where an export lands, `PLAINTEXT_LIFECYCLE.md` §6.
  *
- * It is an interface because the two platforms have no common answer: Android
- * writes into the shared Downloads collection through `MediaStore`, and iOS
- * writes a temporary file the share sheet consumes. What they agree on is the
- * shape: a destination is created, written through a descriptor, and either
- * published or discarded, so an interrupted export is invisible rather than a
- * truncated file a reader cannot tell from a whole one.
+ * Android streams to MediaStore or a selected document and shares through a
+ * temporary FileProvider URI. iOS exports through Photos, Files, or the share
+ * sheet. All destinations receive a verified stream and remove incomplete
+ * results where the provider permits it.
  */
 interface ExportSink {
     /** One open destination. */
@@ -1282,4 +1291,13 @@ interface ExportSink {
 
     /** Creates a destination for one export. */
     fun create(displayName: String, contentType: String): Destination?
+
+    fun create(
+        displayName: String,
+        contentType: String,
+        target: ExportTarget,
+        uri: String?,
+    ): Destination?
 }
+
+enum class ExportTarget { DEFAULT, FILES, MEDIA_LIBRARY, SHARE }

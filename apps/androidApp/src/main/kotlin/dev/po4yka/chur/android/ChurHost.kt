@@ -83,7 +83,7 @@ internal class ChurHost private constructor(context: Context) {
     val controller = ChurController(
         storageRoot = context.storageRoot(),
         privacy = privacy,
-        exports = ExportDestinations(context.contentResolver),
+        exports = ExportDestinations(context),
         clock = { System.currentTimeMillis() },
         notes = FileNoteStore(context.publicShellFile("notes.json")),
         deviceUnlock =

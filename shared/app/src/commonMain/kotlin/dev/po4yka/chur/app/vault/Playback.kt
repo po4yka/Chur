@@ -73,6 +73,9 @@ fun playbackFor(
     return if (source.playable) source else null
 }
 
+/** `media_class` of an image, `CANONICAL_ENCODING_V1.md` §15.4. */
+const val MEDIA_CLASS_IMAGE = 1
+
 /** `media_class` of a video, `CANONICAL_ENCODING_V1.md` §15.4. */
 const val MEDIA_CLASS_VIDEO = 2
 

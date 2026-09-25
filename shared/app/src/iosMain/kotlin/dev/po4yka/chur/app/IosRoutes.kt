@@ -18,6 +18,8 @@ import dev.po4yka.chur.app.vault.CreateVaultScreen
 import dev.po4yka.chur.app.vault.LibraryTile
 import dev.po4yka.chur.app.vault.AlbumPickerDialog
 import dev.po4yka.chur.app.vault.DeleteSelectionDialog
+import dev.po4yka.chur.app.vault.ExportOptionsDialog
+import dev.po4yka.chur.app.vault.canSaveToPhotos
 import dev.po4yka.chur.app.vault.NewAlbumDialog
 import dev.po4yka.chur.app.vault.TagPickerDialog
 import dev.po4yka.chur.app.vault.RecoveryPhraseScreen
@@ -163,6 +165,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     var choosingAlbum by remember { mutableStateOf(false) }
     var choosingTag by remember { mutableStateOf(false) }
     var confirmingDelete by remember { mutableStateOf(false) }
+    var choosingExport by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val codec = remember { IosMediaCodec() }
     val importer = remember { MediaImporter(codec) }
@@ -267,6 +270,19 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 controller.deleteAll(selectedObjects(page, selection)) { selection = emptySet() }
             },
             onDismiss = { confirmingDelete = false },
+        )
+    }
+    if (choosingExport) {
+        val selected = page.objects.filter { it.id in selection }
+        ExportOptionsDialog(
+            media = selected.isNotEmpty() && selected.all { canSaveToPhotos(it.mediaKind) },
+            files = true,
+            share = true,
+            onChoose = { target ->
+                choosingExport = false
+                controller.exportAll(selectedObjects(page, selection), target) { selection = emptySet() }
+            },
+            onDismiss = { choosingExport = false },
         )
     }
 
@@ -374,9 +390,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             onCreateSecondIdentity = controller::createSecondIdentity,
             onSelectAll = { selection = page.objects.map { it.id }.toSet() },
             onClearSelection = { selection = emptySet() },
-            onExportSelection = {
-                controller.exportAll(selectedObjects(page, selection)) { selection = emptySet() }
-            },
+            onExportSelection = { choosingExport = true },
             onOrganizeSelection = {
                 controller.loadAlbums()
                 choosingAlbum = true
@@ -441,6 +455,7 @@ private fun IosViewerRoute(
     var showDetail by remember(projection.id) { mutableStateOf(false) }
     var waveform by remember(projection.id) { mutableStateOf<ByteArray?>(null) }
     var confirmingDelete by remember(projection.id) { mutableStateOf(false) }
+    var choosingExport by remember(projection.id) { mutableStateOf(false) }
 
     LaunchedEffect(projection.id, generation) {
         // A video's still is its poster frame, which `MEDIA_PIPELINE.md` §6
@@ -486,7 +501,7 @@ private fun IosViewerRoute(
         onToggleFavorite = {
             controller.setFavorite(projection.objectId, !projection.favorite)
         },
-        onExport = { controller.export(projection.objectId) },
+        onExport = { choosingExport = true },
         onDelete = { confirmingDelete = true },
         onToggleDetail = { showDetail = !showDetail },
         player = playback?.let { source ->
@@ -505,6 +520,18 @@ private fun IosViewerRoute(
                 controller.delete(projection.objectId, onDeleted)
             },
             onDismiss = { confirmingDelete = false },
+        )
+    }
+    if (choosingExport) {
+        ExportOptionsDialog(
+            media = canSaveToPhotos(projection.mediaKind),
+            files = true,
+            share = true,
+            onChoose = { target ->
+                choosingExport = false
+                controller.export(projection.objectId, target)
+            },
+            onDismiss = { choosingExport = false },
         )
     }
 }
