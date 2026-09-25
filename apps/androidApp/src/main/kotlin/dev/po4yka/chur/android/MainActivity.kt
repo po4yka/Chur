@@ -75,12 +75,11 @@ class MainActivity : FragmentActivity() {
             }
         }
 
-        // §14 of `DESIGN.md`: leaving the foreground locks under the default
-        // policy, and the privacy cover goes on before the platform takes its
-        // snapshot. `repeatOnLifecycle` at STARTED is what puts the two on the
-        // same transition rather than on two.
+        // Observe only while resumed. After onPause enables the cover, a
+        // background lock can emit Locked before onStop; a STARTED collector
+        // would clear FLAG_SECURE while the window is still visible to recents.
         lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
+            repeatOnLifecycle(Lifecycle.State.RESUMED) {
                 controller.vaultState.collect { current ->
                     host.privacy.setEnabled(current is VaultState.Unlocked)
                 }
