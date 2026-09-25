@@ -78,11 +78,11 @@ Security-critical additions require a dedicated reviewer.
 
 `skills-lock.json` is their manifest. Each entry records the upstream repository, the path within it, a content hash, and the upstream commit the content was taken from. The commit satisfies "record source revision for vendored code" above; a content hash alone proves integrity but not provenance, so it is not a substitute.
 
-Every entry now carries a `commit`. The forty-six vendored skills trace to twenty-six distinct upstream commits, and each recorded commit reproduces the vendored bytes exactly.
+Every entry now carries a `commit`. The forty-six vendored skills trace to forty-five distinct upstream commits, and each recorded commit reproduces the vendored bytes exactly.
 
 Two hashes are recorded, and they are not interchangeable:
 
-- `computedHash` belongs to the external skill-synchronisation tool. It covers a skill's `SKILL.md` and nothing else. Thirty-three of the forty-six skills also vendor a `references/` directory, and for those thirty-three the recorded value reproduces neither the vendored content nor any state of that directory in upstream history. It verifies nothing and is kept only because the tool owns it;
+- `computedHash` belongs to the external skill-synchronisation tool, and this repository does not verify it. As written by `skills` 1.7.0, it covers the whole skill directory, with files in case-insensitive path order, so it is not the same value as `contentHash`. The values an earlier version of the tool recorded before the update to rust-skills `v0.2.0` did not reproduce a skill that also vendors a `references/` directory. It is kept because the tool owns it;
 - `contentHash` is the value this repository verifies. It covers the whole vendored directory: SHA-256 over every file under it, in ascending order of the file's path relative to that directory, feeding for each file the relative path as UTF-8 with `/` separators and then the file bytes.
 
 `scripts/check-vendored-skills.py` recomputes `contentHash` for every entry, reports a skill that is vendored but unlocked or locked but absent, and fails on any mismatch. It runs offline and is a job of the enforcing workflow. With `--verify-upstream` and a clone of each upstream repository it also checks that every recorded commit still reproduces the vendored bytes, which is the provenance half and needs the network.

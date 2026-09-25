@@ -1,8 +1,12 @@
 # Type size reduction
 
-Deep material for the "Type size" section of `skills/rust-hot-path/SKILL.md`: how to read a
+Deep material for the "Type size" section of [SKILL.md](../SKILL.md): how to read a
 `-Zprint-type-sizes` block, what a wrapper costs per field, the exact clippy boundaries, and how
 to guard a size once you measured it.
+
+Sections: read a `-Zprint-type-sizes` block; merge fields under one wrapper; shrink the index
+type; freeze a `Vec` into `Box<[T]>`, and the cost of the conversion; probe the copy boundary;
+the clippy gates; guard the size; order of attack.
 
 All figures below were measured on rustc 1.97.0. Layout is an unspecified implementation detail.
 Re-measure on your toolchain before you depend on a number.
@@ -58,7 +62,9 @@ editing the declaration wins nothing. That is the normal result under the defaul
 
 ### What the dump covers, and what it omits
 
-Produce the dump from a cold build. A warm cache emits nothing for the units rustc skips.
+Produce the dump from a cold build. A warm cache emits nothing for the units rustc skips. Use
+this form to survey the whole crate graph; the `cargo rustc` form in SKILL.md scopes the dump to
+one crate and keeps the build cache.
 
 ```bash
 cargo clean
@@ -73,10 +79,10 @@ prints its block, a build after an edit prints it again, and a build with no edi
 - An uninstantiated generic never appears. `Gen<T>` is absent; each monomorphization such as
   `Gen<u32>` is present. A type missing from the dump is usually a generic that this crate never
   instantiates. Measure it from a crate that does.
-- On stable the flag is rejected with
-  `error: the option "Z" is only accepted on the nightly compiler`.
+- On stable the flag is rejected. rustc 1.98.1 prints
+  ``error: the option `Z` is only accepted on the nightly compiler``.
 - `top-type-sizes` 0.2.1, released 2025-12-26, reformats the same output. Install it with
-  `cargo install top-type-sizes` and pipe the dump through it. Its value is sorting, compaction
+  `cargo install --locked top-type-sizes` and pipe the dump through it. Its value is sorting, compaction
   and filtering. It re-sorts the whole stream by size, which repairs the per-unit order of a
   multi-crate build, and it offers `--remove-wrappers`, `--hide-less` and `--limit`. `-r` flips
   the print direction.
@@ -99,12 +105,14 @@ still rounds up to the alignment. The reorder therefore shrinks the type only wh
 gap is larger than the tail gap it creates. Measured on aarch64-apple-darwin:
 
 ```rust
+pub struct Native { pub a: u8, pub b: u64, pub c: u8 }             // rustc reorders: 16 bytes
 #[repr(C)] pub struct Spread { pub a: u8, pub b: u64, pub c: u8 }  // 7 interior + 7 tail
 #[repr(C)] pub struct Packed { pub b: u64, pub a: u8, pub c: u8 }  // 0 interior + 6 tail
 #[repr(C)] pub struct Small  { pub a: u8, pub b: u32 }             // 3 interior
 #[repr(C)] pub struct Wide   { pub b: u32, pub a: u8 }             // the same 3, now at the tail
-const _: () = assert!(size_of::<Spread>() == 24 && size_of::<Packed>() == 16);
-const _: () = assert!(size_of::<Small>() == 8 && size_of::<Wide>() == 8);
+const _: () = assert!(std::mem::size_of::<Native>() == 16);
+const _: () = assert!(std::mem::size_of::<Spread>() == 24 && std::mem::size_of::<Packed>() == 16);
+const _: () = assert!(std::mem::size_of::<Small>() == 8 && std::mem::size_of::<Wide>() == 8);
 ```
 
 The first pair saves 8 bytes. The second pair saves nothing. So a reorder is worth a try for the
@@ -179,11 +187,23 @@ pub fn endpoint(nodes: &[u64], edge: &Edge) -> u64 {
 ```
 
 `as usize` is a widening cast on a 64-bit target. The cost is a register move, and it is paid once
-per access against 4 bytes saved per stored index. The ceiling is `u32::MAX` elements. Write that
-ceiling in a comment next to the field, because the cast panics nowhere and truncates nowhere; the
-failure arrives later as a collection that cannot grow.
+per access against 4 bytes saved per stored index. The ceiling is `u32::MAX` elements. Narrow on
+store with `u32::try_from(index)` and handle the error, or `.expect("<collection> index fits u32:
+<reason>")` for a real invariant. `index as u32` truncates silently and corrupts the edge. Write the
+ceiling in a comment next to the field.
 
-## The `Vec` to `Box<[T]>` conversion is not always free
+## Freeze a finished `Vec` into `Box<[T]>`
+
+SKILL.md *Type size* gives the word counts of `Vec<T>`, `Box<[T]>`, and `ThinVec<T>`.
+`collect::<Box<[T]>>()` is `collect::<Vec<_>>().into_boxed_slice()` in std, so it is not a
+cheaper path. It allocates once only when std knows the exact length up front: a range, a
+slice, a `Vec`, and `map` or `copied` over one. After `filter` or another inexact adaptor it runs
+the growth ladder and then one shrinking `realloc`. Measured on 1.98.1, 500 filtered `u32` cost 1
+allocation and 8 reallocations in both forms. When you know the final length, write
+`Vec::with_capacity(n)`, `extend`, then `into_boxed_slice()`: capacity equals length, so the
+conversion does not reallocate.
+
+### The conversion is not always free
 
 `Vec::into_boxed_slice` calls `shrink_to_fit` when capacity exceeds length. That issues a
 `realloc`, and a `realloc` does not always move the buffer. Measured with a `Vec<u32>` at length 3
@@ -270,7 +290,7 @@ pub enum Frame {
     Header([u8; 300]),
     Body([u8; 300]),
 }
-const _: () = assert!(size_of::<Frame>() == 301);
+const _: () = assert!(std::mem::size_of::<Frame>() == 301);
 ```
 
 Boxing one variant here wins nothing. Box both, or split `Frame` into two types and let the caller
@@ -299,12 +319,13 @@ pub struct Node {
 
 // 16 bytes measured on rustc 1.97.0, aarch64-apple-darwin.
 #[cfg(target_pointer_width = "64")]
-const _: () = assert!(size_of::<Node>() == 16);
+const _: () = assert!(std::mem::size_of::<Node>() == 16);
 ```
 
-- `size_of` is in the edition-2024 prelude. The assert needs no import and no dependency.
+- `size_of` is in the prelude since Rust 1.80. Write `std::mem::size_of` when the MSRV is
+  older. No external dependency is required.
 - A mismatch fails the build with
-  `error[E0080]: evaluation panicked: assertion failed: size_of::<Node>() == 16`.
+  `error[E0080]: evaluation panicked: assertion failed: std::mem::size_of::<Node>() == 16`.
 - Gate it. The same assertion without the `cfg` compiles on aarch64-apple-darwin and fails with
   E0080 when the identical file is cross-compiled to `i686-linux-android`, because the pointer is
   4 bytes there.
