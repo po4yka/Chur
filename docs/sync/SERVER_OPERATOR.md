@@ -63,7 +63,7 @@ A sharing POST body is `record_length:u32be || signed_record || outer_operation`
 
 The package response has one `chur_sharing_accept` input for each current grant. Each package contains the complete collection membership chain and the minimum closed issuer operation prefixes needed to authenticate it. Mobile clients treat package bytes as opaque and pass them to the core.
 
-Upload and download checksums are 64 hexadecimal SHA-256 characters. Upload ranges are sequential and at most 16 MiB. An exact range replay is idempotent. Upload progress is `received:u64be || expected:u64be || complete:u8`. A signed deletion route does not accept a transport token as authority; it verifies `ServerDeletionAuthorizationV1` against current device membership.
+Upload and download checksums are 64 hexadecimal SHA-256 characters. Upload ranges are sequential and at most 16 MiB. An exact range replay is idempotent. Upload progress is `received:u64be || expected:u64be || complete:u8`. A signed deletion route does not accept a transport token as authority; it verifies `ServerDeletionAuthorizationV1` against current device membership. The signer key comes from that membership, so the route rebuilds it before it verifies the signature. Until the signature verifies, a failure that depends on stored state is `AUTHENTICATION_FAILED`: an unknown vault, an unenrolled or revoked signer, a wrong signature, a failed storage read, and stored membership that does not replay all get the same answer. A malformed body still gets its decoding status. The replay rule of [`SYNC_PROTOCOL_V1.md`](SYNC_PROTOCOL_V1.md) §9.1 is the exception: an exact replay succeeds, and a reused request identifier is `CONFLICT`.
 
 ## Network boundary
 

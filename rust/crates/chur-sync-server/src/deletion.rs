@@ -20,6 +20,17 @@ pub enum DeletionOutcome {
 
 impl ReferenceServer {
     /// Verifies and applies one object or whole-account deletion authorization.
+    ///
+    /// The request carries no transport token, so its signature is the only
+    /// proof of authority, and the signer key comes from the stored membership.
+    /// The signature cannot be checked before that membership is rebuilt.
+    /// Until the signature verifies, every failure is therefore
+    /// `AUTHENTICATION_FAILED`, as in `authenticate_transport`: an unknown
+    /// vault, a failed storage read, and stored membership that does not
+    /// replay look the same as a wrong key (`ERROR_MODEL.md` principle 2).
+    /// The replay rule of `SYNC_PROTOCOL_V1.md` §9.1 is the one exception: an
+    /// exact replay succeeds, and a reused request identifier is `CONFLICT`.
+    /// Only an authenticated request can get `CATALOG_CORRUPT`.
     pub fn apply_deletion(
         &mut self,
         authorization: &ServerDeletionAuthorization,
@@ -36,7 +47,7 @@ impl ReferenceServer {
                 |row| row.get::<_, Vec<u8>>(0),
             )
             .optional()
-            .map_err(|error| map_sqlite(error, "deletion replay lookup failed"))?
+            .map_err(|_| signer_not_accepted())?
         {
             ensure!(
                 stored == authorization.encode(),
@@ -46,7 +57,8 @@ impl ReferenceServer {
             return Ok(DeletionOutcome::Duplicate);
         }
 
-        let membership = super::relay::membership_state(&self.db, authorization.vault_id())?;
+        let membership = super::relay::membership_state(&self.db, authorization.vault_id())
+            .map_err(|_| signer_not_accepted())?;
         let device = membership
             .device(authorization.device_id())
             .ok_or_else(|| {
@@ -181,6 +193,13 @@ impl ReferenceServer {
             .map_err(|error| map_sqlite(error, "account deletion checkpoint failed"))?;
         Ok(())
     }
+}
+
+fn signer_not_accepted() -> Error {
+    Error::new(
+        ChurStatus::AuthenticationFailed,
+        "deletion signer is not accepted",
+    )
 }
 
 pub(super) fn account_was_deleted(db: &Connection, vault_id: &Id) -> Result<bool> {
@@ -440,6 +459,106 @@ mod tests {
             server
                 .accept_initial_membership(&enrollment, &operation)
                 .is_err()
+        );
+    }
+
+    /// A deletion that is not authenticated learns nothing about stored state.
+    ///
+    /// The signer key comes from the stored membership, so damaged membership
+    /// authenticates no request. Before this rule, a caller with no device key
+    /// got `CATALOG_CORRUPT` for damaged membership and `NOT_FOUND` for an
+    /// unknown vault. The replay rule of `SYNC_PROTOCOL_V1.md` §9.1 still
+    /// answers before authentication.
+    #[test]
+    fn an_unauthenticated_deletion_learns_nothing_about_stored_state() {
+        let root = crate::tests::TestRoot::new();
+        let (vault, device, store, transfer) = (id(1), id(2), id(10), id(9));
+        let key = DeviceSigningKey::from_seed([3; 32]);
+        let enrollment = EnrollmentRecord::initial(vault, device, key.verifying_key(), [4; 32])
+            .expect("enrollment")
+            .sign(&key);
+        let operation = Operation::new(
+            id(5),
+            vault,
+            device,
+            1,
+            [0; 32],
+            Vec::new(),
+            id(6),
+            [vec![7; 24], vec![8; 16]].concat(),
+            [0; 64],
+        )
+        .expect("operation")
+        .sign(&key);
+        let bytes = b"opaque";
+        let checksum: [u8; 32] = Sha256::digest(bytes).into();
+        let mut server = ReferenceServer::open(&root.0, 32, 32_768).expect("server");
+        server
+            .accept_initial_membership(&enrollment, &operation)
+            .expect("bootstrap");
+        server
+            .begin_upload(vault, transfer, store, bytes.len() as u64)
+            .expect("begin upload");
+        server
+            .append_upload(vault, transfer, 0, bytes, checksum)
+            .expect("upload");
+        server
+            .finish_upload(vault, transfer, checksum)
+            .expect("finish");
+        let signed = |request: u8, signer: &DeviceSigningKey| {
+            ServerDeletionAuthorization::object(
+                id(request),
+                vault,
+                device,
+                store,
+                operation.digest(),
+            )
+            .expect("authorization")
+            .sign(signer)
+        };
+        let applied = signed(11, &key);
+        assert_eq!(
+            server
+                .apply_deletion(&applied)
+                .expect("authenticated delete"),
+            DeletionOutcome::Deleted
+        );
+
+        let mut initial = enrollment.encode();
+        *initial.last_mut().expect("signature") ^= 1;
+        server
+            .db
+            .execute(
+                "UPDATE membership_records SET record = ?1 WHERE vault_id = ?2",
+                params![initial, vault.as_bytes().as_slice()],
+            )
+            .expect("damaged membership");
+        let observed = [
+            server.apply_deletion(&signed(12, &DeviceSigningKey::from_seed([14; 32]))),
+            server.apply_deletion(&signed(13, &key)),
+            server.apply_deletion(
+                &ServerDeletionAuthorization::account(id(15), id(20), device).sign(&key),
+            ),
+            server.apply_deletion(&applied),
+            server.apply_deletion(
+                &ServerDeletionAuthorization::account(id(11), vault, device).sign(&key),
+            ),
+        ]
+        .map(|result| result.map_err(|error| error.status()));
+        assert_eq!(
+            observed,
+            [
+                // A wrong key.
+                Err(ChurStatus::AuthenticationFailed),
+                // The enrolled key: membership does not replay, so no key verifies.
+                Err(ChurStatus::AuthenticationFailed),
+                // An unknown vault.
+                Err(ChurStatus::AuthenticationFailed),
+                // An exact replay.
+                Ok(DeletionOutcome::Duplicate),
+                // A reused request identifier.
+                Err(ChurStatus::Conflict),
+            ]
         );
     }
 
