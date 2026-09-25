@@ -9,7 +9,7 @@
 jdk = "21"
 kotlin = "2.4.10"
 agp = "9.3.2"
-composeMultiplatform = "1.11.1"
+composeMultiplatform = "1.12.1"
 # Compose Multiplatform Material 3 ships on its own version line, not the
 # release-train number above.
 composeMaterial3 = "1.9.0"
