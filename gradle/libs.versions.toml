@@ -7,7 +7,7 @@
 [versions]
 # Toolchain
 jdk = "21"
-kotlin = "2.4.10"
+kotlin = "2.4.20"
 agp = "9.3.2"
 composeMultiplatform = "1.11.1"
 # Compose Multiplatform Material 3 ships on its own version line, not the
