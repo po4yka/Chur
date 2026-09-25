@@ -5,7 +5,7 @@ use chur_sync_protocol::operation::Operation;
 use chur_sync_protocol::state::{DeviceStatus, MembershipState};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
-use super::{ReferenceServer, from_sqlite, map_sqlite, to_sqlite};
+use super::{ReferenceServer, corrupt_row, from_sqlite, map_sqlite, to_sqlite};
 
 const ENROLLMENT_KIND: i64 = 1;
 const REVOCATION_KIND: i64 = 2;
@@ -590,7 +590,8 @@ pub(super) fn membership_state(db: &Connection, vault_id: &Id) -> Result<Members
         CatalogCorrupt,
         "initial membership kind is invalid"
     );
-    let initial = EnrollmentRecord::decode(&record)?;
+    let initial = EnrollmentRecord::decode(&record)
+        .map_err(corrupt_row("stored initial membership is invalid"))?;
     let mut state = MembershipState::bootstrap(&initial)?;
     ensure!(
         initial.vault_id() == vault_id
@@ -601,15 +602,18 @@ pub(super) fn membership_state(db: &Connection, vault_id: &Id) -> Result<Members
         "initial membership association is invalid"
     );
     for (kind, outer_device, outer_sequence, record) in records {
-        let outer_device = Id::from_slice(&outer_device)?;
+        let outer_device = Id::from_slice(&outer_device)
+            .map_err(corrupt_row("stored outer device id is invalid"))?;
         let outer_sequence = from_sqlite(outer_sequence, "stored outer sequence is invalid")?;
         match kind {
             ENROLLMENT_KIND => {
-                let enrollment = EnrollmentRecord::decode(&record)?;
+                let enrollment = EnrollmentRecord::decode(&record)
+                    .map_err(corrupt_row("stored enrollment is invalid"))?;
                 state.accept_enrollment(&enrollment, &outer_device, outer_sequence)?;
             }
             REVOCATION_KIND => {
-                let revocation = RevocationRecord::decode(&record)?;
+                let revocation = RevocationRecord::decode(&record)
+                    .map_err(corrupt_row("stored revocation is invalid"))?;
                 state.accept_revocation(&revocation, &outer_device)?;
             }
             _ => {
