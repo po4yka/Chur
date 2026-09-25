@@ -645,7 +645,7 @@ fn hex<const N: usize>(value: &str) -> chur_core::Result<[u8; N]> {
         "hex value has the wrong length"
     );
     let mut bytes = [0; N];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in value.as_bytes().chunks(2).enumerate() {
         bytes[index] = (nibble(pair[0])? << 4) | nibble(pair[1])?;
     }
     Ok(bytes)

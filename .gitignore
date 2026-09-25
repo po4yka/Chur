@@ -14,6 +14,12 @@ build/
 .kotlin/
 local.properties
 
+# Android release signing material (the active key lives outside this repo).
+*.jks
+*.keystore
+*.p12
+*.pass
+
 # Android Studio / IntelliJ
 .idea/
 *.iml

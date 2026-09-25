@@ -209,9 +209,9 @@ mod tests {
     #[test]
     fn the_vendored_wordlist_is_the_published_one() {
         let digest = Sha256::digest(WORDLIST_SOURCE.as_bytes());
+        let digest_hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
         assert_eq!(
-            format!("{digest:x}"),
-            "2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda",
+            digest_hex, "2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda",
             "the vendored BIP-39 English list is not the published one"
         );
         let list = wordlist();

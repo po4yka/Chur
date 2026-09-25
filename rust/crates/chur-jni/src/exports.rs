@@ -22,9 +22,9 @@ use chur_ffi::records::{
     ChurQueryV1, ChurRuntimeConfigV1, ChurScanRequestV1, ChurUnlockRequestV1,
 };
 use chur_ffi::sync::ChurSyncReportV1;
-use jni::JNIEnv;
 use jni::objects::{JByteArray, JByteBuffer, JClass, JIntArray, JLongArray, JString};
 use jni::sys::{jboolean, jint, jlong};
+use jni::{Env, EnvUnowned};
 
 use crate::convert::{
     INTERNAL_FAILURE, INVALID_INPUT, byte_array, direct_buffer, fixed_array, string_bytes,
@@ -47,7 +47,7 @@ const CURSOR_LEN: usize = 42;
 /// `abiVersionMajor` of the handshake.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_abiVersionMajor(
-    _env: JNIEnv<'_>,
+    _env: EnvUnowned<'_>,
     _class: JClass<'_>,
 ) -> jint {
     crate::convert::contain(0, || chur_ffi::chur_abi_version_major() as jint)
@@ -56,7 +56,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_abiVersionMajor(
 /// `abiVersionMinor` of the handshake.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_abiVersionMinor(
-    _env: JNIEnv<'_>,
+    _env: EnvUnowned<'_>,
     _class: JClass<'_>,
 ) -> jint {
     crate::convert::contain(0, || chur_ffi::chur_abi_version_minor() as jint)
@@ -65,7 +65,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_abiVersionMinor(
 /// `capabilities` of the handshake.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_capabilities(
-    _env: JNIEnv<'_>,
+    _env: EnvUnowned<'_>,
     _class: JClass<'_>,
 ) -> jlong {
     crate::convert::contain(0, || chur_ffi::chur_capabilities() as jlong)
@@ -74,7 +74,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_capabilities(
 /// `objectFormatMin` of the handshake.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectFormatMin(
-    _env: JNIEnv<'_>,
+    _env: EnvUnowned<'_>,
     _class: JClass<'_>,
 ) -> jint {
     crate::convert::contain(0xffff, || jint::from(chur_ffi::chur_object_format_min()))
@@ -83,7 +83,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectFormatMin(
 /// `objectFormatMax` of the handshake.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectFormatMax(
-    _env: JNIEnv<'_>,
+    _env: EnvUnowned<'_>,
     _class: JClass<'_>,
 ) -> jint {
     crate::convert::contain(0, || jint::from(chur_ffi::chur_object_format_max()))
@@ -92,7 +92,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectFormatMax(
 /// `keySlotFormatMin` of the handshake.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_keySlotFormatMin(
-    _env: JNIEnv<'_>,
+    _env: EnvUnowned<'_>,
     _class: JClass<'_>,
 ) -> jint {
     crate::convert::contain(0xffff, || jint::from(chur_ffi::chur_key_slot_format_min()))
@@ -101,7 +101,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_keySlotFormatMin(
 /// `keySlotFormatMax` of the handshake.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_keySlotFormatMax(
-    _env: JNIEnv<'_>,
+    _env: EnvUnowned<'_>,
     _class: JClass<'_>,
 ) -> jint {
     crate::convert::contain(0, || jint::from(chur_ffi::chur_key_slot_format_max()))
@@ -110,7 +110,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_keySlotFormatMax(
 /// `buildFlavor` of the handshake.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_buildFlavor(
-    _env: JNIEnv<'_>,
+    _env: EnvUnowned<'_>,
     _class: JClass<'_>,
 ) -> jint {
     crate::convert::contain(0, || chur_ffi::chur_build_flavor() as jint)
@@ -119,7 +119,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_buildFlavor(
 /// Whether a status value is one this build allocates.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_statusIsKnown(
-    _env: JNIEnv<'_>,
+    _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     value: jint,
 ) -> jboolean {
@@ -135,13 +135,13 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_statusIsKnown(
 /// Opens the process runtime over a storage root.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_runtimeOpen<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     root: JString<'local>,
     out_runtime: JLongArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(bytes) = string_bytes(&mut env, &root) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(bytes) = string_bytes(env, &root) else {
             return INVALID_INPUT;
         };
         let config = ChurRuntimeConfigV1 {
@@ -155,14 +155,14 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_runtimeOpen<'local>(
         // SAFETY: `config` is a live local and `handle` is a live local, so both
         // satisfy the pointer contract of the export for the length of the call.
         let status = unsafe { chur_ffi::api::chur_runtime_open(&config, &mut handle) };
-        finish_handle(&mut env, status, &out_runtime, handle)
+        finish_handle(env, status, &out_runtime, handle)
     })
 }
 
 /// Closes the runtime and every handle it owns.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_runtimeClose(
-    _env: JNIEnv<'_>,
+    _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     runtime: jlong,
 ) -> jint {
@@ -175,7 +175,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_runtimeClose(
 /// Stages one opaque sync record while the vault may be locked.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_syncStage<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     runtime: jlong,
     vault_id: JByteArray<'local>,
@@ -184,11 +184,11 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_syncStage<'local>(
     record: JByteBuffer<'local>,
     length: jint,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(vault_id) = fixed_array(&mut env, &vault_id, ID_LEN) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(vault_id) = fixed_array(env, &vault_id, ID_LEN) else {
             return INVALID_INPUT;
         };
-        let Some((address, capacity)) = direct_buffer(&env, &record) else {
+        let Some((address, capacity)) = direct_buffer(env, &record) else {
             return INVALID_INPUT;
         };
         let (Ok(kind), Ok(staged_at_ms), Ok(length)) = (
@@ -218,14 +218,14 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_syncStage<'local>(
 /// Processes the current unlocked vault's sync inbox.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_syncProcess<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     now_ms: jlong,
     out_counts: JLongArray<'local>,
     out_status: JIntArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
         let Ok(now_ms) = u64::try_from(now_ms) else {
             return INVALID_INPUT;
         };
@@ -244,7 +244,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_syncProcess<'local>(
             return status;
         }
         if !write_longs(
-            &mut env,
+            env,
             &out_counts,
             &[
                 report.applied as jlong,
@@ -253,7 +253,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_syncProcess<'local>(
                 report.rejected as jlong,
             ],
             0,
-        ) || !write_ints(&mut env, &out_status, &[report.first_rejection])
+        ) || !write_ints(env, &out_status, &[report.first_rejection])
         {
             return INVALID_INPUT;
         }
@@ -264,12 +264,12 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_syncProcess<'local>(
 /// Whether the storage root holds a vault.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultPresent<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     runtime: jlong,
     out_present: JByteArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
         let mut present = 0u8;
         // SAFETY: `present` is a live local.
         let status =
@@ -277,7 +277,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultPresent<'local>(
         if status != 0 {
             return status;
         }
-        if write_bytes(&mut env, &out_present, &[present]) {
+        if write_bytes(env, &out_present, &[present]) {
             0
         } else {
             INVALID_INPUT
@@ -288,7 +288,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultPresent<'local>(
 /// Begins vault creation.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultCreateBegin<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     runtime: jlong,
     password: JByteArray<'local>,
@@ -297,8 +297,8 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultCreateBegin<'local>
     parallelism: jint,
     out_creation: JLongArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(bytes) = byte_array(&mut env, &password) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(bytes) = byte_array(env, &password) else {
             return INVALID_INPUT;
         };
         let request = ChurCreateRequestV1 {
@@ -316,21 +316,21 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultCreateBegin<'local>
         let status = unsafe {
             chur_ffi::product::chur_vault_create_begin(handle_of(runtime), &request, &mut handle)
         };
-        finish_handle(&mut env, status, &out_creation, handle)
+        finish_handle(env, status, &out_creation, handle)
     })
 }
 
 /// Offers the recovery slot during creation.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultCreationAddRecoverySlot<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     creation: jlong,
     destination: JByteBuffer<'local>,
     out_written: JIntArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some((address, capacity)) = direct_buffer(&env, &destination) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
             return INVALID_INPUT;
         };
         let mut written = 0usize;
@@ -343,32 +343,32 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultCreationAddRecovery
                 &mut written,
             )
         };
-        finish_written(&mut env, status, &out_written, written)
+        finish_written(env, status, &out_written, written)
     })
 }
 
 /// Reaches `ACTIVE` and opens the session.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultCreationActivate<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     creation: jlong,
     out_session: JLongArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
         let mut handle = 0u64;
         // SAFETY: `handle` is a live local.
         let status = unsafe {
             chur_ffi::product::chur_vault_creation_activate(handle_of(creation), &mut handle)
         };
-        finish_handle(&mut env, status, &out_session, handle)
+        finish_handle(env, status, &out_session, handle)
     })
 }
 
 /// Abandons a creation.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultCreationAbandon(
-    _env: JNIEnv<'_>,
+    _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     creation: jlong,
 ) -> jint {
@@ -381,15 +381,15 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultCreationAbandon(
 /// Unlocks a vault.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultUnlock<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     runtime: jlong,
     factor: jint,
     secret: JByteArray<'local>,
     out_session: JLongArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(bytes) = byte_array(&mut env, &secret) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(bytes) = byte_array(env, &secret) else {
             return INVALID_INPUT;
         };
         let Ok(factor) = u8::try_from(factor) else {
@@ -408,14 +408,14 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultUnlock<'local>(
         // SAFETY: `request` and `handle` are live locals.
         let status =
             unsafe { chur_ffi::api::chur_vault_unlock(handle_of(runtime), &request, &mut handle) };
-        finish_handle(&mut env, status, &out_session, handle)
+        finish_handle(env, status, &out_session, handle)
     })
 }
 
 /// Locks a session.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultLock(
-    _env: JNIEnv<'_>,
+    _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session: jlong,
     reason: jint,
@@ -429,7 +429,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultLock(
 /// Closes a session handle.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sessionClose(
-    _env: JNIEnv<'_>,
+    _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session: jlong,
 ) -> jint {
@@ -442,14 +442,14 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sessionClose(
 /// Provisions or returns the ordinary local collection-sharing identity.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingIdentity<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     destination: JByteBuffer<'local>,
     out_written: JIntArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some((address, capacity)) = direct_buffer(&env, &destination) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
             return INVALID_INPUT;
         };
         let mut written = 0usize;
@@ -462,14 +462,14 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingIdentity<'local>(
                 &mut written,
             )
         };
-        finish_written(&mut env, status, &out_written, written)
+        finish_written(env, status, &out_written, written)
     })
 }
 
 /// Prepares one recipient membership and collection-key grant.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingPrepare<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     collection_id: JByteArray<'local>,
@@ -479,11 +479,11 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingPrepare<'local>(
     destination: JByteBuffer<'local>,
     out_written: JIntArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(collection_id) = fixed_array(&mut env, &collection_id, ID_LEN) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(collection_id) = fixed_array(env, &collection_id, ID_LEN) else {
             return INVALID_INPUT;
         };
-        let Some(recipient_enrollment) = byte_array(&mut env, &recipient_enrollment) else {
+        let Some(recipient_enrollment) = byte_array(env, &recipient_enrollment) else {
             return INVALID_INPUT;
         };
         let Ok(recipient_enrollment_length) = u32::try_from(recipient_enrollment.len()) else {
@@ -492,7 +492,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingPrepare<'local>(
         let Ok(permissions) = u8::try_from(permissions) else {
             return INVALID_INPUT;
         };
-        let Some((address, capacity)) = direct_buffer(&env, &destination) else {
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
             return INVALID_INPUT;
         };
         let mut written = 0usize;
@@ -504,20 +504,20 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingPrepare<'local>(
                 recipient_enrollment.as_ptr(),
                 recipient_enrollment_length,
                 permissions,
-                u8::from(fingerprint_verified != 0),
+                u8::from(fingerprint_verified),
                 address,
                 capacity,
                 &mut written,
             )
         };
-        finish_written(&mut env, status, &out_written, written)
+        finish_written(env, status, &out_written, written)
     })
 }
 
 /// Prepares a grant for one authenticated recipient device.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingPrepareDevice<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     collection_id: JByteArray<'local>,
@@ -529,14 +529,14 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingPrepareDevice<'lo
     destination: JByteBuffer<'local>,
     out_written: JIntArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(collection_id) = fixed_array(&mut env, &collection_id, ID_LEN) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(collection_id) = fixed_array(env, &collection_id, ID_LEN) else {
             return INVALID_INPUT;
         };
-        let Some(recipient_device_id) = fixed_array(&mut env, &recipient_device_id, ID_LEN) else {
+        let Some(recipient_device_id) = fixed_array(env, &recipient_device_id, ID_LEN) else {
             return INVALID_INPUT;
         };
-        let Some((evidence_address, evidence_capacity)) = direct_buffer(&env, &recipient_evidence)
+        let Some((evidence_address, evidence_capacity)) = direct_buffer(env, &recipient_evidence)
         else {
             return INVALID_INPUT;
         };
@@ -552,7 +552,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingPrepareDevice<'lo
         let Ok(permissions) = u8::try_from(permissions) else {
             return INVALID_INPUT;
         };
-        let Some((address, capacity)) = direct_buffer(&env, &destination) else {
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
             return INVALID_INPUT;
         };
         let mut written = 0usize;
@@ -565,20 +565,20 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingPrepareDevice<'lo
                 evidence_length,
                 recipient_device_id.as_ptr(),
                 permissions,
-                u8::from(fingerprint_verified != 0),
+                u8::from(fingerprint_verified),
                 address,
                 capacity,
                 &mut written,
             )
         };
-        finish_written(&mut env, status, &out_written, written)
+        finish_written(env, status, &out_written, written)
     })
 }
 
 /// Revokes one recipient and writes one bounded rotation batch.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingRevoke<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     collection_id: JByteArray<'local>,
@@ -588,20 +588,20 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingRevoke<'local>(
     destination: JByteBuffer<'local>,
     out_written: JIntArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(collection_id) = fixed_array(&mut env, &collection_id, ID_LEN) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(collection_id) = fixed_array(env, &collection_id, ID_LEN) else {
             return INVALID_INPUT;
         };
-        let Some(recipient_vault_id) = fixed_array(&mut env, &recipient_vault_id, ID_LEN) else {
+        let Some(recipient_vault_id) = fixed_array(env, &recipient_vault_id, ID_LEN) else {
             return INVALID_INPUT;
         };
-        let Some(recipient_device_id) = fixed_array(&mut env, &recipient_device_id, ID_LEN) else {
+        let Some(recipient_device_id) = fixed_array(env, &recipient_device_id, ID_LEN) else {
             return INVALID_INPUT;
         };
         let Ok(accepted_at_ms) = u64::try_from(accepted_at_ms) else {
             return INVALID_INPUT;
         };
-        let Some((address, capacity)) = direct_buffer(&env, &destination) else {
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
             return INVALID_INPUT;
         };
         let mut written = 0usize;
@@ -618,21 +618,21 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingRevoke<'local>(
                 &mut written,
             )
         };
-        finish_written(&mut env, status, &out_written, written)
+        finish_written(env, status, &out_written, written)
     })
 }
 
 /// Authenticates and installs one recipient share bundle.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingAccept<'local>(
-    env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     bundle: JByteBuffer<'local>,
     length: jint,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some((address, capacity)) = direct_buffer(&env, &bundle) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((address, capacity)) = direct_buffer(env, &bundle) else {
             return INVALID_INPUT;
         };
         let Ok(length) = usize::try_from(length) else {
@@ -656,7 +656,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingAccept<'local>(
 /// Writes one page into a direct buffer.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_catalogQuery<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     scope: jint,
@@ -669,14 +669,14 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_catalogQuery<'local>(
     destination: JByteBuffer<'local>,
     out_written: JIntArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(scope_bytes) = fixed_array(&mut env, &scope_id, ID_LEN) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(scope_bytes) = fixed_array(env, &scope_id, ID_LEN) else {
             return INVALID_INPUT;
         };
         let mut scope_array = [0u8; ID_LEN];
         scope_array.copy_from_slice(&scope_bytes);
 
-        let cursor_bytes = byte_array(&mut env, &cursor);
+        let cursor_bytes = byte_array(env, &cursor);
         let mut cursor_array = [0u8; CURSOR_LEN];
         let cursor_present = match &cursor_bytes {
             Some(bytes) if bytes.len() == CURSOR_LEN => {
@@ -686,8 +686,8 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_catalogQuery<'local>(
             Some(_) => return INVALID_INPUT,
             None => 0,
         };
-        let terms_bytes = byte_array(&mut env, &terms).unwrap_or_default();
-        let Some((address, capacity)) = direct_buffer(&env, &destination) else {
+        let terms_bytes = byte_array(env, &terms).unwrap_or_default();
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
             return INVALID_INPUT;
         };
         let (Ok(scope), Ok(sort), Ok(kinds), Ok(limit)) = (
@@ -724,7 +724,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_catalogQuery<'local>(
                 &mut written,
             )
         };
-        finish_written(&mut env, status, &out_written, written)
+        finish_written(env, status, &out_written, written)
     })
 }
 
@@ -735,7 +735,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_catalogQuery<'local>(
 /// Starts an import from a descriptor.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_importBegin<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     source_fd: jint,
@@ -749,11 +749,11 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_importBegin<'local>(
     original_filename: JString<'local>,
     out_import: JLongArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(content) = string_bytes(&mut env, &content_type) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(content) = string_bytes(env, &content_type) else {
             return INVALID_INPUT;
         };
-        let filename = string_bytes(&mut env, &original_filename);
+        let filename = string_bytes(env, &original_filename);
         let (Ok(media_class), Ok(width), Ok(height)) = (
             u8::try_from(media_class),
             u32::try_from(width),
@@ -794,22 +794,22 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_importBegin<'local>(
         let status = unsafe {
             chur_ffi::api::chur_import_begin(handle_of(session), source_fd, &request, &mut handle)
         };
-        finish_handle(&mut env, status, &out_import, handle)
+        finish_handle(env, status, &out_import, handle)
     })
 }
 
 /// Starts an export to a descriptor.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_exportBegin<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     object_id: JByteArray<'local>,
     destination_fd: jint,
     out_export: JLongArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(reference) = object_reference(&mut env, &object_id) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(reference) = object_reference(env, &object_id) else {
             return INVALID_INPUT;
         };
         let mut handle = 0u64;
@@ -822,23 +822,23 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_exportBegin<'local>(
                 &mut handle,
             )
         };
-        finish_handle(&mut env, status, &out_export, handle)
+        finish_handle(env, status, &out_export, handle)
     })
 }
 
 /// Starts an integrity scan.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_integrityScanBegin<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     object_id: JByteArray<'local>,
     out_scan: JLongArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
         // A null identifier means every object, which the JVM expresses as null
         // rather than as a flag the caller could set inconsistently.
-        let single = byte_array(&mut env, &object_id);
+        let single = byte_array(env, &object_id);
         let mut request = ChurScanRequestV1 {
             single_object: 0,
             reserved: [0; 7],
@@ -856,21 +856,21 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_integrityScanBegin<'loca
         let status = unsafe {
             chur_ffi::api::chur_integrity_scan_begin(handle_of(session), &request, &mut handle)
         };
-        finish_handle(&mut env, status, &out_scan, handle)
+        finish_handle(env, status, &out_scan, handle)
     })
 }
 
 /// Copies an operation's progress snapshot.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_operationPoll<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     operation: jlong,
     out_counts: JLongArray<'local>,
     out_states: JIntArray<'local>,
     out_object_id: JByteArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
         let mut progress = ChurProgressV1 {
             kind: 0,
             stage: 0,
@@ -894,9 +894,9 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_operationPoll<'local>(
             jint::from(progress.terminal),
             progress.status,
         ];
-        if write_longs(&mut env, &out_counts, &counts, 0)
-            && write_ints(&mut env, &out_states, &states)
-            && write_bytes(&mut env, &out_object_id, &progress.object_id)
+        if write_longs(env, &out_counts, &counts, 0)
+            && write_ints(env, &out_states, &states)
+            && write_bytes(env, &out_object_id, &progress.object_id)
         {
             0
         } else {
@@ -908,7 +908,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_operationPoll<'local>(
 /// Cancels an operation.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_operationCancel(
-    _env: JNIEnv<'_>,
+    _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     operation: jlong,
 ) -> jint {
@@ -921,7 +921,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_operationCancel(
 /// Closes an operation handle.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_operationClose(
-    _env: JNIEnv<'_>,
+    _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     operation: jlong,
 ) -> jint {
@@ -938,15 +938,15 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_operationClose(
 /// Opens a random-access reader.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderOpen<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     object_id: JByteArray<'local>,
     stream_kind: jint,
     out_reader: JLongArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(reference) = object_reference(&mut env, &object_id) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(reference) = object_reference(env, &object_id) else {
             return INVALID_INPUT;
         };
         let Ok(kind) = u32::try_from(stream_kind) else {
@@ -962,19 +962,19 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderOpen<'local>
                 &mut handle,
             )
         };
-        finish_handle(&mut env, status, &out_reader, handle)
+        finish_handle(env, status, &out_reader, handle)
     })
 }
 
 /// Writes the authenticated plaintext size.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderSize<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     reader: jlong,
     out_size: JLongArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
         let mut size = 0u64;
         // SAFETY: `size` is a live local.
         let status =
@@ -982,7 +982,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderSize<'local>
         if status != 0 {
             return status;
         }
-        if write_long(&mut env, &out_size, 0, size as jlong) {
+        if write_long(env, &out_size, 0, size as jlong) {
             0
         } else {
             INVALID_INPUT
@@ -996,13 +996,13 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderSize<'local>
 /// padding is the host compiler's and the JVM has no equivalent shape.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderContentInfo<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     reader: jlong,
     out_numbers: JLongArray<'local>,
     out_content_type: JByteArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
         let mut info = ChurContentInfoV1 {
             plaintext_size: 0,
             content_type: [0; 64],
@@ -1028,12 +1028,8 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderContentInfo<
             .iter()
             .position(|byte| *byte == 0)
             .unwrap_or(info.content_type.len());
-        if write_longs(&mut env, &out_numbers, &numbers, 0)
-            && write_bytes(
-                &mut env,
-                &out_content_type,
-                &info.content_type[..terminator],
-            )
+        if write_longs(env, &out_numbers, &numbers, 0)
+            && write_bytes(env, &out_content_type, &info.content_type[..terminator])
         {
             0
         } else {
@@ -1045,15 +1041,15 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderContentInfo<
 /// Reads a plaintext range into a direct buffer.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderReadAt<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     reader: jlong,
     offset: jlong,
     destination: JByteBuffer<'local>,
     out_written: JIntArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some((address, capacity)) = direct_buffer(&env, &destination) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
             return INVALID_INPUT;
         };
         if offset < 0 {
@@ -1071,19 +1067,19 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderReadAt<'loca
                 &mut written,
             )
         };
-        finish_written(&mut env, status, &out_written, written)
+        finish_written(env, status, &out_written, written)
     })
 }
 
 /// Runs complete verification and writes the state it reached.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderVerifyComplete<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     reader: jlong,
     out_state: JIntArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
         let mut state = 0u32;
         // SAFETY: `state` is a live local.
         let status = unsafe {
@@ -1092,7 +1088,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderVerifyComple
         if status != 0 {
             return status;
         }
-        if write_ints(&mut env, &out_state, &[state as jint]) {
+        if write_ints(env, &out_state, &[state as jint]) {
             0
         } else {
             INVALID_INPUT
@@ -1103,7 +1099,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderVerifyComple
 /// Closes a reader handle.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderClose(
-    _env: JNIEnv<'_>,
+    _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     reader: jlong,
 ) -> jint {
@@ -1126,7 +1122,7 @@ const fn handle_of(value: jlong) -> u64 {
 }
 
 /// Builds an object reference from a 16-byte array.
-fn object_reference(env: &mut JNIEnv<'_>, object_id: &JByteArray<'_>) -> Option<ChurObjectRefV1> {
+fn object_reference(env: &mut Env<'_>, object_id: &JByteArray<'_>) -> Option<ChurObjectRefV1> {
     let bytes = fixed_array(env, object_id, ID_LEN)?;
     let mut value = [0u8; ID_LEN];
     value.copy_from_slice(&bytes);
@@ -1134,12 +1130,7 @@ fn object_reference(env: &mut JNIEnv<'_>, object_id: &JByteArray<'_>) -> Option<
 }
 
 /// Writes a handle back on success, or reports the export's status.
-fn finish_handle(
-    env: &mut JNIEnv<'_>,
-    status: Status,
-    target: &JLongArray<'_>,
-    handle: u64,
-) -> jint {
+fn finish_handle(env: &mut Env<'_>, status: Status, target: &JLongArray<'_>, handle: u64) -> jint {
     if status != 0 {
         return status;
     }
@@ -1152,7 +1143,7 @@ fn finish_handle(
 
 /// Writes a byte count back, which the export sets on every call.
 fn finish_written(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     status: Status,
     target: &JIntArray<'_>,
     written: usize,
@@ -1172,7 +1163,7 @@ fn finish_written(
 /// on the foreign side; this clears the Rust side, and the Kotlin adapter
 /// clears its array as soon as it is done.
 fn finish_secret(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     status: Status,
     target: &JByteArray<'_>,
     secret: &mut [u8; SECRET_LEN],
@@ -1195,14 +1186,14 @@ fn finish_secret(
 /// Adds a recovery slot to an active vault.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultAddRecoverySlot<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     destination: JByteBuffer<'local>,
     out_written: JIntArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some((address, capacity)) = direct_buffer(&env, &destination) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
             return INVALID_INPUT;
         };
         let mut written = 0usize;
@@ -1215,7 +1206,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultAddRecoverySlot<'lo
                 &mut written,
             )
         };
-        finish_written(&mut env, status, &out_written, written)
+        finish_written(env, status, &out_written, written)
     })
 }
 
@@ -1223,14 +1214,14 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultAddRecoverySlot<'lo
 /// only; the Android Keystore slot is a platform wrap and takes no secret here.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultAddDeviceSlot<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     item_id: JByteArray<'local>,
     out_secret: JByteArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(item) = fixed_array(&mut env, &item_id, ID_LEN) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(item) = fixed_array(env, &item_id, ID_LEN) else {
             return INVALID_INPUT;
         };
         let mut secret = [0u8; SECRET_LEN];
@@ -1242,7 +1233,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultAddDeviceSlot<'loca
                 secret.as_mut_ptr(),
             )
         };
-        finish_secret(&mut env, status, &out_secret, &mut secret)
+        finish_secret(env, status, &out_secret, &mut secret)
     })
 }
 
@@ -1252,14 +1243,14 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultAddDeviceSlot<'loca
 /// Keystore wrap returns, which ADR-0041 requires of every holder.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultKeystoreBegin<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     destination: JByteBuffer<'local>,
     out_written: JIntArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some((address, capacity)) = direct_buffer(&env, &destination) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
             return INVALID_INPUT;
         };
         let mut written = 0usize;
@@ -1272,24 +1263,24 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultKeystoreBegin<'loca
                 &mut written,
             )
         };
-        finish_written(&mut env, status, &out_written, written)
+        finish_written(env, status, &out_written, written)
     })
 }
 
 /// Stores what the Keystore wrap returned.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultKeystoreCommit<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     gcm_nonce: JByteArray<'local>,
     wrapped_root_secret: JByteArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(nonce) = fixed_array(&mut env, &gcm_nonce, 12) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(nonce) = fixed_array(env, &gcm_nonce, 12) else {
             return INVALID_INPUT;
         };
-        let Some(wrapped) = fixed_array(&mut env, &wrapped_root_secret, 48) else {
+        let Some(wrapped) = fixed_array(env, &wrapped_root_secret, 48) else {
             return INVALID_INPUT;
         };
         // SAFETY: both vectors are live locals of the required lengths.
@@ -1307,14 +1298,14 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultKeystoreCommit<'loc
 /// secret.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultKeystoreMaterial<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     runtime: jlong,
     destination: JByteBuffer<'local>,
     out_written: JIntArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some((address, capacity)) = direct_buffer(&env, &destination) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
             return INVALID_INPUT;
         };
         let mut written = 0usize;
@@ -1327,20 +1318,20 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultKeystoreMaterial<'l
                 &mut written,
             )
         };
-        finish_written(&mut env, status, &out_written, written)
+        finish_written(env, status, &out_written, written)
     })
 }
 
 /// Removes one slot.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultRemoveSlot<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     slot_id: JByteArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(slot) = fixed_array(&mut env, &slot_id, ID_LEN) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(slot) = fixed_array(env, &slot_id, ID_LEN) else {
             return INVALID_INPUT;
         };
         // SAFETY: `slot` is a live 16-byte local.
@@ -1351,13 +1342,13 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultRemoveSlot<'local>(
 /// Replaces the password slot.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultChangePassword<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     password: JByteArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(bytes) = byte_array(&mut env, &password) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(bytes) = byte_array(env, &password) else {
             return INVALID_INPUT;
         };
         let request = ChurUnlockRequestV1 {
@@ -1377,14 +1368,14 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultChangePassword<'loc
 /// Writes the slot list into a direct buffer.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultSlots<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     destination: JByteBuffer<'local>,
     out_written: JIntArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some((address, capacity)) = direct_buffer(&env, &destination) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
             return INVALID_INPUT;
         };
         let mut written = 0usize;
@@ -1392,21 +1383,21 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultSlots<'local>(
         let status = unsafe {
             chur_ffi::product::chur_vault_slots(handle_of(session), address, capacity, &mut written)
         };
-        finish_written(&mut env, status, &out_written, written)
+        finish_written(env, status, &out_written, written)
     })
 }
 
 /// Sets or clears the favourite flag.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectSetFavorite<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     object_id: JByteArray<'local>,
     favorite: jboolean,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(reference) = object_reference(&mut env, &object_id) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(reference) = object_reference(env, &object_id) else {
             return INVALID_INPUT;
         };
         // SAFETY: `reference` is a live local.
@@ -1414,7 +1405,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectSetFavorite<'local
             chur_ffi::product::chur_object_set_favorite(
                 handle_of(session),
                 &reference,
-                u8::from(favorite != 0),
+                u8::from(favorite),
             )
         }
     })
@@ -1423,13 +1414,13 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectSetFavorite<'local
 /// Deletes an object.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectDelete<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     object_id: JByteArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(reference) = object_reference(&mut env, &object_id) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(reference) = object_reference(env, &object_id) else {
             return INVALID_INPUT;
         };
         // SAFETY: `reference` is a live local.
@@ -1440,18 +1431,18 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectDelete<'local>(
 /// Writes one object's metadata record into a direct buffer.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectMetadata<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     object_id: JByteArray<'local>,
     destination: JByteBuffer<'local>,
     out_written: JIntArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(reference) = object_reference(&mut env, &object_id) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(reference) = object_reference(env, &object_id) else {
             return INVALID_INPUT;
         };
-        let Some((address, capacity)) = direct_buffer(&env, &destination) else {
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
             return INVALID_INPUT;
         };
         let mut written = 0usize;
@@ -1465,21 +1456,21 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectMetadata<'local>(
                 &mut written,
             )
         };
-        finish_written(&mut env, status, &out_written, written)
+        finish_written(env, status, &out_written, written)
     })
 }
 
 /// Creates an album.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumCreate<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     name: JString<'local>,
     out_album_id: JByteArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(bytes) = string_bytes(&mut env, &name) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(bytes) = string_bytes(env, &name) else {
             return INVALID_INPUT;
         };
         let Ok(length) = u32::try_from(bytes.len()) else {
@@ -1498,7 +1489,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumCreate<'local>(
         if status != 0 {
             return status;
         }
-        if write_bytes(&mut env, &out_album_id, &album) {
+        if write_bytes(env, &out_album_id, &album) {
             0
         } else {
             INVALID_INPUT
@@ -1509,18 +1500,18 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumCreate<'local>(
 /// Adds or removes one album membership.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumSetMembership<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     album_id: JByteArray<'local>,
     object_id: JByteArray<'local>,
     member: jboolean,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(album) = fixed_array(&mut env, &album_id, ID_LEN) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(album) = fixed_array(env, &album_id, ID_LEN) else {
             return INVALID_INPUT;
         };
-        let Some(reference) = object_reference(&mut env, &object_id) else {
+        let Some(reference) = object_reference(env, &object_id) else {
             return INVALID_INPUT;
         };
         // SAFETY: `album` and `reference` are live locals.
@@ -1529,7 +1520,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumSetMembership<'loca
                 handle_of(session),
                 album.as_ptr(),
                 &reference,
-                u8::from(member != 0),
+                u8::from(member),
             )
         }
     })
@@ -1538,14 +1529,14 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumSetMembership<'loca
 /// Writes the album list into a direct buffer.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumList<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     destination: JByteBuffer<'local>,
     out_written: JIntArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some((address, capacity)) = direct_buffer(&env, &destination) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
             return INVALID_INPUT;
         };
         let mut written = 0usize;
@@ -1553,21 +1544,21 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumList<'local>(
         let status = unsafe {
             chur_ffi::product::chur_album_list(handle_of(session), address, capacity, &mut written)
         };
-        finish_written(&mut env, status, &out_written, written)
+        finish_written(env, status, &out_written, written)
     })
 }
 
 /// Creates a tag.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_tagCreate<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     name: JString<'local>,
     out_tag_id: JByteArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(bytes) = string_bytes(&mut env, &name) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(bytes) = string_bytes(env, &name) else {
             return INVALID_INPUT;
         };
         let Ok(length) = u32::try_from(bytes.len()) else {
@@ -1586,7 +1577,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_tagCreate<'local>(
         if status != 0 {
             return status;
         }
-        if write_bytes(&mut env, &out_tag_id, &tag) {
+        if write_bytes(env, &out_tag_id, &tag) {
             0
         } else {
             INVALID_INPUT
@@ -1597,18 +1588,18 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_tagCreate<'local>(
 /// Applies or removes one tag on one object.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectSetTag<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     tag_id: JByteArray<'local>,
     object_id: JByteArray<'local>,
     tagged: jboolean,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(tag) = fixed_array(&mut env, &tag_id, ID_LEN) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(tag) = fixed_array(env, &tag_id, ID_LEN) else {
             return INVALID_INPUT;
         };
-        let Some(reference) = object_reference(&mut env, &object_id) else {
+        let Some(reference) = object_reference(env, &object_id) else {
             return INVALID_INPUT;
         };
         // SAFETY: `tag` and `reference` are live locals.
@@ -1617,7 +1608,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectSetTag<'local>(
                 handle_of(session),
                 tag.as_ptr(),
                 &reference,
-                u8::from(tagged != 0),
+                u8::from(tagged),
             )
         }
     })
@@ -1626,7 +1617,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectSetTag<'local>(
 /// Encrypts and records one derived asset from a direct buffer.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_derivedPut<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     object_id: JByteArray<'local>,
@@ -1636,11 +1627,11 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_derivedPut<'local>(
     source: JByteBuffer<'local>,
     length: jint,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(reference) = object_reference(&mut env, &object_id) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(reference) = object_reference(env, &object_id) else {
             return INVALID_INPUT;
         };
-        let Some((address, capacity)) = direct_buffer(&env, &source) else {
+        let Some((address, capacity)) = direct_buffer(env, &source) else {
             return INVALID_INPUT;
         };
         let (Ok(kind), Ok(width), Ok(height), Ok(length)) = (
@@ -1673,7 +1664,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_derivedPut<'local>(
 /// Reads one derived asset into a direct buffer.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_derivedRead<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     object_id: JByteArray<'local>,
@@ -1681,11 +1672,11 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_derivedRead<'local>(
     destination: JByteBuffer<'local>,
     out_written: JIntArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(reference) = object_reference(&mut env, &object_id) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(reference) = object_reference(env, &object_id) else {
             return INVALID_INPUT;
         };
-        let Some((address, capacity)) = direct_buffer(&env, &destination) else {
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
             return INVALID_INPUT;
         };
         let Ok(kind) = u32::try_from(kind) else {
@@ -1703,41 +1694,41 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_derivedRead<'local>(
                 &mut written,
             )
         };
-        finish_written(&mut env, status, &out_written, written)
+        finish_written(env, status, &out_written, written)
     })
 }
 
 /// Starts a backup package write, `FFI_CONTRACT.md` §6.7.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_backupCreate<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session: jlong,
     destination_fd: jint,
     out_operation: JLongArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
         let mut handle = 0u64;
         // SAFETY: `handle` is a live local.
         let status = unsafe {
             chur_ffi::product::chur_backup_create(handle_of(session), destination_fd, &mut handle)
         };
-        finish_handle(&mut env, status, &out_operation, handle)
+        finish_handle(env, status, &out_operation, handle)
     })
 }
 
 /// Starts a restore from a backup package, §6.7.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_backupRestore<'local>(
-    mut env: JNIEnv<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     runtime: jlong,
     source_fd: jint,
     password: JByteArray<'local>,
     out_operation: JLongArray<'local>,
 ) -> jint {
-    crate::convert::contain(INTERNAL_FAILURE, || {
-        let Some(secret) = byte_array(&mut env, &password) else {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(secret) = byte_array(env, &password) else {
             return INVALID_INPUT;
         };
         let Ok(length) = u32::try_from(secret.len()) else {
@@ -1754,6 +1745,6 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_backupRestore<'local>(
                 &mut handle,
             )
         };
-        finish_handle(&mut env, status, &out_operation, handle)
+        finish_handle(env, status, &out_operation, handle)
     })
 }

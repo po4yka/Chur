@@ -454,7 +454,7 @@ pub fn fingerprint(
 ) -> String {
     let digest = fingerprint_digest(vault_id, device_id, signing_public_key, hpke_public_key);
     let mut display = String::with_capacity(49);
-    for (index, pair) in digest[..20].chunks_exact(2).enumerate() {
+    for (index, pair) in digest[..20].chunks(2).enumerate() {
         if index != 0 {
             display.push(' ');
         }

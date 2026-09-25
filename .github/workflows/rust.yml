@@ -37,7 +37,7 @@ jobs:
     name: cargo fmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup component add rustfmt
       - run: cargo fmt --all --check
 
@@ -45,8 +45,8 @@ jobs:
     name: cargo clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -60,8 +60,8 @@ jobs:
     name: cargo test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -74,8 +74,8 @@ jobs:
     name: vector set
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -93,7 +93,7 @@ jobs:
       - name: record the vector-set digest
         run: cargo run --locked -p chur-cli -- vectors digest --dir ../test-vectors/v1
           | tee ../vector-set-digest.txt
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: vector-set-digest
           path: vector-set-digest.txt
@@ -102,8 +102,8 @@ jobs:
     name: C ABI harness
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -133,8 +133,8 @@ jobs:
     name: fuzz smoke
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -167,7 +167,7 @@ jobs:
       run:
         working-directory: .
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # DEPENDENCY_POLICY.md "Vendored agent skills": every entry records a
       # content hash and the upstream commit it came from. The offline half of
       # the check recomputes the hash of every vendored directory, so content
@@ -181,7 +181,7 @@ jobs:
       run:
         working-directory: .
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # ANDROID.md section 13.4: release MUST fail when either rule file names a
       # path under vaults/ or registry/, or declares an include of the root or
       # external domain. An <include> set makes everything else excluded, so
@@ -208,8 +208,8 @@ jobs:
       run:
         working-directory: .
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -235,12 +235,12 @@ jobs:
       run:
         working-directory: .
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: "21"
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.gradle/caches
@@ -268,12 +268,12 @@ jobs:
       run:
         working-directory: .
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: "21"
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.gradle/caches
@@ -306,6 +306,29 @@ jobs:
           ./gradlew --no-daemon :apps:androidApp:assembleDebug :apps:androidApp:lintDebug --write-locks --quiet
           git diff --exit-code -- '**/gradle.lockfile'
 
+      - name: prepare Android release signing
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          CHUR_RELEASE_KEYSTORE_BASE64: ${{ secrets.CHUR_RELEASE_KEYSTORE_BASE64 }}
+          CHUR_RELEASE_PASSWORD: ${{ secrets.CHUR_RELEASE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$CHUR_RELEASE_KEYSTORE_BASE64"
+          test -n "$CHUR_RELEASE_PASSWORD"
+          umask 077
+          printf '%s' "$CHUR_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/chur-release.p12"
+          echo "CHUR_RELEASE_KEYSTORE=$RUNNER_TEMP/chur-release.p12" >> "$GITHUB_ENV"
+          echo "CHUR_RELEASE_PASSWORD=$CHUR_RELEASE_PASSWORD" >> "$GITHUB_ENV"
+      - name: assemble and verify signed release APK
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon :apps:androidApp:assembleRelease
+          "$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner" verify --verbose --print-certs \
+            apps/androidApp/build/outputs/apk/release/androidApp-release.apk | tee "$RUNNER_TEMP/chur-release-signature.txt"
+          grep -Fq 'certificate SHA-256 digest: 747ec3a4cad129e9bde4437c389c138c84933cbfb1a2a34253b6c4d1c6513c8d' \
+            "$RUNNER_TEMP/chur-release-signature.txt"
+
   kotlin-native:
     name: kotlin/native tests
     runs-on: macos-latest
@@ -313,12 +336,12 @@ jobs:
       run:
         working-directory: .
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: "21"
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.gradle/caches
@@ -352,8 +375,8 @@ jobs:
     env:
       CARGO_DENY_VERSION: 0.20.2
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cargo
           key: deny-${{ env.CARGO_DENY_VERSION }}-${{ hashFiles('rust/Cargo.lock', 'rust/fuzz/Cargo.lock') }}
