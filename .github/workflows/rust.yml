@@ -282,6 +282,11 @@ jobs:
       - name: add the Android targets to the pinned toolchain
         working-directory: rust
         run: rustup target add aarch64-linux-android x86_64-linux-android
+      - name: install the pinned Android NDK
+        run: |
+          ndk_version=$(sed -n 's/^ndk = "\([^"]*\)"/\1/p' gradle/libs.versions.toml)
+          test -n "$ndk_version"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ndk_version"
       # `gradle check` compiles the library modules and stops there, so nothing
       # built the application itself: `MainActivity`, the route table, the
       # importer, the export sink and the device-slot binding are the whole
