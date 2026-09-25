@@ -19,6 +19,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import dev.po4yka.chur.app.ActiveOperation
 import dev.po4yka.chur.app.theme.BackGlyph
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.DeleteGlyph
@@ -55,6 +57,9 @@ fun ViewerScreen(
     onToggleDetail: () -> Unit,
     player: (@Composable (Modifier) -> Unit)? = null,
     waveform: ByteArray? = null,
+    operation: ActiveOperation? = null,
+    onCancelOperation: () -> Unit = {},
+    status: String? = null,
 ) {
     Box(modifier = Modifier.fillMaxSize().background(ViewerColors.canvas)) {
         if (player != null) {
@@ -131,7 +136,7 @@ fun ViewerScreen(
                     tint = ViewerColors.content,
                 )
             }
-            IconButton(onClick = onExport) {
+            IconButton(onClick = onExport, enabled = operation == null) {
                 Icon(ExportGlyph, contentDescription = "Export", tint = ViewerColors.content)
             }
             IconButton(onClick = onDelete) {
@@ -144,6 +149,24 @@ fun ViewerScreen(
                 detail = detail,
                 projection = projection,
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 72.dp()),
+            )
+        }
+        if (operation != null) {
+            OperationProgressCard(
+                operation = operation,
+                onCancel = onCancelOperation,
+                modifier = Modifier.align(Alignment.BottomCenter)
+                    .padding(horizontal = ChurSpacing.gutter).padding(bottom = 88.dp),
+            )
+        } else if (status != null) {
+            Text(
+                text = status,
+                color = ViewerColors.content,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.align(Alignment.BottomCenter)
+                    .padding(bottom = 88.dp)
+                    .background(ViewerColors.chromeScrim)
+                    .padding(horizontal = ChurSpacing.gutter, vertical = ChurSpacing.two),
             )
         }
     }

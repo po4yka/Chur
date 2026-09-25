@@ -32,6 +32,8 @@ class MediaImporter(
         data class Imported(
             val objectId: ByteArray,
             val derivatives: Int,
+            /** Cancellation after commit keeps the original and skips remaining previews. */
+            val previewsSkipped: Boolean = false,
         ) : Outcome {
             override fun equals(other: Any?): Boolean = other is Imported && objectId.contentEquals(other.objectId)
 
@@ -56,15 +58,19 @@ class MediaImporter(
     suspend fun import(
         repository: VaultRepository,
         source: PickedMedia?,
+        onProgress: (OperationProgress) -> Unit = {},
+        cancelRequested: () -> Boolean = { false },
     ): Outcome {
         val media = source ?: return Outcome.Unreadable
         try {
+            if (cancelRequested()) return Outcome.Refused("CANCELLED")
             // §2 stage 3, before stage 4: an over-large source is refused
             // before an object key exists.
             val probe =
                 codec.probe(media)
                     ?: return Outcome.Refused("UNSUPPORTED_VERSION")
             MediaBounds.check(probe)?.let { return Outcome.TooLarge(it) }
+            if (cancelRequested()) return Outcome.Refused("CANCELLED")
 
             val operation =
                 repository.beginImport(
@@ -83,9 +89,13 @@ class MediaImporter(
                         ),
                 )
             val terminal = try {
-                drain(repository, operation)
+                drain(repository, operation, onProgress, cancelRequested)
             } finally {
-                repository.closeOperation(operation)
+                try {
+                    repository.cancel(operation)
+                } finally {
+                    repository.closeOperation(operation)
+                }
             }
             if (terminal.status != 0) {
                 return Outcome.Refused(statusName(terminal.status))
@@ -104,13 +114,16 @@ class MediaImporter(
             // and the catalog never claims a derivative that does not exist.
             var written = 0
             for (kind in requiredDerivatives(probe)) {
+                if (cancelRequested()) return Outcome.Imported(objectId, written, previewsSkipped = true)
                 val derivative = try {
-                    codec.derive(media, probe, kind)
+                    codec.derive(media, probe, kind, cancelRequested)
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
                     null
-                } ?: continue
+                }
+                if (cancelRequested()) return Outcome.Imported(objectId, written, previewsSkipped = true)
+                if (derivative == null) continue
                 repository.putDerived(
                     objectId = objectId,
                     kind = kind,
@@ -141,9 +154,17 @@ class MediaImporter(
     private suspend fun drain(
         repository: VaultRepository,
         operation: Long,
+        onProgress: (OperationProgress) -> Unit,
+        cancelRequested: () -> Boolean,
     ): OperationProgress {
+        var signalled = false
         while (true) {
+            if (!signalled && cancelRequested()) {
+                repository.cancel(operation)
+                signalled = true
+            }
             val progress = repository.poll(operation)
+            onProgress(progress)
             if (progress.terminal) return progress
             kotlinx.coroutines.delay(POLL_INTERVAL_MS)
         }

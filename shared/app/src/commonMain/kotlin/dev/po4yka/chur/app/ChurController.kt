@@ -8,6 +8,7 @@ import dev.po4yka.chur.ffi.LockReason
 import dev.po4yka.chur.ffi.ObjectDetail
 import dev.po4yka.chur.ffi.ObjectPage
 import dev.po4yka.chur.ffi.ObjectQuery
+import dev.po4yka.chur.ffi.OperationProgress
 import dev.po4yka.chur.ffi.SharingIdentity
 import dev.po4yka.chur.ffi.SharingMember
 import dev.po4yka.chur.ffi.SharingOverview
@@ -26,16 +27,19 @@ import dev.po4yka.chur.notes.NoteStore
 import dev.po4yka.chur.vault.LockPolicy
 import dev.po4yka.chur.vault.VaultRepository
 import dev.po4yka.chur.vault.VaultState
+import dev.po4yka.chur.imports.PickedMedia
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -106,6 +110,8 @@ class ChurController(
     private val _sharingRecipient = MutableStateFlow<SharingRecipient?>(null)
     private var recipientEnrollment: ByteArray? = null
     private val _message = MutableStateFlow<String?>(null)
+    private val _activeOperation = MutableStateFlow<ActiveOperation?>(null)
+    private var operationToken = 0L
     private val _recoveryPhrase = MutableStateFlow<String?>(null)
     private val _deviceUnlockOffered = MutableStateFlow(false)
 
@@ -175,6 +181,9 @@ class ChurController(
 
     /** A bounded message that carries no private value. */
     val message: StateFlow<String?> = _message.asStateFlow()
+
+    /** The current user-visible import, export, backup, restore, or scan. */
+    val activeOperation: StateFlow<ActiveOperation?> = _activeOperation.asStateFlow()
 
     /** The recovery phrase, held only until the user acknowledges it. */
     val recoveryPhrase: StateFlow<String?> = _recoveryPhrase.asStateFlow()
@@ -505,13 +514,13 @@ class ChurController(
     }
 
     /** Loads one query scope. */
-    fun load(query: ObjectQuery) = guarded {
+    fun load(query: ObjectQuery) = guarded(clearMessage = false) {
         currentQuery = query
         _page.value = withContext(Dispatchers.Default) { repository.page(query) }
     }
 
     /** Loads the albums. */
-    fun loadAlbums() = guarded {
+    fun loadAlbums() = guarded(clearMessage = false) {
         _albums.value = withContext(Dispatchers.Default) { repository.albums() }
     }
 
@@ -521,7 +530,7 @@ class ChurController(
     }
 
     /** Loads the key slots. */
-    fun loadSlots() = guarded {
+    fun loadSlots() = guarded(clearMessage = false) {
         _slots.value = withContext(Dispatchers.Default) { repository.slots() }
     }
 
@@ -676,7 +685,7 @@ class ChurController(
     }
 
     /** Loads public sharing identity and current active recipients for Settings. */
-    fun loadSharing() = guarded {
+    fun loadSharing() = guarded(clearMessage = false) {
         _sharingIdentity.value = withContext(Dispatchers.Default) { repository.syncIdentity() }
         _sharingOverview.value = withContext(Dispatchers.Default) { repository.sharingOverview() }
     }
@@ -782,28 +791,39 @@ class ChurController(
      * boundary, and recipients, editors, and share extensions persist plaintext
      * under their own policies from here on.
      */
-    fun export(objectId: ByteArray) = guarded { exportOne(objectId) }
+    fun export(objectId: ByteArray) = guarded { tracked("export") { token -> exportOne(objectId, token) } }
 
-    private suspend fun exportOne(objectId: ByteArray) {
+    private suspend fun exportOne(objectId: ByteArray, token: Long) {
         val detail = withContext(Dispatchers.Default) { repository.detail(objectId) }
         val destination = exports.create(
             detail.filename.ifBlank { "chur-export" },
             detail.contentType,
         ) ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the export destination")
+        var published = false
         try {
             val operation = withContext(Dispatchers.Default) {
                 repository.beginExport(objectId, destination.descriptor)
             }
-            val terminal = drain(operation)
-            withContext(Dispatchers.Default) { repository.closeOperation(operation) }
+            val terminal = try {
+                drain(operation, token)
+            } finally {
+                closeOperation(operation)
+            }
             if (terminal != 0) {
-                destination.discard()
                 throw ChurFailure(ChurStatus.fromValue(terminal), "the export")
             }
+            if (_activeOperation.value?.id != token) {
+                throw ChurFailure(ChurStatus.CANCELLED, "the export")
+            }
             destination.publish()
+            published = true
             _message.value = "Exported. The copy is outside the vault."
         } finally {
-            destination.close()
+            try {
+                if (!published) destination.discard()
+            } finally {
+                destination.close()
+            }
         }
     }
 
@@ -822,8 +842,28 @@ class ChurController(
      * rather than a simplification.
      */
     fun exportAll(objectIds: List<ByteArray>, onSuccess: () -> Unit = {}) = guarded {
-        objectIds.forEach { exportOne(it) }
-        onSuccess()
+        var exported = 0
+        try {
+            tracked("export") { token ->
+                objectIds.forEach {
+                    if (cancellationRequested(token)) {
+                        throw ChurFailure(ChurStatus.CANCELLED, "the export")
+                    }
+                    exportOne(it, token)
+                    exported += 1
+                }
+                if (cancellationRequested(token)) {
+                    throw ChurFailure(ChurStatus.CANCELLED, "the export")
+                }
+                onSuccess()
+            }
+        } catch (failure: ChurFailure) {
+            if (failure.status == ChurStatus.CANCELLED && exported > 0) {
+                _message.value = "Cancelled after exporting $exported. Exported copies remain outside the vault."
+            } else {
+                throw failure
+            }
+        }
     }
 
     /**
@@ -840,23 +880,36 @@ class ChurController(
      * whose vault it is, and neither does this.
      */
     fun createBackup() = guarded {
-        val destination = exports.create("chur-backup", "application/octet-stream")
-            ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the backup destination")
-        try {
-            val operation = withContext(Dispatchers.Default) {
-                repository.beginBackup(destination.descriptor)
+        tracked("backup") { token ->
+            val destination = exports.create("chur-backup", "application/octet-stream")
+                ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the backup destination")
+            var published = false
+            try {
+                val operation = withContext(Dispatchers.Default) {
+                    repository.beginBackup(destination.descriptor)
+                }
+                val terminal = try {
+                    drain(operation, token)
+                } finally {
+                    closeOperation(operation)
+                }
+                if (terminal != 0) {
+                    throw ChurFailure(ChurStatus.fromValue(terminal), "the backup")
+                }
+                if (_activeOperation.value?.id != token) {
+                    throw ChurFailure(ChurStatus.CANCELLED, "the backup")
+                }
+                destination.publish()
+                published = true
+                _message.value =
+                    "Backup written. It opens with the password or phrase you use now."
+            } finally {
+                try {
+                    if (!published) destination.discard()
+                } finally {
+                    destination.close()
+                }
             }
-            val terminal = drain(operation)
-            withContext(Dispatchers.Default) { repository.closeOperation(operation) }
-            if (terminal != 0) {
-                destination.discard()
-                throw ChurFailure(ChurStatus.fromValue(terminal), "the backup")
-            }
-            destination.publish()
-            _message.value =
-                "Backup written. It opens with the password or phrase you use now."
-        } finally {
-            destination.close()
         }
     }
 
@@ -897,16 +950,21 @@ class ChurController(
         val bytes = password.encodeToByteArray()
         beginHostActivity()
         try {
-            val operation = withContext(Dispatchers.Default) {
-                repository.beginRestore(sourceFd, bytes)
+            tracked("restore") { token ->
+                val operation = withContext(Dispatchers.Default) {
+                    repository.beginRestore(sourceFd, bytes)
+                }
+                val terminal = try {
+                    drain(operation, token)
+                } finally {
+                    closeOperation(operation)
+                }
+                if (terminal != 0) {
+                    throw ChurFailure(ChurStatus.fromValue(terminal), "the restore")
+                }
+                withContext(Dispatchers.Default) { repository.start() }
+                _route.value = AppRoute.Unlock
             }
-            val terminal = drain(operation)
-            withContext(Dispatchers.Default) { repository.closeOperation(operation) }
-            if (terminal != 0) {
-                throw ChurFailure(ChurStatus.fromValue(terminal), "the restore")
-            }
-            withContext(Dispatchers.Default) { repository.start() }
-            _route.value = AppRoute.Unlock
         } finally {
             bytes.fill(0)
             endHostActivity()
@@ -932,27 +990,19 @@ class ChurController(
     }
 
     fun verifyEverything() = guarded {
-        val operation = withContext(Dispatchers.Default) { repository.beginIntegrityScan(null) }
-        try {
-            while (true) {
-                // §8 of the FFI contract: every native call runs off the
-                // main thread, and a poll is one, however short it is.
-                val progress =
-                    withContext(Dispatchers.Default) { repository.poll(operation) }
-                if (progress.terminal) {
-                    _message.value = if (progress.status == 0) {
-                        "Verified ${progress.processed} object(s)."
-                    } else {
-                        ChurStatus.fromValue(progress.status).name
-                    }
-                    break
+        tracked("verification") { token ->
+            val operation = withContext(Dispatchers.Default) { repository.beginIntegrityScan(null) }
+            try {
+                val result = drainProgress(operation, token)
+                _message.value = if (result.status == 0) {
+                    "Verified ${result.processed} object(s)."
+                } else {
+                    statusMessage(result.status)
                 }
-                _message.value = "Verifying ${progress.processed}"
-                delay(POLL_INTERVAL_MS)
+            } finally {
+                closeOperation(operation)
+                if (repository.state.value is VaultState.Unlocked) reload()
             }
-        } finally {
-            withContext(Dispatchers.Default) { repository.closeOperation(operation) }
-            reload()
         }
     }
 
@@ -999,20 +1049,102 @@ class ChurController(
         _message.value = message
     }
 
+    /** Requests cancellation; the worker sends it to Rust before its next poll. */
+    fun cancelActiveOperation() {
+        _activeOperation.update { current ->
+            current?.takeIf { it.cancellable }?.copy(cancelling = true) ?: current
+        }
+    }
+
+    /** Runs a picker import with the same progress and cancellation as other work. */
+    suspend fun importMedia(importer: MediaImporter, open: () -> PickedMedia?): MediaImporter.Outcome? =
+        try {
+            tracked("import") { token ->
+                withContext(Dispatchers.Default) {
+                    importer.import(
+                        repository = repository,
+                        source = open(),
+                        onProgress = { updateOperation(token, it, keepCancellableOnSuccess = true) },
+                        cancelRequested = { cancellationRequested(token) },
+                    )
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: ChurFailure) {
+            MediaImporter.Outcome.Refused(statusMessage(failure.status.value))
+        } catch (_: Exception) {
+            MediaImporter.Outcome.Refused(ChurStatus.INTERNAL_FAILURE.name)
+        }
+
     /** Closes the runtime, which a finishing host does. */
     suspend fun shutdown() {
         withContext(Dispatchers.Default) { repository.shutdown() }
     }
 
-    /** Polls one operation to its terminal status. */
-    suspend fun drain(operation: Long): Int {
+    private suspend fun <T> tracked(name: String, body: suspend (Long) -> T): T? {
+        if (_activeOperation.value != null) {
+            _message.value = "Finish the current operation first."
+            return null
+        }
+        val token = ++operationToken
+        _activeOperation.value = ActiveOperation(token, name)
+        try {
+            val result = body(token)
+            return result.takeIf { _activeOperation.value?.id == token }
+        } finally {
+            _activeOperation.update { current -> current?.takeUnless { it.id == token } }
+        }
+    }
+
+    private fun cancellationRequested(token: Long): Boolean =
+        _activeOperation.value?.let { it.id != token || it.cancelling } ?: true
+
+    private fun updateOperation(
+        token: Long,
+        progress: OperationProgress,
+        keepCancellableOnSuccess: Boolean = false,
+    ) {
+        _activeOperation.update { current ->
+            current?.takeIf { it.id == token }?.copy(
+                processed = progress.processed,
+                total = progress.total,
+                stage = progress.stage,
+                cancellable = !progress.terminal || (keepCancellableOnSuccess && progress.status == 0),
+            ) ?: current
+        }
+    }
+
+    private suspend fun closeOperation(operation: Long) {
+        withContext(NonCancellable + Dispatchers.Default) {
+            try {
+                repository.cancel(operation)
+            } finally {
+                repository.closeOperation(operation)
+            }
+        }
+    }
+
+    private fun statusMessage(status: Int): String =
+        if (status == ChurStatus.CANCELLED.value) "Cancelled." else ChurStatus.fromValue(status).name
+
+    /** Polls one native operation and forwards its redacted snapshot to the UI. */
+    private suspend fun drainProgress(operation: Long, token: Long): OperationProgress {
+        var signalled = false
         while (true) {
+            if (!signalled && cancellationRequested(token)) {
+                withContext(Dispatchers.Default) { repository.cancel(operation) }
+                signalled = true
+            }
             val progress =
                 withContext(Dispatchers.Default) { repository.poll(operation) }
-            if (progress.terminal) return progress.status
+            updateOperation(token, progress)
+            if (progress.terminal) return progress
             delay(POLL_INTERVAL_MS)
         }
     }
+
+    private suspend fun drain(operation: Long, token: Long): Int = drainProgress(operation, token).status
 
     private suspend fun reload() {
         if (repository.state.value is VaultState.Unlocked) {
@@ -1025,6 +1157,7 @@ class ChurController(
     }
 
     private suspend fun clearPrivateProjections() {
+        _activeOperation.value = null
         currentQuery = ObjectQuery()
         // §10.3: a lock transition destroys private back-stack projections, and
         // these flows are that projection. §4 of `PLAINTEXT_LIFECYCLE.md` and
@@ -1090,15 +1223,15 @@ class ChurController(
      * re-thrown ahead of it, because swallowing it would break the cancellation
      * of the scope itself.
      */
-    private fun guarded(body: suspend () -> Unit) {
+    private fun guarded(clearMessage: Boolean = true, body: suspend () -> Unit) {
         scope.launch {
             try {
-                _message.value = null
+                if (clearMessage) _message.value = null
                 body()
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (failure: ChurFailure) {
-                _message.value = failure.status.name
+                _message.value = statusMessage(failure.status.value)
             } catch (_: Exception) {
                 _message.value = ChurStatus.INTERNAL_FAILURE.name
             }

@@ -49,11 +49,64 @@ class MediaImporterHostTest {
                         media: PickedMedia,
                         probe: ProbedMedia,
                         kind: StreamKind,
+                        cancelRequested: () -> Boolean,
                     ): Derivative = error("the platform decoder refused this derivative")
                 }
                 val outcome = MediaImporter(codec).import(vault, picked)
                 assertIs<MediaImporter.Outcome.Imported>(outcome)
                 assertEquals(0, outcome.derivatives)
+                assertEquals(1, vault.page(ObjectQuery()).objects.size)
+            }
+            assertTrue(closed)
+        } finally {
+            vault.shutdown()
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun cancelling_after_commit_keeps_the_original_and_skips_previews() = runBlocking {
+        val root = File(System.getProperty("java.io.tmpdir"), "chur-cancel-${System.nanoTime()}")
+        root.mkdirs()
+        val source = File(root, "picked.jpg").apply { writeBytes(ByteArray(2_048) { 3 }) }
+        val vault = VaultRepository(File(root, "vault").absolutePath, { 1_700_000_000_000L })
+        try {
+            vault.start()
+            vault.create("correct horse battery staple".encodeToByteArray(), offerRecovery = false)
+            var closed = false
+            var cancelled = false
+            RandomAccessFile(source, "r").use { file ->
+                val descriptor = file.fd.javaClass.getDeclaredField("fd").apply { isAccessible = true }
+                    .getInt(file.fd)
+                val picked = PickedMedia(
+                    descriptor = descriptor,
+                    seekable = true,
+                    knownLength = source.length(),
+                    contentTypeHint = "image/jpeg",
+                    originalFilename = "picked.jpg",
+                    captureTimeMs = null,
+                    platformHandle = null,
+                    close = { closed = true },
+                )
+                val codec = object : MediaCodec {
+                    override fun probe(media: PickedMedia) =
+                        ProbedMedia(MediaBounds.CLASS_IMAGE, 1_200, 900, 0, "image/jpeg")
+
+                    override fun derive(
+                        media: PickedMedia,
+                        probe: ProbedMedia,
+                        kind: StreamKind,
+                        cancelRequested: () -> Boolean,
+                    ): Derivative = error("a cancelled preview must not start")
+                }
+                val outcome = MediaImporter(codec).import(
+                    vault,
+                    picked,
+                    onProgress = { if (it.terminal) cancelled = true },
+                    cancelRequested = { cancelled },
+                )
+                val imported = assertIs<MediaImporter.Outcome.Imported>(outcome)
+                assertTrue(imported.previewsSkipped)
                 assertEquals(1, vault.page(ObjectQuery()).objects.size)
             }
             assertTrue(closed)

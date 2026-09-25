@@ -18,6 +18,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import dev.po4yka.chur.app.AppRoute
+import dev.po4yka.chur.app.ActiveOperation
 import dev.po4yka.chur.app.ChurController
 import dev.po4yka.chur.app.MediaImporter
 import dev.po4yka.chur.app.notes.NoteEditorScreen
@@ -182,6 +183,7 @@ private fun PublicShell(controller: ChurController, route: AppRoute) {
 @Composable
 private fun RestoreRoute(controller: ChurController) {
     val message by controller.message.collectAsState()
+    val operation by controller.activeOperation.collectAsState()
     val context = LocalContext.current
     var password by remember { mutableStateOf("") }
     var running by remember { mutableStateOf(false) }
@@ -221,6 +223,7 @@ private fun RestoreRoute(controller: ChurController) {
     RestoreBackupScreen(
         busy = running,
         error = message,
+        operation = operation,
         onChoose = { entered ->
             // The flag is what stops a second package being restored on top of
             // the first: both would pass the registry check of §11 while the
@@ -232,6 +235,7 @@ private fun RestoreRoute(controller: ChurController) {
             picker.launch(arrayOf("*/*"))
         },
         onBack = { controller.goTo(AppRoute.PublicShell) },
+        onCancel = controller::cancelActiveOperation,
     )
 }
 
@@ -242,6 +246,7 @@ private fun VaultRoute(controller: ChurController) {
     val tags by controller.tags.collectAsState()
     val slots by controller.slots.collectAsState()
     val message by controller.message.collectAsState()
+    val operation by controller.activeOperation.collectAsState()
     val vaultState by controller.vaultState.collectAsState()
     val syncStatus by controller.syncStatus.collectAsState()
     val sharingIdentity by controller.sharingIdentity.collectAsState()
@@ -281,22 +286,29 @@ private fun VaultRoute(controller: ChurController) {
         importAlbumId = null
         if (uri != null) {
             scope.launch {
-                controller.report("Importing")
-                val outcome = withContext(Dispatchers.IO) {
-                    importer.import(controller.vault, codec.open(uri))
-                }
+                val outcome = controller.importMedia(importer) { codec.open(uri) }
+                if (controller.vaultState.value !is VaultState.Unlocked) return@launch
                 when (outcome) {
                     is MediaImporter.Outcome.Imported -> {
-                        controller.reportImport(if (albumId == null) "Imported into vault." else null)
+                        controller.reportImport(when {
+                            outcome.previewsSkipped -> "Imported original; remaining previews cancelled."
+                            albumId == null -> "Imported into vault."
+                            else -> null
+                        })
                         if (albumId != null) {
                             controller.putAllInAlbum(albumId, listOf(outcome.objectId)) {
-                                controller.report("Imported into album.")
+                                controller.report(if (outcome.previewsSkipped) {
+                                    "Imported original into album; remaining previews cancelled."
+                                } else "Imported into album.")
                             }
                         }
                     }
                     is MediaImporter.Outcome.TooLarge -> controller.reportImport(outcome.reason)
                     MediaImporter.Outcome.Unreadable -> controller.reportImport("That file could not be opened.")
-                    is MediaImporter.Outcome.Refused -> controller.reportImport(outcome.status)
+                    is MediaImporter.Outcome.Refused -> controller.reportImport(
+                        if (outcome.status == "CANCELLED") "Cancelled." else outcome.status,
+                    )
+                    null -> Unit
                 }
             }
         }
@@ -340,6 +352,8 @@ private fun VaultRoute(controller: ChurController) {
     viewing?.let { projection ->
         ViewerRoute(
             controller = controller,
+            operation = operation,
+            status = message,
             cache = cache,
             generation = generation,
             projection = projection,
@@ -455,6 +469,7 @@ private fun VaultRoute(controller: ChurController) {
             openAlbum = openAlbum,
             widthDp = configuration.screenWidthDp,
             progress = message,
+            operation = operation,
             selectedCount = selection.size,
             deviceSlotAvailable = true,
             deviceSlotStrict = deviceSlotStrict,
@@ -474,6 +489,7 @@ private fun VaultRoute(controller: ChurController) {
                 // in which case it extends the selection. Selection is a mode
                 // and an open would leave it silently.
                 if (selection.isEmpty()) {
+                    controller.report(null)
                     viewing = projection
                 } else {
                     selection = selection.toggle(projection.id)
@@ -517,6 +533,7 @@ private fun VaultRoute(controller: ChurController) {
                 }
             },
             onDeleteSelection = { confirmingDelete = true },
+            onCancelOperation = controller::cancelActiveOperation,
             onAddDeviceSlot = controller::enrollDeviceSlot,
             onToggleDeviceSlotPolicy = controller::toggleDeviceSlotPolicy,
             onConfigureSync = controller::configureSync,
@@ -543,6 +560,8 @@ private fun Set<String>.toggle(id: String): Set<String> =
 @Composable
 private fun ViewerRoute(
     controller: ChurController,
+    operation: ActiveOperation?,
+    status: String?,
     cache: ThumbnailCache,
     generation: Long,
     projection: ObjectProjection,
@@ -606,6 +625,9 @@ private fun ViewerRoute(
             { modifier -> VaultPlayer(source, modifier) }
         },
         waveform = waveform,
+        operation = operation,
+        onCancelOperation = controller::cancelActiveOperation,
+        status = status,
     )
     if (confirmingDelete) {
         DeleteSelectionDialog(

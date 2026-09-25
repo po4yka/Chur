@@ -18,6 +18,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -37,6 +38,8 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import dev.po4yka.chur.app.ActiveOperation
 import dev.po4yka.chur.app.theme.AlbumsGlyph
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.LibraryGlyph
@@ -95,6 +98,7 @@ data class VaultUiState(
     val widthDp: Int = 400,
     /** A bounded operation message, carrying no private value. */
     val progress: String? = null,
+    val operation: ActiveOperation? = null,
     /** Whether this platform can hold a device slot at all. */
     val deviceSlotAvailable: Boolean = false,
     /**
@@ -172,6 +176,8 @@ data class VaultActions(
     val onRemoveSelectionFromAlbum: () -> Unit = {},
     /** Delete every selected object from this vault, §11.4. */
     val onDeleteSelection: () -> Unit = {},
+    /** Stop the native operation at its next cooperative cancellation point. */
+    val onCancelOperation: () -> Unit = {},
     /** Connect the vault to the server the user named, `SYNC_PROTOCOL_V1.md` §6. */
     val onConfigureSync: (serverUrl: String, bootstrapSecret: String) -> Unit = { _, _ -> },
     /** Run one sync cycle now. */
@@ -262,7 +268,7 @@ fun VaultShell(state: VaultUiState, actions: VaultActions) {
             // contextual action inside an open album, and a destination
             // nowhere. §11.4 replaces the ordinary actions while a selection
             // runs, and the floating action is one of them.
-            if (state.selectedCount == 0 &&
+            if (state.operation == null && state.selectedCount == 0 &&
                 (state.destination == VaultDestination.LIBRARY || state.openAlbum != null)
             ) {
                 FloatingActionButton(onClick = actions.onImport) {
@@ -287,7 +293,17 @@ fun VaultShell(state: VaultUiState, actions: VaultActions) {
                 state.destination == VaultDestination.SEARCH -> SearchBody(state, actions)
                 else -> SettingsBody(state, actions)
             }
-            state.progress?.let { message ->
+            state.operation?.let { operation ->
+                OperationProgressCard(
+                    operation = operation,
+                    onCancel = actions.onCancelOperation,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(
+                        horizontal = ChurSpacing.gutter,
+                        vertical = 88.dp,
+                    ),
+                )
+            }
+            if (state.operation == null) state.progress?.let { message ->
                 // §10 of the FFI contract: progress carries only bounded
                 // non-private numbers, so this line never names a file.
                 Text(
@@ -296,6 +312,34 @@ fun VaultShell(state: VaultUiState, actions: VaultActions) {
                     color = colors.inkMuted,
                     modifier = Modifier.align(Alignment.BottomStart).padding(ChurSpacing.gutter),
                 )
+            }
+        }
+    }
+}
+
+/** Progress uses only the bounded numeric snapshot published by the FFI. */
+@Composable
+internal fun OperationProgressCard(
+    operation: ActiveOperation,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(modifier = modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter),
+            verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
+        ) {
+            Text(operation.description, style = MaterialTheme.typography.bodyMedium)
+            val fraction = operation.fraction
+            if (fraction == null) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            } else {
+                LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth())
+            }
+            if (operation.cancellable) {
+                TextButton(onClick = onCancel, enabled = !operation.cancelling) {
+                    Text(if (operation.cancelling) "Cancelling…" else "Cancel")
+                }
             }
         }
     }
@@ -323,7 +367,9 @@ private fun SelectionBar(state: VaultUiState, actions: VaultActions) {
             }
         },
         actions = {
-            TextButton(onClick = actions.onExportSelection) { Text("Export") }
+            TextButton(onClick = actions.onExportSelection, enabled = state.operation == null) {
+                Text("Export")
+            }
             Box {
                 TextButton(onClick = { expanded = true }) { Text("More") }
                 DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
@@ -516,7 +562,7 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
             Text("Backup", style = MaterialTheme.typography.titleMedium)
         }
         item {
-            SettingsAction("Write a backup file", actions.onCreateBackup)
+            SettingsAction("Write a backup file", actions.onCreateBackup, enabled = state.operation == null)
         }
         item {
             // `BACKUP_FORMAT_V1.md` §12: rotating a password does not revoke an
@@ -536,7 +582,7 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
             Text("Integrity", style = MaterialTheme.typography.titleMedium)
         }
         item {
-            SettingsAction("Verify every object", actions.onVerifyAll)
+            SettingsAction("Verify every object", actions.onVerifyAll, enabled = state.operation == null)
         }
         state.sync?.let { sync ->
             item {
@@ -610,8 +656,8 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
 }
 
 @Composable
-private fun SettingsAction(label: String, onClick: () -> Unit) {
-    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+private fun SettingsAction(label: String, onClick: () -> Unit, enabled: Boolean = true) {
+    Card(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
         Text(label, modifier = Modifier.padding(ChurSpacing.three))
     }
 }

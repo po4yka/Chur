@@ -15,6 +15,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import dev.po4yka.chur.app.ActiveOperation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -228,8 +229,10 @@ fun RecoveryPhraseScreen(phrase: String, onAcknowledged: () -> Unit) {
 fun RestoreBackupScreen(
     busy: Boolean,
     error: String?,
+    operation: ActiveOperation? = null,
     onChoose: (password: String) -> Unit,
     onBack: () -> Unit,
+    onCancel: () -> Unit = {},
 ) {
     var password by remember { mutableStateOf("") }
     val colors = LocalChurColors.current
@@ -262,7 +265,11 @@ fun RestoreBackupScreen(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 if (error != null) {
-                    Text(error, style = MaterialTheme.typography.bodySmall, color = colors.error)
+                    Text(
+                        error,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (error == "Cancelled.") colors.inkMuted else colors.error,
+                    )
                 }
                 Button(
                     onClick = { onChoose(password) },
@@ -270,6 +277,9 @@ fun RestoreBackupScreen(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(if (busy) "Restoring" else "Choose backup file")
+                }
+                if (operation != null) {
+                    OperationProgressCard(operation, onCancel)
                 }
                 TextButton(onClick = onBack, enabled = !busy) { Text("Back") }
             }

@@ -32,12 +32,12 @@ class ExportDestinations(private val resolver: ContentResolver) : ExportSink {
 
         /** Makes the row visible once the whole object is written. */
         override fun publish() {
-            resolver.update(
+            check(resolver.update(
                 uri,
                 ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) },
                 null,
                 null,
-            )
+            ) == 1) { "the export could not be published" }
         }
 
         /** Removes a destination whose export failed. */
@@ -59,7 +59,12 @@ class ExportDestinations(private val resolver: ContentResolver) : ExportSink {
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
         val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return null
-        val handle = resolver.openFileDescriptor(uri, "w")
+        val handle = try {
+            resolver.openFileDescriptor(uri, "w")
+        } catch (failure: Exception) {
+            resolver.delete(uri, null, null)
+            throw failure
+        }
         if (handle == null) {
             resolver.delete(uri, null, null)
             return null

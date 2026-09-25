@@ -149,6 +149,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     val tags by controller.tags.collectAsState()
     val slots by controller.slots.collectAsState()
     val message by controller.message.collectAsState()
+    val operation by controller.activeOperation.collectAsState()
     val syncStatus by controller.syncStatus.collectAsState()
     val sharingIdentity by controller.sharingIdentity.collectAsState()
     val sharingOverview by controller.sharingOverview.collectAsState()
@@ -285,6 +286,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             openAlbum = openAlbum,
             widthDp = 400,
             progress = message,
+            operation = operation,
             selectedCount = selection.size,
             sync = syncStatus,
             sharingIdentity = sharingIdentity,
@@ -301,8 +303,12 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             // toggled selection, which made a video unreachable and a tap on a
             // photograph mean two things.
             onOpen = { projection ->
-                if (selection.isEmpty()) viewing = projection
-                else selection = selection.toggle(projection.id)
+                if (selection.isEmpty()) {
+                    controller.report(null)
+                    viewing = projection
+                } else {
+                    selection = selection.toggle(projection.id)
+                }
             },
             onToggleSelection = { projection ->
                 selection = selection.toggle(projection.id)
@@ -319,22 +325,31 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                         if (path != null) {
                             scope.launch {
                                 try {
-                                    controller.report("Importing")
-                                    val outcome = withContext(Dispatchers.Default) {
-                                        importer.import(controller.vault, codec.open(NSURL.fileURLWithPath(path)))
+                                    val outcome = controller.importMedia(importer) {
+                                        codec.open(NSURL.fileURLWithPath(path))
                                     }
+                                    if (controller.vaultState.value !is VaultState.Unlocked) return@launch
                                     when (outcome) {
                                         is MediaImporter.Outcome.Imported -> {
-                                            controller.reportImport(if (albumId == null) "Imported into vault." else null)
+                                            controller.reportImport(when {
+                                                outcome.previewsSkipped -> "Imported original; remaining previews cancelled."
+                                                albumId == null -> "Imported into vault."
+                                                else -> null
+                                            })
                                             if (albumId != null) {
                                                 controller.putAllInAlbum(albumId, listOf(outcome.objectId)) {
-                                                    controller.report("Imported into album.")
+                                                    controller.report(if (outcome.previewsSkipped) {
+                                                        "Imported original into album; remaining previews cancelled."
+                                                    } else "Imported into album.")
                                                 }
                                             }
                                         }
                                         is MediaImporter.Outcome.TooLarge -> controller.reportImport(outcome.reason)
                                         MediaImporter.Outcome.Unreadable -> controller.reportImport("That file could not be opened.")
-                                        is MediaImporter.Outcome.Refused -> controller.reportImport(outcome.status)
+                                        is MediaImporter.Outcome.Refused -> controller.reportImport(
+                                            if (outcome.status == "CANCELLED") "Cancelled." else outcome.status,
+                                        )
+                                        null -> Unit
                                     }
                                 } finally {
                                     if (path.startsWith(NSTemporaryDirectory())) unlink(path)
@@ -378,6 +393,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 }
             },
             onDeleteSelection = { confirmingDelete = true },
+            onCancelOperation = controller::cancelActiveOperation,
             onConfigureSync = controller::configureSync,
             onSyncNow = controller::syncNow,
             onDisconnectSync = controller::disconnectSync,
@@ -390,6 +406,8 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     viewing?.let { projection ->
         IosViewerRoute(
             controller = controller,
+            operation = operation,
+            status = message,
             cache = cache,
             generation = generation,
             projection = projection,
@@ -410,6 +428,8 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
 @Composable
 private fun IosViewerRoute(
     controller: ChurController,
+    operation: ActiveOperation?,
+    status: String?,
     cache: ThumbnailCache,
     generation: Long,
     projection: ObjectProjection,
@@ -473,6 +493,9 @@ private fun IosViewerRoute(
             { modifier -> VaultPlayer(source, modifier) }
         },
         waveform = waveform,
+        operation = operation,
+        onCancelOperation = controller::cancelActiveOperation,
+        status = status,
     )
     if (confirmingDelete) {
         DeleteSelectionDialog(
@@ -514,11 +537,13 @@ public object IosMediaPicker {
 @Composable
 private fun IosRestoreRoute(controller: ChurController) {
     val message by controller.message.collectAsState()
+    val operation by controller.activeOperation.collectAsState()
     var running by remember { mutableStateOf(false) }
 
     RestoreBackupScreen(
         busy = running,
         error = message,
+        operation = operation,
         onChoose = { password ->
             val present = IosBackupPicker.present
             if (present == null) {
@@ -547,6 +572,7 @@ private fun IosRestoreRoute(controller: ChurController) {
             }
         },
         onBack = { controller.goTo(AppRoute.PublicShell) },
+        onCancel = controller::cancelActiveOperation,
     )
 }
 

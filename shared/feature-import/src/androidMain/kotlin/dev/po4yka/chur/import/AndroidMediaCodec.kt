@@ -131,9 +131,15 @@ class AndroidMediaCodec(private val resolver: ContentResolver) : MediaCodec {
         )
     }
 
-    override fun derive(media: PickedMedia, probe: ProbedMedia, kind: StreamKind): Derivative? {
+    override fun derive(
+        media: PickedMedia,
+        probe: ProbedMedia,
+        kind: StreamKind,
+        cancelRequested: () -> Boolean,
+    ): Derivative? {
+        if (cancelRequested()) return null
         val uri = uriOf(media) ?: return null
-        if (kind == StreamKind.AUDIO_WAVEFORM) return deriveWaveform(uri, probe)
+        if (kind == StreamKind.AUDIO_WAVEFORM) return deriveWaveform(uri, probe, cancelRequested)
         val target = MediaBounds.targetSize(kind, probe.width, probe.height) ?: return null
         val (targetWidth, targetHeight) = target
         val bitmap = when (probe.mediaClass) {
@@ -169,7 +175,11 @@ class AndroidMediaCodec(private val resolver: ContentResolver) : MediaCodec {
      * distinct outcome from a malformed source, and the caller decides whether
      * to import the object without this derivative.
      */
-    private fun deriveWaveform(uri: Uri, probe: ProbedMedia): Derivative? {
+    private fun deriveWaveform(
+        uri: Uri,
+        probe: ProbedMedia,
+        cancelRequested: () -> Boolean,
+    ): Derivative? {
         val descriptor = resolver.openFileDescriptor(uri, "r") ?: return null
         val extractor = MediaExtractor()
         var codec: android.media.MediaCodec? = null
@@ -191,7 +201,8 @@ class AndroidMediaCodec(private val resolver: ContentResolver) : MediaCodec {
             codec = android.media.MediaCodec.createDecoderByType(mime)
             codec.configure(format, null, null, 0)
             codec.start()
-            drain(codec, extractor, accumulator)
+            drain(codec, extractor, accumulator, cancelRequested)
+            if (cancelRequested()) return null
             return Derivative(
                 kind = StreamKind.AUDIO_WAVEFORM,
                 bytes = accumulator.encode(probe.durationMs),
@@ -225,11 +236,13 @@ class AndroidMediaCodec(private val resolver: ContentResolver) : MediaCodec {
         codec: android.media.MediaCodec,
         extractor: MediaExtractor,
         into: Waveform.Accumulator,
+        cancelRequested: () -> Boolean,
     ) {
         val info = android.media.MediaCodec.BufferInfo()
         var inputDone = false
         var stalls = 0
         while (stalls < DECODE_STALL_LIMIT) {
+            if (cancelRequested()) return
             var moved = false
             if (!inputDone) {
                 val index = codec.dequeueInputBuffer(BUFFER_TIMEOUT_US)

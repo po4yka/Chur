@@ -140,9 +140,15 @@ class IosMediaCodec : MediaCodec {
         )
     }
 
-    override fun derive(media: PickedMedia, probe: ProbedMedia, kind: StreamKind): Derivative? {
+    override fun derive(
+        media: PickedMedia,
+        probe: ProbedMedia,
+        kind: StreamKind,
+        cancelRequested: () -> Boolean,
+    ): Derivative? {
+        if (cancelRequested()) return null
         val url = urlOf(media) ?: return null
-        if (kind == StreamKind.AUDIO_WAVEFORM) return deriveWaveform(url, probe)
+        if (kind == StreamKind.AUDIO_WAVEFORM) return deriveWaveform(url, probe, cancelRequested)
         val target = MediaBounds.targetSize(kind, probe.width, probe.height) ?: return null
         val (width, height) = target
         val image = when (probe.mediaClass) {
@@ -180,7 +186,11 @@ class IosMediaCodec : MediaCodec {
      * `AVAssetReaderAudioMixOutput` produces for every input format the platform
      * decodes, so the folding code is the same on both hosts.
      */
-    private fun deriveWaveform(url: NSURL, probe: ProbedMedia): Derivative? {
+    private fun deriveWaveform(
+        url: NSURL,
+        probe: ProbedMedia,
+        cancelRequested: () -> Boolean,
+    ): Derivative? {
         val asset = AVURLAsset(url, options = null)
         val track = asset.tracksWithMediaType(AVMediaTypeAudio).firstOrNull() as? AVAssetTrack
             ?: return null
@@ -202,6 +212,10 @@ class IosMediaCodec : MediaCodec {
         val samples = probe.durationMs * SAMPLE_RATE_HINT / 1_000L
         val accumulator = Waveform.Accumulator(samples)
         while (true) {
+            if (cancelRequested()) {
+                reader.cancelReading()
+                return null
+            }
             val buffer = output.copyNextSampleBuffer() ?: break
             val block = CMSampleBufferGetDataBuffer(buffer)
             if (block != null) {

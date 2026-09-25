@@ -205,7 +205,12 @@ interface MediaCodec {
      * It returns `null` when the source has no decodable image, which §13 says
      * must not commit a catalog entry claiming the derivative exists.
      */
-    fun derive(media: PickedMedia, probe: ProbedMedia, kind: StreamKind): Derivative?
+    fun derive(
+        media: PickedMedia,
+        probe: ProbedMedia,
+        kind: StreamKind,
+        cancelRequested: () -> Boolean = { false },
+    ): Derivative?
 }
 
 /**
