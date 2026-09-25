@@ -724,6 +724,9 @@ impl IntoResponse for HttpError {
             | ChurStatus::StorageUnavailable
             | ChurStatus::NetworkFailure
             | ChurStatus::InternalFailure => StatusCode::SERVICE_UNAVAILABLE,
+            // Stored server state failed an integrity check. The fault is the
+            // server's, and a retry reads the same state.
+            ChurStatus::CatalogCorrupt => StatusCode::INTERNAL_SERVER_ERROR,
             _ => StatusCode::UNPROCESSABLE_ENTITY,
         };
         (
@@ -740,6 +743,13 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
+
+    #[test]
+    fn catalog_corrupt_is_a_server_error() {
+        let response =
+            HttpError(Error::new(ChurStatus::CatalogCorrupt, "damaged row")).into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
 
     #[test]
     fn collection_cursor_is_complete_or_absent() {
