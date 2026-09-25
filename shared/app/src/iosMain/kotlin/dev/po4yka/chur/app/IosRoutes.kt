@@ -142,6 +142,9 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     val slots by controller.slots.collectAsState()
     val message by controller.message.collectAsState()
     val syncStatus by controller.syncStatus.collectAsState()
+    val sharingIdentity by controller.sharingIdentity.collectAsState()
+    val sharingOverview by controller.sharingOverview.collectAsState()
+    val sharingRecipient by controller.sharingRecipient.collectAsState()
     var destination by remember { mutableStateOf(VaultDestination.LIBRARY) }
     var terms by remember { mutableStateOf("") }
     var openAlbum by remember { mutableStateOf<AlbumSummary?>(null) }
@@ -155,7 +158,10 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             )
             destination == VaultDestination.LIBRARY -> controller.load(ObjectQuery())
             destination == VaultDestination.ALBUMS -> controller.loadAlbums()
-            destination == VaultDestination.SETTINGS -> controller.loadSlots()
+            destination == VaultDestination.SETTINGS -> {
+                controller.loadSlots()
+                controller.loadSharing()
+            }
             else -> Unit
         }
     }
@@ -204,6 +210,9 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             progress = message,
             selectedCount = selection.size,
             sync = syncStatus,
+            sharingIdentity = sharingIdentity,
+            sharingOverview = sharingOverview,
+            sharingRecipient = sharingRecipient,
         ),
         actions = VaultActions(
             onDestination = {
@@ -258,6 +267,9 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             onConfigureSync = controller::configureSync,
             onSyncNow = controller::syncNow,
             onDisconnectSync = controller::disconnectSync,
+            onInspectSharingRecipient = controller::inspectSharingRecipient,
+            onShareWithRecipient = controller::shareWithRecipient,
+            onRevokeSharingMember = controller::revokeSharingMember,
         ),
     )
 

@@ -67,7 +67,7 @@ pub const ABI_VERSION_MAJOR: u32 = 1;
 /// multi-device recipients. §6.2 makes an addition a minor bump. Nothing in
 /// the §6.2 list changed, so a host built against 1.0 still works: an export it
 /// does not call costs it nothing.
-pub const ABI_VERSION_MINOR: u32 = 9;
+pub const ABI_VERSION_MINOR: u32 = 10;
 
 /// Capability bit: independent decoy identity supported.
 pub const CHUR_CAP_DECOY_VAULT: u64 = 1 << 0;

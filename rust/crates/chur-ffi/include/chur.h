@@ -15,9 +15,10 @@
  * sharing identity surface of section 6.9, and the share preparation surface
  * of section 6.10, the share acceptance surface of section 6.11, and the
  * recipient revocation surface of section 6.12, and the authenticated
- * recipient-device surface of section 6.13. Adding an export raises the minor
+ * recipient-device surface of section 6.13, and the sharing discovery surface
+ * of section 6.14. Adding an export raises the minor
  * ABI version; changing or removing one raises the major. The library reports
- * 1.9.
+ * 1.10.
  */
 
 #ifndef CHUR_H
@@ -355,6 +356,17 @@ chur_status_t chur_sync_process(chur_handle_t session, uint64_t now_ms,
 chur_status_t chur_sharing_identity(chur_handle_t session,
                                     uint8_t *destination, size_t capacity,
                                     size_t *bytes_written);
+
+/* Default collection and current recipients, section 6.14. */
+chur_status_t chur_sharing_overview(chur_handle_t session,
+                                    uint8_t *destination, size_t capacity,
+                                    size_t *bytes_written);
+
+/* Authenticated initial recipient enrollment preview, section 6.14. */
+chur_status_t chur_sharing_inspect_enrollment(const uint8_t *enrollment,
+                                               uint32_t enrollment_length,
+                                               uint8_t *destination, size_t capacity,
+                                               size_t *bytes_written);
 
 /* Recipient membership and HPKE grant preparation, section 6.10. */
 chur_status_t chur_sharing_prepare(chur_handle_t session,

@@ -1,5 +1,8 @@
 package dev.po4yka.chur.sync
 
+import dev.po4yka.chur.ffi.PreparedGrant
+import dev.po4yka.chur.ffi.PreparedShare
+import dev.po4yka.chur.ffi.PreparedShareRevocation
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
@@ -46,6 +49,30 @@ public class FileSyncStateStore(
                 deviceId = fromHex(file.deviceId),
                 transportToken = fromHex(file.transportToken),
                 cursors = file.cursors.map { DeviceCursor(fromHex(it.deviceId), it.after.toULong()) },
+                pendingSharing = file.pendingSharing.map { pending ->
+                    val membership = fromHex(pending.membership)
+                    val operation = fromHex(pending.membershipOperation)
+                    when (pending.kind) {
+                        "share" -> PendingSharingPublication(
+                            share = PreparedShare(
+                                membership,
+                                operation,
+                                fromHex(requireNotNull(pending.grant)),
+                                fromHex(requireNotNull(pending.grantOperation)),
+                            ),
+                        )
+                        "revocation" -> PendingSharingPublication(
+                            revocation = PreparedShareRevocation(
+                                membership,
+                                operation,
+                                pending.rotationOperations.map(::fromHex),
+                                pending.grants.map { PreparedGrant(fromHex(it.grant), fromHex(it.operation)) },
+                                pending.rotationComplete,
+                            ),
+                        )
+                        else -> error("unknown pending sharing record")
+                    }
+                },
             ).also { cache = it }
         }
 
@@ -60,6 +87,20 @@ public class FileSyncStateStore(
                         deviceId = state.deviceId.toHex(),
                         transportToken = state.transportToken.toHex(),
                         cursors = state.cursors.map { CursorV1(it.deviceId.toHex(), it.after.toString()) },
+                        pendingSharing = state.pendingSharing.map { pending ->
+                            val share = pending.share
+                            val revocation = pending.revocation
+                            PendingSharingFileV1(
+                                kind = if (share != null) "share" else "revocation",
+                                membership = (share?.membership ?: requireNotNull(revocation).membership).toHex(),
+                                membershipOperation = (share?.membershipOperation ?: requireNotNull(revocation).membershipOperation).toHex(),
+                                grant = share?.grant?.toHex(),
+                                grantOperation = share?.grantOperation?.toHex(),
+                                rotationOperations = revocation?.rotationOperations?.map(ByteArray::toHex).orEmpty(),
+                                grants = revocation?.grants?.map { GrantFileV1(it.grant.toHex(), it.operation.toHex()) }.orEmpty(),
+                                rotationComplete = revocation?.rotationComplete ?: true,
+                            )
+                        },
                     ),
                 )
             writeSyncStateFile(path, text)
@@ -101,7 +142,17 @@ public data class SyncState(
     public val transportToken: ByteArray,
     /** One pull cursor per device chain, `SYNC_PROTOCOL_V1.md` §5. */
     public val cursors: List<DeviceCursor>,
+    /** Signed sharing batches waiting for idempotent server publication. */
+    public val pendingSharing: List<PendingSharingPublication> = emptyList(),
 )
+
+/** One already prepared batch retained until its server upload succeeds. */
+public data class PendingSharingPublication(
+    public val share: PreparedShare? = null,
+    public val revocation: PreparedShareRevocation? = null,
+) {
+    init { require((share == null) != (revocation == null)) }
+}
 
 @Serializable
 private data class SyncStateFileV1(
@@ -111,7 +162,23 @@ private data class SyncStateFileV1(
     val deviceId: String,
     val transportToken: String,
     val cursors: List<CursorV1> = emptyList(),
+    val pendingSharing: List<PendingSharingFileV1> = emptyList(),
 )
+
+@Serializable
+private data class PendingSharingFileV1(
+    val kind: String,
+    val membership: String,
+    val membershipOperation: String,
+    val grant: String? = null,
+    val grantOperation: String? = null,
+    val rotationOperations: List<String> = emptyList(),
+    val grants: List<GrantFileV1> = emptyList(),
+    val rotationComplete: Boolean = true,
+)
+
+@Serializable
+private data class GrantFileV1(val grant: String, val operation: String)
 
 @Serializable
 private data class CursorV1(

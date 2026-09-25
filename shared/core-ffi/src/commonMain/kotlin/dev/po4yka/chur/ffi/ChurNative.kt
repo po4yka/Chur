@@ -91,6 +91,18 @@ internal expect object ChurNative {
         outWritten: IntArray,
     ): Int
 
+    fun sharingOverview(
+        session: Long,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int
+
+    fun sharingInspectEnrollment(
+        enrollment: ByteArray,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int
+
     fun sharingPrepare(
         session: Long,
         collectionId: ByteArray,

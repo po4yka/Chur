@@ -94,6 +94,18 @@ internal object ChurJni {
         outWritten: IntArray,
     ): Int
 
+    external fun sharingOverview(
+        session: Long,
+        destination: ByteBuffer,
+        outWritten: IntArray,
+    ): Int
+
+    external fun sharingInspectEnrollment(
+        enrollment: ByteArray,
+        destination: ByteBuffer,
+        outWritten: IntArray,
+    ): Int
+
     external fun sharingPrepare(
         session: Long,
         collectionId: ByteArray,

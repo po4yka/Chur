@@ -4,11 +4,12 @@ use chur_core::{ChurStatus, Error, Id, ensure};
 use chur_crypto::Key;
 use chur_format::codec::{Reader, Writer};
 use chur_sync_protocol::{
-    collection_membership::CollectionMembershipRecord,
+    collection_membership::{CollectionMembershipRecord, RecipientVerification},
     grant::{CollectionGrant, PermissionProfile},
     identity::fingerprint,
     membership::{EnrollmentRecord, RevocationRecord},
     operation::Operation,
+    state::MembershipState,
 };
 
 use crate::api::{Status, borrow_bytes, borrow_bytes_mut, borrow_large, write_out};
@@ -97,6 +98,142 @@ pub unsafe extern "C" fn chur_sharing_identity(
             encoded.len() <= buffer.len(),
             ResourceLimitExceeded,
             "the destination buffer is smaller than the sharing identity record"
+        );
+        buffer[..encoded.len()].copy_from_slice(&encoded);
+        // SAFETY: the caller guarantees the writable out-parameter above.
+        unsafe { write_out(bytes_written, encoded.len()) }
+    })
+}
+
+/// Returns the default collection and its current and historical recipient devices.
+///
+/// # Safety
+///
+/// `destination` covers `capacity` writable bytes and `bytes_written` points
+/// to one writable, aligned `size_t` for this call.
+#[unsafe(no_mangle)]
+#[expect(
+    unsafe_code,
+    reason = "FFI_CONTRACT.md section 6.14 fixes this exported symbol"
+)]
+pub unsafe extern "C" fn chur_sharing_overview(
+    session: Handle,
+    destination: *mut u8,
+    capacity: usize,
+    bytes_written: *mut usize,
+) -> Status {
+    guard_status_for(session, || {
+        // SAFETY: the caller guarantees the writable out-parameter above.
+        unsafe { write_out(bytes_written, 0usize)? };
+        let entry = registry::get(session, Kind::Session)?;
+        let Entry::Session { session, .. } = entry.as_ref() else {
+            return Err(Error::new(
+                ChurStatus::InvalidInput,
+                "the handle is of another type",
+            ));
+        };
+        let encoded = {
+            let mut session = registry::lock(session);
+            let collection_id = chur_media::keys::ensure_default_collection(&mut session)?;
+            let state = chur_catalog::sharing::load(session.catalog_ref()?, &collection_id)?;
+            let mut writer = Writer::new();
+            writer.u16(RECORD_VERSION_V1).id(&collection_id);
+            let members = state
+                .as_ref()
+                .map_or_else(Vec::new, |state| state.members().collect::<Vec<_>>());
+            ensure!(
+                members.len() <= BUNDLE_RECORDS_MAX,
+                ResourceLimitExceeded,
+                "the sharing overview exceeds the member limit"
+            );
+            writer.u32(u32::try_from(members.len()).map_err(|_| {
+                Error::new(
+                    ChurStatus::ResourceLimitExceeded,
+                    "the sharing overview count exceeds u32",
+                )
+            })?);
+            for (vault_id, device_id, member) in members {
+                let display = fingerprint(
+                    vault_id,
+                    device_id,
+                    member.signing_public_key(),
+                    member.hpke_public_key(),
+                );
+                let verified = state
+                    .as_ref()
+                    .and_then(|state| state.recipient_verification(vault_id, device_id));
+                writer
+                    .id(vault_id)
+                    .id(device_id)
+                    .u8(member.permissions() as u8)
+                    .u8(u8::from(member.is_active()))
+                    .u8(u8::from(verified == Some(RecipientVerification::Verified)));
+                writer.variable(display.as_bytes())?;
+            }
+            writer.finish()
+        };
+        // SAFETY: the caller guarantees the writable destination range above.
+        let buffer = unsafe { borrow_bytes_mut(destination, capacity)? };
+        ensure!(
+            encoded.len() <= buffer.len(),
+            ResourceLimitExceeded,
+            "the destination buffer is smaller than the sharing overview"
+        );
+        buffer[..encoded.len()].copy_from_slice(&encoded);
+        // SAFETY: the caller guarantees the writable out-parameter above.
+        unsafe { write_out(bytes_written, encoded.len()) }
+    })
+}
+
+/// Authenticates a self-signed initial enrollment before showing its identity.
+///
+/// # Safety
+///
+/// `enrollment` covers `enrollment_length` readable bytes, `destination`
+/// covers `capacity` writable bytes, and `bytes_written` is writable.
+#[unsafe(no_mangle)]
+#[expect(
+    unsafe_code,
+    reason = "FFI_CONTRACT.md section 6.14 fixes this exported symbol"
+)]
+pub unsafe extern "C" fn chur_sharing_inspect_enrollment(
+    enrollment: *const u8,
+    enrollment_length: u32,
+    destination: *mut u8,
+    capacity: usize,
+    bytes_written: *mut usize,
+) -> Status {
+    guard_status_for(0, || {
+        // SAFETY: the caller guarantees the writable out-parameter above.
+        unsafe { write_out(bytes_written, 0usize)? };
+        ensure!(
+            enrollment_length as usize == EnrollmentRecord::LEN,
+            InvalidInput,
+            "a recipient enrollment has an invalid length"
+        );
+        // SAFETY: the caller guarantees the readable input range above.
+        let record =
+            EnrollmentRecord::decode(unsafe { borrow_bytes(enrollment, enrollment_length)? })?;
+        MembershipState::bootstrap(&record)?;
+        let display = fingerprint(
+            record.vault_id(),
+            record.device_id(),
+            record.signing_public_key(),
+            record.hpke_public_key(),
+        );
+        let mut writer = Writer::new();
+        writer
+            .u16(RECORD_VERSION_V1)
+            .id(record.vault_id())
+            .id(record.device_id());
+        writer.variable(display.as_bytes())?;
+        let encoded = writer.finish();
+        // SAFETY: the caller guarantees the writable destination range above.
+        let buffer = unsafe { borrow_bytes_mut(destination, capacity)? };
+        ensure!(
+            encoded.len() <= buffer.len(),
+            ResourceLimitExceeded,
+            "the destination buffer is smaller than the recipient preview"
         );
         buffer[..encoded.len()].copy_from_slice(&encoded);
         // SAFETY: the caller guarantees the writable out-parameter above.

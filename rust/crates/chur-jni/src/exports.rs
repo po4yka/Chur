@@ -466,6 +466,67 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingIdentity<'local>(
     })
 }
 
+/// Returns the default collection and active recipient devices.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingOverview<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let mut written = 0usize;
+        // SAFETY: `written` is live and the buffer is direct.
+        let status = unsafe {
+            chur_ffi::sharing::chur_sharing_overview(
+                handle_of(session),
+                address,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Authenticates an initial recipient enrollment before display.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingInspectEnrollment<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    enrollment: JByteArray<'local>,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(enrollment) = byte_array(env, &enrollment) else {
+            return INVALID_INPUT;
+        };
+        let Ok(enrollment_length) = u32::try_from(enrollment.len()) else {
+            return INVALID_INPUT;
+        };
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let mut written = 0usize;
+        // SAFETY: the vector, `written`, and direct buffer stay live for the call.
+        let status = unsafe {
+            chur_ffi::sharing::chur_sharing_inspect_enrollment(
+                enrollment.as_ptr(),
+                enrollment_length,
+                address,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
 /// Prepares one recipient membership and collection-key grant.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingPrepare<'local>(

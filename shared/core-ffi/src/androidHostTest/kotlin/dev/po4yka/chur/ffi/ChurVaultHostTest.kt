@@ -212,6 +212,15 @@ class ChurVaultHostTest {
         assertContentEquals(first.deviceId, replay.deviceId)
         assertContentEquals(first.enrollment, replay.enrollment)
         assertContentEquals(first.initialOperation, replay.initialOperation)
+        val overview = ChurVault.sharingOverview(session)
+        assertEquals(16, overview.collectionId.size)
+        assertTrue(overview.members.isEmpty())
+        val inspected = ChurVault.inspectEnrollment(first.enrollment)
+        assertContentEquals(first.vaultId, inspected.vaultId)
+        assertContentEquals(first.deviceId, inspected.deviceId)
+        assertEquals(first.fingerprint, inspected.fingerprint)
+        val altered = first.enrollment.copyOf().also { it[it.lastIndex] = (it.last().toInt() xor 1).toByte() }
+        assertFailsWith<ChurFailure> { ChurVault.inspectEnrollment(altered) }
         ChurVault.closeSession(session)
     }
 
@@ -219,7 +228,7 @@ class ChurVaultHostTest {
     fun the_handshake_matches_the_frozen_abi() {
         val handshake = ChurVault.handshake()
         assertEquals(1, handshake.major)
-        assertEquals(9, handshake.minor, "§6.13 added authenticated recipient devices")
+        assertEquals(10, handshake.minor, "§6.14 added user-facing sharing discovery")
         assertEquals(1, handshake.objectFormatMin)
         assertEquals(1, handshake.objectFormatMax)
         assertTrue(handshake.capabilities and 0b0000_0010L != 0L, "the reader is declared")

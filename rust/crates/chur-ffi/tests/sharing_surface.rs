@@ -6,8 +6,8 @@
 use chur_ffi::api::{chur_runtime_close, chur_runtime_open, chur_session_close, chur_vault_unlock};
 use chur_ffi::records::{ChurRuntimeConfigV1, ChurUnlockRequestV1};
 use chur_ffi::sharing::{
-    chur_sharing_accept, chur_sharing_identity, chur_sharing_prepare, chur_sharing_prepare_device,
-    chur_sharing_revoke,
+    chur_sharing_accept, chur_sharing_identity, chur_sharing_inspect_enrollment,
+    chur_sharing_overview, chur_sharing_prepare, chur_sharing_prepare_device, chur_sharing_revoke,
 };
 use chur_format::codec::{Reader, Writer};
 use chur_format::envelope::CollectionKeyEnvelope;
@@ -112,6 +112,25 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
     assert_eq!(operation.device_id(), &device_id);
     assert_eq!(operation.device_sequence(), 1);
 
+    let mut overview = vec![0u8; 512 * 1024];
+    assert_eq!(
+        unsafe {
+            chur_sharing_overview(session, overview.as_mut_ptr(), overview.len(), &mut written)
+        },
+        0
+    );
+    let mut overview_reader = Reader::new(
+        &overview[..written],
+        chur_core::ChurStatus::NonCanonicalEncoding,
+    );
+    assert_eq!(overview_reader.u16().expect("overview version"), 1);
+    assert_eq!(
+        overview_reader.id().expect("default collection"),
+        collection_id
+    );
+    assert_eq!(overview_reader.u32().expect("empty members"), 0);
+    overview_reader.finish().expect("complete empty overview");
+
     let recipient_path = std::env::temp_dir().join(format!(
         "chur-ffi-sharing-recipient-{}",
         chur_crypto::random::id().expect("random id").to_hex()
@@ -167,6 +186,55 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
         .variable(EnrollmentRecord::LEN as u32)
         .expect("recipient enrollment")
         .to_vec();
+    let mut preview = [0u8; 128];
+    assert_eq!(
+        unsafe {
+            chur_sharing_inspect_enrollment(
+                recipient_enrollment.as_ptr(),
+                recipient_enrollment.len() as u32,
+                preview.as_mut_ptr(),
+                preview.len(),
+                &mut written,
+            )
+        },
+        0
+    );
+    let mut preview_reader = Reader::new(
+        &preview[..written],
+        chur_core::ChurStatus::NonCanonicalEncoding,
+    );
+    assert_eq!(preview_reader.u16().expect("preview version"), 1);
+    assert_eq!(
+        preview_reader.id().expect("preview vault"),
+        recipient_vault_id
+    );
+    assert_eq!(
+        preview_reader.id().expect("preview device"),
+        recipient_device_id
+    );
+    assert_eq!(
+        preview_reader
+            .variable(49)
+            .expect("preview fingerprint")
+            .len(),
+        49
+    );
+    preview_reader.finish().expect("complete preview");
+    let mut forged = recipient_enrollment.clone();
+    *forged.last_mut().expect("signature byte") ^= 1;
+    assert_eq!(
+        unsafe {
+            chur_sharing_inspect_enrollment(
+                forged.as_ptr(),
+                forged.len() as u32,
+                preview.as_mut_ptr(),
+                preview.len(),
+                &mut written,
+            )
+        },
+        chur_core::ChurStatus::AuthenticationFailed.as_i32()
+    );
+    assert_eq!(written, 0);
     let recipient_initial_operation = recipient_reader
         .variable(16_777_216)
         .expect("recipient initial operation")
@@ -241,6 +309,45 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
     assert_eq!(grant.recipient_device_id(), &recipient_device_id);
     assert!(grant.permissions() == PermissionProfile::Contribute);
     assert!(membership_operation.device_sequence() < grant_operation.device_sequence());
+
+    assert_eq!(
+        unsafe {
+            chur_sharing_overview(session, overview.as_mut_ptr(), overview.len(), &mut written)
+        },
+        0
+    );
+    let mut overview_reader = Reader::new(
+        &overview[..written],
+        chur_core::ChurStatus::NonCanonicalEncoding,
+    );
+    assert_eq!(overview_reader.u16().expect("overview version"), 1);
+    assert_eq!(
+        overview_reader.id().expect("default collection"),
+        collection_id
+    );
+    assert_eq!(overview_reader.u32().expect("member count"), 1);
+    assert_eq!(
+        overview_reader.id().expect("member vault"),
+        recipient_vault_id
+    );
+    assert_eq!(
+        overview_reader.id().expect("member device"),
+        recipient_device_id
+    );
+    assert_eq!(
+        overview_reader.u8().expect("permission"),
+        PermissionProfile::Contribute as u8
+    );
+    assert_eq!(overview_reader.u8().expect("active"), 1);
+    assert_eq!(overview_reader.u8().expect("verified"), 1);
+    assert_eq!(
+        overview_reader
+            .variable(49)
+            .expect("member fingerprint")
+            .len(),
+        49
+    );
+    overview_reader.finish().expect("complete overview");
 
     let mut recipient_evidence = Writer::new();
     recipient_evidence.u16(1).u32(1);
@@ -370,6 +477,44 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
         0
     );
     revoke.truncate(revoke_written);
+    assert_eq!(
+        unsafe {
+            chur_sharing_overview(session, overview.as_mut_ptr(), overview.len(), &mut written)
+        },
+        0
+    );
+    let mut overview_reader = Reader::new(
+        &overview[..written],
+        chur_core::ChurStatus::NonCanonicalEncoding,
+    );
+    assert_eq!(overview_reader.u16().expect("overview version"), 1);
+    assert_eq!(
+        overview_reader.id().expect("default collection"),
+        collection_id
+    );
+    assert_eq!(overview_reader.u32().expect("historical members"), 1);
+    assert_eq!(
+        overview_reader.id().expect("revoked vault"),
+        recipient_vault_id
+    );
+    assert_eq!(
+        overview_reader.id().expect("revoked device"),
+        recipient_device_id
+    );
+    assert_eq!(
+        overview_reader.u8().expect("old permission"),
+        PermissionProfile::Contribute as u8
+    );
+    assert_eq!(overview_reader.u8().expect("inactive"), 0);
+    assert_eq!(overview_reader.u8().expect("verified"), 1);
+    assert_eq!(
+        overview_reader
+            .variable(49)
+            .expect("revoked fingerprint")
+            .len(),
+        49
+    );
+    overview_reader.finish().expect("complete revoked overview");
     let mut revoke_reader = Reader::new(&revoke, chur_core::ChurStatus::NonCanonicalEncoding);
     assert_eq!(revoke_reader.u16().expect("revoke version"), 1);
     let revoked_membership = CollectionMembershipRecord::decode(

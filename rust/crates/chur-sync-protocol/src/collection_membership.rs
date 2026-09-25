@@ -736,6 +736,13 @@ impl CollectionMembershipState {
         self.members.get(&(*identity_vault_id, *device_id))
     }
 
+    /// Current and historical recipient devices in canonical identifier order.
+    pub fn members(&self) -> impl Iterator<Item = (&Id, &Id, &CollectionMember)> {
+        self.members
+            .iter()
+            .map(|((vault_id, device_id), member)| (vault_id, device_id, member))
+    }
+
     /// Latest accepted collection membership generation.
     #[must_use]
     pub const fn generation(&self) -> u64 {

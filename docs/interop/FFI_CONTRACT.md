@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. v1 ships 1.9: §6.5 through §6.13 each added one minor surface. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
+- native API version is the (major, minor) pair. v1 ships 1.10: §6.5 through §6.14 each added one minor surface. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -552,6 +552,24 @@ chur_status_t chur_sharing_prepare_device(chur_handle_t session,
 ```
 
 The evidence is at most 16 MiB and contains `version:u16 = 1`, `membership_count:u32`, that many `membership_record:bytes<u32>` values, `operation_count:u32`, and that many `operation:bytes<u32>` values. Each count is at most 4096. The membership list starts at generation one and includes every successor through the selected device's current membership. The output and retry rules are identical to §6.10. The initial-enrollment function remains for ABI compatibility and first-device invitations.
+
+### 6.14 User-facing sharing discovery, ABI 1.10
+
+`chur_sharing_overview` idempotently creates the default cryptographic collection if needed, then returns its identifier and all current or historical recipient devices. Its canonical output is `version:u16 = 1`, `collection_id:id`, `member_count:u32`, then each member in identifier order as `vault_id:id`, `device_id:id`, `permissions:u8`, `active:u8`, `fingerprint_verified:u8`, `fingerprint:bytes<u32>`. The count is at most 4096. The fingerprint is computed from the pinned public keys; both flags are exactly zero or one. A revoked recipient remains visible with `active = 0` so a pending key rotation can resume after restart.
+
+`chur_sharing_inspect_enrollment` accepts exactly one canonical 270-byte initial enrollment and verifies its self-signature before returning `version:u16 = 1`, `vault_id:id`, `device_id:id`, `fingerprint:bytes<u32>`. The application compares the displayed fingerprint through an independent channel before preparing a grant. The enrollment and overview output contain public identity material only; neither function exposes a private key.
+
+```c
+chur_status_t chur_sharing_overview(chur_handle_t session,
+                                    uint8_t *destination, size_t capacity,
+                                    size_t *bytes_written);
+chur_status_t chur_sharing_inspect_enrollment(const uint8_t *enrollment,
+                                               uint32_t enrollment_length,
+                                               uint8_t *destination, size_t capacity,
+                                               size_t *bytes_written);
+```
+
+Both calls set `bytes_written` to zero on failure and reject a short destination without a partial write. The caller reserves 512 KiB for the overview and 128 bytes for one recipient preview.
 
 ## 7. Buffer ownership
 

@@ -13,6 +13,11 @@ import dev.po4yka.chur.ffi.ObjectPage
 import dev.po4yka.chur.ffi.ObjectQuery
 import dev.po4yka.chur.ffi.OperationProgress
 import dev.po4yka.chur.ffi.SharingIdentity
+import dev.po4yka.chur.ffi.SharingOverview
+import dev.po4yka.chur.ffi.SharingPermission
+import dev.po4yka.chur.ffi.SharingRecipient
+import dev.po4yka.chur.ffi.PreparedShare
+import dev.po4yka.chur.ffi.PreparedShareRevocation
 import dev.po4yka.chur.ffi.SlotSummary
 import dev.po4yka.chur.ffi.StreamKind
 import dev.po4yka.chur.ffi.SyncProcessReport
@@ -454,6 +459,39 @@ class VaultRepository(
      */
     suspend fun syncIdentity(): SharingIdentity? = mutex.withLock {
         if (session == 0L) null else ChurVault.sharingIdentity(session)
+    }
+
+    suspend fun sharingOverview(): SharingOverview = mutex.withLock {
+        require(session != 0L) { "the vault is locked" }
+        ChurVault.sharingOverview(session)
+    }
+
+    suspend fun inspectEnrollment(enrollment: ByteArray): SharingRecipient =
+        ChurVault.inspectEnrollment(enrollment)
+
+    suspend fun prepareShare(
+        collectionId: ByteArray,
+        enrollment: ByteArray,
+        permission: SharingPermission,
+    ): PreparedShare = mutex.withLock {
+        require(session != 0L) { "the vault is locked" }
+        ChurVault.prepareShare(session, collectionId, enrollment, permission, true)
+    }
+
+    suspend fun revokeShare(
+        collectionId: ByteArray,
+        recipientVaultId: ByteArray,
+        recipientDeviceId: ByteArray,
+    ): PreparedShareRevocation = mutex.withLock {
+        require(session != 0L) { "the vault is locked" }
+        ChurVault.revokeShare(session, collectionId, recipientVaultId, recipientDeviceId, clock())
+    }
+
+    suspend fun acceptSharePackage(packageBytes: ByteArray): Boolean = mutex.withLock {
+        if (session == 0L) false else {
+            ChurVault.acceptSharePackage(session, packageBytes)
+            true
+        }
     }
 
     // -----------------------------------------------------------------------

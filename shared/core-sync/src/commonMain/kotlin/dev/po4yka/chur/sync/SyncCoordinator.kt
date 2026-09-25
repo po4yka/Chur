@@ -2,6 +2,8 @@ package dev.po4yka.chur.sync
 
 import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.ChurFailure
+import dev.po4yka.chur.ffi.PreparedShare
+import dev.po4yka.chur.ffi.PreparedShareRevocation
 import dev.po4yka.chur.ffi.SharingIdentity
 import dev.po4yka.chur.ffi.SyncProcessReport
 import dev.po4yka.chur.ffi.SyncRecordKind
@@ -18,7 +20,7 @@ import kotlinx.coroutines.sync.withLock
  * `SYNC_PROTOCOL_V1.md` §7 splits the protocol by lock state: a locked device
  * may transfer signed opaque bytes but may not open the catalog, so staging
  * needs only the runtime, while identity and application need the unlocked
- * session. This interface is that split as three calls; `:shared:app` binds
+ * session. This interface is that split; `:shared:app` binds
  * one implementation to the one [dev.po4yka.chur.vault.VaultRepository], which
  * owns the handles, so no engine caller ever sees a `Long`.
  */
@@ -44,6 +46,9 @@ public interface SyncVaultBoundary {
      * while locked, in which case the next unlock drains it.
      */
     public suspend fun process(): SyncProcessReport?
+
+    /** Verifies and installs an addressed share, or `false` if the vault locked. */
+    public suspend fun acceptSharePackage(packageBytes: ByteArray): Boolean
 }
 
 /** The bounded, non-private state one sync surface shows. */
@@ -111,7 +116,12 @@ public class SyncCoordinator(
                 if (state == null) {
                     NOT_CONFIGURED
                 } else {
-                    SyncStatus(configured = true, serverUrl = state.serverUrl, message = null, busy = false)
+                    SyncStatus(
+                        configured = true,
+                        serverUrl = state.serverUrl,
+                        message = if (state.pendingSharing.isEmpty()) null else "Sharing changes need upload.",
+                        busy = false,
+                    )
                 }
         }
 
@@ -128,10 +138,14 @@ public class SyncCoordinator(
         bootstrapSecret: String,
     ): Unit =
         mutex.withLock {
+            require(store.load()?.pendingSharing.isNullOrEmpty()) { "publish pending sharing changes before changing the server" }
             val vault = requireNotNull(boundary) { "no vault is bound to sync" }
             val identity =
                 vault.identity()
                     ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "sync setup needs an unlocked vault")
+            store.load()?.let { existing ->
+                require(matches(existing, identity)) { "disconnect the other vault before configuring sync" }
+            }
             val secret =
                 try {
                     fromHex(bootstrapSecret.trim())
@@ -181,7 +195,7 @@ public class SyncCoordinator(
      */
     public suspend fun syncNow(): Boolean =
         mutex.withLock {
-            val state =
+            var state =
                 store.load() ?: run {
                     _status.value = NOT_CONFIGURED
                     return false
@@ -191,17 +205,31 @@ public class SyncCoordinator(
                     _status.value = SyncStatus(true, state.serverUrl, "The vault is not open.", false)
                     return false
                 }
+            vault.identity()?.let { identity ->
+                if (!matches(state, identity)) {
+                    _status.value = SyncStatus(true, state.serverUrl, "Configured sync belongs to another vault.", false)
+                    return false
+                }
+            }
+            _status.value = SyncStatus(true, state.serverUrl, "Syncing…", true)
             val client = clientFactory(state.serverUrl) { state.transportToken }
             try {
                 var backoff = INITIAL_BACKOFF_MS
                 repeat(MAX_ATTEMPTS) { attempt ->
                     try {
+                        state = flushPending(client, state)
                         val puller =
                             LockedSyncPuller(client) { vaultId, kind, stagedAtMs, record ->
                                 vault.stage(vaultId, kind, stagedAtMs, record)
                             }
                         val report = puller.pullOnce(state.vaultId, state.cursors, clock())
                         vault.process()
+                        val shares =
+                            if (vault.identity()?.let { matches(state, it) } == true) {
+                                SharingPuller(client) { vault.acceptSharePackage(it) }.pullOnce(state.vaultId)
+                            } else {
+                                0
+                            }
                         // §5: the cursor advances only once the records are in
                         // native storage, so a dropped page is fetched again.
                         store.save(state.copy(cursors = report.cursors.ifEmpty { state.cursors }))
@@ -211,7 +239,8 @@ public class SyncCoordinator(
                                 serverUrl = state.serverUrl,
                                 message =
                                     "Synced ${report.operations} operation(s) " +
-                                        "and ${report.checkpoints} checkpoint(s).",
+                                        "and ${report.checkpoints} checkpoint(s)." +
+                                        (if (shares == 0) "" else " Received $shares share(s)."),
                                 busy = false,
                             )
                         return true
@@ -240,12 +269,117 @@ public class SyncCoordinator(
                 false
             } finally {
                 client.close()
+                if (_status.value.busy) _status.value = _status.value.copy(busy = false)
             }
         }
+
+    /** Publishes an already prepared grant in server dependency order. */
+    public suspend fun publishShare(share: PreparedShare): Unit =
+        mutex.withLock {
+            val existing = requireConfiguredState()
+            requireMatchingIdentity(existing)
+            val state = existing.copy(
+                pendingSharing = existing.pendingSharing +
+                    if (existing.pendingSharing.any { it.share?.let { queued -> sameShare(queued, share) } == true }) {
+                        emptyList()
+                    } else {
+                        listOf(PendingSharingPublication(share = share))
+                    },
+            )
+            store.save(state)
+            _status.value = SyncStatus(true, state.serverUrl, "Publishing access…", true)
+            val client = clientFactory(state.serverUrl) { state.transportToken }
+            try {
+                flushPending(client, state)
+                _status.value = SyncStatus(true, state.serverUrl, "Access published.", false)
+            } catch (failure: Exception) {
+                _status.value = SyncStatus(true, state.serverUrl, "Sharing changes need upload.", false)
+                throw failure
+            } finally {
+                client.close()
+            }
+        }
+
+    /** Publishes one already prepared forward-only revocation batch. */
+    public suspend fun publishRevocation(revocation: PreparedShareRevocation): Unit =
+        mutex.withLock {
+            val existing = requireConfiguredState()
+            requireMatchingIdentity(existing)
+            val state = existing.copy(
+                pendingSharing = existing.pendingSharing +
+                    if (existing.pendingSharing.any { it.revocation?.let { queued -> sameRevocation(queued, revocation) } == true }) {
+                        emptyList()
+                    } else {
+                        listOf(PendingSharingPublication(revocation = revocation))
+                    },
+            )
+            store.save(state)
+            _status.value = SyncStatus(true, state.serverUrl, "Publishing revocation…", true)
+            val client = clientFactory(state.serverUrl) { state.transportToken }
+            try {
+                flushPending(client, state)
+                _status.value = SyncStatus(true, state.serverUrl, "Revocation published.", false)
+            } catch (failure: Exception) {
+                _status.value = SyncStatus(true, state.serverUrl, "Sharing changes need upload.", false)
+                throw failure
+            } finally {
+                client.close()
+            }
+        }
+
+    private suspend fun requireConfiguredState(): SyncState =
+        store.load() ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sync is not configured")
+
+    /** Checks the active vault before a native grant or revocation changes local state. */
+    public suspend fun requireActiveVault(): Unit = mutex.withLock {
+        requireMatchingIdentity(requireConfiguredState())
+    }
+
+    private suspend fun requireMatchingIdentity(state: SyncState) {
+        val identity = boundary?.identity()
+            ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "sharing needs an unlocked vault")
+        if (!matches(state, identity)) {
+            throw ChurFailure(ChurStatus.CONFLICT, "configured sync belongs to another vault")
+        }
+    }
+
+    private fun matches(state: SyncState, identity: SharingIdentity): Boolean =
+        state.vaultId.contentEquals(identity.vaultId) && state.deviceId.contentEquals(identity.deviceId)
+
+    private fun sameShare(first: PreparedShare, second: PreparedShare): Boolean =
+        first.membership.contentEquals(second.membership) &&
+            first.membershipOperation.contentEquals(second.membershipOperation) &&
+            first.grant.contentEquals(second.grant) &&
+            first.grantOperation.contentEquals(second.grantOperation)
+
+    private fun sameRevocation(first: PreparedShareRevocation, second: PreparedShareRevocation): Boolean =
+        first.membership.contentEquals(second.membership) &&
+            first.membershipOperation.contentEquals(second.membershipOperation) &&
+            first.rotationComplete == second.rotationComplete &&
+            first.rotationOperations.size == second.rotationOperations.size &&
+            first.rotationOperations.zip(second.rotationOperations).all { (left, right) -> left.contentEquals(right) } &&
+            first.grants.size == second.grants.size &&
+            first.grants.zip(second.grants).all { (left, right) ->
+                left.grant.contentEquals(right.grant) && left.operation.contentEquals(right.operation)
+            }
+
+    private suspend fun flushPending(client: SyncClient, initial: SyncState): SyncState {
+        var state = initial
+        val pusher = SharingPusher(client)
+        while (state.pendingSharing.isNotEmpty()) {
+            val pending = state.pendingSharing.first()
+            pending.share?.let { pusher.push(state.vaultId, it) }
+            pending.revocation?.let { pusher.pushRevocation(state.vaultId, it) }
+            state = state.copy(pendingSharing = state.pendingSharing.drop(1))
+            store.save(state)
+        }
+        return state
+    }
 
     /** Forgets the server entirely, which the settings entry offers. */
     public suspend fun disconnect(): Unit =
         mutex.withLock {
+            require(store.load()?.pendingSharing.isNullOrEmpty()) { "publish pending sharing changes before disconnecting" }
             store.clear()
             _status.value = NOT_CONFIGURED
         }

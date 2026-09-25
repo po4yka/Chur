@@ -42,6 +42,11 @@ import dev.po4yka.chur.app.theme.SettingsGlyph
 import dev.po4yka.chur.ffi.AlbumSummary
 import dev.po4yka.chur.ffi.ObjectProjection
 import dev.po4yka.chur.ffi.SlotSummary
+import dev.po4yka.chur.ffi.SharingIdentity
+import dev.po4yka.chur.ffi.SharingMember
+import dev.po4yka.chur.ffi.SharingOverview
+import dev.po4yka.chur.ffi.SharingPermission
+import dev.po4yka.chur.ffi.SharingRecipient
 import dev.po4yka.chur.sync.SyncStatus
 
 /**
@@ -101,6 +106,9 @@ data class VaultUiState(
      * something nothing can deliver.
      */
     val sync: SyncStatus? = null,
+    val sharingIdentity: SharingIdentity? = null,
+    val sharingOverview: SharingOverview? = null,
+    val sharingRecipient: SharingRecipient? = null,
 )
 
 /** What the shell can ask the application to do. */
@@ -160,6 +168,9 @@ data class VaultActions(
     val onSyncNow: () -> Unit = {},
     /** Forget the configured server. */
     val onDisconnectSync: () -> Unit = {},
+    val onInspectSharingRecipient: (String) -> Unit = {},
+    val onShareWithRecipient: (SharingPermission) -> Unit = {},
+    val onRevokeSharingMember: (SharingMember) -> Unit = {},
 )
 
 /**
@@ -507,6 +518,9 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
             } else {
                 item {
                     SettingsAction("Sync now", actions.onSyncNow)
+                }
+                item {
+                    SharingCard(state, actions)
                 }
                 sync.message?.let { message ->
                     item {

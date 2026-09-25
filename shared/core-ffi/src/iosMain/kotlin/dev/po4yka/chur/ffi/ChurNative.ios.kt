@@ -50,6 +50,8 @@ import dev.po4yka.chur.native.chur_runtime_open
 import dev.po4yka.chur.native.chur_session_close
 import dev.po4yka.chur.native.chur_sharing_accept
 import dev.po4yka.chur.native.chur_sharing_identity
+import dev.po4yka.chur.native.chur_sharing_overview
+import dev.po4yka.chur.native.chur_sharing_inspect_enrollment
 import dev.po4yka.chur.native.chur_sharing_prepare
 import dev.po4yka.chur.native.chur_sharing_prepare_device
 import dev.po4yka.chur.native.chur_sharing_revoke
@@ -280,6 +282,29 @@ internal actual object ChurNative {
                 )
             }
         }
+
+    actual fun sharingOverview(
+        session: Long,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int = memScoped {
+        writtenCall(outWritten) { written ->
+            chur_sharing_overview(session.toULong(), destination.pointer, destination.size.toULong(), written)
+        }
+    }
+
+    actual fun sharingInspectEnrollment(
+        enrollment: ByteArray,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int = memScoped {
+        enrollment.pinnedPointer { input ->
+            writtenCall(outWritten) { written ->
+                chur_sharing_inspect_enrollment(input, enrollment.size.toUInt(),
+                    destination.pointer, destination.size.toULong(), written)
+            }
+        }
+    }
 
     actual fun sharingPrepare(
         session: Long,

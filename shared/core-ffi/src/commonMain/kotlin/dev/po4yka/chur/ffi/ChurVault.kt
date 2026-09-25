@@ -141,6 +141,25 @@ object ChurVault {
             decodeSharingIdentity(buffer.copyOut(written[0]), written[0])
         }
 
+    /** Returns the default collection and its current active recipients. */
+    fun sharingOverview(session: Long): SharingOverview =
+        withChurBuffer(SHARING_OVERVIEW_CAPACITY) { buffer ->
+            val written = IntArray(1)
+            ChurFailure.check(ChurNative.sharingOverview(session, buffer, written), "sharing overview")
+            decodeSharingOverview(buffer.copyOut(written[0]), written[0])
+        }
+
+    /** Authenticates and previews a recipient's self-signed initial enrollment. */
+    fun inspectEnrollment(enrollment: ByteArray): SharingRecipient =
+        withChurBuffer(SHARING_RECIPIENT_CAPACITY) { buffer ->
+            val written = IntArray(1)
+            ChurFailure.check(
+                ChurNative.sharingInspectEnrollment(enrollment, buffer, written),
+                "sharing enrollment inspection",
+            )
+            decodeSharingRecipient(buffer.copyOut(written[0]), written[0])
+        }
+
     /** Prepares the membership and HPKE grant for one recipient device. */
     fun prepareShare(
         session: Long,
@@ -782,6 +801,11 @@ object ChurVault {
 
     /** The bounded public identity, enrollment, and initial operation record. */
     private const val SHARING_IDENTITY_CAPACITY = 4 * 1024
+
+    /** Four thousand active members with identifiers and fingerprints. */
+    private const val SHARING_OVERVIEW_CAPACITY = 512 * 1024
+
+    private const val SHARING_RECIPIENT_CAPACITY = 128
 
     /** Four bounded sharing records; current v1 output is below two KiB. */
     private const val PREPARED_SHARE_CAPACITY = 16 * 1024

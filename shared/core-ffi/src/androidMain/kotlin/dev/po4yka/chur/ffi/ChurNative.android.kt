@@ -80,6 +80,18 @@ internal actual object ChurNative {
         outWritten: IntArray,
     ): Int = ChurJni.sharingIdentity(session, destination.buffer, outWritten)
 
+    actual fun sharingOverview(
+        session: Long,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int = ChurJni.sharingOverview(session, destination.buffer, outWritten)
+
+    actual fun sharingInspectEnrollment(
+        enrollment: ByteArray,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int = ChurJni.sharingInspectEnrollment(enrollment, destination.buffer, outWritten)
+
     actual fun sharingPrepare(
         session: Long,
         collectionId: ByteArray,

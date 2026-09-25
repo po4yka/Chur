@@ -238,6 +238,9 @@ private fun VaultRoute(controller: ChurController) {
     val message by controller.message.collectAsState()
     val vaultState by controller.vaultState.collectAsState()
     val syncStatus by controller.syncStatus.collectAsState()
+    val sharingIdentity by controller.sharingIdentity.collectAsState()
+    val sharingOverview by controller.sharingOverview.collectAsState()
+    val sharingRecipient by controller.sharingRecipient.collectAsState()
     val deviceSlotStrict by controller.deviceSlotStrict.collectAsState()
     val configuration = LocalConfiguration.current
     val context = LocalContext.current
@@ -289,7 +292,10 @@ private fun VaultRoute(controller: ChurController) {
             )
             destination == VaultDestination.LIBRARY -> controller.load(ObjectQuery())
             destination == VaultDestination.ALBUMS -> controller.loadAlbums()
-            destination == VaultDestination.SETTINGS -> controller.loadSlots()
+            destination == VaultDestination.SETTINGS -> {
+                controller.loadSlots()
+                controller.loadSharing()
+            }
             else -> Unit
         }
     }
@@ -359,6 +365,9 @@ private fun VaultRoute(controller: ChurController) {
             deviceSlotAvailable = true,
             deviceSlotStrict = deviceSlotStrict,
             sync = syncStatus,
+            sharingIdentity = sharingIdentity,
+            sharingOverview = sharingOverview,
+            sharingRecipient = sharingRecipient,
         ),
         actions = VaultActions(
             onDestination = {
@@ -422,6 +431,9 @@ private fun VaultRoute(controller: ChurController) {
             onConfigureSync = controller::configureSync,
             onSyncNow = controller::syncNow,
             onDisconnectSync = controller::disconnectSync,
+            onInspectSharingRecipient = controller::inspectSharingRecipient,
+            onShareWithRecipient = controller::shareWithRecipient,
+            onRevokeSharingMember = controller::revokeSharingMember,
         ),
     )
 }

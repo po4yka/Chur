@@ -1,5 +1,7 @@
 package dev.po4yka.chur.sync
 
+import dev.po4yka.chur.ffi.PreparedShare
+import dev.po4yka.chur.ffi.PreparedShareRevocation
 import kotlinx.coroutines.test.runTest
 import java.io.File
 import kotlin.test.AfterTest
@@ -47,6 +49,27 @@ class FileSyncStateStoreTest {
             assertContentEquals(state.cursors.single().deviceId, reopened?.cursors?.single()?.deviceId)
             assertEquals(41uL, reopened?.cursors?.single()?.after)
         }
+
+    @Test
+    fun prepared_sharing_batches_survive_a_new_store() = runTest {
+        val state = SyncState(
+            "https://sync.example", ByteArray(16), ByteArray(16), ByteArray(32), emptyList(),
+            pendingSharing = listOf(
+                PendingSharingPublication(share = PreparedShare(byteArrayOf(1), byteArrayOf(2), byteArrayOf(3), byteArrayOf(4))),
+                PendingSharingPublication(revocation = PreparedShareRevocation(
+                    byteArrayOf(5), byteArrayOf(6), listOf(byteArrayOf(7)), emptyList(), false,
+                )),
+            ),
+        )
+        FileSyncStateStore(path).save(state)
+
+        val reopened = FileSyncStateStore(path).load()!!.pendingSharing
+
+        assertEquals(2, reopened.size)
+        assertContentEquals(byteArrayOf(4), reopened[0].share?.grantOperation)
+        assertContentEquals(byteArrayOf(7), reopened[1].revocation?.rotationOperations?.single())
+        assertEquals(false, reopened[1].revocation?.rotationComplete)
+    }
 
     @Test
     fun an_absent_file_is_no_state() =

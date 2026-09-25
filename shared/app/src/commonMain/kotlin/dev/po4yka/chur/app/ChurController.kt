@@ -8,6 +8,12 @@ import dev.po4yka.chur.ffi.LockReason
 import dev.po4yka.chur.ffi.ObjectDetail
 import dev.po4yka.chur.ffi.ObjectPage
 import dev.po4yka.chur.ffi.ObjectQuery
+import dev.po4yka.chur.ffi.SharingIdentity
+import dev.po4yka.chur.ffi.SharingMember
+import dev.po4yka.chur.ffi.SharingOverview
+import dev.po4yka.chur.ffi.SharingPermission
+import dev.po4yka.chur.ffi.SharingRecipient
+import dev.po4yka.chur.ffi.fromHex
 import dev.po4yka.chur.ffi.QueryScope
 import dev.po4yka.chur.sync.SyncCoordinator
 import dev.po4yka.chur.sync.SyncStatus
@@ -92,6 +98,10 @@ class ChurController(
     private val _page = MutableStateFlow(ObjectPage(emptyList(), 0, 0, null))
     private val _albums = MutableStateFlow<List<AlbumSummary>>(emptyList())
     private val _slots = MutableStateFlow<List<SlotSummary>>(emptyList())
+    private val _sharingIdentity = MutableStateFlow<SharingIdentity?>(null)
+    private val _sharingOverview = MutableStateFlow<SharingOverview?>(null)
+    private val _sharingRecipient = MutableStateFlow<SharingRecipient?>(null)
+    private var recipientEnrollment: ByteArray? = null
     private val _message = MutableStateFlow<String?>(null)
     private val _recoveryPhrase = MutableStateFlow<String?>(null)
     private val _deviceUnlockOffered = MutableStateFlow(false)
@@ -154,6 +164,10 @@ class ChurController(
 
     /** The key slots. */
     val slots: StateFlow<List<SlotSummary>> = _slots.asStateFlow()
+
+    val sharingIdentity: StateFlow<SharingIdentity?> = _sharingIdentity.asStateFlow()
+    val sharingOverview: StateFlow<SharingOverview?> = _sharingOverview.asStateFlow()
+    val sharingRecipient: StateFlow<SharingRecipient?> = _sharingRecipient.asStateFlow()
 
     /** A bounded message that carries no private value. */
     val message: StateFlow<String?> = _message.asStateFlow()
@@ -577,6 +591,67 @@ class ChurController(
         sync?.disconnect()
     }
 
+    /** Loads public sharing identity and current active recipients for Settings. */
+    fun loadSharing() = guarded {
+        _sharingIdentity.value = withContext(Dispatchers.Default) { repository.syncIdentity() }
+        _sharingOverview.value = withContext(Dispatchers.Default) { repository.sharingOverview() }
+    }
+
+    /** Validates the pasted self-signed enrollment and shows its fingerprint. */
+    fun inspectSharingRecipient(enrollmentHex: String) = guarded {
+        recipientEnrollment = null
+        _sharingRecipient.value = null
+        val compact = enrollmentHex.filterNot(Char::isWhitespace)
+        if (compact.length > 2048) throw ChurFailure(ChurStatus.INVALID_INPUT, "enrollment is too long")
+        val bytes = try {
+            compact.fromHex()
+        } catch (_: IllegalArgumentException) {
+            throw ChurFailure(ChurStatus.INVALID_INPUT, "enrollment is not hexadecimal")
+        }
+        val recipient = withContext(Dispatchers.Default) { repository.inspectEnrollment(bytes) }
+        recipientEnrollment = bytes
+        _sharingRecipient.value = recipient
+    }
+
+    /** Publishes a grant after the UI confirms both identity and vault scope. */
+    fun shareWithRecipient(permission: SharingPermission) = guarded {
+        val enrollment = recipientEnrollment ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "recipient is not verified")
+        val collection = _sharingOverview.value?.collectionId
+            ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sharing overview is not loaded")
+        val engine = sync ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sync is unavailable")
+        if (!engine.status.value.configured) throw ChurFailure(ChurStatus.INVALID_INPUT, "connect sync first")
+        engine.requireActiveVault()
+        val share = withContext(Dispatchers.Default) {
+            repository.prepareShare(collection, enrollment, permission)
+        }
+        engine.publishShare(share)
+        _sharingOverview.value = withContext(Dispatchers.Default) { repository.sharingOverview() }
+        recipientEnrollment = null
+        _sharingRecipient.value = null
+        _message.value = "Access published."
+    }
+
+    /** Rotates the collection key and publishes the forward-only revocation. */
+    fun revokeSharingMember(member: SharingMember) = guarded {
+        val collection = _sharingOverview.value?.collectionId
+            ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sharing overview is not loaded")
+        val engine = sync ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sync is unavailable")
+        if (!engine.status.value.configured) throw ChurFailure(ChurStatus.INVALID_INPUT, "connect sync first")
+        engine.requireActiveVault()
+        var batch = withContext(Dispatchers.Default) {
+            repository.revokeShare(collection, member.vaultId, member.deviceId)
+        }
+        while (true) {
+            engine.publishRevocation(batch)
+            if (batch.rotationComplete) break
+            batch = withContext(Dispatchers.Default) {
+                repository.revokeShare(collection, member.vaultId, member.deviceId)
+            }
+        }
+        _sharingOverview.value = withContext(Dispatchers.Default) { repository.sharingOverview() }
+        _message.value = "Access revoked for future updates."
+    }
+
     /**
      * One sync cycle a background schedule asked for.
      *
@@ -865,6 +940,10 @@ class ChurController(
         _page.value = ObjectPage(emptyList(), 0, 0, null)
         _albums.value = emptyList()
         _slots.value = emptyList()
+        _sharingIdentity.value = null
+        _sharingOverview.value = null
+        _sharingRecipient.value = null
+        recipientEnrollment = null
         // The phrase is one of them, and the most valuable: it opens the vault
         // on its own. Both route tables draw it ahead of the route, so leaving
         // it set kept a full credential on screen after the lock had already

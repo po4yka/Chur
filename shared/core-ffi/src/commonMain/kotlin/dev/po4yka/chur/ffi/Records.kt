@@ -151,6 +151,29 @@ class SharingIdentity(
     val initialOperation: ByteArray,
 )
 
+/** The current default cryptographic collection and its known recipients. */
+class SharingOverview(
+    val collectionId: ByteArray,
+    val members: List<SharingMember>,
+)
+
+/** One current or historical recipient device of the default collection. */
+class SharingMember(
+    val vaultId: ByteArray,
+    val deviceId: ByteArray,
+    val fingerprint: String,
+    val permissions: SharingPermission,
+    val active: Boolean,
+    val verified: Boolean,
+)
+
+/** Identity authenticated from a self-signed initial enrollment. */
+class SharingRecipient(
+    val vaultId: ByteArray,
+    val deviceId: ByteArray,
+    val fingerprint: String,
+)
+
 /** One cumulative collection-sharing permission profile. */
 enum class SharingPermission(val code: Int) {
     READ(0x01),
@@ -250,6 +273,44 @@ fun decodeSharingIdentity(bytes: ByteArray, length: Int): SharingIdentity {
     )
     reader.requireExhausted()
     return identity
+}
+
+/** Decodes the active default-collection members of §6.14. */
+fun decodeSharingOverview(bytes: ByteArray, length: Int): SharingOverview {
+    val reader = RecordReader(bytes, length)
+    if (reader.short() != 1) {
+        throw ChurFailure(ChurStatus.NON_CANONICAL_ENCODING, "the sharing overview version")
+    }
+    val collectionId = reader.take(ID_LENGTH)
+    val count = reader.int()
+    if (count !in 0..SHARING_RECORDS_MAX) {
+        throw ChurFailure(ChurStatus.NON_CANONICAL_ENCODING, "the sharing member count")
+    }
+    val members = List(count) {
+        val vaultId = reader.take(ID_LENGTH)
+        val deviceId = reader.take(ID_LENGTH)
+        val permissionCode = reader.byte()
+        val permission = SharingPermission.entries.firstOrNull { it.code == permissionCode }
+            ?: throw ChurFailure(ChurStatus.NON_CANONICAL_ENCODING, "the sharing permission")
+        val active = reader.flag()
+        val verified = reader.flag()
+        val fingerprint = reader.bounded().decodeToString()
+        SharingMember(vaultId, deviceId, fingerprint, permission, active, verified)
+    }
+    reader.requireExhausted()
+    return SharingOverview(collectionId, members)
+}
+
+/** Decodes an authenticated initial enrollment preview of §6.14. */
+fun decodeSharingRecipient(bytes: ByteArray, length: Int): SharingRecipient {
+    val reader = RecordReader(bytes, length)
+    if (reader.short() != 1) {
+        throw ChurFailure(ChurStatus.NON_CANONICAL_ENCODING, "the sharing recipient version")
+    }
+    val recipient = SharingRecipient(reader.take(ID_LENGTH), reader.take(ID_LENGTH),
+        reader.bounded().decodeToString())
+    reader.requireExhausted()
+    return recipient
 }
 
 /** Decodes the prepared share record of §6.10. */

@@ -19,13 +19,30 @@ class SharingPullerTest {
         }
         val client = SyncClient("https://sync.example", { ByteArray(32) }, HttpClient(engine))
         val accepted = mutableListOf<ByteArray>()
-        val puller = SharingPuller(client) { accepted += it }
+        val puller = SharingPuller(client) {
+            accepted += it
+            true
+        }
 
         val count = puller.pullOnce(ByteArray(16) { 1 })
 
         assertEquals(2, count)
         assertContentEquals(first, accepted[0])
         assertContentEquals(second, accepted[1])
+    }
+
+    @Test
+    fun a_locked_vault_stops_before_later_packages() = runTest {
+        val engine = MockEngine { respond(frame(byteArrayOf(1), byteArrayOf(2))) }
+        val client = SyncClient("https://sync.example", { ByteArray(32) }, HttpClient(engine))
+        var attempts = 0
+        val count = SharingPuller(client) {
+            attempts++
+            false
+        }.pullOnce(ByteArray(16))
+
+        assertEquals(0, count)
+        assertEquals(1, attempts)
     }
 }
 

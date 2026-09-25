@@ -27,4 +27,7 @@ class RepositorySyncBoundary(
     ) = repository.stageSyncRecord(vaultId, kind, stagedAtMs, record)
 
     override suspend fun process(): SyncProcessReport? = repository.processSync()
+
+    override suspend fun acceptSharePackage(packageBytes: ByteArray): Boolean =
+        repository.acceptSharePackage(packageBytes)
 }

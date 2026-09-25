@@ -2,12 +2,15 @@ package dev.po4yka.chur.sync
 
 import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.SharingIdentity
+import dev.po4yka.chur.ffi.PreparedShare
+import dev.po4yka.chur.ffi.PreparedShareRevocation
 import dev.po4yka.chur.ffi.SyncProcessReport
 import dev.po4yka.chur.ffi.SyncRecordKind
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockRequestHandler
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.engine.mock.toByteArray
 import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -52,6 +55,7 @@ class SyncCoordinatorTest {
         var identity: SharingIdentity? = null
         val staged = mutableListOf<Pair<SyncRecordKind, ByteArray>>()
         var processed = 0
+        val accepted = mutableListOf<ByteArray>()
 
         override suspend fun identity(): SharingIdentity? = identity
 
@@ -67,6 +71,11 @@ class SyncCoordinatorTest {
         override suspend fun process(): SyncProcessReport? {
             processed++
             return SyncProcessReport(staged.size.toLong(), 0, 0, 0, 0)
+        }
+
+        override suspend fun acceptSharePackage(packageBytes: ByteArray): Boolean {
+            accepted += packageBytes
+            return true
         }
     }
 
@@ -189,6 +198,7 @@ class SyncCoordinatorTest {
                     when {
                         path.contains("/operations/") -> MockAnswer.Body(frame2(operation, second))
                         path.endsWith("/checkpoints") -> MockAnswer.Body(frame(checkpoint))
+                        path.endsWith("/sharing/packages") -> MockAnswer.Body(byteArrayOf(0, 0, 0, 0))
                         else -> error(path)
                     }
                 }
@@ -264,6 +274,7 @@ class SyncCoordinatorTest {
                         failing -> MockAnswer.NetworkError
                         path.contains("/operations/") -> MockAnswer.Body(frame(operation))
                         path.endsWith("/checkpoints") -> MockAnswer.Body(frame(byteArrayOf(2)))
+                        path.endsWith("/sharing/packages") -> MockAnswer.Body(byteArrayOf(0, 0, 0, 0))
                         else -> error(path)
                     }
                 }
@@ -340,6 +351,129 @@ class SyncCoordinatorTest {
             assertNull(store.saved)
             assertFalse(coordinator.status.value.configured)
         }
+
+    @Test
+    fun unlocked_sync_accepts_addressed_share_packages() = runTest {
+        val packageBytes = byteArrayOf(9, 8, 7)
+        val engine = okEngine { path ->
+            when {
+                path.contains("/operations/") || path.endsWith("/checkpoints") -> MockAnswer.Body(byteArrayOf(0, 0, 0, 0))
+                path.endsWith("/sharing/packages") -> MockAnswer.Body(frame(packageBytes))
+                else -> error(path)
+            }
+        }
+        val store = FakeStore().apply {
+            saved = SyncState("https://sync.example", vaultId, deviceId, ByteArray(32), listOf(DeviceCursor(deviceId, 0u)))
+        }
+        val boundary = FakeBoundary().apply { identity = this@SyncCoordinatorTest.identity }
+        val coordinator = coordinator(store, boundary, engine)
+
+        assertTrue(coordinator.syncNow())
+        assertContentEquals(packageBytes, boundary.accepted.single())
+        assertTrue(coordinator.status.value.message!!.contains("1 share(s)"))
+        // The server can return the same current grant again. Native acceptance is idempotent.
+        assertTrue(coordinator.syncNow())
+        assertEquals(2, boundary.accepted.size)
+    }
+
+    @Test
+    fun prepared_share_and_revocation_are_published_in_order() = runTest {
+        val requests = mutableListOf<String>()
+        val engine = okEngine { path ->
+            requests += path
+            MockAnswer.Body(ByteArray(0))
+        }
+        val store = FakeStore().apply {
+            saved = SyncState("https://sync.example", vaultId, deviceId, ByteArray(32), emptyList())
+        }
+        val coordinator = coordinator(store, FakeBoundary().apply { identity = this@SyncCoordinatorTest.identity }, engine)
+
+        coordinator.publishShare(PreparedShare(byteArrayOf(1), byteArrayOf(2), byteArrayOf(3), byteArrayOf(4)))
+        coordinator.publishRevocation(
+            PreparedShareRevocation(byteArrayOf(5), byteArrayOf(6), listOf(byteArrayOf(7)), emptyList(), true),
+        )
+
+        assertEquals(
+            listOf("/sharing/memberships", "/sharing/grants", "/sharing/memberships", "/sharing/operations"),
+            requests.map { it.substringAfter("/v1/vaults/${vaultId.toHex()}") },
+        )
+    }
+
+    @Test
+    fun failed_partial_publication_is_retried_before_the_next_pull() = runTest {
+        var failGrant = true
+        val requests = mutableListOf<String>()
+        val engine = okEngine { path ->
+            requests += path
+            when {
+                path.endsWith("/sharing/grants") && failGrant -> MockAnswer.NetworkError
+                path.contains("/operations/") || path.endsWith("/checkpoints") || path.endsWith("/sharing/packages") ->
+                    MockAnswer.Body(byteArrayOf(0, 0, 0, 0))
+                else -> MockAnswer.Body(ByteArray(0))
+            }
+        }
+        val store = FakeStore().apply {
+            saved = SyncState("https://sync.example", vaultId, deviceId, ByteArray(32), listOf(DeviceCursor(deviceId, 0u)))
+        }
+        val boundary = FakeBoundary().apply { identity = this@SyncCoordinatorTest.identity }
+        val coordinator = coordinator(store, boundary, engine)
+        val share = PreparedShare(byteArrayOf(1), byteArrayOf(2), byteArrayOf(3), byteArrayOf(4))
+
+        assertFailsWith<SyncTransportFailure> { coordinator.publishShare(share) }
+        assertEquals(1, store.saved?.pendingSharing?.size)
+        assertEquals("Sharing changes need upload.", coordinator.status.value.message)
+
+        failGrant = false
+        assertTrue(coordinator.syncNow())
+        assertTrue(store.saved!!.pendingSharing.isEmpty())
+        assertEquals(2, requests.count { it.endsWith("/sharing/grants") })
+        assertTrue(requests.indexOfLast { it.endsWith("/sharing/grants") } < requests.indexOfFirst { it.contains("/operations/") })
+    }
+
+    @Test
+    fun later_rotation_batches_are_not_dropped_when_membership_repeats() = runTest {
+        val operations = mutableListOf<ByteArray>()
+        val engine = CountingEngine { request ->
+            if (request.url.encodedPath.endsWith("/sharing/operations")) {
+                operations += request.body.toByteArray()
+            }
+            respond(ByteArray(0), HttpStatusCode.OK)
+        }
+        val store = FakeStore().apply {
+            saved = SyncState("https://sync.example", vaultId, deviceId, ByteArray(32), emptyList())
+        }
+        val boundary = FakeBoundary().apply { identity = this@SyncCoordinatorTest.identity }
+        val coordinator = coordinator(store, boundary, engine)
+        val first = PreparedShareRevocation(byteArrayOf(1), byteArrayOf(2), listOf(byteArrayOf(3)), emptyList(), false)
+        val second = PreparedShareRevocation(byteArrayOf(1), byteArrayOf(2), listOf(byteArrayOf(4)), emptyList(), true)
+
+        coordinator.publishRevocation(first)
+        coordinator.publishRevocation(second)
+
+        assertEquals(2, operations.size)
+        assertContentEquals(byteArrayOf(3), operations[0])
+        assertContentEquals(byteArrayOf(4), operations[1])
+    }
+
+    @Test
+    fun a_configured_vault_cannot_publish_from_another_identity() = runTest {
+        val engine = okEngine { error(it) }
+        val store = FakeStore().apply {
+            saved = SyncState("https://sync.example", vaultId, deviceId, ByteArray(32), emptyList())
+        }
+        val boundary = FakeBoundary().apply {
+            identity = SharingIdentity(ByteArray(16) { 9 }, deviceId, ByteArray(32), ByteArray(32), "other", byteArrayOf(), byteArrayOf())
+        }
+        val coordinator = coordinator(store, boundary, engine)
+
+        assertFailsWith<dev.po4yka.chur.ffi.ChurFailure> {
+            coordinator.publishShare(PreparedShare(byteArrayOf(1), byteArrayOf(2), byteArrayOf(3), byteArrayOf(4)))
+        }
+        assertTrue(store.saved!!.pendingSharing.isEmpty())
+        assertEquals(0, engine.requests)
+        assertFalse(coordinator.syncNow())
+        assertEquals(0, engine.requests)
+    }
 
     private companion object {
         val SECRET_HEX = (0 until 32).joinToString("") { "ab" }
