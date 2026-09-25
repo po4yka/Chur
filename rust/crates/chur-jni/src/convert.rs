@@ -7,9 +7,9 @@
 //! argument can be null in ways a C caller's cannot.
 
 use chur_ffi::api::Status;
-use jni::JNIEnv;
 use jni::objects::{JByteArray, JByteBuffer, JIntArray, JLongArray, JString};
 use jni::sys::{jint, jlong};
+use jni::{Env, EnvUnowned, Outcome};
 use zeroize::Zeroizing;
 
 /// `CHUR_INVALID_INPUT` of `docs/ERROR_MODEL.md`.
@@ -38,18 +38,38 @@ pub(crate) fn contain<R>(default: R, body: impl FnOnce() -> R) -> R {
     }
 }
 
+/// Upgrades a JVM-owned JNI environment before using it and contains panics.
+pub(crate) fn contain_env<'local, R>(
+    default: R,
+    mut unowned: EnvUnowned<'local>,
+    body: impl FnOnce(&mut Env<'local>) -> R,
+) -> R {
+    match unowned
+        .with_env(|env| Ok::<R, jni::errors::Error>(body(env)))
+        .into_outcome()
+    {
+        Outcome::Ok(value) => value,
+        Outcome::Err(_) => default,
+        Outcome::Panic(payload) => {
+            drop(payload);
+            default
+        }
+    }
+}
+
 /// Reads a Java string as UTF-8 bytes.
 ///
 /// The heap copy is zeroized on drop: a password, recovery secret, or device
 /// secret can arrive through this path, and `docs/interop/FFI_CONTRACT.md` §12
 /// requires a Rust secret wrapper on receipt.
-pub fn string_bytes(env: &mut JNIEnv<'_>, value: &JString<'_>) -> Option<Zeroizing<Vec<u8>>> {
+pub fn string_bytes(env: &mut Env<'_>, value: &JString<'_>) -> Option<Zeroizing<Vec<u8>>> {
     if value.is_null() {
         return None;
     }
-    env.get_string(value)
+    value
+        .try_to_string(env)
         .ok()
-        .map(|text| Zeroizing::new(String::from(text).into_bytes()))
+        .map(|text| Zeroizing::new(text.into_bytes()))
 }
 
 /// Copies a `byte[]` into a zeroized `Vec`.
@@ -60,7 +80,7 @@ pub fn string_bytes(env: &mut JNIEnv<'_>, value: &JString<'_>) -> Option<Zeroizi
 /// [`Zeroizing`], because passwords, recovery secrets, and the 32-byte device
 /// secret travel through this path and `docs/interop/FFI_CONTRACT.md` §12
 /// requires that the JVM-to-Rust copy never outlives the call as plaintext.
-pub fn byte_array(env: &mut JNIEnv<'_>, value: &JByteArray<'_>) -> Option<Zeroizing<Vec<u8>>> {
+pub fn byte_array(env: &mut Env<'_>, value: &JByteArray<'_>) -> Option<Zeroizing<Vec<u8>>> {
     if value.is_null() {
         return None;
     }
@@ -69,7 +89,7 @@ pub fn byte_array(env: &mut JNIEnv<'_>, value: &JByteArray<'_>) -> Option<Zeroiz
 
 /// Copies a `byte[]` of exactly `length` bytes.
 pub fn fixed_array(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     value: &JByteArray<'_>,
     length: usize,
 ) -> Option<Zeroizing<Vec<u8>>> {
@@ -78,28 +98,28 @@ pub fn fixed_array(
 }
 
 /// Writes bytes back into a `byte[]`, which must be at least as long.
-pub fn write_bytes(env: &mut JNIEnv<'_>, target: &JByteArray<'_>, bytes: &[u8]) -> bool {
+pub fn write_bytes(env: &mut Env<'_>, target: &JByteArray<'_>, bytes: &[u8]) -> bool {
     if target.is_null() {
         return false;
     }
-    let Ok(length) = env.get_array_length(target) else {
+    let Ok(length) = target.len(env) else {
         return false;
     };
-    if (length as usize) < bytes.len() {
+    if length < bytes.len() {
         return false;
     }
     let signed: Vec<i8> = bytes.iter().map(|byte| *byte as i8).collect();
-    env.set_byte_array_region(target, 0, &signed).is_ok()
+    target.set_region(env, 0, &signed).is_ok()
 }
 
 /// Writes one `long` into a `long[]`.
-pub fn write_long(env: &mut JNIEnv<'_>, target: &JLongArray<'_>, at: usize, value: jlong) -> bool {
+pub fn write_long(env: &mut Env<'_>, target: &JLongArray<'_>, at: usize, value: jlong) -> bool {
     write_longs(env, target, &[value], at)
 }
 
 /// Writes several `long` values into a `long[]` starting at `at`.
 pub fn write_longs(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     target: &JLongArray<'_>,
     values: &[jlong],
     at: usize,
@@ -107,30 +127,30 @@ pub fn write_longs(
     if target.is_null() {
         return false;
     }
-    let Ok(length) = env.get_array_length(target) else {
+    let Ok(length) = target.len(env) else {
         return false;
     };
-    if (length as usize) < at + values.len() {
+    if length < at + values.len() {
         return false;
     }
     let Ok(index) = jint::try_from(at) else {
         return false;
     };
-    env.set_long_array_region(target, index, values).is_ok()
+    target.set_region(env, index, values).is_ok()
 }
 
 /// Writes several `int` values into an `int[]`.
-pub fn write_ints(env: &mut JNIEnv<'_>, target: &JIntArray<'_>, values: &[jint]) -> bool {
+pub fn write_ints(env: &mut Env<'_>, target: &JIntArray<'_>, values: &[jint]) -> bool {
     if target.is_null() {
         return false;
     }
-    let Ok(length) = env.get_array_length(target) else {
+    let Ok(length) = target.len(env) else {
         return false;
     };
-    if (length as usize) < values.len() {
+    if length < values.len() {
         return false;
     }
-    env.set_int_array_region(target, 0, values).is_ok()
+    target.set_region(env, 0, values).is_ok()
 }
 
 /// The address and capacity of a direct `ByteBuffer`.
@@ -139,7 +159,7 @@ pub fn write_ints(env: &mut JNIEnv<'_>, target: &JIntArray<'_>, values: &[jint])
 /// for the data plane, so a heap buffer is refused here rather than silently
 /// copied: a copy would double the peak memory of a range read, which §12 of
 /// the media pipeline bounds.
-pub fn direct_buffer(env: &JNIEnv<'_>, buffer: &JByteBuffer<'_>) -> Option<(*mut u8, usize)> {
+pub fn direct_buffer(env: &Env<'_>, buffer: &JByteBuffer<'_>) -> Option<(*mut u8, usize)> {
     if buffer.is_null() {
         return None;
     }

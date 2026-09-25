@@ -404,7 +404,8 @@ impl ReferenceServer {
             ObjectIncomplete,
             "upload is incomplete"
         );
-        let store_id = Id::from_slice(&store_id)?;
+        let store_id =
+            Id::from_slice(&store_id).map_err(corrupt_row("stored store id is invalid"))?;
         let partial = self.partial_path(vault_id, transfer_id);
         let object = self.object_path(vault_id, store_id);
         let source = if partial.exists() { &partial } else { &object };
@@ -588,8 +589,29 @@ fn to_sqlite(value: u64, context: &'static str) -> Result<i64> {
     i64::try_from(value).map_err(|_| Error::new(ChurStatus::ResourceLimitExceeded, context))
 }
 
+/// Reads a `u64` back from a column that stores it as a signed integer.
+///
+/// Every caller reads a length or a sequence from a stored row, and the schema
+/// accepts no negative value there, so a negative value is a damaged row.
 fn from_sqlite(value: i64, context: &'static str) -> Result<u64> {
-    u64::try_from(value).map_err(|_| Error::new(ChurStatus::InternalFailure, context))
+    u64::try_from(value).map_err(|_| Error::new(ChurStatus::CatalogCorrupt, context))
+}
+
+/// Reports a stored row that fails an identifier, record, or replay check as
+/// `CATALOG_CORRUPT`.
+///
+/// The server checks every identifier and record before it stores them, so a
+/// stored value that fails the same check is a damaged row. `Id::from_slice`
+/// reports a short or reserved all-zero identifier as `INVALID_INPUT`, and a
+/// record decoder reports its own status, for example `NON_CANONICAL_ENCODING`
+/// or `RESOURCE_LIMIT_EXCEEDED`. A `MembershipState` replay reports
+/// `AUTHENTICATION_FAILED` or `SYNC_HEAD_ROLLBACK`, and
+/// `RESOURCE_LIMIT_EXCEEDED` when the generation cannot advance. Each of these
+/// statuses blames the request: the HTTP layer answers `AUTHENTICATION_FAILED`
+/// with 401, `SYNC_HEAD_ROLLBACK` with 409, `RESOURCE_LIMIT_EXCEEDED` with 413,
+/// and the others with 400.
+fn corrupt_row(context: &'static str) -> impl FnOnce(Error) -> Error {
+    move |_| Error::new(ChurStatus::CatalogCorrupt, context)
 }
 
 fn file_sha256(path: &Path) -> Result<[u8; 32]> {
@@ -639,6 +661,12 @@ mod tests {
 
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    use chur_sync_protocol::{
+        deletion::ServerDeletionAuthorization,
+        membership::{EnrollmentRecord, RevocationRecord},
+        operation::{DeviceSigningKey, Operation},
+    };
+
     use super::*;
 
     pub(crate) struct TestRoot(pub(crate) PathBuf);
@@ -668,6 +696,406 @@ mod tests {
 
     fn sha256(bytes: &[u8]) -> [u8; 32] {
         Sha256::digest(bytes).into()
+    }
+
+    fn status<T>(result: Result<T>) -> Option<ChurStatus> {
+        result.err().map(|error| error.status())
+    }
+
+    /// Opens a server that holds the self-enrollment of device `id(2)` in
+    /// vault `id(1)`, and returns the device key, the enrollment, and its
+    /// outer operation.
+    fn bootstrapped(
+        root: &TestRoot,
+    ) -> (
+        ReferenceServer,
+        DeviceSigningKey,
+        EnrollmentRecord,
+        Operation,
+    ) {
+        let mut server = ReferenceServer::open(&root.0, 8, 32_768).expect("open");
+        let key = DeviceSigningKey::from_seed([3; 32]);
+        let enrollment = EnrollmentRecord::initial(id(1), id(2), key.verifying_key(), [4; 32])
+            .expect("enrollment")
+            .sign(&key);
+        let operation = Operation::new(
+            id(5),
+            id(1),
+            id(2),
+            1,
+            [0; 32],
+            Vec::new(),
+            id(6),
+            [vec![7; 24], vec![8; 16]].concat(),
+            [0; 64],
+        )
+        .expect("operation")
+        .sign(&key);
+        server
+            .accept_initial_membership(&enrollment, &operation)
+            .expect("bootstrap");
+        (server, key, enrollment, operation)
+    }
+
+    /// A stored row that fails an identifier or record check is corrupt.
+    ///
+    /// The server checks every identifier and record before it stores them, so
+    /// a short or reserved all-zero identifier in a row is damage, not a bad
+    /// request. `Id::from_slice` and the record decoders report such a value as
+    /// `INVALID_INPUT`, which the HTTP layer answers with 400. Every read below
+    /// reported that status until it mapped the fault to `CATALOG_CORRUPT`, as
+    /// the sharing reads of the same tables already did.
+    #[test]
+    fn a_reserved_identifier_in_a_stored_row_is_catalog_corrupt() {
+        let root = TestRoot::new();
+        let (mut server, key, enrollment, operation) = bootstrapped(&root);
+        let (vault, device) = (id(1), id(2));
+        // The protocol version, then the reserved identifier. Each record
+        // decoder reached below reads these two fields first.
+        let reserved_record = [&enrollment.encode()[..2], &[0; 16]].concat();
+        let mut observed = Vec::new();
+
+        let bytes = b"cipher";
+        server
+            .begin_upload(vault, id(9), id(10), bytes.len() as u64)
+            .expect("begin");
+        server
+            .append_upload(vault, id(9), 0, bytes, sha256(bytes))
+            .expect("range");
+        // The schema checks the length of each identifier. A damaged file does
+        // not, so the check is off for the short value.
+        server
+            .db
+            .execute_batch("PRAGMA ignore_check_constraints = ON;")
+            .expect("unchecked");
+        for (site, store_id) in [
+            ("finish_upload: all-zero store_id", &[0u8; 16][..]),
+            ("finish_upload: short store_id", &[10; 15][..]),
+        ] {
+            server
+                .db
+                .execute(
+                    "UPDATE object_transfers SET store_id = ?1 WHERE transfer_id = ?2",
+                    params![store_id, id(9).as_bytes().as_slice()],
+                )
+                .expect("damaged store_id");
+            observed.push((
+                site,
+                status(server.finish_upload(vault, id(9), sha256(bytes))),
+            ));
+        }
+
+        server
+            .begin_upload(vault, id(11), id(12), 1)
+            .expect("second upload");
+        server
+            .db
+            .execute(
+                "UPDATE object_transfers SET transfer_id = zeroblob(16) WHERE transfer_id = ?1",
+                [id(11).as_bytes().as_slice()],
+            )
+            .expect("damaged transfer_id");
+        let deletion =
+            ServerDeletionAuthorization::object(id(13), vault, device, id(12), operation.digest())
+                .expect("deletion")
+                .sign(&key);
+        observed.push((
+            "apply_deletion: all-zero transfer_id",
+            status(server.apply_deletion(&deletion)),
+        ));
+
+        server
+            .db
+            .execute(
+                "INSERT INTO collection_membership_records (
+                     collection_id, membership_generation, issuer_vault_id,
+                     issuer_signing_public_key, recipient_vault_id, recipient_device_id,
+                     outer_device_id, outer_device_sequence, record
+                 ) VALUES (zeroblob(16), 1, ?1, ?2, ?3, ?4, ?5, 1, X'00')",
+                params![
+                    vault.as_bytes().as_slice(),
+                    key.verifying_key().as_slice(),
+                    id(14).as_bytes().as_slice(),
+                    id(15).as_bytes().as_slice(),
+                    device.as_bytes().as_slice(),
+                ],
+            )
+            .expect("damaged collection row");
+        observed.push((
+            "collection_memberships_for_recipient: all-zero collection_id",
+            status(server.collection_memberships_for_recipient(id(14), id(15))),
+        ));
+
+        let membership = relay::membership_state(&server.db, &vault).expect("membership");
+        let successor = EnrollmentRecord::new(
+            vault,
+            id(16),
+            DeviceSigningKey::from_seed([17; 32]).verifying_key(),
+            [18; 32],
+            3,
+            device,
+            2,
+            enrollment.commitment(),
+            [19; 32],
+        )
+        .expect("successor")
+        .sign(&key);
+        server
+            .db
+            .execute(
+                "INSERT INTO checkpoints (
+                     vault_id, issuer_device_id, issuer_sequence, commitment, record
+                 ) VALUES (?1, ?2, 1, ?3, ?4)",
+                params![
+                    vault.as_bytes().as_slice(),
+                    device.as_bytes().as_slice(),
+                    [19u8; 32].as_slice(),
+                    reserved_record.as_slice(),
+                ],
+            )
+            .expect("damaged checkpoint row");
+        observed.push((
+            "verify_enrollment_checkpoint: reserved identifier in the checkpoint",
+            status(checkpoint::verify_enrollment_checkpoint(
+                &server.db,
+                &successor,
+                &membership,
+            )),
+        ));
+
+        server
+            .db
+            .execute(
+                "INSERT INTO membership_records (
+                     vault_id, membership_generation, record_kind,
+                     outer_device_id, outer_device_sequence, record
+                 ) VALUES (?1, 2, 1, zeroblob(16), 2, ?2)",
+                params![vault.as_bytes().as_slice(), reserved_record.as_slice()],
+            )
+            .expect("damaged membership row");
+        observed.push((
+            "membership_state: all-zero outer_device_id",
+            status(relay::membership_state(&server.db, &vault)),
+        ));
+        server
+            .db
+            .execute(
+                "UPDATE membership_records SET outer_device_id = ?1
+                 WHERE membership_generation = 2",
+                [device.as_bytes().as_slice()],
+            )
+            .expect("outer device");
+        observed.push((
+            "membership_state: reserved identifier in an enrollment",
+            status(relay::membership_state(&server.db, &vault)),
+        ));
+        server
+            .db
+            .execute_batch(
+                "UPDATE membership_records SET record_kind = 2 WHERE membership_generation = 2;",
+            )
+            .expect("revocation kind");
+        observed.push((
+            "membership_state: reserved identifier in a revocation",
+            status(relay::membership_state(&server.db, &vault)),
+        ));
+        server
+            .db
+            .execute(
+                "UPDATE membership_records SET record = ?1 WHERE membership_generation = 1",
+                [reserved_record.as_slice()],
+            )
+            .expect("damaged initial membership");
+        observed.push((
+            "membership_state: reserved identifier in the initial enrollment",
+            status(relay::membership_state(&server.db, &vault)),
+        ));
+
+        let wrong: Vec<_> = observed
+            .iter()
+            .filter(|(_, status)| *status != Some(ChurStatus::CatalogCorrupt))
+            .collect();
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// A negative length or sequence in a stored row is corrupt.
+    ///
+    /// The schema accepts only a positive or zero value in each of these
+    /// columns, so a negative value is damage. `from_sqlite` reported it as
+    /// `INTERNAL_FAILURE`, which tells the client to retry.
+    #[test]
+    fn a_negative_stored_integer_is_catalog_corrupt() {
+        let root = TestRoot::new();
+        let (mut server, ..) = bootstrapped(&root);
+        let (vault, device) = (id(1), id(2));
+        let bytes = b"cipher";
+        server
+            .begin_upload(vault, id(9), id(10), bytes.len() as u64)
+            .expect("begin");
+        // The schema checks each of these columns. A damaged file does not.
+        server
+            .db
+            .execute_batch(
+                "PRAGMA ignore_check_constraints = ON;
+                 UPDATE object_transfers SET received_length = -1;",
+            )
+            .expect("damaged received_length");
+        let mut observed = vec![
+            (
+                "begin_upload: negative received_length",
+                status(server.begin_upload(vault, id(9), id(10), bytes.len() as u64)),
+            ),
+            (
+                "append_upload: negative received_length",
+                status(server.append_upload(vault, id(9), 0, bytes, sha256(bytes))),
+            ),
+            (
+                "finish_upload: negative received_length",
+                status(server.finish_upload(vault, id(9), sha256(bytes))),
+            ),
+        ];
+        server
+            .db
+            .execute_batch("UPDATE object_transfers SET expected_length = -1, complete = 1;")
+            .expect("damaged expected_length");
+        observed.push((
+            "read_object: negative expected_length",
+            status(server.read_object(vault, id(10), 0, 8)),
+        ));
+
+        server
+            .db
+            .execute_batch("UPDATE membership_records SET outer_device_sequence = -1;")
+            .expect("damaged initial outer sequence");
+        observed.push((
+            "membership_state: negative initial outer sequence",
+            status(relay::membership_state(&server.db, &vault)),
+        ));
+        server
+            .db
+            .execute_batch("UPDATE membership_records SET outer_device_sequence = 1;")
+            .expect("repaired initial outer sequence");
+        server
+            .db
+            .execute(
+                "INSERT INTO membership_records (
+                     vault_id, membership_generation, record_kind,
+                     outer_device_id, outer_device_sequence, record
+                 ) VALUES (?1, 2, 1, ?2, -1, X'00')",
+                params![vault.as_bytes().as_slice(), device.as_bytes().as_slice()],
+            )
+            .expect("damaged outer sequence");
+        observed.push((
+            "membership_state: negative outer sequence",
+            status(relay::membership_state(&server.db, &vault)),
+        ));
+
+        let wrong: Vec<_> = observed
+            .iter()
+            .filter(|(_, status)| *status != Some(ChurStatus::CatalogCorrupt))
+            .collect();
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// A stored membership record that decodes but fails replay is corrupt.
+    ///
+    /// The server stores a membership record only after `MembershipState`
+    /// accepts it, so a stored record that the same checks refuse later is
+    /// damage. The replay reported its own status, for example
+    /// `AUTHENTICATION_FAILED` or `SYNC_HEAD_ROLLBACK`, which blames the
+    /// request. The transport token check hides the cause, as
+    /// `ERROR_MODEL.md` principle 2 requires, before and after the change.
+    #[test]
+    fn a_stored_membership_record_that_fails_replay_is_catalog_corrupt() {
+        let root = TestRoot::new();
+        let (mut server, key, enrollment, _) = bootstrapped(&root);
+        let (vault, device) = (id(1), id(2));
+        let token = [40; 32];
+        server
+            .set_transport_token(vault, device, &token)
+            .expect("token");
+        let successor = EnrollmentRecord::new(
+            vault,
+            id(16),
+            DeviceSigningKey::from_seed([17; 32]).verifying_key(),
+            [18; 32],
+            3,
+            device,
+            2,
+            enrollment.commitment(),
+            [19; 32],
+        )
+        .expect("successor")
+        .sign(&key);
+        let revocation = RevocationRecord::new(vault, id(16), 1, [20; 32], 2, device, [21; 32])
+            .expect("revocation")
+            .sign(&key);
+        let mut observed = Vec::new();
+
+        for (site, kind, outer_sequence, record) in [
+            (
+                "enrollment: the stored outer sequence differs from the record",
+                1,
+                4,
+                successor.encode(),
+            ),
+            (
+                "revocation: the record names another predecessor",
+                2,
+                3,
+                revocation.encode(),
+            ),
+        ] {
+            server
+                .db
+                .execute(
+                    "INSERT OR REPLACE INTO membership_records (
+                         vault_id, membership_generation, record_kind,
+                         outer_device_id, outer_device_sequence, record
+                     ) VALUES (?1, 2, ?2, ?3, ?4, ?5)",
+                    params![
+                        vault.as_bytes().as_slice(),
+                        kind,
+                        device.as_bytes().as_slice(),
+                        outer_sequence,
+                        record,
+                    ],
+                )
+                .expect("stored successor");
+            observed.push((
+                site,
+                status(relay::membership_state(&server.db, &vault)),
+                status(server.authenticate_transport(vault, &token)),
+            ));
+        }
+
+        let mut initial = enrollment.encode();
+        *initial.last_mut().expect("signature") ^= 1;
+        server
+            .db
+            .execute_batch("DELETE FROM membership_records WHERE membership_generation = 2;")
+            .expect("successor removed");
+        server
+            .db
+            .execute(
+                "UPDATE membership_records SET record = ?1 WHERE membership_generation = 1",
+                [initial.as_slice()],
+            )
+            .expect("damaged initial signature");
+        observed.push((
+            "bootstrap: the initial signature does not verify",
+            status(relay::membership_state(&server.db, &vault)),
+            status(server.authenticate_transport(vault, &token)),
+        ));
+
+        let wrong: Vec<_> = observed
+            .iter()
+            .filter(|(_, replay, transport)| {
+                *replay != Some(ChurStatus::CatalogCorrupt)
+                    || *transport != Some(ChurStatus::AuthenticationFailed)
+            })
+            .collect();
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
     #[test]

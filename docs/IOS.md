@@ -62,8 +62,8 @@ The iOS target MUST NOT own:
 | Bundle identifier | `dev.po4yka.chur` |
 | Primary platform target | iOS 26 design baseline; deployment target iOS 18.0, frozen by [ADR-0017](adr/0017-freeze-the-supported-device-set.md) |
 | Native language | Swift 6.2 target baseline |
-| Shared language | Kotlin 2.4.10 / K2 |
-| Shared UI | Compose Multiplatform 1.11.1 |
+| Shared language | Kotlin 2.4.20 / K2 |
+| Shared UI | Compose Multiplatform 1.12.1 |
 | Host UI | Thin SwiftUI/UIKit shell with Compose content |
 | Navigation/state | Shared Navigation 3, AndroidX ViewModel, StateFlow, Flow, UDF/MVVM |
 | Public persistence | Room 3.0.1 KMP and DataStore KMP |

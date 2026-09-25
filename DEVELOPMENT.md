@@ -9,8 +9,8 @@ This document describes the intended development environment and workflow. The r
 | Area | Target |
 | --- | --- |
 | JDK | 21, pinned for Gradle builds |
-| Kotlin | 2.4.10 / K2 |
-| Compose Multiplatform | 1.11.1 |
+| Kotlin | 2.4.20 / K2 |
+| Compose Multiplatform | 1.12.1 |
 | Gradle | version pinned by wrapper |
 | Android | compile/target API 37; NDK pinned in version catalog |
 | Xcode | version supporting the selected iOS deployment target |

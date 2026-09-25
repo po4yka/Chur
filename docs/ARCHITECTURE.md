@@ -328,14 +328,14 @@ Module boundaries MUST prevent feature modules from importing platform-native ke
 
 | Area | Planned choice |
 | --- | --- |
-| Language | Kotlin 2.4.10 / K2 |
-| UI | Compose Multiplatform 1.11.1 |
+| Language | Kotlin 2.4.20 / K2 |
+| UI | Compose Multiplatform 1.12.1 |
 | Navigation | Navigation 3 Multiplatform |
 | Architecture | AndroidX ViewModel with UDF/MVVM |
 | State | StateFlow / Flow |
 | Concurrency | Coroutines 1.11 |
 | Dependency injection | Koin 4.2.2 classic DSL plus manual secure graph |
-| Network | Ktor Client 3.5.2 |
+| Network | Ktor Client 3.6.0 |
 | Serialization | kotlinx.serialization 1.11 |
 | Public database | Room 3.0.1 KMP |
 | Settings | DataStore KMP |

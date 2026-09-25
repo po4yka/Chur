@@ -41,7 +41,7 @@ fn token(value: &str) -> Result<[u8; 32], Box<dyn Error>> {
         return Err("CHUR_SYNC_BOOTSTRAP_TOKEN must be 64 hex characters".into());
     }
     let mut token = [0; 32];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in value.as_bytes().chunks(2).enumerate() {
         token[index] = (nibble(pair[0])? << 4) | nibble(pair[1])?;
     }
     Ok(token)

@@ -5,7 +5,7 @@ use chur_sync_protocol::membership::EnrollmentRecord;
 use chur_sync_protocol::state::{DeviceStatus, MembershipState};
 use rusqlite::{Connection, OptionalExtension, params};
 
-use super::{ReferenceServer, RelayOutcome, map_sqlite};
+use super::{ReferenceServer, RelayOutcome, corrupt_row, map_sqlite};
 
 impl ReferenceServer {
     /// Verifies and stores one signed checkpoint over already stored heads.
@@ -194,7 +194,8 @@ pub(super) fn verify_enrollment_checkpoint(
                 "enrollment checkpoint is not stored",
             )
         })?;
-    let checkpoint = Checkpoint::decode(&record)?;
+    let checkpoint =
+        Checkpoint::decode(&record).map_err(corrupt_row("stored checkpoint is invalid"))?;
     let issuer_head = checkpoint
         .heads()
         .iter()

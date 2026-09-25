@@ -53,9 +53,22 @@ android {
         jniLibs.keepDebugSymbols += "**/libchur_jni.so"
     }
 
+    signingConfigs {
+        create("release") {
+            // CI supplies a temporary file; local builds can point at the
+            // keystore kept outside the repository. A missing file makes
+            // assembleRelease fail instead of producing an unsigned APK.
+            storeFile = file(System.getenv("CHUR_RELEASE_KEYSTORE") ?: "missing-release-keystore.p12")
+            storePassword = System.getenv("CHUR_RELEASE_PASSWORD") ?: ""
+            keyAlias = "chur-release"
+            keyPassword = storePassword
+        }
+    }
+
     buildTypes {
         getByName("release") {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 }

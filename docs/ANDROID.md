@@ -64,8 +64,8 @@ Android MUST NOT own:
 | Compile SDK | Android API 37 |
 | Target SDK | Android API 37 |
 | Minimum SDK | API 29, frozen by [ADR-0017](adr/0017-freeze-the-supported-device-set.md) |
-| Kotlin | Kotlin 2.4.10 / K2 |
-| UI | Compose Multiplatform 1.11.1 hosted by a thin Android shell |
+| Kotlin | Kotlin 2.4.20 / K2 |
+| UI | Compose Multiplatform 1.12.1 hosted by a thin Android shell |
 | Navigation | Navigation 3 Multiplatform |
 | State | AndroidX ViewModel, StateFlow, Flow, UDF/MVVM |
 | Public persistence | Room 3.0.1 KMP and DataStore KMP |

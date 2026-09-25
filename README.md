@@ -218,14 +218,14 @@ The current planned baseline is:
 
 | Area | Choice |
 | --- | --- |
-| Language | **Kotlin 2.4.10 / K2** |
-| UI | **Compose Multiplatform 1.11.1** |
+| Language | **Kotlin 2.4.20 / K2** |
+| UI | **Compose Multiplatform 1.12.1** |
 | Navigation | **Navigation 3 Multiplatform** |
 | Architecture | **AndroidX ViewModel + UDF/MVVM** |
 | State | **StateFlow / Flow** |
 | Concurrency | **Kotlin Coroutines 1.11** |
 | Dependency injection | **Koin 4.2.2 classic DSL** for application/features; **manual DI** for the secure graph |
-| Network | **Ktor Client 3.5.2** |
+| Network | **Ktor Client 3.6.0** |
 | Serialization | **kotlinx.serialization 1.11** |
 | Public database | **Room 3.0.1 KMP** |
 | Public settings | **DataStore KMP** |
