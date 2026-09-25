@@ -32,10 +32,8 @@ import java.io.File
  * `AndroidPrivacyCover` sets a flag on the current window, and
  * `AndroidDeviceUnlock` gives `BiometricPrompt` the current `FragmentActivity`.
  *
- * It is built by the activity rather than by the application, so a process the
- * WorkManager schedule started opens no runtime and holds no vault state until
- * a person launches the application. That is the state [ChurSync] already
- * describes as a quiet no.
+ * The activity and the sync worker share it, so a process started for periodic
+ * work can open the runtime without opening a vault session.
  */
 internal class ChurHost private constructor(context: Context) {
     /**
@@ -105,7 +103,6 @@ internal class ChurHost private constructor(context: Context) {
 
     init {
         sync.bind(RepositorySyncBoundary(controller.vault))
-        ChurSync.coordinator = sync
     }
 
     companion object {
@@ -119,9 +116,9 @@ internal class ChurHost private constructor(context: Context) {
          * `DESIGN.md` §14 before a person can leave, so what outlives a
          * finished activity is a storage path and no plaintext.
          *
-         * Called from `MainActivity.onCreate` alone, which the platform runs on
-         * the main thread, so the check and the store need no lock.
+         * The activity and WorkManager may call this on different threads.
          */
+        @Synchronized
         fun of(context: Context): ChurHost =
             instance ?: ChurHost(context.applicationContext).also { instance = it }
     }

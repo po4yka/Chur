@@ -1,7 +1,7 @@
 package dev.po4yka.chur.android
 
+import android.content.Context
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.collectAsState
@@ -57,7 +57,7 @@ class MainActivity : FragmentActivity() {
         ChurSync.enqueue(this)
 
         val controller = host.controller
-        val verdict = runGate()
+        val verdict = runGate(this)
         if (verdict is GateResult.Compatible) {
             // It runs once per process: the controller refuses a second start,
             // because a second one would leave a second idle timer over the one
@@ -86,29 +86,6 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }
-    }
-
-    /**
-     * The gate of §2, run against the loaded library.
-     *
-     * `releaseApplication` is derived from the build rather than hard-coded, so
-     * a debug build accepts a debug library and a release build does not.
-     */
-    private fun runGate(): GateResult {
-        val handshake = ChurVault.handshake()
-        return gate(
-            NativeHandshake(
-                abiVersionMajor = handshake.major.toUInt(),
-                abiVersionMinor = handshake.minor.toUInt(),
-                capabilities = handshake.capabilities.toULong(),
-                objectFormatMin = handshake.objectFormatMin.toUInt(),
-                objectFormatMax = handshake.objectFormatMax.toUInt(),
-                keySlotFormatMin = handshake.keySlotFormatMin.toUInt(),
-                keySlotFormatMax = handshake.keySlotFormatMax.toUInt(),
-                buildFlavor = handshake.buildFlavor.toUInt(),
-            ),
-            releaseApplication = !BuildConfigCompat.debuggable(this),
-        )
     }
 
     /**
@@ -150,8 +127,26 @@ class MainActivity : FragmentActivity() {
     }
 }
 
+/** Run the native gate before either host entry point opens a runtime. */
+internal fun runGate(context: Context): GateResult {
+    val handshake = ChurVault.handshake()
+    return gate(
+        NativeHandshake(
+            abiVersionMajor = handshake.major.toUInt(),
+            abiVersionMinor = handshake.minor.toUInt(),
+            capabilities = handshake.capabilities.toULong(),
+            objectFormatMin = handshake.objectFormatMin.toUInt(),
+            objectFormatMax = handshake.objectFormatMax.toUInt(),
+            keySlotFormatMin = handshake.keySlotFormatMin.toUInt(),
+            keySlotFormatMax = handshake.keySlotFormatMax.toUInt(),
+            buildFlavor = handshake.buildFlavor.toUInt(),
+        ),
+        releaseApplication = !BuildConfigCompat.debuggable(context),
+    )
+}
+
 /** Whether this build is debuggable, without generating a `BuildConfig`. */
 internal object BuildConfigCompat {
-    fun debuggable(activity: ComponentActivity): Boolean =
-        activity.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
+    fun debuggable(context: Context): Boolean =
+        context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
 }

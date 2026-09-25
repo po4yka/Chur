@@ -9,34 +9,18 @@ import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import dev.po4yka.chur.sync.SyncCoordinator
+import dev.po4yka.chur.app.GateResult
 import kotlinx.coroutines.CancellationException
 import java.util.concurrent.TimeUnit
 
 /**
  * The Android background schedule, `SYNC_PROTOCOL_V1.md` §7.
  *
- * One periodic WorkManager job asks the engine for a cycle while the process
- * is alive. The worker is deliberately thin about what can happen around it:
- * a process the system started for this job has no composition root yet, and
- * the one-runtime rule of `docs/interop/FFI_CONTRACT.md` §14 forbids opening a
- * second one beside `MainActivity`'s, so a cycle without a bound engine is a
- * quiet no rather than a second runtime. [ChurHost] binds the engine and
- * enqueues the work; from then on every periodic run, foregrounded or not,
- * pulls and stages while the vault happens to be locked and applies nothing
- * until the user unlocks.
+ * One periodic WorkManager job asks the process-scoped [ChurHost] for a cycle.
+ * A process started for the job creates that same host before opening the
+ * runtime; the vault stays locked and inbound records are staged until unlock.
  */
 object ChurSync {
-    /**
-     * The engine [ChurHost] bound, or `null` before a launch built one.
-     *
-     * It is process state rather than activity state because the worker
-     * outlives no process but can outlive the activity. It is set once and not
-     * cleared: [ChurHost] is process-scoped too, so the engine it bound stays
-     * correct for every later activity.
-     */
-    var coordinator: SyncCoordinator? = null
-
     /** Schedules the periodic pull, keeping an existing schedule over it. */
     fun enqueue(context: Context) {
         val request =
@@ -56,25 +40,26 @@ object ChurSync {
 /**
  * One work unit: one engine cycle, `SyncCoordinator.syncNow`.
  *
- * The cycle carries the bounded backoff of §10 inside it, so the worker's own
- * result adds no second backoff: a finished cycle is a finished run, and the
- * next periodic schedule is the retry the user experiences.
+ * The cycle carries the bounded transport backoff of §10 inside it. WorkManager
+ * retries only when the host cannot start or an unexpected exception escapes.
  */
 internal class ChurSyncWorker(
     context: Context,
     parameters: WorkerParameters,
 ) : CoroutineWorker(context, parameters) {
     override suspend fun doWork(): Result {
-        val coordinator = ChurSync.coordinator ?: return Result.success()
         try {
-            coordinator.syncNow()
+            if (runGate(applicationContext) !is GateResult.Compatible) return Result.failure()
+            val host = ChurHost.of(applicationContext)
+            host.controller.vault.start()
+            host.sync.syncNow()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            // The engine records a bounded status for its own failures; what
-            // reaches here is a schedule-level accident, and the log is where
-            // a report of one starts. The next run is the recovery.
+            // Engine transport failures have their own bounded backoff. An
+            // exception here means the scheduled work never completed.
             Log.w("ChurSync", "the background sync cycle failed", failure)
+            return Result.retry()
         }
         return Result.success()
     }
