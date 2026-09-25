@@ -41,6 +41,10 @@ impl ReferenceServer {
     }
 
     /// Authenticates one opaque transport credential and returns its active device.
+    ///
+    /// Every failure is `AUTHENTICATION_FAILED`: an unknown token or vault, a
+    /// revoked device, a failed storage read, and stored membership that does
+    /// not replay look the same (`ERROR_MODEL.md` principle 2).
     pub fn authenticate_transport(&self, vault_id: Id, token: &[u8; 32]) -> Result<Id> {
         let device: Option<Vec<u8>> = self
             .db
@@ -54,7 +58,7 @@ impl ReferenceServer {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|error| map_sqlite(error, "transport token lookup failed"))?;
+            .map_err(|_| authentication_failed())?;
         let device = device
             .as_deref()
             .and_then(|bytes| Id::from_slice(bytes).ok())
@@ -207,6 +211,26 @@ mod tests {
             server
                 .authenticate_transport(vault, &replacement)
                 .expect_err("revoked credential")
+                .status(),
+            ChurStatus::AuthenticationFailed
+        );
+    }
+
+    /// A failed token lookup tells an unauthenticated caller nothing about
+    /// stored state. Before this rule, the caller got the status of the
+    /// SQLite error, here `INTERNAL_FAILURE`.
+    #[test]
+    fn a_failed_token_lookup_is_authentication_failed() {
+        let root = crate::tests::TestRoot::new();
+        let server = ReferenceServer::open(&root.0, 1_024, 32_768).expect("server");
+        server
+            .db
+            .execute_batch("DROP TABLE transport_tokens;")
+            .expect("dropped token table");
+        assert_eq!(
+            server
+                .authenticate_transport(id(1), &[9; 32])
+                .expect_err("failed lookup")
                 .status(),
             ChurStatus::AuthenticationFailed
         );

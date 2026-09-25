@@ -67,6 +67,8 @@ The package response has one `chur_sharing_accept` input for each current grant.
 
 Upload and download checksums are 64 hexadecimal SHA-256 characters. Upload ranges are sequential and at most 16 MiB. An exact range replay is idempotent. Upload progress is `received:u64be || expected:u64be || complete:u8`. A signed deletion route does not accept a transport token as authority; it verifies `ServerDeletionAuthorizationV1` against current device membership. The signer key comes from that membership, so the route rebuilds it before it verifies the signature. Until the signature verifies, a failure that depends on stored state is `AUTHENTICATION_FAILED`: an unknown vault, an unenrolled or revoked signer, a wrong signature, a failed storage read, and stored membership that does not replay all get the same answer. A malformed body still gets its decoding status. The replay rule of [`SYNC_PROTOCOL_V1.md`](SYNC_PROTOCOL_V1.md) §9.1 is the exception: an exact replay succeeds, and a reused request identifier is `CONFLICT`.
 
+A bearer route answers every failure of its token check with `AUTHENTICATION_FAILED`: an absent or unknown token, an unknown vault, a revoked device, a failed storage read, and stored membership that does not replay all get the same answer. A malformed path, query, or body can get its decoding status before the token check.
+
 ## Network boundary
 
 Keep the process on a loopback or private address. Put a reverse proxy with TLS 1.3 in front of it. Do not expose the default cleartext listener to an untrusted network. Back up the complete data directory as one unit because SQLite and object files share one logical store.
