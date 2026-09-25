@@ -59,6 +59,7 @@ import dev.po4yka.chur.native.chur_status_is_known
 import dev.po4yka.chur.native.chur_sync_process
 import dev.po4yka.chur.native.chur_sync_stage
 import dev.po4yka.chur.native.chur_tag_create
+import dev.po4yka.chur.native.chur_tag_list
 import dev.po4yka.chur.native.chur_vault_add_device_slot
 import dev.po4yka.chur.native.chur_vault_add_recovery_slot
 import dev.po4yka.chur.native.chur_vault_change_password
@@ -864,6 +865,22 @@ internal actual object ChurNative {
             }
         }
     }
+
+    actual fun tagList(
+        session: Long,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int =
+        memScoped {
+            writtenCall(outWritten) { written ->
+                chur_tag_list(
+                    session.toULong(),
+                    destination.pointer,
+                    destination.size.toULong(),
+                    written,
+                )
+            }
+        }
 
     actual fun objectSetTag(
         session: Long,

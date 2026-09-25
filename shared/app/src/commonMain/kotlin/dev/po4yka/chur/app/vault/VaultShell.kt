@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -25,6 +27,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.CustomAccessibilityAction
@@ -158,6 +164,10 @@ data class VaultActions(
     val onClearSelection: () -> Unit = {},
     /** Export every selected object. */
     val onExportSelection: () -> Unit = {},
+    /** Add the selection to an album, or move it from the open album. */
+    val onOrganizeSelection: () -> Unit = {},
+    /** Assign or remove a private catalog tag. */
+    val onTagSelection: () -> Unit = {},
     /** Remove every selected object from the open album, §11.4. */
     val onRemoveSelectionFromAlbum: () -> Unit = {},
     /** Delete every selected object from this vault, §11.4. */
@@ -252,7 +262,9 @@ fun VaultShell(state: VaultUiState, actions: VaultActions) {
             // contextual action inside an open album, and a destination
             // nowhere. §11.4 replaces the ordinary actions while a selection
             // runs, and the floating action is one of them.
-            if (state.selectedCount == 0 && state.destination == VaultDestination.LIBRARY) {
+            if (state.selectedCount == 0 &&
+                (state.destination == VaultDestination.LIBRARY || state.openAlbum != null)
+            ) {
                 FloatingActionButton(onClick = actions.onImport) {
                     Icon(PlusGlyph, contentDescription = "Import")
                 }
@@ -297,13 +309,12 @@ fun VaultShell(state: VaultUiState, actions: VaultActions) {
  * from album" are two actions and never one ambiguous `Delete`; and the album
  * action appears only where it has a scope to act in.
  *
- * "More" and "move to album" are not here. They are the two entries of §11.4
- * that need a picker this shell does not have yet, and an action that opens
- * nothing would be worse than one that is absent.
+ * The menu keeps the destructive actions reachable on narrow screens.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun SelectionBar(state: VaultUiState, actions: VaultActions) {
+    var expanded by remember { mutableStateOf(false) }
     TopAppBar(
         title = { Text("${state.selectedCount} selected") },
         navigationIcon = {
@@ -312,14 +323,34 @@ private fun SelectionBar(state: VaultUiState, actions: VaultActions) {
             }
         },
         actions = {
-            TextButton(onClick = actions.onSelectAll) { Text("Select all") }
             TextButton(onClick = actions.onExportSelection) { Text("Export") }
-            if (state.openAlbum != null) {
-                TextButton(onClick = actions.onRemoveSelectionFromAlbum) {
-                    Text("Remove from album")
+            Box {
+                TextButton(onClick = { expanded = true }) { Text("More") }
+                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Select all") },
+                        onClick = { expanded = false; actions.onSelectAll() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(if (state.openAlbum == null) "Add to album" else "Move to album") },
+                        onClick = { expanded = false; actions.onOrganizeSelection() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Tags") },
+                        onClick = { expanded = false; actions.onTagSelection() },
+                    )
+                    if (state.openAlbum != null) {
+                        DropdownMenuItem(
+                            text = { Text("Remove from album") },
+                            onClick = { expanded = false; actions.onRemoveSelectionFromAlbum() },
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text("Delete from this vault") },
+                        onClick = { expanded = false; actions.onDeleteSelection() },
+                    )
                 }
             }
-            TextButton(onClick = actions.onDeleteSelection) { Text("Delete from this vault") }
         },
     )
 }

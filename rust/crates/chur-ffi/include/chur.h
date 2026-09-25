@@ -16,9 +16,9 @@
  * of section 6.10, the share acceptance surface of section 6.11, and the
  * recipient revocation surface of section 6.12, and the authenticated
  * recipient-device surface of section 6.13, and the sharing discovery surface
- * of section 6.14. Adding an export raises the minor
+ * of section 6.14, and the private tag list of section 6.15. Adding an export raises the minor
  * ABI version; changing or removing one raises the major. The library reports
- * 1.10.
+ * 1.11.
  */
 
 #ifndef CHUR_H
@@ -579,6 +579,8 @@ chur_status_t chur_album_list(chur_handle_t session, uint8_t *destination,
                               size_t capacity, size_t *bytes_written);
 chur_status_t chur_tag_create(chur_handle_t session, const uint8_t *name,
                               uint32_t name_length, uint8_t *out_tag_id);
+chur_status_t chur_tag_list(chur_handle_t session, uint8_t *destination,
+                            size_t capacity, size_t *bytes_written);
 chur_status_t chur_object_set_tag(chur_handle_t session, const uint8_t *tag_id,
                                   const ChurObjectRefV1 *object, uint8_t tagged);
 

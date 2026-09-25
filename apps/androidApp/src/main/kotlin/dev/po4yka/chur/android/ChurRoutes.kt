@@ -15,11 +15,16 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import dev.po4yka.chur.app.AppRoute
 import dev.po4yka.chur.app.ChurController
+import dev.po4yka.chur.app.MediaImporter
 import dev.po4yka.chur.app.notes.NoteEditorScreen
 import dev.po4yka.chur.app.notes.NotesScreen
 import dev.po4yka.chur.app.notes.PublicSettingsScreen
 import dev.po4yka.chur.app.vault.CreateVaultScreen
 import dev.po4yka.chur.app.vault.LibraryTile
+import dev.po4yka.chur.app.vault.AlbumPickerDialog
+import dev.po4yka.chur.app.vault.DeleteSelectionDialog
+import dev.po4yka.chur.app.vault.NewAlbumDialog
+import dev.po4yka.chur.app.vault.TagPickerDialog
 import dev.po4yka.chur.app.vault.RecoveryPhraseScreen
 import dev.po4yka.chur.app.vault.RecoveryScreen
 import dev.po4yka.chur.app.vault.RestoreBackupScreen
@@ -29,10 +34,6 @@ import dev.po4yka.chur.app.vault.VaultActions
 import dev.po4yka.chur.app.vault.VaultDestination
 import dev.po4yka.chur.app.vault.VaultShell
 import dev.po4yka.chur.app.vault.VaultUiState
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.ui.graphics.ImageBitmap
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_VIDEO
@@ -234,6 +235,7 @@ private fun RestoreRoute(controller: ChurController) {
 private fun VaultRoute(controller: ChurController) {
     val page by controller.page.collectAsState()
     val albums by controller.albums.collectAsState()
+    val tags by controller.tags.collectAsState()
     val slots by controller.slots.collectAsState()
     val message by controller.message.collectAsState()
     val vaultState by controller.vaultState.collectAsState()
@@ -252,6 +254,10 @@ private fun VaultRoute(controller: ChurController) {
     var viewing by remember { mutableStateOf<ObjectProjection?>(null) }
     var selection by remember { mutableStateOf(setOf<String>()) }
     var creatingAlbum by remember { mutableStateOf(false) }
+    var choosingAlbum by remember { mutableStateOf(false) }
+    var choosingTag by remember { mutableStateOf(false) }
+    var confirmingDelete by remember { mutableStateOf(false) }
+    var importAlbumId by remember { mutableStateOf<ByteArray?>(null) }
 
     // The cache is the controller's: its lock transitions clear it whether
     // or not this screen is composed, §4 of `PLAINTEXT_LIFECYCLE.md`. The
@@ -260,7 +266,8 @@ private fun VaultRoute(controller: ChurController) {
     val cache = controller.thumbnailCache
     val generation = (vaultState as? VaultState.Unlocked)?.generation ?: 0L
 
-    val importer = remember { ChurImporter(AndroidMediaCodec(context.contentResolver)) }
+    val codec = remember { AndroidMediaCodec(context.contentResolver) }
+    val importer = remember { MediaImporter(codec) }
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
     ) { uri ->
@@ -271,16 +278,22 @@ private fun VaultRoute(controller: ChurController) {
             scope.launch {
                 controller.report("Importing")
                 val outcome = withContext(Dispatchers.IO) {
-                    importer.import(controller.vault, context.contentResolver, uri)
+                    importer.import(controller.vault, codec.open(uri))
                 }
-                controller.reportImport(
-                    when (outcome) {
-                        is ChurImporter.Outcome.Imported -> null
-                        is ChurImporter.Outcome.TooLarge -> outcome.reason
-                        ChurImporter.Outcome.Unreadable -> "That file could not be opened."
-                        is ChurImporter.Outcome.Refused -> outcome.status
-                    },
-                )
+                when (outcome) {
+                    is MediaImporter.Outcome.Imported -> {
+                        val albumId = importAlbumId
+                        controller.reportImport(if (albumId == null) "Imported into vault." else null)
+                        if (albumId != null) {
+                            controller.putAllInAlbum(albumId, listOf(outcome.objectId)) {
+                                controller.report("Imported into album.")
+                            }
+                        }
+                    }
+                    is MediaImporter.Outcome.TooLarge -> controller.reportImport(outcome.reason)
+                    MediaImporter.Outcome.Unreadable -> controller.reportImport("That file could not be opened.")
+                    is MediaImporter.Outcome.Refused -> controller.reportImport(outcome.status)
+                }
             }
         }
     }
@@ -334,14 +347,65 @@ private fun VaultRoute(controller: ChurController) {
     }
 
     if (creatingAlbum) {
-        NameDialog(
-            title = "New album",
-            label = "Album name",
-            onConfirm = { name ->
+        NewAlbumDialog(
+            onCreate = { name ->
                 creatingAlbum = false
                 controller.createAlbum(name)
             },
             onDismiss = { creatingAlbum = false },
+        )
+    }
+    if (choosingAlbum) {
+        AlbumPickerDialog(
+            albums = albums,
+            currentAlbum = openAlbum,
+            onChoose = { album ->
+                choosingAlbum = false
+                controller.putAllInAlbum(
+                    album.albumId, selectedObjects(page, selection), openAlbum?.albumId,
+                ) { selection = emptySet() }
+            },
+            onCreate = { name ->
+                choosingAlbum = false
+                controller.createAlbumWithObjects(
+                    name, selectedObjects(page, selection), openAlbum?.albumId,
+                ) { selection = emptySet() }
+            },
+            onDismiss = { choosingAlbum = false },
+        )
+    }
+    if (choosingTag) {
+        TagPickerDialog(
+            tags = tags,
+            onAdd = { tag ->
+                choosingTag = false
+                controller.setTagForAll(tag.tagId, selectedObjects(page, selection), true) {
+                    selection = emptySet()
+                }
+            },
+            onRemove = { tag ->
+                choosingTag = false
+                controller.setTagForAll(tag.tagId, selectedObjects(page, selection), false) {
+                    selection = emptySet()
+                }
+            },
+            onCreate = { name ->
+                choosingTag = false
+                controller.createTagWithObjects(name, selectedObjects(page, selection)) {
+                    selection = emptySet()
+                }
+            },
+            onDismiss = { choosingTag = false },
+        )
+    }
+    if (confirmingDelete) {
+        DeleteSelectionDialog(
+            count = selection.size,
+            onDelete = {
+                confirmingDelete = false
+                controller.deleteAll(selectedObjects(page, selection)) { selection = emptySet() }
+            },
+            onDismiss = { confirmingDelete = false },
         )
     }
 
@@ -393,6 +457,7 @@ private fun VaultRoute(controller: ChurController) {
                 // activity as the picker comes up and the background lock would
                 // otherwise close the vault the result needs.
                 controller.beginHostActivity()
+                importAlbumId = openAlbum?.albumId
                 picker.launch(
                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo),
                 )
@@ -413,19 +478,24 @@ private fun VaultRoute(controller: ChurController) {
             onSelectAll = { selection = page.objects.map { it.id }.toSet() },
             onClearSelection = { selection = emptySet() },
             onExportSelection = {
-                controller.exportAll(selectedObjects(page, selection))
-                selection = emptySet()
+                controller.exportAll(selectedObjects(page, selection)) { selection = emptySet() }
+            },
+            onOrganizeSelection = {
+                controller.loadAlbums()
+                choosingAlbum = true
+            },
+            onTagSelection = {
+                controller.loadTags()
+                choosingTag = true
             },
             onRemoveSelectionFromAlbum = {
                 openAlbum?.let { album ->
-                    controller.removeAllFromAlbum(album.albumId, selectedObjects(page, selection))
+                    controller.removeAllFromAlbum(album.albumId, selectedObjects(page, selection)) {
+                        selection = emptySet()
+                    }
                 }
-                selection = emptySet()
             },
-            onDeleteSelection = {
-                controller.deleteAll(selectedObjects(page, selection))
-                selection = emptySet()
-            },
+            onDeleteSelection = { confirmingDelete = true },
             onAddDeviceSlot = controller::enrollDeviceSlot,
             onToggleDeviceSlotPolicy = controller::toggleDeviceSlotPolicy,
             onConfigureSync = controller::configureSync,
@@ -462,7 +532,7 @@ private fun ViewerRoute(
     var preview by remember(projection.id) { mutableStateOf<ImageBitmap?>(null) }
     var showDetail by remember(projection.id) { mutableStateOf(false) }
     var waveform by remember(projection.id) { mutableStateOf<ByteArray?>(null) }
-    val scope = rememberCoroutineScope()
+    var confirmingDelete by remember(projection.id) { mutableStateOf(false) }
 
     LaunchedEffect(projection.id, generation) {
         // A video's still is its poster frame, which `MEDIA_PIPELINE.md` §6
@@ -509,47 +579,23 @@ private fun ViewerRoute(
             controller.setFavorite(projection.objectId, !projection.favorite)
         },
         onExport = { controller.export(projection.objectId) },
-        onDelete = {
-            scope.launch {
-                controller.delete(projection.objectId)
-                onDeleted()
-            }
-        },
+        onDelete = { confirmingDelete = true },
         onToggleDetail = { showDetail = !showDetail },
         player = playback?.let { source ->
             { modifier -> VaultPlayer(source, modifier) }
         },
         waveform = waveform,
     )
-}
-
-/** A single-field dialog, for an album or a tag name. */
-@Composable
-private fun NameDialog(
-    title: String,
-    label: String,
-    onConfirm: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var value by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            OutlinedTextField(
-                value = value,
-                onValueChange = { value = it },
-                singleLine = true,
-                label = { Text(label) },
-            )
-        },
-        confirmButton = {
-            TextButton(onClick = { onConfirm(value) }, enabled = value.isNotBlank()) {
-                Text("Create")
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
+    if (confirmingDelete) {
+        DeleteSelectionDialog(
+            count = 1,
+            onDelete = {
+                confirmingDelete = false
+                controller.delete(projection.objectId, onDeleted)
+            },
+            onDismiss = { confirmingDelete = false },
+        )
+    }
 }
 
 /** The object identifiers the selection names, in the page's order. */

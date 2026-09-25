@@ -492,6 +492,14 @@ object ChurVault {
         return out
     }
 
+    /** Every tag available to the private selection picker. */
+    fun tags(session: Long): List<TagSummary> =
+        withChurBuffer(TAG_LIST_CAPACITY) { buffer ->
+            val written = IntArray(1)
+            ChurFailure.check(ChurNative.tagList(session, buffer, written), "tag list")
+            decodeTagList(buffer.copyOut(written[0]), written[0])
+        }
+
     /** Applies or removes one tag on one object. */
     fun setObjectTag(
         session: Long,
@@ -823,6 +831,9 @@ object ChurVault {
      *  of them and a longer list is `RESOURCE_LIMIT_EXCEEDED`, which the caller
      *  surfaces rather than truncating. */
     private const val ALBUM_LIST_CAPACITY = 64 * 1024
+
+    /** The picker reports an explicit limit error instead of truncating a long list. */
+    private const val TAG_LIST_CAPACITY = 64 * 1024
 
     /** A detail record is bounded by §12's metadata bounds. */
     private const val DETAIL_CAPACITY = 96 * 1024

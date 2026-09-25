@@ -19,6 +19,7 @@ import dev.po4yka.chur.sync.SyncCoordinator
 import dev.po4yka.chur.sync.SyncStatus
 import dev.po4yka.chur.ffi.SlotSummary
 import dev.po4yka.chur.ffi.StreamKind
+import dev.po4yka.chur.ffi.TagSummary
 import dev.po4yka.chur.notes.InMemoryNoteStore
 import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.notes.NoteStore
@@ -97,6 +98,8 @@ class ChurController(
     private val _disclosureDue = MutableStateFlow(false)
     private val _page = MutableStateFlow(ObjectPage(emptyList(), 0, 0, null))
     private val _albums = MutableStateFlow<List<AlbumSummary>>(emptyList())
+    private val _tags = MutableStateFlow<List<TagSummary>>(emptyList())
+    private var currentQuery = ObjectQuery()
     private val _slots = MutableStateFlow<List<SlotSummary>>(emptyList())
     private val _sharingIdentity = MutableStateFlow<SharingIdentity?>(null)
     private val _sharingOverview = MutableStateFlow<SharingOverview?>(null)
@@ -161,6 +164,7 @@ class ChurController(
 
     /** The albums. */
     val albums: StateFlow<List<AlbumSummary>> = _albums.asStateFlow()
+    val tags: StateFlow<List<TagSummary>> = _tags.asStateFlow()
 
     /** The key slots. */
     val slots: StateFlow<List<SlotSummary>> = _slots.asStateFlow()
@@ -502,12 +506,18 @@ class ChurController(
 
     /** Loads one query scope. */
     fun load(query: ObjectQuery) = guarded {
+        currentQuery = query
         _page.value = withContext(Dispatchers.Default) { repository.page(query) }
     }
 
     /** Loads the albums. */
     fun loadAlbums() = guarded {
         _albums.value = withContext(Dispatchers.Default) { repository.albums() }
+    }
+
+    /** Loads tags only for the unlocked selection picker. */
+    fun loadTags() = guarded {
+        _tags.value = withContext(Dispatchers.Default) { repository.tags() }
     }
 
     /** Loads the key slots. */
@@ -517,8 +527,10 @@ class ChurController(
 
     /** Searches, `CATALOG_SCHEMA_V1.md` §16.4. */
     fun search(terms: String) = guarded {
+        val query = ObjectQuery(QueryScope.SEARCH, terms = terms)
+        currentQuery = query
         _page.value = withContext(Dispatchers.Default) {
-            repository.page(ObjectQuery(QueryScope.SEARCH, terms = terms))
+            repository.page(query)
         }
     }
 
@@ -529,9 +541,11 @@ class ChurController(
     }
 
     /** Deletes an object, `CATALOG_SCHEMA_V1.md` §14.1. */
-    fun delete(objectId: ByteArray) = guarded {
+    fun delete(objectId: ByteArray, onSuccess: () -> Unit = {}) = guarded {
         withContext(Dispatchers.Default) { repository.delete(objectId) }
         reload()
+        refreshAlbums()
+        onSuccess()
     }
 
     /**
@@ -540,11 +554,13 @@ class ChurController(
      * One reload rather than one per object: the page is read once at the end,
      * so a selection of two hundred does not redraw the grid two hundred times.
      */
-    fun deleteAll(objectIds: List<ByteArray>) = guarded {
+    fun deleteAll(objectIds: List<ByteArray>, onSuccess: () -> Unit = {}) = guarded {
         withContext(Dispatchers.Default) {
             objectIds.forEach { repository.delete(it) }
         }
         reload()
+        refreshAlbums()
+        onSuccess()
     }
 
     /**
@@ -553,17 +569,85 @@ class ChurController(
      * It is a separate action from [deleteAll] because §11.4 forbids collapsing
      * the two: one changes a membership and the other destroys the object.
      */
-    fun removeAllFromAlbum(albumId: ByteArray, objectIds: List<ByteArray>) = guarded {
+    fun removeAllFromAlbum(
+        albumId: ByteArray,
+        objectIds: List<ByteArray>,
+        onSuccess: () -> Unit = {},
+    ) = guarded {
         withContext(Dispatchers.Default) {
             objectIds.forEach { repository.setAlbumMembership(albumId, it, false) }
         }
         reload()
+        refreshAlbums()
+        onSuccess()
+    }
+
+    /** Adds a selection to an album, then removes the old membership for a move. */
+    fun putAllInAlbum(
+        albumId: ByteArray,
+        objectIds: List<ByteArray>,
+        fromAlbumId: ByteArray? = null,
+        onSuccess: () -> Unit = {},
+    ) = guarded {
+        withContext(Dispatchers.Default) {
+            objectIds.forEach { repository.setAlbumMembership(albumId, it, true) }
+            if (fromAlbumId != null && !fromAlbumId.contentEquals(albumId)) {
+                objectIds.forEach { repository.setAlbumMembership(fromAlbumId, it, false) }
+            }
+        }
+        reload()
+        refreshAlbums()
+        onSuccess()
+    }
+
+    /** Creates an album and adds the selected objects to it. */
+    fun createAlbumWithObjects(
+        name: String,
+        objectIds: List<ByteArray>,
+        fromAlbumId: ByteArray? = null,
+        onSuccess: () -> Unit = {},
+    ) = guarded {
+        val albumId = withContext(Dispatchers.Default) { repository.createAlbum(name) }
+        withContext(Dispatchers.Default) {
+            objectIds.forEach { repository.setAlbumMembership(albumId, it, true) }
+            if (fromAlbumId != null) {
+                objectIds.forEach { repository.setAlbumMembership(fromAlbumId, it, false) }
+            }
+        }
+        reload()
+        refreshAlbums()
+        onSuccess()
     }
 
     /** Creates an album and reloads the list. */
     fun createAlbum(name: String) = guarded {
         withContext(Dispatchers.Default) { repository.createAlbum(name) }
-        _albums.value = withContext(Dispatchers.Default) { repository.albums() }
+        refreshAlbums()
+    }
+
+    /** Applies or removes one tag across the selected objects. */
+    fun setTagForAll(
+        tagId: ByteArray,
+        objectIds: List<ByteArray>,
+        tagged: Boolean,
+        onSuccess: () -> Unit = {},
+    ) = guarded {
+        withContext(Dispatchers.Default) {
+            objectIds.forEach { repository.setObjectTag(tagId, it, tagged) }
+        }
+        reload()
+        onSuccess()
+    }
+
+    /** Creates a tag and applies it to the selection. */
+    fun createTagWithObjects(name: String, objectIds: List<ByteArray>, onSuccess: () -> Unit = {}) = guarded {
+        val tagId = withContext(Dispatchers.Default) { repository.createTag(name) }
+        withContext(Dispatchers.Default) {
+            objectIds.forEach { repository.setObjectTag(tagId, it, true) }
+        }
+        reload()
+        _tags.value = withContext(Dispatchers.Default) { repository.tags() }
+        onSuccess()
     }
 
     // -----------------------------------------------------------------------
@@ -697,7 +781,9 @@ class ChurController(
      * boundary, and recipients, editors, and share extensions persist plaintext
      * under their own policies from here on.
      */
-    fun export(objectId: ByteArray) = guarded {
+    fun export(objectId: ByteArray) = guarded { exportOne(objectId) }
+
+    private suspend fun exportOne(objectId: ByteArray) {
         val detail = withContext(Dispatchers.Default) { repository.detail(objectId) }
         val destination = exports.create(
             detail.filename.ifBlank { "chur-export" },
@@ -734,8 +820,9 @@ class ChurController(
      * `CANONICAL_ENCODING_V1.md` §13 does not admit, so the loop is the design
      * rather than a simplification.
      */
-    fun exportAll(objectIds: List<ByteArray>) {
-        objectIds.forEach { export(it) }
+    fun exportAll(objectIds: List<ByteArray>, onSuccess: () -> Unit = {}) = guarded {
+        objectIds.forEach { exportOne(it) }
+        onSuccess()
     }
 
     /**
@@ -928,17 +1015,23 @@ class ChurController(
 
     private suspend fun reload() {
         if (repository.state.value is VaultState.Unlocked) {
-            _page.value = withContext(Dispatchers.Default) { repository.page(ObjectQuery()) }
+            _page.value = withContext(Dispatchers.Default) { repository.page(currentQuery) }
         }
     }
 
+    private suspend fun refreshAlbums() {
+        _albums.value = withContext(Dispatchers.Default) { repository.albums() }
+    }
+
     private suspend fun clearPrivateProjections() {
+        currentQuery = ObjectQuery()
         // §10.3: a lock transition destroys private back-stack projections, and
         // these flows are that projection. §4 of `PLAINTEXT_LIFECYCLE.md` and
         // §8 step 7 add the decoded-image cache, which leaves with them.
         thumbnails.clear()
         _page.value = ObjectPage(emptyList(), 0, 0, null)
         _albums.value = emptyList()
+        _tags.value = emptyList()
         _slots.value = emptyList()
         _sharingIdentity.value = null
         _sharingOverview.value = null

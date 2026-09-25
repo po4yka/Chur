@@ -20,6 +20,7 @@ import dev.po4yka.chur.ffi.PreparedShare
 import dev.po4yka.chur.ffi.PreparedShareRevocation
 import dev.po4yka.chur.ffi.SlotSummary
 import dev.po4yka.chur.ffi.StreamKind
+import dev.po4yka.chur.ffi.TagSummary
 import dev.po4yka.chur.ffi.SyncProcessReport
 import dev.po4yka.chur.ffi.SyncRecordKind
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -222,6 +223,9 @@ class VaultRepository(
 
     /** Creates a tag. */
     suspend fun createTag(name: String): ByteArray = withSession { ChurVault.createTag(it, name) }
+
+    /** Every tag available in the private catalog. */
+    suspend fun tags(): List<TagSummary> = withSession { ChurVault.tags(it) }
 
     /** Applies or removes one tag. */
     suspend fun setObjectTag(tagId: ByteArray, objectId: ByteArray, tagged: Boolean) =

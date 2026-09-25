@@ -102,6 +102,15 @@ data class AlbumSummary(val albumId: ByteArray, val memberCount: Long, val name:
     override fun hashCode(): Int = id.hashCode()
 }
 
+/** One private tag for the selection picker. */
+data class TagSummary(val tagId: ByteArray, val name: String) {
+    val id: String get() = tagId.toHex()
+
+    override fun equals(other: Any?): Boolean = other is TagSummary && id == other.id
+
+    override fun hashCode(): Int = id.hashCode()
+}
+
 /** One key slot, §6.5. */
 data class SlotSummary(val slotId: ByteArray, val slotType: Int, val generation: Long) {
     val id: String get() = slotId.toHex()
@@ -467,6 +476,18 @@ fun decodeAlbumList(bytes: ByteArray, length: Int): List<AlbumSummary> {
     }
     reader.requireExhausted()
     return albums
+}
+
+/** Decodes the bounded private tag list. */
+fun decodeTagList(bytes: ByteArray, length: Int): List<TagSummary> {
+    val reader = RecordReader(bytes, length)
+    val count = reader.int()
+    val tags = ArrayList<TagSummary>(count)
+    repeat(count) {
+        tags.add(TagSummary(reader.take(ID_LENGTH), reader.text()))
+    }
+    reader.requireExhausted()
+    return tags
 }
 
 /** Decodes `ChurSlotListV1`, §6.5. */

@@ -57,6 +57,7 @@ val iosHostSymbols =
         "IosPrivacyCover",
         // Step 5: the media codec.
         "IosMediaCodec",
+        "IosMediaPicker",
         // Step 6: the background task and the sync engine it drives.
         "IosSyncBackground",
         "SyncCoordinator",

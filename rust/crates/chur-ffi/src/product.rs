@@ -790,6 +790,44 @@ pub unsafe extern "C" fn chur_tag_create(
     })
 }
 
+/// Writes the private tag list.
+///
+/// # Safety
+///
+/// `destination` points to `capacity` writable bytes and `bytes_written`
+/// points to one writable `usize`, as in [`chur_album_list`].
+#[unsafe(no_mangle)]
+#[expect(
+    unsafe_code,
+    reason = "ADR-0016: the v1 C ABI requires an exported symbol"
+)]
+pub unsafe extern "C" fn chur_tag_list(
+    session: Handle,
+    destination: *mut u8,
+    capacity: usize,
+    bytes_written: *mut usize,
+) -> Status {
+    guard_status_for(session, || {
+        // SAFETY: the caller guarantees `bytes_written` is writable.
+        let _ = unsafe { crate::api::write_out(bytes_written, 0usize) };
+        let entry = registry::get(session, Kind::Session)?;
+        let Entry::Session {
+            session: guarded, ..
+        } = entry.as_ref()
+        else {
+            return Err(wrong_type());
+        };
+        let encoded = {
+            let guard = registry::lock(guarded);
+            let tags = store::tags(guard.catalog_ref()?)?;
+            crate::records::encode_tag_list(&tags)
+        };
+        // SAFETY: the caller guarantees `destination` covers `capacity` bytes.
+        let buffer = unsafe { crate::api::borrow_bytes_mut(destination, capacity)? };
+        write_record(&encoded, buffer, bytes_written)
+    })
+}
+
 /// Applies or removes one tag on one object.
 ///
 /// # Safety

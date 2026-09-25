@@ -373,6 +373,18 @@ pub fn encode_album_list(albums: &[(chur_catalog::model::Album, u64)]) -> Vec<u8
     out
 }
 
+/// Encodes the private tag list as count and identifier/name pairs.
+#[must_use]
+pub fn encode_tag_list(tags: &[chur_catalog::model::Tag]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&u32::try_from(tags.len()).unwrap_or(u32::MAX).to_be_bytes());
+    for tag in tags {
+        out.extend_from_slice(tag.tag_id.as_bytes());
+        put_text(&mut out, &tag.name);
+    }
+    out
+}
+
 /// Encodes `ChurObjectMetadataV1` of §6.5.
 #[must_use]
 pub fn encode_object_metadata(

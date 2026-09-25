@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. v1 ships 1.10: §6.5 through §6.14 each added one minor surface. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
+- native API version is the (major, minor) pair. v1 ships 1.11: §6.5 through §6.15 each added one minor surface. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -326,7 +326,7 @@ Two things cross that §12 would otherwise keep inside, and they cross different
 
 The recovery slot writes the *phrase* rather than the 32 canonical bytes. [`../security/RECOVERY.md`](../security/RECOVERY.md) §2 requires the user to see it, and the phrase is a presentation encoding, which [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §13 reserves for Rust; a host given the bytes would have to implement BIP-39 twice, once per platform, to show anything. It crosses as bounded UTF-8 bytes in a caller buffer, which is the same shape §12 already permits for a password entering Rust, and the host clears the buffer once the user has seen it. `CHUR_RECOVERY_PHRASE_MAX` is 216: twenty-four words of the English list, whose longest entry is eight characters, plus the separators.
 
-Three list results are canonical bytes, for the reason §6.4 gives:
+Four list results are canonical bytes, for the reason §6.4 gives:
 
 ```text
 ChurSlotListV1
@@ -337,6 +337,11 @@ ChurAlbumListV1
     count             u32
     entries           count × { album_id: bytes[16], member_count: u64,
                                 name_length: u16, name: bytes[name_length] }
+
+ChurTagListV1
+    count             u32
+    entries           count × { tag_id: bytes[16], name_length: u16,
+                                name: bytes[name_length] }
 
 ChurObjectMetadataV1
     capture_time_ms            u64
@@ -570,6 +575,15 @@ chur_status_t chur_sharing_inspect_enrollment(const uint8_t *enrollment,
 ```
 
 Both calls set `bytes_written` to zero on failure and reject a short destination without a partial write. The caller reserves 512 KiB for the overview and 128 bytes for one recipient preview.
+
+### 6.15 Private tag picker, ABI 1.11
+
+`chur_tag_list` returns `ChurTagListV1` in name and identifier order from the unlocked catalog. A short destination yields no partial record. Tag names remain private to the unlocked application surface.
+
+```c
+chur_status_t chur_tag_list(chur_handle_t session, uint8_t *destination,
+                            size_t capacity, size_t *bytes_written);
+```
 
 ## 7. Buffer ownership
 

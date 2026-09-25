@@ -342,6 +342,8 @@ internal expect object ChurNative {
         outTagId: ByteArray,
     ): Int
 
+    fun tagList(session: Long, destination: ChurBuffer, outWritten: IntArray): Int
+
     fun objectSetTag(
         session: Long,
         tagId: ByteArray,

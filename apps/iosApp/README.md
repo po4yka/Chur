@@ -51,7 +51,14 @@ preference.
    [`../../DESIGN.md`](../../DESIGN.md) §14.
 
 5. **Present `PHPickerViewController` for import and write exports through the
-   share sheet.** `IosMediaCodec` takes the resulting file URL. §8 of
+   share sheet.** Install `IosMediaPicker.shared.present` at launch. Present a
+   `PHPickerViewController` with image and video filters and a selection limit
+   of one. On a result, use the item provider's file representation and copy
+   it into this application's temporary directory before its completion block
+   returns. Call the supplied answer exactly once with that copy's path, or
+   with `nil` after dismissal or failure. The framework imports the copy,
+   closes its descriptor, and deletes the temporary file after the import.
+   `IosMediaCodec` takes the resulting file URL. §8 of
    [`../../docs/interop/MEDIA_PIPELINE.md`](../../docs/interop/MEDIA_PIPELINE.md)
    keeps the decoded derivative only long enough to encrypt it, so the picker's
    temporary copy is closed as soon as the import commits.

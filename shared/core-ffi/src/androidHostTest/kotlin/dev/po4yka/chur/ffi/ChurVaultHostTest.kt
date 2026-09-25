@@ -228,7 +228,7 @@ class ChurVaultHostTest {
     fun the_handshake_matches_the_frozen_abi() {
         val handshake = ChurVault.handshake()
         assertEquals(1, handshake.major)
-        assertEquals(10, handshake.minor, "§6.14 added user-facing sharing discovery")
+        assertEquals(11, handshake.minor, "§6.15 added the private tag list")
         assertEquals(1, handshake.objectFormatMin)
         assertEquals(1, handshake.objectFormatMax)
         assertTrue(handshake.capabilities and 0b0000_0010L != 0L, "the reader is declared")
@@ -353,6 +353,19 @@ class ChurVaultHostTest {
             1,
             ChurVault.query(session, ObjectQuery(QueryScope.ALBUM, scopeId = album)).objects.size,
         )
+
+        // A move adds the destination before removing the old membership.
+        val movedTo = ChurVault.createAlbum(session, "Later")
+        ChurVault.setAlbumMembership(session, movedTo, objectId, true)
+        ChurVault.setAlbumMembership(session, album, objectId, false)
+        assertEquals(0, ChurVault.query(session, ObjectQuery(QueryScope.ALBUM, scopeId = album)).objects.size)
+        assertEquals(1, ChurVault.query(session, ObjectQuery(QueryScope.ALBUM, scopeId = movedTo)).objects.size)
+        assertEquals(1, ChurVault.query(session, ObjectQuery()).objects.size)
+
+        val tag = ChurVault.createTag(session, "To print")
+        assertEquals("To print", ChurVault.tags(session).single().name)
+        ChurVault.setObjectTag(session, tag, objectId, true)
+        assertEquals(1, ChurVault.query(session, ObjectQuery(QueryScope.TAG, scopeId = tag)).objects.size)
 
         // §16.4: the tokenizer folds the diacritic and the prefix index answers
         // an as-you-type query.

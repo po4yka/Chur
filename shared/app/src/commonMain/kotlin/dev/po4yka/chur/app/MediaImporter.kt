@@ -1,14 +1,14 @@
-package dev.po4yka.chur.android
+package dev.po4yka.chur.app
 
-import android.content.ContentResolver
-import android.net.Uri
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.ImportRequest
 import dev.po4yka.chur.ffi.OperationProgress
-import dev.po4yka.chur.imports.AndroidMediaCodec
+import dev.po4yka.chur.imports.MediaCodec
+import dev.po4yka.chur.imports.PickedMedia
 import dev.po4yka.chur.imports.MediaBounds
 import dev.po4yka.chur.imports.requiredDerivatives
 import dev.po4yka.chur.vault.VaultRepository
+import kotlinx.coroutines.CancellationException
 
 /**
  * The import stages of `docs/interop/MEDIA_PIPELINE.md` §2, in order.
@@ -23,8 +23,8 @@ import dev.po4yka.chur.vault.VaultRepository
  * than a boolean: a codec failure must not commit a catalog entry claiming the
  * derivatives exist, and an over-large source is not a corrupt one.
  */
-class ChurImporter(
-    private val codec: AndroidMediaCodec,
+class MediaImporter(
+    private val codec: MediaCodec,
 ) {
     /** What an import attempt ended as, §13. */
     sealed interface Outcome {
@@ -55,10 +55,9 @@ class ChurImporter(
     /** Runs one import. */
     suspend fun import(
         repository: VaultRepository,
-        resolver: ContentResolver,
-        uri: Uri,
+        source: PickedMedia?,
     ): Outcome {
-        val media = codec.open(uri) ?: return Outcome.Unreadable
+        val media = source ?: return Outcome.Unreadable
         try {
             // §2 stage 3, before stage 4: an over-large source is refused
             // before an object key exists.
@@ -82,8 +81,11 @@ class ChurImporter(
                             originalFilename = media.originalFilename,
                         ),
                 )
-            val terminal = drain(repository, operation)
-            repository.closeOperation(operation)
+            val terminal = try {
+                drain(repository, operation)
+            } finally {
+                repository.closeOperation(operation)
+            }
             if (terminal.status != 0) {
                 return Outcome.Refused(statusName(terminal.status))
             }
@@ -101,7 +103,13 @@ class ChurImporter(
             // and the catalog never claims a derivative that does not exist.
             var written = 0
             for (kind in requiredDerivatives(probe)) {
-                val derivative = codec.derive(media, probe, kind) ?: continue
+                val derivative = try {
+                    codec.derive(media, probe, kind)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    null
+                } ?: continue
                 repository.putDerived(
                     objectId = objectId,
                     kind = kind,

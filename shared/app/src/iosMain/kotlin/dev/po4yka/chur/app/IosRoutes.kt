@@ -16,6 +16,10 @@ import dev.po4yka.chur.app.notes.NotesScreen
 import dev.po4yka.chur.app.notes.PublicSettingsScreen
 import dev.po4yka.chur.app.vault.CreateVaultScreen
 import dev.po4yka.chur.app.vault.LibraryTile
+import dev.po4yka.chur.app.vault.AlbumPickerDialog
+import dev.po4yka.chur.app.vault.DeleteSelectionDialog
+import dev.po4yka.chur.app.vault.NewAlbumDialog
+import dev.po4yka.chur.app.vault.TagPickerDialog
 import dev.po4yka.chur.app.vault.RecoveryPhraseScreen
 import dev.po4yka.chur.app.vault.RecoveryScreen
 import dev.po4yka.chur.app.vault.RestoreBackupScreen
@@ -37,22 +41,25 @@ import dev.po4yka.chur.ffi.ObjectProjection
 import dev.po4yka.chur.ffi.ObjectQuery
 import dev.po4yka.chur.ffi.QueryScope
 import dev.po4yka.chur.ffi.StreamKind
+import dev.po4yka.chur.imports.IosMediaCodec
 import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.vault.VaultState
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import platform.Foundation.NSDate
+import platform.Foundation.NSTemporaryDirectory
+import platform.Foundation.NSURL
 import platform.Foundation.timeIntervalSince1970
 import platform.posix.O_RDONLY
 import platform.posix.close
 import platform.posix.open
+import platform.posix.unlink
 
 /**
  * The iOS route table.
  *
- * It is the Android one without the one thing the Android host owns: the photo
- * picker, which is a `PHPickerViewController` the Xcode project presents. The
- * picker calls back into [ChurController] with the file URL, so the flow is the
- * same and the presentation is the platform's.
+ * The photo picker is presented by the Xcode host through [IosMediaPicker].
  */
 @Composable
 internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: VaultState) {
@@ -139,6 +146,7 @@ private fun PublicShell(controller: ChurController, route: AppRoute) {
 private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     val page by controller.page.collectAsState()
     val albums by controller.albums.collectAsState()
+    val tags by controller.tags.collectAsState()
     val slots by controller.slots.collectAsState()
     val message by controller.message.collectAsState()
     val syncStatus by controller.syncStatus.collectAsState()
@@ -150,6 +158,13 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     var openAlbum by remember { mutableStateOf<AlbumSummary?>(null) }
     var selection by remember { mutableStateOf(setOf<String>()) }
     var viewing by remember { mutableStateOf<ObjectProjection?>(null) }
+    var creatingAlbum by remember { mutableStateOf(false) }
+    var choosingAlbum by remember { mutableStateOf(false) }
+    var choosingTag by remember { mutableStateOf(false) }
+    var confirmingDelete by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val codec = remember { IosMediaCodec() }
+    val importer = remember { MediaImporter(codec) }
 
     LaunchedEffect(destination, openAlbum) {
         when {
@@ -166,7 +181,6 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         }
     }
 
-    val scope = rememberCoroutineScope()
     // The cache is the controller's: its lock transitions clear it whether
     // or not this screen is composed, §4 of `PLAINTEXT_LIFECYCLE.md`. The
     // session generation in the key is what makes a stale entry unreachable
@@ -190,6 +204,69 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 thumbnails = thumbnails + (projection.id to image)
             }
         }
+    }
+
+    if (creatingAlbum) {
+        NewAlbumDialog(
+            onCreate = { name ->
+                creatingAlbum = false
+                controller.createAlbum(name)
+            },
+            onDismiss = { creatingAlbum = false },
+        )
+    }
+    if (choosingAlbum) {
+        AlbumPickerDialog(
+            albums = albums,
+            currentAlbum = openAlbum,
+            onChoose = { album ->
+                choosingAlbum = false
+                controller.putAllInAlbum(
+                    album.albumId, selectedObjects(page, selection), openAlbum?.albumId,
+                ) { selection = emptySet() }
+            },
+            onCreate = { name ->
+                choosingAlbum = false
+                controller.createAlbumWithObjects(
+                    name, selectedObjects(page, selection), openAlbum?.albumId,
+                ) { selection = emptySet() }
+            },
+            onDismiss = { choosingAlbum = false },
+        )
+    }
+    if (choosingTag) {
+        TagPickerDialog(
+            tags = tags,
+            onAdd = { tag ->
+                choosingTag = false
+                controller.setTagForAll(tag.tagId, selectedObjects(page, selection), true) {
+                    selection = emptySet()
+                }
+            },
+            onRemove = { tag ->
+                choosingTag = false
+                controller.setTagForAll(tag.tagId, selectedObjects(page, selection), false) {
+                    selection = emptySet()
+                }
+            },
+            onCreate = { name ->
+                choosingTag = false
+                controller.createTagWithObjects(name, selectedObjects(page, selection)) {
+                    selection = emptySet()
+                }
+            },
+            onDismiss = { choosingTag = false },
+        )
+    }
+    if (confirmingDelete) {
+        DeleteSelectionDialog(
+            count = selection.size,
+            onDelete = {
+                confirmingDelete = false
+                controller.deleteAll(selectedObjects(page, selection)) { selection = emptySet() }
+            },
+            onDismiss = { confirmingDelete = false },
+        )
     }
 
     VaultShell(
@@ -223,25 +300,57 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             // Opening is opening. Before the viewer existed on this host it
             // toggled selection, which made a video unreachable and a tap on a
             // photograph mean two things.
-            onOpen = { projection -> viewing = projection },
+            onOpen = { projection ->
+                if (selection.isEmpty()) viewing = projection
+                else selection = selection.toggle(projection.id)
+            },
             onToggleSelection = { projection ->
-                selection = if (projection.id in selection) {
-                    selection - projection.id
+                selection = selection.toggle(projection.id)
+            },
+            onImport = {
+                val present = IosMediaPicker.present
+                if (present == null) {
+                    controller.report("This build cannot open the photo picker.")
                 } else {
-                    selection + projection.id
+                    val albumId = openAlbum?.albumId
+                    controller.beginHostActivity()
+                    present { path ->
+                        controller.endHostActivity()
+                        if (path != null) {
+                            scope.launch {
+                                try {
+                                    controller.report("Importing")
+                                    val outcome = withContext(Dispatchers.Default) {
+                                        importer.import(controller.vault, codec.open(NSURL.fileURLWithPath(path)))
+                                    }
+                                    when (outcome) {
+                                        is MediaImporter.Outcome.Imported -> {
+                                            controller.reportImport(if (albumId == null) "Imported into vault." else null)
+                                            if (albumId != null) {
+                                                controller.putAllInAlbum(albumId, listOf(outcome.objectId)) {
+                                                    controller.report("Imported into album.")
+                                                }
+                                            }
+                                        }
+                                        is MediaImporter.Outcome.TooLarge -> controller.reportImport(outcome.reason)
+                                        MediaImporter.Outcome.Unreadable -> controller.reportImport("That file could not be opened.")
+                                        is MediaImporter.Outcome.Refused -> controller.reportImport(outcome.status)
+                                    }
+                                } finally {
+                                    if (path.startsWith(NSTemporaryDirectory())) unlink(path)
+                                }
+                            }
+                        }
+                    }
                 }
             },
-            // The picker is the Xcode project's, so this asks it rather than
-            // presenting one: a Compose composable cannot present a UIKit view
-            // controller without the host's window.
-            onImport = { controller.report("Choose a photo from the picker.") },
             onSearch = {
                 terms = it
                 controller.search(it)
             },
             onOpenAlbum = { openAlbum = it },
             onCloseAlbum = { openAlbum = null },
-            onCreateAlbum = { controller.createAlbum("Album") },
+            onCreateAlbum = { creatingAlbum = true },
             onLock = { controller.lock() },
             onPanic = { controller.panic() },
             onVerifyAll = { controller.verifyEverything() },
@@ -251,19 +360,24 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             onSelectAll = { selection = page.objects.map { it.id }.toSet() },
             onClearSelection = { selection = emptySet() },
             onExportSelection = {
-                controller.exportAll(selectedObjects(page, selection))
-                selection = emptySet()
+                controller.exportAll(selectedObjects(page, selection)) { selection = emptySet() }
+            },
+            onOrganizeSelection = {
+                controller.loadAlbums()
+                choosingAlbum = true
+            },
+            onTagSelection = {
+                controller.loadTags()
+                choosingTag = true
             },
             onRemoveSelectionFromAlbum = {
                 openAlbum?.let { album ->
-                    controller.removeAllFromAlbum(album.albumId, selectedObjects(page, selection))
+                    controller.removeAllFromAlbum(album.albumId, selectedObjects(page, selection)) {
+                        selection = emptySet()
+                    }
                 }
-                selection = emptySet()
             },
-            onDeleteSelection = {
-                controller.deleteAll(selectedObjects(page, selection))
-                selection = emptySet()
-            },
+            onDeleteSelection = { confirmingDelete = true },
             onConfigureSync = controller::configureSync,
             onSyncNow = controller::syncNow,
             onDisconnectSync = controller::disconnectSync,
@@ -306,7 +420,7 @@ private fun IosViewerRoute(
     var preview by remember(projection.id) { mutableStateOf<ImageBitmap?>(null) }
     var showDetail by remember(projection.id) { mutableStateOf(false) }
     var waveform by remember(projection.id) { mutableStateOf<ByteArray?>(null) }
-    val scope = rememberCoroutineScope()
+    var confirmingDelete by remember(projection.id) { mutableStateOf(false) }
 
     LaunchedEffect(projection.id, generation) {
         // A video's still is its poster frame, which `MEDIA_PIPELINE.md` §6
@@ -353,18 +467,23 @@ private fun IosViewerRoute(
             controller.setFavorite(projection.objectId, !projection.favorite)
         },
         onExport = { controller.export(projection.objectId) },
-        onDelete = {
-            scope.launch {
-                controller.delete(projection.objectId)
-                onDeleted()
-            }
-        },
+        onDelete = { confirmingDelete = true },
         onToggleDetail = { showDetail = !showDetail },
         player = playback?.let { source ->
             { modifier -> VaultPlayer(source, modifier) }
         },
         waveform = waveform,
     )
+    if (confirmingDelete) {
+        DeleteSelectionDialog(
+            count = 1,
+            onDelete = {
+                confirmingDelete = false
+                controller.delete(projection.objectId, onDeleted)
+            },
+            onDismiss = { confirmingDelete = false },
+        )
+    }
 }
 
 /** The object identifiers the selection names, in the page's order. */
@@ -372,6 +491,14 @@ private fun selectedObjects(
     page: ObjectPage,
     selection: Set<String>,
 ): List<ByteArray> = page.objects.filter { it.id in selection }.map { it.objectId }
+
+private fun Set<String>.toggle(id: String): Set<String> =
+    if (id in this) this - id else this + id
+
+/** The Xcode host presents PHPicker and returns a readable copy in the app's temp directory. */
+public object IosMediaPicker {
+    public var present: ((answer: (String?) -> Unit) -> Unit)? = null
+}
 
 /**
  * The restore route, `docs/format/BACKUP_FORMAT_V1.md` §8.

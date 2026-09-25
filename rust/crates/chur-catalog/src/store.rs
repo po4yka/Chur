@@ -943,6 +943,34 @@ pub fn albums(db: &CatalogDb) -> Result<Vec<(Album, u64)>> {
     Ok(albums)
 }
 
+/// Every tag in name order, for the private picker.
+pub fn tags(db: &CatalogDb) -> Result<Vec<Tag>> {
+    let connection = db.connection();
+    let mut statement = connection
+        .prepare("SELECT tag_id, name, created_ms FROM tags ORDER BY name, tag_id")
+        .map_err(|error| map_sqlite(error, "the tag query could not be prepared"))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(|error| map_sqlite(error, "the tags could not be read"))?;
+    let mut tags = Vec::new();
+    for row in rows {
+        let (id, name, created) =
+            row.map_err(|error| map_sqlite(error, "a tag row could not be read"))?;
+        tags.push(Tag {
+            tag_id: crate::row::id(&id, "the tag id is malformed")?,
+            name,
+            created_ms: from_sqlite_integer(created, "the tag time is negative")?,
+        });
+    }
+    Ok(tags)
+}
+
 /// The tags on one object, in name order, §9.
 pub fn object_tags(db: &CatalogDb, object_id: &Id) -> Result<Vec<Tag>> {
     let connection = db.connection();

@@ -34,35 +34,41 @@ class AndroidMediaCodec(private val resolver: ContentResolver) : MediaCodec {
      * record.
      */
     fun open(uri: Uri): PickedMedia? {
-        val descriptor: ParcelFileDescriptor = resolver.openFileDescriptor(uri, "r") ?: return null
-        var name: String? = null
-        var size: Long? = null
-        resolver.query(uri, null, null, null, null)?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val nameColumn = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (nameColumn >= 0 && !cursor.isNull(nameColumn)) {
-                    name = cursor.getString(nameColumn)
-                }
-                val sizeColumn = cursor.getColumnIndex(OpenableColumns.SIZE)
-                if (sizeColumn >= 0 && !cursor.isNull(sizeColumn)) {
-                    size = cursor.getLong(sizeColumn)
+        val descriptor: ParcelFileDescriptor = try {
+            resolver.openFileDescriptor(uri, "r") ?: return null
+        } catch (_: Exception) {
+            return null
+        }
+        try {
+            var name: String? = null
+            var size: Long? = null
+            resolver.query(uri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameColumn = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (nameColumn >= 0 && !cursor.isNull(nameColumn)) {
+                        name = cursor.getString(nameColumn)
+                    }
+                    val sizeColumn = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (sizeColumn >= 0 && !cursor.isNull(sizeColumn)) {
+                        size = cursor.getLong(sizeColumn)
+                    }
                 }
             }
+            return PickedMedia(
+                descriptor = descriptor.fd,
+                seekable = true,
+                knownLength = size,
+                contentTypeHint = resolver.getType(uri) ?: "application/octet-stream",
+                originalFilename = name,
+                // §8.1 of the catalog: a plain content URI publishes no capture time.
+                captureTimeMs = null,
+                platformHandle = uri,
+                close = { descriptor.close() },
+            )
+        } catch (_: Exception) {
+            descriptor.close()
+            return null
         }
-        return PickedMedia(
-            descriptor = descriptor.fd,
-            seekable = true,
-            knownLength = size,
-            contentTypeHint = resolver.getType(uri) ?: "application/octet-stream",
-            originalFilename = name,
-            // §8.1 of the catalog: the capture time comes from provider
-            // metadata, and a plain content URI publishes none, so it is absent
-            // and the row records that it was substituted rather than carrying
-            // a guess.
-            captureTimeMs = null,
-            platformHandle = uri,
-            close = { descriptor.close() },
-        )
     }
 
     override fun probe(media: PickedMedia): ProbedMedia? {

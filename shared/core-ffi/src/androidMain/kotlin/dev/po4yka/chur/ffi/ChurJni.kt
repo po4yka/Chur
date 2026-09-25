@@ -345,6 +345,8 @@ internal object ChurJni {
         outTagId: ByteArray,
     ): Int
 
+    external fun tagList(session: Long, destination: ByteBuffer, outWritten: IntArray): Int
+
     external fun objectSetTag(
         session: Long,
         tagId: ByteArray,

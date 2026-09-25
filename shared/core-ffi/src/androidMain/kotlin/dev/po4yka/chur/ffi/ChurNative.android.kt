@@ -356,6 +356,12 @@ internal actual object ChurNative {
         outTagId: ByteArray,
     ): Int = ChurJni.tagCreate(session, name, outTagId)
 
+    actual fun tagList(
+        session: Long,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int = ChurJni.tagList(session, destination.buffer, outWritten)
+
     actual fun objectSetTag(
         session: Long,
         tagId: ByteArray,
