@@ -589,8 +589,12 @@ fn to_sqlite(value: u64, context: &'static str) -> Result<i64> {
     i64::try_from(value).map_err(|_| Error::new(ChurStatus::ResourceLimitExceeded, context))
 }
 
+/// Reads a `u64` back from a column that stores it as a signed integer.
+///
+/// Every caller reads a length or a sequence from a stored row, and the schema
+/// accepts no negative value there, so a negative value is a damaged row.
 fn from_sqlite(value: i64, context: &'static str) -> Result<u64> {
-    u64::try_from(value).map_err(|_| Error::new(ChurStatus::InternalFailure, context))
+    u64::try_from(value).map_err(|_| Error::new(ChurStatus::CatalogCorrupt, context))
 }
 
 /// Reports a stored row that fails an identifier or record check as
@@ -901,6 +905,85 @@ mod tests {
             .expect("damaged initial membership");
         observed.push((
             "membership_state: reserved identifier in the initial enrollment",
+            status(relay::membership_state(&server.db, &vault)),
+        ));
+
+        let wrong: Vec<_> = observed
+            .iter()
+            .filter(|(_, status)| *status != Some(ChurStatus::CatalogCorrupt))
+            .collect();
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// A negative length or sequence in a stored row is corrupt.
+    ///
+    /// The schema accepts only a positive or zero value in each of these
+    /// columns, so a negative value is damage. `from_sqlite` reported it as
+    /// `INTERNAL_FAILURE`, which tells the client to retry.
+    #[test]
+    fn a_negative_stored_integer_is_catalog_corrupt() {
+        let root = TestRoot::new();
+        let (mut server, ..) = bootstrapped(&root);
+        let (vault, device) = (id(1), id(2));
+        let bytes = b"cipher";
+        server
+            .begin_upload(vault, id(9), id(10), bytes.len() as u64)
+            .expect("begin");
+        // The schema checks each of these columns. A damaged file does not.
+        server
+            .db
+            .execute_batch(
+                "PRAGMA ignore_check_constraints = ON;
+                 UPDATE object_transfers SET received_length = -1;",
+            )
+            .expect("damaged received_length");
+        let mut observed = vec![
+            (
+                "begin_upload: negative received_length",
+                status(server.begin_upload(vault, id(9), id(10), bytes.len() as u64)),
+            ),
+            (
+                "append_upload: negative received_length",
+                status(server.append_upload(vault, id(9), 0, bytes, sha256(bytes))),
+            ),
+            (
+                "finish_upload: negative received_length",
+                status(server.finish_upload(vault, id(9), sha256(bytes))),
+            ),
+        ];
+        server
+            .db
+            .execute_batch("UPDATE object_transfers SET expected_length = -1, complete = 1;")
+            .expect("damaged expected_length");
+        observed.push((
+            "read_object: negative expected_length",
+            status(server.read_object(vault, id(10), 0, 8)),
+        ));
+
+        server
+            .db
+            .execute_batch("UPDATE membership_records SET outer_device_sequence = -1;")
+            .expect("damaged initial outer sequence");
+        observed.push((
+            "membership_state: negative initial outer sequence",
+            status(relay::membership_state(&server.db, &vault)),
+        ));
+        server
+            .db
+            .execute_batch("UPDATE membership_records SET outer_device_sequence = 1;")
+            .expect("repaired initial outer sequence");
+        server
+            .db
+            .execute(
+                "INSERT INTO membership_records (
+                     vault_id, membership_generation, record_kind,
+                     outer_device_id, outer_device_sequence, record
+                 ) VALUES (?1, 2, 1, ?2, -1, X'00')",
+                params![vault.as_bytes().as_slice(), device.as_bytes().as_slice()],
+            )
+            .expect("damaged outer sequence");
+        observed.push((
+            "membership_state: negative outer sequence",
             status(relay::membership_state(&server.db, &vault)),
         ));
 

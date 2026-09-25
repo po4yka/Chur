@@ -649,7 +649,10 @@ fn membership_count(db: &Connection, vault_id: &Id) -> Result<u64> {
             |row| row.get(0),
         )
         .map_err(|error| map_sqlite(error, "membership count failed"))?;
-    from_sqlite(count, "stored membership count is invalid")
+    // SQLite computes this count, and no row stores it, so a negative value is
+    // an implementation failure and not a damaged row.
+    u64::try_from(count)
+        .map_err(|_| Error::new(ChurStatus::InternalFailure, "membership count is invalid"))
 }
 
 // The width changes here rather than at each call site, because
