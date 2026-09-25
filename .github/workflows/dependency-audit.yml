@@ -1,0 +1,29 @@
+name: dependency audit
+
+on:
+  schedule:
+    - cron: "17 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deny:
+    name: cargo deny (scheduled)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    env:
+      CARGO_DENY_VERSION: 0.20.2
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: install the pinned cargo-deny
+        run: |
+          cargo deny --version | grep -qxF "cargo-deny $CARGO_DENY_VERSION" \
+            || cargo install --locked --force cargo-deny --version "$CARGO_DENY_VERSION"
+      - run: cargo deny check
+      - name: cargo deny (fuzz workspace)
+        working-directory: rust/fuzz
+        run: cargo deny --config ../deny.toml check
