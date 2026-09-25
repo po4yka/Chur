@@ -592,7 +592,8 @@ pub(super) fn membership_state(db: &Connection, vault_id: &Id) -> Result<Members
     );
     let initial = EnrollmentRecord::decode(&record)
         .map_err(corrupt_row("stored initial membership is invalid"))?;
-    let mut state = MembershipState::bootstrap(&initial)?;
+    let mut state = MembershipState::bootstrap(&initial)
+        .map_err(corrupt_row("stored initial membership does not replay"))?;
     ensure!(
         initial.vault_id() == vault_id
             && initial.device_id().as_bytes() == outer_device.as_slice()
@@ -609,12 +610,16 @@ pub(super) fn membership_state(db: &Connection, vault_id: &Id) -> Result<Members
             ENROLLMENT_KIND => {
                 let enrollment = EnrollmentRecord::decode(&record)
                     .map_err(corrupt_row("stored enrollment is invalid"))?;
-                state.accept_enrollment(&enrollment, &outer_device, outer_sequence)?;
+                state
+                    .accept_enrollment(&enrollment, &outer_device, outer_sequence)
+                    .map_err(corrupt_row("stored enrollment does not replay"))?;
             }
             REVOCATION_KIND => {
                 let revocation = RevocationRecord::decode(&record)
                     .map_err(corrupt_row("stored revocation is invalid"))?;
-                state.accept_revocation(&revocation, &outer_device)?;
+                state
+                    .accept_revocation(&revocation, &outer_device)
+                    .map_err(corrupt_row("stored revocation does not replay"))?;
             }
             _ => {
                 return Err(Error::new(

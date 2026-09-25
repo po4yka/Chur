@@ -597,16 +597,19 @@ fn from_sqlite(value: i64, context: &'static str) -> Result<u64> {
     u64::try_from(value).map_err(|_| Error::new(ChurStatus::CatalogCorrupt, context))
 }
 
-/// Reports a stored row that fails an identifier or record check as
+/// Reports a stored row that fails an identifier, record, or replay check as
 /// `CATALOG_CORRUPT`.
 ///
 /// The server checks every identifier and record before it stores them, so a
 /// stored value that fails the same check is a damaged row. `Id::from_slice`
 /// reports a short or reserved all-zero identifier as `INVALID_INPUT`, and a
 /// record decoder reports its own status, for example `NON_CANONICAL_ENCODING`
-/// or `RESOURCE_LIMIT_EXCEEDED`. Each of these statuses blames the request: the
-/// HTTP layer answers `RESOURCE_LIMIT_EXCEEDED` with 413 and the others with
-/// 400.
+/// or `RESOURCE_LIMIT_EXCEEDED`. A `MembershipState` replay reports
+/// `AUTHENTICATION_FAILED` or `SYNC_HEAD_ROLLBACK`, and
+/// `RESOURCE_LIMIT_EXCEEDED` when the generation cannot advance. Each of these
+/// statuses blames the request: the HTTP layer answers `AUTHENTICATION_FAILED`
+/// with 401, `SYNC_HEAD_ROLLBACK` with 409, `RESOURCE_LIMIT_EXCEEDED` with 413,
+/// and the others with 400.
 fn corrupt_row(context: &'static str) -> impl FnOnce(Error) -> Error {
     move |_| Error::new(ChurStatus::CatalogCorrupt, context)
 }
@@ -660,7 +663,7 @@ mod tests {
 
     use chur_sync_protocol::{
         deletion::ServerDeletionAuthorization,
-        membership::EnrollmentRecord,
+        membership::{EnrollmentRecord, RevocationRecord},
         operation::{DeviceSigningKey, Operation},
     };
 
@@ -990,6 +993,107 @@ mod tests {
         let wrong: Vec<_> = observed
             .iter()
             .filter(|(_, status)| *status != Some(ChurStatus::CatalogCorrupt))
+            .collect();
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// A stored membership record that decodes but fails replay is corrupt.
+    ///
+    /// The server stores a membership record only after `MembershipState`
+    /// accepts it, so a stored record that the same checks refuse later is
+    /// damage. The replay reported its own status, for example
+    /// `AUTHENTICATION_FAILED` or `SYNC_HEAD_ROLLBACK`, which blames the
+    /// request. The transport token check hides the cause, as
+    /// `ERROR_MODEL.md` principle 2 requires, before and after the change.
+    #[test]
+    fn a_stored_membership_record_that_fails_replay_is_catalog_corrupt() {
+        let root = TestRoot::new();
+        let (mut server, key, enrollment, _) = bootstrapped(&root);
+        let (vault, device) = (id(1), id(2));
+        let token = [40; 32];
+        server
+            .set_transport_token(vault, device, &token)
+            .expect("token");
+        let successor = EnrollmentRecord::new(
+            vault,
+            id(16),
+            DeviceSigningKey::from_seed([17; 32]).verifying_key(),
+            [18; 32],
+            3,
+            device,
+            2,
+            enrollment.commitment(),
+            [19; 32],
+        )
+        .expect("successor")
+        .sign(&key);
+        let revocation = RevocationRecord::new(vault, id(16), 1, [20; 32], 2, device, [21; 32])
+            .expect("revocation")
+            .sign(&key);
+        let mut observed = Vec::new();
+
+        for (site, kind, outer_sequence, record) in [
+            (
+                "enrollment: the stored outer sequence differs from the record",
+                1,
+                4,
+                successor.encode(),
+            ),
+            (
+                "revocation: the record names another predecessor",
+                2,
+                3,
+                revocation.encode(),
+            ),
+        ] {
+            server
+                .db
+                .execute(
+                    "INSERT OR REPLACE INTO membership_records (
+                         vault_id, membership_generation, record_kind,
+                         outer_device_id, outer_device_sequence, record
+                     ) VALUES (?1, 2, ?2, ?3, ?4, ?5)",
+                    params![
+                        vault.as_bytes().as_slice(),
+                        kind,
+                        device.as_bytes().as_slice(),
+                        outer_sequence,
+                        record,
+                    ],
+                )
+                .expect("stored successor");
+            observed.push((
+                site,
+                status(relay::membership_state(&server.db, &vault)),
+                status(server.authenticate_transport(vault, &token)),
+            ));
+        }
+
+        let mut initial = enrollment.encode();
+        *initial.last_mut().expect("signature") ^= 1;
+        server
+            .db
+            .execute_batch("DELETE FROM membership_records WHERE membership_generation = 2;")
+            .expect("successor removed");
+        server
+            .db
+            .execute(
+                "UPDATE membership_records SET record = ?1 WHERE membership_generation = 1",
+                [initial.as_slice()],
+            )
+            .expect("damaged initial signature");
+        observed.push((
+            "bootstrap: the initial signature does not verify",
+            status(relay::membership_state(&server.db, &vault)),
+            status(server.authenticate_transport(vault, &token)),
+        ));
+
+        let wrong: Vec<_> = observed
+            .iter()
+            .filter(|(_, replay, transport)| {
+                *replay != Some(ChurStatus::CatalogCorrupt)
+                    || *transport != Some(ChurStatus::AuthenticationFailed)
+            })
             .collect();
         assert!(wrong.is_empty(), "{wrong:#?}");
     }
