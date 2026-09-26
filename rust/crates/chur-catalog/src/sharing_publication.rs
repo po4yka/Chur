@@ -206,7 +206,38 @@ pub fn publish_page(
     let keys = sync_keys::key_directory(db, root, source_vault_id)?;
     let mut memberships = BTreeMap::new();
     memberships.insert(source_vault_id, membership.clone());
-    let mut log = sharing_log::load(
+    sharing_log::ensure_object_index(db, domain.selector(), &keys)?;
+    let mut stored_create = None;
+    let mut stored_commit = None;
+    sharing_log::visit_object_records(
+        db,
+        &keys,
+        domain.selector(),
+        &candidates[0].object_id,
+        |operation, payload| {
+            match payload.body() {
+                PayloadBody::CreateObject { .. } => {
+                    ensure!(
+                        stored_create.is_none(),
+                        CatalogCorrupt,
+                        "object has two create operations"
+                    );
+                    stored_create = Some(operation);
+                }
+                PayloadBody::CommitObject { .. } => {
+                    ensure!(
+                        stored_commit.is_none(),
+                        CatalogCorrupt,
+                        "object has two commit operations"
+                    );
+                    stored_commit = Some(operation);
+                }
+                _ => {}
+            }
+            Ok(())
+        },
+    )?;
+    let mut log = sharing_log::take_cached_log(
         db,
         collection_id,
         epoch,
@@ -215,34 +246,6 @@ pub fn publish_page(
         &memberships,
         &sharing_state,
     )?;
-    // ponytail: this scans the epoch log on each author call; add an indexed durable
-    // object projection if measured large-vault latency or memory requires it.
-    let mut existing =
-        BTreeMap::<Id, (Option<CollectionOperation>, Option<CollectionOperation>)>::new();
-    for operation in sharing_log::records(db, domain.selector())? {
-        let payload = OperationPayload::open_for_collection_operation(&operation, &keys)?;
-        match payload.body() {
-            PayloadBody::CreateObject { object_id, .. } => {
-                let prior = &mut existing.entry(*object_id).or_default().0;
-                ensure!(
-                    prior.is_none(),
-                    CatalogCorrupt,
-                    "object has two create operations"
-                );
-                *prior = Some(operation);
-            }
-            PayloadBody::CommitObject { object_id, .. } => {
-                let prior = &mut existing.entry(*object_id).or_default().1;
-                ensure!(
-                    prior.is_none(),
-                    CatalogCorrupt,
-                    "object has two commit operations"
-                );
-                *prior = Some(operation);
-            }
-            _ => {}
-        }
-    }
     let mut published = Vec::with_capacity(candidates.len());
     for item in candidates {
         ensure!(
@@ -250,8 +253,7 @@ pub fn publish_page(
             Conflict,
             "object changed during publication"
         );
-        let (stored_create, stored_commit) = existing.remove(&item.object_id).unwrap_or_default();
-        let create_operation = match stored_create {
+        let create_operation = match stored_create.take() {
             Some(operation) => {
                 let payload = OperationPayload::open_for_collection_operation(&operation, &keys)?;
                 ensure!(
@@ -291,7 +293,7 @@ pub fn publish_page(
                 )?
             }
         };
-        let commit_operation = match stored_commit {
+        let commit_operation = match stored_commit.take() {
             Some(operation) => {
                 let payload = OperationPayload::open_for_collection_operation(&operation, &keys)?;
                 ensure!(
@@ -348,6 +350,7 @@ pub fn publish_page(
             commit_operation,
         });
     }
+    sharing_log::store_cached_log(db, *domain.selector(), log)?;
     Ok(published)
 }
 
