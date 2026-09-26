@@ -140,16 +140,43 @@ class DesignRulesTest {
         assertNotEquals(ChurDarkColors.accent, ChurDarkColors.ink)
         assertEquals(Color(0xFF315EF7), ChurLightColors.accent)
         assertEquals(Color(0xFF7D98FF), ChurDarkColors.accent)
+        assertEquals(Color(0xFF5B7CFF), ChurLightColors.focus)
+        assertEquals(Color(0xFF9FB1FF), ChurDarkColors.focus)
+        assertEquals(Color(0xFFDDE6FF), ChurLightColors.selectionSoft)
+        assertEquals(Color(0xFF253569), ChurDarkColors.selectionSoft)
+    }
+
+    @Test
+    fun brand_cord_is_distinct_from_functional_selection_and_error() {
+        assertEquals(Color(0xFFA01818), ChurLightColors.brandCord)
+        assertEquals(Color(0xFFD54A47), ChurDarkColors.brandCord)
+        for (colors in listOf(ChurLightColors, ChurDarkColors)) {
+            assertNotEquals(colors.accent, colors.brandCord)
+            assertNotEquals(colors.error, colors.brandCord)
+        }
     }
 
     @Test
     fun the_two_ladders_are_the_hexadecimal_values_of_section_6_2() {
         assertEquals(Color(0xFFFAFAF9), ChurLightColors.canvas)
         assertEquals(Color(0xFFFFFFFF), ChurLightColors.surface)
+        assertEquals(Color(0xFFF4F4F2), ChurLightColors.surfaceSubtle)
+        assertEquals(Color(0xFFEEEEEB), ChurLightColors.surfaceSunken)
         assertEquals(Color(0xFF171717), ChurLightColors.ink)
         assertEquals(Color(0xFF0A0A0A), ChurDarkColors.canvas)
         assertEquals(Color(0xFF111111), ChurDarkColors.surface)
+        assertEquals(Color(0xFF171717), ChurDarkColors.surfaceSubtle)
+        assertEquals(Color(0xFF1D1D1D), ChurDarkColors.surfaceRaised)
+        assertEquals(Color(0xFF050505), ChurDarkColors.surfaceSunken)
         assertEquals(Color(0xFFF5F5F3), ChurDarkColors.ink)
+    }
+
+    @Test
+    fun warning_and_error_use_the_semantic_colours_of_section_6_3() {
+        assertEquals(Color(0xFF986600), ChurLightColors.warning)
+        assertEquals(Color(0xFFC93434), ChurLightColors.error)
+        assertEquals(Color(0xFFD5AA52), ChurDarkColors.warning)
+        assertEquals(Color(0xFFF06C6C), ChurDarkColors.error)
     }
 
     @Test

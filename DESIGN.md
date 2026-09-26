@@ -88,6 +88,8 @@ colors:
     selection: "#FFFFFF"
     danger: "#FF7B7B"
   brand:
+    cord-on-light: "#A01818"
+    cord-on-dark: "#D54A47"
     boundary-blue: "#315EF7"
     boundary-violet: "#7657F6"
     boundary-cyan: "#28B8A7"
@@ -500,6 +502,10 @@ The primary launcher mark is a carved boundary post wrapped with a red cord
 that forms an interrupted ring. The opening represents authorized passage,
 not weakness. The selected source and its light/dark adaptations are in
 `art/app-icon/`.
+
+The cord red is reserved for the launcher mark and restrained private identity
+marks. Blue remains the functional focus and selection color; semantic error
+uses its separate error token. The cord never signals a locked or error state.
 
 Do not use as the primary mark:
 

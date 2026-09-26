@@ -1,7 +1,11 @@
 package dev.po4yka.chur.app.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.text.selection.LocalTextSelectionColors
+import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.TextFieldColors
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -33,6 +37,8 @@ data class ChurColors(
     val surface: Color,
     /** A quieter surface, for grouping. */
     val surfaceSubtle: Color,
+    /** An elevated surface in the dark ladder. */
+    val surfaceRaised: Color,
     /** A recessed surface, for wells and fields. */
     val surfaceSunken: Color,
     /** Primary text and primary action fill. */
@@ -45,6 +51,12 @@ data class ChurColors(
     val accentPressed: Color,
     /** A tinted background for the accent. */
     val accentSoft: Color,
+    /** Focus indicator, distinct from the selection accent. */
+    val focus: Color,
+    /** Background for selected text. */
+    val selectionSoft: Color,
+    /** Restrained private brand cord, never a status color. */
+    val brandCord: Color,
     /** Integrity uncertainty, §6.3. */
     val warning: Color,
     /** Confirmed corruption, §6.3. */
@@ -63,14 +75,18 @@ val ChurLightColors = ChurColors(
     canvas = Color(0xFFFAFAF9),
     surface = Color(0xFFFFFFFF),
     surfaceSubtle = Color(0xFFF4F4F2),
+    surfaceRaised = Color(0xFFFFFFFF),
     surfaceSunken = Color(0xFFEEEEEB),
     ink = Color(0xFF171717),
     inkMuted = Color(0xFF5C5C58),
     accent = Color(0xFF315EF7),
     accentPressed = Color(0xFF2448C9),
     accentSoft = Color(0xFFE9EEFF),
-    warning = Color(0xFF8A5A00),
-    error = Color(0xFFB3261E),
+    focus = Color(0xFF5B7CFF),
+    selectionSoft = Color(0xFFDDE6FF),
+    brandCord = Color(0xFFA01818),
+    warning = Color(0xFF986600),
+    error = Color(0xFFC93434),
     outline = Color(0xFFDCDCD8),
     dark = false,
 )
@@ -80,14 +96,18 @@ val ChurDarkColors = ChurColors(
     canvas = Color(0xFF0A0A0A),
     surface = Color(0xFF111111),
     surfaceSubtle = Color(0xFF171717),
-    surfaceSunken = Color(0xFF1D1D1D),
+    surfaceRaised = Color(0xFF1D1D1D),
+    surfaceSunken = Color(0xFF050505),
     ink = Color(0xFFF5F5F3),
     inkMuted = Color(0xFFA3A39D),
     accent = Color(0xFF7D98FF),
     accentPressed = Color(0xFFA7B7FF),
     accentSoft = Color(0xFF1C2852),
-    warning = Color(0xFFE0A34A),
-    error = Color(0xFFF2B8B5),
+    focus = Color(0xFF9FB1FF),
+    selectionSoft = Color(0xFF253569),
+    brandCord = Color(0xFFD54A47),
+    warning = Color(0xFFD5AA52),
+    error = Color(0xFFF06C6C),
     outline = Color(0xFF2A2A2A),
     dark = true,
 )
@@ -162,6 +182,17 @@ val DiagnosticTextStyle: TextStyle = TextStyle(
     letterSpacing = 0.sp,
 )
 
+/** Keep field focus blue while primary actions remain neutral. */
+@Composable
+fun churOutlinedTextFieldColors(): TextFieldColors {
+    val colors = LocalChurColors.current
+    return OutlinedTextFieldDefaults.colors(
+        focusedBorderColor = colors.focus,
+        focusedLabelColor = colors.focus,
+        cursorColor = colors.focus,
+    )
+}
+
 /**
  * The application theme.
  *
@@ -208,14 +239,14 @@ fun ChurTheme(
         outline = colors.outline,
         outlineVariant = colors.outline,
         scrim = Color.Black,
-        surfaceBright = if (dark) colors.surfaceSunken else colors.surface,
-        surfaceDim = if (dark) colors.canvas else colors.surfaceSunken,
+        surfaceBright = colors.surfaceRaised,
+        surfaceDim = colors.surfaceSunken,
         // Cards and other tonal components use the surface-container ladder.
-        surfaceContainerLowest = if (dark) colors.canvas else colors.surface,
+        surfaceContainerLowest = if (dark) colors.surfaceSunken else colors.surface,
         surfaceContainerLow = colors.surfaceSubtle,
         surfaceContainer = colors.surfaceSubtle,
-        surfaceContainerHigh = colors.surfaceSunken,
-        surfaceContainerHighest = colors.surfaceSunken,
+        surfaceContainerHigh = if (dark) colors.surfaceRaised else colors.surfaceSunken,
+        surfaceContainerHighest = if (dark) colors.surfaceRaised else colors.surfaceSunken,
         primaryFixed = ChurLightColors.ink,
         primaryFixedDim = ChurLightColors.inkMuted,
         onPrimaryFixed = Color.White,
@@ -229,7 +260,14 @@ fun ChurTheme(
         onTertiaryFixed = ChurLightColors.ink,
         onTertiaryFixedVariant = ChurLightColors.inkMuted,
     )
-    CompositionLocalProvider(LocalChurColors provides colors) {
+    val selectionColors = TextSelectionColors(
+        handleColor = colors.accent,
+        backgroundColor = colors.selectionSoft,
+    )
+    CompositionLocalProvider(
+        LocalChurColors provides colors,
+        LocalTextSelectionColors provides selectionColors,
+    ) {
         MaterialTheme(colorScheme = scheme, typography = churTypography, content = content)
     }
 }

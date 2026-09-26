@@ -7,7 +7,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.Dp
@@ -17,13 +16,11 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun PrivateBoundaryMark(size: Dp, media: Boolean = false, modifier: Modifier = Modifier) {
     val colors = LocalChurColors.current
-    // The source icon's deep red needs a lighter value against the dark canvas.
-    val cord = if (colors.dark) Color(0xFFD54A47) else Color(0xFFA01818)
     Canvas(modifier = modifier.size(size)) {
         val edge = this.size.minDimension
         val ringWidth = 3.dp.toPx()
         drawArc(
-            color = cord,
+            color = colors.brandCord,
             startAngle = 55f,
             sweepAngle = 295f,
             useCenter = false,
