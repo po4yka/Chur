@@ -12,6 +12,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
@@ -93,6 +96,100 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions) {
     var dropPoint by remember { mutableStateOf(Offset.Zero) }
     val rows = remember(albums) { albumRows(albums) }
 
+    var grid by remember { mutableStateOf(false) }
+    val albumCard: @Composable (AlbumSummary, Int) -> Unit = { album, depth ->
+        DisposableEffect(album.id) { onDispose { bounds.remove(album.id) } }
+        val siblings = siblingsOf(album, albums)
+        val index = siblings.indexOfFirst { it.id == album.id }
+        val parent = parentOf(album, albums)
+        var menu by remember(album.id) { mutableStateOf(false) }
+        Card(
+            onClick = { actions.onOpenAlbum(album) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = if (grid) 0.dp else (depth * 16).coerceAtMost(96).dp)
+                .onGloballyPositioned { bounds[album.id] = it.boundsInWindow() }
+                .pointerInput(album.id, albums) {
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = { offset ->
+                            dragged = album
+                            dropPoint = (bounds[album.id]?.topLeft ?: Offset.Zero) + offset
+                        },
+                        onDragEnd = {
+                            val source = dragged
+                            val target = rows.map { it.first }.firstOrNull {
+                                it.id != source?.id && bounds[it.id]?.contains(dropPoint) == true
+                            }
+                            if (source != null && target != null &&
+                                !descendantOf(target, source, albums)
+                            ) {
+                                val area = bounds[target.id]!!
+                                val relativeY = (dropPoint.y - area.top) / area.height
+                                if (relativeY in 0.25f..0.75f) {
+                                    actions.onMoveAlbum(source, target, null)
+                                } else {
+                                    val targetSiblings = siblingsOf(target, albums)
+                                    val before = if (relativeY < 0.25f) target else
+                                        targetSiblings.getOrNull(targetSiblings.indexOfFirst { it.id == target.id } + 1)
+                                    actions.onMoveAlbum(source, parentOf(target, albums), before)
+                                }
+                            }
+                            dragged = null
+                        },
+                        onDragCancel = { dragged = null },
+                        onDrag = { change, amount ->
+                            change.consume()
+                            dropPoint += amount
+                        },
+                    )
+                },
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(ChurSpacing.three),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(album.name, style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (grid && parent != null) {
+                        Text("In ${parent.name}", style = MaterialTheme.typography.bodySmall,
+                            color = colors.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    Text(
+                        "${album.memberCount} item${if (album.memberCount == 1L) "" else "s"} · Hold to drag",
+                        style = MaterialTheme.typography.bodySmall, color = colors.inkMuted,
+                    )
+                }
+                Box {
+                    TextButton(onClick = { menu = true }) { Text("More") }
+                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        DropdownMenuItem(text = { Text("Rename") }, onClick = {
+                            menu = false; renameText = album.name; renaming = album
+                        })
+                        DropdownMenuItem(text = { Text("Move to…") }, onClick = {
+                            menu = false; moving = album
+                        })
+                        if (index > 0) {
+                            DropdownMenuItem(text = { Text("Move up") }, onClick = {
+                                menu = false
+                                actions.onMoveAlbum(album, parent, siblings[index - 1])
+                            })
+                        }
+                        if (index in 0 until siblings.lastIndex) {
+                            DropdownMenuItem(text = { Text("Move down") }, onClick = {
+                                menu = false
+                                actions.onMoveAlbum(album, parent, siblings.getOrNull(index + 2))
+                            })
+                        }
+                        DropdownMenuItem(text = { Text("Delete album") }, onClick = {
+                            menu = false; deleting = album
+                        })
+                    }
+                }
+            }
+        }
+    }
+
     if (albums.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -101,94 +198,31 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions) {
             }
         }
     } else {
-        LazyColumn(
-            contentPadding = PaddingValues(ChurSpacing.gutter),
-            verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
-        ) {
-            items(rows, key = { it.first.id }) { (album, depth) ->
-                DisposableEffect(album.id) { onDispose { bounds.remove(album.id) } }
-                val siblings = siblingsOf(album, albums)
-                val index = siblings.indexOfFirst { it.id == album.id }
-                var menu by remember(album.id) { mutableStateOf(false) }
-                Card(
-                    onClick = { actions.onOpenAlbum(album) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = (depth * 16).coerceAtMost(96).dp)
-                        .onGloballyPositioned { bounds[album.id] = it.boundsInWindow() }
-                        .pointerInput(album.id, albums) {
-                            detectDragGesturesAfterLongPress(
-                                onDragStart = { offset ->
-                                    dragged = album
-                                    dropPoint = (bounds[album.id]?.topLeft ?: Offset.Zero) + offset
-                                },
-                                onDragEnd = {
-                                    val source = dragged
-                                    val target = rows.map { it.first }.firstOrNull {
-                                        it.id != source?.id && bounds[it.id]?.contains(dropPoint) == true
-                                    }
-                                    if (source != null && target != null &&
-                                        !descendantOf(target, source, albums)
-                                    ) {
-                                        val area = bounds[target.id]!!
-                                        val relativeY = (dropPoint.y - area.top) / area.height
-                                        if (relativeY in 0.25f..0.75f) {
-                                            actions.onMoveAlbum(source, target, null)
-                                        } else {
-                                            val targetSiblings = siblingsOf(target, albums)
-                                            val before = if (relativeY < 0.25f) target else
-                                                targetSiblings.getOrNull(targetSiblings.indexOfFirst { it.id == target.id } + 1)
-                                            actions.onMoveAlbum(source, parentOf(target, albums), before)
-                                        }
-                                    }
-                                    dragged = null
-                                },
-                                onDragCancel = { dragged = null },
-                                onDrag = { change, amount ->
-                                    change.consume()
-                                    dropPoint += amount
-                                },
-                            )
-                        },
+        Column(modifier = Modifier.fillMaxSize()) {
+            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = ChurSpacing.gutter)) {
+                TextButton(onClick = { grid = false }) { Text(if (grid) "List" else "✓ List") }
+                TextButton(onClick = { grid = true }) { Text(if (grid) "✓ Grid" else "Grid") }
+            }
+            if (grid) {
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(240.dp),
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(ChurSpacing.gutter),
+                    horizontalArrangement = Arrangement.spacedBy(ChurSpacing.two),
+                    verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(ChurSpacing.three),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(album.name, style = MaterialTheme.typography.titleMedium,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(
-                                "${album.memberCount} item${if (album.memberCount == 1L) "" else "s"} · Hold to drag",
-                                style = MaterialTheme.typography.bodySmall, color = colors.inkMuted,
-                            )
-                        }
-                        Box {
-                            TextButton(onClick = { menu = true }) { Text("More") }
-                            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                                DropdownMenuItem(text = { Text("Rename") }, onClick = {
-                                    menu = false; renameText = album.name; renaming = album
-                                })
-                                DropdownMenuItem(text = { Text("Move to…") }, onClick = {
-                                    menu = false; moving = album
-                                })
-                                if (index > 0) {
-                                    DropdownMenuItem(text = { Text("Move up") }, onClick = {
-                                        menu = false
-                                        actions.onMoveAlbum(album, parentOf(album, albums), siblings[index - 1])
-                                    })
-                                }
-                                if (index in 0 until siblings.lastIndex) {
-                                    DropdownMenuItem(text = { Text("Move down") }, onClick = {
-                                        menu = false
-                                        actions.onMoveAlbum(album, parentOf(album, albums), siblings.getOrNull(index + 2))
-                                    })
-                                }
-                                DropdownMenuItem(text = { Text("Delete album") }, onClick = {
-                                    menu = false; deleting = album
-                                })
-                            }
-                        }
+                    gridItems(rows, key = { it.first.id }) { (album, depth) ->
+                        albumCard(album, depth)
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(ChurSpacing.gutter),
+                    verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
+                ) {
+                    items(rows, key = { it.first.id }) { (album, depth) ->
+                        albumCard(album, depth)
                     }
                 }
             }
