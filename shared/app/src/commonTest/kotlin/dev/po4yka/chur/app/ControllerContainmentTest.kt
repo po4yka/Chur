@@ -15,6 +15,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 
 /**
  * What a failing action does to the process.
@@ -122,10 +123,22 @@ class ControllerContainmentTest {
         assertEquals(ChurStatus.INTERNAL_FAILURE.name, controller.message.value)
     }
 
-    private fun controllerOver(notes: NoteStore) = ChurController(
+    @Test
+    fun locking_cancels_pending_app_owned_exports() = runTest(dispatcher) {
+        val exports = PendingExports()
+        val controller = controllerOver(InertNotes, exports)
+
+        controller.lock()
+        advanceUntilIdle()
+        exports.cancelled.await()
+
+        assertFalse(exports.pending)
+    }
+
+    private fun controllerOver(notes: NoteStore, exports: ExportSink = NoExports) = ChurController(
         storageRoot = "/nonexistent",
         privacy = NoPrivacyCover,
-        exports = NoExports,
+        exports = exports,
         clock = { 0L },
         notes = notes,
     )
@@ -160,6 +173,25 @@ class ControllerContainmentTest {
 
     /** No export can start in these tests, and none is attempted. */
     private object NoExports : ExportSink {
+        override fun cancelPending() = Unit
+        override fun create(displayName: String, contentType: String): ExportSink.Destination? = null
+        override fun create(
+            displayName: String,
+            contentType: String,
+            target: ExportTarget,
+            uri: String?,
+        ): ExportSink.Destination? = null
+    }
+
+    private class PendingExports : ExportSink {
+        var pending = true
+        val cancelled = CompletableDeferred<Unit>()
+
+        override fun cancelPending() {
+            pending = false
+            cancelled.complete(Unit)
+        }
+
         override fun create(displayName: String, contentType: String): ExportSink.Destination? = null
         override fun create(
             displayName: String,

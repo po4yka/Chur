@@ -73,7 +73,7 @@ class ChurController(
     private val appLockSetting: AppLockSetting = AppLockSetting.unset(),
     private val clock: () -> Long,
     private val notes: NoteStore = InMemoryNoteStore(),
-    policy: LockPolicy = LockPolicy(),
+    private val policy: LockPolicy = LockPolicy(),
     /**
      * The sync engine, when the host binds one.
      *
@@ -293,6 +293,11 @@ class ChurController(
             password.length <= 20 && !isValidVaultPin(password)) {
             _message.value = "Use at least 12 digits for a vault PIN."
             return@guarded
+        }
+        if (repository.state.value is VaultState.Unlocked) {
+            lockEpoch += 1
+            _activeOperation.value = null
+            exports.cancelPending()
         }
         val bytes = password.encodeToByteArray()
         val phrase = try {
@@ -525,6 +530,8 @@ class ChurController(
     /** Locks now, `DESIGN.md` §14.3. */
     fun lock(reason: LockReason = LockReason.USER) = guarded {
         lockEpoch += 1
+        _activeOperation.value = null
+        exports.cancelPending()
         withContext(Dispatchers.Default) { repository.lock(reason) }
         privacy.setEnabled(false)
         clearPrivateProjections()
@@ -569,6 +576,10 @@ class ChurController(
         privacy.setEnabled(true)
         if (hostActivities > 0) return
         lockEpoch += 1
+        if (_appLockEnabled.value || policy.lockOnBackground) {
+            _activeOperation.value = null
+            exports.cancelPending()
+        }
         withContext(Dispatchers.Default) {
             if (_appLockEnabled.value) repository.lock(LockReason.BACKGROUND)
             else repository.onBackground()
@@ -595,8 +606,15 @@ class ChurController(
 
     /** The idle check of `DESIGN.md` §14.4, which [runIdleTimer] drives. */
     suspend fun checkIdle() {
-        if (withContext(Dispatchers.Default) { repository.lockIfIdle() }) {
-            lockEpoch += 1
+        if (withContext(Dispatchers.Default) {
+            repository.lockIfIdle {
+                withContext(NonCancellable + Dispatchers.Main) {
+                    lockEpoch += 1
+                    _activeOperation.value = null
+                    exports.cancelPending()
+                }
+            }
+        }) {
             privacy.setEnabled(false)
             clearPrivateProjections()
             _route.value = if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell
@@ -1292,6 +1310,7 @@ class ChurController(
 
     private suspend fun clearPrivateProjections() {
         _activeOperation.value = null
+        exports.cancelPending()
         currentQuery = ObjectQuery()
         // §10.3: a lock transition destroys private back-stack projections, and
         // these flows are that projection. §4 of `PLAINTEXT_LIFECYCLE.md` and
@@ -1325,12 +1344,14 @@ class ChurController(
 
     private suspend fun completeUnlock(target: AppRoute, epoch: Long) {
         if (epoch != lockEpoch || _route.value != target) {
+            exports.cancelPending()
             withContext(Dispatchers.Default) { repository.lock(LockReason.BACKGROUND) }
             clearPrivateProjections()
             _route.value = if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell
             return
         }
         if (target == AppRoute.AppUnlock || target == AppRoute.AppRecover) {
+            exports.cancelPending()
             withContext(Dispatchers.Default) { repository.lock(LockReason.USER) }
             privacy.setEnabled(false)
             _route.value = AppRoute.PublicShell
@@ -1413,6 +1434,9 @@ class ChurController(
  * results where the provider permits it.
  */
 interface ExportSink {
+    /** Revokes and deletes temporary results still owned by this application. Safe to repeat. */
+    fun cancelPending()
+
     /** One open destination. */
     interface Destination {
         /** The descriptor Rust writes into; §13 has Rust duplicate it. */

@@ -161,7 +161,9 @@ class VaultRepository(
      * has: the panic gesture during a background transition is the case the
      * product expects rather than the case it forbids.
      */
-    suspend fun lock(reason: LockReason) = mutex.withLock {
+    suspend fun lock(reason: LockReason) = mutex.withLock { lockSession(reason) }
+
+    private fun lockSession(reason: LockReason) {
         if (session != 0L) {
             runCatching { ChurVault.lock(session, reason) }
             runCatching { ChurVault.closeSession(session) }
@@ -171,15 +173,18 @@ class VaultRepository(
     }
 
     /** Locks when the policy says the session has been idle too long. */
-    suspend fun lockIfIdle(): Boolean {
-        val decision = mutex.withLock {
-            if (session == 0L) LockDecision.KEEP else idleDecision(policy, lastUsedMs, clock())
-        }
-        if (decision == LockDecision.LOCK) {
-            lock(LockReason.TIMEOUT)
+    suspend fun lockIfIdle(beforeLock: suspend () -> Unit = {}): Boolean {
+        mutex.lock()
+        try {
+            if (session == 0L || idleDecision(policy, lastUsedMs, clock()) != LockDecision.LOCK) {
+                return false
+            }
+            beforeLock()
+            lockSession(LockReason.TIMEOUT)
             return true
+        } finally {
+            mutex.unlock()
         }
-        return false
     }
 
     /** Locks when the application leaves the foreground, if the policy says so. */

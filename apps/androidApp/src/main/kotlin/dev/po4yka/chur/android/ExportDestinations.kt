@@ -14,17 +14,39 @@ import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
 import dev.po4yka.chur.app.ExportSink
 import dev.po4yka.chur.app.ExportTarget
+import dev.po4yka.chur.core.model.ChurStatus
+import dev.po4yka.chur.ffi.ChurFailure
 import java.io.File
 import java.util.UUID
 
 /** Streams verified originals to a chosen system destination. */
-class ExportDestinations(private val context: Context) : ExportSink {
+class ExportDestinations(
+    private val context: Context,
+    private val onShareLaunch: () -> Unit,
+    private val onShareEnd: () -> Unit,
+) : ExportSink {
     private val resolver: ContentResolver = context.contentResolver
     private val scratch = File(context.cacheDir, "export-scratch")
+    private val pendingShares = mutableMapOf<Uri, File>()
+    private var generation = 0L
 
     init {
         scratch.deleteRecursively() // A previous process cannot have a live share sheet.
         scratch.mkdirs()
+    }
+
+    override fun cancelPending() {
+        generation += 1
+        pendingShares.toMap().forEach { (uri, file) -> releaseShare(uri, file) }
+        scratch.deleteRecursively()
+        scratch.mkdirs()
+        onShareEnd()
+    }
+
+    private fun releaseShare(uri: Uri, file: File) {
+        pendingShares.remove(uri)
+        runCatching { context.revokeUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        file.delete()
     }
 
     private class Destination(
@@ -61,6 +83,7 @@ class ExportDestinations(private val context: Context) : ExportSink {
             open(document, publish = {}, discard = { resolver.delete(document, null, null) })
         }
         ExportTarget.SHARE -> {
+            val createdGeneration = generation
             val extension = MimeTypeMap.getSingleton().getExtensionFromMimeType(contentType)
                 ?: displayName.substringAfterLast('.', "bin")
             val safeExtension = extension.takeIf { it.matches(Regex("[A-Za-z0-9]{1,10}")) } ?: "bin"
@@ -73,6 +96,10 @@ class ExportDestinations(private val context: Context) : ExportSink {
                 throw failure
             }
             Destination(handle, publishAction = {
+                if (createdGeneration != generation) {
+                    file.delete()
+                    throw ChurFailure(ChurStatus.CANCELLED, "the share was cancelled")
+                }
                 val contentUri = FileProvider.getUriForFile(
                     context, "${context.packageName}.exports", file, displayName,
                 )
@@ -82,13 +109,20 @@ class ExportDestinations(private val context: Context) : ExportSink {
                     clipData = ClipData.newRawUri("", contentUri)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                context.startActivity(Intent.createChooser(intent, "Share original").apply {
-                    clipData = ClipData.newRawUri("", contentUri)
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-                })
+                pendingShares[contentUri] = file
+                try {
+                    onShareLaunch()
+                    context.startActivity(Intent.createChooser(intent, "Share original").apply {
+                        clipData = ClipData.newRawUri("", contentUri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                    })
+                } catch (failure: Exception) {
+                    releaseShare(contentUri, file)
+                    onShareEnd()
+                    throw failure
+                }
                 Handler(Looper.getMainLooper()).postDelayed({
-                    runCatching { context.revokeUriPermission(contentUri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-                    file.delete()
+                    releaseShare(contentUri, file)
                 }, 30 * 60 * 1000L)
             }, discardAction = { file.delete() })
         }

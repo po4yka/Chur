@@ -119,13 +119,19 @@ class VaultRepositoryHostTest {
         val repository = repository(LockPolicy(idleTimeoutMs = 1_000))
         repository.start()
         repository.create(PASSWORD.encodeToByteArray(), offerRecovery = false)
+        var beforeLockCalls = 0
 
         now += 500
-        assertEquals(false, repository.lockIfIdle())
+        assertEquals(false, repository.lockIfIdle { beforeLockCalls += 1 })
+        assertEquals(0, beforeLockCalls)
         assertIs<VaultState.Unlocked>(repository.state.value)
 
         now += 600
-        assertEquals(true, repository.lockIfIdle())
+        assertEquals(true, repository.lockIfIdle {
+            assertIs<VaultState.Unlocked>(repository.state.value)
+            beforeLockCalls += 1
+        })
+        assertEquals(1, beforeLockCalls)
         assertIs<VaultState.Locked>(repository.state.value)
 
         // A locked session has nothing to time out.

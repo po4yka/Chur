@@ -61,6 +61,7 @@ class AppLockHostTest {
     }
 
     private object NoExports : ExportSink {
+        override fun cancelPending() = Unit
         override fun create(displayName: String, contentType: String): ExportSink.Destination? = null
         override fun create(
             displayName: String,

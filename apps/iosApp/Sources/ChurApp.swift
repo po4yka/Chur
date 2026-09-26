@@ -13,13 +13,16 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     private(set) var storageReady = false
     weak var scene: SceneDelegate?
 
-    private lazy var exports = ShareExportSink { [weak self] url, target in
-        if let scene = self?.scene {
-            scene.presentExport(url, target: target)
-        } else {
-            try? FileManager.default.removeItem(at: url)
-        }
-    }
+    private lazy var exports = ShareExportSink(
+        present: { [weak self] url, target in
+            if let scene = self?.scene {
+                scene.presentExport(url, target: target)
+            } else {
+                try? FileManager.default.removeItem(at: url)
+            }
+        },
+        cancel: { [weak self] in self?.scene?.cancelPendingExports() }
+    )
 
     func application(
         _ application: UIApplication,
@@ -77,6 +80,9 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     private var pendingExports: [(URL, ExportTarget)] = []
     private var presentingExport = false
     private var exportUsesHostActivity = false
+    private var activeExportURL: URL?
+    private var activeExportController: UIViewController?
+    private var exportGeneration = 0
 
     private var host: AppDelegate { UIApplication.shared.delegate as! AppDelegate }
 
@@ -152,42 +158,47 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         guard !presentingExport, !pendingExports.isEmpty else { return }
         presentingExport = true
         let (url, target) = pendingExports.removeFirst()
+        let generation = exportGeneration
+        activeExportURL = url
         exportUsesHostActivity = target != .mediaLibrary
         if exportUsesHostActivity { host.controller.beginHostActivity() }
         guard FileManager.default.fileExists(atPath: url.path) else {
-            finishExport(url)
+            finishExport(url, generation: generation)
             host.controller.report(message: "Export expired. Please try again.")
             return
         }
         guard let presenter = window?.rootViewController else {
-            finishExport(url)
+            finishExport(url, generation: generation)
             return
         }
         if target == .mediaLibrary {
             guard let type = UTType(filenameExtension: url.pathExtension),
                   type.conforms(to: .image) || type.conforms(to: .movie) else {
-                finishExport(url)
+                finishExport(url, generation: generation)
                 host.controller.report(message: "Only photos and videos can be saved to Photos.")
                 return
             }
             PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] status in
-                guard status == .authorized else {
-                    DispatchQueue.main.async {
-                        self?.finishExport(url)
-                        self?.host.controller.report(message: "Photos access was not granted.")
+                DispatchQueue.main.async {
+                    guard let self, self.exportGeneration == generation else { return }
+                    guard status == .authorized else {
+                        if self.finishExport(url, generation: generation) {
+                            self.host.controller.report(message: "Photos access was not granted.")
+                        }
+                        return
                     }
-                    return
-                }
-                PHPhotoLibrary.shared().performChanges({
-                    if type.conforms(to: .movie) {
-                        PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
-                    } else {
-                        PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url)
-                    }
-                }) { [weak self] saved, _ in
-                    DispatchQueue.main.async {
-                        self?.finishExport(url)
-                        self?.host.controller.report(message: saved ? "Saved to Photos. The copy is outside the vault." : "Could not save to Photos.")
+                    PHPhotoLibrary.shared().performChanges({
+                        if type.conforms(to: .movie) {
+                            PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
+                        } else {
+                            PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url)
+                        }
+                    }) { [weak self] saved, _ in
+                        DispatchQueue.main.async {
+                            if self?.finishExport(url, generation: generation) == true {
+                                self?.host.controller.report(message: saved ? "Saved to Photos. The copy is outside the vault." : "Could not save to Photos.")
+                            }
+                        }
                     }
                 }
             }
@@ -197,32 +208,54 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             let picker = UIDocumentPickerViewController(forExporting: [url], asCopy: true)
             let delegate = ExportPickerDelegate { [weak self] saved in
                 self?.exportPicker = nil
-                self?.finishExport(url)
-                self?.host.controller.report(message: saved ? "Saved to Files. The copy is outside the vault." : "Save to Files cancelled.")
+                if self?.finishExport(url, generation: generation) == true {
+                    self?.host.controller.report(message: saved ? "Saved to Files. The copy is outside the vault." : "Save to Files cancelled.")
+                }
             }
             exportPicker = delegate
             picker.delegate = delegate
+            activeExportController = picker
             presenter.present(picker, animated: true)
             return
         }
         let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
         sheet.completionWithItemsHandler = { _, completed, _, _ in
-            self.finishExport(url)
-            self.host.controller.report(message: completed ? "Shared. The copy is outside the vault." : "Sharing cancelled.")
+            if self.finishExport(url, generation: generation) {
+                self.host.controller.report(message: completed ? "Shared. The copy is outside the vault." : "Sharing cancelled.")
+            }
         }
         if let popover = sheet.popoverPresentationController {
             popover.sourceView = presenter.view
             popover.sourceRect = CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.midY, width: 1, height: 1)
         }
+        activeExportController = sheet
         presenter.present(sheet, animated: true)
     }
 
-    private func finishExport(_ url: URL) {
-        try? FileManager.default.removeItem(at: url)
+    func cancelPendingExports() {
+        exportGeneration += 1
+        pendingExports.forEach { try? FileManager.default.removeItem(at: $0.0) }
+        pendingExports.removeAll()
+        if let activeExportURL { try? FileManager.default.removeItem(at: activeExportURL) }
+        activeExportController?.dismiss(animated: false)
+        activeExportController = nil
+        activeExportURL = nil
         if exportUsesHostActivity { host.controller.endHostActivity() }
         exportUsesHostActivity = false
         presentingExport = false
+        exportPicker = nil
+    }
+
+    @discardableResult private func finishExport(_ url: URL, generation: Int) -> Bool {
+        try? FileManager.default.removeItem(at: url)
+        guard generation == exportGeneration, activeExportURL == url else { return false }
+        if exportUsesHostActivity { host.controller.endHostActivity() }
+        exportUsesHostActivity = false
+        presentingExport = false
+        activeExportURL = nil
+        activeExportController = nil
         presentNextExport()
+        return true
     }
 }
 
@@ -351,16 +384,41 @@ private final class BackupPickerDelegate: NSObject, UIDocumentPickerDelegate {
 
 private final class ShareExportSink: NSObject, ExportSink {
     private let present: (URL, ExportTarget) -> Void
+    private let cancel: () -> Void
     private let directory = FileManager.default.temporaryDirectory.appendingPathComponent("chur-exports", isDirectory: true)
+    private var generation = 0
+    private var ready = false
 
-    init(present: @escaping (URL, ExportTarget) -> Void) {
+    init(present: @escaping (URL, ExportTarget) -> Void, cancel: @escaping () -> Void) {
         self.present = present
+        self.cancel = cancel
         super.init()
         // A terminated share sheet leaves plaintext behind; only our own
         // scratch directory is removed on the next process launch.
-        try? FileManager.default.removeItem(at: directory)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try? (directory as NSURL).setResourceValue(true, forKey: .isExcludedFromBackupKey)
+        ready = resetDirectory()
+    }
+
+    func cancelPending() {
+        generation += 1
+        cancel()
+        ready = resetDirectory()
+    }
+
+    private func resetDirectory() -> Bool {
+        do {
+            if FileManager.default.fileExists(atPath: directory.path) {
+                try FileManager.default.removeItem(at: directory)
+            }
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true,
+                attributes: [.protectionKey: FileProtectionType.complete]
+            )
+            try (directory as NSURL).setResourceValue(true, forKey: .isExcludedFromBackupKey)
+            return true
+        } catch {
+            return false
+        }
     }
 
     func create(displayName: String, contentType: String) -> ExportSinkDestination? {
@@ -368,6 +426,8 @@ private final class ShareExportSink: NSObject, ExportSink {
     }
 
     func create(displayName: String, contentType: String, target: ExportTarget, uri: String?) -> ExportSinkDestination? {
+        guard ready else { return nil }
+        let createdGeneration = generation
         let ext = UTType(mimeType: contentType)?.preferredFilenameExtension
             ?? URL(fileURLWithPath: displayName).pathExtension
         let suffix = ext.range(of: "^[A-Za-z0-9]{1,10}$", options: .regularExpression) == nil ? "bin" : ext
@@ -386,7 +446,13 @@ private final class ShareExportSink: NSObject, ExportSink {
             try? FileManager.default.removeItem(at: url)
             return nil
         }
-        return ShareDestination(url: url, descriptor: descriptor, target: target, present: present)
+        return ShareDestination(
+            url: url,
+            descriptor: descriptor,
+            target: target,
+            present: present,
+            valid: { [weak self] in self?.generation == createdGeneration }
+        )
     }
 }
 
@@ -395,17 +461,20 @@ private final class ShareDestination: NSObject, ExportSinkDestination {
     private let url: URL
     private let target: ExportTarget
     private let present: (URL, ExportTarget) -> Void
+    private let valid: () -> Bool
     private var closed = false
 
-    init(url: URL, descriptor: Int32, target: ExportTarget, present: @escaping (URL, ExportTarget) -> Void) {
+    init(url: URL, descriptor: Int32, target: ExportTarget, present: @escaping (URL, ExportTarget) -> Void, valid: @escaping () -> Bool) {
         self.url = url
         self.descriptor = descriptor
         self.target = target
         self.present = present
+        self.valid = valid
     }
 
     func publish() {
         DispatchQueue.main.async {
+            guard self.valid() else { self.discard(); return }
             self.present(self.url, self.target)
             let url = self.url
             DispatchQueue.main.asyncAfter(deadline: .now() + 30 * 60) {

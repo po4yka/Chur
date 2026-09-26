@@ -91,11 +91,27 @@ internal class ChurHost private constructor(context: Context) {
         },
     )
 
+    private var shareHostActivity = false
+
+    private fun beginShareActivity() {
+        if (!shareHostActivity) {
+            shareHostActivity = true
+            controller.beginHostActivity()
+        }
+    }
+
+    fun endShareActivity() {
+        if (shareHostActivity) {
+            shareHostActivity = false
+            controller.endHostActivity()
+        }
+    }
+
     /** The one controller, over the one repository, over the one runtime. */
     val controller = ChurController(
         storageRoot = context.storageRoot(),
         privacy = privacy,
-        exports = ExportDestinations(context),
+        exports = ExportDestinations(context, ::beginShareActivity, ::endShareActivity),
         clock = { System.currentTimeMillis() },
         notes = FileNoteStore(context.publicShellFile("notes.json")),
         deviceUnlock =

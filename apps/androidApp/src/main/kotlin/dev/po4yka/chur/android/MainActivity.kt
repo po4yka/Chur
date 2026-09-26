@@ -104,6 +104,11 @@ class MainActivity : FragmentActivity() {
      * first suspension point and the session stayed open in a process the
      * platform keeps.
      */
+    override fun onResume() {
+        super.onResume()
+        host.endShareActivity()
+    }
+
     override fun onPause() {
         host.privacy.setEnabled(true)
         super.onPause()
