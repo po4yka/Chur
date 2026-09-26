@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.PersistableBundle
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,6 +34,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.AppRoute
@@ -95,6 +97,14 @@ import kotlinx.coroutines.withContext
  * a private route without passing through [AppRoute.Unlock] or
  * [AppRoute.CreateVault], because those are the only two that call into the
  * application's unlock and create.
+ *
+ * System Back does what the screen's own back or cancel control does, and a
+ * screen without one returns to where it is entered from. A screen that must
+ * not be left (the recovery phrase, a creation or a restore in progress) holds
+ * Back. Without a handler Back is the platform's back-to-home, and the
+ * background lock of `MainActivity.onPause` then closes the vault and drops
+ * whatever the screen held. Only the roots let it through: the public shell,
+ * the app gate, and the vault's Library.
  */
 @Composable
 fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultState) {
@@ -103,38 +113,61 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
 
     // The phrase is shown once and takes precedence over every route, because
     // `RECOVERY.md` §2 shows it exactly once and a navigation that skipped it
-    // would be that once spent.
+    // would be that once spent. Back is held for the same reason: leaving
+    // would run the background lock, which clears the phrase for good.
     phrase?.let { value ->
+        BackHandler {}
         RecoveryPhraseScreen(phrase = value, onAcknowledged = controller::acknowledgeRecoveryPhrase)
         return
     }
 
     when (route) {
         AppRoute.PublicShell, AppRoute.PublicSettings -> PublicShell(controller, route)
-        AppRoute.CreateVault -> CreateVaultScreen(
-            busy = vaultState is VaultState.Creating,
-            error = message,
-            onCreate = controller::create,
-            onCancel = { controller.goTo(AppRoute.PublicShell) },
-            // The offer exists only where no identity does. `DECOY_VAULT.md`
-            // §8 and §10: this screen is also where a second identity is
-            // created, and a restore offered there would reach for a registry
-            // that already holds one.
-            onRestore = if (vaultState is VaultState.NoVault) {
-                { controller.goTo(AppRoute.RestoreBackup) }
-            } else {
-                null
-            },
-        )
+        AppRoute.CreateVault -> {
+            // A second identity is created from an open session, `DECOY_VAULT.md`
+            // §3, so leaving returns to that vault and never shows the public
+            // shell over it: a vault entry from there would open a second
+            // session beside the first. Nothing leaves while the vault is being
+            // created, as 'Not now' is disabled then.
+            val leave = {
+                when (controller.vaultState.value) {
+                    is VaultState.Creating -> Unit
+                    is VaultState.Unlocked -> controller.goTo(AppRoute.Vault)
+                    else -> controller.goTo(AppRoute.PublicShell)
+                }
+            }
+            BackHandler(onBack = leave)
+            CreateVaultScreen(
+                busy = vaultState is VaultState.Creating,
+                error = message,
+                onCreate = controller::create,
+                onCancel = leave,
+                // The offer exists only where no identity does. `DECOY_VAULT.md`
+                // §8 and §10: this screen is also where a second identity is
+                // created, and a restore offered there would reach for a registry
+                // that already holds one.
+                onRestore = if (vaultState is VaultState.NoVault) {
+                    { controller.goTo(AppRoute.RestoreBackup) }
+                } else {
+                    null
+                },
+            )
+        }
         AppRoute.RestoreBackup -> RestoreRoute(controller)
-        AppRoute.Unlock -> UnlockScreen(
-            busy = false,
-            failed = (vaultState as? VaultState.Locked)?.lastFailure != null || message != null,
-            onUnlock = controller::unlock,
-            onUseRecovery = { controller.goTo(AppRoute.Recover) },
-            deviceUnlockOffered = controller.deviceUnlockOffered.collectAsState().value,
-            onUseDevice = controller::unlockWithDevice,
-        )
+        AppRoute.Unlock -> {
+            // The screen has no way back of its own. It is entered from the
+            // vault entry of the public settings, or after a restore, and Back
+            // returns to that entry either way.
+            BackHandler { controller.goTo(AppRoute.PublicSettings) }
+            UnlockScreen(
+                busy = false,
+                failed = (vaultState as? VaultState.Locked)?.lastFailure != null || message != null,
+                onUnlock = controller::unlock,
+                onUseRecovery = { controller.goTo(AppRoute.Recover) },
+                deviceUnlockOffered = controller.deviceUnlockOffered.collectAsState().value,
+                onUseDevice = controller::unlockWithDevice,
+            )
+        }
         AppRoute.AppUnlock -> UnlockScreen(
             busy = false,
             failed = (vaultState as? VaultState.Locked)?.lastFailure != null || message != null,
@@ -144,18 +177,26 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
             onUseDevice = controller::unlockWithDevice,
             appGate = true,
         )
-        AppRoute.Recover -> RecoveryScreen(
-            busy = false,
-            failed = (vaultState as? VaultState.Locked)?.lastFailure != null,
-            onRecover = controller::recover,
-            onBack = { controller.goTo(AppRoute.Unlock) },
-        )
-        AppRoute.AppRecover -> RecoveryScreen(
-            busy = false,
-            failed = (vaultState as? VaultState.Locked)?.lastFailure != null || message != null,
-            onRecover = controller::recover,
-            onBack = { controller.goTo(AppRoute.AppUnlock) },
-        )
+        AppRoute.Recover -> {
+            val back = { controller.goTo(AppRoute.Unlock) }
+            BackHandler(onBack = back)
+            RecoveryScreen(
+                busy = false,
+                failed = (vaultState as? VaultState.Locked)?.lastFailure != null,
+                onRecover = controller::recover,
+                onBack = back,
+            )
+        }
+        AppRoute.AppRecover -> {
+            val back = { controller.goTo(AppRoute.AppUnlock) }
+            BackHandler(onBack = back)
+            RecoveryScreen(
+                busy = false,
+                failed = (vaultState as? VaultState.Locked)?.lastFailure != null || message != null,
+                onRecover = controller::recover,
+                onBack = back,
+            )
+        }
         AppRoute.Vault -> VaultRoute(controller)
     }
 }
@@ -167,6 +208,7 @@ private fun PublicShell(controller: ChurController, route: AppRoute) {
     val disclosureDue by controller.disclosureDue.collectAsState()
     var query by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf<Note?>(null) }
+    val focusManager = LocalFocusManager.current
 
     editing?.let { note ->
         NoteEditorScreen(
@@ -177,6 +219,7 @@ private fun PublicShell(controller: ChurController, route: AppRoute) {
                 editing = null
             },
             onBack = { editing = null },
+            backHandler = { BackHandler(onBack = it) },
         )
         return
     }
@@ -197,12 +240,18 @@ private fun PublicShell(controller: ChurController, route: AppRoute) {
         // §2: the route to the vault is a visible settings entry.
         // `DISCREET_MODE.md` "The v1 decision" makes it the session gate, and
         // it now opens the public shell's own settings, where the permanent
-        // disclosure sits beside the vault row.
-        onOpenSettings = { controller.goTo(AppRoute.PublicSettings) },
+        // disclosure sits beside the vault row. The search field stays
+        // composed under them, so it gives up the keyboard first: an open IME
+        // would take keystrokes meant for nothing and the first Back.
+        onOpenSettings = {
+            focusManager.clearFocus()
+            controller.goTo(AppRoute.PublicSettings)
+        },
         showFirstWriteDisclosure = disclosureDue,
         onAcknowledgeDisclosure = controller::acknowledgeDisclosure,
     )
     if (route == AppRoute.PublicSettings) {
+        BackHandler { controller.goTo(AppRoute.PublicShell) }
         PublicSettingsScreen(
             onBack = { controller.goTo(AppRoute.PublicShell) },
             onOpenVault = controller::openVaultEntry,
@@ -220,8 +269,7 @@ private fun PublicShell(controller: ChurController, route: AppRoute) {
  * The bracket around the launch is the media picker's, for the media picker's
  * reason. The platform stops this activity while the documents UI is up, and
  * the background transition would move the shell back to the public route and
- * take this screen with it - and would mark a storage root that holds no vault
- * as `Locked`.
+ * take this screen with it.
  */
 @Composable
 private fun RestoreRoute(controller: ChurController) {
@@ -263,6 +311,9 @@ private fun RestoreRoute(controller: ChurController) {
         }
     }
 
+    // Back waits while a restore runs, as the screen's own Back does.
+    val back = { controller.goTo(AppRoute.PublicShell) }
+    BackHandler { if (!running) back() }
     RestoreBackupScreen(
         busy = running,
         error = message,
@@ -277,7 +328,7 @@ private fun RestoreRoute(controller: ChurController) {
             controller.beginHostActivity()
             picker.launch(arrayOf("*/*"))
         },
-        onBack = { controller.goTo(AppRoute.PublicShell) },
+        onBack = back,
         onCancel = controller::cancelActiveOperation,
     )
 }
@@ -430,6 +481,27 @@ private fun VaultRoute(controller: ChurController) {
             if (image != null) {
                 thumbnails = thumbnails + (projection.id to image)
             }
+        }
+    }
+
+    // Back undoes the innermost thing the visible controls opened, with the
+    // state changes those controls make: the viewer, the selection, the album,
+    // the Browse scope, then any other tab. The Library root declines, so Back
+    // there stays the platform's back-to-home with its background lock.
+    BackHandler(
+        enabled = viewing != null || selection.isNotEmpty() || openAlbum != null ||
+            openTag != null || favoritesOnly || trashOpen || destination != VaultDestination.LIBRARY,
+    ) {
+        when {
+            viewing != null -> viewing = null
+            selection.isNotEmpty() -> selection = emptySet()
+            openAlbum != null -> openAlbum = null
+            openTag != null || favoritesOnly || trashOpen -> {
+                openTag = null
+                favoritesOnly = false
+                trashOpen = false
+            }
+            else -> destination = VaultDestination.LIBRARY
         }
     }
 
@@ -830,6 +902,10 @@ private fun ViewerRoute(
     var waveform by remember(projection.id) { mutableStateOf<ByteArray?>(null) }
     var confirmingDelete by remember(projection.id) { mutableStateOf(false) }
     var choosingExport by remember(projection.id) { mutableStateOf(false) }
+    // Registered after the vault's handler, so it answers first: Back closes
+    // the Info overlay before it closes the viewer. The overlay is drawn only
+    // once the detail has loaded.
+    BackHandler(enabled = showDetail && detail != null) { showDetail = false }
     val context = LocalContext.current
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         controller.endHostActivity()

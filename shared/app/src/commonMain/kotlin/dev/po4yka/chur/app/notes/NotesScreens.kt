@@ -212,12 +212,31 @@ private fun EmptyNotes(hasQuery: Boolean, onCreate: (() -> Unit)? = null) {
     }
 }
 
-/** The note editor, §10.2's "folders/list/editor". */
+/**
+ * The note editor, §10.2's "folders/list/editor".
+ *
+ * [backHandler] registers its argument with the platform's system Back. The
+ * host supplies it because this module compiles against no back dispatcher;
+ * `DESIGN.md` §25.4 lets back behaviour differ by platform, and the iOS host
+ * passes none. Both ways out save what changed, so a Back never discards
+ * what was typed and never keeps a note that was opened and left blank.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NoteEditorScreen(note: Note, onSave: (Note) -> Unit, onDelete: () -> Unit, onBack: () -> Unit) {
+fun NoteEditorScreen(
+    note: Note,
+    onSave: (Note) -> Unit,
+    onDelete: () -> Unit,
+    onBack: () -> Unit,
+    backHandler: @Composable (onBack: () -> Unit) -> Unit = {},
+) {
     var title by remember(note.id) { mutableStateOf(note.title) }
     var body by remember(note.id) { mutableStateOf(note.body) }
+    val close = {
+        if (title != note.title || body != note.body) onSave(note.copy(title = title, body = body))
+        onBack()
+    }
+    backHandler(close)
     val colors = LocalChurColors.current
     Scaffold(
         containerColor = colors.canvas,
@@ -225,10 +244,7 @@ fun NoteEditorScreen(note: Note, onSave: (Note) -> Unit, onDelete: () -> Unit, o
             TopAppBar(
                 title = { Text("Note") },
                 navigationIcon = {
-                    IconButton(onClick = {
-                        onSave(note.copy(title = title, body = body))
-                        onBack()
-                    }) {
+                    IconButton(onClick = close) {
                         Icon(BackGlyph, contentDescription = "Back")
                     }
                 },
