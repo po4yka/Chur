@@ -61,7 +61,15 @@ actual fun VaultPlayer(source: PlaybackSource, modifier: Modifier) {
     }
     AndroidView(
         modifier = modifier,
-        factory = { PlayerView(it).apply { this.player = player } },
+        factory = {
+            PlayerView(it).apply {
+                this.player = player
+                // The viewer plays one object, so there is no previous or next
+                // item for these buttons to reach.
+                setShowPreviousButton(false)
+                setShowNextButton(false)
+            }
+        },
         onRelease = { it.player = null },
     )
 }
