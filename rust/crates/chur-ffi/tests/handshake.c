@@ -52,8 +52,8 @@ int main(void) {
           "neither format range is the empty panic fallback");
 
     check(chur_abi_version_major() == 1, "major ABI version is 1");
-    check(chur_abi_version_minor() == 12,
-          "minor ABI version is 12, including shared object transfer");
+    check(chur_abi_version_minor() == 13,
+          "minor ABI version is 13, including resumable shared downloads");
 
     check(chur_object_format_min() <= chur_object_format_max(),
           "object format range is ordered");
@@ -179,6 +179,7 @@ int main(void) {
             (const void *)&chur_sharing_prepare_device,
             (const void *)&chur_sharing_accept,
             (const void *)&chur_sharing_revoke,
+            (const void *)&chur_sharing_download_offset,
         };
         size_t index;
         int all_present = 1;
