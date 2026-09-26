@@ -6,10 +6,9 @@
 //!
 //! Three properties are the reason the code looks as it does.
 //!
-//! **Nothing is decrypted.** §1 requires the package to preserve immutable
-//! object containers without opening them, so a container entry is a byte copy.
-//! Neither creation nor restore ever holds an object key, and a backup of a
-//! vault this build cannot read still copies it correctly.
+//! **Containers travel unchanged.** §1 requires the package to preserve
+//! immutable object containers as byte copies. Restore opens each container's
+//! final commit before activation so damage cannot become an openable vault.
 //!
 //! **Memory does not scale with the vault.** The inventory is walked twice
 //! rather than collected: `docs/format/CATALOG_SCHEMA_V1.md` §21 admits a
@@ -36,11 +35,13 @@ use chur_format::backup::{
     framing_of, manifest_key,
 };
 use chur_format::constants::{SlotType, VaultState};
-use chur_format::container::PublicPreamble as ContainerPreamble;
+use chur_format::container::{PublicPreamble as ContainerPreamble, StreamIdentity, StreamReader};
 use chur_format::descriptor::VaultDescriptor;
 use chur_sync_protocol::identity::DeviceIdentityEnvelope;
 
+use crate::keys;
 use crate::progress::{self, Progress};
+use crate::store::ContainerFile;
 
 /// How much of a container is read to recompute its manifest commitment.
 ///
@@ -474,12 +475,10 @@ struct RecordSlot {
 /// Restores a package into `root_dir`, §8.
 ///
 /// The steps run in §8's order and the two that matter are the two that come
-/// before anything is written: the package is authenticated whole — every
-/// container's inventory entry recomputed into the commitment the final commit
-/// seals — before the first byte lands in the vault namespace, and the
-/// descriptor is installed last, by the same atomic rename that ends a vault
-/// creation. A restore interrupted at any earlier point leaves no openable
-/// vault, exactly as an abandoned creation does.
+/// before activation: the inventory is authenticated before the first byte
+/// lands in the vault namespace, and each container's final commit is opened
+/// before the descriptor is installed. A restore interrupted at any earlier
+/// point leaves no openable vault, exactly as an abandoned creation does.
 ///
 /// It takes no clock. A restore installs bytes the package already fixed and
 /// records no time of its own: the manifest carries the creation time and the
@@ -752,6 +751,23 @@ pub fn restore(
                 &root_dir.container(&store_id, &stream.container_path_id),
                 progress,
             )?;
+            let object_key = keys::object_key_from_catalog(&catalog, &root_secret, object_id)
+                .map_err(|_| chur_core::err!(VaultCorrupt, "a restored object key is invalid"))?;
+            let file = ContainerFile::open(root_dir, &store_id, &stream.container_path_id)?;
+            let identity = StreamIdentity {
+                object_id: *object_id,
+                stream_id: stream.stream_id,
+                stream_kind: stream.stream_kind,
+                stream_revision: stream.stream_revision,
+            };
+            let mut reader = StreamReader::open(file, &object_key, &identity)
+                .map_err(|_| chur_core::err!(VaultCorrupt, "a restored container is invalid"))?;
+            ensure!(
+                reader.read_final_commit()?.ordered_chunk_commitment()
+                    == &entry.ordered_chunk_commitment,
+                VaultCorrupt,
+                "a container's final commit contradicts the backup inventory"
+            );
             index += 1;
             done += entry.ciphertext_length;
             progress.advance(done);
@@ -964,9 +980,8 @@ fn read_container_entry(
 /// commitment is a hash of their concatenation, so the whole range hashes at
 /// once without the chunk boundaries the encrypted manifest would give.
 ///
-/// This is what makes a damaged package fail before it installs rather than at
-/// the first read afterwards, and it is why a backup can verify a vault whose
-/// containers this build could not open.
+/// This catches damaged manifests and chunks before writing. Restore also
+/// authenticates the final commit with the object key before activation.
 fn verify_container(
     source: &mut (impl Read + Seek),
     slot: &RecordSlot,

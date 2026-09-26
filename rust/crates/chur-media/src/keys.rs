@@ -6,6 +6,7 @@
 //! is a derivation or an AEAD open, and none of the results leaves this crate
 //! or `chur-catalog`.
 
+use chur_catalog::db::CatalogDb;
 use chur_catalog::vault::Session;
 use chur_core::{Id, Result};
 use chur_crypto::{Key, Nonce, random};
@@ -23,11 +24,24 @@ pub fn collection_key(session: &Session, collection_id: &Id, epoch: u64) -> Resu
 
 /// Opens the object key of one object.
 pub fn object_key(session: &Session, object_id: &Id) -> Result<Key> {
-    let object = chur_catalog::store::object(session.catalog_ref()?, object_id)?;
-    let collection =
-        chur_catalog::store::collection(session.catalog_ref()?, &object.collection_id)?;
-    let collection_key = collection_key(session, &object.collection_id, collection.current_epoch)?;
-    let body = chur_catalog::store::active_envelope(session.catalog_ref()?, object_id)?;
+    object_key_from_catalog(session.catalog_ref()?, session.root_secret()?, object_id)
+}
+
+/// Opens an object key while a restored catalog has not yet become a session.
+pub(crate) fn object_key_from_catalog(
+    catalog: &CatalogDb,
+    root_secret: &Key,
+    object_id: &Id,
+) -> Result<Key> {
+    let object = chur_catalog::store::object(catalog, object_id)?;
+    let collection = chur_catalog::store::collection(catalog, &object.collection_id)?;
+    let body = chur_catalog::store::active_collection_envelope(
+        catalog,
+        &object.collection_id,
+        collection.current_epoch,
+    )?;
+    let collection_key = CollectionKeyEnvelope::decode(&body)?.open(root_secret)?;
+    let body = chur_catalog::store::active_envelope(catalog, object_id)?;
     ObjectKeyEnvelope::decode(&body)?.open(&collection_key)
 }
 

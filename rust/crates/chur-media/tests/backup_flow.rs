@@ -336,6 +336,23 @@ fn a_damaged_package_installs_nothing() {
     assert_eq!(status, ChurStatus::VaultCorrupt);
     assert!(destination.registry_names().unwrap().is_empty());
 
+    // The container's final commit is outside the chunk commitment. It must
+    // still authenticate before the descriptor makes the vault openable.
+    let destination = scratch_root();
+    let mut final_commit = whole.clone();
+    let at = container_final_commit_byte(&final_commit);
+    final_commit[at] ^= 0x01;
+    assert_eq!(
+        rejection(backup::restore(
+            &destination,
+            &mut Cursor::new(final_commit),
+            PASSWORD,
+            &mut Uninterrupted,
+        )),
+        ChurStatus::VaultCorrupt
+    );
+    assert!(destination.registry_names().unwrap().is_empty());
+
     // A byte changed inside the catalog export. `VAULT_DESCRIPTOR_V1.md` §5
     // has the descriptor commit to the catalog's header, and the restore checks
     // that before it installs anything.
@@ -380,6 +397,19 @@ fn container_byte(package: &[u8]) -> usize {
         .position(|window| window == b"CHUROBJ1")
         .expect("the package carries no container");
     at + 4_000
+}
+
+fn container_final_commit_byte(package: &[u8]) -> usize {
+    let mut offset = 32usize;
+    loop {
+        let header = &package[offset..offset + 12];
+        let length = usize::try_from(u64::from_be_bytes(header[4..12].try_into().unwrap()))
+            .expect("a record length fits a usize");
+        if header[0] == 0x04 {
+            return offset + 12 + length - 1;
+        }
+        offset += 12 + length;
+    }
 }
 
 /// An offset inside the catalog export's header.
