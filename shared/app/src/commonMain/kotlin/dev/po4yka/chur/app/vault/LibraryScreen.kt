@@ -14,13 +14,16 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items as listItems
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ButtonDefaults
@@ -31,12 +34,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.ImageBitmap
@@ -45,6 +51,8 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -54,6 +62,7 @@ import dev.po4yka.chur.app.theme.IntegrityGlyph
 import dev.po4yka.chur.app.theme.LocalChurColors
 import dev.po4yka.chur.app.theme.PrivateBoundaryMark
 import dev.po4yka.chur.app.theme.gridGeometry
+import dev.po4yka.chur.ffi.AlbumSummary
 import dev.po4yka.chur.ffi.ObjectProjection
 
 /**
@@ -192,48 +201,133 @@ fun MediaBrowser(
     onOpen: (ObjectProjection) -> Unit,
     onToggleSelection: (ObjectProjection) -> Unit,
     onMove: ((ObjectProjection, ObjectProjection?) -> Unit)? = null,
+    albumTargets: List<AlbumSummary> = emptyList(),
+    onDropIntoAlbum: ((List<ObjectProjection>, AlbumSummary?) -> Unit)? = null,
     onLoadMore: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
-    val bounds = remember { mutableMapOf<String, Rect>() }
+    val colors = LocalChurColors.current
+    val bounds = remember { mutableStateMapOf<String, Rect>() }
+    val albumTargetBounds = remember { mutableStateMapOf<String, Rect>() }
     var dragged by remember { mutableStateOf<String?>(null) }
     var dropPoint by remember { mutableStateOf(Offset.Zero) }
-    fun dragModifier(tile: LibraryTile): Modifier = if (onMove == null) Modifier else Modifier
-        .onGloballyPositioned { bounds[tile.projection.id] = it.boundsInWindow() }
-        .pointerInput(tile.projection.id, tiles) {
+    var viewport by remember { mutableStateOf(Rect.Zero) }
+    var albumDropBounds by remember { mutableStateOf(Rect.Zero) }
+    var albumTrayViewport by remember { mutableStateOf(Rect.Zero) }
+    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
+    val albumTrayState = rememberLazyListState()
+    val currentTiles by rememberUpdatedState(tiles)
+    val currentAlbumTargets by rememberUpdatedState(albumTargets)
+    val currentMove by rememberUpdatedState(onMove)
+    val currentDropIntoAlbum by rememberUpdatedState(onDropIntoAlbum)
+    val currentHasMore by rememberUpdatedState(onLoadMore != null)
+    val currentView by rememberUpdatedState(view)
+    val draggedTile = tiles.firstOrNull { it.projection.id == dragged }
+    val draggedItems = if (draggedTile?.selected == true) tiles.filter { it.selected }
+    else listOfNotNull(draggedTile)
+    val hoveredAlbum = albumTargets.firstOrNull { albumTargetBounds[it.id]?.contains(dropPoint) == true }
+    val hovered = tiles.takeUnless { albumDropBounds.contains(dropPoint) }?.firstOrNull { it.projection.id != dragged &&
+        bounds[it.projection.id]?.contains(dropPoint) == true }
+    val after = hovered?.let { target ->
+        val rect = bounds[target.projection.id]!!
+        if (view == ContentView.GRID) dropPoint.x >= rect.center.x else dropPoint.y >= rect.center.y
+    } ?: false
+    val placement = if (onMove != null && dragged != null && hovered != null)
+        memberDrop(tiles.map { it.projection.id }, dragged!!, hovered.projection.id,
+            after, onLoadMore != null) else null
+    DragEdgeScroll(dragged != null, dropPoint, viewport,
+        if (view == ContentView.GRID) gridState else listState,
+        if (dragged != null) albumDropBounds else null)
+    DragEdgeScroll(dragged != null && onDropIntoAlbum != null, dropPoint,
+        albumTrayViewport, albumTrayState)
+    fun reorderActions(tile: LibraryTile): Modifier {
+        if (onMove == null) return Modifier
+        val index = tiles.indexOfFirst { it.projection.id == tile.projection.id }
+        return Modifier.semantics {
+            customActions = buildList {
+                if (index > 0) add(CustomAccessibilityAction("Move earlier") {
+                    onMove(tile.projection, tiles[index - 1].projection)
+                    true
+                })
+                if (index >= 0 && index < tiles.lastIndex &&
+                    (index < tiles.lastIndex - 1 || onLoadMore == null)) {
+                    add(CustomAccessibilityAction("Move later") {
+                        onMove(tile.projection, tiles.getOrNull(index + 2)?.projection)
+                        true
+                    })
+                }
+            }
+        }
+    }
+    fun dragModifier(tile: LibraryTile): Modifier = if (onMove == null && onDropIntoAlbum == null)
+        Modifier else Modifier.onGloballyPositioned { bounds[tile.projection.id] = it.boundsInWindow() }
+    val dragGestureModifier = if (onMove == null && onDropIntoAlbum == null) Modifier else Modifier
+        .pointerInput(onMove != null, onDropIntoAlbum != null, view) {
             detectDragGesturesAfterLongPress(
                 onDragStart = { offset ->
-                    dragged = tile.projection.id
-                    dropPoint = (bounds[tile.projection.id]?.topLeft ?: Offset.Zero) + offset
+                    val point = viewport.topLeft + offset
+                    val source = currentTiles.firstOrNull {
+                        bounds[it.projection.id]?.contains(point) == true
+                    }
+                    if (source != null) {
+                        dragged = source.projection.id
+                        dropPoint = point
+                        albumDropBounds = Rect.Zero
+                    }
                 },
                 onDragEnd = {
-                    val sourceIndex = tiles.indexOfFirst { it.projection.id == dragged }
-                    val targetIndex = tiles.indexOfFirst {
-                        it.projection.id != dragged && bounds[it.projection.id]?.contains(dropPoint) == true
-                    }
-                    if (sourceIndex >= 0 && targetIndex >= 0) {
-                        val beforeIndex = if (sourceIndex < targetIndex) targetIndex + 1 else targetIndex
-                        onMove(tiles[sourceIndex].projection, tiles.getOrNull(beforeIndex)?.projection)
+                    val visibleTiles = currentTiles
+                    val source = visibleTiles.firstOrNull { it.projection.id == dragged }
+                    if (source != null && currentDropIntoAlbum != null &&
+                        albumDropBounds.contains(dropPoint)) {
+                        val moved = if (source.selected) visibleTiles.filter { it.selected } else listOf(source)
+                        val target = currentAlbumTargets.firstOrNull {
+                            albumTargetBounds[it.id]?.contains(dropPoint) == true
+                        }
+                        currentDropIntoAlbum?.invoke(moved.map { it.projection }, target)
+                    } else if (source != null && currentMove != null) {
+                        val target = visibleTiles.firstOrNull { it.projection.id != source.projection.id &&
+                            bounds[it.projection.id]?.contains(dropPoint) == true }
+                        if (target != null) {
+                            val rect = bounds[target.projection.id]!!
+                            val afterTarget = if (currentView == ContentView.GRID)
+                                dropPoint.x >= rect.center.x else dropPoint.y >= rect.center.y
+                            val move = memberDrop(visibleTiles.map { it.projection.id }, source.projection.id,
+                                target.projection.id, afterTarget, currentHasMore)
+                            if (move != null) currentMove?.invoke(source.projection,
+                                visibleTiles.firstOrNull { it.projection.id == move.beforeId }?.projection)
+                        }
                     }
                     dragged = null
+                    albumDropBounds = Rect.Zero
                 },
-                onDragCancel = { dragged = null },
-                onDrag = { change, amount -> change.consume(); dropPoint += amount },
+                onDragCancel = { dragged = null; albumDropBounds = Rect.Zero },
+                onDrag = { change, amount ->
+                    if (dragged != null) { change.consume(); dropPoint += amount }
+                },
             )
         }
-    if (view == ContentView.GRID) {
-        BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier = modifier.fillMaxSize()
+        .onGloballyPositioned { viewport = it.boundsInWindow() }
+        .then(dragGestureModifier)) {
+        if (view == ContentView.GRID) {
             val geometry = gridGeometry(maxWidth.value.toInt())
             LazyVerticalGrid(
+                state = gridState,
                 columns = GridCells.Fixed(geometry.columns),
                 horizontalArrangement = Arrangement.spacedBy(geometry.gap),
                 verticalArrangement = Arrangement.spacedBy(geometry.gap),
                 contentPadding = PaddingValues(geometry.gap),
+                modifier = Modifier.fillMaxSize(),
             ) {
                 items(tiles, key = { it.projection.id }) { tile ->
                     DisposableEffect(tile.projection.id) { onDispose { bounds.remove(tile.projection.id) } }
                     MediaTile(tile, { onOpen(tile.projection) }, { onToggleSelection(tile.projection) },
-                        dragModifier(tile))
+                        dragModifier(tile).then(reorderActions(tile)).graphicsLayer {
+                            if (dragged == tile.projection.id) { scaleX = 1.04f; scaleY = 1.04f; alpha = 0.8f }
+                        }, if (hovered?.projection?.id == tile.projection.id && placement != null)
+                            if (after) "Place after" else "Place before" else null)
                 }
                 if (onLoadMore != null) item(key = "load-more") {
                     LaunchedEffect(tiles.size) { onLoadMore() }
@@ -242,22 +336,61 @@ fun MediaBrowser(
                     }
                 }
             }
-        }
-    } else {
+        } else {
         LazyColumn(
-            modifier = modifier.fillMaxSize(),
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(ChurSpacing.gutter),
             verticalArrangement = Arrangement.spacedBy(ChurSpacing.one),
         ) {
             listItems(tiles, key = { it.projection.id }) { tile ->
                 DisposableEffect(tile.projection.id) { onDispose { bounds.remove(tile.projection.id) } }
                 MediaRow(tile, { onOpen(tile.projection) }, { onToggleSelection(tile.projection) },
-                    dragModifier(tile))
+                    dragModifier(tile).then(reorderActions(tile)).graphicsLayer {
+                        if (dragged == tile.projection.id) { scaleX = 1.02f; scaleY = 1.02f; alpha = 0.8f }
+                    }, if (hovered?.projection?.id == tile.projection.id && placement != null)
+                        if (after) "Place after" else "Place before" else null)
             }
             if (onLoadMore != null) item(key = "load-more") {
                 LaunchedEffect(tiles.size) { onLoadMore() }
                 Box(modifier = Modifier.fillMaxWidth().height(64.dp), contentAlignment = Alignment.Center) {
                     Text("Loading…", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+        }
+        if (dragged != null && onDropIntoAlbum != null) {
+            Box(
+                modifier = Modifier.align(Alignment.BottomEnd).fillMaxWidth(0.55f)
+                    .padding(end = ChurSpacing.gutter, bottom = ChurSpacing.one)
+                    .onGloballyPositioned { albumDropBounds = it.boundsInWindow() }
+                    .background(if (albumDropBounds.contains(dropPoint)) colors.accentSoft else colors.surface)
+                    .border(2.dp, colors.accent, RoundedCornerShape(12.dp))
+                    .heightIn(max = 240.dp),
+            ) {
+                Column {
+                    Text("${draggedItems.size} item${if (draggedItems.size == 1) "" else "s"} · Choose album…",
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                            .padding(ChurSpacing.two), color = colors.accent)
+                    if (albumTargets.isNotEmpty()) LazyColumn(
+                        state = albumTrayState,
+                        modifier = Modifier.heightIn(max = 184.dp)
+                            .onGloballyPositioned { albumTrayViewport = it.boundsInWindow() },
+                    ) {
+                        listItems(albumRows(albumTargets), key = { it.first.id }) { (album, depth) ->
+                            DisposableEffect(album.id) {
+                                onDispose { albumTargetBounds.remove(album.id) }
+                            }
+                            Text(album.name,
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                                    .onGloballyPositioned { albumTargetBounds[album.id] = it.boundsInWindow() }
+                                    .background(if (hoveredAlbum?.id == album.id) colors.accentSoft else colors.surface)
+                                    .padding(start = (depth * 12).coerceAtMost(48).dp, top = ChurSpacing.two),
+                                color = if (hoveredAlbum?.id == album.id) colors.accent else colors.ink,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -267,7 +400,7 @@ fun MediaBrowser(
 /** A compact row exposes useful metadata without requiring the viewer. */
 @Composable
 private fun MediaRow(tile: LibraryTile, onOpen: () -> Unit, onToggleSelection: () -> Unit,
-    modifier: Modifier = Modifier) {
+    modifier: Modifier = Modifier, dropHint: String? = null) {
     val colors = LocalChurColors.current
     val projection = tile.projection
     val state = PresentedState.of(projection)
@@ -281,7 +414,7 @@ private fun MediaRow(tile: LibraryTile, onOpen: () -> Unit, onToggleSelection: (
         modifier = modifier.fillMaxWidth()
             .clip(RoundedCornerShape(ChurSpacing.one))
             .background(if (tile.selected) colors.accentSoft else colors.surfaceSunken)
-            .border(if (tile.selected) ChurSpacing.hairline else 0.dp, colors.accent,
+            .border(if (dropHint != null) 2.dp else if (tile.selected) ChurSpacing.hairline else 0.dp, colors.accent,
                 RoundedCornerShape(ChurSpacing.one))
             .clickable(onClick = onOpen)
             .padding(ChurSpacing.two),
@@ -304,6 +437,8 @@ private fun MediaRow(tile: LibraryTile, onOpen: () -> Unit, onToggleSelection: (
                 Text(state.label, style = MaterialTheme.typography.labelSmall,
                     color = if (severityOf(state) == StateSeverity.ERROR) colors.error else colors.warning)
             }
+            if (dropHint != null) Text(dropHint, color = colors.accent,
+                style = MaterialTheme.typography.labelSmall)
         }
         if (tile.selected) SelectionCheck(modifier = Modifier, onClick = onToggleSelection)
     }
@@ -338,12 +473,13 @@ private fun MediaTile(
     onOpen: () -> Unit,
     onToggleSelection: () -> Unit,
     modifier: Modifier = Modifier,
+    dropHint: String? = null,
 ) {
     val colors = LocalChurColors.current
     val state = PresentedState.of(tile.projection)
     val severity = severityOf(state)
     // §11.4: selection is a 2dp outline plus a checkmark, never colour alone.
-    val selectionBorder = if (tile.selected) ChurSpacing.hairline else 0.dp
+    val selectionBorder = if (dropHint != null) 2.dp else if (tile.selected) ChurSpacing.hairline else 0.dp
     Box(
         modifier = modifier
             .aspectRatio(1f)
@@ -386,6 +522,12 @@ private fun MediaTile(
         }
         if (tile.selected) {
             SelectionCheck(modifier = Modifier.align(Alignment.TopEnd), onClick = onToggleSelection)
+        }
+        if (dropHint != null) {
+            Text(dropHint, modifier = Modifier.align(Alignment.BottomStart).padding(ChurSpacing.one)
+                .clip(RoundedCornerShape(ChurSpacing.one)).background(colors.surface)
+                .padding(horizontal = ChurSpacing.one), color = colors.accent,
+                style = MaterialTheme.typography.labelSmall)
         }
     }
 }

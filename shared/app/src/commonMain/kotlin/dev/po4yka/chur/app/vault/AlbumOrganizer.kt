@@ -12,9 +12,14 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
@@ -26,6 +31,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -36,6 +42,8 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.theme.ChurSpacing
@@ -86,32 +94,18 @@ internal fun albumRows(albums: List<AlbumSummary>, order: AlbumOrder = AlbumOrde
             var current: AlbumSummary? = album
             var steps = 0
             while (current != null && steps++ < albums.size) {
-                val node = current ?: break
-                if (!visible.add(node.id)) break
-                current = node.parentId?.toHex()?.let(byId::get)
+                if (!visible.add(current.id)) break
+                current = current.parentId?.toHex()?.let(byId::get)
             }
         }
     return result.filter { (album, _) -> album.id in visible }
 }
-
-private fun parentOf(album: AlbumSummary, albums: List<AlbumSummary>): AlbumSummary? =
-    albums.firstOrNull { parent -> album.parentId?.contentEquals(parent.albumId) == true }
 
 private fun siblingsOf(album: AlbumSummary, albums: List<AlbumSummary>): List<AlbumSummary> =
     albums.filter { child ->
         if (album.parentId == null) child.parentId == null
         else child.parentId?.contentEquals(album.parentId) == true
     }.sortedWith(compareBy<AlbumSummary> { it.position }.thenBy { it.id })
-
-private fun descendantOf(candidate: AlbumSummary, ancestor: AlbumSummary, albums: List<AlbumSummary>): Boolean {
-    var parent = parentOf(candidate, albums)
-    repeat(albums.size) {
-        if (parent == null) return false
-        if (parent.id == ancestor.id) return true
-        parent = parentOf(parent, albums)
-    }
-    return true
-}
 
 /** Album navigation, editing, nesting, and drag placement for both hosts. */
 @Composable
@@ -124,11 +118,58 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
     var renameText by remember { mutableStateOf("") }
     var deleting by remember { mutableStateOf<AlbumSummary?>(null) }
     var moving by remember { mutableStateOf<AlbumSummary?>(null) }
-    val bounds = remember { mutableMapOf<String, Rect>() }
+    val bounds = remember { mutableStateMapOf<String, Rect>() }
     var dragged by remember { mutableStateOf<AlbumSummary?>(null) }
     var dropPoint by remember { mutableStateOf(Offset.Zero) }
+    var viewport by remember { mutableStateOf(Rect.Zero) }
+    var rootDropBounds by remember { mutableStateOf(Rect.Zero) }
+    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
     val rows = remember(albums, order, filter) { albumRows(albums, order, filter) }
     val canReorder = order == AlbumOrder.MANUAL && filter.isBlank()
+    val hovered = dragged?.takeUnless { rootDropBounds.contains(dropPoint) }?.let { source -> rows.firstOrNull { (album, _) ->
+        album.id != source.id && bounds[album.id]?.contains(dropPoint) == true
+    }?.first }
+    val hoverPlacement = hovered?.let { albumPlacement(dropPoint, bounds[it.id]!!) }
+    val hoverMove = if (dragged != null && hovered != null && hoverPlacement != null)
+        albumDrop(dragged!!, hovered, hoverPlacement, albums) else null
+    DragEdgeScroll(dragged != null, dropPoint, viewport,
+        if (view == ContentView.GRID) gridState else listState,
+        if (dragged != null) rootDropBounds else null)
+    val dragGestureModifier = if (!canReorder) Modifier else Modifier.pointerInput(albums, view) {
+        detectDragGesturesAfterLongPress(
+            onDragStart = { offset ->
+                val point = viewport.topLeft + offset
+                val source = rows.firstOrNull { (album, _) ->
+                    bounds[album.id]?.contains(point) == true
+                }?.first
+                if (source != null) {
+                    dragged = source
+                    dropPoint = point
+                    rootDropBounds = Rect.Zero
+                }
+            },
+            onDragEnd = {
+                val source = dragged
+                if (source != null) {
+                    val move = if (rootAlbumDrop(source, albums) != null &&
+                        rootDropBounds.contains(dropPoint)) rootAlbumDrop(source, albums)
+                    else rows.firstOrNull { (candidate, _) ->
+                        candidate.id != source.id && bounds[candidate.id]?.contains(dropPoint) == true
+                    }?.first?.let { target ->
+                        albumDrop(source, target, albumPlacement(dropPoint, bounds[target.id]!!), albums)
+                    }
+                    if (move != null) actions.onMoveAlbum(source, move.parent, move.before)
+                }
+                dragged = null
+                rootDropBounds = Rect.Zero
+            },
+            onDragCancel = { dragged = null; rootDropBounds = Rect.Zero },
+            onDrag = { change, amount ->
+                if (dragged != null) { change.consume(); dropPoint += amount }
+            },
+        )
+    }
 
     val grid = view == ContentView.GRID
     val albumCard: @Composable (AlbumSummary, Int) -> Unit = { album, depth ->
@@ -142,42 +183,13 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(start = if (grid) 0.dp else (depth * 16).coerceAtMost(96).dp)
-                .onGloballyPositioned { bounds[album.id] = it.boundsInWindow() }
-                .pointerInput(album.id, albums, canReorder) {
-                    if (!canReorder) return@pointerInput
-                    detectDragGesturesAfterLongPress(
-                        onDragStart = { offset ->
-                            dragged = album
-                            dropPoint = (bounds[album.id]?.topLeft ?: Offset.Zero) + offset
-                        },
-                        onDragEnd = {
-                            val source = dragged
-                            val target = rows.map { it.first }.firstOrNull {
-                                it.id != source?.id && bounds[it.id]?.contains(dropPoint) == true
-                            }
-                            if (source != null && target != null &&
-                                !descendantOf(target, source, albums)
-                            ) {
-                                val area = bounds[target.id]!!
-                                val relativeY = (dropPoint.y - area.top) / area.height
-                                if (relativeY in 0.25f..0.75f) {
-                                    actions.onMoveAlbum(source, target, null)
-                                } else {
-                                    val targetSiblings = siblingsOf(target, albums)
-                                    val before = if (relativeY < 0.25f) target else
-                                        targetSiblings.getOrNull(targetSiblings.indexOfFirst { it.id == target.id } + 1)
-                                    actions.onMoveAlbum(source, parentOf(target, albums), before)
-                                }
-                            }
-                            dragged = null
-                        },
-                        onDragCancel = { dragged = null },
-                        onDrag = { change, amount ->
-                            change.consume()
-                            dropPoint += amount
-                        },
-                    )
-                },
+                .zIndex(if (dragged?.id == album.id) 1f else 0f)
+                .graphicsLayer {
+                    if (dragged?.id == album.id) { scaleX = 1.03f; scaleY = 1.03f; alpha = 0.8f }
+                }
+                .border(if (hovered?.id == album.id && hoverMove != null) 2.dp else 0.dp,
+                    colors.accent, RoundedCornerShape(12.dp))
+                .onGloballyPositioned { bounds[album.id] = it.boundsInWindow() },
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(ChurSpacing.three),
@@ -195,6 +207,13 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
                             if (canReorder) " · Hold to drag" else "",
                         style = MaterialTheme.typography.bodySmall, color = colors.inkMuted,
                     )
+                    if (hovered?.id == album.id && hoverMove != null) {
+                        Text(when (hoverPlacement) {
+                            AlbumPlacement.BEFORE -> "Place before"
+                            AlbumPlacement.AFTER -> "Place after"
+                            else -> "Move inside"
+                        }, color = colors.accent, style = MaterialTheme.typography.labelSmall)
+                    }
                 }
                 Box {
                     TextButton(onClick = { menu = true }) { Text("More") }
@@ -263,10 +282,14 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
                 Text("No matching albums", color = colors.inkMuted)
             }
         } else {
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()
+                .onGloballyPositioned { viewport = it.boundsInWindow() }
+                .then(dragGestureModifier)) {
             if (grid) {
                 LazyVerticalGrid(
                     columns = GridCells.Adaptive(150.dp),
-                    modifier = Modifier.weight(1f),
+                    state = gridState,
+                    modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(ChurSpacing.gutter),
                     horizontalArrangement = Arrangement.spacedBy(ChurSpacing.two),
                     verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
@@ -277,7 +300,8 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
                 }
             } else {
                 LazyColumn(
-                    modifier = Modifier.weight(1f),
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(ChurSpacing.gutter),
                     verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
                 ) {
@@ -285,6 +309,20 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
                         albumCard(album, depth)
                     }
                 }
+            }
+            if (dragged?.let { rootAlbumDrop(it, albums) } != null) {
+                Box(
+                    modifier = Modifier.align(Alignment.BottomEnd).fillMaxWidth(0.55f)
+                        .padding(end = ChurSpacing.gutter, bottom = ChurSpacing.one)
+                        .onGloballyPositioned { rootDropBounds = it.boundsInWindow() }
+                        .background(if (rootDropBounds.contains(dropPoint)) colors.accentSoft else colors.surface)
+                        .border(2.dp, colors.accent, RoundedCornerShape(12.dp))
+                        .heightIn(min = 64.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("Drop: top level", color = colors.accent)
+                }
+            }
             }
         }
     }

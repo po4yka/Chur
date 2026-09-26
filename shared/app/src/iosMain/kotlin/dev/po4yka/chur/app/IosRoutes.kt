@@ -240,6 +240,9 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     // after a new session opens.
     val cache = controller.thumbnailCache
     val generation = (vaultState as? VaultState.Unlocked)?.generation ?: 0L
+    LaunchedEffect(generation) {
+        if (vaultState is VaultState.Unlocked) controller.loadAlbums()
+    }
 
     // The tiles carry whatever the cache already holds, and a tile whose
     // thumbnail is missing loads it. §11.1 keeps the geometry stable while it
@@ -500,6 +503,17 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             onMoveAlbumMember = { objectToMove, before ->
                 openAlbum?.let { album ->
                     controller.moveAlbumMember(album.albumId, objectToMove.objectId, before?.objectId)
+                }
+            },
+            onDropMediaIntoAlbum = { objects, target ->
+                if (target != null) {
+                    controller.placeObjectsInAlbum(target.albumId, objects.map { it.objectId },
+                        openAlbum?.albumId, openAlbum != null) { selection = emptySet() }
+                } else {
+                    controller.loadAlbums()
+                    organizingIds = objects.map { it.objectId }
+                    movingSelection = openAlbum != null
+                    choosingAlbum = true
                 }
             },
             onLoadMore = controller::loadNextPage,

@@ -352,6 +352,9 @@ private fun VaultRoute(controller: ChurController) {
     // after a new session opens.
     val cache = controller.thumbnailCache
     val generation = (vaultState as? VaultState.Unlocked)?.generation ?: 0L
+    LaunchedEffect(generation) {
+        if (vaultState is VaultState.Unlocked) controller.loadAlbums()
+    }
 
     val codec = remember { AndroidMediaCodec(context.contentResolver) }
     val importer = remember { MediaImporter(codec) }
@@ -722,6 +725,17 @@ private fun VaultRoute(controller: ChurController) {
             onMoveAlbumMember = { objectToMove, before ->
                 openAlbum?.let { album ->
                     controller.moveAlbumMember(album.albumId, objectToMove.objectId, before?.objectId)
+                }
+            },
+            onDropMediaIntoAlbum = { objects, target ->
+                if (target != null) {
+                    controller.placeObjectsInAlbum(target.albumId, objects.map { it.objectId },
+                        openAlbum?.albumId, openAlbum != null) { selection = emptySet() }
+                } else {
+                    controller.loadAlbums()
+                    organizingIds = objects.map { it.objectId }
+                    movingSelection = openAlbum != null
+                    choosingAlbum = true
                 }
             },
             onLoadMore = controller::loadNextPage,

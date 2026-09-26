@@ -172,6 +172,7 @@ data class VaultActions(
     val onDeleteAlbum: (AlbumSummary) -> Unit = {},
     val onMoveAlbum: (AlbumSummary, AlbumSummary?, AlbumSummary?) -> Unit = { _, _, _ -> },
     val onMoveAlbumMember: (ObjectProjection, ObjectProjection?) -> Unit = { _, _ -> },
+    val onDropMediaIntoAlbum: (List<ObjectProjection>, AlbumSummary?) -> Unit = { _, _ -> },
     val onLoadMore: () -> Unit = {},
     /** Lock the vault now. */
     val onLock: () -> Unit,
@@ -552,6 +553,8 @@ private fun LibraryBody(state: VaultUiState, actions: VaultActions,
                 onToggleSelection = actions.onToggleSelection,
                 onMove = if (state.openAlbum != null && state.sort == QuerySort.ALBUM_MANUAL &&
                     state.kinds == 0 && state.selectedCount == 0) actions.onMoveAlbumMember else null,
+                albumTargets = state.albums.filterNot { it.id == state.openAlbum?.id },
+                onDropIntoAlbum = if (state.trashOpen) null else actions.onDropMediaIntoAlbum,
                 onLoadMore = if (state.canLoadMore) actions.onLoadMore else null,
                 modifier = Modifier.weight(1f),
             )
@@ -602,6 +605,8 @@ private fun SearchBody(state: VaultUiState, actions: VaultActions,
                 view = view,
                 onOpen = actions.onOpen,
                 onToggleSelection = actions.onToggleSelection,
+                albumTargets = state.albums,
+                onDropIntoAlbum = actions.onDropMediaIntoAlbum,
                 onLoadMore = if (state.canLoadMore) actions.onLoadMore else null,
             )
         }
