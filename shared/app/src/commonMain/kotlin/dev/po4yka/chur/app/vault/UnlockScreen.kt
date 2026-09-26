@@ -6,7 +6,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -47,12 +49,15 @@ fun UnlockScreen(
     onUseRecovery: () -> Unit,
     deviceUnlockOffered: Boolean = false,
     onUseDevice: () -> Unit = {},
+    appGate: Boolean = false,
 ) {
     var password by remember { mutableStateOf("") }
+    var usePin by remember { mutableStateOf(false) }
     val colors = LocalChurColors.current
     Surface(color = colors.canvas, modifier = Modifier.fillMaxSize()) {
         Column(
-            modifier = Modifier.fillMaxSize().padding(ChurSpacing.gutterExpanded),
+            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                .padding(ChurSpacing.gutterExpanded),
             verticalArrangement = Arrangement.spacedBy(ChurSpacing.three, Alignment.CenterVertically),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -62,19 +67,36 @@ fun UnlockScreen(
             ) {
                 Text("Chur", style = MaterialTheme.typography.headlineMedium)
                 Text(
-                    "Enter your password to open the vault.",
+                    if (appGate) {
+                        "Enter your password or PIN to open Chur."
+                    } else {
+                        "Enter your password or PIN to open the vault."
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = colors.inkMuted,
                 )
+                TextButton(
+                    onClick = {
+                        usePin = !usePin
+                        password = ""
+                    },
+                    enabled = !busy,
+                ) {
+                    Text(if (usePin) "Use a password instead" else "Use a PIN instead")
+                }
                 OutlinedTextField(
                     value = password,
-                    onValueChange = { password = it },
+                    onValueChange = {
+                        if (!usePin || (it.length <= 20 && it.all { digit -> digit in '0'..'9' })) {
+                            password = it
+                        }
+                    },
                     singleLine = true,
                     enabled = !busy,
-                    label = { Text("Password") },
+                    label = { Text(if (usePin) "PIN" else "Password") },
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Password,
+                        keyboardType = if (usePin) KeyboardType.NumberPassword else KeyboardType.Password,
                         imeAction = ImeAction.Go,
                     ),
                     isError = failed,
@@ -83,13 +105,13 @@ fun UnlockScreen(
                 // §14.1: one message for every credential failure. It names no
                 // slot, no identity, and no count.
                 Text(
-                    text = if (failed) "That password did not open a vault." else " ",
+                    text = if (failed) "Unable to unlock." else " ",
                     style = MaterialTheme.typography.bodySmall,
                     color = if (failed) colors.error else colors.inkMuted,
                 )
                 Button(
                     onClick = { onUnlock(password) },
-                    enabled = !busy && password.isNotEmpty(),
+                    enabled = !busy && password.isNotEmpty() && (!usePin || isValidVaultPin(password)),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(if (busy) "Opening" else "Unlock")
@@ -98,7 +120,7 @@ fun UnlockScreen(
                 // what it will ask for and nothing about what the vault holds.
                 if (deviceUnlockOffered) {
                     TextButton(onClick = onUseDevice, enabled = !busy) {
-                        Text("Use screen lock")
+                        Text("Use device authentication")
                     }
                 }
                 TextButton(onClick = onUseRecovery, enabled = !busy) {

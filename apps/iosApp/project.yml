@@ -16,6 +16,7 @@ targets:
         CADisableMinimumFrameDurationOnPhone: true
         LSRequiresIPhoneOS: true
         NSPhotoLibraryAddUsageDescription: "Save selected vault media to your photo library."
+        NSFaceIDUsageDescription: "Use Face ID to open your Chur vault."
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false

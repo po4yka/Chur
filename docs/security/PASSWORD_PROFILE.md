@@ -6,6 +6,8 @@
 
 Passwords provide a portable factor for unwrapping `VaultRootSecret`. They do not encrypt media and are not stored or recoverable by Chur.
 
+The application can collect a 12–20 digit ASCII PIN as this password factor. It uses the same Argon2id slot and recovery rules. A shorter application PIN would be exposed to offline guessing if an attacker copied the vault files. The device screen-lock PIN is a separate, platform-gated factor under [`KEY_SLOTS.md`](KEY_SLOTS.md) §4 and §5.
+
 ## 2. Input acquisition
 
 - use a secure platform text field;

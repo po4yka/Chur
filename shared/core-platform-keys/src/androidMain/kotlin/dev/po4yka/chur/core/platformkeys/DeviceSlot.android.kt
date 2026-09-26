@@ -2,6 +2,7 @@ package dev.po4yka.chur.core.platformkeys
 
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyInfo
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
@@ -18,6 +19,7 @@ import java.security.KeyStore
 import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
+import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -176,12 +178,13 @@ public actual class DeviceSlot public actual constructor(identifier: ByteArray) 
      */
     public suspend fun unwrap(
         activity: FragmentActivity,
-        policy: DeviceSlotPolicy,
         prompt: DeviceSlotPrompt,
         wrapped: KeystoreWrapped,
         slotAad: ByteArray,
     ): ByteArray {
-        val cipher = authorized(activity, policy, prompt) {
+        // The setting can change after enrollment. The stored key, not today's
+        // setting, decides which factor the prompt and cipher must use.
+        val cipher = authorized(activity, storedPolicy(), prompt) {
             Cipher.getInstance(TRANSFORMATION).apply {
                 init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(TAG_BITS, wrapped.gcmNonce))
             }
@@ -344,6 +347,25 @@ public actual class DeviceSlot public actual constructor(identifier: ByteArray) 
         return entry.secretKey
     }
 
+    private fun storedPolicy(): DeviceSlotPolicy = try {
+        val secret = key()
+        val info = SecretKeyFactory.getInstance(secret.algorithm, PROVIDER)
+            .getKeySpec(secret, KeyInfo::class.java) as KeyInfo
+        if (!info.isUserAuthenticationRequired) {
+            throw DeviceSlotException(
+                ChurStatus.PLATFORM_KEY_UNAVAILABLE,
+                "the slot key does not require user authentication",
+            )
+        }
+        policyOfKey(
+            Build.VERSION.SDK_INT,
+            info.userAuthenticationValidityDurationSeconds,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) info.userAuthenticationType else 0,
+        )
+    } catch (cause: Exception) {
+        throw classify(cause, "the Keystore refused to describe a slot key")
+    }
+
     private fun keyStore(): KeyStore =
         try {
             KeyStore.getInstance(PROVIDER).apply { load(null) }
@@ -441,6 +463,20 @@ internal fun allowedAuthenticators(policy: DeviceSlotPolicy, sdkInt: Int): Int =
             BiometricManager.Authenticators.DEVICE_CREDENTIAL
     }
 }
+
+/** A key keeps its enrollment policy even when the setting changes later. */
+internal fun policyOfKey(sdkInt: Int, validitySeconds: Int, authenticationType: Int): DeviceSlotPolicy =
+    if (sdkInt >= Build.VERSION_CODES.R) {
+        if (authenticationType and KeyProperties.AUTH_DEVICE_CREDENTIAL != 0) {
+            DeviceSlotPolicy.CONVENIENT
+        } else {
+            DeviceSlotPolicy.STRICT
+        }
+    } else if (validitySeconds > 0) {
+        DeviceSlotPolicy.CONVENIENT
+    } else {
+        DeviceSlotPolicy.STRICT
+    }
 
 /**
  * What an Android slot body carries, `KEY_SLOT_BODIES_V1.md` section 5.

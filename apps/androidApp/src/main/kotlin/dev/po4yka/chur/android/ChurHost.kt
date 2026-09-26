@@ -3,6 +3,7 @@ package dev.po4yka.chur.android
 import android.content.Context
 import androidx.fragment.app.FragmentActivity
 import dev.po4yka.chur.app.AndroidPrivacyCover
+import dev.po4yka.chur.app.AppLockSetting
 import dev.po4yka.chur.app.ChurController
 import dev.po4yka.chur.app.DeviceSlotPolicySetting
 import dev.po4yka.chur.app.RepositorySyncBoundary
@@ -79,6 +80,17 @@ internal class ChurHost private constructor(context: Context) {
             },
         )
 
+    private val appLockSetting = AppLockSetting(
+        reader = {
+            val file = File(context.publicShellFile("app-lock.txt"))
+            file.exists() && file.readText().trim() == "whole-app"
+        },
+        writer = { enabled ->
+            File(context.publicShellFile("app-lock.txt"))
+                .writeText(if (enabled) "whole-app" else "vault-only")
+        },
+    )
+
     /** The one controller, over the one repository, over the one runtime. */
     val controller = ChurController(
         storageRoot = context.storageRoot(),
@@ -98,6 +110,7 @@ internal class ChurHost private constructor(context: Context) {
                 },
             ),
         deviceSlotPolicy = deviceSlotPolicy,
+        appLockSetting = appLockSetting,
         sync = sync,
     )
 

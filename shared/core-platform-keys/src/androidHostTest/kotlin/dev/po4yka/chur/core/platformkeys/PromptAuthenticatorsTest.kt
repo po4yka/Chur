@@ -1,5 +1,6 @@
 package dev.po4yka.chur.core.platformkeys
 
+import android.security.keystore.KeyProperties
 import androidx.biometric.BiometricManager.Authenticators
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -19,6 +20,21 @@ import kotlin.test.assertEquals
  * `KEY_SLOTS.md` §4 could not gate anything on that device.
  */
 class PromptAuthenticatorsTest {
+
+    @Test
+    fun existing_keys_keep_their_enrollment_policy_after_the_setting_changes() {
+        assertEquals(DeviceSlotPolicy.CONVENIENT, policyOfKey(29, 10, 0))
+        assertEquals(DeviceSlotPolicy.STRICT, policyOfKey(29, -1, 0))
+        assertEquals(
+            DeviceSlotPolicy.CONVENIENT,
+            policyOfKey(
+                30,
+                0,
+                KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL,
+            ),
+        )
+        assertEquals(DeviceSlotPolicy.STRICT, policyOfKey(30, 0, KeyProperties.AUTH_BIOMETRIC_STRONG))
+    }
 
     @Test
     fun the_convenient_prompt_takes_a_combination_the_library_accepts_on_the_floor_device() {

@@ -20,12 +20,14 @@ First launch opens the public shell. It does not open a vault flow.
 - the public-shell disclosure required by [`../product/DISCREET_MODE.md`](../product/DISCREET_MODE.md) is shown the first time the user writes public-shell content, not during vault creation;
 - the route to vault creation is a visible settings entry. A hidden gesture is configured later, from an unlocked session, and never replaces the visible route.
 
+After a vault exists, its owner may opt in to a whole-app gate. This choice is made inside an unlocked vault. At the next launch and after backgrounding, the app accepts the vault password or PIN, recovery phrase, or enrolled device factor, then closes the temporary vault session before it shows the public shell. The default remains the public shell without this gate.
+
 ## 3. Creation
 
 When the user asks to create a vault, the application must, in this order:
 
 1. explain what the vault protects, and that no server copy exists and no support path can recover it;
-2. take the password and check it against [`PASSWORD_PROFILE.md`](PASSWORD_PROFILE.md);
+2. take the password or 12–20 digit vault PIN and check it against [`PASSWORD_PROFILE.md`](PASSWORD_PROFILE.md);
 3. run the transaction of [`../format/VAULT_DESCRIPTOR_V1.md`](../format/VAULT_DESCRIPTOR_V1.md) §9, which generates the `VaultRootSecret` at its first step;
 4. verify the password slot by unwrapping the committed root with the entered password, before the descriptor reaches `ACTIVE`;
 5. offer the recovery slot under §4;

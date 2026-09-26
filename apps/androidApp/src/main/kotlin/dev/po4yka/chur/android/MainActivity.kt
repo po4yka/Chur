@@ -11,12 +11,14 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import dev.po4yka.chur.app.ChurApp
+import dev.po4yka.chur.app.AppRoute
 import dev.po4yka.chur.app.GateResult
 import dev.po4yka.chur.app.NativeHandshake
 import dev.po4yka.chur.app.gate
 import dev.po4yka.chur.ffi.ChurVault
 import dev.po4yka.chur.vault.VaultState
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.combine
 
 /**
  * The window half of the composition root.
@@ -53,7 +55,7 @@ class MainActivity : FragmentActivity() {
         // forbidden column, and the platform can take one before the collector
         // below has run, so the cover is set from the state here rather than
         // waiting for the first collection.
-        host.privacy.setEnabled(host.controller.vaultState.value is VaultState.Unlocked)
+        host.privacy.setEnabled(needsSecureWindow(host.controller.vaultState.value, host.controller.route.value))
         ChurSync.enqueue(this)
 
         val controller = host.controller
@@ -80,8 +82,10 @@ class MainActivity : FragmentActivity() {
         // would clear FLAG_SECURE while the window is still visible to recents.
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.RESUMED) {
-                controller.vaultState.collect { current ->
-                    host.privacy.setEnabled(current is VaultState.Unlocked)
+                combine(controller.vaultState, controller.route) { state, route ->
+                    needsSecureWindow(state, route)
+                }.collect { secure ->
+                    host.privacy.setEnabled(secure)
                 }
             }
         }
@@ -125,6 +129,10 @@ class MainActivity : FragmentActivity() {
         }
     }
 }
+
+private fun needsSecureWindow(state: VaultState, route: AppRoute): Boolean =
+    state is VaultState.Unlocked || route == AppRoute.Unlock || route == AppRoute.Recover ||
+        route == AppRoute.AppUnlock || route == AppRoute.AppRecover
 
 /** Run the native gate before either host entry point opens a runtime. */
 internal fun runGate(context: Context): GateResult {

@@ -53,17 +53,16 @@ class AndroidDeviceUnlock(
     ): Pair<ByteArray, ByteArray> = normalized {
         val activity = activity()
         val slot = DeviceSlot(alias)
-        slot.provision(policy())
+        val slotPolicy = policy()
+        slot.provision(slotPolicy)
+        var wrapped = false
         try {
-            val wrapped = slot.wrap(activity, policy(), prompt(activity), rootSecret, aad)
-            wrapped.gcmNonce to wrapped.wrappedRootSecret
-        } catch (cause: DeviceSlotException) {
-            // The key exists and the slot does not, which is a state nothing
-            // can open. Removing it leaves the vault as it was. A refused or
-            // cancelled authorization lands here too, and it must: a key kept
-            // after an abandoned enrolment is a key no descriptor names.
-            slot.destroy()
-            throw cause
+            val result = slot.wrap(activity, slotPolicy, prompt(activity), rootSecret, aad)
+            wrapped = true
+            result.gcmNonce to result.wrappedRootSecret
+        } finally {
+            // Cancellation also leaves an uncommitted slot key behind.
+            if (!wrapped) slot.destroy()
         }
     }
 
@@ -79,7 +78,6 @@ class AndroidDeviceUnlock(
         try {
             slot.unwrap(
                 activity,
-                policy(),
                 prompt(activity),
                 KeystoreWrapped(gcmNonce, wrappedRootSecret),
                 aad,

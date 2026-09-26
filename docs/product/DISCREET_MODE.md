@@ -37,6 +37,8 @@ Public-shell requirements:
 
 Public-shell content is not vault-protected. It is ordinary application data in public storage, readable by anyone holding the unlocked device, and it enters the platform backup. The product deliberately asks the user to keep real content there, because a shell that is not genuinely used is not a shell, so the application must say what that costs:
 
+The optional whole-app gate controls access through the interface. It does not encrypt public-shell content or change its backup policy.
+
 - the first time the user writes public-shell content, the application states once that this content is not encrypted by Chur, and names the private vault as the protected alternative;
 - public-shell settings carry the same statement permanently, beside the entry that reaches the vault;
 - the copy must not present the disclosure as a security feature and must not imply that the public shell is private.

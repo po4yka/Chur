@@ -14,20 +14,26 @@ import platform.CoreFoundation.CFDictionaryCreateMutable
 import platform.CoreFoundation.CFDictionarySetValue
 import platform.CoreFoundation.CFMutableDictionaryRef
 import platform.CoreFoundation.CFRelease
+import platform.CoreFoundation.CFRetain
 import platform.CoreFoundation.CFTypeRefVar
 import platform.CoreFoundation.kCFAllocatorDefault
 import platform.CoreFoundation.kCFBooleanTrue
 import platform.Foundation.CFBridgingRelease
 import platform.Foundation.CFBridgingRetain
 import platform.Foundation.NSData
+import platform.Foundation.NSArray
+import platform.Foundation.NSDictionary
 import platform.Foundation.create
+import platform.LocalAuthentication.LAContext
 import platform.Security.SecAccessControlCreateWithFlags
 import platform.Security.SecItemAdd
 import platform.Security.SecItemCopyMatching
 import platform.Security.SecItemDelete
 import platform.Security.SecRandomCopyBytes
 import platform.Security.errSecItemNotFound
+import platform.Security.errSecDuplicateItem
 import platform.Security.errSecSuccess
+import platform.Security.errSecUserCanceled
 import platform.Security.kSecAccessControlBiometryCurrentSet
 import platform.Security.kSecAccessControlUserPresence
 import platform.Security.kSecAttrAccessControl
@@ -38,8 +44,11 @@ import platform.Security.kSecClass
 import platform.Security.kSecClassGenericPassword
 import platform.Security.kSecMatchLimit
 import platform.Security.kSecMatchLimitOne
+import platform.Security.kSecMatchLimitAll
 import platform.Security.kSecRandomDefault
+import platform.Security.kSecReturnAttributes
 import platform.Security.kSecReturnData
+import platform.Security.kSecUseAuthenticationContext
 import platform.Security.kSecValueData
 import platform.posix.memcpy
 
@@ -79,60 +88,63 @@ public actual class DeviceSlot public actual constructor(
      * copy of the secret and no retained object behind.
      */
     public actual fun provision(policy: DeviceSlotPolicy) {
+        val secret = randomBytes(SECRET_BYTES)
+        try {
+            storeSecret(policy, secret)
+        } finally {
+            secret.fill(0)
+        }
+    }
+
+    /** Stores the secret Rust used to seal the Apple slot. The caller clears its copy. */
+    public fun storeSecret(policy: DeviceSlotPolicy, secret: ByteArray) {
+        require(secret.size == SECRET_BYTES)
         if (isProvisioned()) {
             throw DeviceSlotException(
                 ChurStatus.CONFLICT,
                 "a Keychain item already exists for this slot identity",
             )
         }
-        val secret = randomBytes(SECRET_BYTES)
-        try {
-            val flags =
-                when (policy) {
-                    DeviceSlotPolicy.CONVENIENT -> kSecAccessControlUserPresence
-                    DeviceSlotPolicy.STRICT -> kSecAccessControlBiometryCurrentSet
-                }
-            memScoped {
-                val error = alloc<CFTypeRefVar>()
-                val access =
-                    SecAccessControlCreateWithFlags(
-                        kCFAllocatorDefault,
-                        kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-                        flags,
-                        error.ptr.reinterpret(),
-                    ) ?: run {
-                        // The failed call leaves its `CFError` where `error` points,
-                        // and the object is ours to release.
-                        error.value?.let { CFRelease(it) }
-                        throw DeviceSlotException(
-                            ChurStatus.PLATFORM_KEY_UNAVAILABLE,
-                            "the device offers no factor for the requested policy",
-                        )
-                    }
-                try {
-                    withKeychainQuery(
-                        { query -> CFDictionarySetValue(query, kSecAttrAccessControl, access) },
-                    ) { query ->
-                        val data = CFBridgingRetain(secret.toNSData())
-                        try {
-                            CFDictionarySetValue(query, kSecValueData, data)
-                            val status = SecItemAdd(query, null)
-                            if (status != errSecSuccess) {
-                                throw DeviceSlotException(
-                                    ChurStatus.PLATFORM_KEY_UNAVAILABLE,
-                                    "the Keychain refused to store a slot secret",
-                                )
-                            }
-                        } finally {
-                            CFRelease(data)
-                        }
-                    }
-                } finally {
-                    CFRelease(access)
-                }
+        val flags = when (policy) {
+            DeviceSlotPolicy.CONVENIENT -> kSecAccessControlUserPresence
+            DeviceSlotPolicy.STRICT -> kSecAccessControlBiometryCurrentSet
+        }
+        memScoped {
+            val error = alloc<CFTypeRefVar>()
+            val access = SecAccessControlCreateWithFlags(
+                kCFAllocatorDefault,
+                kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+                flags,
+                error.ptr.reinterpret(),
+            ) ?: run {
+                error.value?.let { CFRelease(it) }
+                throw DeviceSlotException(
+                    ChurStatus.PLATFORM_KEY_UNAVAILABLE,
+                    "the device offers no factor for the requested policy",
+                )
             }
-        } finally {
-            secret.fill(0)
+            try {
+                withKeychainQuery(
+                    { query -> CFDictionarySetValue(query, kSecAttrAccessControl, access) },
+                ) { query ->
+                    val data = CFBridgingRetain(secret.toNSData())
+                    try {
+                        CFDictionarySetValue(query, kSecValueData, data)
+                        val status = SecItemAdd(query, null)
+                        if (status != errSecSuccess) {
+                            throw DeviceSlotException(
+                                if (status == errSecDuplicateItem) ChurStatus.CONFLICT
+                                else ChurStatus.PLATFORM_KEY_UNAVAILABLE,
+                                "the Keychain refused to store a slot secret",
+                            )
+                        }
+                    } finally {
+                        CFRelease(data)
+                    }
+                }
+            } finally {
+                CFRelease(access)
+            }
         }
     }
 
@@ -170,12 +182,16 @@ public actual class DeviceSlot public actual constructor(
      * when the item no longer opens, and [ChurStatus.PLATFORM_KEY_UNAVAILABLE]
      * when the factor is absent or the user did not authorize.
      */
-    public fun releaseSecret(): ByteArray {
-        val bytes =
+    public fun releaseSecret(context: LAContext? = null): ByteArray {
+        val retainedContext = context?.let { CFBridgingRetain(it) }
+        val bytes = try {
             withKeychainQuery(
                 { query ->
                     CFDictionarySetValue(query, kSecReturnData, kCFBooleanTrue)
                     CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitOne)
+                    if (retainedContext != null) {
+                        CFDictionarySetValue(query, kSecUseAuthenticationContext, retainedContext)
+                    }
                 },
             ) { query ->
                 memScoped {
@@ -199,6 +215,13 @@ public actual class DeviceSlot public actual constructor(
                             )
                         }
 
+                        errSecUserCanceled -> {
+                            throw DeviceSlotException(
+                                ChurStatus.CANCELLED,
+                                "the user cancelled Keychain authorization",
+                            )
+                        }
+
                         else -> {
                             throw DeviceSlotException(
                                 ChurStatus.PLATFORM_KEY_UNAVAILABLE,
@@ -208,6 +231,9 @@ public actual class DeviceSlot public actual constructor(
                     }
                 }
             }
+        } finally {
+            retainedContext?.let { CFRelease(it) }
+        }
         if (bytes.size != SECRET_BYTES) {
             bytes.fill(0)
             throw DeviceSlotException(
@@ -252,28 +278,79 @@ public actual class DeviceSlot public actual constructor(
         }
     }
 
-    private fun randomBytes(count: Int): ByteArray {
-        val out = ByteArray(count)
-        val status =
-            out.usePinned { pinned ->
-                SecRandomCopyBytes(kSecRandomDefault, count.toULong(), pinned.addressOf(0))
-            }
-        if (status != errSecSuccess) {
-            // CRYPTOGRAPHY.md section 9: an RNG failure aborts the operation.
-            // There is no fallback generator.
-            throw DeviceSlotException(
-                ChurStatus.INTERNAL_FAILURE,
-                "the operating-system CSPRNG failed and there is no fallback",
-            )
-        }
-        return out
-    }
-
     private companion object {
-        const val SERVICE = "dev.po4yka.chur"
         const val SECRET_BYTES = 32
     }
 }
+
+/** Opaque IDs are non-secret Keychain account attributes; this query reads no item data. */
+@OptIn(ExperimentalForeignApi::class)
+public fun appleDeviceSlotIds(): List<ByteArray> {
+    val query = CFDictionaryCreateMutable(kCFAllocatorDefault, 0, null, null)
+        ?: throw DeviceSlotException(ChurStatus.INTERNAL_FAILURE, "could not allocate a Keychain query")
+    val service = CFBridgingRetain(SERVICE)
+    val context = CFBridgingRetain(LAContext().apply { interactionNotAllowed = true })
+    try {
+        CFDictionarySetValue(query, kSecClass, kSecClassGenericPassword)
+        CFDictionarySetValue(query, kSecAttrService, service)
+        CFDictionarySetValue(query, kSecReturnAttributes, kCFBooleanTrue)
+        CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitAll)
+        CFDictionarySetValue(query, kSecUseAuthenticationContext, context)
+        return memScoped {
+            val result = alloc<CFTypeRefVar>()
+            when (val status = SecItemCopyMatching(query, result.ptr)) {
+                errSecItemNotFound -> emptyList()
+                errSecSuccess -> {
+                    val accounts = CFBridgingRelease(result.value) as? NSArray
+                        ?: throw DeviceSlotException(ChurStatus.PLATFORM_KEY_UNAVAILABLE, "the Keychain returned no slot accounts")
+                    val accountKey = CFBridgingRelease(CFRetain(kSecAttrAccount)) as String
+                    (0 until accounts.count.toInt()).mapNotNull account@{ index ->
+                        val attributes = accounts.objectAtIndex(index.toULong()) as? NSDictionary
+                        val account = attributes?.objectForKey(accountKey) as? String
+                        if (account == null || !account.startsWith(ACCOUNT_PREFIX) ||
+                            account.length != ACCOUNT_PREFIX.length + 32
+                        ) return@account null
+                        val id = ByteArray(16)
+                        for (byteIndex in id.indices) {
+                            val value = account.substring(
+                                ACCOUNT_PREFIX.length + byteIndex * 2,
+                                ACCOUNT_PREFIX.length + byteIndex * 2 + 2,
+                            ).toIntOrNull(16) ?: return@account null
+                            id[byteIndex] = value.toByte()
+                        }
+                        id
+                    }
+                }
+                else -> throw DeviceSlotException(ChurStatus.PLATFORM_KEY_UNAVAILABLE, "the Keychain refused to list slot accounts")
+            }
+        }
+    } finally {
+        CFRelease(context)
+        CFRelease(service)
+        CFRelease(query)
+    }
+}
+
+/** New opaque identity for one Apple slot. */
+public fun newAppleSlotIdentifier(): ByteArray = randomBytes(16)
+
+@OptIn(ExperimentalForeignApi::class)
+private fun randomBytes(count: Int): ByteArray {
+    val out = ByteArray(count)
+    val status = out.usePinned { pinned ->
+        SecRandomCopyBytes(kSecRandomDefault, count.toULong(), pinned.addressOf(0))
+    }
+    if (status != errSecSuccess) {
+        throw DeviceSlotException(
+            ChurStatus.INTERNAL_FAILURE,
+            "the operating-system CSPRNG failed and there is no fallback",
+        )
+    }
+    return out
+}
+
+private const val SERVICE = "dev.po4yka.chur"
+private const val ACCOUNT_PREFIX = "dev.po4yka.chur.slot."
 
 @OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
 private fun ByteArray.toNSData(): NSData =

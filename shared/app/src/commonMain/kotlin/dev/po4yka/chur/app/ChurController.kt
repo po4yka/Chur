@@ -1,6 +1,7 @@
 package dev.po4yka.chur.app
 
 import dev.po4yka.chur.app.vault.ThumbnailCache
+import dev.po4yka.chur.app.vault.isValidVaultPin
 import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.AlbumSummary
 import dev.po4yka.chur.ffi.ChurFailure
@@ -60,6 +61,7 @@ class ChurController(
     private val privacy: PrivacyCover,
     private val exports: ExportSink,
     private val deviceUnlock: DeviceUnlock = NoDeviceUnlock,
+    private val appleDeviceUnlock: AppleDeviceUnlock = NoAppleDeviceUnlock,
     /**
      * The per-vault device-slot policy of `KEY_SLOTS.md` §1.
      *
@@ -68,6 +70,7 @@ class ChurController(
      * false with it.
      */
     private val deviceSlotPolicy: DeviceSlotPolicySetting = DeviceSlotPolicySetting.unset(),
+    private val appLockSetting: AppLockSetting = AppLockSetting.unset(),
     private val clock: () -> Long,
     private val notes: NoteStore = InMemoryNoteStore(),
     policy: LockPolicy = LockPolicy(),
@@ -97,7 +100,10 @@ class ChurController(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main + uncaught)
     private val repository = VaultRepository(storageRoot, clock, policy)
 
-    private val _route = MutableStateFlow<AppRoute>(AppRoute.PublicShell)
+    private val initiallyLockWholeApp = runCatching { appLockSetting.read() }.getOrDefault(false)
+    private val _route = MutableStateFlow<AppRoute>(
+        if (initiallyLockWholeApp) AppRoute.AppUnlock else AppRoute.PublicShell,
+    )
     private val _notes = MutableStateFlow<List<Note>>(emptyList())
     private val _disclosureDue = MutableStateFlow(false)
     private val _page = MutableStateFlow(ObjectPage(emptyList(), 0, 0, null))
@@ -130,12 +136,16 @@ class ChurController(
     val thumbnailCache: ThumbnailCache get() = thumbnails
 
     private val _deviceSlotStrict = MutableStateFlow(false)
+    private val _appLockEnabled = MutableStateFlow(initiallyLockWholeApp)
+
+    /** Whether the entire app is gated on start and return from background. */
+    val appLockEnabled: StateFlow<Boolean> = _appLockEnabled.asStateFlow()
 
     /** Whether the device slot requires biometry only, `KEY_SLOTS.md` §1. */
     val deviceSlotStrict: StateFlow<Boolean> = _deviceSlotStrict.asStateFlow()
 
     /** Whether this platform can hold a device slot at all. */
-    val deviceUnlockAvailable: Boolean get() = deviceUnlock.available
+    val deviceUnlockAvailable: Boolean get() = deviceUnlock.available || appleDeviceUnlock.available
 
     /**
      * How many activities the host launched and is still waiting on.
@@ -144,6 +154,7 @@ class ChurController(
      * callbacks and the lifecycle callbacks run, so it needs no synchronization.
      */
     private var hostActivities = 0
+    private var lockEpoch = 0L
 
     /**
      * Whether [start] has already run.
@@ -226,7 +237,12 @@ class ChurController(
      */
     suspend fun start() {
         if (started) return
-        withContext(Dispatchers.Default) { repository.start() }
+        val initialState = withContext(Dispatchers.Default) { repository.start() }
+        if (initialState is VaultState.NoVault && _appLockEnabled.value) {
+            withContext(Dispatchers.Default) { appLockSetting.write(false) }
+            _appLockEnabled.value = false
+            _route.value = AppRoute.PublicShell
+        }
         _notes.value = notes.all()
         _deviceSlotStrict.value =
             withContext(Dispatchers.Default) { deviceSlotPolicy.read() }
@@ -273,6 +289,11 @@ class ChurController(
 
     /** Creates a vault, `PROVISIONING.md` §3. */
     fun create(password: String, offerRecovery: Boolean) = guarded {
+        if (password.isNotEmpty() && password.all { it in '0'..'9' } &&
+            password.length <= 20 && !isValidVaultPin(password)) {
+            _message.value = "Use at least 12 digits for a vault PIN."
+            return@guarded
+        }
         val bytes = password.encodeToByteArray()
         val phrase = try {
             withContext(Dispatchers.Default) { repository.create(bytes, offerRecovery) }
@@ -286,7 +307,7 @@ class ChurController(
             // would answer, from inside a decoy session, the question the
             // design refuses to answer. The residual signal that a creation
             // failed at all is structural and is recorded in §5 there.
-            _message.value = "This vault could not be created. Try a different password."
+            _message.value = "This vault could not be created. Try a different credential."
             return@guarded
         } finally {
             bytes.fill(0)
@@ -304,19 +325,23 @@ class ChurController(
 
     /** Unlocks with a password. */
     fun unlock(password: String) = guarded {
+        val target = _route.value
+        val epoch = lockEpoch
         val bytes = password.encodeToByteArray()
         try {
             withContext(Dispatchers.Default) { repository.unlock(bytes) }
         } finally {
             bytes.fill(0)
         }
-        enterVault()
+        completeUnlock(target, epoch)
     }
 
     /** Unlocks with the recovery phrase. */
     fun recover(phrase: String) = guarded {
+        val target = _route.value
+        val epoch = lockEpoch
         withContext(Dispatchers.Default) { repository.unlockWithRecovery(phrase.trim()) }
-        enterVault()
+        completeUnlock(target, epoch)
     }
 
     /**
@@ -327,6 +352,8 @@ class ChurController(
      * in turn, because the material names no identity.
      */
     fun unlockWithDevice() = guarded {
+        val target = _route.value
+        val epoch = lockEpoch
         val material = withContext(Dispatchers.Default) { repository.keystoreMaterial() }
         // Not `firstNotNullOfOrNull`: the unwrap suspends now, because the
         // platform asks the user to authorize it first.
@@ -349,7 +376,44 @@ class ChurController(
         }
         val opened = root ?: throw ChurFailure(ChurStatus.AUTHENTICATION_FAILED, "no device slot opened")
         withContext(Dispatchers.Default) { repository.unlockWithKeystoreRoot(opened) }
-        enterVault()
+        completeUnlock(target, epoch)
+    }
+
+    /** Opens the vault with a Keychain secret released by local authorization. */
+    fun unlockWithAppleDevice() = guarded {
+        val target = _route.value
+        val epoch = lockEpoch
+        beginHostActivity()
+        try {
+            withContext(Dispatchers.Default) {
+                appleDeviceUnlock.beginUnlock()
+                try {
+                    var opened = false
+                    for (itemId in appleDeviceUnlock.itemIds()) {
+                        val secret = appleDeviceUnlock.releaseSecret(itemId)
+                        try {
+                            try {
+                                repository.unlockWithDeviceSecret(secret)
+                                opened = true
+                                break
+                            } catch (failure: ChurFailure) {
+                                if (failure.status != ChurStatus.AUTHENTICATION_FAILED) throw failure
+                            }
+                        } finally {
+                            secret.fill(0)
+                        }
+                    }
+                    if (!opened) {
+                        throw ChurFailure(ChurStatus.AUTHENTICATION_FAILED, "no device slot opened")
+                    }
+                } finally {
+                    appleDeviceUnlock.endUnlock()
+                }
+            }
+        } finally {
+            endHostActivity()
+        }
+        completeUnlock(target, epoch)
     }
 
     /**
@@ -380,15 +444,39 @@ class ChurController(
         refreshDeviceUnlockOffer()
     }
 
+    /** Stores a random Rust device secret under Keychain authorization. */
+    fun enrollAppleDeviceSlot() = guarded {
+        beginHostActivity()
+        try {
+            withContext(Dispatchers.Default) {
+                val itemId = appleDeviceUnlock.newItemId()
+                repository.enrollAppleSlot(itemId) { secret ->
+                    appleDeviceUnlock.storeSecret(itemId, secret, deviceSlotPolicy.read())
+                }
+            }
+        } finally {
+            endHostActivity()
+        }
+        _message.value = "This device can now open the vault."
+        loadSlots()
+        refreshDeviceUnlockOffer()
+    }
+
     /** Recomputes whether the unlock screen may offer the device slot. */
     private fun refreshDeviceUnlockOffer() {
-        if (!deviceUnlock.available) {
+        if (!deviceUnlockAvailable) {
             _deviceUnlockOffered.value = false
             return
         }
         scope.launch {
             _deviceUnlockOffered.value = runCatching {
-                withContext(Dispatchers.Default) { repository.keystoreMaterial() }.isNotEmpty()
+                withContext(Dispatchers.Default) {
+                    if (appleDeviceUnlock.available) {
+                        appleDeviceUnlock.itemIds().isNotEmpty()
+                    } else {
+                        repository.keystoreMaterial().isNotEmpty()
+                    }
+                }
             }.getOrDefault(false)
         }
     }
@@ -406,6 +494,16 @@ class ChurController(
             withContext(Dispatchers.Default) { deviceSlotPolicy.write(next) }
             _deviceSlotStrict.value = next
         }
+
+    /** Selects whether the public shell also needs a vault credential. */
+    fun toggleAppLock() = guarded {
+        if (repository.state.value !is VaultState.Unlocked) {
+            throw ChurFailure(ChurStatus.VAULT_LOCKED, "the vault is locked")
+        }
+        val next = !_appLockEnabled.value
+        withContext(Dispatchers.Default) { appLockSetting.write(next) }
+        _appLockEnabled.value = next
+    }
 
     /** Whether the public-shell disclosure is owed to the user right now. */
     val disclosureDue: StateFlow<Boolean> = _disclosureDue.asStateFlow()
@@ -426,10 +524,11 @@ class ChurController(
 
     /** Locks now, `DESIGN.md` §14.3. */
     fun lock(reason: LockReason = LockReason.USER) = guarded {
+        lockEpoch += 1
         withContext(Dispatchers.Default) { repository.lock(reason) }
         privacy.setEnabled(false)
         clearPrivateProjections()
-        _route.value = AppRoute.PublicShell
+        _route.value = if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell
     }
 
     /**
@@ -469,10 +568,14 @@ class ChurController(
     suspend fun onBackground() {
         privacy.setEnabled(true)
         if (hostActivities > 0) return
-        withContext(Dispatchers.Default) { repository.onBackground() }
+        lockEpoch += 1
+        withContext(Dispatchers.Default) {
+            if (_appLockEnabled.value) repository.lock(LockReason.BACKGROUND)
+            else repository.onBackground()
+        }
         if (repository.state.value !is VaultState.Unlocked) {
             clearPrivateProjections()
-            _route.value = AppRoute.PublicShell
+            _route.value = if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell
         }
     }
 
@@ -493,19 +596,22 @@ class ChurController(
     /** The idle check of `DESIGN.md` §14.4, which [runIdleTimer] drives. */
     suspend fun checkIdle() {
         if (withContext(Dispatchers.Default) { repository.lockIfIdle() }) {
+            lockEpoch += 1
             privacy.setEnabled(false)
             clearPrivateProjections()
-            _route.value = AppRoute.PublicShell
+            _route.value = if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell
         }
     }
 
     /** Moves to a route the public shell offers. */
     fun goTo(next: AppRoute) {
+        if (next == AppRoute.Unlock || next == AppRoute.AppUnlock) _message.value = null
         _route.value = next
     }
 
     /** The route the visible settings entry of §2 leads to. */
     fun openVaultEntry() {
+        _message.value = null
         _route.value = if (repository.state.value is VaultState.NoVault) {
             AppRoute.CreateVault
         } else {
@@ -772,6 +878,23 @@ class ChurController(
     /** Adds a recovery slot and shows the phrase once. */
     fun addRecoverySlot() = guarded {
         _recoveryPhrase.value = withContext(Dispatchers.Default) { repository.addRecoverySlot() }
+        _slots.value = withContext(Dispatchers.Default) { repository.slots() }
+    }
+
+    /** Replaces the password slot with a password or a long numeric PIN. */
+    fun changePassword(password: String) = guarded {
+        if (password.isEmpty() ||
+            (password.all { it in '0'..'9' } && password.length <= 20 && !isValidVaultPin(password))) {
+            _message.value = "Use a password or a PIN of at least 12 digits."
+            return@guarded
+        }
+        val bytes = password.encodeToByteArray()
+        try {
+            withContext(Dispatchers.Default) { repository.changePassword(bytes) }
+        } finally {
+            bytes.fill(0)
+        }
+        _message.value = "Vault credential changed. Existing backups still use the old credential."
         _slots.value = withContext(Dispatchers.Default) { repository.slots() }
     }
 
@@ -1198,6 +1321,22 @@ class ChurController(
         // ended. Carrying its count forward would suppress the background lock
         // of the next session, so the count ends with the session.
         hostActivities = 0
+    }
+
+    private suspend fun completeUnlock(target: AppRoute, epoch: Long) {
+        if (epoch != lockEpoch || _route.value != target) {
+            withContext(Dispatchers.Default) { repository.lock(LockReason.BACKGROUND) }
+            clearPrivateProjections()
+            _route.value = if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell
+            return
+        }
+        if (target == AppRoute.AppUnlock || target == AppRoute.AppRecover) {
+            withContext(Dispatchers.Default) { repository.lock(LockReason.USER) }
+            privacy.setEnabled(false)
+            _route.value = AppRoute.PublicShell
+        } else {
+            enterVault()
+        }
     }
 
     private suspend fun enterVault() {

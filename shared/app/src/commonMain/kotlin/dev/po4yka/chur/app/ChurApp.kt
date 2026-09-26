@@ -72,8 +72,14 @@ public sealed interface AppRoute {
     /** The session gate, `DESIGN.md` §14. */
     public data object Unlock : AppRoute
 
+    /** Optional gate for the entire app, backed by the same vault factors. */
+    public data object AppUnlock : AppRoute
+
     /** The recovery route. */
     public data object Recover : AppRoute
+
+    /** Recovery while opening the whole app. */
+    public data object AppRecover : AppRoute
 
     /** The unlocked vault. */
     public data object Vault : AppRoute

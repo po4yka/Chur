@@ -28,6 +28,8 @@
 	<true/>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save selected vault media to your photo library.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Use Face ID to open your Chur vault.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

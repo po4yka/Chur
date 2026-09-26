@@ -8,9 +8,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -37,6 +42,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.ActiveOperation
@@ -106,6 +113,8 @@ data class VaultUiState(
      * platform has no device slot and no row can act on one.
      */
     val deviceSlotStrict: Boolean? = null,
+    /** Whether the lock screen also covers the public shell. */
+    val appLockEnabled: Boolean = false,
     /** How many tiles the selection holds, §11.4. */
     val selectedCount: Int = 0,
     /**
@@ -154,6 +163,8 @@ data class VaultActions(
     val onVerifyAll: () -> Unit,
     /** Add a recovery slot. */
     val onAddRecoverySlot: () -> Unit,
+    /** Change the password slot of the open vault. */
+    val onChangePassword: (String) -> Unit,
     /** Write a backup package, `BACKUP_FORMAT_V1.md` §7. */
     val onCreateBackup: () -> Unit = {},
     /** Provision a second vault identity, `DECOY_VAULT.md` §3. */
@@ -162,6 +173,8 @@ data class VaultActions(
     val onAddDeviceSlot: () -> Unit = {},
     /** Switch the device-slot policy of `KEY_SLOTS.md` §1. */
     val onToggleDeviceSlotPolicy: () -> Unit = {},
+    /** Switch between locking the vault and locking the whole app. */
+    val onToggleAppLock: () -> Unit = {},
     /** Select every tile the current scope shows. */
     val onSelectAll: () -> Unit = {},
     /** Leave selection mode without acting. */
@@ -505,6 +518,7 @@ private fun SearchBody(state: VaultUiState, actions: VaultActions) {
 @Composable
 private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
     val colors = LocalChurColors.current
+    var changingPassword by remember { mutableStateOf(false) }
     LazyColumn(
         contentPadding = PaddingValues(ChurSpacing.gutter),
         verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
@@ -532,6 +546,13 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
             }
         }
         item {
+            SettingsAction(
+                "Change password or PIN",
+                { changingPassword = true },
+                enabled = state.operation == null,
+            )
+        }
+        item {
             SettingsAction("Add a recovery phrase", actions.onAddRecoverySlot)
         }
         // §4 of KEY_SLOTS makes the device unlock code a vault credential in
@@ -557,6 +578,21 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
                     )
                 }
             }
+        }
+        item {
+            SettingsAction(
+                if (state.appLockEnabled) "Lock vault only" else "Lock whole app",
+                actions.onToggleAppLock,
+            )
+        }
+        item {
+            Text(
+                "Whole-app lock also hides public Notes until you unlock. " +
+                    "Public Notes remain unencrypted on this device.",
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.inkMuted,
+                modifier = Modifier.padding(horizontal = ChurSpacing.three),
+            )
         }
         item {
             Text("Backup", style = MaterialTheme.typography.titleMedium)
@@ -653,6 +689,95 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
             )
         }
     }
+    if (changingPassword) {
+        ChangePasswordDialog(
+            enabled = state.operation == null,
+            onChange = {
+                actions.onChangePassword(it)
+                changingPassword = false
+            },
+            onDismiss = { changingPassword = false },
+        )
+    }
+}
+
+@Composable
+private fun ChangePasswordDialog(
+    enabled: Boolean,
+    onChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var password by remember { mutableStateOf("") }
+    var confirmation by remember { mutableStateOf("") }
+    var usePin by remember { mutableStateOf(false) }
+    val matching = password.isNotEmpty() && password == confirmation &&
+        (!usePin || isValidVaultPin(password))
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Change password or PIN") },
+        text = {
+            Column(
+                modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
+            ) {
+                Text(
+                    "Old backup files still accept the password or PIN used when they were written. " +
+                        "Write a new backup and delete old copies if you need to retire it.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                TextButton(
+                    onClick = {
+                        usePin = !usePin
+                        password = ""
+                        confirmation = ""
+                    },
+                    enabled = enabled,
+                ) {
+                    Text(if (usePin) "Use a password instead" else "Use a PIN instead")
+                }
+                if (usePin) {
+                    Text("Choose 12–20 digits.", style = MaterialTheme.typography.bodySmall)
+                }
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = {
+                        if (!usePin || (it.length <= 20 && it.all { digit -> digit in '0'..'9' })) {
+                            password = it
+                        }
+                    },
+                    singleLine = true,
+                    enabled = enabled,
+                    label = { Text(if (usePin) "New PIN" else "New password") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = if (usePin) KeyboardType.NumberPassword else KeyboardType.Password,
+                    ),
+                )
+                OutlinedTextField(
+                    value = confirmation,
+                    onValueChange = {
+                        if (!usePin || (it.length <= 20 && it.all { digit -> digit in '0'..'9' })) {
+                            confirmation = it
+                        }
+                    },
+                    singleLine = true,
+                    enabled = enabled,
+                    label = { Text(if (usePin) "Repeat PIN" else "Repeat password") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = if (usePin) KeyboardType.NumberPassword else KeyboardType.Password,
+                    ),
+                    isError = confirmation.isNotEmpty() && !matching,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onChange(password) }, enabled = enabled && matching) {
+                Text("Change")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable

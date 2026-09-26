@@ -15,6 +15,7 @@ import platform.Foundation.NSFileManager
 import platform.Foundation.NSDate
 import platform.Foundation.NSSearchPathForDirectoriesInDomains
 import platform.Foundation.NSUserDomainMask
+import platform.Foundation.NSUserDefaults
 import platform.Foundation.timeIntervalSince1970
 import platform.UIKit.UIViewController
 
@@ -67,6 +68,15 @@ fun churController(privacy: IosPrivacyCover, exports: ExportSink): ChurControlle
         storageRoot = churStorageRoot(),
         privacy = privacy,
         exports = exports,
+        appleDeviceUnlock = IosAppleDeviceUnlock(),
+        deviceSlotPolicy = DeviceSlotPolicySetting(
+            reader = { NSUserDefaults.standardUserDefaults.boolForKey("deviceSlotStrict") },
+            writer = { NSUserDefaults.standardUserDefaults.setBool(it, forKey = "deviceSlotStrict") },
+        ),
+        appLockSetting = AppLockSetting(
+            reader = { NSUserDefaults.standardUserDefaults.boolForKey("lockWholeApp") },
+            writer = { NSUserDefaults.standardUserDefaults.setBool(it, forKey = "lockWholeApp") },
+        ),
         clock = clock,
         notes = churNoteStore(),
         sync = sync,

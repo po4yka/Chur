@@ -261,6 +261,9 @@ kotlin {
             implementation(libs.androidx.media3.datasource)
             implementation(libs.androidx.media3.ui)
         }
+        iosMain.dependencies {
+            implementation(project(":shared:core-platform-keys"))
+        }
         commonTest.dependencies {
             implementation(kotlin("test"))
             // `ChurController` launches on `Dispatchers.Main`, so a test that

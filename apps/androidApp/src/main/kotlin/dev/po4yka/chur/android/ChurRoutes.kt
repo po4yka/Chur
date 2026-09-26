@@ -105,17 +105,32 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
         AppRoute.RestoreBackup -> RestoreRoute(controller)
         AppRoute.Unlock -> UnlockScreen(
             busy = false,
-            failed = (vaultState as? VaultState.Locked)?.lastFailure != null,
+            failed = (vaultState as? VaultState.Locked)?.lastFailure != null || message != null,
             onUnlock = controller::unlock,
             onUseRecovery = { controller.goTo(AppRoute.Recover) },
             deviceUnlockOffered = controller.deviceUnlockOffered.collectAsState().value,
             onUseDevice = controller::unlockWithDevice,
+        )
+        AppRoute.AppUnlock -> UnlockScreen(
+            busy = false,
+            failed = (vaultState as? VaultState.Locked)?.lastFailure != null || message != null,
+            onUnlock = controller::unlock,
+            onUseRecovery = { controller.goTo(AppRoute.AppRecover) },
+            deviceUnlockOffered = controller.deviceUnlockOffered.collectAsState().value,
+            onUseDevice = controller::unlockWithDevice,
+            appGate = true,
         )
         AppRoute.Recover -> RecoveryScreen(
             busy = false,
             failed = (vaultState as? VaultState.Locked)?.lastFailure != null,
             onRecover = controller::recover,
             onBack = { controller.goTo(AppRoute.Unlock) },
+        )
+        AppRoute.AppRecover -> RecoveryScreen(
+            busy = false,
+            failed = (vaultState as? VaultState.Locked)?.lastFailure != null || message != null,
+            onRecover = controller::recover,
+            onBack = { controller.goTo(AppRoute.AppUnlock) },
         )
         AppRoute.Vault -> VaultRoute(controller)
     }
@@ -257,6 +272,7 @@ private fun VaultRoute(controller: ChurController) {
     val sharingOverview by controller.sharingOverview.collectAsState()
     val sharingRecipient by controller.sharingRecipient.collectAsState()
     val deviceSlotStrict by controller.deviceSlotStrict.collectAsState()
+    val appLockEnabled by controller.appLockEnabled.collectAsState()
     val configuration = LocalConfiguration.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -492,6 +508,7 @@ private fun VaultRoute(controller: ChurController) {
             selectedCount = selection.size,
             deviceSlotAvailable = true,
             deviceSlotStrict = deviceSlotStrict,
+            appLockEnabled = appLockEnabled,
             sync = syncStatus,
             sharingIdentity = sharingIdentity,
             sharingOverview = sharingOverview,
@@ -529,6 +546,8 @@ private fun VaultRoute(controller: ChurController) {
             onPanic = { controller.panic() },
             onVerifyAll = { controller.verifyEverything() },
             onAddRecoverySlot = controller::addRecoverySlot,
+            onChangePassword = controller::changePassword,
+            onToggleAppLock = controller::toggleAppLock,
             onCreateBackup = controller::createBackup,
             onCreateSecondIdentity = controller::createSecondIdentity,
             onSelectAll = { selection = page.objects.map { it.id }.toSet() },

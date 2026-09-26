@@ -241,6 +241,25 @@ class VaultRepository(
     suspend fun addDeviceSlot(keychainItemId: ByteArray): ByteArray =
         withSession { ChurVault.addDeviceSlot(it, keychainItemId) }
 
+    /** Adds a Keychain slot and removes it if the platform cannot keep its secret. */
+    suspend fun enrollAppleSlot(
+        keychainItemId: ByteArray,
+        store: (ByteArray) -> Unit,
+    ) = withSession { session ->
+        val before = ChurVault.slots(session).map { it.id }.toSet()
+        val secret = ChurVault.addDeviceSlot(session, keychainItemId)
+        try {
+            store(secret)
+        } catch (failure: Throwable) {
+            ChurVault.slots(session)
+                .firstOrNull { it.slotType == 3 && it.id !in before }
+                ?.let { slot -> runCatching { ChurVault.removeSlot(session, slot.slotId) } }
+            throw failure
+        } finally {
+            secret.fill(0)
+        }
+    }
+
     /**
      * Enrolls the Android Keystore slot, `KEY_SLOTS.md` §4.
      *

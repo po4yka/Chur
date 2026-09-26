@@ -12,6 +12,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -199,6 +200,34 @@ class VaultRepositoryHostTest {
         repository.lock(LockReason.USER)
 
         repository.unlockWithRecovery(phrase)
+        assertIs<VaultState.Unlocked>(repository.state.value)
+        repository.shutdown()
+    }
+
+    @Test
+    fun an_apple_slot_rolls_back_a_failed_store_and_unlocks_after_a_successful_store() = runBlocking {
+        val repository = repository()
+        repository.start()
+        repository.create(PASSWORD.encodeToByteArray(), offerRecovery = false)
+
+        var refusedSecret: ByteArray? = null
+        assertFailsWith<IllegalStateException> {
+            repository.enrollAppleSlot(ByteArray(16) { 1 }) { secret ->
+                refusedSecret = secret
+                error("Keychain refused the item")
+            }
+        }
+        assertEquals(1, repository.slots().size)
+        assertTrue(refusedSecret!!.all { it == 0.toByte() })
+
+        var savedSecret = ByteArray(0)
+        repository.enrollAppleSlot(ByteArray(16) { 2 }) { secret ->
+            savedSecret = secret.copyOf()
+        }
+        assertEquals(2, repository.slots().size)
+        repository.lock(LockReason.USER)
+        repository.unlockWithDeviceSecret(savedSecret)
+        savedSecret.fill(0)
         assertIs<VaultState.Unlocked>(repository.state.value)
         repository.shutdown()
     }

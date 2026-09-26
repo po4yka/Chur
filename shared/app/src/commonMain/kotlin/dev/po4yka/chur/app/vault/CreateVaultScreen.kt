@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -23,6 +24,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.theme.ChurSpacing
@@ -57,9 +59,11 @@ fun CreateVaultScreen(
 ) {
     var password by remember { mutableStateOf("") }
     var confirmation by remember { mutableStateOf("") }
+    var usePin by remember { mutableStateOf(false) }
     var offerRecovery by remember { mutableStateOf(true) }
     val colors = LocalChurColors.current
-    val matching = password.isNotEmpty() && password == confirmation
+    val matching = password.isNotEmpty() && password == confirmation &&
+        (!usePin || isValidVaultPin(password))
     Surface(color = colors.canvas, modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
@@ -76,27 +80,58 @@ fun CreateVaultScreen(
                 Text(
                     "A vault keeps photos, video, and audio on this device, encrypted. " +
                         "There is no server copy and no support path: if you lose the " +
-                        "password and the recovery phrase, the contents are gone.",
+                        "${if (usePin) "PIN" else "password"} and the recovery phrase, the contents are gone.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = colors.inkMuted,
                 )
                 // §3 step 2.
+                TextButton(
+                    onClick = {
+                        usePin = !usePin
+                        password = ""
+                        confirmation = ""
+                    },
+                    enabled = !busy,
+                ) {
+                    Text(if (usePin) "Use a password instead" else "Use a PIN instead")
+                }
+                if (usePin) {
+                    Text(
+                        "Choose 12–20 digits. This vault PIN is separate from your device PIN.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.inkMuted,
+                    )
+                }
                 OutlinedTextField(
                     value = password,
-                    onValueChange = { password = it },
+                    onValueChange = {
+                        if (!usePin || (it.length <= 20 && it.all { digit -> digit in '0'..'9' })) {
+                            password = it
+                        }
+                    },
                     singleLine = true,
                     enabled = !busy,
-                    label = { Text("Password") },
+                    label = { Text(if (usePin) "PIN" else "Password") },
                     visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = if (usePin) KeyboardType.NumberPassword else KeyboardType.Password,
+                    ),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
                     value = confirmation,
-                    onValueChange = { confirmation = it },
+                    onValueChange = {
+                        if (!usePin || (it.length <= 20 && it.all { digit -> digit in '0'..'9' })) {
+                            confirmation = it
+                        }
+                    },
                     singleLine = true,
                     enabled = !busy,
-                    label = { Text("Repeat password") },
+                    label = { Text(if (usePin) "Repeat PIN" else "Repeat password") },
                     visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = if (usePin) KeyboardType.NumberPassword else KeyboardType.Password,
+                    ),
                     isError = confirmation.isNotEmpty() && !matching,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -116,7 +151,7 @@ fun CreateVaultScreen(
                         text = if (offerRecovery) {
                             "You will see 24 words once. Write them down and keep them offline."
                         } else {
-                            "Without a recovery phrase, a forgotten password cannot be " +
+                            "Without a recovery phrase, a forgotten ${if (usePin) "PIN" else "password"} cannot be " +
                                 "recovered. You can add one later in settings."
                         },
                         style = MaterialTheme.typography.bodySmall,

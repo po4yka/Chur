@@ -89,15 +89,32 @@ internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: 
         AppRoute.RestoreBackup -> IosRestoreRoute(controller)
         AppRoute.Unlock -> UnlockScreen(
             busy = false,
-            failed = (vaultState as? VaultState.Locked)?.lastFailure != null,
+            failed = (vaultState as? VaultState.Locked)?.lastFailure != null || message != null,
             onUnlock = controller::unlock,
             onUseRecovery = { controller.goTo(AppRoute.Recover) },
+            deviceUnlockOffered = controller.deviceUnlockOffered.collectAsState().value,
+            onUseDevice = controller::unlockWithAppleDevice,
+        )
+        AppRoute.AppUnlock -> UnlockScreen(
+            busy = false,
+            failed = (vaultState as? VaultState.Locked)?.lastFailure != null || message != null,
+            onUnlock = controller::unlock,
+            onUseRecovery = { controller.goTo(AppRoute.AppRecover) },
+            deviceUnlockOffered = controller.deviceUnlockOffered.collectAsState().value,
+            onUseDevice = controller::unlockWithAppleDevice,
+            appGate = true,
         )
         AppRoute.Recover -> RecoveryScreen(
             busy = false,
             failed = (vaultState as? VaultState.Locked)?.lastFailure != null,
             onRecover = controller::recover,
             onBack = { controller.goTo(AppRoute.Unlock) },
+        )
+        AppRoute.AppRecover -> RecoveryScreen(
+            busy = false,
+            failed = (vaultState as? VaultState.Locked)?.lastFailure != null || message != null,
+            onRecover = controller::recover,
+            onBack = { controller.goTo(AppRoute.AppUnlock) },
         )
         AppRoute.Vault -> VaultRoute(controller, vaultState)
     }
@@ -150,6 +167,8 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     val albums by controller.albums.collectAsState()
     val tags by controller.tags.collectAsState()
     val slots by controller.slots.collectAsState()
+    val deviceSlotStrict by controller.deviceSlotStrict.collectAsState()
+    val appLockEnabled by controller.appLockEnabled.collectAsState()
     val message by controller.message.collectAsState()
     val operation by controller.activeOperation.collectAsState()
     val syncStatus by controller.syncStatus.collectAsState()
@@ -304,6 +323,9 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             progress = message,
             operation = operation,
             selectedCount = selection.size,
+            deviceSlotAvailable = controller.deviceUnlockAvailable,
+            deviceSlotStrict = deviceSlotStrict,
+            appLockEnabled = appLockEnabled,
             sync = syncStatus,
             sharingIdentity = sharingIdentity,
             sharingOverview = sharingOverview,
@@ -386,6 +408,10 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             onPanic = { controller.panic() },
             onVerifyAll = { controller.verifyEverything() },
             onAddRecoverySlot = controller::addRecoverySlot,
+            onChangePassword = controller::changePassword,
+            onToggleAppLock = controller::toggleAppLock,
+            onAddDeviceSlot = controller::enrollAppleDeviceSlot,
+            onToggleDeviceSlotPolicy = controller::toggleDeviceSlotPolicy,
             onCreateBackup = controller::createBackup,
             onCreateSecondIdentity = controller::createSecondIdentity,
             onSelectAll = { selection = page.objects.map { it.id }.toSet() },
