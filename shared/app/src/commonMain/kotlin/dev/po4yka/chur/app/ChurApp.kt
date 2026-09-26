@@ -34,10 +34,13 @@ public fun ChurApp(gate: GateResult, route: AppRoute, content: @Composable () ->
         when (gate) {
             is GateResult.Incompatible -> IncompatibleLibrary(gate)
             is GateResult.Compatible -> {
-                // The route is the caller's; this composable only refuses to
-                // render anything private when the gate refused the library.
-                val _unused = route
-                content()
+                // The route is the caller's. This composable refuses to render
+                // anything private when the gate refused the library. It also
+                // stops the keyboard from learning on every route except the
+                // public shell, whose Notes keep the keyboard of any notes app.
+                // A route added later is private until it is listed here.
+                val privateRoute = route != AppRoute.PublicShell && route != AppRoute.PublicSettings
+                PrivateTextInput(enabled = privateRoute, content = content)
             }
         }
     }

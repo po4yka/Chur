@@ -46,6 +46,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.po4yka.chur.app.privateKeyboardOptions
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.LocalChurColors
 import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
@@ -264,6 +265,7 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
         OutlinedTextField(
             value = filter, onValueChange = onFilterChange,
             label = { Text("Find album") }, singleLine = true,
+            keyboardOptions = privateKeyboardOptions(),
             trailingIcon = if (filter.isNotEmpty()) {
                 { TextButton(onClick = { onFilterChange("") }) { Text("Clear") } }
             } else null,
@@ -336,6 +338,7 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
                     value = renameText,
                     onValueChange = { renameText = it },
                     label = { Text("Album name") },
+                    keyboardOptions = privateKeyboardOptions(),
                     colors = churOutlinedTextFieldColors(),
                 )
             },

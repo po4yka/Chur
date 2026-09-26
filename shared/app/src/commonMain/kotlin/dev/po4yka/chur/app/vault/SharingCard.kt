@@ -23,6 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.text.selection.SelectionContainer
+import dev.po4yka.chur.app.privateKeyboardOptions
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.LocalChurColors
 import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
@@ -70,6 +71,7 @@ internal fun SharingCard(state: VaultUiState, actions: VaultActions) {
                 value = enrollment,
                 onValueChange = { enrollment = it; inspected = "" },
                 label = { Text("Recipient enrollment (hex)") },
+                keyboardOptions = privateKeyboardOptions(),
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 2,
                 maxLines = 4,

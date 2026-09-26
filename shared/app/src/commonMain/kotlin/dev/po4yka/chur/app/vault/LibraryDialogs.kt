@@ -21,6 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import dev.po4yka.chur.app.privateKeyboardOptions
 import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
 import dev.po4yka.chur.ffi.AlbumSummary
 import dev.po4yka.chur.ffi.TagSummary
@@ -37,6 +38,7 @@ fun NewAlbumDialog(onCreate: (String) -> Unit, onDismiss: () -> Unit) {
                 value = name,
                 onValueChange = { name = it },
                 singleLine = true,
+                keyboardOptions = privateKeyboardOptions(),
                 label = { Text("Album name") },
             )
         },
@@ -79,6 +81,7 @@ fun AlbumPickerDialog(
                     value = name,
                     onValueChange = { name = it },
                     singleLine = true,
+                    keyboardOptions = privateKeyboardOptions(),
                     label = { Text("New album name") },
                 )
                 Box {
@@ -124,7 +127,8 @@ fun TagPickerDialog(
         text = {
             Column(modifier = Modifier.heightIn(max = 360.dp)) {
                 OutlinedTextField(colors = churOutlinedTextFieldColors(), value = filter,
-                    onValueChange = { filter = it }, singleLine = true, label = { Text("Find tag") })
+                    onValueChange = { filter = it }, singleLine = true,
+                    keyboardOptions = privateKeyboardOptions(), label = { Text("Find tag") })
                 LazyColumn(modifier = Modifier.heightIn(max = 220.dp)) {
                     items(tags.filter { it.name.contains(filter, ignoreCase = true) }, key = { it.id }) { tag ->
                     Column {
@@ -138,6 +142,7 @@ fun TagPickerDialog(
                     value = name,
                     onValueChange = { name = it },
                     singleLine = true,
+                    keyboardOptions = privateKeyboardOptions(),
                     label = { Text("New tag name") },
                 )
                 TextButton(
@@ -173,7 +178,8 @@ fun TagBrowserDialog(
         text = {
             Column(modifier = Modifier.heightIn(max = 420.dp)) {
                 OutlinedTextField(colors = churOutlinedTextFieldColors(), value = filter,
-                    onValueChange = { filter = it }, singleLine = true, label = { Text("Find tag") })
+                    onValueChange = { filter = it }, singleLine = true,
+                    keyboardOptions = privateKeyboardOptions(), label = { Text("Find tag") })
                 LazyColumn(modifier = Modifier.heightIn(max = 270.dp)) {
                     items(tags.filter { it.name.contains(filter, ignoreCase = true) }, key = { it.id }) { tag ->
                         Column {
@@ -185,6 +191,7 @@ fun TagBrowserDialog(
                 }
                 OutlinedTextField(colors = churOutlinedTextFieldColors(), value = name,
                     onValueChange = { name = it }, singleLine = true,
+                    keyboardOptions = privateKeyboardOptions(),
                     label = { Text(if (editing == null) "New tag" else "Rename ${editing?.name}") })
                 TextButton(onClick = {
                     val value = name.trim()

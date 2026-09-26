@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -23,9 +22,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import dev.po4yka.chur.app.secretKeyboardOptions
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.LocalChurColors
 import dev.po4yka.chur.app.theme.PrivateBoundaryMark
@@ -99,10 +98,7 @@ fun UnlockScreen(
                     enabled = !busy,
                     label = { Text(if (usePin) "PIN" else "Password") },
                     visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = if (usePin) KeyboardType.NumberPassword else KeyboardType.Password,
-                        imeAction = ImeAction.Go,
-                    ),
+                    keyboardOptions = secretKeyboardOptions(pin = usePin, imeAction = ImeAction.Go),
                     isError = failed,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -174,6 +170,8 @@ fun RecoveryScreen(
                     onValueChange = { phrase = it },
                     enabled = !busy,
                     label = { Text("Recovery phrase") },
+                    // PASSWORD_PROFILE.md §2: the phrase opens the vault as a password does.
+                    keyboardOptions = secretKeyboardOptions(),
                     isError = failed,
                     modifier = Modifier.fillMaxWidth(),
                 )

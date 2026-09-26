@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
@@ -18,6 +17,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import dev.po4yka.chur.app.privateKeyboardOptions
+import dev.po4yka.chur.app.secretKeyboardOptions
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.LocalChurColors
 import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
@@ -51,7 +52,7 @@ internal fun SyncSetupCard(onConfigure: (serverUrl: String, bootstrapSecret: Str
                 onValueChange = { serverUrl = it },
                 singleLine = true,
                 label = { Text("Server address") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                keyboardOptions = privateKeyboardOptions(KeyboardType.Uri),
                 modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
@@ -61,7 +62,7 @@ internal fun SyncSetupCard(onConfigure: (serverUrl: String, bootstrapSecret: Str
                 singleLine = true,
                 label = { Text("Bootstrap secret") },
                 visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                keyboardOptions = secretKeyboardOptions(),
                 modifier = Modifier.fillMaxWidth(),
             )
             Button(

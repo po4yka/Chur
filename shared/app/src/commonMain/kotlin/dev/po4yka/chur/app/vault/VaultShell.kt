@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -43,11 +42,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.ActiveOperation
+import dev.po4yka.chur.app.privateKeyboardOptions
+import dev.po4yka.chur.app.secretKeyboardOptions
 import dev.po4yka.chur.app.theme.AlbumsGlyph
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.LibraryGlyph
@@ -605,6 +605,7 @@ private fun SearchBody(state: VaultUiState, actions: VaultActions,
             onValueChange = actions.onSearch,
             singleLine = true,
             label = { Text("Search filenames, captions, and tags") },
+            keyboardOptions = privateKeyboardOptions(),
             modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter),
             colors = churOutlinedTextFieldColors(),
         )
@@ -885,9 +886,7 @@ private fun ChangePasswordDialog(
                     enabled = enabled,
                     label = { Text(if (usePin) "New PIN" else "New password") },
                     visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = if (usePin) KeyboardType.NumberPassword else KeyboardType.Password,
-                    ),
+                    keyboardOptions = secretKeyboardOptions(pin = usePin),
                     colors = churOutlinedTextFieldColors(),
                 )
                 OutlinedTextField(
@@ -901,9 +900,7 @@ private fun ChangePasswordDialog(
                     enabled = enabled,
                     label = { Text(if (usePin) "Repeat PIN" else "Repeat password") },
                     visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = if (usePin) KeyboardType.NumberPassword else KeyboardType.Password,
-                    ),
+                    keyboardOptions = secretKeyboardOptions(pin = usePin),
                     isError = confirmation.isNotEmpty() && !matching,
                     colors = churOutlinedTextFieldColors(),
                 )

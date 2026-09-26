@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -25,9 +24,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import dev.po4yka.chur.app.secretKeyboardOptions
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.DiagnosticTextStyle
 import dev.po4yka.chur.app.theme.LocalChurColors
@@ -116,9 +115,7 @@ fun CreateVaultScreen(
                     enabled = !busy,
                     label = { Text(if (usePin) "PIN" else "Password") },
                     visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = if (usePin) KeyboardType.NumberPassword else KeyboardType.Password,
-                    ),
+                    keyboardOptions = secretKeyboardOptions(pin = usePin),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
@@ -133,9 +130,7 @@ fun CreateVaultScreen(
                     enabled = !busy,
                     label = { Text(if (usePin) "Repeat PIN" else "Repeat password") },
                     visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = if (usePin) KeyboardType.NumberPassword else KeyboardType.Password,
-                    ),
+                    keyboardOptions = secretKeyboardOptions(pin = usePin),
                     isError = confirmation.isNotEmpty() && !matching,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -313,6 +308,7 @@ fun RestoreBackupScreen(
                     enabled = !busy,
                     label = { Text("Backup password or recovery phrase") },
                     visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = secretKeyboardOptions(),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 if (error != null) {
