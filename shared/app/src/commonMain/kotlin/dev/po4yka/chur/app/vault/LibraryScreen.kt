@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.IntegrityGlyph
 import dev.po4yka.chur.app.theme.LocalChurColors
+import dev.po4yka.chur.app.theme.PrivateBoundaryMark
 import dev.po4yka.chur.app.theme.gridGeometry
 import dev.po4yka.chur.ffi.ObjectProjection
 
@@ -263,7 +264,7 @@ fun EmptyLibrary(modifier: Modifier = Modifier) {
             verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
             modifier = Modifier.padding(ChurSpacing.gutterExpanded).fillMaxWidth(),
         ) {
-            Icon(IntegrityGlyph, contentDescription = null, tint = colors.outline)
+            PrivateBoundaryMark(size = 72.dp, media = true)
             Text(
                 "Your private library is empty",
                 style = MaterialTheme.typography.titleMedium,

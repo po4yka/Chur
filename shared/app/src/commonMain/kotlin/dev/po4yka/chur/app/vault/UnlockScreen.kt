@@ -28,6 +28,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.LocalChurColors
+import dev.po4yka.chur.app.theme.PrivateBoundaryMark
 
 /**
  * The session gate of `DESIGN.md` §14.1.
@@ -65,6 +66,7 @@ fun UnlockScreen(
                 modifier = Modifier.widthIn(max = 420.dp),
                 verticalArrangement = Arrangement.spacedBy(ChurSpacing.three),
             ) {
+                PrivateBoundaryMark(size = 56.dp)
                 Text("Chur", style = MaterialTheme.typography.headlineMedium)
                 Text(
                     if (appGate) {
