@@ -121,6 +121,18 @@ def command_request(args):
         return {"op": "show", "object": args.object}
     if action in ("album-create", "tag-create"):
         return {"op": action.replace("-", "_"), "name": args.name}
+    if action == "album-rename":
+        return {"op": "album_rename", "album": args.album, "name": args.name}
+    if action == "album-delete":
+        if not args.yes:
+            raise ValueError("album-delete requires --yes; the album subtree is removed but media is retained")
+        return {"op": "album_delete", "album": args.album}
+    if action == "album-move":
+        return {"op": "album_move", "album": args.album,
+                "parent": args.parent or "", "before": args.before or ""}
+    if action == "album-reorder":
+        return {"op": "album_reorder", "album": args.album, "object": args.object,
+                "before": args.before or ""}
     if action in ("album-add", "album-remove"):
         return {"op": "album_member", "album": args.album, "object": args.object,
                 "member": action == "album-add"}
@@ -142,7 +154,7 @@ def parser():
     commands = cli.add_subparsers(dest="action", required=True)
     listing = commands.add_parser("list", help="list a catalog page")
     listing.add_argument("--scope", choices=("timeline", "favorites", "album", "tag", "search"), default="timeline")
-    listing.add_argument("--sort", choices=("capture_desc", "capture_asc", "import_desc"), default="capture_desc")
+    listing.add_argument("--sort", choices=("capture_desc", "capture_asc", "import_desc", "album_manual"), default="capture_desc")
     listing.add_argument("--limit", type=int, default=100)
     listing.add_argument("--id", help="album or tag ID")
     listing.add_argument("--terms", help="search terms")
@@ -153,6 +165,20 @@ def parser():
     commands.add_parser("show").add_argument("object")
     for name in ("album-create", "tag-create"):
         commands.add_parser(name).add_argument("name")
+    rename = commands.add_parser("album-rename", help="rename an album")
+    rename.add_argument("album")
+    rename.add_argument("name")
+    delete = commands.add_parser("album-delete", help="delete an album subtree, retaining media")
+    delete.add_argument("album")
+    delete.add_argument("--yes", action="store_true", help="confirm removal of the album subtree")
+    move = commands.add_parser("album-move", help="move an album under a parent, optionally before a sibling")
+    move.add_argument("album")
+    move.add_argument("--parent")
+    move.add_argument("--before")
+    reorder = commands.add_parser("album-reorder", help="move an object within an album, before another object")
+    reorder.add_argument("album")
+    reorder.add_argument("object")
+    reorder.add_argument("--before")
     for name, owner in (("album-add", "album"), ("album-remove", "album"),
                         ("tag-add", "tag"), ("tag-remove", "tag")):
         item = commands.add_parser(name)
@@ -163,6 +189,7 @@ def parser():
     importer = commands.add_parser("import", help="stream one or more local files into Chur")
     importer.add_argument("paths", nargs="+", type=Path)
     importer.add_argument("--type", help="IANA media type override")
+    importer.add_argument("--album", help="add each imported object to this album")
     exporter = commands.add_parser("export", help="save one original without overwriting a local file")
     exporter.add_argument("object", help="object ID")
     exporter.add_argument("destination", type=Path, help="new local file path")
@@ -221,8 +248,13 @@ def main():
                     result = exchange(connection, {"op": "import", "name": path.name,
                                                    "length": path.stat().st_size,
                                                    "content_type": kind}, source)
+                if args.album and "id" in result:
+                    membership = exchange(connection, {"op": "album_member", "album": args.album,
+                                                       "object": result["id"], "member": True})
+                    if "error" in membership:
+                        result["album_error"] = membership["error"]
                 print(json.dumps({"source": str(path), **result}, ensure_ascii=False))
-                failed |= "error" in result
+                failed |= "error" in result or "album_error" in result
             return 1 if failed else 0
     finally:
         subprocess.run(adb + ["forward", "--remove", f"tcp:{local_port}"], check=False,

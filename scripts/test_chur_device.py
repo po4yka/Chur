@@ -18,6 +18,21 @@ SPEC.loader.exec_module(device)
 
 
 class DeviceProtocolTest(unittest.TestCase):
+    def test_album_commands_and_delete_confirmation(self):
+        cli = device.parser()
+        args = cli.parse_args(["--port", "1234", "album-move", "a" * 32,
+                               "--parent", "b" * 32, "--before", "c" * 32])
+        self.assertEqual(device.command_request(args),
+                         {"op": "album_move", "album": "a" * 32,
+                          "parent": "b" * 32, "before": "c" * 32})
+        args = cli.parse_args(["--port", "1234", "album-delete", "a" * 32])
+        with self.assertRaisesRegex(ValueError, "requires --yes"):
+            device.command_request(args)
+        args = cli.parse_args(["--port", "1234", "album-delete", "a" * 32, "--yes"])
+        self.assertEqual(device.command_request(args)["op"], "album_delete")
+        args = cli.parse_args(["--port", "1234", "import", "--album", "a" * 32, "photo.jpg"])
+        self.assertEqual(args.album, "a" * 32)
+
     def test_session_link_accepts_only_the_expected_local_session(self):
         code = "0123456789abcdef" * 2
         self.assertEqual(device.parse_session_link(f"chur://device-control/v1?port=54321#{code}"),

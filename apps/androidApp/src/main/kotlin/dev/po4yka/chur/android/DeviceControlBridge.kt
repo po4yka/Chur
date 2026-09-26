@@ -164,7 +164,8 @@ internal class DeviceControlBridge(
             }
             "albums" -> JSONObject().put("albums", JSONArray().also { rows ->
                 vault.albums().forEach { rows.put(JSONObject().put("id", it.id)
-                    .put("name", it.name).put("count", it.memberCount)) }
+                    .put("name", it.name).put("count", it.memberCount)
+                    .put("parent", it.parentId?.hex()).put("position", it.position)) }
             })
             "tags" -> JSONObject().put("tags", JSONArray().also { rows ->
                 vault.tags().forEach { rows.put(JSONObject().put("id", it.id).put("name", it.name)) }
@@ -189,6 +190,30 @@ internal class DeviceControlBridge(
                 val id = vault.createAlbum(request.boundedLabel())
                 controller.refreshExternalChanges(albums = true)
                 JSONObject().put("id", id.hex())
+            }
+            "album_rename" -> {
+                vault.renameAlbum(request.getString("album").idBytes(), request.boundedLabel())
+                controller.refreshExternalChanges(albums = true)
+                JSONObject().put("ok", true)
+            }
+            "album_delete" -> {
+                vault.deleteAlbum(request.getString("album").idBytes())
+                controller.refreshExternalChanges(albums = true)
+                JSONObject().put("ok", true)
+            }
+            "album_move" -> {
+                vault.moveAlbum(request.getString("album").idBytes(),
+                    request.optString("parent").takeIf { it.isNotEmpty() }?.idBytes(),
+                    request.optString("before").takeIf { it.isNotEmpty() }?.idBytes())
+                controller.refreshExternalChanges(albums = true)
+                JSONObject().put("ok", true)
+            }
+            "album_reorder" -> {
+                vault.moveAlbumMember(request.getString("album").idBytes(),
+                    request.getString("object").idBytes(),
+                    request.optString("before").takeIf { it.isNotEmpty() }?.idBytes())
+                controller.refreshExternalChanges(albums = true)
+                JSONObject().put("ok", true)
             }
             "tag_create" -> {
                 val id = vault.createTag(request.boundedLabel())

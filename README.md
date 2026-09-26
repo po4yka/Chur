@@ -1031,9 +1031,13 @@ python3 scripts/chur-device.py --port PORT export OBJECT_ID ./original.jpg
 python3 scripts/chur-device.py --port PORT albums
 python3 scripts/chur-device.py --port PORT album-create "Trip"
 python3 scripts/chur-device.py --port PORT album-add ALBUM_ID OBJECT_ID
+python3 scripts/chur-device.py --port PORT album-rename ALBUM_ID "New name"
+python3 scripts/chur-device.py --port PORT album-move ALBUM_ID --parent PARENT_ID --before SIBLING_ID
+python3 scripts/chur-device.py --port PORT album-reorder ALBUM_ID OBJECT_ID --before OTHER_OBJECT_ID
+python3 scripts/chur-device.py --port PORT import --album ALBUM_ID photo.jpg
 ```
 
-The command also supports tags, favorites, search, pagination, and album removal; see `--help`. It connects through `adb forward` and removes that forwarding when the command ends. Imports use a seekable, temporary descriptor backed by the computer file and do not copy a plaintext source file into Android storage. Export streams the original, verifies its size and SHA-256 against the device, and creates a new local file only after verification. The channel works only with the vault currently open on the phone and stops when the app leaves the foreground. Command output can contain private object identifiers and album or tag names.
+The command also supports tags, favorites, search, pagination, and album removal; see `--help`. `album-delete ALBUM_ID --yes` removes that album and its child albums and memberships but retains every media object. Import with `--album` adds each committed object to the album; if that second step fails, the result includes the imported object ID and `album_error`. It connects through `adb forward` and removes that forwarding when the command ends. Imports use a seekable, temporary descriptor backed by the computer file and do not copy a plaintext source file into Android storage. Export streams the original, verifies its size and SHA-256 against the device, and creates a new local file only after verification. The channel works only with the vault currently open on the phone and stops when the app leaves the foreground. Command output can contain private object identifiers and album or tag names.
 
 ---
 
