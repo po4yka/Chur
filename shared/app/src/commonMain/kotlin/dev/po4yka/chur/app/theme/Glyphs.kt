@@ -51,11 +51,20 @@ val BackGlyph: ImageVector = glyph("Back") {
 /** A gear, for settings. */
 val SettingsGlyph: ImageVector = glyph("Settings") {
     stroke {
-        moveTo(12f, 8f); lineTo(16f, 12f); lineTo(12f, 16f); lineTo(8f, 12f); close()
-        moveTo(12f, 3f); lineTo(12f, 6f)
-        moveTo(12f, 18f); lineTo(12f, 21f)
-        moveTo(3f, 12f); lineTo(6f, 12f)
-        moveTo(18f, 12f); lineTo(21f, 12f)
+        moveTo(10f, 2.5f); lineTo(14f, 2.5f); lineTo(14.4f, 4.3f)
+        lineTo(16.2f, 5f); lineTo(17.8f, 4f); lineTo(20f, 6.2f)
+        lineTo(19f, 7.8f); lineTo(19.7f, 9.6f); lineTo(21.5f, 10f)
+        lineTo(21.5f, 14f); lineTo(19.7f, 14.4f); lineTo(19f, 16.2f)
+        lineTo(20f, 17.8f); lineTo(17.8f, 20f); lineTo(16.2f, 19f)
+        lineTo(14.4f, 19.7f); lineTo(14f, 21.5f); lineTo(10f, 21.5f)
+        lineTo(9.6f, 19.7f); lineTo(7.8f, 19f); lineTo(6.2f, 20f)
+        lineTo(4f, 17.8f); lineTo(5f, 16.2f); lineTo(4.3f, 14.4f)
+        lineTo(2.5f, 14f); lineTo(2.5f, 10f); lineTo(4.3f, 9.6f)
+        lineTo(5f, 7.8f); lineTo(4f, 6.2f); lineTo(6.2f, 4f)
+        lineTo(7.8f, 5f); lineTo(9.6f, 4.3f); close()
+        moveTo(12f, 9f)
+        arcToRelative(3f, 3f, 0f, true, true, 0f, 6f)
+        arcToRelative(3f, 3f, 0f, true, true, 0f, -6f)
     }
 }
 
