@@ -448,11 +448,7 @@ class ChurController(
             // Keystore key, runs an interactive prompt and finishes an AEAD.
             // The prompt itself hops back to the main thread on its own, which
             // is where the platform requires it.
-            withContext(Dispatchers.Default) {
-                repository.enrollKeystoreSlot { alias, aad, root ->
-                    deviceUnlock.wrap(alias, aad, root)
-                }
-            }
+            withContext(Dispatchers.Default) { addKeystoreSlot() }
         } finally {
             endHostActivity()
         }
@@ -465,18 +461,31 @@ class ChurController(
     fun enrollAppleDeviceSlot() = guarded {
         beginHostActivity()
         try {
-            withContext(Dispatchers.Default) {
-                val itemId = appleDeviceUnlock.newItemId()
-                repository.enrollAppleSlot(itemId) { secret ->
-                    appleDeviceUnlock.storeSecret(itemId, secret, deviceSlotPolicy.read())
-                }
-            }
+            withContext(Dispatchers.Default) { addAppleSlot() }
         } finally {
             endHostActivity()
         }
         _message.value = "This device can now open the vault."
         loadSlots()
         refreshDeviceUnlockOffer()
+    }
+
+    /**
+     * Enrolls a Keystore slot under the policy [deviceSlotPolicy] holds now,
+     * which the Android binding reads when it generates the key.
+     */
+    private suspend fun addKeystoreSlot() {
+        repository.enrollKeystoreSlot { alias, aad, root ->
+            deviceUnlock.wrap(alias, aad, root)
+        }
+    }
+
+    /** Enrolls a Keychain slot under the policy [deviceSlotPolicy] holds now. */
+    private suspend fun addAppleSlot() {
+        val itemId = appleDeviceUnlock.newItemId()
+        repository.enrollAppleSlot(itemId) { secret ->
+            appleDeviceUnlock.storeSecret(itemId, secret, deviceSlotPolicy.read())
+        }
     }
 
     /** Recomputes whether the unlock screen may offer the device slot. */
@@ -499,18 +508,73 @@ class ChurController(
     }
 
     /**
-     * Switches the device-slot policy of `KEY_SLOTS.md` §1.
+     * Switches the device-slot policy of `KEY_SLOTS.md` §1 and replaces the
+     * device slot the open vault holds under the old one.
      *
-     * §1 shows the choice at device-slot creation, so the next enrollment
-     * and the next unlock read what this wrote; a slot enrolled under the
-     * other policy keeps the key it has until it is removed.
+     * The platform fixes a slot's authentication when it creates the key or
+     * the Keychain item, and the Android unwrap follows the stored key rather
+     * than this setting. Writing the setting alone therefore left a convenient
+     * slot that the device unlock code still opened after the user chose
+     * biometrics only, which is the adversary `THREAT_MODEL.md` A2 names.
+     * `ANDROID.md` §9.3 makes a mode change create or replace the platform
+     * slot, so this enrolls a slot under the new policy through the path, and
+     * the prompt, an enrollment uses. It removes the old slots only after the
+     * new one commits, the order of `KEY_SLOTS.md` §9 and `ANDROID.md` §9.4
+     * steps 5 and 6. With no slot enrolled, the change is the creation-time
+     * choice §1 describes and nothing else happens.
+     *
+     * [deviceSlotStrict] comes from the slots that survive, not from the
+     * request. A cancelled prompt or a failed removal therefore never shows a
+     * policy that is not in force. The platform binding reads the new policy
+     * from the setting during the swap, so the setting is written first; a
+     * process that dies inside the swap skips the read-back and can keep the
+     * new policy in the setting until the next toggle replaces the slot.
      */
-    fun toggleDeviceSlotPolicy() =
-        guarded {
-            val next = !_deviceSlotStrict.value
-            withContext(Dispatchers.Default) { deviceSlotPolicy.write(next) }
-            _deviceSlotStrict.value = next
+    fun toggleDeviceSlotPolicy() = guarded {
+        val previous = _deviceSlotStrict.value
+        val next = !previous
+        // The slot types [SlotSummary.familyName] gives: 2 is the Android
+        // Keystore, 3 the Apple Keychain. The Keychain binding wins when it is
+        // bound, the same choice [refreshDeviceUnlockOffer] makes.
+        val family = if (appleDeviceUnlock.available) 3 else 2
+        beginHostActivity()
+        try {
+            withContext(Dispatchers.Default) {
+                val before = repository.slots().filter { it.slotType == family }
+                deviceSlotPolicy.write(next)
+                try {
+                    if (before.isNotEmpty()) {
+                        if (family == 3) addAppleSlot() else addKeystoreSlot()
+                        // Every old slot goes even when one fails: a removal
+                        // can fail after the descriptor dropped the slot, and
+                        // stopping there would keep the next old slot.
+                        before.mapNotNull { slot ->
+                            runCatching { repository.removeSlot(slot.slotId) }.exceptionOrNull()
+                        }.firstOrNull()?.let { throw it }
+                    }
+                } finally {
+                    // A slot listed in `before` holds the old policy and any
+                    // other slot holds the new one. A mix of the two always
+                    // includes a convenient slot, which the device unlock code
+                    // opens. If the vault cannot be read, assume it holds one.
+                    val after = runCatching {
+                        repository.slots().filter { it.slotType == family }
+                    }.getOrNull()
+                    val inForce = when {
+                        after == null -> false
+                        after.none { it in before } -> next
+                        else -> previous && after.all { it in before }
+                    }
+                    deviceSlotPolicy.write(inForce)
+                    _deviceSlotStrict.value = inForce
+                }
+            }
+        } finally {
+            endHostActivity()
+            loadSlots()
+            refreshDeviceUnlockOffer()
         }
+    }
 
     /** Selects whether the public shell also needs a vault credential. */
     fun toggleAppLock() = guarded {

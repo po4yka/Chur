@@ -689,10 +689,19 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
         }
         // §4 of KEY_SLOTS makes the device unlock code a vault credential in
         // the convenient mode, so the label says which factor it enrolls
-        // rather than promising a stronger one.
+        // rather than promising a stronger one. The strict policy enrolls
+        // biometry only, so the label then names biometrics, not a screen
+        // lock the slot does not accept.
         if (state.deviceSlotAvailable) {
             item {
-                SettingsAction("Unlock with this device's screen lock", actions.onAddDeviceSlot)
+                SettingsAction(
+                    if (state.deviceSlotStrict == true) {
+                        "Unlock with this device's biometrics"
+                    } else {
+                        "Unlock with this device's screen lock"
+                    },
+                    actions.onAddDeviceSlot,
+                )
             }
             state.deviceSlotStrict?.let { strict ->
                 item {
@@ -700,6 +709,9 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
                     // at device-slot creation, and strict is the only
                     // configuration that resists an adversary who knows the
                     // device unlock code. The label names what toggling does.
+                    // The controller re-enrolls an existing slot under the new
+                    // policy (`ANDROID.md` §9.3), so the state the label implies
+                    // is the state in force.
                     SettingsAction(
                         if (strict) {
                             "Allow the device screen lock to unlock"

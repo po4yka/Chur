@@ -39,8 +39,9 @@ class AndroidDeviceUnlock(
      * The per-vault policy of `KEY_SLOTS.md` §1, read at every call.
      *
      * §1 shows the choice at device-slot creation, so reading it per call
-     * is what carries a settings change into the next enrollment and
-     * unlock without a restart.
+     * is what carries a settings change into the next enrollment without a
+     * restart. An unlock follows the stored key instead, which is why a
+     * change re-enrolls the slot rather than only writing the setting.
      */
     private val policy: () -> DeviceSlotPolicy = { DeviceSlotPolicy.CONVENIENT },
 ) : DeviceUnlock {
