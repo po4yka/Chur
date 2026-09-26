@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -40,6 +41,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.LocalChurColors
+import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
 import dev.po4yka.chur.ffi.AlbumSummary
 import dev.po4yka.chur.ffi.toHex
 
@@ -200,8 +202,14 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions) {
     } else {
         Column(modifier = Modifier.fillMaxSize()) {
             Row(modifier = Modifier.fillMaxWidth().padding(horizontal = ChurSpacing.gutter)) {
-                TextButton(onClick = { grid = false }) { Text(if (grid) "List" else "✓ List") }
-                TextButton(onClick = { grid = true }) { Text(if (grid) "✓ Grid" else "Grid") }
+                TextButton(
+                    onClick = { grid = false },
+                    colors = ButtonDefaults.textButtonColors(contentColor = if (grid) colors.inkMuted else colors.accent),
+                ) { Text(if (grid) "List" else "✓ List") }
+                TextButton(
+                    onClick = { grid = true },
+                    colors = ButtonDefaults.textButtonColors(contentColor = if (grid) colors.accent else colors.inkMuted),
+                ) { Text(if (grid) "✓ Grid" else "Grid") }
             }
             if (grid) {
                 LazyVerticalGrid(
@@ -233,7 +241,14 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions) {
         AlertDialog(
             onDismissRequest = { renaming = null },
             title = { Text("Rename album") },
-            text = { OutlinedTextField(renameText, { renameText = it }, label = { Text("Album name") }) },
+            text = {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    label = { Text("Album name") },
+                    colors = churOutlinedTextFieldColors(),
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
                     actions.onRenameAlbum(album, renameText.trim())
