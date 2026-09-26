@@ -32,6 +32,8 @@ colors:
     surface-raised: "#FFFFFF"
     surface-sunken: "#EEEEEB"
     ink: "#171717"
+    ink-muted: "#5C5C58"
+    outline: "#DCDCD8"
     body: "#4F4F4B"
     muted: "#7C7C76"
     disabled: "#A7A7A1"
@@ -60,6 +62,8 @@ colors:
     surface-raised: "#1D1D1D"
     surface-sunken: "#050505"
     ink: "#F5F5F3"
+    ink-muted: "#A3A39D"
+    outline: "#2A2A2A"
     body: "#C6C6C0"
     muted: "#8D8D86"
     disabled: "#62625D"
@@ -219,12 +223,13 @@ components:
     typography: "title-large"
   bottom-navigation:
     visual-height: "64dp plus system inset"
-    active: "ink"
-    inactive: "muted"
-    indicator: "2dp boundary line; no filled capsule by default"
+    active: "accent icon and label"
+    inactive: "ink-muted"
+    indicator: "accent-soft"
   navigation-rail:
     width: "80dp"
-    active-indicator: "primary"
+    active-indicator: "accent-soft"
+    active-content: "accent"
   button-primary:
     minHeight: "48dp"
     background: "primary"
@@ -248,9 +253,12 @@ components:
     rounded: "pill"
   text-field:
     minHeight: "52dp"
-    background: "surface"
-    border: "hairline-strong"
+    background: "transparent over current surface"
+    border: "outline"
     focusBorder: "focus"
+    focusLabel: "focus"
+    cursor: "focus"
+    textSelection: "selection-soft fill with accent handles"
     rounded: "md"
   secure-field:
     minHeight: "56dp"
@@ -258,22 +266,27 @@ components:
     errorBehavior: "Neutral authentication language; no real/decoy oracle"
   search-field:
     minHeight: "48dp"
-    background: "surface-subtle"
+    background: "transparent over current surface"
+    focusBorder: "focus"
     rounded: "md"
   segmented-control:
     minHeight: "40dp"
     background: "surface-subtle"
     selected: "surface-raised"
+    selectedContent: "accent with text or shape cue"
     rounded: "md"
   filter-chip:
     minHeight: "36dp"
     touchTarget: "48dp"
-    selectedBackground: "ink"
+    selectedBackground: "accent-soft"
+    selectedContent: "accent with checkmark"
     rounded: "pill"
   media-tile:
-    background: "surface-subtle"
+    background: "surface-sunken"
     rounded: "xs"
     selectionStroke: "2dp selection plus checkmark"
+    selectionCheck: "accent fill with contrasting checkmark"
+    integrityBadge: "warning or error icon on opaque surface"
   album-card:
     background: "surface"
     border: "hairline"
@@ -306,6 +319,7 @@ components:
     minHeight: "64dp"
     background: "surface"
     progressColor: "accent"
+    progressTrack: "surface-sunken"
   integrity-banner:
     background: "warning-soft or error-soft"
     requirement: "Icon, heading, explanation, and explicit action"
@@ -555,6 +569,12 @@ Neutral structure + user media + one boundary accent
 
 Primary actions are near-black on light surfaces and near-white on dark surfaces. Blue is reserved for focus, selection, progress, links, and explicit active state.
 
+The app's Material primary is neutral ink. Components whose selected or focused state
+would otherwise inherit Material primary use the Chur blue tokens explicitly:
+outlined fields, text selection, navigation items, progress bars, checked controls,
+and the active Albums list/grid choice. An active choice keeps a text or shape cue
+in addition to color.
+
 This prevents Chur from becoming a generic blue dashboard and leaves the strongest chroma to user content.
 
 ### 6.2 Surface ladder
@@ -565,6 +585,7 @@ Light:
 canvas #FAFAF9
 surface #FFFFFF
 surface-subtle #F4F4F2
+surface-raised #FFFFFF
 surface-sunken #EEEEEB
 ink #171717
 ```
@@ -576,6 +597,7 @@ canvas #0A0A0A
 surface #111111
 surface-subtle #171717
 surface-raised #1D1D1D
+surface-sunken #050505
 ink #F5F5F3
 ```
 
@@ -807,6 +829,8 @@ Examples:
 - selection uses a 2dp outline plus checkmark;
 - duration, Live/RAW/spatial indicators use compact overlays only when necessary;
 - failed thumbnail and integrity states use deliberate placeholders;
+- placeholder icons use muted ink rather than a low-contrast outline;
+- integrity badges have an opaque surface behind warning or error icons, so their contrast does not depend on the thumbnail;
 - grid loading uses stable geometry to avoid layout jumps;
 - the column count is `floor(available_width / target_tile)`, clamped to 3 through 8 columns, with `target_tile` 112dp compact, 148dp medium, and 180dp expanded; gaps are 2dp compact and 4dp above. The result is deterministic for a given width, so a screenshot test pins it and density needs no separate setting.
 
@@ -872,6 +896,10 @@ Album card content:
 - album name;
 - item count;
 - optional shared/status metadata when future sharing exists.
+
+The Albums list/grid choice marks the active view with both a checkmark and
+the blue accent. The inactive choice uses muted ink. Album rename fields use
+the same blue focus border, label, and cursor as other outlined fields.
 
 ### 12.2 Search
 
@@ -1363,53 +1391,30 @@ CJK filename and album names
 
 ### 25.1 Source of tokens
 
-The frontmatter is documentation-first. Production tokens should be represented as typed common code, generated from a dedicated token source or kept synchronized by tests.
-
-Conceptual API:
-
-```kotlin
-@Immutable
-data class ChurColors(
-    val canvas: Color,
-    val surface: Color,
-    val ink: Color,
-    val body: Color,
-    val accent: Color,
-    val hairline: Color,
-    val success: Color,
-    val warning: Color,
-    val error: Color,
-    val privacyCover: Color,
-)
-
-@Immutable
-data class ChurDimensions(
-    val screenGutter: Dp,
-    val touchTarget: Dp,
-    val cardRadius: Dp,
-    val sheetRadius: Dp,
-)
-
-@Composable
-fun ChurTheme(
-    darkTheme: Boolean,
-    mediaMode: Boolean = false,
-    content: @Composable () -> Unit,
-)
-```
+The frontmatter defines the design values. Production tokens live in
+`shared/app/src/commonMain/kotlin/dev/po4yka/chur/app/theme/ChurTheme.kt` as
+`ChurLightColors`, `ChurDarkColors`, `ViewerColors`, and `ChurSpacing`.
+`DesignRulesTest` checks the shipped light/dark accent, focus, selection,
+surface, warning, error, and cord values. `ChurTheme(dark, content)` installs
+both the Material scheme and text-selection colors.
 
 ### 25.2 Material mapping
 
 Material 3 may provide semantics and primitives, but Chur owns final tokens.
 
 ```text
-Material colorScheme.primary       ← Chur primary
+Material colorScheme.primary       ← Chur ink (neutral primary actions)
 Material colorScheme.secondary     ← Chur accent
 Material colorScheme.background    ← Chur canvas
 Material colorScheme.surface       ← Chur surface
-Material colorScheme.outline       ← Chur hairline-strong
+Material colorScheme.outline       ← Chur outline
 Material colorScheme.error         ← Chur error
 ```
+
+Do not use Material primary as a shortcut for focus or selected state: it is
+neutral by design. Shared controls apply `focus`, `accent`, `accent-soft`, and
+`selection-soft` explicitly. The red cord is a brand mark token and is never
+used for navigation, form focus, progress, or integrity status.
 
 Do not accept dynamic color automatically for private and public surfaces. It could weaken identity consistency, contrast, real/decoy equivalence, or screenshot-review predictability. Dynamic color requires a separate ADR and security/design review.
 
