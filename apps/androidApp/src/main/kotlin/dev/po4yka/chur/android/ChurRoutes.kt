@@ -484,27 +484,6 @@ private fun VaultRoute(controller: ChurController) {
         }
     }
 
-    // Back undoes the innermost thing the visible controls opened, with the
-    // state changes those controls make: the viewer, the selection, the album,
-    // the Browse scope, then any other tab. The Library root declines, so Back
-    // there stays the platform's back-to-home with its background lock.
-    BackHandler(
-        enabled = viewing != null || selection.isNotEmpty() || openAlbum != null ||
-            openTag != null || favoritesOnly || trashOpen || destination != VaultDestination.LIBRARY,
-    ) {
-        when {
-            viewing != null -> viewing = null
-            selection.isNotEmpty() -> selection = emptySet()
-            openAlbum != null -> openAlbum = null
-            openTag != null || favoritesOnly || trashOpen -> {
-                openTag = null
-                favoritesOnly = false
-                trashOpen = false
-            }
-            else -> destination = VaultDestination.LIBRARY
-        }
-    }
-
     viewing?.let { projection ->
         ViewerRoute(
             controller = controller,
@@ -866,6 +845,7 @@ private fun VaultRoute(controller: ChurController) {
             onShareWithRecipient = controller::shareWithRecipient,
             onRevokeSharingMember = controller::revokeSharingMember,
         ),
+        systemBack = { enabled, onBack -> BackHandler(enabled = enabled, onBack = onBack) },
     )
 }
 
@@ -902,7 +882,11 @@ private fun ViewerRoute(
     var waveform by remember(projection.id) { mutableStateOf<ByteArray?>(null) }
     var confirmingDelete by remember(projection.id) { mutableStateOf(false) }
     var choosingExport by remember(projection.id) { mutableStateOf(false) }
-    // Registered after the vault's handler, so it answers first: Back closes
+    // The viewer is an early return over the shell, not a back-stack entry,
+    // so Back is routed to its own Back here; a press that reached the
+    // platform would go home and lock.
+    BackHandler(onBack = onBack)
+    // Registered after the viewer's handler, so it answers first: Back closes
     // the Info overlay before it closes the viewer. The overlay is drawn only
     // once the detail has loaded.
     BackHandler(enabled = showDetail && detail != null) { showDetail = false }

@@ -241,17 +241,50 @@ data class VaultActions(
 )
 
 /**
+ * The step system Back takes in the shell, or `null` at its root.
+ *
+ * It is the step a visible control already takes - the selection bar's close,
+ * the top bar's Back, the Library tab - innermost first, so a press never skips
+ * a level the user can see. The Library root returns `null`: Back there belongs
+ * to the platform, which goes home, and the background lock of `ANDROID.md`
+ * §19.1 follows as before. `DESIGN.md` §22.1 has navigation respect the
+ * platform's back behavior, and §25.4 lets the gesture differ per platform.
+ */
+internal fun VaultUiState.backStep(actions: VaultActions): (() -> Unit)? = when {
+    selectedCount > 0 -> actions.onClearSelection
+    openAlbum != null -> actions.onCloseAlbum
+    libraryScopeTitle != null -> actions.onShowAllMedia
+    destination != VaultDestination.LIBRARY -> {
+        { actions.onDestination(VaultDestination.LIBRARY) }
+    }
+    else -> null
+}
+
+/**
  * The private shell.
  *
  * It is a pure function of [VaultUiState]: nothing here reads a repository, so
  * a screenshot test renders any state without a vault, and a lock transition
  * cannot leave a half-rendered screen behind because there is no state to
  * leave.
+ *
+ * What Back does is decided here, by [backStep]. The dispatcher that delivers
+ * it is [systemBack]. This module compiles against neither `activity-compose`
+ * nor a common back handler, so the Android host passes its `BackHandler`, and
+ * iOS, which has no system Back, passes nothing.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun VaultShell(state: VaultUiState, actions: VaultActions) {
+fun VaultShell(
+    state: VaultUiState,
+    actions: VaultActions,
+    // No default: a host that forgot it would compile, pass every test, and
+    // send Back home, where the background lock closes the vault.
+    systemBack: @Composable (enabled: Boolean, onBack: () -> Unit) -> Unit,
+) {
     val colors = LocalChurColors.current
+    val back = state.backStep(actions)
+    systemBack(back != null) { back?.invoke() }
     Scaffold(
         containerColor = colors.canvas,
         topBar = {

@@ -571,6 +571,8 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             onShareWithRecipient = controller::shareWithRecipient,
             onRevokeSharingMember = controller::revokeSharingMember,
         ),
+        // iOS has no system Back to deliver, `DESIGN.md` §25.4.
+        systemBack = { _, _ -> },
     )
 
     viewing?.let { projection ->
