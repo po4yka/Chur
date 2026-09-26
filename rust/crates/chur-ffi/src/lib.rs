@@ -302,7 +302,7 @@ mod tests {
     #[test]
     fn the_handshake_answers_every_documented_fact() {
         assert_eq!(chur_abi_version_major(), 1);
-        assert_eq!(chur_abi_version_minor(), 13);
+        assert_eq!(chur_abi_version_minor(), 14);
         assert_eq!(chur_object_format_min(), 1);
         assert_eq!(chur_object_format_max(), 1);
         assert_eq!(chur_key_slot_format_min(), 1);
