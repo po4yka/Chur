@@ -455,6 +455,37 @@ pub fn verify_recipient_keys(
     Ok(candidate)
 }
 
+/// Projects an authenticated rotation in the caller's transaction.
+pub(crate) fn project_recipient_rotation(
+    transaction: &Transaction<'_>,
+    current: &CollectionMembershipState,
+    identity_vault_id: Id,
+    device_id: Id,
+    signing_public_key: [u8; 32],
+    hpke_public_key: [u8; 32],
+) -> Result<CollectionMembershipState> {
+    let mut candidate = current.clone();
+    candidate.rotate_recipient_keys(
+        identity_vault_id,
+        device_id,
+        signing_public_key,
+        hpke_public_key,
+    )?;
+    check_head(transaction, current)?;
+    let pin = candidate
+        .recipient_pin(&identity_vault_id, &device_id)
+        .ok_or_else(|| Error::new(ChurStatus::CatalogCorrupt, "rotated pin is missing"))?;
+    upsert_pin(
+        transaction,
+        candidate.collection_id(),
+        &identity_vault_id,
+        &device_id,
+        pin,
+    )?;
+    bump_generation(transaction)?;
+    Ok(candidate)
+}
+
 /// Validates and stores one canonical collection grant atomically.
 pub fn store_grant(
     db: &mut CatalogDb,
@@ -763,7 +794,17 @@ fn restore_pin_for_record(
             && stored.signing_public_key == *record.recipient_signing_public_key()
             && stored.hpke_public_key == *record.recipient_hpke_public_key()
     });
-    if key_change || final_verified_key || verification_upgrade {
+    if key_change {
+        state
+            .restore_recipient_keys(
+                recipient.0,
+                recipient.1,
+                *record.recipient_signing_public_key(),
+                *record.recipient_hpke_public_key(),
+                stored.verification,
+            )
+            .map_err(corrupt_sharing)?;
+    } else if final_verified_key || verification_upgrade {
         state
             .verify_recipient_keys(
                 recipient.0,

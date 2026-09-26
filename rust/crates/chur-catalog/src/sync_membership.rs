@@ -163,6 +163,55 @@ pub fn load(db: &CatalogDb) -> Result<Option<MembershipState>> {
     Ok(Some(state))
 }
 
+/// Authenticated historical key pairs for one local device, in generation order.
+/// The full membership chain is replayed before these rows are used as evidence.
+pub(crate) fn device_key_history(
+    db: &CatalogDb,
+    device_id: &Id,
+) -> Result<Vec<([u8; 32], [u8; 32])>> {
+    let state = load(db)?.ok_or_else(|| {
+        Error::new(
+            ChurStatus::RecoveryRequired,
+            "local membership history is absent",
+        )
+    })?;
+    ensure!(
+        state.device(device_id).is_some(),
+        AuthenticationFailed,
+        "local device is not enrolled"
+    );
+    let mut statement = db
+        .connection()
+        .prepare("SELECT record FROM sync_membership_records WHERE record_kind = ?1 ORDER BY membership_generation")
+        .map_err(|error| map_sqlite(error, "local key history could not be prepared"))?;
+    let mut rows = statement
+        .query([ENROLLMENT])
+        .map_err(|error| map_sqlite(error, "local key history could not be read"))?;
+    let mut history = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| map_sqlite(error, "local key history could not be read"))?
+    {
+        let bytes: Vec<u8> = row
+            .get(0)
+            .map_err(|error| map_sqlite(error, "local enrollment could not be read"))?;
+        let record = EnrollmentRecord::decode(&bytes).map_err(corrupt_membership)?;
+        if record.device_id() == device_id {
+            history.push((*record.signing_public_key(), *record.hpke_public_key()));
+        }
+    }
+    ensure!(
+        history.last().is_some_and(|(signing, hpke)| {
+            state.device(device_id).is_some_and(|device| {
+                signing == device.signing_public_key() && hpke == device.hpke_public_key()
+            })
+        }),
+        CatalogCorrupt,
+        "local key history contradicts current membership"
+    );
+    Ok(history)
+}
+
 /// Creates generation-one membership and every required projection atomically.
 pub fn provision(db: &mut CatalogDb, enrollment: &EnrollmentRecord) -> Result<MembershipState> {
     db.transaction(|transaction| {

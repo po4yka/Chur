@@ -144,6 +144,7 @@ pub fn prepare_share(
         *recipient_enrollment.hpke_public_key(),
         permissions,
         fingerprint_verified,
+        None,
     )
 }
 
@@ -204,6 +205,7 @@ pub fn prepare_share_for_device(
         *recipient_device.hpke_public_key(),
         permissions,
         fingerprint_verified,
+        Some(history),
     )
 }
 
@@ -222,6 +224,7 @@ fn prepare_share_to_device(
     recipient_hpke_public_key: [u8; 32],
     permissions: PermissionProfile,
     fingerprint_verified: bool,
+    recipient_history: Option<&BTreeMap<u64, MembershipState>>,
 ) -> Result<PreparedShare> {
     ensure!(
         recipient_vault_id != source_vault_id,
@@ -283,19 +286,46 @@ fn prepare_share_to_device(
         )?;
         (membership, operation)
     } else {
-        if fingerprint_verified
-            && sharing_state
-                .recipient_pin(&recipient_vault_id, &recipient_device_id)
-                .is_some()
-        {
-            sharing_state = sharing::verify_recipient_keys(
-                db,
-                &collection_id,
-                recipient_vault_id,
-                recipient_device_id,
-                recipient_signing_public_key,
-                recipient_hpke_public_key,
-            )?;
+        if let Some(pin) = sharing_state.recipient_pin(&recipient_vault_id, &recipient_device_id) {
+            let changed = pin.signing_public_key() != &recipient_signing_public_key
+                || pin.hpke_public_key() != &recipient_hpke_public_key;
+            if changed {
+                // Keep the new pin in memory until author_sharing_operation
+                // writes it with the membership record in one transaction.
+                if fingerprint_verified {
+                    sharing_state.verify_recipient_keys(
+                        recipient_vault_id,
+                        recipient_device_id,
+                        recipient_signing_public_key,
+                        recipient_hpke_public_key,
+                    )?;
+                } else {
+                    let history = recipient_history.ok_or_else(|| {
+                        Error::new(
+                            ChurStatus::AuthenticationFailed,
+                            "recipient key changed without authenticated rotation",
+                        )
+                    })?;
+                    let pairs = device_pairs(history, &recipient_device_id);
+                    ensure!(
+                        rotation_follows(
+                            &pairs,
+                            pin.signing_public_key(),
+                            pin.hpke_public_key(),
+                            &recipient_signing_public_key,
+                            &recipient_hpke_public_key
+                        ),
+                        AuthenticationFailed,
+                        "recipient key changed without authenticated rotation"
+                    );
+                    sharing_state.rotate_recipient_keys(
+                        recipient_vault_id,
+                        recipient_device_id,
+                        recipient_signing_public_key,
+                        recipient_hpke_public_key,
+                    )?;
+                }
+            }
         }
         let sequence = next_sequence(&log, &source_device_id)?;
         let membership = CollectionMembershipRecord::new(
@@ -331,16 +361,6 @@ fn prepare_share_to_device(
             identity.signing_key(),
             PayloadBody::ChangeCollectionMembership(membership.clone()),
         )?;
-        if fingerprint_verified {
-            sharing_state = sharing::verify_recipient_keys(
-                db,
-                &collection_id,
-                recipient_vault_id,
-                recipient_device_id,
-                recipient_signing_public_key,
-                recipient_hpke_public_key,
-            )?;
-        }
         (membership, operation)
     };
 
@@ -947,12 +967,19 @@ pub fn accept_share(
         "a share has no collection membership chain"
     );
     let (issuer_states, authenticated_operations) = authenticate_issuers(issuers)?;
+    let local_membership = sync_membership::load(db)?.ok_or_else(|| {
+        Error::new(
+            ChurStatus::RecoveryRequired,
+            "share acceptance has no local device membership",
+        )
+    })?;
     let first = &membership_records[0].0;
     let mut collection_state = CollectionMembershipState::new(
         *first.source_vault_id(),
         *first.collection_id(),
         first.collection_epoch(),
     )?;
+    let mut authenticated_rotations = Vec::new();
     for (record, operation) in membership_records {
         let issuer = issuer_state(
             &issuer_states,
@@ -967,6 +994,39 @@ pub fn accept_share(
             AuthenticationFailed,
             "collection membership does not match its authenticated operation"
         );
+        if let Some(pin) = collection_state.recipient_pin(
+            record.recipient_identity_vault_id(),
+            record.recipient_device_id(),
+        ) && (pin.signing_public_key() != record.recipient_signing_public_key()
+            || pin.hpke_public_key() != record.recipient_hpke_public_key())
+        {
+            let pairs = if record.recipient_identity_vault_id() == local_membership.vault_id() {
+                sync_membership::device_key_history(db, record.recipient_device_id())?
+            } else {
+                issuer_states
+                    .get(record.recipient_identity_vault_id())
+                    .map(|history| device_pairs(history, record.recipient_device_id()))
+                    .unwrap_or_default()
+            };
+            ensure!(
+                rotation_follows(
+                    &pairs,
+                    pin.signing_public_key(),
+                    pin.hpke_public_key(),
+                    record.recipient_signing_public_key(),
+                    record.recipient_hpke_public_key(),
+                ),
+                AuthenticationFailed,
+                "collection recipient key changed without authenticated rotation"
+            );
+            collection_state.rotate_recipient_keys(
+                *record.recipient_identity_vault_id(),
+                *record.recipient_device_id(),
+                *record.recipient_signing_public_key(),
+                *record.recipient_hpke_public_key(),
+            )?;
+            authenticated_rotations.push(record.collection_membership_generation());
+        }
         collection_state.accept(record, issuer)?;
     }
     ensure!(
@@ -1009,12 +1069,6 @@ pub fn accept_share(
     );
     collection_state.validate_grant(grant, sender)?;
 
-    let local_membership = sync_membership::load(db)?.ok_or_else(|| {
-        Error::new(
-            ChurStatus::RecoveryRequired,
-            "share acceptance has no local device membership",
-        )
-    })?;
     ensure!(
         local_membership.vault_id() == grant.recipient_identity_vault_id(),
         AuthenticationFailed,
@@ -1064,6 +1118,7 @@ pub fn accept_share(
         root,
         *local_membership.vault_id(),
         &issuer_states,
+        &authenticated_rotations,
         membership_records,
         grant,
         sender,
@@ -1209,6 +1264,39 @@ fn issuer_state<'a>(
         })
 }
 
+fn device_pairs(
+    history: &BTreeMap<u64, MembershipState>,
+    device_id: &Id,
+) -> Vec<([u8; 32], [u8; 32])> {
+    history
+        .values()
+        .filter_map(|state| {
+            state
+                .device(device_id)
+                .map(|device| (*device.signing_public_key(), *device.hpke_public_key()))
+        })
+        .collect()
+}
+
+fn rotation_follows(
+    pairs: &[([u8; 32], [u8; 32])],
+    old_signing: &[u8; 32],
+    old_hpke: &[u8; 32],
+    new_signing: &[u8; 32],
+    new_hpke: &[u8; 32],
+) -> bool {
+    let Some(old_index) = pairs
+        .iter()
+        .position(|(signing, hpke)| signing == old_signing && hpke == old_hpke)
+    else {
+        return false;
+    };
+    pairs
+        .iter()
+        .skip(old_index + 1)
+        .any(|(signing, hpke)| signing == new_signing && hpke == new_hpke)
+}
+
 fn require_authenticated_operation(
     operations: &AuthenticatedOperations,
     operation: &Operation,
@@ -1256,6 +1344,7 @@ fn install_share(
     root: &Key,
     local_vault_id: Id,
     issuer_states: &IssuerStates,
+    authenticated_rotations: &[u64],
     membership_records: &[(CollectionMembershipRecord, Operation)],
     grant: &CollectionGrant,
     sender: &MembershipState,
@@ -1390,6 +1479,16 @@ fn install_share(
             }
         };
         for (record, _) in membership_records.iter().skip(accepted_records) {
+            if authenticated_rotations.contains(&record.collection_membership_generation()) {
+                current = sharing::project_recipient_rotation(
+                    transaction,
+                    &current,
+                    *record.recipient_identity_vault_id(),
+                    *record.recipient_device_id(),
+                    *record.recipient_signing_public_key(),
+                    *record.recipient_hpke_public_key(),
+                )?;
+            }
             let issuer = issuer_state(
                 issuer_states,
                 record.issuer_identity_vault_id(),
@@ -1458,6 +1557,302 @@ mod tests {
 
     fn id(byte: u8) -> Id {
         Id::new([byte; 16]).expect("id")
+    }
+
+    #[test]
+    fn authenticated_recipient_rotations_keep_tofu_and_reject_substitution() {
+        let source_vault = id(41);
+        let collection_id = id(42);
+        let root = Key::new([43; 32]);
+        let catalog_key = CatalogKey::derive(&root, &source_vault).expect("catalog key");
+        let mut db = CatalogDb::open(&CatalogLocation::Memory, &catalog_key).expect("catalog");
+        schema::open_at_current_version(&mut db, 1).expect("schema");
+        sync_receive::provision_local_identity(&mut db, &root, source_vault)
+            .expect("source identity");
+        let collection_key = Key::new([44; 32]);
+        let envelope = CollectionKeyEnvelope::seal(
+            &root,
+            source_vault,
+            collection_id,
+            1,
+            1,
+            Nonce::new([45; 24]),
+            &collection_key,
+        )
+        .expect("envelope");
+        store::put_collection_with_envelope(
+            &mut db,
+            &Collection {
+                collection_id,
+                current_epoch: 1,
+                policy_type: COLLECTION_POLICY_VAULT_DEFAULT,
+                created_revision: 1,
+                status: COLLECTION_STATUS_ACTIVE,
+            },
+            1,
+            &envelope.encode(),
+        )
+        .expect("collection");
+
+        let vault = id(46);
+        let device = id(47);
+        let original = DeviceIdentity::from_seeds([48; 32], [49; 32]);
+        let hpke_rotated = DeviceIdentity::from_seeds([48; 32], [50; 32]);
+        let both_rotated = DeviceIdentity::from_seeds([51; 32], [50; 32]);
+        let initial = EnrollmentRecord::initial(
+            vault,
+            device,
+            original.signing_public_key(),
+            original.hpke_public_key(),
+        )
+        .expect("initial")
+        .sign(original.signing_key());
+        prepare_share(
+            &mut db,
+            &root,
+            source_vault,
+            collection_id,
+            &initial,
+            PermissionProfile::Read,
+            false,
+        )
+        .expect("initial share");
+        let mut state = MembershipState::bootstrap(&initial).expect("membership");
+        let operation_key = Key::new([52; 32]);
+        let selector = id(53);
+        let mut log = OperationLog::new();
+        let first_outer = log
+            .author(
+                id(54),
+                vault,
+                device,
+                selector,
+                &operation_key,
+                Nonce::new([55; 24]),
+                b"initial",
+                original.signing_key(),
+                &state,
+            )
+            .expect("initial outer");
+        log.accept(&first_outer, &state)
+            .expect("accept initial outer");
+        let first_rotation = EnrollmentRecord::new(
+            vault,
+            device,
+            hpke_rotated.signing_public_key(),
+            hpke_rotated.hpke_public_key(),
+            2,
+            device,
+            2,
+            *state.commitment(),
+            [56; 32],
+        )
+        .expect("hpke rotation")
+        .sign(original.signing_key());
+        let second_outer = log
+            .author(
+                id(57),
+                vault,
+                device,
+                selector,
+                &operation_key,
+                Nonce::new([58; 24]),
+                b"hpke rotation",
+                original.signing_key(),
+                &state,
+            )
+            .expect("rotation outer");
+        log.accept(&second_outer, &state)
+            .expect("accept rotation outer");
+        state
+            .accept_enrollment(&first_rotation, &device, 2)
+            .expect("accept hpke rotation");
+        let records = [
+            IssuerMembershipRecord::Enrollment(initial.clone()),
+            IssuerMembershipRecord::Enrollment(first_rotation.clone()),
+        ];
+        let operations = [first_outer.clone(), second_outer.clone()];
+        db.connection()
+            .execute_batch(
+                "CREATE TRIGGER reject_rotated_membership
+                 BEFORE INSERT ON sharing_membership_records
+                 WHEN NEW.membership_generation = 2
+                 BEGIN SELECT RAISE(ABORT, 'test rejection'); END;",
+            )
+            .expect("install failure trigger");
+        assert!(
+            prepare_share_for_device(
+                &mut db,
+                &root,
+                source_vault,
+                collection_id,
+                IssuerEvidence {
+                    membership: &records,
+                    operations: &operations,
+                },
+                device,
+                PermissionProfile::Read,
+                false,
+            )
+            .is_err()
+        );
+        let after_failure = sharing::load(&db, &collection_id)
+            .expect("state still replays")
+            .expect("sharing");
+        assert_eq!(after_failure.generation(), 1);
+        let pin = after_failure
+            .recipient_pin(&vault, &device)
+            .expect("old pin");
+        assert_eq!(pin.signing_public_key(), &original.signing_public_key());
+        assert_eq!(pin.hpke_public_key(), &original.hpke_public_key());
+        db.connection()
+            .execute_batch("DROP TRIGGER reject_rotated_membership")
+            .expect("drop failure trigger");
+        let rotated = prepare_share_for_device(
+            &mut db,
+            &root,
+            source_vault,
+            collection_id,
+            IssuerEvidence {
+                membership: &records,
+                operations: &operations,
+            },
+            device,
+            PermissionProfile::Read,
+            false,
+        )
+        .expect("authenticated hpke rotation");
+        assert_eq!(
+            rotated.membership().recipient_hpke_public_key(),
+            &hpke_rotated.hpke_public_key()
+        );
+        let persisted = sharing::load(&db, &collection_id)
+            .expect("reload")
+            .expect("sharing");
+        assert!(
+            persisted.recipient_verification(&vault, &device)
+                == Some(RecipientVerification::TrustOnFirstUse)
+        );
+
+        let substituted = DeviceIdentity::from_seeds([59; 32], [60; 32]);
+        let forged_history = EnrollmentRecord::new(
+            vault,
+            device,
+            substituted.signing_public_key(),
+            substituted.hpke_public_key(),
+            3,
+            device,
+            3,
+            *state.commitment(),
+            [61; 32],
+        )
+        .expect("substitution")
+        .sign(substituted.signing_key());
+        let forged_records = [
+            IssuerMembershipRecord::Enrollment(initial.clone()),
+            IssuerMembershipRecord::Enrollment(first_rotation.clone()),
+            IssuerMembershipRecord::Enrollment(forged_history),
+        ];
+        assert!(
+            prepare_share_for_device(
+                &mut db,
+                &root,
+                source_vault,
+                collection_id,
+                IssuerEvidence {
+                    membership: &forged_records,
+                    operations: &operations
+                },
+                device,
+                PermissionProfile::Read,
+                false,
+            )
+            .is_err()
+        );
+
+        let second_rotation = EnrollmentRecord::new(
+            vault,
+            device,
+            both_rotated.signing_public_key(),
+            both_rotated.hpke_public_key(),
+            3,
+            device,
+            3,
+            *state.commitment(),
+            [61; 32],
+        )
+        .expect("signing rotation")
+        .sign(hpke_rotated.signing_key());
+        let third_outer = log
+            .author(
+                id(62),
+                vault,
+                device,
+                selector,
+                &operation_key,
+                Nonce::new([63; 24]),
+                b"signing rotation",
+                hpke_rotated.signing_key(),
+                &state,
+            )
+            .expect("second rotation outer");
+        let records = [
+            IssuerMembershipRecord::Enrollment(initial),
+            IssuerMembershipRecord::Enrollment(first_rotation),
+            IssuerMembershipRecord::Enrollment(second_rotation),
+        ];
+        let operations = [first_outer, second_outer, third_outer];
+        let rotated = prepare_share_for_device(
+            &mut db,
+            &root,
+            source_vault,
+            collection_id,
+            IssuerEvidence {
+                membership: &records,
+                operations: &operations,
+            },
+            device,
+            PermissionProfile::Read,
+            false,
+        )
+        .expect("authenticated signing rotation");
+        assert_eq!(
+            rotated.membership().recipient_signing_public_key(),
+            &both_rotated.signing_public_key()
+        );
+        let persisted = sharing::load(&db, &collection_id)
+            .expect("reload")
+            .expect("sharing");
+        assert!(
+            persisted.recipient_verification(&vault, &device)
+                == Some(RecipientVerification::TrustOnFirstUse)
+        );
+        let verified = prepare_share_for_device(
+            &mut db,
+            &root,
+            source_vault,
+            collection_id,
+            IssuerEvidence {
+                membership: &records,
+                operations: &operations,
+            },
+            device,
+            PermissionProfile::Read,
+            true,
+        )
+        .expect("verify unchanged recipient keys");
+        assert_eq!(
+            verified.membership().encode(),
+            rotated.membership().encode()
+        );
+        let persisted = sharing::load(&db, &collection_id)
+            .expect("reload verification")
+            .expect("sharing");
+        assert_eq!(persisted.generation(), 3);
+        assert!(
+            persisted.recipient_verification(&vault, &device)
+                == Some(RecipientVerification::Verified)
+        );
     }
 
     #[test]
@@ -2198,6 +2593,133 @@ mod tests {
         .expect("exact replay");
         assert_eq!(schema::generation(&recipient).expect("generation"), after);
 
+        let original_membership = sync_membership::load(&recipient)
+            .expect("membership")
+            .expect("present");
+        let (recipient_device, original_identity) =
+            sync_keys::local_identity(&recipient, &recipient_root, &original_membership)
+                .expect("local identity")
+                .expect("present");
+        let rotated_identity = DeviceIdentity::from_seeds([70; 32], [71; 32]);
+        let rotation = EnrollmentRecord::new(
+            recipient_vault,
+            recipient_device,
+            rotated_identity.signing_public_key(),
+            rotated_identity.hpke_public_key(),
+            2,
+            recipient_device,
+            2,
+            *original_membership.commitment(),
+            [72; 32],
+        )
+        .expect("rotation")
+        .sign(original_identity.signing_key());
+        let mut recipient_log = OperationLog::new();
+        let operation_key = Key::new([73; 32]);
+        let selector = id(74);
+        let initial_outer = recipient_log
+            .author(
+                id(75),
+                recipient_vault,
+                recipient_device,
+                selector,
+                &operation_key,
+                Nonce::new([76; 24]),
+                b"initial",
+                original_identity.signing_key(),
+                &original_membership,
+            )
+            .expect("initial outer");
+        recipient_log
+            .accept(&initial_outer, &original_membership)
+            .expect("accept outer");
+        let rotation_outer = recipient_log
+            .author(
+                id(77),
+                recipient_vault,
+                recipient_device,
+                selector,
+                &operation_key,
+                Nonce::new([78; 24]),
+                b"rotate",
+                original_identity.signing_key(),
+                &original_membership,
+            )
+            .expect("rotation outer");
+        let rotated_membership =
+            sync_membership::accept_enrollment(&mut recipient, &rotation, &recipient_device, 2)
+                .expect("accept local rotation");
+        let rotated_envelope =
+            chur_sync_protocol::identity::DeviceIdentityEnvelope::seal_for_local(
+                &recipient_root,
+                recipient_vault,
+                recipient_device,
+                2,
+                Nonce::new([79; 24]),
+                &rotated_identity,
+            )
+            .expect("rotated envelope");
+        sync_keys::store_local_identity_envelope(
+            &mut recipient,
+            &recipient_root,
+            &rotated_membership,
+            &rotated_envelope,
+        )
+        .expect("store rotated identity");
+        let recipient_records = [
+            IssuerMembershipRecord::Enrollment(recipient_enrollment.clone()),
+            IssuerMembershipRecord::Enrollment(rotation),
+        ];
+        let recipient_operations = [initial_outer, rotation_outer];
+        let second = prepare_share_for_device(
+            &mut source,
+            &source_root,
+            source_vault,
+            collection_id,
+            IssuerEvidence {
+                membership: &recipient_records,
+                operations: &recipient_operations,
+            },
+            recipient_device,
+            PermissionProfile::Read,
+            false,
+        )
+        .expect("prepare rotated share");
+        let source_operations = sync_log::records_after(&source, &source_device, 0)
+            .expect("source operations")
+            .iter()
+            .map(|bytes| Operation::decode(bytes).expect("operation"))
+            .collect::<Vec<_>>();
+        let collection_records = [
+            (
+                prepared.membership().clone(),
+                prepared.membership_operation().clone(),
+            ),
+            (
+                second.membership().clone(),
+                second.membership_operation().clone(),
+            ),
+        ];
+        let updated = accept_share(
+            &mut recipient,
+            &recipient_root,
+            &[IssuerEvidence {
+                membership: &[IssuerMembershipRecord::Enrollment(
+                    source_enrollment.clone(),
+                )],
+                operations: &source_operations,
+            }],
+            &collection_records,
+            second.grant(),
+            second.grant_operation(),
+        )
+        .expect("accept rotated share");
+        assert_eq!(updated.generation(), 2);
+        let reloaded = sharing::load(&recipient, &collection_id)
+            .expect("reload")
+            .expect("sharing");
+        assert_eq!(reloaded.generation(), 2);
+
         // The second recipient receives a grant while the sender is active,
         // but does not open it until the sender device has been revoked.
         let late_vault = id(28);
@@ -2291,6 +2813,10 @@ mod tests {
                 prepared.membership_operation().clone(),
             ),
             (
+                second.membership().clone(),
+                second.membership_operation().clone(),
+            ),
+            (
                 late_share.membership().clone(),
                 late_share.membership_operation().clone(),
             ),
@@ -2298,10 +2824,16 @@ mod tests {
         let Err(error) = accept_share(
             &mut late_recipient,
             &late_root,
-            &[IssuerEvidence {
-                membership: &current_membership,
-                operations: &current_operations,
-            }],
+            &[
+                IssuerEvidence {
+                    membership: &current_membership,
+                    operations: &current_operations,
+                },
+                IssuerEvidence {
+                    membership: &recipient_records,
+                    operations: &recipient_operations,
+                },
+            ],
             &late_membership,
             late_share.grant(),
             late_share.grant_operation(),

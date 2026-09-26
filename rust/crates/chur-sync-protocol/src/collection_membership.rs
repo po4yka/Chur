@@ -712,6 +712,50 @@ impl CollectionMembershipState {
         Ok(())
     }
 
+    /// Replaces a pin after the caller authenticates this device's identity
+    /// membership rotation. A rotation does not upgrade TOFU to user verification.
+    pub fn rotate_recipient_keys(
+        &mut self,
+        identity_vault_id: Id,
+        device_id: Id,
+        signing_public_key: [u8; PUBLIC_KEY_LEN],
+        hpke_public_key: [u8; PUBLIC_KEY_LEN],
+    ) -> Result<()> {
+        ensure!(
+            signing_public_key != [0; PUBLIC_KEY_LEN] && hpke_public_key != [0; PUBLIC_KEY_LEN],
+            InvalidInput,
+            "rotated recipient key is zero"
+        );
+        let pin = self
+            .pins
+            .get_mut(&(identity_vault_id, device_id))
+            .ok_or_else(|| Error::new(ChurStatus::AuthenticationFailed, "recipient has no pin"))?;
+        pin.signing_public_key = signing_public_key;
+        pin.hpke_public_key = hpke_public_key;
+        Ok(())
+    }
+
+    /// Restores a pin from the protected catalog after its accepted chain is replayed.
+    pub fn restore_recipient_keys(
+        &mut self,
+        identity_vault_id: Id,
+        device_id: Id,
+        signing_public_key: [u8; PUBLIC_KEY_LEN],
+        hpke_public_key: [u8; PUBLIC_KEY_LEN],
+        verification: RecipientVerification,
+    ) -> Result<()> {
+        self.rotate_recipient_keys(
+            identity_vault_id,
+            device_id,
+            signing_public_key,
+            hpke_public_key,
+        )?;
+        if let Some(pin) = self.pins.get_mut(&(identity_vault_id, device_id)) {
+            pin.verification = verification;
+        }
+        Ok(())
+    }
+
     /// How one recipient key pair was accepted.
     #[must_use]
     pub fn recipient_verification(

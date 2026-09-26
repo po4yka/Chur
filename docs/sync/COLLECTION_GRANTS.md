@@ -87,6 +87,8 @@ Recipient key trust follows [`SERVER_TRUST_MODEL.md`](SERVER_TRUST_MODEL.md) §7
 
 A change to a pinned recipient key blocks: no further grant is issued to that recipient until the user re-verifies the fingerprint, or until a signed identity rotation chaining to the pinned key authorizes the change. It is not a dismissible banner.
 
+For an authenticated rotation, the old and new signing and HPKE key pairs must occur in that order in the same device's validated identity-membership chain. The source checks the recipient evidence before it issues a new membership record. A recipient checks its own durable identity-membership chain when it accepts the new grant. A signed collection-membership record alone does not authorize a key substitution. Rotation retains the pin's existing TOFU or user-verified level.
+
 ## 6. Permissions
 
 The only v1 permission profiles are cumulative:
