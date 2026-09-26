@@ -981,6 +981,21 @@ pub fn accept_share(
         "collection grant belongs to another share"
     );
     require_authenticated_operation(&authenticated_operations, grant_operation)?;
+    let current_sender_generation = issuer_states
+        .get(grant_operation.vault_id())
+        .and_then(|history| history.last_key_value())
+        .map(|(generation, _)| *generation)
+        .ok_or_else(|| {
+            Error::new(
+                ChurStatus::AuthenticationFailed,
+                "collection grant sender has no authenticated membership",
+            )
+        })?;
+    ensure!(
+        grant.sender_membership_generation() == current_sender_generation,
+        AuthenticationFailed,
+        "collection grant sender membership is stale"
+    );
     let sender = issuer_state(
         &issuer_states,
         grant_operation.vault_id(),
@@ -1427,6 +1442,8 @@ mod tests {
 
     use chur_format::envelope::{CollectionKeyEnvelope, ObjectKeyEnvelope};
     use chur_sync_protocol::identity::DeviceIdentity;
+    use chur_sync_protocol::membership::RevocationRecord;
+    use chur_sync_protocol::operation::DeviceSigningKey;
 
     use super::*;
     use crate::{
@@ -2080,7 +2097,9 @@ mod tests {
             .map(|bytes| Operation::decode(bytes).expect("operation"))
             .collect::<Vec<_>>();
         let evidence = IssuerEvidence {
-            membership: &[IssuerMembershipRecord::Enrollment(source_enrollment)],
+            membership: &[IssuerMembershipRecord::Enrollment(
+                source_enrollment.clone(),
+            )],
             operations: &operations,
         };
         let membership = [(
@@ -2178,5 +2197,122 @@ mod tests {
         )
         .expect("exact replay");
         assert_eq!(schema::generation(&recipient).expect("generation"), after);
+
+        // The second recipient receives a grant while the sender is active,
+        // but does not open it until the sender device has been revoked.
+        let late_vault = id(28);
+        let late_root = Key::new([29; 32]);
+        let late_catalog_key = CatalogKey::derive(&late_root, &late_vault).expect("late key");
+        let mut late_recipient =
+            CatalogDb::open(&CatalogLocation::Memory, &late_catalog_key).expect("late recipient");
+        schema::open_at_current_version(&mut late_recipient, 1).expect("late schema");
+        let (late_enrollment, _) =
+            sync_receive::provision_local_identity(&mut late_recipient, &late_root, late_vault)
+                .expect("late identity");
+        let late_share = prepare_share(
+            &mut source,
+            &source_root,
+            source_vault,
+            collection_id,
+            &late_enrollment,
+            PermissionProfile::Read,
+            true,
+        )
+        .expect("late share");
+
+        let mut source_membership = sync_membership::load(&source)
+            .expect("source membership")
+            .expect("present");
+        let (_, source_identity) =
+            sync_keys::local_identity(&source, &source_root, &source_membership)
+                .expect("source identity")
+                .expect("present");
+        let mut log = sync_log::load(&source, &source_membership).expect("source log");
+        let checkpoint = log
+            .issue_own_checkpoint(
+                &mut source,
+                &source_membership,
+                &source_device,
+                source_identity.signing_key(),
+                1,
+            )
+            .expect("source checkpoint");
+        let replacement_device = id(30);
+        let replacement_key = DeviceSigningKey::from_seed([31; 32]);
+        let replacement_enrollment = EnrollmentRecord::new(
+            source_vault,
+            replacement_device,
+            replacement_key.verifying_key(),
+            [32; 32],
+            log.head(&source_device).expect("source head").0 + 1,
+            source_device,
+            2,
+            *source_membership.commitment(),
+            checkpoint.commitment(),
+        )
+        .expect("replacement enrollment")
+        .sign(source_identity.signing_key());
+        let root_domain = KeyDomain::root(&source_root, &source_vault).expect("root domain");
+        sync_receive::author_membership_operation(
+            &mut source,
+            &mut log,
+            &mut source_membership,
+            &root_domain,
+            source_device,
+            source_identity.signing_key(),
+            PayloadBody::AddDevice(replacement_enrollment.clone()),
+        )
+        .expect("enroll replacement");
+        let (final_sequence, final_digest) = log.head(&source_device).expect("final source head");
+        let revocation = RevocationRecord::new(
+            source_vault,
+            source_device,
+            final_sequence,
+            final_digest,
+            3,
+            replacement_device,
+            *source_membership.commitment(),
+        )
+        .expect("source revocation")
+        .sign(&replacement_key);
+        let current_operations = sync_log::records_after(&source, &source_device, 0)
+            .expect("current operations")
+            .iter()
+            .map(|bytes| Operation::decode(bytes).expect("operation"))
+            .collect::<Vec<_>>();
+        let current_membership = [
+            IssuerMembershipRecord::Enrollment(source_enrollment),
+            IssuerMembershipRecord::Enrollment(replacement_enrollment),
+            IssuerMembershipRecord::Revocation(revocation),
+        ];
+        let late_membership = [
+            (
+                prepared.membership().clone(),
+                prepared.membership_operation().clone(),
+            ),
+            (
+                late_share.membership().clone(),
+                late_share.membership_operation().clone(),
+            ),
+        ];
+        let Err(error) = accept_share(
+            &mut late_recipient,
+            &late_root,
+            &[IssuerEvidence {
+                membership: &current_membership,
+                operations: &current_operations,
+            }],
+            &late_membership,
+            late_share.grant(),
+            late_share.grant_operation(),
+        ) else {
+            panic!("delayed grant from revoked sender was accepted");
+        };
+        assert_eq!(error.status(), ChurStatus::AuthenticationFailed);
+        assert!(
+            sharing::load(&late_recipient, &collection_id)
+                .expect("late sharing state")
+                .is_none()
+        );
     }
 }
