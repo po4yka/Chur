@@ -31,7 +31,7 @@ use chur_format::slot::{
 };
 
 use crate::db::{CatalogDb, CatalogKey, CatalogLocation};
-use crate::paths::{RegistryName, VaultRoot};
+use crate::paths::{DirectoryClaim, RegistryName, VaultRoot};
 use crate::schema;
 
 /// The salt length a v1 writer produces, `KEY_SLOT_BODIES_V1.md` §8.
@@ -61,15 +61,19 @@ const PASSWORD_DERIVATIONS: usize = 2;
 /// specification fixes.
 ///
 /// Dropping it without [`VaultCreation::activate`] leaves the temporary
-/// descriptor and the vault directory, which [`abandon`] and
-/// [`VaultRoot::sweep_temporary`] remove. Nothing openable exists in the
-/// meantime, because §11 enumerates only installed `.vd` entries.
+/// descriptor and the vault directory, which [`abandon`] removes, and which
+/// [`VaultRoot::sweep_temporary`] and [`sweep_orphaned_directories`] remove at
+/// the next start. Nothing openable exists in the meantime, because §11
+/// enumerates only installed `.vd` entries.
 pub struct VaultCreation {
     root_dir: VaultRoot,
     root_secret: Key,
     descriptor: VaultDescriptor,
     entry_name: RegistryName,
     catalog: CatalogDb,
+    /// The claim on the vault directory, held for the life of the creation so
+    /// that the orphan sweep of another runtime on this root leaves it.
+    claim: DirectoryClaim,
 }
 
 /// The advisory lock `docs/interop/FFI_CONTRACT.md` §8.1 takes on a descriptor
@@ -131,6 +135,14 @@ pub struct Session {
     entry_name: RegistryName,
     catalog: Option<CatalogDb>,
     pending_keystore: Option<PendingKeystore>,
+    /// A sealed recovery slot waiting for the user to confirm its phrase.
+    ///
+    /// `RECOVERY.md` §8 commits a new recovery slot only after the phrase is
+    /// confirmed, and `PROVISIONING.md` §4 runs the presentation "before the
+    /// slot commits". A lock takes the root the commit needs, and closing the
+    /// session drops the slot, so a phrase the user never confirmed opens
+    /// nothing.
+    pending_recovery: Option<KeySlotDescriptor>,
     /// The §8.1 advisory lock on the descriptor file, held for the life of the
     /// session. A creation holds none until its descriptor exists.
     descriptor_lock: Option<DescriptorLock>,
@@ -237,7 +249,7 @@ pub fn create_with_params(
     let root_secret: Key = random::secret::<32>()?;
     let object_store_id = random::id()?;
     let catalog_path_id = random::id()?;
-    root_dir.prepare(&object_store_id)?;
+    let claim = root_dir.prepare(&object_store_id)?;
 
     // §9 step 2: the encrypted catalog, created and keyed.
     let catalog_key = CatalogKey::derive(&root_secret, &vault_id)?;
@@ -288,6 +300,7 @@ pub fn create_with_params(
         descriptor,
         entry_name,
         catalog,
+        claim,
     })
 }
 
@@ -325,6 +338,9 @@ impl VaultCreation {
         std::fs::rename(&temporary, &installed)
             .map_err(|_| chur_core::err!(IoFailure, "the descriptor could not be installed"))?;
         sync_directory(&self.root_dir.registry())?;
+        // Released only after the install, so a sweep that takes the claim
+        // next reads a registry that names this directory.
+        drop(self.claim);
         Ok(Session {
             root_dir: self.root_dir,
             root_secret: Some(self.root_secret),
@@ -332,6 +348,7 @@ impl VaultCreation {
             entry_name: self.entry_name,
             catalog: Some(self.catalog),
             pending_keystore: None,
+            pending_recovery: None,
             // The creation just installed the first descriptor of a vault no
             // other process knows; the unlock paths take the §8.1 lock.
             descriptor_lock: None,
@@ -353,6 +370,74 @@ impl VaultCreation {
             .map_err(|_| chur_core::err!(IoFailure, "the abandoned vault could not be removed"))?;
         Ok(())
     }
+}
+
+/// Removes every vault directory that no installed descriptor names.
+///
+/// `docs/security/PROVISIONING.md` §9 requires a creation that was interrupted
+/// at any step of `VAULT_DESCRIPTOR_V1.md` §9 and then restarted to leave no
+/// orphaned directory. A process that stops before the atomic install (a
+/// crash, a power loss, or a kill while the recovery phrase waits at step 5 of
+/// `PROVISIONING.md` §3) leaves its directory with no `.vd` entry, and
+/// [`VaultRoot::sweep_temporary`] removes only the temporary descriptor. A
+/// restore that stops before its install leaves the same. No entry names such
+/// a directory, so nothing can open it and removal is the whole recovery. A
+/// directory that stays is also the extra storage that `DECOY_VAULT.md` §5
+/// lists as a signal.
+///
+/// The runtime runs this when it opens. `FFI_CONTRACT.md` §14 gives a process
+/// one runtime, but §8.1 expects a second process on the same root, so a
+/// creation or a restore can still be running elsewhere. Each one holds the
+/// [`DirectoryClaim`] on its directory until its descriptor is installed, and
+/// a directory whose claim cannot be taken is skipped. Once the claim is held
+/// the registry is read again, because an activation releases its claim only
+/// after its install. The directory is then renamed before it is removed, so a
+/// creation that has not yet claimed the directory it just made finds it gone
+/// rather than half removed. An entry that cannot be read or parsed can name
+/// any directory, so it stops the sweep before anything more is removed.
+///
+/// The sweep is best-effort. An I/O failure skips the directory it hit and the
+/// sweep goes on, and the runtime opens anyway: a directory that stays is
+/// inert, because nothing names it, and the next start tries it again.
+pub fn sweep_orphaned_directories(root_dir: &VaultRoot) {
+    let Some(named) = named_directories(root_dir) else {
+        return;
+    };
+    let Ok(listing) = std::fs::read_dir(root_dir.vaults()) else {
+        return;
+    };
+    for entry in listing.flatten() {
+        let path = entry.path();
+        if named.contains(&path) || !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let Ok(_claim) = DirectoryClaim::take(&path) else {
+            continue;
+        };
+        match named_directories(root_dir) {
+            None => return,
+            Some(named) if named.contains(&path) => continue,
+            Some(_) => {}
+        }
+        let removing = path.with_extension("removing");
+        if std::fs::rename(&path, &removing).is_ok() {
+            let _ = std::fs::remove_dir_all(&removing);
+        }
+    }
+}
+
+/// The directory of every installed descriptor, or `None` when an entry
+/// cannot be read or parsed and so could name any directory.
+fn named_directories(root_dir: &VaultRoot) -> Option<Vec<std::path::PathBuf>> {
+    let names = root_dir.registry_names().ok()?;
+    names
+        .iter()
+        .map(|name| {
+            let bytes = read_entry(root_dir, name).ok()?;
+            let descriptor = VaultDescriptor::parse(&bytes).ok()?;
+            Some(root_dir.vault(&descriptor.object_store.opaque_root_path_id))
+        })
+        .collect()
 }
 
 /// One password unlock attempt over the whole registry, `KEY_SLOTS.md` §8.
@@ -782,6 +867,7 @@ fn finish_unlock(
         entry_name: entry_name.clone(),
         catalog: Some(catalog),
         pending_keystore: None,
+        pending_recovery: None,
         descriptor_lock: Some(descriptor_lock),
     })
 }
@@ -956,7 +1042,53 @@ impl Session {
     }
 
     /// Adds a recovery slot to an active vault, `RECOVERY.md` §8.
+    ///
+    /// It commits before anyone has seen the phrase, so it is for callers with
+    /// no confirmation step, such as the command line. A host that presents
+    /// the phrase stages the slot with [`Session::begin_recovery_slot`]
+    /// instead. This never reads or replaces a slot staged there.
     pub fn add_recovery_slot(&mut self) -> Result<Key> {
+        let (secret, slot) = self.seal_new_recovery_slot()?;
+        self.commit_slots(|slots| slots.push(slot))?;
+        Ok(secret)
+    }
+
+    /// Stages a recovery slot until its phrase is confirmed, `RECOVERY.md` §8.
+    ///
+    /// The slot is sealed now and held in the session; nothing reaches the
+    /// descriptor until [`Session::finish_recovery_slot`]. The returned secret
+    /// is what the caller presents. A second begin replaces the staged slot,
+    /// so only the phrase shown last can be committed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ChurStatus::VaultLocked`] once the session is locked.
+    pub fn begin_recovery_slot(&mut self) -> Result<Key> {
+        let (secret, slot) = self.seal_new_recovery_slot()?;
+        self.pending_recovery = Some(slot);
+        Ok(secret)
+    }
+
+    /// Commits the staged recovery slot as one descriptor generation,
+    /// `KEY_SLOTS.md` §9.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ChurStatus::VaultLocked`] once the session is locked, whether
+    /// or not a slot was staged, and [`ChurStatus::Conflict`] when no slot is
+    /// waiting, which is what a second commit or a commit without a begin is.
+    pub fn finish_recovery_slot(&mut self) -> Result<()> {
+        self.root_secret()?;
+        let slot = self.pending_recovery.take().ok_or_else(|| {
+            Error::new(
+                ChurStatus::Conflict,
+                "no recovery slot is waiting for confirmation",
+            )
+        })?;
+        self.commit_slots(|slots| slots.push(slot))
+    }
+
+    fn seal_new_recovery_slot(&self) -> Result<(Key, KeySlotDescriptor)> {
         let secret: Key = random::secret::<32>()?;
         let generation = self.next_slot_generation(SlotType::Recovery);
         let slot = seal_recovery_slot(
@@ -965,8 +1097,7 @@ impl Session {
             self.root_secret()?,
             generation,
         )?;
-        self.commit_slots(|slots| slots.push(slot))?;
-        Ok(secret)
+        Ok((secret, slot))
     }
 
     /// Adds the Apple Keychain slot of `KEY_SLOTS.md` §5, step 7 of

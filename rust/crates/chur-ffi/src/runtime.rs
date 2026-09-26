@@ -29,10 +29,15 @@ impl Runtime {
     ///
     /// It sweeps the registry's temporary descriptors first, which
     /// `docs/format/VAULT_DESCRIPTOR_V1.md` §9 requires of a start after a
-    /// creation that did not reach `ACTIVE`.
+    /// creation that did not reach `ACTIVE`. Then it removes the vault
+    /// directories that no installed descriptor names, because
+    /// `docs/security/PROVISIONING.md` §9 requires that start to leave no
+    /// orphaned directory. That second sweep is best-effort: a directory it
+    /// cannot remove stays inert and never stops the runtime from opening.
     pub fn open(root: PathBuf) -> Result<Self> {
         let root = VaultRoot::new(root);
         root.sweep_temporary()?;
+        chur_catalog::vault::sweep_orphaned_directories(&root);
         Ok(Self {
             root,
             unlocking: Arc::new(AtomicBool::new(false)),
@@ -75,6 +80,7 @@ mod tests {
     #![allow(clippy::expect_used, clippy::panic)]
 
     use super::*;
+    use chur_catalog::vault;
 
     #[test]
     fn a_second_unlock_conflicts_until_the_first_releases() {
@@ -96,4 +102,80 @@ mod tests {
             "the release of the first unlock frees the runtime"
         );
     }
+
+    #[test]
+    fn a_restart_removes_the_directory_of_a_creation_that_never_reached_active() {
+        // `PROVISIONING.md` §9: a creation that was interrupted and then
+        // restarted leaves no orphaned directory. A creation dropped without
+        // `abandon` is what a process death leaves behind. The installed vault
+        // beside it keeps its directory.
+        let mut root = std::env::temp_dir();
+        root.push(format!("chur-runtime-orphan-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("create");
+        let runtime = Runtime::open(root.clone()).expect("open");
+        drop(
+            vault::create(runtime.root(), KEPT, 1)
+                .expect("create")
+                .activate()
+                .expect("activate"),
+        );
+        drop(vault::create(runtime.root(), INTERRUPTED, 1).expect("create"));
+        let directories = || {
+            std::fs::read_dir(runtime.root().vaults())
+                .expect("vaults")
+                .count()
+        };
+        assert_eq!(directories(), 2);
+
+        let restarted = Runtime::open(root.clone()).expect("restart");
+        assert_eq!(directories(), 1, "the interrupted creation's directory");
+        drop(vault::unlock_with_password(restarted.root(), KEPT, 1).expect("the installed vault"));
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn a_second_runtime_keeps_the_directory_of_a_creation_that_still_waits() {
+        // `FFI_CONTRACT.md` §8.1 expects a second process on one root. A
+        // creation that waits for its phrase holds the claim on its directory,
+        // so the sweep of a runtime opened meanwhile leaves it, and the
+        // creation still activates into a vault that opens.
+        let mut root = std::env::temp_dir();
+        root.push(format!("chur-runtime-waiting-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("create");
+        let runtime = Runtime::open(root.clone()).expect("open");
+        let waiting = vault::create(runtime.root(), KEPT, 1).expect("create");
+
+        let second = Runtime::open(root.clone()).expect("a second runtime");
+        let directories = std::fs::read_dir(second.root().vaults())
+            .expect("vaults")
+            .count();
+        assert_eq!(directories, 1, "the waiting creation's directory");
+        drop(waiting.activate().expect("activate"));
+        drop(vault::unlock_with_password(second.root(), KEPT, 1).expect("the activated vault"));
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_orphan_the_sweep_cannot_remove_does_not_stop_the_runtime() {
+        // The sweep is best-effort: a directory it cannot remove stays inert,
+        // because nothing names it, and the runtime still opens.
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut root = std::env::temp_dir();
+        root.push(format!("chur-runtime-stuck-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("create");
+        let runtime = Runtime::open(root.clone()).expect("open");
+        drop(vault::create(runtime.root(), INTERRUPTED, 1).expect("create"));
+        let vaults = runtime.root().vaults();
+        let mode = |bits| std::fs::Permissions::from_mode(bits);
+        std::fs::set_permissions(&vaults, mode(0o555)).expect("read-only");
+
+        let reopened = Runtime::open(root.clone());
+        std::fs::set_permissions(&vaults, mode(0o755)).expect("writable");
+        assert!(reopened.is_ok(), "a sweep failure must not stop the open");
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    const KEPT: &[u8] = b"correct horse battery staple";
+    const INTERRUPTED: &[u8] = b"a creation that never reached ACTIVE";
 }

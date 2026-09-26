@@ -55,7 +55,7 @@ class MainActivity : FragmentActivity() {
         // forbidden column, and the platform can take one before the collector
         // below has run, so the cover is set from the state here rather than
         // waiting for the first collection.
-        host.privacy.setEnabled(needsPrivacyCover(host.controller.vaultState.value, host.controller.route.value))
+        host.privacy.setEnabled(host.controller.privacyCoverNeeded)
         ChurSync.enqueue(this)
 
         val controller = host.controller
@@ -82,8 +82,8 @@ class MainActivity : FragmentActivity() {
         // would clear FLAG_SECURE while the window is still visible to recents.
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.RESUMED) {
-                combine(controller.vaultState, controller.route) { state, route ->
-                    needsPrivacyCover(state, route)
+                combine(controller.vaultState, controller.route, controller.recoveryPhrase) { state, route, phrase ->
+                    needsPrivacyCover(state, route, phrase != null)
                 }.collect { secure ->
                     host.privacy.setEnabled(secure)
                 }

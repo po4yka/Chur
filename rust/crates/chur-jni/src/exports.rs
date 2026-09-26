@@ -1586,6 +1586,45 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultAddRecoverySlot<'lo
     })
 }
 
+/// Stages a recovery slot until its phrase is confirmed.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultRecoveryBegin<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let mut written = 0usize;
+        // SAFETY: `written` is a live local and the buffer is direct.
+        let status = unsafe {
+            chur_ffi::product::chur_vault_recovery_begin(
+                handle_of(session),
+                address,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Commits the staged recovery slot.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultRecoveryCommit<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |_env| {
+        chur_ffi::product::chur_vault_recovery_commit(handle_of(session))
+    })
+}
+
 /// Adds the Apple Keychain slot. Android calls it for a decoy-free parity test
 /// only; the Android Keystore slot is a platform wrap and takes no secret here.
 #[unsafe(no_mangle)]

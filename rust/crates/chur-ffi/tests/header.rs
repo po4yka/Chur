@@ -334,6 +334,9 @@ fn every_declared_function_is_exported() {
         "chur_vault_creation_activate",
         "chur_vault_creation_abandon",
         "chur_vault_add_recovery_slot",
+        // §6.23, added at ABI 2.19.
+        "chur_vault_recovery_begin",
+        "chur_vault_recovery_commit",
         "chur_vault_add_device_slot",
         "chur_vault_remove_slot",
         "chur_vault_change_password",
@@ -402,7 +405,7 @@ fn every_declared_function_is_exported() {
 
     // Calling each one proves the list above is not a stale copy.
     assert_eq!(chur_ffi::chur_abi_version_major(), 2);
-    assert_eq!(chur_ffi::chur_abi_version_minor(), 18);
+    assert_eq!(chur_ffi::chur_abi_version_minor(), 19);
     assert_eq!(
         chur_ffi::chur_capabilities(),
         chur_ffi::CHUR_CAP_DECOY_VAULT

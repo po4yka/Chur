@@ -4,9 +4,14 @@ import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.core.platformkeys.DeviceSlotException
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.ChurVault
+import dev.po4yka.chur.ffi.ImportRequest
 import dev.po4yka.chur.ffi.LockReason
 import dev.po4yka.chur.ffi.ObjectQuery
 import java.io.File
+import java.io.FileDescriptor
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import kotlin.concurrent.thread
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -58,6 +63,9 @@ class VaultRepositoryHostTest {
         val phrase = repository.create(PASSWORD.encodeToByteArray(), offerRecovery = true)
         assertNotNull(phrase)
         assertEquals(24, phrase.split(" ").size, "RECOVERY.md §2 shows a 24-word phrase")
+        assertIs<VaultState.Creating>(repository.state.value, "§4: the creation waits for the phrase to be confirmed")
+        assertIs<VaultState.Creating>(repository.start(), "a start keeps a waiting creation")
+        assertTrue(repository.confirmRecoveryPhrase())
         assertIs<VaultState.Unlocked>(repository.state.value)
         // §3: the vault is usable at once, which is what step 6 means by
         // opening the session.
@@ -258,11 +266,102 @@ class VaultRepositoryHostTest {
         repository.start()
         val phrase = repository.create(PASSWORD.encodeToByteArray(), offerRecovery = true)
         assertNotNull(phrase)
+        assertTrue(repository.confirmRecoveryPhrase())
         assertEquals(2, repository.slots().size)
         repository.lock(LockReason.USER)
 
         repository.unlockWithRecovery(phrase)
         assertIs<VaultState.Unlocked>(repository.state.value)
+        repository.shutdown()
+    }
+
+    @Test
+    fun a_phrase_lost_before_confirmation_leaves_no_slot_behind() = runBlocking {
+        val repository = repository()
+        repository.start()
+        // `PROVISIONING.md` §4 commits the recovery slot only after the phrase
+        // is confirmed, so the creation waits at step 5 of §3.
+        assertNotNull(repository.create(PASSWORD.encodeToByteArray(), offerRecovery = true))
+        assertIs<VaultState.Creating>(repository.state.value)
+        now += LockPolicy.DEFAULT_IDLE_TIMEOUT_MS + 1
+        assertFalse(repository.lockIfIdle(), "copying the phrase outlasts the idle timeout")
+        now += LockPolicy.RECOVERY_PHRASE_TIMEOUT_MS
+        assertTrue(repository.lockIfIdle())
+        assertIs<VaultState.NoVault>(repository.state.value, "a creation never confirmed leaves nothing openable")
+        assertFalse(repository.confirmRecoveryPhrase(), "the lock discarded what the phrase belonged to")
+
+        assertNotNull(repository.create(PASSWORD.encodeToByteArray(), offerRecovery = true))
+        assertTrue(repository.confirmRecoveryPhrase())
+        assertIs<VaultState.Unlocked>(repository.state.value)
+        assertEquals(2, repository.slots().size)
+
+        // `RECOVERY.md` §8 from settings: a lock before confirmation closes
+        // the session and the staged slot with it.
+        val lost = repository.beginRecoverySlot()
+        repository.lock(LockReason.BACKGROUND)
+        repository.unlock(PASSWORD.encodeToByteArray())
+        assertEquals(2, repository.slots().size, "the lock discarded the unconfirmed slot")
+        repository.beginRecoverySlot()
+        assertTrue(repository.confirmRecoveryPhrase())
+        assertEquals(3, repository.slots().size)
+
+        repository.lock(LockReason.USER)
+        val refused = assertFailsWith<ChurFailure> { repository.unlockWithRecovery(lost) }
+        assertEquals(ChurStatus.AUTHENTICATION_FAILED, refused.status)
+        repository.shutdown()
+    }
+
+    @Test
+    fun a_running_operation_does_not_extend_the_phrase_window() = runBlocking {
+        val repository = repository()
+        repository.start()
+        repository.create(PASSWORD.encodeToByteArray(), offerRecovery = false)
+        repository.beginRecoverySlot()
+        // An import from a pipe that nothing writes to runs until the pipe
+        // closes, and each poll of it refreshes the idle clock.
+        val fifo = File(roots.last(), "source")
+        assertEquals(0, ProcessBuilder("mkfifo", fifo.path).start().waitFor())
+        var writer: FileOutputStream? = null
+        val opener = thread { writer = FileOutputStream(fifo) }
+        val operation = FileInputStream(fifo).use { source ->
+            opener.join()
+            repository.beginImport(
+                descriptorOf(source.fd),
+                ImportRequest(contentType = "image/jpeg", seekable = false, mediaClass = 1),
+            )
+        }
+        now += LockPolicy.RECOVERY_PHRASE_TIMEOUT_MS - 1
+        assertFalse(repository.poll(operation).terminal, "the import waits for its source")
+        writer!!.close()
+        while (!repository.poll(operation).terminal) Thread.yield()
+        repository.closeOperation(operation)
+
+        assertFalse(repository.lockIfIdle(), "the phrase window is still open")
+        now += 1
+        assertTrue(repository.lockIfIdle(), "DESIGN.md §17.2: ten minutes after the phrase appeared")
+        repository.shutdown()
+    }
+
+    @Test
+    fun an_unlock_abandons_a_creation_waiting_for_its_phrase() = runBlocking {
+        val repository = repository()
+        repository.start()
+        repository.create(PASSWORD.encodeToByteArray(), offerRecovery = false)
+        repository.lock(LockReason.USER)
+        assertNotNull(repository.create(SECOND_PASSWORD.encodeToByteArray(), offerRecovery = true))
+
+        repository.unlock(PASSWORD.encodeToByteArray())
+
+        // Activating it now would assign over the session the unlock opened,
+        // and one runtime shares one session.
+        assertFalse(repository.confirmRecoveryPhrase(), "the unlock abandoned the waiting creation")
+        assertIs<VaultState.Unlocked>(repository.state.value)
+        assertEquals(1, repository.slots().size, "the session the unlock opened")
+        repository.lock(LockReason.USER)
+        assertEquals(
+            ChurStatus.AUTHENTICATION_FAILED,
+            assertFailsWith<ChurFailure> { repository.unlock(SECOND_PASSWORD.encodeToByteArray()) }.status,
+        )
         repository.shutdown()
     }
 
@@ -381,7 +480,12 @@ class VaultRepositoryHostTest {
         repository.shutdown()
     }
 
+    /** The integer descriptor behind a JVM stream, which Rust duplicates. */
+    private fun descriptorOf(descriptor: FileDescriptor): Int =
+        descriptor.javaClass.getDeclaredField("fd").apply { isAccessible = true }.getInt(descriptor)
+
     private companion object {
         const val PASSWORD = "correct horse battery staple"
+        const val SECOND_PASSWORD = "a second identity's own passphrase"
     }
 }

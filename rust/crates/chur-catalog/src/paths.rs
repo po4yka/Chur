@@ -55,10 +55,16 @@ impl VaultRoot {
         self.base.join("registry")
     }
 
+    /// The directory that holds the directory of every vault identity.
+    #[must_use]
+    pub fn vaults(&self) -> PathBuf {
+        self.base.join("vaults")
+    }
+
     /// The directory of one vault identity.
     #[must_use]
     pub fn vault(&self, root_path_id: &Id) -> PathBuf {
-        self.base.join("vaults").join(hex(root_path_id))
+        self.vaults().join(hex(root_path_id))
     }
 
     /// The catalog database of one vault identity.
@@ -137,11 +143,22 @@ impl VaultRoot {
             .join(format!("{}{REGISTRY_TEMP_SUFFIX}", entry_name.0))
     }
 
-    /// Creates the directories a vault identity needs.
-    pub fn prepare(&self, root_path_id: &Id) -> Result<()> {
+    /// Creates the directories a vault identity needs and claims them.
+    ///
+    /// The claim is taken after the vault directory exists and before anything
+    /// is written into it, so a sweep that holds the claim first makes this
+    /// call fail rather than remove what it writes. The caller holds it until
+    /// its descriptor is installed or its work is removed; see
+    /// [`DirectoryClaim`].
+    pub fn prepare(&self, root_path_id: &Id) -> Result<DirectoryClaim> {
+        let vault = self.vault(root_path_id);
+        for directory in [self.registry(), vault.clone()] {
+            std::fs::create_dir_all(&directory).map_err(|_| {
+                chur_core::err!(IoFailure, "a vault directory could not be created")
+            })?;
+        }
+        let claim = DirectoryClaim::take(&vault)?;
         for directory in [
-            self.registry(),
-            self.vault(root_path_id),
             self.objects(root_path_id),
             self.incoming(root_path_id),
             self.quarantine(root_path_id),
@@ -152,7 +169,7 @@ impl VaultRoot {
                 chur_core::err!(IoFailure, "a vault directory could not be created")
             })?;
         }
-        Ok(())
+        Ok(claim)
     }
 
     /// The registry entries, in the enumeration order §11 fixes.
@@ -218,6 +235,46 @@ impl VaultRoot {
             }
         }
         Ok(removed)
+    }
+}
+
+/// The name of the lock file inside a vault directory, see [`DirectoryClaim`].
+const CLAIM_NAME: &str = "lock";
+
+/// The advisory lock on a vault directory whose descriptor is not installed.
+///
+/// `docs/interop/FFI_CONTRACT.md` §8.1 expects a second process on one root (a
+/// split Android process or a second launch) and keeps it off a vault with an
+/// exclusive advisory lock on the descriptor file. A creation that waits for
+/// its recovery phrase, or a restore that is still writing, has no descriptor
+/// to lock, so it holds the same kind of lock on a file inside its directory,
+/// from [`VaultRoot::prepare`] until its descriptor is installed or its work is
+/// removed. The orphan sweep of `crate::vault` removes only a directory whose
+/// claim it can take. The lock lives on the open file description, so a crash
+/// releases it, and the file is never read.
+#[must_use = "the directory is claimed only while this value lives"]
+pub struct DirectoryClaim(#[expect(dead_code)] std::fs::File);
+
+impl DirectoryClaim {
+    /// Takes the claim on `directory`, creating its lock file if it is absent.
+    ///
+    /// A claim that another open file description holds returns `CONFLICT`.
+    pub fn take(directory: &Path) -> Result<Self> {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(directory.join(CLAIM_NAME))
+            .map_err(|_| chur_core::err!(IoFailure, "the vault directory could not be claimed"))?;
+        file.try_lock().map_err(|error| match error {
+            std::fs::TryLockError::WouldBlock => {
+                chur_core::err!(Conflict, "the vault directory is claimed by other work")
+            }
+            std::fs::TryLockError::Error(_) => {
+                chur_core::err!(IoFailure, "the vault directory could not be claimed")
+            }
+        })?;
+        Ok(Self(file))
     }
 }
 

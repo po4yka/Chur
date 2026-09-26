@@ -749,6 +749,7 @@ chur/
 │   │   ├── catalog.db
 │   │   ├── catalog.db-wal
 │   │   ├── catalog.db-shm
+│   │   ├── lock                   advisory lock of a creation or restore in progress
 │   │   ├── objects/
 │   │   ├── incoming/
 │   │   ├── quarantine/

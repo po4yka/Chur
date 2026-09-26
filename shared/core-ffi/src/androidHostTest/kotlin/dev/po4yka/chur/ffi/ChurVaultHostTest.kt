@@ -229,7 +229,7 @@ class ChurVaultHostTest {
     fun the_handshake_matches_the_frozen_abi() {
         val handshake = ChurVault.handshake()
         assertEquals(2, handshake.major)
-        assertEquals(18, handshake.minor, "§6.22 added recoverable trash")
+        assertEquals(19, handshake.minor, "§6.23 staged the recovery slot")
         assertEquals(1, handshake.objectFormatMin)
         assertEquals(1, handshake.objectFormatMax)
         assertTrue(handshake.capabilities and 0b0000_0010L != 0L, "the reader is declared")

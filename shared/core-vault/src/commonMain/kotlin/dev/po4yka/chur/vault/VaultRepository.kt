@@ -63,6 +63,31 @@ class VaultRepository(
     private var generation = 0L
     private var lastUsedMs = 0L
 
+    /**
+     * A creation stopped at step 5 of `PROVISIONING.md` §3 while its recovery
+     * phrase waits for confirmation.
+     *
+     * §4 there runs the presentation and confirmation "before the slot
+     * commits", so the handle reaches `ACTIVE` only in [confirmRecoveryPhrase].
+     * A lock before that abandons it.
+     */
+    private var creation = 0L
+
+    /**
+     * Whether a recovery slot staged on the open session waits for its phrase
+     * to be confirmed, `RECOVERY.md` §8. The slot itself is in Rust and goes
+     * with the session.
+     */
+    private var recoveryStaged = false
+
+    /**
+     * When the recovery phrase that waits for confirmation was handed out.
+     *
+     * `DESIGN.md` §17.2 bounds the phrase at ten minutes after it appeared.
+     * [lastUsedMs] cannot carry that bound, because [poll] refreshes it while
+     * an operation runs.
+     */
+    private var phraseShownAtMs = 0L
 
     /** What the application should show. */
     val state: StateFlow<VaultState> = _state.asStateFlow()
@@ -76,13 +101,18 @@ class VaultRepository(
      * keeps: re-deriving the state from the descriptor would publish `Locked`
      * while Rust still holds the session, which puts the unlock screen in
      * front of an unlocked vault and leaves its handles unreachable.
+     *
+     * A creation that waits for its recovery phrase is kept the same way as an
+     * open session. The background sync calls this while the phrase can be on
+     * screen, and `NoVault` or `Locked` would stop the idle timer that bounds
+     * the phrase, `DESIGN.md` §17.2.
      */
     suspend fun start(): VaultState = mutex.withLock {
         if (runtime == 0L) {
             runtime = ChurVault.openRuntime(rootPath)
         }
         val next = when {
-            session != 0L -> _state.value
+            session != 0L || creation != 0L -> _state.value
             ChurVault.vaultPresent(runtime) -> VaultState.Locked()
             else -> VaultState.NoVault
         }
@@ -97,6 +127,11 @@ class VaultRepository(
      * password slot and `ACTIVE`, because that is where §3 puts it. The phrase
      * is returned once and this class keeps no copy: `RECOVERY.md` §2 shows it
      * exactly once and §8 there is how a user who loses it gets another.
+     *
+     * With the offer accepted, the creation stops at step 5 and the state
+     * stays [VaultState.Creating]: §4 commits the slot only after the user
+     * confirmed the phrase, so `ACTIVE` is reached in [confirmRecoveryPhrase].
+     * A lock before that abandons the creation, and no vault is left behind.
      */
     suspend fun create(password: ByteArray, offerRecovery: Boolean): String? =
         mutex.withLock {
@@ -109,38 +144,67 @@ class VaultRepository(
             // §8 of `PLAINTEXT_LIFECYCLE.md` is the transition that ends that,
             // and it runs here rather than being skipped because the caller is
             // busy creating something else.
-            if (session != 0L) {
-                runCatching { ChurVault.lock(session, LockReason.USER) }
-                runCatching { ChurVault.closeSession(session) }
-                session = 0L
-            }
+            endSession(LockReason.USER)
+            // A second tap can land before the state reads `Creating`, and a
+            // creation already waiting here would otherwise be overwritten
+            // with its root and its catalog still live in Rust.
+            abandonCreation()
             _state.value = VaultState.Creating
-            var creation = 0L
+            var pending = 0L
             try {
-                creation = ChurVault.beginCreation(runtime, password)
-                val secret = if (offerRecovery) ChurVault.creationAddRecoverySlot(creation) else null
-                session = ChurVault.activateCreation(creation)
-                creation = 0L
-                generation += 1
-                touch()
-                _state.value = VaultState.Unlocked(generation)
+                pending = ChurVault.beginCreation(runtime, password)
+                val secret = if (offerRecovery) ChurVault.creationAddRecoverySlot(pending) else null
+                if (secret == null) {
+                    activate(pending)
+                } else {
+                    creation = pending
+                    phraseShownAtMs = clock()
+                }
+                pending = 0L
                 secret
             } catch (failure: ChurFailure) {
                 // §9 of the descriptor format: a creation that does not reach
                 // ACTIVE leaves nothing openable, and abandoning is how.
-                if (creation != 0L) {
-                    runCatching { ChurVault.abandonCreation(creation) }
+                if (pending != 0L) {
+                    runCatching { ChurVault.abandonCreation(pending) }
                 }
-                // A refused first creation leaves no vault, and `Locked` would
-                // put the unlock screen in front of nothing, as in [lockSession].
-                // The disk decides; a check that cannot answer keeps the old
-                // report. The failure itself reaches the user as the thrown
-                // status either way.
-                val present = runCatching { ChurVault.vaultPresent(runtime) }.getOrDefault(true)
-                _state.value = if (present) VaultState.Locked(failure.status) else VaultState.NoVault
+                // The failure itself reaches the user as the thrown status.
+                _state.value = closedState(failure.status)
                 throw failure
             }
         }
+
+    /**
+     * Commits what the recovery phrase on screen belongs to, `RECOVERY.md` §8.
+     *
+     * A creation waiting at step 5 of `PROVISIONING.md` §3 reaches `ACTIVE`,
+     * and a slot [beginRecoverySlot] staged is written. It returns `false`
+     * when nothing waits, because a lock already discarded what the phrase
+     * belonged to and the phrase opens nothing.
+     */
+    suspend fun confirmRecoveryPhrase(): Boolean = mutex.withLock {
+        when {
+            creation != 0L -> {
+                val pending = creation
+                creation = 0L
+                try {
+                    activate(pending)
+                } catch (failure: ChurFailure) {
+                    runCatching { ChurVault.abandonCreation(pending) }
+                    _state.value = closedState(failure.status)
+                    throw failure
+                }
+                true
+            }
+            recoveryStaged && session != 0L -> {
+                recoveryStaged = false
+                ChurVault.commitRecoverySlot(session)
+                touch()
+                true
+            }
+            else -> false
+        }
+    }
 
     /** Unlocks with a password, `KEY_SLOTS.md` §8. */
     suspend fun unlock(password: ByteArray) = mutex.withLock {
@@ -170,10 +234,15 @@ class VaultRepository(
     suspend fun lock(reason: LockReason) = mutex.withLock { lockSession(reason) }
 
     private fun lockSession(reason: LockReason) {
-        if (session != 0L) {
-            runCatching { ChurVault.lock(session, reason) }
-            runCatching { ChurVault.closeSession(session) }
-            session = 0L
+        // `PROVISIONING.md` §4 commits nothing the user has not confirmed. A
+        // slot staged on the session closes with it, and a creation waiting
+        // for its phrase is abandoned, which §3 says leaves no openable vault.
+        // Every lock also clears the phrase from the screen, so no slot
+        // outlives the phrase that opens it.
+        endSession(reason)
+        if (abandonCreation()) {
+            _state.value = closedState()
+            return
         }
         // `Locked` says a vault exists. Every trigger can fire before the
         // user has created one, and the background lock does on a first run
@@ -185,11 +254,24 @@ class VaultRepository(
         }
     }
 
-    /** Locks when the policy says the session has been idle too long. */
+    /**
+     * Locks when the policy says the session has been idle too long.
+     *
+     * While a recovery phrase waits for confirmation the limit is
+     * [LockPolicy.RECOVERY_PHRASE_TIMEOUT_MS] from when it appeared, whatever
+     * refreshed the idle clock since: copying it outlasts the default, and
+     * `DESIGN.md` §17.2 bounds how long a full credential stays on a screen
+     * that is kept awake. A waiting creation holds a root too.
+     */
     suspend fun lockIfIdle(beforeLock: suspend () -> Unit = {}): Boolean {
         mutex.lock()
         try {
-            if (session == 0L || idleDecision(policy, lastUsedMs, clock()) != LockDecision.LOCK) {
+            val decision = if (creation != 0L || recoveryStaged) {
+                idleDecision(LockPolicy(LockPolicy.RECOVERY_PHRASE_TIMEOUT_MS), phraseShownAtMs, clock())
+            } else {
+                idleDecision(policy, lastUsedMs, clock())
+            }
+            if ((session == 0L && creation == 0L) || decision != LockDecision.LOCK) {
                 return false
             }
             beforeLock()
@@ -210,6 +292,11 @@ class VaultRepository(
     /** Closes everything, which a process shutdown does. */
     suspend fun shutdown() = mutex.withLock {
         if (runtime != 0L) {
+            // A waiting creation's vault directory goes now rather than at
+            // the next open, where the runtime sweeps it with the temporary
+            // descriptor, `PROVISIONING.md` §9.
+            abandonCreation()
+            recoveryStaged = false
             runCatching { ChurVault.closeRuntime(runtime) }
             runtime = 0L
             session = 0L
@@ -306,8 +393,18 @@ class VaultRepository(
     /** The key slots, for the settings screen. */
     suspend fun slots(): List<SlotSummary> = withSession { ChurVault.slots(it) }
 
-    /** Adds a recovery slot and returns the phrase once. */
-    suspend fun addRecoverySlot(): String = withSession { ChurVault.addRecoverySlot(it) }
+    /**
+     * Stages a recovery slot and returns the phrase once, `RECOVERY.md` §8.
+     *
+     * Nothing commits until [confirmRecoveryPhrase]; a lock closes the session
+     * and the staged slot with it.
+     */
+    suspend fun beginRecoverySlot(): String = withSession { current ->
+        ChurVault.beginRecoverySlot(current).also {
+            recoveryStaged = true
+            phraseShownAtMs = clock()
+        }
+    }
 
     /** Adds the platform device slot and returns the secret to store. */
     suspend fun addDeviceSlot(keychainItemId: ByteArray): ByteArray =
@@ -725,12 +822,10 @@ class VaultRepository(
         // it, and replacing the handle would leave that session unlocked in
         // Rust, with its root, keys and catalog, beyond every later lock. It
         // is ended first, as `create` ends it; §8 of `PLAINTEXT_LIFECYCLE.md`
-        // is that transition.
-        if (session != 0L) {
-            runCatching { ChurVault.lock(session, LockReason.USER) }
-            runCatching { ChurVault.closeSession(session) }
-            session = 0L
-        }
+        // is that transition. A creation waiting for its phrase is abandoned
+        // for the same reason: its activation would assign over this session.
+        endSession(LockReason.USER)
+        abandonCreation()
         try {
             session = open()
             generation += 1
@@ -744,6 +839,58 @@ class VaultRepository(
 
     private fun touch() {
         lastUsedMs = clock()
+    }
+
+    /**
+     * Opens the session a creation reached `ACTIVE` with, step 6 of §3.
+     *
+     * One runtime shares one session, §8.1 of `docs/interop/FFI_CONTRACT.md`,
+     * so a session still open here is ended first rather than assigned over.
+     */
+    private fun activate(pending: Long) {
+        endSession(LockReason.USER)
+        session = ChurVault.activateCreation(pending)
+        generation += 1
+        touch()
+        _state.value = VaultState.Unlocked(generation)
+    }
+
+    /**
+     * Locks and closes the open session, if there is one, and with it the
+     * recovery slot staged on it, `PLAINTEXT_LIFECYCLE.md` §8.
+     */
+    private fun endSession(reason: LockReason) {
+        if (session != 0L) {
+            runCatching { ChurVault.lock(session, reason) }
+            runCatching { ChurVault.closeSession(session) }
+            session = 0L
+        }
+        recoveryStaged = false
+    }
+
+    /**
+     * Abandons the creation waiting for its phrase, if there is one.
+     *
+     * §9 of the descriptor format: a creation that does not reach `ACTIVE`
+     * leaves nothing openable, and abandoning is how.
+     */
+    private fun abandonCreation(): Boolean {
+        if (creation == 0L) return false
+        runCatching { ChurVault.abandonCreation(creation) }
+        creation = 0L
+        return true
+    }
+
+    /**
+     * The state when no session is open.
+     *
+     * A stopped first creation leaves no vault, and `Locked` would put the
+     * unlock screen in front of nothing, as in [lockSession]. The disk decides;
+     * a check that cannot answer keeps `Locked`.
+     */
+    private fun closedState(failure: ChurStatus? = null): VaultState {
+        val present = runCatching { ChurVault.vaultPresent(runtime) }.getOrDefault(true)
+        return if (present) VaultState.Locked(failure) else VaultState.NoVault
     }
 
     /**

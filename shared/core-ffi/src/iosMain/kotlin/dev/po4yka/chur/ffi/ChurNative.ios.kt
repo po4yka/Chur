@@ -92,6 +92,8 @@ import dev.po4yka.chur.native.chur_vault_keystore_material
 import dev.po4yka.chur.native.chur_vault_lock
 import dev.po4yka.chur.native.chur_vault_platform_slot_identifier
 import dev.po4yka.chur.native.chur_vault_present
+import dev.po4yka.chur.native.chur_vault_recovery_begin
+import dev.po4yka.chur.native.chur_vault_recovery_commit
 import dev.po4yka.chur.native.chur_vault_remove_slot
 import dev.po4yka.chur.native.chur_vault_slots
 import dev.po4yka.chur.native.chur_vault_unlock
@@ -823,6 +825,25 @@ internal actual object ChurNative {
                 )
             }
         }
+
+    actual fun vaultRecoveryBegin(
+        session: Long,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int =
+        memScoped {
+            writtenCall(outWritten) { written ->
+                chur_vault_recovery_begin(
+                    session.toULong(),
+                    destination.pointer,
+                    destination.size.toULong(),
+                    written,
+                )
+            }
+        }
+
+    actual fun vaultRecoveryCommit(session: Long): Int =
+        chur_vault_recovery_commit(session.toULong())
 
     actual fun vaultAddDeviceSlot(
         session: Long,

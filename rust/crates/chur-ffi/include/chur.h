@@ -18,7 +18,7 @@
  * recipient-device surface of section 6.13, and the sharing discovery surface
  * of section 6.14, and the private tag list of section 6.15. Adding an export raises the minor
  * ABI version; changing or removing one raises the major. The library reports
- * 2.18.
+ * 2.19.
  */
 
 #ifndef CHUR_H
@@ -571,6 +571,17 @@ chur_status_t chur_vault_creation_abandon(chur_handle_t creation);
 chur_status_t chur_vault_add_recovery_slot(chur_handle_t session,
                                            uint8_t *destination, size_t capacity,
                                            size_t *bytes_written);
+
+/* ABI 2.19, FFI_CONTRACT.md section 6.23. RECOVERY.md section 8 commits a
+ * recovery slot only after the user confirmed its phrase. Begin writes the
+ * phrase as chur_vault_add_recovery_slot does and holds the sealed slot in the
+ * session; commit writes it as one descriptor generation. A slot never
+ * committed before the session closes is never written. A commit with nothing
+ * staged returns CONFLICT, and on a locked session VAULT_LOCKED. */
+chur_status_t chur_vault_recovery_begin(chur_handle_t session,
+                                        uint8_t *destination, size_t capacity,
+                                        size_t *bytes_written);
+chur_status_t chur_vault_recovery_commit(chur_handle_t session);
 chur_status_t chur_vault_add_device_slot(chur_handle_t session,
                                          const uint8_t *item_id,
                                          uint8_t *out_secret);

@@ -43,6 +43,10 @@ interface PrivacyCover {
  * Whether the switcher must not show the screen for [state] and [route],
  * `PLAINTEXT_LIFECYCLE.md` §1.
  *
+ * A recovery phrase on screen is private whatever the state: it opens the
+ * vault on its own, and while a creation waits for it to be confirmed the
+ * state is [VaultState.Creating] rather than an open session.
+ *
  * An open session is private, and so is the gate, because `IOS.md` §22.1 keeps
  * authentication errors out of the snapshot. The restore screen is private for
  * the same reason: it takes the vault's password or recovery phrase, and a
@@ -53,8 +57,8 @@ interface PrivacyCover {
  * enters the background, because its cover is a view and cannot stay up
  * while the scene is in front.
  */
-fun needsPrivacyCover(state: VaultState, route: AppRoute): Boolean =
-    state is VaultState.Unlocked || route == AppRoute.Unlock || route == AppRoute.Recover ||
+fun needsPrivacyCover(state: VaultState, route: AppRoute, phraseShown: Boolean = false): Boolean =
+    phraseShown || state is VaultState.Unlocked || route == AppRoute.Unlock || route == AppRoute.Recover ||
         route == AppRoute.AppUnlock || route == AppRoute.AppRecover || route == AppRoute.RestoreBackup
 
 /** A cover that does nothing, for a host with no window to cover. */

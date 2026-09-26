@@ -347,6 +347,14 @@ internal actual object ChurNative {
         outWritten: IntArray,
     ): Int = ChurJni.vaultAddRecoverySlot(session, destination.buffer, outWritten)
 
+    actual fun vaultRecoveryBegin(
+        session: Long,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int = ChurJni.vaultRecoveryBegin(session, destination.buffer, outWritten)
+
+    actual fun vaultRecoveryCommit(session: Long): Int = ChurJni.vaultRecoveryCommit(session)
+
     actual fun vaultAddDeviceSlot(
         session: Long,
         itemId: ByteArray,

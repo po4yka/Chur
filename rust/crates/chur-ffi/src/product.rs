@@ -296,6 +296,58 @@ pub unsafe extern "C" fn chur_vault_add_recovery_slot(
     })
 }
 
+/// Stages a recovery slot until its phrase is confirmed, §6.23.
+///
+/// It writes the phrase as [`chur_vault_add_recovery_slot`] does, but holds
+/// the sealed slot in the session: `RECOVERY.md` §8 commits it only after the
+/// user confirmed the phrase, which [`chur_vault_recovery_commit`] is.
+///
+/// # Safety
+///
+/// As [`chur_vault_slots`].
+#[unsafe(no_mangle)]
+#[expect(
+    unsafe_code,
+    reason = "ADR-0016: the v1 C ABI requires an exported symbol"
+)]
+pub unsafe extern "C" fn chur_vault_recovery_begin(
+    session: Handle,
+    destination: *mut u8,
+    capacity: usize,
+    bytes_written: *mut usize,
+) -> Status {
+    guard_status_for(session, || {
+        // SAFETY: the caller guarantees `bytes_written` is writable.
+        let _ = unsafe { crate::api::write_out(bytes_written, 0usize) };
+        // The destination is validated before the slot is staged: a caller
+        // that cannot receive the phrase could never confirm it.
+        ensure!(
+            capacity >= RECOVERY_PHRASE_MAX,
+            ResourceLimitExceeded,
+            "the destination buffer is smaller than CHUR_RECOVERY_PHRASE_MAX"
+        );
+        // SAFETY: the caller guarantees `destination` covers `capacity` bytes.
+        let buffer = unsafe { crate::api::borrow_bytes_mut(destination, capacity)? };
+        let entry = registry::get(session, Kind::Session)?;
+        let secret = with_session_mut(&entry, Session::begin_recovery_slot)?;
+        let phrase = chur_crypto::recovery::to_phrase(&secret);
+        write_record(phrase.as_bytes(), buffer, bytes_written)
+    })
+}
+
+/// Commits the recovery slot [`chur_vault_recovery_begin`] staged, §6.23.
+#[unsafe(no_mangle)]
+#[expect(
+    unsafe_code,
+    reason = "ADR-0016: the C ABI requires an exported symbol"
+)]
+pub extern "C" fn chur_vault_recovery_commit(session: Handle) -> Status {
+    guard_status_for(session, || {
+        let entry = registry::get(session, Kind::Session)?;
+        with_session_mut(&entry, Session::finish_recovery_slot)
+    })
+}
+
 /// Adds the Apple Keychain slot of `KEY_SLOTS.md` §5, step 7 of provisioning.
 ///
 /// # Safety

@@ -445,6 +445,23 @@ object ChurVault {
             ChurNative.vaultAddRecoverySlot(session, buffer, written)
         }
 
+    /**
+     * Stages a recovery slot and returns its phrase, `RECOVERY.md` §8.
+     *
+     * Nothing is committed: [commitRecoverySlot] writes the slot once the user
+     * has confirmed the phrase, and a lock or a close before that discards it,
+     * §6.23 of `docs/interop/FFI_CONTRACT.md`.
+     */
+    fun beginRecoverySlot(session: Long): String =
+        phraseOf("recovery begin") { buffer, written ->
+            ChurNative.vaultRecoveryBegin(session, buffer, written)
+        }
+
+    /** Commits the slot [beginRecoverySlot] staged, `KEY_SLOTS.md` §9. */
+    fun commitRecoverySlot(session: Long) {
+        ChurFailure.check(ChurNative.vaultRecoveryCommit(session), "recovery commit")
+    }
+
     /** Adds the Apple Keychain slot, `KEY_SLOTS.md` §5. */
     fun addDeviceSlot(
         session: Long,

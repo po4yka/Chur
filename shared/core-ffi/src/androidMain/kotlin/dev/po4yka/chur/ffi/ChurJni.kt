@@ -325,6 +325,14 @@ internal object ChurJni {
         outWritten: IntArray,
     ): Int
 
+    external fun vaultRecoveryBegin(
+        session: Long,
+        destination: ByteBuffer,
+        outWritten: IntArray,
+    ): Int
+
+    external fun vaultRecoveryCommit(session: Long): Int
+
     external fun vaultAddDeviceSlot(
         session: Long,
         itemId: ByteArray,

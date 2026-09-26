@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. The current library reports 2.18: §6.19 changes the album-list record, §6.20 adds atomic album placement, §6.21 adds tag and favourite selection controls, and §6.22 adds recoverable trash. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
+- native API version is the (major, minor) pair. The current library reports 2.19: §6.19 changes the album-list record, §6.20 adds atomic album placement, §6.21 adds tag and favourite selection controls, §6.22 adds recoverable trash, and §6.23 stages the recovery slot until its phrase is confirmed. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -270,6 +270,9 @@ chur_status_t chur_vault_creation_abandon(chur_handle_t creation);
 /* key slots, KEY_SLOTS.md section 9 */
 chur_status_t chur_vault_add_recovery_slot(chur_handle_t session, uint8_t *destination,
                                            size_t capacity, size_t *bytes_written);
+chur_status_t chur_vault_recovery_begin(chur_handle_t session, uint8_t *destination,
+                                        size_t capacity, size_t *bytes_written);
+chur_status_t chur_vault_recovery_commit(chur_handle_t session);
 chur_status_t chur_vault_add_device_slot(chur_handle_t session,
                                          const uint8_t *item_id,
                                          uint8_t *out_secret);
@@ -628,6 +631,10 @@ When the caller's tag-list buffer is too small, `chur_tag_list` reports the requ
 
 `chur_trash_restore_all` restores every unexpired entry in one transaction. `chur_object_delete` is the irreversible cryptographic erasure path. `chur_trash_empty` invokes it for every trash entry. Expired entries are purged on unlock and before catalog queries. An interrupted purge rolls forward at the next unlock. Final deletion may progress through several objects before an error; successful objects stay deleted and remaining entries stay in trash.
 
+### 6.23 Staged recovery slot, ABI 2.19
+
+[`../security/RECOVERY.md`](../security/RECOVERY.md) §8 commits a new recovery slot only after the user confirmed that the phrase was stored, and [`../security/PROVISIONING.md`](../security/PROVISIONING.md) §4 runs the presentation and confirmation "before the slot commits". `chur_vault_add_recovery_slot` commits before the host has shown anything, so a phrase lost on screen left a working slot that no one could use. `chur_vault_recovery_begin` seals a recovery slot, writes its phrase under the §6.5 rules, and holds the slot in the session without writing the descriptor; a second begin replaces the staged slot. `chur_vault_recovery_commit` writes the staged slot as one descriptor generation ([`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §9). A commit with nothing staged returns `CONFLICT`, and on a session that `chur_vault_lock` has locked it returns `VAULT_LOCKED`. Closing the session discards a staged slot, so a slot never committed is never written. `chur_vault_add_recovery_slot` is unchanged and serves callers with no presentation step. A creation needs neither call: its slot already waits in the creation handle, and the host calls `chur_vault_creation_activate` only after the phrase is confirmed.
+
 ## 7. Buffer ownership
 
 Each function specifies:
@@ -664,6 +671,7 @@ Thread affinity is a property of the handle type, not of the creating thread. No
 The table above bounds calls on one handle. These rules bound a vault, and no other document restates them:
 
 - one process opens a vault. The runtime takes an exclusive advisory lock on the descriptor file for the life of the session; a second process that cannot take it returns `CONFLICT` and attempts no slot unwrap, so a split Android process or a second launch cannot corrupt the catalog;
+- a vault directory whose descriptor is not installed yet, of a creation that waits for its recovery phrase or of a restore that is still writing, is held by the same kind of exclusive advisory lock, on a `lock` file inside the directory, until the install or the removal. The orphan sweep at runtime open ([`../security/PROVISIONING.md`](../security/PROVISIONING.md) §9) removes only a directory whose lock it can take, and it is best-effort: a directory it cannot remove never stops the runtime from opening;
 - one runtime per process (§14), so a second iOS scene or a second Android task shares the one session rather than opening its own. There is no per-scene vault state;
 - catalog writes are serialized by one writer mutex per session. Reads run on the writer's connection in v1, which is why every reader handle is serialized in the table above. A read pool is a later change gated on `CHUR_CAP_CONCURRENT_READS` and does not alter this contract, because callers must already tolerate serialized reads;
 - at most one unlock is in flight per runtime. A `chur_vault_unlock` arriving while another is running returns `CONFLICT` before deriving anything, so a double-tapped unlock button never starts two derivations;

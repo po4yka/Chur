@@ -38,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
@@ -124,6 +125,15 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
     // would run the background lock, which clears the phrase for good.
     phrase?.let { value ->
         BackHandler {}
+        // Copying 24 words by hand, `RECOVERY.md` §2.3, outlasts the screen
+        // timeout, and the pause that follows it used to lock and drop the
+        // phrase mid-copy. The repository's phrase window bounds how long the
+        // display stays awake.
+        val view = LocalView.current
+        DisposableEffect(view) {
+            view.keepScreenOn = true
+            onDispose { view.keepScreenOn = false }
+        }
         RecoveryPhraseScreen(phrase = value, onAcknowledged = controller::acknowledgeRecoveryPhrase)
         return
     }

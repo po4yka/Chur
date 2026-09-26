@@ -1131,7 +1131,7 @@ Flow:
 - clearly label copy risk;
 - use readable grouping and checksum feedback;
 - offer accessible spoken alternatives without reading secrets automatically;
-- clear from UI and clipboard according to explicit policy.
+- clear from UI and clipboard according to explicit policy: the phrase stays on screen, with the display kept awake, until the user confirms it or ten minutes after it appeared; any lock before confirmation clears it and commits no slot.
 
 ### 17.3 Irrecoverable mode
 

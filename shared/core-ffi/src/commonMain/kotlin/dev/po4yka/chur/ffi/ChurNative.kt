@@ -322,6 +322,14 @@ internal expect object ChurNative {
         outWritten: IntArray,
     ): Int
 
+    fun vaultRecoveryBegin(
+        session: Long,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int
+
+    fun vaultRecoveryCommit(session: Long): Int
+
     fun vaultAddDeviceSlot(
         session: Long,
         itemId: ByteArray,

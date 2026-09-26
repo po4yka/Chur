@@ -234,20 +234,23 @@ class BackNavigationTest {
     fun backDoesNotSpendTheOneShowingOfTheRecoveryPhrase() = inTestVault {
         val before = runBlocking { controller.vault.slots() }.map { it.id }.toSet()
         instrumentation.runOnMainSync { controller.addRecoverySlot() }
-        try {
-            assertTrue("the vault shows a new phrase", await(60_000) { controller.recoveryPhrase.value != null })
+        assertTrue("the vault shows a new phrase", await(60_000) { controller.recoveryPhrase.value != null })
 
-            pressBack()
+        pressBack()
 
-            assertNotNull("Back must not leave the phrase", controller.recoveryPhrase.value)
-        } finally {
-            // A descriptor holds at most 16 slots, so each run removes the one
-            // it added while the session is still open.
-            instrumentation.runOnMainSync { controller.acknowledgeRecoveryPhrase() }
-            runBlocking {
-                controller.vault.slots().filter { it.id !in before }.forEach { controller.vault.removeSlot(it.slotId) }
-            }
+        assertNotNull("Back must not leave the phrase", controller.recoveryPhrase.value)
+        // The slot commits only when the phrase is confirmed, and a lock
+        // discards it. A descriptor holds at most 16 slots, so the test vault
+        // must not keep one per run; a failure above leaves through the same
+        // lock in `inTestVault`.
+        lockQuietly()
+        assertTrue("the lock leaves the vault", await { controller.route.value != AppRoute.Vault })
+        instrumentation.runOnMainSync {
+            controller.goTo(AppRoute.Unlock)
+            controller.unlock(PASSWORD)
         }
+        assertTrue("the vault opens again", await(60_000) { isOpen() })
+        assertEquals(before, runBlocking { controller.vault.slots() }.map { it.id }.toSet())
     }
 
     // -----------------------------------------------------------------------
@@ -312,13 +315,15 @@ class BackNavigationTest {
         assertTrue("the vault must lock", controller.vaultState.value !is VaultState.Unlocked)
     }
 
-    /** Locks without asserting, so a cleanup cannot hide the failure it follows. */
+    /**
+     * Locks without asserting, so a cleanup cannot hide the failure it follows.
+     *
+     * The lock also discards a recovery slot or a creation whose phrase is
+     * still on screen, so nothing the test did not confirm is committed.
+     */
     private fun lockQuietly() {
         if (controller.vaultState.value !is VaultState.Unlocked && controller.recoveryPhrase.value == null) return
-        instrumentation.runOnMainSync {
-            controller.acknowledgeRecoveryPhrase()
-            controller.lock()
-        }
+        instrumentation.runOnMainSync { controller.lock() }
         await { controller.vaultState.value !is VaultState.Unlocked }
     }
 

@@ -192,7 +192,8 @@ fun CreateVaultScreen(
  */
 @Composable
 fun RecoveryPhraseScreen(phrase: String, onAcknowledged: () -> Unit) {
-    var acknowledged by remember { mutableStateOf(false) }
+    // Keyed to the phrase: a tick given to one phrase says nothing about the next.
+    var acknowledged by remember(phrase) { mutableStateOf(false) }
     val colors = LocalChurColors.current
     Surface(color = colors.canvas, modifier = Modifier.fillMaxSize()) {
         Column(
@@ -208,7 +209,9 @@ fun RecoveryPhraseScreen(phrase: String, onAcknowledged: () -> Unit) {
                 Text("Your recovery phrase", style = MaterialTheme.typography.headlineSmall)
                 Text(
                     "These 24 words open your vault without the password. They are shown " +
-                        "once. Write them down and keep them somewhere safe and offline.",
+                        "once. Write them down and keep them somewhere safe and offline. " +
+                        "Nothing is saved until you tap Continue. If the app locks or you " +
+                        "leave it before then, these words are discarded.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = colors.inkMuted,
                 )

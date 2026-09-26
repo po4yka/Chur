@@ -629,7 +629,9 @@ pub fn restore(
         object_store: chur_format::descriptor::ObjectStoreDescriptor::v1(store_id),
         ..descriptor.clone()
     };
-    root_dir.prepare(&store_id)?;
+    // The claim keeps the orphan sweep of another runtime on this root off the
+    // directory until this function returns, after the install below.
+    let _claim = root_dir.prepare(&store_id)?;
     let catalog_path = root_dir.catalog(&store_id, &catalog_path_id);
     let installed = (|| -> Result<()> {
         extract(

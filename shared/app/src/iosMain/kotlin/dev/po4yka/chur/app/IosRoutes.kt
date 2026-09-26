@@ -3,6 +3,7 @@
 package dev.po4yka.chur.app
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -63,6 +64,7 @@ import platform.Foundation.NSDate
 import platform.Foundation.NSTemporaryDirectory
 import platform.Foundation.NSURL
 import platform.Foundation.timeIntervalSince1970
+import platform.UIKit.UIApplication
 import platform.posix.O_RDONLY
 import platform.posix.close
 import platform.posix.open
@@ -79,6 +81,13 @@ internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: 
     val message by controller.message.collectAsState()
 
     phrase?.let { value ->
+        // Copying 24 words by hand, `RECOVERY.md` §2.3, outlasts the
+        // auto-lock, which backgrounds the scene and drops the phrase. The
+        // repository's phrase window bounds how long the display stays awake.
+        DisposableEffect(Unit) {
+            UIApplication.sharedApplication.idleTimerDisabled = true
+            onDispose { UIApplication.sharedApplication.idleTimerDisabled = false }
+        }
         RecoveryPhraseScreen(phrase = value, onAcknowledged = controller::acknowledgeRecoveryPhrase)
         return
     }

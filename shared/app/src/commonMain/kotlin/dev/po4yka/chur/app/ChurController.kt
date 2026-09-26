@@ -185,7 +185,7 @@ class ChurController(
      * only as an untyped object, so the check is made here and not in the host.
      */
     val privacyCoverNeeded: Boolean
-        get() = needsPrivacyCover(vaultState.value, route.value)
+        get() = needsPrivacyCover(vaultState.value, route.value, recoveryPhrase.value != null)
 
     /** The public notes. */
     val notesState: StateFlow<List<Note>> = _notes.asStateFlow()
@@ -289,11 +289,13 @@ class ChurController(
      * idle check existed and nothing called it, so a timed lock never happened.
      *
      * `collectLatest` cancels the loop as soon as the session is not unlocked,
-     * so no wakeup runs while there is nothing to lock.
+     * so no wakeup runs while there is nothing to lock. A creation waiting for
+     * its recovery phrase to be confirmed counts: it holds a root and shows a
+     * full credential, so it times out as a session does.
      */
     private suspend fun runIdleTimer() {
         repository.state.collectLatest { current ->
-            if (current !is VaultState.Unlocked) return@collectLatest
+            if (current !is VaultState.Unlocked && current !is VaultState.Creating) return@collectLatest
             while (true) {
                 delay(IDLE_TICK_MS)
                 checkIdle()
@@ -301,12 +303,37 @@ class ChurController(
         }
     }
 
+    /**
+     * Whether a request that ends with a recovery phrase on screen is in
+     * flight, [create] or [addRecoverySlot].
+     *
+     * A second request abandons what the first staged while the first phrase
+     * can already be on screen, so that phrase opens nothing, and a Continue
+     * on it would commit the second before its phrase was ever shown. So a
+     * request is ignored while another runs or its phrase is shown. The flag
+     * is set on Main before the work starts, because the vault state reads
+     * `Creating` only once the work has reached the repository.
+     */
+    private var phraseRequested = false
+
+    private fun requestPhrase(body: suspend () -> Unit) {
+        if (phraseRequested || _recoveryPhrase.value != null) return
+        phraseRequested = true
+        guarded {
+            try {
+                body()
+            } finally {
+                phraseRequested = false
+            }
+        }
+    }
+
     /** Creates a vault, `PROVISIONING.md` §3. */
-    fun create(password: String, offerRecovery: Boolean) = guarded {
+    fun create(password: String, offerRecovery: Boolean) = requestPhrase {
         if (password.isNotEmpty() && password.all { it in '0'..'9' } &&
             password.length <= 20 && !isValidVaultPin(password)) {
             _message.value = "Use at least 12 digits for a vault PIN."
-            return@guarded
+            return@requestPhrase
         }
         endOpenSession()
         val bytes = password.encodeToByteArray()
@@ -323,18 +350,38 @@ class ChurController(
             // design refuses to answer. The residual signal that a creation
             // failed at all is structural and is recorded in §5 there.
             _message.value = "This vault could not be created. Try a different credential."
-            return@guarded
+            return@requestPhrase
         } finally {
             bytes.fill(0)
         }
         if (phrase != null) _recoveryPhrase.value = phrase else enterVault()
     }
 
-    /** Acknowledges the phrase, which is the only way past that screen. */
+    /**
+     * Acknowledges the phrase, which is the only way past that screen.
+     *
+     * The slot commits here and not before: `PROVISIONING.md` §4 runs the
+     * presentation and confirmation "before the slot commits", and
+     * `RECOVERY.md` §8 confirms before the new descriptor generation. The
+     * phrase leaves the screen at the tap, so it is shown once and a second
+     * tap does nothing. A lock that reached the repository first already
+     * discarded what the phrase belonged to, and the user is told that the
+     * phrase they wrote down was not saved.
+     *
+     * An activation that fails reaches the user as a message, as a failed
+     * [create] does, and leaves nothing to clear: the repository abandons the
+     * creation, and [endOpenSession] cleared the projections of an open
+     * session before the creation began.
+     */
     fun acknowledgeRecoveryPhrase() {
+        if (_recoveryPhrase.value == null) return
         _recoveryPhrase.value = null
-        if (repository.state.value is VaultState.Unlocked) {
-            guarded { enterVault() }
+        guarded {
+            if (withContext(Dispatchers.Default) { repository.confirmRecoveryPhrase() }) {
+                enterVault()
+            } else {
+                _message.value = "This recovery phrase was not saved."
+            }
         }
     }
 
@@ -662,7 +709,10 @@ class ChurController(
             if (_appLockEnabled.value) repository.lock(LockReason.BACKGROUND)
             else repository.onBackground()
         }
-        if (repository.state.value !is VaultState.Unlocked) {
+        // A background that did not lock keeps a creation waiting for its
+        // phrase together with the phrase.
+        val after = repository.state.value
+        if (after !is VaultState.Unlocked && after !is VaultState.Creating) {
             clearPrivateProjections()
             _route.value = if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell
         }
@@ -682,20 +732,31 @@ class ChurController(
      */
     fun background() = guarded { onBackground() }
 
-    /** The idle check of `DESIGN.md` §14.4, which [runIdleTimer] drives. */
+    /**
+     * The idle check of `DESIGN.md` §14.4, which [runIdleTimer] drives.
+     *
+     * The lock publishes the new state before this check resumes on Main, and
+     * the `collectLatest` of [runIdleTimer] then cancels the check. Without
+     * [NonCancellable] the check stopped after the lock and before the
+     * clearing: the route stayed in the vault, and a recovery phrase whose
+     * slot the lock had discarded stayed on screen with the display awake,
+     * against the clearing policy of `DESIGN.md` §17.2.
+     */
     suspend fun checkIdle() {
-        if (withContext(Dispatchers.Default) {
-            repository.lockIfIdle {
-                withContext(NonCancellable + Dispatchers.Main) {
-                    lockEpoch += 1
-                    _activeOperation.value = null
-                    exports.cancelPending()
+        withContext(NonCancellable) {
+            if (withContext(Dispatchers.Default) {
+                repository.lockIfIdle {
+                    withContext(NonCancellable + Dispatchers.Main) {
+                        lockEpoch += 1
+                        _activeOperation.value = null
+                        exports.cancelPending()
+                    }
                 }
+            }) {
+                privacy.setEnabled(false)
+                clearPrivateProjections()
+                _route.value = if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell
             }
-        }) {
-            privacy.setEnabled(false)
-            clearPrivateProjections()
-            _route.value = if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell
         }
     }
 
@@ -1088,10 +1149,15 @@ class ChurController(
         sync?.bind(null)
     }
 
-    /** Adds a recovery slot and shows the phrase once. */
-    fun addRecoverySlot() = guarded {
-        _recoveryPhrase.value = withContext(Dispatchers.Default) { repository.addRecoverySlot() }
-        _slots.value = withContext(Dispatchers.Default) { repository.slots() }
+    /**
+     * Stages a recovery slot and shows the phrase once.
+     *
+     * Nothing is committed yet, so the slot list stays as it is:
+     * [acknowledgeRecoveryPhrase] commits it, and Settings reloads the slots
+     * when it is entered again.
+     */
+    fun addRecoverySlot() = requestPhrase {
+        _recoveryPhrase.value = withContext(Dispatchers.Default) { repository.beginRecoverySlot() }
     }
 
     /** Replaces the password slot with a password or a long numeric PIN. */
@@ -1648,9 +1714,12 @@ class ChurController(
         // clears feature projections and step 9 shows a neutral surface; a
         // phrase that survived the lock did neither.
         //
-        // Losing an unacknowledged phrase to a lock is the intended cost.
-        // `RECOVERY.md` §2 shows it exactly once, the password still opens the
-        // vault, and §8 there is how a user gets another one.
+        // Losing an unacknowledged phrase to a lock is still intended, but it
+        // no longer strands a slot: the repository's lock discards the slot
+        // staged on the session, or abandons the creation waiting for the
+        // phrase, so nothing the user did not confirm stays committed.
+        // `RECOVERY.md` §2 shows the phrase exactly once, and §8 there is how
+        // a user gets another one.
         _recoveryPhrase.value = null
         // A launch whose result never arrived belonged to the session that just
         // ended. Carrying its count forward would suppress the background lock

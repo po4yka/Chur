@@ -20,7 +20,11 @@ sealed interface VaultState {
     /** A vault exists and is closed. */
     data class Locked(val lastFailure: ChurStatus? = null) : VaultState
 
-    /** A vault is being created, `PROVISIONING.md` §3. */
+    /**
+     * A vault is being created, `PROVISIONING.md` §3, including while its
+     * recovery phrase waits for confirmation at step 5: §4 there commits
+     * nothing before the user confirms it.
+     */
     data object Creating : VaultState
 
     /** A session is open. */
@@ -49,6 +53,19 @@ data class LockPolicy(
     companion object {
         /** Two minutes, which `DESIGN.md` §14 names as the default. */
         const val DEFAULT_IDLE_TIMEOUT_MS: Long = 120_000
+
+        /**
+         * The idle limit while a recovery phrase waits for confirmation.
+         *
+         * `RECOVERY.md` §2.3 has the user copy 24 numbered words by hand, which
+         * takes longer than the default above, and nothing on that screen
+         * reaches the repository to refresh the idle clock. Ten minutes from
+         * when the phrase appeared covers a slow copy and still bounds an
+         * unattended screen that shows a full credential, `DESIGN.md` §17.2.
+         * The window counts from that moment and not from the idle clock,
+         * which a running operation keeps refreshing.
+         */
+        const val RECOVERY_PHRASE_TIMEOUT_MS: Long = 600_000
 
         /** Lock as soon as the session stops being used. */
         val IMMEDIATE = LockPolicy(idleTimeoutMs = 0)
