@@ -344,6 +344,13 @@ internal expect object ChurNative {
         outWritten: IntArray,
     ): Int
 
+    fun vaultPlatformSlotIdentifier(
+        session: Long,
+        slotId: ByteArray,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int
+
     fun vaultKeystoreBegin(
         session: Long,
         destination: ChurBuffer,

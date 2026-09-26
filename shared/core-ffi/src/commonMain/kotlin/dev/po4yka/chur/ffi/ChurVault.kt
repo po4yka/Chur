@@ -527,6 +527,23 @@ object ChurVault {
             decodeSlotList(buffer.copyOut(written[0]), written[0])
         }
 
+    /** Public Keychain item ID or Keystore alias for a slot in this session. */
+    fun platformSlotIdentifier(session: Long, slotId: ByteArray): ByteArray {
+        require(slotId.size == 16) { "invalid slot ID" }
+        if (ChurNative.abiVersionMinor() < 14) {
+            throw ChurFailure(ChurStatus.UNSUPPORTED_VERSION, "platform slot identifier")
+        }
+        return withChurBuffer(64) { buffer ->
+            val written = IntArray(1)
+            ChurFailure.check(
+                ChurNative.vaultPlatformSlotIdentifier(session, slotId, buffer, written),
+                "platform slot identifier",
+            )
+            require(written[0] in 16..64) { "invalid platform slot identifier length" }
+            buffer.copyOut(written[0])
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Library
     // -----------------------------------------------------------------------

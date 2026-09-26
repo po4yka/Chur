@@ -1,6 +1,8 @@
 package dev.po4yka.chur.vault
 
 import dev.po4yka.chur.core.model.ChurStatus
+import dev.po4yka.chur.core.platformkeys.DeviceSlot
+import dev.po4yka.chur.core.platformkeys.DeviceSlotException
 import dev.po4yka.chur.ffi.AlbumSummary
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.ChurVault
@@ -52,6 +54,7 @@ class VaultRepository(
     private val rootPath: String,
     private val clock: () -> Long,
     private val policy: LockPolicy = LockPolicy(),
+    private val destroyPlatformSlot: (ByteArray) -> Unit = { DeviceSlot(it).destroy() },
 ) {
     private val mutex = Mutex()
     private val _state = MutableStateFlow<VaultState>(VaultState.Starting)
@@ -256,7 +259,18 @@ class VaultRepository(
         } catch (failure: Throwable) {
             ChurVault.slots(session)
                 .firstOrNull { it.slotType == 3 && it.id !in before }
-                ?.let { slot -> runCatching { ChurVault.removeSlot(session, slot.slotId) } }
+                ?.let { slot ->
+                    try {
+                        // A conflict means this item existed before enrollment.
+                        val itemToDelete = if (
+                            failure is ChurFailure && failure.status == ChurStatus.CONFLICT
+                        ) null else keychainItemId
+                        removeSlotInSession(session, slot.slotId, itemToDelete)
+                    } catch (cleanup: Throwable) {
+                        cleanup.addSuppressed(failure)
+                        throw cleanup
+                    }
+                }
             throw failure
         } finally {
             secret.fill(0)
@@ -282,9 +296,27 @@ class VaultRepository(
         ) -> Pair<ByteArray, ByteArray>,
     ) = withSession { session ->
         val enrollment = ChurVault.beginKeystoreSlot(session)
+        var platformWrapped = false
         try {
-            val (nonce, wrapped) = wrap(enrollment.alias, enrollment.aad, enrollment.rootSecret)
-            ChurVault.commitKeystoreSlot(session, nonce, wrapped)
+            val (nonce, wrappedRoot) = wrap(enrollment.alias, enrollment.aad, enrollment.rootSecret)
+            platformWrapped = true
+            ChurVault.commitKeystoreSlot(session, nonce, wrappedRoot)
+        } catch (failure: Throwable) {
+            if (platformWrapped) {
+                try {
+                    // A descriptor install can succeed before its relock fails.
+                    // Keep a key that a committed slot still references.
+                    val committed = ChurVault.slots(session)
+                        .filter { it.slotType == 2 }
+                        .any { ChurVault.platformSlotIdentifier(session, it.slotId)
+                            .contentEquals(enrollment.alias) }
+                    if (!committed) deletePlatformSlot(enrollment.alias)
+                } catch (cleanup: Throwable) {
+                    cleanup.addSuppressed(failure)
+                    throw cleanup
+                }
+            }
+            throw failure
         } finally {
             enrollment.rootSecret.fill(0)
         }
@@ -306,8 +338,46 @@ class VaultRepository(
         }
     }
 
-    /** Removes one slot. */
-    suspend fun removeSlot(slotId: ByteArray) = withSession { ChurVault.removeSlot(it, slotId) }
+    /** Removes one slot, then deletes its platform key or secret if it has one. */
+    suspend fun removeSlot(slotId: ByteArray) = withSession { session ->
+        val family = ChurVault.slots(session)
+            .firstOrNull { it.slotId.contentEquals(slotId) }
+            ?.slotType
+        val identifier = if (family == 2 || family == 3) {
+            ChurVault.platformSlotIdentifier(session, slotId)
+        } else {
+            null
+        }
+        removeSlotInSession(session, slotId, identifier)
+    }
+
+    private fun removeSlotInSession(session: Long, slotId: ByteArray, identifier: ByteArray?) {
+        var removalFailure: Throwable? = null
+        try {
+            ChurVault.removeSlot(session, slotId)
+        } catch (failure: Throwable) {
+            removalFailure = failure
+        }
+        val stillPresent = ChurVault.slots(session).any { it.slotId.contentEquals(slotId) }
+        if (!stillPresent && identifier != null) {
+            try {
+                deletePlatformSlot(identifier)
+            } catch (cleanup: Throwable) {
+                removalFailure?.let(cleanup::addSuppressed)
+                throw cleanup
+            }
+        }
+        removalFailure?.let { throw it }
+        check(!stillPresent) { "the vault did not remove the slot" }
+    }
+
+    private fun deletePlatformSlot(identifier: ByteArray) {
+        try {
+            destroyPlatformSlot(identifier)
+        } catch (failure: DeviceSlotException) {
+            throw ChurFailure(failure.status, "platform slot cleanup")
+        }
+    }
 
     /** Replaces the password slot. */
     suspend fun changePassword(password: ByteArray) =

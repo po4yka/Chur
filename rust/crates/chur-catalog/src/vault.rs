@@ -1190,6 +1190,49 @@ impl Session {
             .collect()
     }
 
+    /// Returns the public platform name for one device slot in this session.
+    /// A shared name is refused so deleting it cannot disable another slot.
+    pub fn platform_slot_identifier(&self, slot_id: &Id) -> Result<Vec<u8>> {
+        self.root_secret()?;
+        let target = self
+            .descriptor
+            .key_slots
+            .iter()
+            .find(|entry| &entry.slot_id == slot_id)
+            .ok_or_else(|| chur_core::err!(NotFound, "no slot carries that id"))?;
+        let identifier = match target.slot_type {
+            SlotType::AndroidKeystore => AndroidKeystoreSlotBody::decode(&target.slot_body)?
+                .alias()
+                .to_vec(),
+            SlotType::AppleKeychain => AppleKeychainSlotBody::decode(&target.slot_body)?
+                .keychain_item_id()
+                .as_bytes()
+                .to_vec(),
+            _ => return Err(chur_core::err!(InvalidInput, "slot has no platform key")),
+        };
+        for other in &self.descriptor.key_slots {
+            if other.slot_id == *slot_id || other.slot_type != target.slot_type {
+                continue;
+            }
+            let other_identifier = match other.slot_type {
+                SlotType::AndroidKeystore => AndroidKeystoreSlotBody::decode(&other.slot_body)?
+                    .alias()
+                    .to_vec(),
+                SlotType::AppleKeychain => AppleKeychainSlotBody::decode(&other.slot_body)?
+                    .keychain_item_id()
+                    .as_bytes()
+                    .to_vec(),
+                _ => continue,
+            };
+            ensure!(
+                other_identifier != identifier,
+                Conflict,
+                "platform key is shared by another slot"
+            );
+        }
+        Ok(identifier)
+    }
+
     /// Whether the session still holds an open catalog.
     #[must_use]
     pub fn is_unlocked(&self) -> bool {

@@ -25,6 +25,7 @@ kotlin {
         commonMain.dependencies {
             api(project(":shared:core-ffi"))
             implementation(project(":shared:core-model"))
+            implementation(project(":shared:core-platform-keys"))
             implementation(libs.kotlinx.coroutines.core)
         }
         commonTest.dependencies {

@@ -347,6 +347,13 @@ internal object ChurJni {
         outWritten: IntArray,
     ): Int
 
+    external fun vaultPlatformSlotIdentifier(
+        session: Long,
+        slotId: ByteArray,
+        destination: ByteBuffer,
+        outWritten: IntArray,
+    ): Int
+
     external fun vaultKeystoreBegin(
         session: Long,
         destination: ByteBuffer,

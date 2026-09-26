@@ -1,6 +1,7 @@
 package dev.po4yka.chur.vault
 
 import dev.po4yka.chur.core.model.ChurStatus
+import dev.po4yka.chur.core.platformkeys.DeviceSlotException
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.LockReason
 import dev.po4yka.chur.ffi.ObjectQuery
@@ -12,6 +13,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 
@@ -31,11 +33,14 @@ class VaultRepositoryHostTest {
         roots.forEach { it.deleteRecursively() }
     }
 
-    private fun repository(policy: LockPolicy = LockPolicy()): VaultRepository {
+    private fun repository(
+        policy: LockPolicy = LockPolicy(),
+        destroyPlatformSlot: (ByteArray) -> Unit = { error("unexpected platform deletion") },
+    ): VaultRepository {
         val directory = File(System.getProperty("java.io.tmpdir"), "chur-repo-${System.nanoTime()}")
         directory.mkdirs()
         roots.add(directory)
-        return VaultRepository(directory.absolutePath, { now }, policy)
+        return VaultRepository(directory.absolutePath, { now }, policy, destroyPlatformSlot)
     }
 
     @Test
@@ -206,7 +211,8 @@ class VaultRepositoryHostTest {
 
     @Test
     fun an_apple_slot_rolls_back_a_failed_store_and_unlocks_after_a_successful_store() = runBlocking {
-        val repository = repository()
+        val deleted = mutableListOf<ByteArray>()
+        val repository = repository(destroyPlatformSlot = { deleted += it.copyOf() })
         repository.start()
         repository.create(PASSWORD.encodeToByteArray(), offerRecovery = false)
 
@@ -219,6 +225,7 @@ class VaultRepositoryHostTest {
         }
         assertEquals(1, repository.slots().size)
         assertTrue(refusedSecret!!.all { it == 0.toByte() })
+        assertTrue(deleted.single().contentEquals(ByteArray(16) { 1 }))
 
         var savedSecret = ByteArray(0)
         repository.enrollAppleSlot(ByteArray(16) { 2 }) { secret ->
@@ -229,6 +236,91 @@ class VaultRepositoryHostTest {
         repository.unlockWithDeviceSecret(savedSecret)
         savedSecret.fill(0)
         assertIs<VaultState.Unlocked>(repository.state.value)
+        repository.shutdown()
+    }
+
+    @Test
+    fun apple_store_conflict_does_not_delete_an_existing_platform_item() = runBlocking {
+        var deleted = false
+        val repository = repository(destroyPlatformSlot = { deleted = true })
+        repository.start()
+        repository.create(PASSWORD.encodeToByteArray(), offerRecovery = false)
+
+        assertEquals(
+            ChurStatus.CONFLICT,
+            assertFailsWith<ChurFailure> {
+                repository.enrollAppleSlot(ByteArray(16) { 3 }) {
+                    throw ChurFailure(ChurStatus.CONFLICT, "item already exists")
+                }
+            }.status,
+        )
+        assertFalse(deleted)
+        assertEquals(1, repository.slots().size)
+        repository.shutdown()
+    }
+
+    @Test
+    fun removing_an_apple_slot_deletes_the_matching_item_after_descriptor_commit() = runBlocking {
+        val itemId = ByteArray(16) { 9 }
+        val deleted = mutableListOf<ByteArray>()
+        val repository = repository(destroyPlatformSlot = { deleted += it.copyOf() })
+        repository.start()
+        repository.create(PASSWORD.encodeToByteArray(), offerRecovery = false)
+        repository.enrollAppleSlot(itemId) { }
+        val slot = repository.slots().single { it.slotType == 3 }
+
+        repository.removeSlot(slot.slotId)
+
+        assertEquals(1, deleted.size)
+        assertTrue(deleted.single().contentEquals(itemId))
+        assertFalse(repository.slots().any { it.slotId.contentEquals(slot.slotId) })
+        repository.shutdown()
+    }
+
+    @Test
+    fun removing_an_android_slot_deletes_its_alias_and_reports_cleanup_failure() = runBlocking {
+        var alias = ByteArray(0)
+        var deleted = ByteArray(0)
+        val repository = repository(destroyPlatformSlot = { identifier ->
+            deleted = identifier.copyOf()
+            throw DeviceSlotException(ChurStatus.PLATFORM_KEY_UNAVAILABLE, "delete refused")
+        })
+        repository.start()
+        repository.create(PASSWORD.encodeToByteArray(), offerRecovery = false)
+        repository.enrollKeystoreSlot { identifier, _, _ ->
+            alias = identifier.copyOf()
+            ByteArray(12) { 1 } to ByteArray(48) { 2 }
+        }
+        val slot = repository.slots().single { it.slotType == 2 }
+
+        assertEquals(
+            ChurStatus.PLATFORM_KEY_UNAVAILABLE,
+            assertFailsWith<ChurFailure> { repository.removeSlot(slot.slotId) }.status,
+        )
+        assertTrue(deleted.contentEquals(alias))
+        assertFalse(repository.slots().any { it.slotId.contentEquals(slot.slotId) })
+        repository.shutdown()
+    }
+
+    @Test
+    fun a_failed_keystore_commit_deletes_the_uncommitted_platform_key() = runBlocking {
+        var alias = ByteArray(0)
+        var deleted = ByteArray(0)
+        val repository = repository(destroyPlatformSlot = { deleted = it.copyOf() })
+        repository.start()
+        repository.create(PASSWORD.encodeToByteArray(), offerRecovery = false)
+
+        assertEquals(
+            ChurStatus.INVALID_INPUT,
+            assertFailsWith<ChurFailure> {
+                repository.enrollKeystoreSlot { identifier, _, _ ->
+                    alias = identifier.copyOf()
+                    ByteArray(1) to ByteArray(48)
+                }
+            }.status,
+        )
+        assertTrue(deleted.contentEquals(alias))
+        assertEquals(1, repository.slots().size)
         repository.shutdown()
     }
 

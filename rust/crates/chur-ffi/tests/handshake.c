@@ -52,8 +52,8 @@ int main(void) {
           "neither format range is the empty panic fallback");
 
     check(chur_abi_version_major() == 1, "major ABI version is 1");
-    check(chur_abi_version_minor() == 13,
-          "minor ABI version is 13, including resumable shared downloads");
+    check(chur_abi_version_minor() == 14,
+          "minor ABI version is 14, including platform slot identifiers");
 
     check(chur_object_format_min() <= chur_object_format_max(),
           "object format range is ordered");
@@ -160,6 +160,7 @@ int main(void) {
         const void *surface[] = {
             (const void *)&chur_vault_lock,
             (const void *)&chur_session_close,
+            (const void *)&chur_vault_platform_slot_identifier,
             (const void *)&chur_import_begin,
             (const void *)&chur_export_begin,
             (const void *)&chur_integrity_scan_begin,

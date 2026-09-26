@@ -78,6 +78,7 @@ import dev.po4yka.chur.native.chur_vault_keystore_begin
 import dev.po4yka.chur.native.chur_vault_keystore_commit
 import dev.po4yka.chur.native.chur_vault_keystore_material
 import dev.po4yka.chur.native.chur_vault_lock
+import dev.po4yka.chur.native.chur_vault_platform_slot_identifier
 import dev.po4yka.chur.native.chur_vault_present
 import dev.po4yka.chur.native.chur_vault_remove_slot
 import dev.po4yka.chur.native.chur_vault_slots
@@ -854,6 +855,26 @@ internal actual object ChurNative {
                     destination.size.toULong(),
                     written,
                 )
+            }
+        }
+
+    actual fun vaultPlatformSlotIdentifier(
+        session: Long,
+        slotId: ByteArray,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int =
+        memScoped {
+            slotId.pinnedPointer { pointer ->
+                writtenCall(outWritten) { written ->
+                    chur_vault_platform_slot_identifier(
+                        session.toULong(),
+                        pointer,
+                        destination.pointer,
+                        destination.size.toULong(),
+                        written,
+                    )
+                }
             }
         }
 

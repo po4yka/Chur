@@ -547,6 +547,39 @@ pub unsafe extern "C" fn chur_vault_slots(
     })
 }
 
+/// Writes the public Keychain item ID or Keystore alias of one device slot.
+/// Only an unlocked session for the descriptor containing the slot can read it.
+///
+/// # Safety
+///
+/// `slot_id` covers 16 bytes, `destination` covers `capacity` writable bytes,
+/// and `bytes_written` points to a writable `size_t`.
+#[unsafe(no_mangle)]
+#[expect(
+    unsafe_code,
+    reason = "ADR-0016: the v1 C ABI requires an exported symbol"
+)]
+pub unsafe extern "C" fn chur_vault_platform_slot_identifier(
+    session: Handle,
+    slot_id: *const u8,
+    destination: *mut u8,
+    capacity: usize,
+    bytes_written: *mut usize,
+) -> Status {
+    guard_status_for(session, || {
+        // SAFETY: the caller guarantees `bytes_written` is writable.
+        let _ = unsafe { crate::api::write_out(bytes_written, 0usize) };
+        // SAFETY: the caller guarantees `slot_id` covers 16 bytes.
+        let slot = Id::from_slice(unsafe { crate::api::borrow_bytes(slot_id, 16)? })?;
+        let entry = registry::get(session, Kind::Session)?;
+        let identifier =
+            with_session_mut(&entry, |session| session.platform_slot_identifier(&slot))?;
+        // SAFETY: the caller guarantees `destination` covers `capacity` bytes.
+        let buffer = unsafe { crate::api::borrow_bytes_mut(destination, capacity)? };
+        write_record(&identifier, buffer, bytes_written)
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Library
 // ---------------------------------------------------------------------------

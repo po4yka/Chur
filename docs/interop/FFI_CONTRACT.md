@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. v1 ships 1.13: §6.5 through §6.17 add minor surfaces. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
+- native API version is the (major, minor) pair. v1 ships 1.14: §6.5 through §6.18 add minor surfaces. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -595,6 +595,10 @@ chur_status_t chur_tag_list(chur_handle_t session, uint8_t *destination,
 ### 6.17 Shared download resume, ABI 1.13
 
 `chur_sharing_download_offset` reads the durable private staging length only for an object in the current authenticated receive plan. If staging is absent, a committed container with the signed length returns that length to recover a crash before catalog activation. A missing or oversized file returns offset zero. The host resumes at that offset, and `chur_sharing_download_finish` still verifies every ciphertext record and the signed final commitment before activation. If verification of resumed bytes fails, the host restarts the download at offset zero once.
+
+### 6.18 Device-slot platform identifier, ABI 1.14
+
+`chur_vault_platform_slot_identifier` returns the public platform name bound to one Android Keystore or Apple Keychain slot in the unlocked session. The result is the opaque Keystore alias or 16-byte Keychain item ID, never the platform key or device secret. The call refuses other slot families, missing slots, and an identifier shared by another slot. The host reads this name before removing the slot from the vault descriptor. After descriptor removal succeeds, it deletes the platform item by that name and reports a deletion failure to the caller. A crash between these two stores can leave an orphan platform item. It cannot open the vault without its descriptor slot.
 
 ## 7. Buffer ownership
 

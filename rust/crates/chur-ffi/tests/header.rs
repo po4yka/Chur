@@ -338,6 +338,7 @@ fn every_declared_function_is_exported() {
         "chur_vault_remove_slot",
         "chur_vault_change_password",
         "chur_vault_slots",
+        "chur_vault_platform_slot_identifier",
         "chur_object_set_favorite",
         "chur_object_delete",
         "chur_object_metadata",
@@ -389,7 +390,7 @@ fn every_declared_function_is_exported() {
 
     // Calling each one proves the list above is not a stale copy.
     assert_eq!(chur_ffi::chur_abi_version_major(), 1);
-    assert_eq!(chur_ffi::chur_abi_version_minor(), 13);
+    assert_eq!(chur_ffi::chur_abi_version_minor(), 14);
     assert_eq!(
         chur_ffi::chur_capabilities(),
         chur_ffi::CHUR_CAP_DECOY_VAULT

@@ -531,6 +531,67 @@ fn the_last_portable_slot_cannot_be_removed_through_the_boundary() {
 }
 
 #[test]
+fn a_device_slot_exposes_only_its_platform_item_id_until_removal() {
+    let root = scratch();
+    let runtime = open_runtime(&root);
+    let session = fresh_session(runtime);
+    let item_id = [42u8; 16];
+    let mut secret = [0u8; 32];
+    assert_eq!(
+        unsafe { chur_vault_add_device_slot(session, item_id.as_ptr(), secret.as_mut_ptr()) },
+        OK
+    );
+    let mut slots = vec![0u8; 1_024];
+    let mut written = 0usize;
+    assert_eq!(
+        unsafe { chur_vault_slots(session, slots.as_mut_ptr(), slots.len(), &mut written) },
+        OK
+    );
+    let count = u32::from_be_bytes(slots[..4].try_into().unwrap()) as usize;
+    let apple_slot: [u8; 16] = (0..count)
+        .find_map(|index| {
+            let start = 4 + index * 25;
+            (slots[start + 16] == 3).then(|| slots[start..start + 16].try_into().unwrap())
+        })
+        .unwrap();
+    let mut identifier = [0u8; 64];
+    assert_eq!(
+        unsafe {
+            chur_vault_platform_slot_identifier(
+                session,
+                apple_slot.as_ptr(),
+                identifier.as_mut_ptr(),
+                identifier.len(),
+                &mut written,
+            )
+        },
+        OK
+    );
+    assert_eq!(written, 16);
+    assert_eq!(&identifier[..written], &item_id);
+    assert_ne!(&identifier[..written], &secret[..16]);
+    assert_eq!(
+        unsafe { chur_vault_remove_slot(session, apple_slot.as_ptr()) },
+        OK
+    );
+    assert_eq!(
+        status(unsafe {
+            chur_vault_platform_slot_identifier(
+                session,
+                apple_slot.as_ptr(),
+                identifier.as_mut_ptr(),
+                identifier.len(),
+                &mut written,
+            )
+        }),
+        ChurStatus::NotFound
+    );
+    assert_eq!(written, 0);
+    secret.fill(0);
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+}
+
+#[test]
 fn a_password_change_takes_effect_and_retires_the_old_one() {
     let root = scratch();
     let runtime = open_runtime(&root);

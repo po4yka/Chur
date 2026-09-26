@@ -18,7 +18,7 @@
  * recipient-device surface of section 6.13, and the sharing discovery surface
  * of section 6.14, and the private tag list of section 6.15. Adding an export raises the minor
  * ABI version; changing or removing one raises the major. The library reports
- * 1.13.
+ * 1.14.
  */
 
 #ifndef CHUR_H
@@ -578,6 +578,15 @@ chur_status_t chur_vault_change_password(chur_handle_t session,
                                          const ChurUnlockRequestV1 *request);
 chur_status_t chur_vault_slots(chur_handle_t session, uint8_t *destination,
                                size_t capacity, size_t *bytes_written);
+
+/* ABI 1.14. Returns the public platform identifier of a device slot in the
+ * unlocked session: the 16-byte Apple Keychain item ID or the 16..64-byte
+ * Android Keystore alias. Password and recovery slots have no identifier.
+ * Call after looking up the slot family and before removing its descriptor.
+ * The buffer is unchanged on failure and bytes_written is set to zero. */
+chur_status_t chur_vault_platform_slot_identifier(
+    chur_handle_t session, const uint8_t *slot_id, uint8_t *destination,
+    size_t capacity, size_t *bytes_written);
 
 /* -------------------------------------------------------------------------
  * The Android Keystore surface, ABI 1.2, FFI_CONTRACT.md section 6.6.

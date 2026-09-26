@@ -1763,6 +1763,38 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultSlots<'local>(
     })
 }
 
+/// Writes one device slot's public platform identifier into a direct buffer.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultPlatformSlotIdentifier<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    slot_id: JByteArray<'local>,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(slot) = fixed_array(env, &slot_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let mut written = 0usize;
+        // SAFETY: `slot` is a live 16-byte local, and `address` covers capacity.
+        let status = unsafe {
+            chur_ffi::product::chur_vault_platform_slot_identifier(
+                handle_of(session),
+                slot.as_ptr(),
+                address,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
 /// Sets or clears the favourite flag.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectSetFavorite<'local>(

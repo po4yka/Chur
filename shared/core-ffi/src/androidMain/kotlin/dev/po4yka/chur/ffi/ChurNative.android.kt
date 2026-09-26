@@ -369,6 +369,13 @@ internal actual object ChurNative {
         outWritten: IntArray,
     ): Int = ChurJni.vaultSlots(session, destination.buffer, outWritten)
 
+    actual fun vaultPlatformSlotIdentifier(
+        session: Long,
+        slotId: ByteArray,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int = ChurJni.vaultPlatformSlotIdentifier(session, slotId, destination.buffer, outWritten)
+
     actual fun vaultKeystoreBegin(
         session: Long,
         destination: ChurBuffer,
