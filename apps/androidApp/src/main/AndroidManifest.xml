@@ -64,5 +64,9 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/export_paths" />
         </provider>
+        <provider
+            android:name=".DeviceImportProvider"
+            android:authorities="${applicationId}.device-import"
+            android:exported="false" />
     </application>
 </manifest>

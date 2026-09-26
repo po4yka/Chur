@@ -2,6 +2,7 @@ package dev.po4yka.chur.android
 
 import android.content.Context
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.collectAsState
@@ -89,6 +90,15 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }
+        lifecycleScope.launch {
+            host.deviceControl.pairing.collect { pairing ->
+                if (pairing != null) {
+                    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                } else {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
+            }
+        }
     }
 
     /**
@@ -111,6 +121,8 @@ class MainActivity : FragmentActivity() {
 
     override fun onPause() {
         host.privacy.setEnabled(true)
+        host.deviceControl.stop()
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         super.onPause()
         // A configuration change is not the user leaving. The platform destroys
         // this activity and creates another one in the same task, in the

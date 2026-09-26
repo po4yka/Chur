@@ -6,6 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -276,6 +277,8 @@ private fun VaultRoute(controller: ChurController) {
     val configuration = LocalConfiguration.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val deviceControl = remember(context) { ChurHost.of(context).deviceControl }
+    val devicePairing by deviceControl.pairing.collectAsState()
 
     var destination by remember { mutableStateOf(VaultDestination.LIBRARY) }
     var terms by remember { mutableStateOf("") }
@@ -289,6 +292,15 @@ private fun VaultRoute(controller: ChurController) {
     var choosingExport by remember { mutableStateOf(false) }
     var choosingImport by remember { mutableStateOf(false) }
     var importAlbumId by remember { mutableStateOf<ByteArray?>(null) }
+
+    DisposableEffect(deviceControl) {
+        onDispose { deviceControl.stop() }
+    }
+    LaunchedEffect(destination, vaultState) {
+        if (destination != VaultDestination.SETTINGS || vaultState !is VaultState.Unlocked) {
+            deviceControl.stop()
+        }
+    }
 
     // The cache is the controller's: its lock transitions clear it whether
     // or not this screen is composed, §4 of `PLAINTEXT_LIFECYCLE.md`. The
@@ -411,6 +423,18 @@ private fun VaultRoute(controller: ChurController) {
         )
     }
 
+    devicePairing?.let { pairing ->
+        AlertDialog(
+            onDismissRequest = deviceControl::stop,
+            title = { Text("Control from computer") },
+            text = { Text(
+                "Keep Chur open on this screen. Run scripts/chur-device.py with " +
+                    "--port ${pairing.port}. Enter this one-session code when asked:\n${pairing.code}"
+            ) },
+            confirmButton = { TextButton(onClick = deviceControl::stop) { Text("Stop") } },
+        )
+    }
+
     if (creatingAlbum) {
         NewAlbumDialog(
             onCreate = { name ->
@@ -509,6 +533,7 @@ private fun VaultRoute(controller: ChurController) {
             deviceSlotAvailable = true,
             deviceSlotStrict = deviceSlotStrict,
             appLockEnabled = appLockEnabled,
+            deviceControlAvailable = true,
             sync = syncStatus,
             sharingIdentity = sharingIdentity,
             sharingOverview = sharingOverview,
@@ -548,6 +573,7 @@ private fun VaultRoute(controller: ChurController) {
             onAddRecoverySlot = controller::addRecoverySlot,
             onChangePassword = controller::changePassword,
             onToggleAppLock = controller::toggleAppLock,
+            onDeviceControl = { deviceControl.start() },
             onCreateBackup = controller::createBackup,
             onCreateSecondIdentity = controller::createSecondIdentity,
             onSelectAll = { selection = page.objects.map { it.id }.toSet() },

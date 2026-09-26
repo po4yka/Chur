@@ -115,6 +115,8 @@ data class VaultUiState(
     val deviceSlotStrict: Boolean? = null,
     /** Whether the lock screen also covers the public shell. */
     val appLockEnabled: Boolean = false,
+    /** The Android host offers an explicit, foreground desktop session. */
+    val deviceControlAvailable: Boolean = false,
     /** How many tiles the selection holds, §11.4. */
     val selectedCount: Int = 0,
     /**
@@ -175,6 +177,8 @@ data class VaultActions(
     val onToggleDeviceSlotPolicy: () -> Unit = {},
     /** Switch between locking the vault and locking the whole app. */
     val onToggleAppLock: () -> Unit = {},
+    /** Open the Android-only, user-approved desktop control dialog. */
+    val onDeviceControl: () -> Unit = {},
     /** Select every tile the current scope shows. */
     val onSelectAll: () -> Unit = {},
     /** Leave selection mode without acting. */
@@ -596,6 +600,11 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
         }
         item {
             Text("Backup", style = MaterialTheme.typography.titleMedium)
+        }
+        if (state.deviceControlAvailable) {
+            item {
+                SettingsAction("Control from computer", actions.onDeviceControl, enabled = state.operation == null)
+            }
         }
         item {
             SettingsAction("Write a backup file", actions.onCreateBackup, enabled = state.operation == null)

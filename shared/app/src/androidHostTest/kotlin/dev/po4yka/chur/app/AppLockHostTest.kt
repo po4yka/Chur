@@ -4,6 +4,7 @@ import dev.po4yka.chur.notes.InMemoryNoteStore
 import dev.po4yka.chur.vault.VaultState
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -36,6 +37,8 @@ class AppLockHostTest {
             first.start()
             first.create("123456789012", offerRecovery = false)
             withTimeout(10_000) { first.route.first { it == AppRoute.Vault } }
+            delay(250)
+            assertEquals(null, first.message.value)
             first.toggleAppLock()
             withTimeout(10_000) { first.appLockEnabled.first { it } }
 

@@ -130,6 +130,9 @@ internal class ChurHost private constructor(context: Context) {
         sync = sync,
     )
 
+    /** Explicit, foreground-only desktop control of the open session. */
+    val deviceControl = DeviceControlBridge(context.applicationContext, controller)
+
     init {
         sync.bind(RepositorySyncBoundary(controller.vault))
     }

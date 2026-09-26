@@ -1008,6 +1008,20 @@ Sensitive surfaces use `FLAG_SECURE` where appropriate. This reduces ordinary sc
 
 Use the system Photo Picker and file providers. Transfer open descriptors or seekable streams to Rust rather than loading large media into Kotlin memory.
 
+### Control from a connected computer
+
+Unlock the vault on Android, open **Settings → Control from computer**, and keep that dialog visible. With USB debugging authorized and `adb` installed on the computer, use the port shown on the phone. The command prompts for the code displayed in the same dialog; `--code-stdin` is available for a private input pipe. Close the dialog to revoke the session.
+
+```sh
+python3 scripts/chur-device.py --port PORT list --details
+python3 scripts/chur-device.py --port PORT import photo.jpg video.mp4
+python3 scripts/chur-device.py --port PORT albums
+python3 scripts/chur-device.py --port PORT album-create "Trip"
+python3 scripts/chur-device.py --port PORT album-add ALBUM_ID OBJECT_ID
+```
+
+The command also supports tags, favorites, search, pagination, and album removal; see `--help`. It connects through `adb forward` and removes that forwarding when the command ends. Imports use a seekable, temporary descriptor backed by the computer file and do not copy a plaintext source file into Android storage. The channel works only with the vault currently open on the phone and stops when the app leaves the foreground. Command output can contain private object identifiers and album or tag names.
+
 ---
 
 ## iOS integration

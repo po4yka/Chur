@@ -503,14 +503,18 @@ class VaultRepository(
         ChurVault.beginRestore(runtime, sourceFd, password)
     }
 
-    /**
-     * One progress snapshot, §10.
-     *
-     * It takes no session lock. §10 makes polling cheap and says it never waits
-     * on the operation, and holding the session mutex here would make a poll
-     * wait on the very worker it is asking about.
-     */
-    fun poll(operation: Long): OperationProgress = ChurVault.poll(operation)
+    /** One nonblocking progress snapshot. Active work refreshes the idle clock. */
+    fun poll(operation: Long): OperationProgress {
+        val progress = ChurVault.poll(operation)
+        if (!progress.terminal && mutex.tryLock()) {
+            try {
+                if (session != 0L) touch()
+            } finally {
+                mutex.unlock()
+            }
+        }
+        return progress
+    }
 
     /** Asks an operation to stop, §9. Callable at any time, like poll. */
     fun cancel(operation: Long) = ChurVault.cancel(operation)

@@ -97,9 +97,10 @@ data class ObjectPage(
 data class AlbumSummary(val albumId: ByteArray, val memberCount: Long, val name: String) {
     val id: String get() = albumId.toHex()
 
-    override fun equals(other: Any?): Boolean = other is AlbumSummary && id == other.id
+    override fun equals(other: Any?): Boolean = other is AlbumSummary &&
+        id == other.id && memberCount == other.memberCount && name == other.name
 
-    override fun hashCode(): Int = id.hashCode()
+    override fun hashCode(): Int = (id.hashCode() * 31 + memberCount.hashCode()) * 31 + name.hashCode()
 }
 
 /** One private tag for the selection picker. */

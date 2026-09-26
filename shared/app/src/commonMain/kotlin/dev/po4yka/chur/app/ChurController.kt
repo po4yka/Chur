@@ -653,6 +653,13 @@ class ChurController(
         _tags.value = withContext(Dispatchers.Default) { repository.tags() }
     }
 
+    /** Refreshes the visible projections after a host command changes the vault. */
+    suspend fun refreshExternalChanges(albums: Boolean = false, tags: Boolean = false) {
+        reload()
+        if (albums) refreshAlbums()
+        if (tags) _tags.value = withContext(Dispatchers.Default) { repository.tags() }
+    }
+
     /** Loads the key slots. */
     fun loadSlots() = guarded(clearMessage = false) {
         _slots.value = withContext(Dispatchers.Default) { repository.slots() }
@@ -1368,10 +1375,10 @@ class ChurController(
         // explicit unlock". Whatever the locked puller staged while the vault
         // was closed is validated and applied here, off the first frame, and
         // then a configured engine pulls what arrived since the last run.
-        guarded {
-            withContext(Dispatchers.Default) { repository.processSync() }
-            sync?.let { engine ->
-                if (engine.status.value.configured) engine.syncNow()
+        sync?.takeIf { it.status.value.configured }?.let { engine ->
+            guarded {
+                withContext(Dispatchers.Default) { repository.processSync() }
+                engine.syncNow()
             }
         }
     }

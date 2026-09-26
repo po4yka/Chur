@@ -638,6 +638,14 @@ Chur does not consider an import successful until Rust has committed the encrypt
 
 Deleting the original is a separate explicit user operation after successful commit. Chur MUST NOT claim secure physical erasure of the source from shared storage.
 
+### 14.6 Desktop control of an open vault
+
+The Android host offers a user-started control session from the private Settings screen. It binds a random TCP port on `127.0.0.1` and shows a random 128-bit pairing code only on the protected screen. A desktop command uses `adb forward` to reach that port. ADB connectivity alone does not authorize a command: the app requires the code and an unlocked vault, and closes the channel when the activity pauses, the vault locks, or the user stops it. The code and port are never passed through an Android Intent, notification, public database, or log.
+
+The versioned, length-bounded command channel lists objects, albums, and tags and applies album membership, tags, and favorites through `VaultRepository`. A remote import exposes one host file through a private, non-exported provider backed by a seekable proxy descriptor. The provider requests bounded byte ranges over the paired channel, so no plaintext source file is staged on Android. The ordinary Android codec and Rust import transaction remain responsible for probing, derivatives, encryption, and commit. A failed or interrupted request is reported as a failure; a committed original is never rolled back merely because a later derivative failed.
+
+This session authorizes the currently open identity only. It does not unlock a vault, keep one unlocked in the background, access the sibling identity, or expose the catalog as a filesystem. Desktop output can contain private names and IDs, so the desktop user is responsible for where command output is stored.
+
 ---
 
 ## 15. Metadata and derived assets
