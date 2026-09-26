@@ -394,7 +394,7 @@ class SyncCoordinatorTest {
         )
 
         assertEquals(
-            listOf("/sharing/memberships", "/sharing/grants", "/sharing/memberships", "/sharing/operations"),
+            listOf("/sharing/memberships", "/sharing/grants", "/sharing/memberships", "/operations"),
             requests.map { it.substringAfter("/v1/vaults/${vaultId.toHex()}") },
         )
     }
@@ -434,7 +434,7 @@ class SyncCoordinatorTest {
     fun later_rotation_batches_are_not_dropped_when_membership_repeats() = runTest {
         val operations = mutableListOf<ByteArray>()
         val engine = CountingEngine { request ->
-            if (request.url.encodedPath.endsWith("/sharing/operations")) {
+            if (request.url.encodedPath.endsWith("/operations")) {
                 operations += request.body.toByteArray()
             }
             respond(ByteArray(0), HttpStatusCode.OK)
