@@ -1,6 +1,7 @@
 package dev.po4yka.chur.android
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Base64
 import dev.po4yka.chur.app.ChurController
 import dev.po4yka.chur.app.MediaImporter
@@ -17,6 +18,7 @@ import java.io.IOException
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.security.MessageDigest
 import java.security.SecureRandom
 import kotlin.concurrent.thread
@@ -38,6 +40,9 @@ internal class DeviceControlBridge(
     private val random = SecureRandom()
     private val _pairing = MutableStateFlow<Pairing?>(null)
     val pairing = _pairing.asStateFlow()
+    private val _connected = MutableStateFlow(false)
+    val connected = _connected.asStateFlow()
+    @Volatile private var lastActivityAt = 0L
     @Volatile private var server: ServerSocket? = null
     @Volatile private var client: Socket? = null
 
@@ -45,20 +50,29 @@ internal class DeviceControlBridge(
         check(controller.vaultState.value is VaultState.Unlocked)
         _pairing.value?.let { return it }
         val listener = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+        listener.soTimeout = 5_000
         val code = ByteArray(16).also(random::nextBytes).hex()
         val current = Pairing(listener.localPort, code)
         server = listener
+        lastActivityAt = SystemClock.elapsedRealtime()
         _pairing.value = current
         thread(name = "chur-device-control", isDaemon = true) {
             while (server === listener) {
+                if (SystemClock.elapsedRealtime() - lastActivityAt >= IDLE_TIMEOUT_MS) {
+                    stop()
+                    break
+                }
                 try {
                     val socket = listener.accept()
                     client = socket
                     socket.use { serve(it, current) }
+                } catch (_: SocketTimeoutException) {
+                    continue
                 } catch (_: IOException) {
                     if (server !== listener) break
                 } finally {
                     client = null
+                    _connected.value = false
                 }
             }
         }
@@ -68,6 +82,7 @@ internal class DeviceControlBridge(
     @Synchronized fun stop() {
         if (_pairing.value != null) controller.cancelActiveOperation()
         _pairing.value = null
+        _connected.value = false
         server?.close()
         server = null
         client?.close()
@@ -88,9 +103,12 @@ internal class DeviceControlBridge(
             return
         }
         peer.send(JSONObject().put("ok", true).put("version", 1))
+        lastActivityAt = SystemClock.elapsedRealtime()
+        _connected.value = true
         socket.soTimeout = 60_000
         try { while (server != null && controller.vaultState.value is VaultState.Unlocked) {
             val request = try { peer.receive() } catch (_: Exception) { break }
+            lastActivityAt = SystemClock.elapsedRealtime()
             val response = try {
                 if (controller.vaultState.value !is VaultState.Unlocked) {
                     throw IllegalStateException("VAULT_LOCKED")
@@ -132,6 +150,7 @@ internal class DeviceControlBridge(
                 JSONObject().put("error", "INVALID_REQUEST_OR_OPERATION_FAILED")
             }
             try { peer.send(response) } catch (_: IOException) { break }
+            lastActivityAt = SystemClock.elapsedRealtime()
         } } finally { export?.close() }
     }
 
@@ -344,6 +363,10 @@ internal class DeviceControlBridge(
         }
 
         fun close() = controller.vault.releaseReader(reader)
+    }
+
+    private companion object {
+        const val IDLE_TIMEOUT_MS = 10 * 60 * 1_000L
     }
 
     private class Peer(socket: Socket) {

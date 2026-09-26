@@ -82,6 +82,7 @@ class DeviceProtocolTest(unittest.TestCase):
     def test_import_serves_nonsequential_ranges_and_receives_commit(self):
         host, remote = socket.socketpair()
         observed = []
+        progress = []
 
         def app():
             with remote:
@@ -95,12 +96,13 @@ class DeviceProtocolTest(unittest.TestCase):
         worker = threading.Thread(target=app)
         worker.start()
         with host, io.BytesIO(b"0123456789") as source:
-            result = device.exchange(host, {"op": "import"}, source)
+            result = device.exchange(host, {"op": "import"}, source, progress=progress.append)
         worker.join(timeout=5)
         self.assertFalse(worker.is_alive())
         self.assertEqual([base64.b64decode(item) for item in observed],
                          [b"456", b"0123", b"789"])
         self.assertEqual(result["derivatives"], 2)
+        self.assertEqual(progress, [3, 7, 10])
 
     def test_refuses_a_read_past_the_source(self):
         host, remote = socket.socketpair()
@@ -122,7 +124,7 @@ class DeviceProtocolTest(unittest.TestCase):
         payload = b"Chur original" * 10000
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "original.bin"
-            for corrupt in (True, False):
+            for corrupt, exists in ((True, False), (False, False), (False, True)):
                 host, remote = socket.socketpair()
 
                 def app():
@@ -148,6 +150,10 @@ class DeviceProtocolTest(unittest.TestCase):
                         with self.assertRaisesRegex(ValueError, "integrity"):
                             device.export_file(host, "ab" * 16, destination)
                         self.assertFalse(destination.exists())
+                    elif exists:
+                        with self.assertRaises(FileExistsError):
+                            device.export_file(host, "ab" * 16, destination)
+                        self.assertEqual(destination.read_bytes(), payload)
                     else:
                         result = device.export_file(host, "ab" * 16, destination)
                         self.assertEqual(result["sha256"], hashlib.sha256(payload).hexdigest())

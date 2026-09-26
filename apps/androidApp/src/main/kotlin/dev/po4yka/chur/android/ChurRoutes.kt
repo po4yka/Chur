@@ -298,6 +298,7 @@ private fun VaultRoute(controller: ChurController) {
     val scope = rememberCoroutineScope()
     val deviceControl = remember(context) { ChurHost.of(context).deviceControl }
     val devicePairing by deviceControl.pairing.collectAsState()
+    val deviceConnected by deviceControl.connected.collectAsState()
 
     var destination by remember { mutableStateOf(VaultDestination.LIBRARY) }
     var terms by remember { mutableStateOf("") }
@@ -458,7 +459,8 @@ private fun VaultRoute(controller: ChurController) {
                     modifier = Modifier.verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text("Session active", color = MaterialTheme.colorScheme.primary,
+                    Text(if (deviceConnected) "Computer connected" else "Waiting for computer",
+                        color = MaterialTheme.colorScheme.primary,
                         style = MaterialTheme.typography.labelLarge)
                     Text("Keep Chur open and unlocked. Connect your computer with USB debugging enabled.")
                     Surface(
@@ -479,7 +481,7 @@ private fun VaultRoute(controller: ChurController) {
                     Text(
                         "Copy the link to use with scripts/chur-device.py. Keep it private: " +
                             "anyone with the link and ADB access can control this vault. " +
-                            "Stop revokes the session.",
+                            "Stop revokes the session. It also stops after 10 minutes without a command.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }

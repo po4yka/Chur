@@ -15,6 +15,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 
 MAX_FRAME = 262_144
 SESSION_LINK = re.compile(r"chur://device-control/v1\?port=([0-9]{1,5})#([0-9a-f]{32})")
@@ -50,8 +51,9 @@ def frame_receive(connection):
     return json.loads(exact(length))
 
 
-def exchange(connection, request, source=None):
+def exchange(connection, request, source=None, progress=None):
     frame_send(connection, request)
+    served = 0
     while True:
         reply = frame_receive(connection)
         if reply.get("op") != "read":
@@ -66,6 +68,35 @@ def exchange(connection, request, source=None):
         if len(data) != size:
             raise IOError("host file changed during import")
         frame_send(connection, {"op": "data", "bytes": base64.b64encode(data).decode("ascii")})
+        served += size
+        if progress is not None:
+            progress(served)
+
+
+class TransferProgress:
+    def __init__(self, label, total=None):
+        self.label = label
+        self.total = total
+        self.last_report = 0.0
+
+    def update(self, count):
+        now = time.monotonic()
+        if now - self.last_report < 0.2 and count != self.total:
+            return
+        self.last_report = now
+        if self.total is None:
+            message = f"{self.label}: {count:,} source bytes read"
+        else:
+            percent = 100 if self.total == 0 else count * 100 // self.total
+            message = f"{self.label}: {count:,}/{self.total:,} bytes ({percent}%)"
+        if sys.stderr.isatty():
+            print("\r" + message, end="", file=sys.stderr, flush=True)
+        else:
+            print(message, file=sys.stderr)
+
+    def finish(self):
+        if sys.stderr.isatty():
+            print(file=sys.stderr)
 
 
 def export_file(connection, object_id, destination, progress=None):
@@ -78,6 +109,8 @@ def export_file(connection, object_id, destination, progress=None):
     destination = Path(destination)
     fd, temporary = tempfile.mkstemp(prefix=".chur-export-", dir=destination.parent)
     digest = hashlib.sha256()
+    reporter = TransferProgress("export", size) if progress is None else None
+    progress = progress or reporter.update
     try:
         with os.fdopen(fd, "wb") as output:
             offset = 0
@@ -94,8 +127,7 @@ def export_file(connection, object_id, destination, progress=None):
                 output.write(data)
                 digest.update(data)
                 offset += length
-                if progress is not None:
-                    progress(offset, size)
+                progress(offset)
             output.flush()
             os.fsync(output.fileno())
         result = exchange(connection, {"op": "export_finish"})
@@ -108,6 +140,8 @@ def export_file(connection, object_id, destination, progress=None):
                 "sha256": digest.hexdigest()}
     finally:
         os.unlink(temporary)
+        if reporter is not None:
+            reporter.finish()
 
 
 def run_batch(connection, args):
@@ -276,14 +310,21 @@ def main():
     with socket.socket() as reserved:
         reserved.bind(("127.0.0.1", 0))
         local_port = reserved.getsockname()[1]
-    subprocess.run(adb + ["forward", "--no-rebind", f"tcp:{local_port}", f"tcp:{port}"],
-                   check=True, stdout=subprocess.DEVNULL)
     try:
-        with socket.create_connection(("127.0.0.1", local_port), timeout=15) as connection:
+        subprocess.run(adb + ["forward", "--no-rebind", f"tcp:{local_port}", f"tcp:{port}"],
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except subprocess.CalledProcessError:
+        raise RuntimeError("ADB forwarding failed; check USB debugging, device authorization and --serial") from None
+    try:
+        try:
+            connection = socket.create_connection(("127.0.0.1", local_port), timeout=15)
+        except OSError:
+            raise RuntimeError("cannot reach Chur; keep Control from computer open and the vault unlocked") from None
+        with connection:
             connection.settimeout(None)
             hello = exchange(connection, {"op": "pair", "version": 1, "code": code})
             if hello.get("ok") is not True:
-                raise PermissionError(hello.get("error", "pairing rejected"))
+                raise PermissionError("session code rejected; copy a fresh link from the open dialog")
             if args.action == "export":
                 print(json.dumps(export_file(connection, args.object, args.destination), ensure_ascii=False))
                 return 0
@@ -303,10 +344,15 @@ def main():
             failed = False
             for path in args.paths:
                 kind = args.type or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+                progress = TransferProgress(f"import {path.name}")
                 with path.open("rb") as source:
-                    result = exchange(connection, {"op": "import", "name": path.name,
-                                                   "length": path.stat().st_size,
-                                                   "content_type": kind}, source)
+                    try:
+                        result = exchange(connection, {"op": "import", "name": path.name,
+                                                       "length": path.stat().st_size,
+                                                       "content_type": kind}, source,
+                                          progress=progress.update)
+                    finally:
+                        progress.finish()
                 if args.album and "id" in result:
                     membership = exchange(connection, {"op": "album_member", "album": args.album,
                                                        "object": result["id"], "member": True})
@@ -323,6 +369,6 @@ def main():
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except (OSError, ValueError, PermissionError, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, PermissionError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"chur-device: {error}", file=sys.stderr)
         sys.exit(1)
