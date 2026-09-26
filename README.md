@@ -1027,12 +1027,13 @@ You can still enter the displayed port and code manually. The command prompts fo
 ```sh
 python3 scripts/chur-device.py --port PORT list --details
 python3 scripts/chur-device.py --port PORT import photo.jpg video.mp4
+python3 scripts/chur-device.py --port PORT export OBJECT_ID ./original.jpg
 python3 scripts/chur-device.py --port PORT albums
 python3 scripts/chur-device.py --port PORT album-create "Trip"
 python3 scripts/chur-device.py --port PORT album-add ALBUM_ID OBJECT_ID
 ```
 
-The command also supports tags, favorites, search, pagination, and album removal; see `--help`. It connects through `adb forward` and removes that forwarding when the command ends. Imports use a seekable, temporary descriptor backed by the computer file and do not copy a plaintext source file into Android storage. The channel works only with the vault currently open on the phone and stops when the app leaves the foreground. Command output can contain private object identifiers and album or tag names.
+The command also supports tags, favorites, search, pagination, and album removal; see `--help`. It connects through `adb forward` and removes that forwarding when the command ends. Imports use a seekable, temporary descriptor backed by the computer file and do not copy a plaintext source file into Android storage. Export streams the original, verifies its size and SHA-256 against the device, and creates a new local file only after verification. The channel works only with the vault currently open on the phone and stops when the app leaves the foreground. Command output can contain private object identifiers and album or tag names.
 
 ---
 

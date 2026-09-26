@@ -8,6 +8,7 @@ import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.ObjectQuery
 import dev.po4yka.chur.ffi.QueryScope
 import dev.po4yka.chur.ffi.QuerySort
+import dev.po4yka.chur.ffi.StreamKind
 import dev.po4yka.chur.imports.AndroidMediaCodec
 import dev.po4yka.chur.vault.VaultState
 import java.io.DataInputStream
@@ -76,6 +77,7 @@ internal class DeviceControlBridge(
     private fun serve(socket: Socket, current: Pairing) {
         socket.soTimeout = 10_000
         val peer = Peer(socket)
+        var export: ExportSession? = null
         val hello = try { peer.receive() } catch (_: Exception) { return }
         val supplied = hello.optString("code").toByteArray(Charsets.UTF_8)
         val expected = current.code.toByteArray(Charsets.UTF_8)
@@ -87,7 +89,7 @@ internal class DeviceControlBridge(
         }
         peer.send(JSONObject().put("ok", true).put("version", 1))
         socket.soTimeout = 60_000
-        while (server != null && controller.vaultState.value is VaultState.Unlocked) {
+        try { while (server != null && controller.vaultState.value is VaultState.Unlocked) {
             val request = try { peer.receive() } catch (_: Exception) { break }
             val response = try {
                 if (controller.vaultState.value !is VaultState.Unlocked) {
@@ -95,7 +97,34 @@ internal class DeviceControlBridge(
                 }
                 runBlocking(Dispatchers.Main) {
                     if (request.optString("op") == "import") execute(peer, request)
-                    else withContext(Dispatchers.Default) { execute(peer, request) }
+                    else withContext(Dispatchers.Default) {
+                        when (request.optString("op")) {
+                            "export_begin" -> {
+                                export?.close()
+                                export = null
+                                val id = request.getString("object").idBytes()
+                                val reader = controller.vault.leaseReader(id)
+                                try {
+                                    val info = controller.vault.readerContentInfo(reader)
+                                    require(info.complete && info.plaintextSize >= 0)
+                                    val name = controller.vault.detail(id).filename
+                                    export = ExportSession(reader, info.plaintextSize)
+                                    JSONObject().put("size", info.plaintextSize).put("filename", name)
+                                } catch (failure: Exception) {
+                                    controller.vault.releaseReader(reader)
+                                    throw failure
+                                }
+                            }
+                            "export_read" -> requireNotNull(export).read(request)
+                            "export_finish" -> {
+                                val result = requireNotNull(export).finish()
+                                export?.close()
+                                export = null
+                                result
+                            }
+                            else -> execute(peer, request)
+                        }
+                    }
                 }
             } catch (failure: ChurFailure) {
                 JSONObject().put("error", failure.status.name)
@@ -103,7 +132,7 @@ internal class DeviceControlBridge(
                 JSONObject().put("error", "INVALID_REQUEST_OR_OPERATION_FAILED")
             }
             try { peer.send(response) } catch (_: IOException) { break }
-        }
+        } } finally { export?.close() }
     }
 
     private suspend fun execute(peer: Peer, request: JSONObject): JSONObject {
@@ -235,6 +264,30 @@ internal class DeviceControlBridge(
     }
 
     private fun ByteArray.hex(): String = joinToString("") { "%02x".format(it.toInt() and 0xff) }
+
+    private inner class ExportSession(private val reader: Long, private val size: Long) {
+        private val digest = MessageDigest.getInstance("SHA-256")
+        private var offset = 0L
+
+        fun read(request: JSONObject): JSONObject {
+            val at = request.getLong("offset")
+            val length = request.getInt("size")
+            require(at == offset && length in 1..65_536 && length <= size - offset)
+            val bytes = controller.vault.readLeased(reader, offset, length)
+            require(bytes.size == length)
+            digest.update(bytes)
+            offset += length
+            return JSONObject().put("offset", at)
+                .put("bytes", Base64.encodeToString(bytes, Base64.NO_WRAP))
+        }
+
+        fun finish(): JSONObject {
+            require(offset == size)
+            return JSONObject().put("size", size).put("sha256", digest.digest().hex())
+        }
+
+        fun close() = controller.vault.releaseReader(reader)
+    }
 
     private class Peer(socket: Socket) {
         private val input = DataInputStream(socket.getInputStream())

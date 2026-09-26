@@ -4,14 +4,17 @@
 import argparse
 import base64
 import getpass
+import hashlib
 import json
 import mimetypes
+import os
 from pathlib import Path
 import re
 import socket
 import struct
 import subprocess
 import sys
+import tempfile
 
 MAX_FRAME = 262_144
 SESSION_LINK = re.compile(r"chur://device-control/v1\?port=([0-9]{1,5})#([0-9a-f]{32})")
@@ -63,6 +66,48 @@ def exchange(connection, request, source=None):
         if len(data) != size:
             raise IOError("host file changed during import")
         frame_send(connection, {"op": "data", "bytes": base64.b64encode(data).decode("ascii")})
+
+
+def export_file(connection, object_id, destination, progress=None):
+    metadata = exchange(connection, {"op": "export_begin", "object": object_id})
+    if "error" in metadata:
+        raise ValueError(metadata["error"])
+    size = metadata["size"]
+    if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+        raise ValueError("invalid export size")
+    destination = Path(destination)
+    fd, temporary = tempfile.mkstemp(prefix=".chur-export-", dir=destination.parent)
+    digest = hashlib.sha256()
+    try:
+        with os.fdopen(fd, "wb") as output:
+            offset = 0
+            while offset < size:
+                length = min(65_536, size - offset)
+                result = exchange(connection, {"op": "export_read", "offset": offset, "size": length})
+                if "error" in result:
+                    raise ValueError(result["error"])
+                if result.get("offset") != offset:
+                    raise ValueError("invalid export offset")
+                data = base64.b64decode(result["bytes"], validate=True)
+                if len(data) != length:
+                    raise ValueError("short export read")
+                output.write(data)
+                digest.update(data)
+                offset += length
+                if progress is not None:
+                    progress(offset, size)
+            output.flush()
+            os.fsync(output.fileno())
+        result = exchange(connection, {"op": "export_finish"})
+        if "error" in result:
+            raise ValueError(result["error"])
+        if result.get("size") != size or result.get("sha256") != digest.hexdigest():
+            raise ValueError("export integrity check failed")
+        os.link(temporary, destination)
+        return {"object": object_id, "destination": str(destination), "size": size,
+                "sha256": digest.hexdigest()}
+    finally:
+        os.unlink(temporary)
 
 
 def command_request(args):
@@ -118,6 +163,9 @@ def parser():
     importer = commands.add_parser("import", help="stream one or more local files into Chur")
     importer.add_argument("paths", nargs="+", type=Path)
     importer.add_argument("--type", help="IANA media type override")
+    exporter = commands.add_parser("export", help="save one original without overwriting a local file")
+    exporter.add_argument("object", help="object ID")
+    exporter.add_argument("destination", type=Path, help="new local file path")
     return cli
 
 
@@ -152,6 +200,9 @@ def main():
             hello = exchange(connection, {"op": "pair", "version": 1, "code": code})
             if hello.get("ok") is not True:
                 raise PermissionError(hello.get("error", "pairing rejected"))
+            if args.action == "export":
+                print(json.dumps(export_file(connection, args.object, args.destination), ensure_ascii=False))
+                return 0
             if args.action != "import":
                 result = exchange(connection, command_request(args))
                 if args.action == "list" and args.details and "error" not in result:

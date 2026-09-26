@@ -3,9 +3,11 @@
 
 import importlib.util
 import base64
+import hashlib
 import io
 from pathlib import Path
 import socket
+import tempfile
 import threading
 import unittest
 
@@ -66,6 +68,44 @@ class DeviceProtocolTest(unittest.TestCase):
                 device.exchange(host, {"op": "import"}, source)
         worker.join(timeout=5)
         self.assertFalse(worker.is_alive())
+
+    def test_export_verifies_hash_and_never_overwrites(self):
+        payload = b"Chur original" * 10000
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "original.bin"
+            for corrupt in (True, False):
+                host, remote = socket.socketpair()
+
+                def app():
+                    with remote:
+                        self.assertEqual(device.frame_receive(remote)["op"], "export_begin")
+                        device.frame_send(remote, {"size": len(payload), "filename": "original.bin"})
+                        offset = 0
+                        while offset < len(payload):
+                            request = device.frame_receive(remote)
+                            self.assertEqual(request["offset"], offset)
+                            size = request["size"]
+                            device.frame_send(remote, {"offset": offset,
+                                                       "bytes": base64.b64encode(payload[offset:offset + size]).decode()})
+                            offset += size
+                        self.assertEqual(device.frame_receive(remote)["op"], "export_finish")
+                        digest = hashlib.sha256(payload).hexdigest()
+                        device.frame_send(remote, {"size": len(payload), "sha256": "0" * 64 if corrupt else digest})
+
+                worker = threading.Thread(target=app)
+                worker.start()
+                with host:
+                    if corrupt:
+                        with self.assertRaisesRegex(ValueError, "integrity"):
+                            device.export_file(host, "ab" * 16, destination)
+                        self.assertFalse(destination.exists())
+                    else:
+                        result = device.export_file(host, "ab" * 16, destination)
+                        self.assertEqual(result["sha256"], hashlib.sha256(payload).hexdigest())
+                        self.assertEqual(destination.read_bytes(), payload)
+                worker.join(timeout=5)
+                self.assertFalse(worker.is_alive())
+            self.assertEqual(list(Path(directory).glob(".chur-export-*")), [])
 
 
 if __name__ == "__main__":
