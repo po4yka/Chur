@@ -720,6 +720,17 @@ class VaultRepository(
     }
 
     private inline fun openSession(open: () -> Long) {
+        // One runtime shares one session, §8.1 of `docs/interop/FFI_CONTRACT.md`.
+        // An unlock can find one open when a host showed the public shell over
+        // it, and replacing the handle would leave that session unlocked in
+        // Rust, with its root, keys and catalog, beyond every later lock. It
+        // is ended first, as `create` ends it; §8 of `PLAINTEXT_LIFECYCLE.md`
+        // is that transition.
+        if (session != 0L) {
+            runCatching { ChurVault.lock(session, LockReason.USER) }
+            runCatching { ChurVault.closeSession(session) }
+            session = 0L
+        }
         try {
             session = open()
             generation += 1

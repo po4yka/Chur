@@ -86,7 +86,15 @@ internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: 
             busy = vaultState is VaultState.Creating,
             error = message,
             onCreate = controller::create,
-            onCancel = { controller.goTo(AppRoute.PublicShell) },
+            // A second vault is set up over an open session, and the public
+            // shell is the last step of a lock, `PLAINTEXT_LIFECYCLE.md` §8.
+            // The route check keeps a lock that already moved the route from
+            // being undone by this composition's stale vault state.
+            onCancel = {
+                if (controller.route.value == route) {
+                    controller.goTo(if (vaultState is VaultState.Unlocked) AppRoute.Vault else AppRoute.PublicShell)
+                }
+            },
             onRestore = if (vaultState is VaultState.NoVault) {
                 { controller.goTo(AppRoute.RestoreBackup) }
             } else {

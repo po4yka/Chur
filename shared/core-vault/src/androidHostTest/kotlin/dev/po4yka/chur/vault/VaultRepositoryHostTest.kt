@@ -3,6 +3,7 @@ package dev.po4yka.chur.vault
 import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.core.platformkeys.DeviceSlotException
 import dev.po4yka.chur.ffi.ChurFailure
+import dev.po4yka.chur.ffi.ChurVault
 import dev.po4yka.chur.ffi.LockReason
 import dev.po4yka.chur.ffi.ObjectQuery
 import java.io.File
@@ -182,6 +183,25 @@ class VaultRepositoryHostTest {
         assertIs<VaultState.NoVault>(repository.state.value)
         assertNull(repository.create(PASSWORD.encodeToByteArray(), offerRecovery = false))
         assertIs<VaultState.Unlocked>(repository.state.value)
+        repository.shutdown()
+    }
+
+    @Test
+    fun an_unlock_over_an_open_session_ends_that_session_first() = runBlocking {
+        val repository = repository()
+        repository.start()
+        repository.create(PASSWORD.encodeToByteArray(), offerRecovery = false)
+        // The handle is private on purpose; the test reads it to show the
+        // session it replaced is gone in Rust, not just forgotten here.
+        val handle = VaultRepository::class.java.getDeclaredField("session").apply { isAccessible = true }
+        val first = handle.getLong(repository)
+
+        repository.unlock(PASSWORD.encodeToByteArray())
+
+        assertIs<VaultState.Unlocked>(repository.state.value)
+        assertTrue(handle.getLong(repository) != first)
+        assertFailsWith<ChurFailure> { ChurVault.slots(first) }
+        assertEquals(1, repository.slots().size, "the new session works")
         repository.shutdown()
     }
 
