@@ -295,11 +295,7 @@ class ChurController(
             _message.value = "Use at least 12 digits for a vault PIN."
             return@guarded
         }
-        if (repository.state.value is VaultState.Unlocked) {
-            lockEpoch += 1
-            _activeOperation.value = null
-            exports.cancelPending()
-        }
+        endOpenSession()
         val bytes = password.encodeToByteArray()
         val phrase = try {
             withContext(Dispatchers.Default) { repository.create(bytes, offerRecovery) }
@@ -331,6 +327,7 @@ class ChurController(
 
     /** Unlocks with a password. */
     fun unlock(password: String) = guarded {
+        endOpenSession()
         val target = _route.value
         val epoch = lockEpoch
         val bytes = password.encodeToByteArray()
@@ -344,6 +341,7 @@ class ChurController(
 
     /** Unlocks with the recovery phrase. */
     fun recover(phrase: String) = guarded {
+        endOpenSession()
         val target = _route.value
         val epoch = lockEpoch
         withContext(Dispatchers.Default) { repository.unlockWithRecovery(phrase.trim()) }
@@ -358,6 +356,7 @@ class ChurController(
      * in turn, because the material names no identity.
      */
     fun unlockWithDevice() = guarded {
+        endOpenSession()
         val target = _route.value
         val epoch = lockEpoch
         val material = withContext(Dispatchers.Default) { repository.keystoreMaterial() }
@@ -387,6 +386,7 @@ class ChurController(
 
     /** Opens the vault with a Keychain secret released by local authorization. */
     fun unlockWithAppleDevice() = guarded {
+        endOpenSession()
         val target = _route.value
         val epoch = lockEpoch
         beginHostActivity()
@@ -1427,6 +1427,30 @@ class ChurController(
 
     private suspend fun refreshAlbums() {
         _albums.value = withContext(Dispatchers.Default) { repository.albums() }
+    }
+
+    /**
+     * Ends a session a new credential replaces, §8 of `PLAINTEXT_LIFECYCLE.md`.
+     *
+     * What this controller derived from the session goes with it: its pending
+     * work, and step 7's projections and decoded images, which would otherwise
+     * show one identity's albums, tags, slots or sharing inside the next until
+     * each reloads - the cross-identity surface `DECOY_VAULT.md` §10 forbids.
+     *
+     * It locks the session here rather than leaving that to the repository's
+     * next open, for two reasons. The lock waits behind the old session's
+     * calls already in flight, so their results land before the clear and
+     * not after it. And a device unlock the user then cancels leaves the
+     * vault locked on both sides, not open in Rust with nothing on screen.
+     *
+     * Every entry point calls it before it reads the epoch, and before
+     * [beginHostActivity], whose count the clear resets.
+     */
+    private suspend fun endOpenSession() {
+        if (repository.state.value !is VaultState.Unlocked) return
+        lockEpoch += 1
+        withContext(Dispatchers.Default) { repository.lock(LockReason.USER) }
+        clearPrivateProjections()
     }
 
     private suspend fun clearPrivateProjections() {
