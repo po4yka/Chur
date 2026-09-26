@@ -208,7 +208,7 @@ The activity MUST always be able to start in `PublicLocked`, even when the previ
 Android state restoration MAY restore:
 
 - the public shell route;
-- public notes/calculator state through Room;
+- public notes/calculator state, from the public store and, for an open editor, from saved instance state;
 - theme, locale, and non-secret preferences;
 - an indication that an interrupted encrypted transaction requires Rust reconciliation.
 

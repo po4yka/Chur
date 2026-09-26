@@ -21,9 +21,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,6 +42,7 @@ import dev.po4yka.chur.app.theme.LocalChurColors
 import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
 import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.notes.Notes
+import kotlinx.coroutines.delay
 
 /**
  * The public Notes shell, `DESIGN.md` §19.
@@ -215,28 +221,42 @@ private fun EmptyNotes(hasQuery: Boolean, onCreate: (() -> Unit)? = null) {
 /**
  * The note editor, §10.2's "folders/list/editor".
  *
- * [backHandler] registers its argument with the platform's system Back. The
- * host supplies it because this module compiles against no back dispatcher;
- * `DESIGN.md` §25.4 lets back behaviour differ by platform, and the iOS host
- * passes none. Both ways out save what changed, so a Back never discards
- * what was typed and never keeps a note that was opened and left blank.
+ * It saves as the user writes rather than on the way out. `DISCREET_MODE.md`
+ * requires a public shell that is "functional rather than a static decoy
+ * screen" and "usable after process restart without opening a vault", and a
+ * notes editor that drops what was typed is neither. A save on the arrow and on
+ * system Back alone missed every other way out: the whole-app gate taking the
+ * route on a background, an activity recreated for a font or locale change,
+ * and a process the platform reclaimed each dropped what had been typed. The
+ * draft is now written after a pause in typing and again when the editor
+ * leaves composition, whatever took it away, and the text is saved state, so a
+ * recreation brings the editor back as it was; [rememberOpenNote] says how the
+ * two are restored together. [rememberNoteDraft] holds the text and makes the
+ * writes.
+ *
+ * Which of those writes is a change is the controller's to decide against the
+ * store, not this screen's against the note it opened with: text typed and then
+ * typed back to what it was has still been saved once in between. The one
+ * exception is a note that "Create note" made, [OpenNote.isNew], and that is
+ * blank when the editor leaves. The controller cannot tell it from a stored
+ * note the user emptied, which stays, so this screen removes it through
+ * [onRemove]: "Create note", a word, and the word erased leave no empty
+ * "Untitled" row. Only leaving removes it, never the autosave, and never a
+ * note the store held when the editor opened, so opening a note the user
+ * emptied earlier leaves it where it is.
+ *
+ * Delete clears the draft, so the save on leaving has nothing to write back
+ * into the note it has just removed.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NoteEditorScreen(
-    note: Note,
-    onSave: (Note) -> Unit,
-    onDelete: () -> Unit,
-    onBack: () -> Unit,
-    backHandler: @Composable (onBack: () -> Unit) -> Unit = {},
-) {
-    var title by remember(note.id) { mutableStateOf(note.title) }
-    var body by remember(note.id) { mutableStateOf(note.body) }
-    val close = {
-        if (title != note.title || body != note.body) onSave(note.copy(title = title, body = body))
-        onBack()
+fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) -> Unit, onBack: () -> Unit) {
+    var draft by rememberNoteDraft(open, onSave, onRemove)
+    val (title, body) = draft ?: run {
+        LaunchedEffect(Unit) { onBack() }
+        return
     }
-    backHandler(close)
+
     val colors = LocalChurColors.current
     Scaffold(
         containerColor = colors.canvas,
@@ -244,12 +264,17 @@ fun NoteEditorScreen(
             TopAppBar(
                 title = { Text("Note") },
                 navigationIcon = {
-                    IconButton(onClick = close) {
+                    // Leaving is the save: the draft's dispose writes it.
+                    IconButton(onClick = onBack) {
                         Icon(BackGlyph, contentDescription = "Back")
                     }
                 },
                 actions = {
-                    TextButton(onClick = onDelete) { Text("Delete") }
+                    TextButton(onClick = {
+                        draft = null
+                        onRemove(open.note.id)
+                        onBack()
+                    }) { Text("Delete") }
                 },
             )
         },
@@ -260,7 +285,7 @@ fun NoteEditorScreen(
         ) {
             OutlinedTextField(
                 value = title,
-                onValueChange = { title = it },
+                onValueChange = { draft = it to body },
                 singleLine = true,
                 label = { Text("Title") },
                 modifier = Modifier.fillMaxWidth(),
@@ -268,7 +293,7 @@ fun NoteEditorScreen(
             )
             OutlinedTextField(
                 value = body,
-                onValueChange = { body = it },
+                onValueChange = { draft = title to it },
                 label = { Text("Note") },
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 colors = churOutlinedTextFieldColors(),
@@ -276,3 +301,141 @@ fun NoteEditorScreen(
         }
     }
 }
+
+/**
+ * [NoteEditorScreen]'s text and the writes it makes, apart from its layout, so
+ * a test can compose them without a window.
+ *
+ * The text is the note's title and body. It is null, and the editor closes
+ * without a write, when there is no text to show: the draft was too long to
+ * keep as saved state, [DRAFT_STATE_LIMIT]; saved state brought [open] back
+ * without the draft, whose text [OpenNoteSaver] does not keep; or Delete has
+ * removed the note. In each case the store has what was last written, and the
+ * list opens the note again from there.
+ *
+ * The autosave writes the text [AUTOSAVE_DELAY_MS] after it last changed. When
+ * this leaves composition it writes the text again, or, for a new note that is
+ * blank, removes it. The removal waits for that moment: a pause while the
+ * fields are empty is not the user leaving the note.
+ */
+@Composable
+internal fun rememberNoteDraft(
+    open: OpenNote,
+    onSave: (Note) -> Unit,
+    onRemove: (String) -> Unit,
+): MutableState<Pair<String, String>?> {
+    val note = open.note
+    val draft = rememberSaveable(note.id, saver = DraftSaver) {
+        // A restore that reaches this has lost the draft, and the restored
+        // note's blank text is a placeholder, not the note's.
+        mutableStateOf<Pair<String, String>?>(if (open.restored) null else note.title to note.body)
+    }
+    val save by rememberUpdatedState(onSave)
+    val remove by rememberUpdatedState(onRemove)
+    val text = draft.value ?: return draft
+
+    LaunchedEffect(text) {
+        delay(AUTOSAVE_DELAY_MS)
+        save(note.copy(title = text.first, body = text.second))
+    }
+    DisposableEffect(note.id) {
+        onDispose {
+            // Read now, so what is on screen as the editor leaves is written.
+            val (title, body) = draft.value ?: return@onDispose
+            if (open.isNew && title.isBlank() && body.isBlank()) {
+                remove(note.id)
+            } else {
+                save(note.copy(title = title, body = body))
+            }
+        }
+    }
+    return draft
+}
+
+/**
+ * How long the editor waits after the last keystroke before it writes.
+ *
+ * Long enough that a word is one write rather than one per letter, because
+ * `FileNoteStore` rewrites its whole file on every change; short enough that a
+ * process the platform reclaims soon after the user stops typing has already
+ * written.
+ */
+private const val AUTOSAVE_DELAY_MS = 500L
+
+/**
+ * The most text, title and body together, the editor keeps as saved state.
+ *
+ * ponytail: a longer draft is not saved state, because the Android saved-state
+ * Bundle has a size ceiling that a note does not: past the binder's 1 MB
+ * transaction limit, onStop throws TransactionTooLargeException, and Android's
+ * guidance for saved state is under 50 KB, which 20,000 UTF-16 characters keep
+ * to. Above it a recreation or a process restart closes the editor, and the
+ * note opens again from the list, that is from the store, which has what the
+ * autosave and the save on leaving last wrote. Keep drafts in the store by id
+ * if long notes must reopen in the editor.
+ */
+internal const val DRAFT_STATE_LIMIT = 20_000
+
+/**
+ * [NoteEditorScreen]'s text as saved state: the title and body, or, over
+ * [DRAFT_STATE_LIMIT], only that the draft was too long, which restores as
+ * null.
+ */
+internal val DraftSaver: Saver<MutableState<Pair<String, String>?>, Any> = Saver(
+    save = { draft ->
+        draft.value?.takeIf { (title, body) -> title.length + body.length <= DRAFT_STATE_LIMIT }?.toList() ?: false
+    },
+    restore = { saved -> mutableStateOf((saved as? List<*>)?.let { it[0] as String to it[1] as String }) },
+)
+
+/**
+ * A note open in [NoteEditorScreen].
+ *
+ * [isNew] marks a note that "Create note" made, which the store did not hold
+ * when the editor opened. It stays set for the editor's whole session, also
+ * after the autosave has stored the note, because such a note is the only one
+ * the editor removes when it leaves it blank.
+ *
+ * [restored] marks a note that saved state brought back, [rememberOpenNote].
+ * [OpenNoteSaver] keeps no text, so its title and body are blank placeholders
+ * that the editor never reads: it takes its own saved draft, or closes.
+ */
+data class OpenNote(val note: Note, val isNew: Boolean, val restored: Boolean = false)
+
+/**
+ * The note the editor has open, kept across an activity recreation and a
+ * process restart.
+ *
+ * `ANDROID.md` §6.3 and `IOS.md` §6.3 allow the public-shell route and public
+ * notes state to be restored, and this is both: one public note, nothing from
+ * the vault. Only the note's identity and [OpenNote.isNew] are saved, not its
+ * text: [NoteEditorScreen] saves the draft, which is the text worth restoring,
+ * and a second copy would double what the Bundle carries for nothing. The
+ * restored note carries no text; the editor restores its own draft in its
+ * place, or closes when that is missing or was too long to keep.
+ *
+ * On iOS the composition's registry is in memory and the host does not persist
+ * it, so there it lasts as long as the view controller and a relaunch opens the
+ * list.
+ */
+@Composable
+fun rememberOpenNote(): MutableState<OpenNote?> =
+    rememberSaveable(stateSaver = OpenNoteSaver) { mutableStateOf(null) }
+
+internal val OpenNoteSaver: Saver<OpenNote?, Any> = Saver(
+    save = { open -> open?.run { listOf(note.id, note.updatedMs, note.pinned, isNew) } },
+    restore = { saved ->
+        val fields = saved as List<*>
+        OpenNote(
+            note = Note(
+                id = fields[0] as String,
+                title = "",
+                body = "",
+                updatedMs = fields[1] as Long,
+                pinned = fields[2] as Boolean,
+            ),
+            isNew = fields[3] as Boolean,
+            restored = true,
+        )
+    },
+)

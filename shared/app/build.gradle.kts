@@ -84,7 +84,13 @@ kotlin {
             libs.versions.androidMinSdk
                 .get()
                 .toInt()
-        withHostTest {}
+        withHostTest {
+            // Compose's Android runtime traces every composition through
+            // android.os.Trace, which the host tests' android.jar stubs to
+            // throw. Stubs that return defaults let a host test compose, as
+            // NoteDraftTest does, without a device.
+            isReturnDefaultValues = true
+        }
     }
     iosArm64()
     iosSimulatorArm64()

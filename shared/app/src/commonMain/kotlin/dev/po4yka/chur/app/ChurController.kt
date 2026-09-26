@@ -1274,10 +1274,32 @@ class ChurController(
         }
     }
 
-    /** Writes a public note. */
+    /**
+     * Writes a public note, stamped with the time of the write.
+     *
+     * The editor calls this as the user types and again as it closes, so this
+     * is where a write is told apart from a repeat. A note equal to the stored
+     * one apart from its time is not written again, and neither is a new note
+     * the user never wrote in: "Create note" and straight back out is not the
+     * first public-shell write `DISCREET_MODE.md` discloses. A blank edit of a
+     * stored note is written: this cannot tell a note the user emptied, which
+     * stays, from one "Create note" made that was written and erased again.
+     * The editor knows which note it created, and removes that one through
+     * [removeNote] as it leaves it blank. The comparison reads the store
+     * rather than [notesState]: the store's lock places the read after every
+     * write queued ahead of it, and the projection is refreshed only once each
+     * has finished.
+     *
+     * The time is this controller's clock rather than the one the note carries,
+     * which is when it was opened, so an edited note moves up a list that
+     * `Notes.ordered` sorts by it.
+     */
     fun putNote(note: Note) = guarded {
+        val stored = notes.all().firstOrNull { it.id == note.id }
+        if (stored == null && note.title.isBlank() && note.body.isBlank()) return@guarded
+        if (stored != null && stored.copy(updatedMs = note.updatedMs) == note) return@guarded
         val first = !notes.disclosureAcknowledged()
-        notes.put(note)
+        notes.put(note.copy(updatedMs = clock()))
         _notes.value = notes.all()
         // `DISCREET_MODE.md`: the statement appears on the first public-shell
         // write, which is this one. It is raised after the write rather than
@@ -1298,7 +1320,13 @@ class ChurController(
         _disclosureDue.value = false
     }
 
-    /** Removes a public note. */
+    /**
+     * Removes a public note.
+     *
+     * The editor calls this for Delete, and as it leaves a note that "Create
+     * note" made and that is blank. It never calls it for a stored note only
+     * because that note is blank: a note the user emptied stays.
+     */
     fun removeNote(id: String) = guarded {
         notes.remove(id)
         _notes.value = notes.all()

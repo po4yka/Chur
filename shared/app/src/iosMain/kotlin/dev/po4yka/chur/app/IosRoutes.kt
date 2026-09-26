@@ -13,7 +13,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
 import dev.po4yka.chur.app.notes.NoteEditorScreen
 import dev.po4yka.chur.app.notes.NotesScreen
+import dev.po4yka.chur.app.notes.OpenNote
 import dev.po4yka.chur.app.notes.PublicSettingsScreen
+import dev.po4yka.chur.app.notes.rememberOpenNote
 import dev.po4yka.chur.app.vault.CreateVaultScreen
 import dev.po4yka.chur.app.vault.LibraryTile
 import dev.po4yka.chur.app.vault.AlbumPickerDialog
@@ -140,16 +142,16 @@ private fun PublicShell(controller: ChurController, route: AppRoute) {
     val notes by controller.notesState.collectAsState()
     val disclosureDue by controller.disclosureDue.collectAsState()
     var query by remember { mutableStateOf("") }
-    var editing by remember { mutableStateOf<Note?>(null) }
+    // Saved state, shared with the Android host. This host does not persist
+    // the composition's saved state, so on iOS it lasts as long as the view
+    // controller; the editor saves its own draft whenever it leaves.
+    var editing by rememberOpenNote()
 
-    editing?.let { note ->
+    editing?.let { open ->
         NoteEditorScreen(
-            note = note,
+            open = open,
             onSave = controller::putNote,
-            onDelete = {
-                controller.removeNote(note.id)
-                editing = null
-            },
+            onRemove = controller::removeNote,
             onBack = { editing = null },
         )
         return
@@ -159,10 +161,10 @@ private fun PublicShell(controller: ChurController, route: AppRoute) {
         notes = notes,
         query = query,
         onQueryChange = { query = it },
-        onOpen = { editing = it },
+        onOpen = { editing = OpenNote(it, isNew = false) },
         onCreate = {
             val now = (NSDate().timeIntervalSince1970 * 1000).toLong()
-            editing = Note(id = "note-$now", title = "", body = "", updatedMs = now)
+            editing = OpenNote(Note(id = "note-$now", title = "", body = "", updatedMs = now), isNew = true)
         },
         onOpenSettings = { controller.goTo(AppRoute.PublicSettings) },
         showFirstWriteDisclosure = disclosureDue,

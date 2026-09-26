@@ -2,6 +2,7 @@ package dev.po4yka.chur.app
 
 import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.ChurFailure
+import dev.po4yka.chur.notes.InMemoryNoteStore
 import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.notes.NoteStore
 import kotlinx.coroutines.CompletableDeferred
@@ -16,6 +17,7 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
  * What a failing action does to the process.
@@ -135,11 +137,47 @@ class ControllerContainmentTest {
         assertFalse(exports.pending)
     }
 
-    private fun controllerOver(notes: NoteStore, exports: ExportSink = NoExports) = ChurController(
+    @Test
+    fun a_note_is_written_only_when_its_text_changed_and_carries_the_write_time() = runTest(
+        dispatcher,
+    ) {
+        val store = InMemoryNoteStore(
+            listOf(Note(id = "kept", title = "Kept", body = "", updatedMs = 5L)),
+        )
+        val controller = controllerOver(store, clock = { 9L })
+
+        // The editor saves as it closes whatever happened, so a note opened
+        // and left as it was reaches the controller too. That is not a write,
+        // and nor is a new note with nothing in it; neither is the first
+        // public-shell write `DISCREET_MODE.md` discloses.
+        controller.putNote(Note(id = "new", title = "", body = "", updatedMs = 1L))
+        controller.putNote(Note(id = "kept", title = "Kept", body = "", updatedMs = 5L))
+        advanceUntilIdle()
+
+        assertEquals(listOf("kept" to 5L), store.all().map { it.id to it.updatedMs })
+        assertFalse(controller.disclosureDue.value)
+
+        // A real edit is stamped with the time it was written rather than the
+        // time the note was opened, so it sorts to the top of the list.
+        controller.putNote(Note(id = "new", title = "", body = "milk", updatedMs = 1L))
+        advanceUntilIdle()
+
+        assertEquals(
+            listOf("new" to 9L, "kept" to 5L),
+            controller.notesState.value.map { it.id to it.updatedMs },
+        )
+        assertTrue(controller.disclosureDue.value)
+    }
+
+    private fun controllerOver(
+        notes: NoteStore,
+        exports: ExportSink = NoExports,
+        clock: () -> Long = { 0L },
+    ) = ChurController(
         storageRoot = "/nonexistent",
         privacy = NoPrivacyCover,
         exports = exports,
-        clock = { 0L },
+        clock = clock,
         notes = notes,
     )
 

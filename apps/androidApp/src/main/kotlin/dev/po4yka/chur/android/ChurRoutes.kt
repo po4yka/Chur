@@ -48,7 +48,9 @@ import dev.po4yka.chur.app.ExportTarget
 import dev.po4yka.chur.app.MediaImporter
 import dev.po4yka.chur.app.notes.NoteEditorScreen
 import dev.po4yka.chur.app.notes.NotesScreen
+import dev.po4yka.chur.app.notes.OpenNote
 import dev.po4yka.chur.app.notes.PublicSettingsScreen
+import dev.po4yka.chur.app.notes.rememberOpenNote
 import dev.po4yka.chur.app.vault.CreateVaultScreen
 import dev.po4yka.chur.app.vault.LibraryTile
 import dev.po4yka.chur.app.vault.AlbumPickerDialog
@@ -211,19 +213,21 @@ private fun PublicShell(controller: ChurController, route: AppRoute) {
     val vaultState by controller.vaultState.collectAsState()
     val disclosureDue by controller.disclosureDue.collectAsState()
     var query by remember { mutableStateOf("") }
-    var editing by remember { mutableStateOf<Note?>(null) }
+    // Saved state, so a recreation or a process restart reopens the note being
+    // written; the editor saves its own draft whenever it leaves.
+    var editing by rememberOpenNote()
     val focusManager = LocalFocusManager.current
 
-    editing?.let { note ->
+    editing?.let { open ->
+        // System and predictive Back close the editor, as its arrow does,
+        // `DESIGN.md` §22.1. Closing is all either does: the editor writes the
+        // draft as it leaves composition, so no save rides on the press.
+        BackHandler { editing = null }
         NoteEditorScreen(
-            note = note,
+            open = open,
             onSave = controller::putNote,
-            onDelete = {
-                controller.removeNote(note.id)
-                editing = null
-            },
+            onRemove = controller::removeNote,
             onBack = { editing = null },
-            backHandler = { BackHandler(onBack = it) },
         )
         return
     }
@@ -232,13 +236,16 @@ private fun PublicShell(controller: ChurController, route: AppRoute) {
         notes = notes,
         query = query,
         onQueryChange = { query = it },
-        onOpen = { editing = it },
+        onOpen = { editing = OpenNote(it, isNew = false) },
         onCreate = {
-            editing = Note(
-                id = "note-${System.nanoTime()}",
-                title = "",
-                body = "",
-                updatedMs = System.currentTimeMillis(),
+            editing = OpenNote(
+                Note(
+                    id = "note-${System.nanoTime()}",
+                    title = "",
+                    body = "",
+                    updatedMs = System.currentTimeMillis(),
+                ),
+                isNew = true,
             )
         },
         // §2: the route to the vault is a visible settings entry.

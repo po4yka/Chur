@@ -2,8 +2,15 @@ package dev.po4yka.chur.android
 
 import android.content.Intent
 import android.graphics.Bitmap
+import android.os.Bundle
 import android.view.Choreographer
+import android.view.View
+import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
+import androidx.compose.ui.platform.ViewRootForTest
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.getAllSemanticsNodes
+import androidx.compose.ui.text.AnnotatedString
 import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -12,6 +19,7 @@ import dev.po4yka.chur.app.AppRoute
 import dev.po4yka.chur.app.ChurController
 import dev.po4yka.chur.app.MediaImporter
 import dev.po4yka.chur.imports.AndroidMediaCodec
+import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.vault.VaultState
 import java.io.File
 import java.util.concurrent.CountDownLatch
@@ -29,12 +37,15 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * System Back on the routes of `ChurRoutes` and inside the vault.
+ * System Back on the routes of `ChurRoutes`, in the note editor and inside the
+ * vault.
  *
  * Without a handler Back is the platform's back-to-home: the activity pauses,
  * and the background lock of `MainActivity.onPause` closes the vault and drops
  * what the screen held. Each case presses Back once and checks that the
  * application stayed in front and landed where the screen's own control goes.
+ * The note editor's cases also pin what leaving it writes, since that write,
+ * not the press, is what keeps the draft; they remove the notes they make.
  * The order of the vault's ladder is a pure function, pinned by
  * `VaultBackTest`; the vault cases here pin that the host delivers it, and the
  * viewer's own handlers.
@@ -100,6 +111,65 @@ class BackNavigationTest {
         lockIfOpen()
         assertEquals(AppRoute.PublicShell, backFrom(AppRoute.CreateVault))
         assertEquals(AppRoute.PublicShell, backFrom(AppRoute.RestoreBackup))
+    }
+
+    // -----------------------------------------------------------------------
+    // The note editor
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun backClosesTheNoteEditorAndKeepsTheDraft() = inNewNote {
+        assertTrue("the editor holds Back", backIsHandled())
+
+        // The text lands and Back is pressed in one main-thread message, so no
+        // frame composes the text before the editor leaves. Its autosave never
+        // starts, and only the save on leaving can write the draft, however
+        // slow the device.
+        pressBack { replaceBodyText(NOTE_TEXT) }
+
+        assertEquals(AppRoute.PublicShell, controller.route.value)
+        assertTrue("the draft is written as the editor leaves", await { madeNotes().any { it.body == NOTE_TEXT } })
+        assertFalse("back at the Notes root", backIsHandled())
+    }
+
+    @Test
+    fun deleteAfterAnAutosaveLeavesNoNote() = inNewNote {
+        typeNote(NOTE_TEXT)
+        assertTrue("the autosave writes the draft", await { madeNotes().any { it.body == NOTE_TEXT } })
+
+        tap(label("Delete"))
+
+        assertTrue("the note is removed", await { madeNotes().isEmpty() })
+        assertFalse("the save on leaving must not write it back", await(1_000) { madeNotes().isNotEmpty() })
+    }
+
+    @Test
+    fun aNewNoteErasedAgainLeavesNoEmptyRow() = inNewNote {
+        typeNote(NOTE_TEXT)
+        assertTrue("the autosave writes the draft", await { madeNotes().any { it.body == NOTE_TEXT } })
+        typeNote("")
+
+        pressBack()
+
+        assertTrue("no empty row is left", await { madeNotes().isEmpty() })
+    }
+
+    @Test
+    fun openingANoteTheUserEmptiedKeepsIt() = inNotes {
+        // A note the user emptied: stored with text, then written blank. It is
+        // pinned and the newest, so its row heads the list.
+        val emptied = Note(id = "back-test-${System.nanoTime()}", title = "", body = NOTE_TEXT, updatedMs = 0L, pinned = true)
+        instrumentation.runOnMainSync { controller.putNote(emptied) }
+        assertTrue("the note is stored", await { madeNotes().any { it.body == NOTE_TEXT } })
+        instrumentation.runOnMainSync { controller.putNote(emptied.copy(body = "")) }
+        assertTrue("the note is stored blank", await { madeNotes().singleOrNull()?.body == "" })
+
+        tap(label("Untitled"))
+        assertTrue("the editor opens", await { find(label("Delete")) != null })
+        assertFalse("the autosave must not remove it", await(1_000) { madeNotes().isEmpty() })
+        pressBack()
+
+        assertFalse("leaving must not remove it", await(1_000) { madeNotes().isEmpty() })
     }
 
     // -----------------------------------------------------------------------
@@ -191,9 +261,11 @@ class BackNavigationTest {
         return controller.route.value
     }
 
-    private fun pressBack() {
+    /** Presses Back, after [first] in the same main-thread message. */
+    private fun pressBack(first: () -> Unit = {}) {
         awaitFrames()
         instrumentation.runOnMainSync {
+            first()
             // Without a handler the press below would go home. This fails at
             // once rather than through the pause that follows.
             assertTrue("the screen must register a Back handler", activity.onBackPressedDispatcher.hasEnabledCallbacks())
@@ -282,6 +354,70 @@ class BackNavigationTest {
         }
     }
 
+    /** The notes that were not in the store when the running case began. */
+    private var notesBefore: Set<String> = emptySet()
+
+    private fun madeNotes() = controller.notesState.value.filter { it.id !in notesBefore }
+
+    /** Runs [body] in the editor of a new note, and removes every note it made. */
+    private fun inNewNote(body: () -> Unit) = inNotes {
+        // The empty list offers "Create note"; a list with notes, its button.
+        tap { label("Create note")(it) || label("New note")(it) }
+        body()
+    }
+
+    /** Runs [body] on the Notes root, and removes every note it made. */
+    private fun inNotes(body: () -> Unit) {
+        lockIfOpen()
+        instrumentation.runOnMainSync { controller.goTo(AppRoute.PublicShell) }
+        notesBefore = controller.notesState.value.map { it.id }.toSet()
+        try {
+            body()
+        } finally {
+            // The editor writes its draft as it leaves, so a case that failed
+            // with it open leaves through Delete, which writes nothing, before
+            // the rest is removed. Nothing here asserts, so a cleanup cannot
+            // hide the failure it follows.
+            find(label("Delete"))?.let { delete ->
+                generateSequence(delete) { it.parent }.firstOrNull { it.isClickable }
+                    ?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                await { find(label("Delete")) == null }
+            }
+            instrumentation.runOnMainSync { madeNotes().forEach { controller.removeNote(it.id) } }
+        }
+    }
+
+    /** Replaces the text of the editor's body, as typing it does. */
+    private fun typeNote(text: String) {
+        var field: AccessibilityNodeInfo? = null
+        // The title comes first and the body last.
+        assertTrue("the note field", await { findAll { it.isEditable }.lastOrNull()?.also { field = it } != null })
+        val arguments = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+        }
+        assertTrue("the text must land", field?.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments) == true)
+        awaitFrames()
+    }
+
+    /**
+     * Replaces the text of the editor's body through its semantics, on the
+     * main thread. Unlike the accessibility action of [typeNote], which runs in
+     * a message of its own, this lets a case press Back before a frame runs.
+     */
+    private fun replaceBodyText(text: String) {
+        // The title comes first and the body last.
+        val body = activity.window.decorView.composeRoots()
+            .flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false) }
+            .last { SemanticsActions.SetText in it.config }
+        val landed = body.config[SemanticsActions.SetText].action?.invoke(AnnotatedString(text))
+        assertTrue("the text must land", landed == true)
+    }
+
+    private fun View.composeRoots(): List<ViewRootForTest> =
+        listOfNotNull(this as? ViewRootForTest) +
+            ((this as? ViewGroup)?.let { group -> (0 until group.childCount).flatMap { group.getChildAt(it).composeRoots() } }
+                ?: emptyList())
+
     /** Imports one generated photograph through the production importer. */
     private fun importPhoto() {
         val context = instrumentation.targetContext
@@ -357,5 +493,6 @@ class BackNavigationTest {
     private companion object {
         const val PASSWORD = "BackNavigationTest-password"
         const val ALBUM = "Back test album"
+        const val NOTE_TEXT = "BackNavigationTest note"
     }
 }
