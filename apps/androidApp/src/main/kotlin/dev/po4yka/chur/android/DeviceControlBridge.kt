@@ -237,6 +237,38 @@ internal class DeviceControlBridge(
                 controller.refreshExternalChanges()
                 JSONObject().put("ok", true)
             }
+            "batch" -> {
+                val action = request.getString("action")
+                require(action in setOf("album-add", "album-remove", "tag-add", "tag-remove",
+                    "favorite", "unfavorite"))
+                val target = if (action.startsWith("album-") || action.startsWith("tag-")) {
+                    request.getString("target").idBytes()
+                } else null
+                val objects = request.getJSONArray("objects")
+                require(objects.length() in 1..100)
+                val ids = (0 until objects.length()).map { objects.getString(it).idBytes() }
+                val rows = JSONArray()
+                ids.forEach { id ->
+                    val row = JSONObject().put("id", id.hex())
+                    try {
+                        when (action) {
+                            "album-add", "album-remove" ->
+                                vault.setAlbumMembership(requireNotNull(target), id, action == "album-add")
+                            "tag-add", "tag-remove" ->
+                                vault.setObjectTag(requireNotNull(target), id, action == "tag-add")
+                            "favorite", "unfavorite" -> vault.setFavorite(id, action == "favorite")
+                        }
+                        row.put("ok", true)
+                    } catch (failure: ChurFailure) {
+                        row.put("error", failure.status.name)
+                    } catch (_: Exception) {
+                        row.put("error", "OPERATION_FAILED")
+                    }
+                    rows.put(row)
+                }
+                controller.refreshExternalChanges(albums = action.startsWith("album-"))
+                JSONObject().put("results", rows)
+            }
             "import" -> importFile(peer, request)
             else -> throw IllegalArgumentException("unknown operation")
         }

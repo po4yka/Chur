@@ -110,6 +110,53 @@ def export_file(connection, object_id, destination, progress=None):
         os.unlink(temporary)
 
 
+def run_batch(connection, args):
+    if not 1 <= args.max_objects <= 10000:
+        raise ValueError("--max-objects must be between 1 and 10000")
+    if args.scope == "search" and not args.terms:
+        raise ValueError("search selection requires --terms")
+    if args.scope in ("album", "tag") and not args.id:
+        raise ValueError("album and tag selections require --id")
+    if args.action_name.startswith(("album-", "tag-")) and not args.target:
+        raise ValueError("album and tag actions require --target")
+    ids = []
+    cursor = ""
+    while True:
+        page = exchange(connection, {"op": "list", "scope": args.scope, "sort": "capture_desc",
+                                     "limit": 500, "id": args.id or "", "terms": args.terms or "",
+                                     "cursor": cursor})
+        if "error" in page:
+            raise ValueError(page["error"])
+        ids.extend(row["id"] for row in page["objects"])
+        if len(ids) > args.max_objects:
+            raise ValueError(f"selection exceeds --max-objects={args.max_objects}; nothing changed")
+        cursor = page.get("cursor") or ""
+        if not cursor:
+            break
+    if len(set(ids)) != len(ids):
+        raise ValueError("catalog returned duplicate object IDs; nothing changed")
+    preview = {"action": args.action_name, "target": args.target,
+               "selection": {"scope": args.scope, "id": args.id, "terms": args.terms},
+               "count": len(ids), "object_ids": ids, "apply": args.apply}
+    print(json.dumps(preview, ensure_ascii=False))
+    if not args.apply:
+        return 0
+    failures = 0
+    for start in range(0, len(ids), 100):
+        selected = ids[start:start + 100]
+        response = exchange(connection, {"op": "batch", "action": args.action_name,
+                                         "target": args.target or "", "objects": selected})
+        if "error" in response:
+            raise ValueError(f"batch stopped after {start} objects: {response['error']}")
+        rows = response["results"]
+        if len(rows) != len(selected) or [row.get("id") for row in rows] != selected:
+            raise ValueError("invalid batch response")
+        for row in rows:
+            print(json.dumps(row, ensure_ascii=False))
+            failures += "error" in row
+    return 1 if failures else 0
+
+
 def command_request(args):
     action = args.action
     if action == "list":
@@ -193,6 +240,16 @@ def parser():
     exporter = commands.add_parser("export", help="save one original without overwriting a local file")
     exporter.add_argument("object", help="object ID")
     exporter.add_argument("destination", type=Path, help="new local file path")
+    batch = commands.add_parser("batch", help="preview or apply an action to a query selection")
+    batch.add_argument("action_name", choices=("album-add", "album-remove", "tag-add",
+                                                "tag-remove", "favorite", "unfavorite"))
+    batch.add_argument("--target", help="album or tag ID for the action")
+    batch.add_argument("--scope", choices=("timeline", "favorites", "album", "tag", "search"),
+                       default="timeline")
+    batch.add_argument("--id", help="album or tag ID for the selection")
+    batch.add_argument("--terms", help="terms for a search selection")
+    batch.add_argument("--max-objects", type=int, default=1000)
+    batch.add_argument("--apply", action="store_true", help="apply after listing the selection")
     return cli
 
 
@@ -230,6 +287,8 @@ def main():
             if args.action == "export":
                 print(json.dumps(export_file(connection, args.object, args.destination), ensure_ascii=False))
                 return 0
+            if args.action == "batch":
+                return run_batch(connection, args)
             if args.action != "import":
                 result = exchange(connection, command_request(args))
                 if args.action == "list" and args.details and "error" not in result:

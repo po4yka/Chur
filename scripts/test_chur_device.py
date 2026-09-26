@@ -5,11 +5,13 @@ import importlib.util
 import base64
 import hashlib
 import io
+import json
 from pathlib import Path
 import socket
 import tempfile
 import threading
 import unittest
+from contextlib import redirect_stdout
 
 
 SPEC = importlib.util.spec_from_file_location("chur_device", Path(__file__).with_name("chur-device.py"))
@@ -32,6 +34,38 @@ class DeviceProtocolTest(unittest.TestCase):
         self.assertEqual(device.command_request(args)["op"], "album_delete")
         args = cli.parse_args(["--port", "1234", "import", "--album", "a" * 32, "photo.jpg"])
         self.assertEqual(args.album, "a" * 32)
+
+    def test_batch_previews_before_mutation_and_reports_each_result(self):
+        cli = device.parser()
+        identifiers = ["a" * 32, "b" * 32]
+        for apply in (False, True):
+            host, remote = socket.socketpair()
+
+            def app():
+                with remote:
+                    query = device.frame_receive(remote)
+                    self.assertEqual((query["scope"], query["terms"]), ("search", "beach"))
+                    device.frame_send(remote, {"objects": [{"id": item} for item in identifiers],
+                                               "cursor": None})
+                    if apply:
+                        request = device.frame_receive(remote)
+                        self.assertEqual(request["objects"], identifiers)
+                        device.frame_send(remote, {"results": [{"id": identifiers[0], "ok": True},
+                                                              {"id": identifiers[1], "error": "NOT_FOUND"}]})
+
+            worker = threading.Thread(target=app)
+            worker.start()
+            argv = ["--port", "1234", "batch", "favorite", "--scope", "search", "--terms", "beach"]
+            args = cli.parse_args(argv + (["--apply"] if apply else []))
+            output = io.StringIO()
+            with host, redirect_stdout(output):
+                code = device.run_batch(host, args)
+            worker.join(timeout=5)
+            self.assertFalse(worker.is_alive())
+            lines = [json.loads(line) for line in output.getvalue().splitlines()]
+            self.assertEqual(lines[0]["object_ids"], identifiers)
+            self.assertEqual(code, 1 if apply else 0)
+            self.assertEqual(len(lines), 3 if apply else 1)
 
     def test_session_link_accepts_only_the_expected_local_session(self):
         code = "0123456789abcdef" * 2
