@@ -205,7 +205,7 @@ private fun MediaTile(tile: LibraryTile, onOpen: () -> Unit, onToggleSelection: 
                 Icon(
                     IntegrityGlyph,
                     contentDescription = null,
-                    tint = colors.outline,
+                    tint = colors.inkMuted,
                 )
             }
         }
@@ -226,7 +226,11 @@ private fun StateBadge(state: PresentedState, severity: StateSeverity, modifier:
         else -> colors.warning
     }
     Row(
-        modifier = modifier.padding(ChurSpacing.one),
+        modifier = modifier
+            .padding(ChurSpacing.one)
+            .clip(RoundedCornerShape(50))
+            .background(colors.surface)
+            .padding(ChurSpacing.one),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(ChurSpacing.one),
     ) {
