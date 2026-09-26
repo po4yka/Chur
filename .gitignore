@@ -42,3 +42,6 @@ xcuserdata/
 # Root-level lock state Gradle writes when a task runs --write-locks outside
 # a module; the committed lockfiles are the per-module gradle.lockfile ones.
 settings-gradle.lockfile
+
+# Unselected app icon drafts.
+/art/app-icon/proposals/
