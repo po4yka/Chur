@@ -106,8 +106,9 @@ data class VaultUiState(
     /** Active library scope, if narrower than all media. */
     val libraryScopeTitle: String? = null,
     val trashOpen: Boolean = false,
-    /** The available width, which fixes the grid geometry of §11.1. */
-    val widthDp: Int = 400,
+    /** Session-only presentation choices; never written outside the unlocked vault. */
+    val mediaView: ContentView = ContentView.GRID,
+    val albumView: ContentView = ContentView.LIST,
     /** A bounded operation message, carrying no private value. */
     val progress: String? = null,
     val operation: ActiveOperation? = null,
@@ -214,6 +215,8 @@ data class VaultActions(
     /** Move or permanently delete the selection, according to the current scope. */
     val onDeleteSelection: () -> Unit = {},
     val onRestoreSelection: () -> Unit = {},
+    val onMediaViewChange: (ContentView) -> Unit = {},
+    val onAlbumViewChange: (ContentView) -> Unit = {},
     /** Stop the native operation at its next cooperative cancellation point. */
     val onCancelOperation: () -> Unit = {},
     /** Connect the vault to the server the user named, `SYNC_PROTOCOL_V1.md` §6. */
@@ -365,9 +368,11 @@ fun VaultShell(state: VaultUiState, actions: VaultActions) {
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             when {
                 state.openAlbum != null || state.destination == VaultDestination.LIBRARY ->
-                    LibraryBody(state, actions)
-                state.destination == VaultDestination.ALBUMS -> AlbumOrganizer(state.albums, actions)
-                state.destination == VaultDestination.SEARCH -> SearchBody(state, actions)
+                    LibraryBody(state, actions, state.mediaView, actions.onMediaViewChange)
+                state.destination == VaultDestination.ALBUMS ->
+                    AlbumOrganizer(state.albums, actions, state.albumView, actions.onAlbumViewChange)
+                state.destination == VaultDestination.SEARCH ->
+                    SearchBody(state, actions, state.mediaView, actions.onMediaViewChange)
                 else -> SettingsBody(state, actions)
             }
             state.operation?.let { operation ->
@@ -511,28 +516,34 @@ private fun glyphFor(destination: VaultDestination) = when (destination) {
 }
 
 @Composable
-private fun LibraryBody(state: VaultUiState, actions: VaultActions) {
-    if (state.tiles.isEmpty()) {
-        if (state.libraryScopeTitle == null) EmptyLibrary()
-        else Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("No media in ${state.libraryScopeTitle}",
-                color = LocalChurColors.current.inkMuted,
-                style = MaterialTheme.typography.bodyMedium)
+private fun LibraryBody(state: VaultUiState, actions: VaultActions,
+    view: ContentView, onViewChange: (ContentView) -> Unit) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        ContentViewToggle(view, onViewChange)
+        if (state.tiles.isEmpty()) {
+            if (state.libraryScopeTitle == null) EmptyLibrary(modifier = Modifier.weight(1f))
+            else Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text("No media in ${state.libraryScopeTitle}",
+                    color = LocalChurColors.current.inkMuted,
+                    style = MaterialTheme.typography.bodyMedium)
+            }
+        } else {
+            MediaBrowser(
+                tiles = state.tiles,
+                view = view,
+                onOpen = actions.onOpen,
+                onToggleSelection = actions.onToggleSelection,
+                onMove = if (state.openAlbum != null && state.selectedCount == 0) actions.onMoveAlbumMember else null,
+                onLoadMore = if (state.canLoadMore) actions.onLoadMore else null,
+                modifier = Modifier.weight(1f),
+            )
         }
-    } else {
-        MediaGrid(
-            tiles = state.tiles,
-            widthDp = state.widthDp,
-            onOpen = actions.onOpen,
-            onToggleSelection = actions.onToggleSelection,
-            onMove = if (state.openAlbum != null && state.selectedCount == 0) actions.onMoveAlbumMember else null,
-            onLoadMore = if (state.canLoadMore) actions.onLoadMore else null,
-        )
     }
 }
 
 @Composable
-private fun SearchBody(state: VaultUiState, actions: VaultActions) {
+private fun SearchBody(state: VaultUiState, actions: VaultActions,
+    view: ContentView, onViewChange: (ContentView) -> Unit) {
     val colors = LocalChurColors.current
     Column(modifier = Modifier.fillMaxSize()) {
         OutlinedTextField(
@@ -543,6 +554,7 @@ private fun SearchBody(state: VaultUiState, actions: VaultActions) {
             modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter),
             colors = churOutlinedTextFieldColors(),
         )
+        ContentViewToggle(view, onViewChange)
         when {
             state.searchTerms.isBlank() -> Box(
                 modifier = Modifier.fillMaxSize(),
@@ -562,9 +574,9 @@ private fun SearchBody(state: VaultUiState, actions: VaultActions) {
             ) {
                 Text("No results", style = MaterialTheme.typography.bodyMedium, color = colors.inkMuted)
             }
-            else -> MediaGrid(
+            else -> MediaBrowser(
                 tiles = state.tiles,
-                widthDp = state.widthDp,
+                view = view,
                 onOpen = actions.onOpen,
                 onToggleSelection = actions.onToggleSelection,
                 onLoadMore = if (state.canLoadMore) actions.onLoadMore else null,

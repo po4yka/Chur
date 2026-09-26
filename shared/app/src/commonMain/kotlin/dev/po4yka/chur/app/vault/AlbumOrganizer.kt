@@ -16,7 +16,6 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -87,7 +86,8 @@ private fun descendantOf(candidate: AlbumSummary, ancestor: AlbumSummary, albums
 
 /** Album navigation, editing, nesting, and drag placement for both hosts. */
 @Composable
-fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions) {
+fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
+    view: ContentView, onViewChange: (ContentView) -> Unit) {
     val colors = LocalChurColors.current
     var renaming by remember { mutableStateOf<AlbumSummary?>(null) }
     var renameText by remember { mutableStateOf("") }
@@ -98,7 +98,7 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions) {
     var dropPoint by remember { mutableStateOf(Offset.Zero) }
     val rows = remember(albums) { albumRows(albums) }
 
-    var grid by remember { mutableStateOf(false) }
+    val grid = view == ContentView.GRID
     val albumCard: @Composable (AlbumSummary, Int) -> Unit = { album, depth ->
         DisposableEffect(album.id) { onDispose { bounds.remove(album.id) } }
         val siblings = siblingsOf(album, albums)
@@ -192,25 +192,16 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions) {
         }
     }
 
-    if (albums.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("No albums yet", style = MaterialTheme.typography.titleMedium)
-                Text("Group objects you want to find together.", color = colors.inkMuted)
+    Column(modifier = Modifier.fillMaxSize()) {
+        ContentViewToggle(view, onViewChange)
+        if (albums.isEmpty()) {
+            Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("No albums yet", style = MaterialTheme.typography.titleMedium)
+                    Text("Group objects you want to find together.", color = colors.inkMuted)
+                }
             }
-        }
-    } else {
-        Column(modifier = Modifier.fillMaxSize()) {
-            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = ChurSpacing.gutter)) {
-                TextButton(
-                    onClick = { grid = false },
-                    colors = ButtonDefaults.textButtonColors(contentColor = if (grid) colors.inkMuted else colors.accent),
-                ) { Text(if (grid) "List" else "✓ List") }
-                TextButton(
-                    onClick = { grid = true },
-                    colors = ButtonDefaults.textButtonColors(contentColor = if (grid) colors.accent else colors.inkMuted),
-                ) { Text(if (grid) "✓ Grid" else "Grid") }
-            }
+        } else {
             if (grid) {
                 LazyVerticalGrid(
                     columns = GridCells.Adaptive(150.dp),

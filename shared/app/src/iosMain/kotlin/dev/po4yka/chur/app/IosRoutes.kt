@@ -30,6 +30,7 @@ import dev.po4yka.chur.app.vault.ThumbnailCache
 import dev.po4yka.chur.app.vault.UnlockScreen
 import dev.po4yka.chur.app.vault.VaultActions
 import dev.po4yka.chur.app.vault.VaultDestination
+import dev.po4yka.chur.app.vault.ContentView
 import dev.po4yka.chur.app.vault.VaultShell
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_VIDEO
@@ -180,6 +181,8 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     val sharingOverview by controller.sharingOverview.collectAsState()
     val sharingRecipient by controller.sharingRecipient.collectAsState()
     var destination by remember { mutableStateOf(VaultDestination.LIBRARY) }
+    var mediaView by remember { mutableStateOf(ContentView.GRID) }
+    var albumView by remember { mutableStateOf(ContentView.LIST) }
     var terms by remember { mutableStateOf("") }
     var openAlbum by remember { mutableStateOf<AlbumSummary?>(null) }
     LaunchedEffect(albums) {
@@ -374,7 +377,8 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             openAlbum = openAlbum,
             libraryScopeTitle = if (trashOpen) "Trash" else openTag?.name ?: if (favoritesOnly) "Favorites" else null,
             trashOpen = trashOpen,
-            widthDp = 400,
+            mediaView = mediaView,
+            albumView = albumView,
             progress = message,
             operation = operation,
             selectedCount = selection.size,
@@ -463,6 +467,8 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             onOpenAlbum = { openAlbum = it; openTag = null; favoritesOnly = false; trashOpen = false },
             onCloseAlbum = { openAlbum = null },
             onCreateAlbum = { creatingAlbum = true },
+            onMediaViewChange = { mediaView = it },
+            onAlbumViewChange = { albumView = it },
             onShowAllMedia = { openTag = null; favoritesOnly = false; trashOpen = false; selection = emptySet() },
             onShowFavorites = { openTag = null; favoritesOnly = true; trashOpen = false; selection = emptySet() },
             onShowTags = { controller.loadTags(); managingTags = true },

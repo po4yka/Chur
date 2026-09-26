@@ -32,7 +32,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -60,6 +59,7 @@ import dev.po4yka.chur.app.vault.ThumbnailCache
 import dev.po4yka.chur.app.vault.UnlockScreen
 import dev.po4yka.chur.app.vault.VaultActions
 import dev.po4yka.chur.app.vault.VaultDestination
+import dev.po4yka.chur.app.vault.ContentView
 import dev.po4yka.chur.app.vault.VaultShell
 import dev.po4yka.chur.app.vault.VaultUiState
 import androidx.compose.ui.graphics.ImageBitmap
@@ -295,7 +295,6 @@ private fun VaultRoute(controller: ChurController) {
     val sharingRecipient by controller.sharingRecipient.collectAsState()
     val deviceSlotStrict by controller.deviceSlotStrict.collectAsState()
     val appLockEnabled by controller.appLockEnabled.collectAsState()
-    val configuration = LocalConfiguration.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val deviceControl = remember(context) { ChurHost.of(context).deviceControl }
@@ -303,6 +302,8 @@ private fun VaultRoute(controller: ChurController) {
     val deviceConnected by deviceControl.connected.collectAsState()
 
     var destination by remember { mutableStateOf(VaultDestination.LIBRARY) }
+    var mediaView by remember { mutableStateOf(ContentView.GRID) }
+    var albumView by remember { mutableStateOf(ContentView.LIST) }
     var terms by remember { mutableStateOf("") }
     var openAlbum by remember { mutableStateOf<AlbumSummary?>(null) }
     LaunchedEffect(albums) {
@@ -641,7 +642,8 @@ private fun VaultRoute(controller: ChurController) {
             openAlbum = openAlbum,
             libraryScopeTitle = if (trashOpen) "Trash" else openTag?.name ?: if (favoritesOnly) "Favorites" else null,
             trashOpen = trashOpen,
-            widthDp = configuration.screenWidthDp,
+            mediaView = mediaView,
+            albumView = albumView,
             progress = message,
             operation = operation,
             selectedCount = selection.size,
@@ -686,6 +688,8 @@ private fun VaultRoute(controller: ChurController) {
             onOpenAlbum = { openAlbum = it; openTag = null; favoritesOnly = false; trashOpen = false },
             onCloseAlbum = { openAlbum = null },
             onCreateAlbum = { creatingAlbum = true },
+            onMediaViewChange = { mediaView = it },
+            onAlbumViewChange = { albumView = it },
             onShowAllMedia = { openTag = null; favoritesOnly = false; trashOpen = false; selection = emptySet() },
             onShowFavorites = { openTag = null; favoritesOnly = true; trashOpen = false; selection = emptySet() },
             onShowTags = { controller.loadTags(); managingTags = true },
