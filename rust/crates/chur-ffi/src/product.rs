@@ -13,7 +13,7 @@
 use chur_catalog::model::{Album, Tag};
 use chur_catalog::vault::{self, Session};
 use chur_catalog::{deletion, store};
-use chur_core::{ChurStatus, Error, Id, Result, ensure};
+use chur_core::{ChurStatus, Error, Id, Result, bail, ensure};
 use chur_crypto::password::Argon2Params;
 use chur_format::constants::{ObjectState, StreamKind};
 use zeroize::Zeroizing;
@@ -728,6 +728,89 @@ pub unsafe extern "C" fn chur_album_create(
     })
 }
 
+/// Renames a logical album without changing its contents.
+///
+/// # Safety
+/// `album_id` points to 16 readable bytes and `name` covers `name_length` bytes.
+#[unsafe(no_mangle)]
+#[expect(unsafe_code, reason = "the C ABI requires an exported symbol")]
+pub unsafe extern "C" fn chur_album_rename(
+    session: Handle,
+    album_id: *const u8,
+    name: *const u8,
+    name_length: u32,
+) -> Status {
+    guard_status_for(session, || {
+        let entry = registry::get(session, Kind::Session)?;
+        let id = Id::from_slice(unsafe { crate::api::borrow_bytes(album_id, 16)? })?;
+        let bytes = unsafe { crate::api::borrow_bytes(name, name_length)? };
+        let text = core::str::from_utf8(bytes)
+            .map_err(|_| Error::new(ChurStatus::InvalidInput, "the album name is not UTF-8"))?;
+        with_catalog_mut(&entry, |catalog| store::rename_album(catalog, &id, text))
+    })
+}
+
+/// Deletes an album and its descendants while retaining their media.
+///
+/// # Safety
+/// `album_id` points to 16 readable bytes.
+#[unsafe(no_mangle)]
+#[expect(unsafe_code, reason = "the C ABI requires an exported symbol")]
+pub unsafe extern "C" fn chur_album_delete(session: Handle, album_id: *const u8) -> Status {
+    guard_status_for(session, || {
+        let entry = registry::get(session, Kind::Session)?;
+        let id = Id::from_slice(unsafe { crate::api::borrow_bytes(album_id, 16)? })?;
+        with_catalog_mut(&entry, |catalog| store::delete_album(catalog, &id))
+    })
+}
+
+/// Moves an album under another album and before a sibling. All-zero parent
+/// means root; all-zero before means append.
+///
+/// # Safety
+/// Every identifier points to 16 readable bytes.
+#[unsafe(no_mangle)]
+#[expect(unsafe_code, reason = "the C ABI requires an exported symbol")]
+pub unsafe extern "C" fn chur_album_move(
+    session: Handle,
+    album_id: *const u8,
+    parent_id: *const u8,
+    before_id: *const u8,
+) -> Status {
+    guard_status_for(session, || {
+        let entry = registry::get(session, Kind::Session)?;
+        let id = Id::from_slice(unsafe { crate::api::borrow_bytes(album_id, 16)? })?;
+        let parent = unsafe { optional_album_id(parent_id)? };
+        let before = unsafe { optional_album_id(before_id)? };
+        with_catalog_mut(&entry, |catalog| {
+            store::move_album(catalog, &id, parent.as_ref(), before.as_ref())
+        })
+    })
+}
+
+/// Places an existing member before another member, or appends it.
+///
+/// # Safety
+/// Every identifier points to 16 readable bytes.
+#[unsafe(no_mangle)]
+#[expect(unsafe_code, reason = "the C ABI requires an exported symbol")]
+pub unsafe extern "C" fn chur_album_move_member(
+    session: Handle,
+    album_id: *const u8,
+    object_id: *const u8,
+    before_id: *const u8,
+) -> Status {
+    guard_status_for(session, || {
+        let entry = registry::get(session, Kind::Session)?;
+        let album = Id::from_slice(unsafe { crate::api::borrow_bytes(album_id, 16)? })?;
+        let object = Id::from_slice(unsafe { crate::api::borrow_bytes(object_id, 16)? })?;
+        let before = unsafe { optional_album_id(before_id)? };
+        with_catalog_mut(&entry, |catalog| {
+            store::move_album_member(catalog, &album, &object, before.as_ref())
+        })
+    })
+}
+
 /// Adds or removes one album membership.
 ///
 /// # Safety
@@ -790,6 +873,14 @@ pub unsafe extern "C" fn chur_album_list(
         };
         // SAFETY: the caller guarantees `destination` covers `capacity` bytes.
         let buffer = unsafe { crate::api::borrow_bytes_mut(destination, capacity)? };
+        if buffer.len() < encoded.len() {
+            // SAFETY: the caller provides a writable count even when its buffer is too small.
+            unsafe { crate::api::write_out(bytes_written, encoded.len())? };
+            bail!(
+                ResourceLimitExceeded,
+                "the destination buffer is smaller than the album list"
+            );
+        }
         write_record(&encoded, buffer, bytes_written)
     })
 }
@@ -990,6 +1081,16 @@ fn wrong_type() -> Error {
 }
 
 /// Rejects a boolean argument that is neither 0 nor 1.
+#[expect(unsafe_code, reason = "the C ABI passes a borrowed identifier")]
+unsafe fn optional_album_id(pointer: *const u8) -> Result<Option<Id>> {
+    let bytes = unsafe { crate::api::borrow_bytes(pointer, 16)? };
+    if bytes.iter().all(|byte| *byte == 0) {
+        Ok(None)
+    } else {
+        Id::from_slice(bytes).map(Some)
+    }
+}
+
 fn boolean(value: u8) -> Result<bool> {
     match value {
         0 => Ok(false),

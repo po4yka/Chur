@@ -303,6 +303,56 @@ fn the_whole_product_flow_runs_through_the_boundary() {
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].name, "Holiday");
     assert_eq!(listed[0].member_count, 1);
+    assert_eq!(listed[0].parent_id, None);
+    assert_eq!(listed[0].position, 0);
+
+    let mut short = [0u8; 4];
+    assert_eq!(
+        status(unsafe { chur_album_list(session, short.as_mut_ptr(), short.len(), &mut written) }),
+        ChurStatus::ResourceLimitExceeded
+    );
+    assert_eq!(written, 4 + 16 + 8 + 2 + name.len() + 16 + 8);
+    let renamed = b"Journeys";
+    assert_eq!(
+        unsafe {
+            chur_album_rename(
+                session,
+                album_id.as_ptr(),
+                renamed.as_ptr(),
+                renamed.len() as u32,
+            )
+        },
+        OK
+    );
+    let mut child_id = [0u8; 16];
+    assert_eq!(
+        unsafe { chur_album_create(session, b"Child".as_ptr(), 5, child_id.as_mut_ptr()) },
+        OK
+    );
+    let none = [0u8; 16];
+    assert_eq!(
+        unsafe { chur_album_move(session, child_id.as_ptr(), album_id.as_ptr(), none.as_ptr()) },
+        OK
+    );
+    assert_eq!(
+        status(unsafe {
+            chur_album_move(session, album_id.as_ptr(), child_id.as_ptr(), none.as_ptr())
+        }),
+        ChurStatus::InvalidInput
+    );
+    assert_eq!(
+        unsafe {
+            chur_album_move_member(
+                session,
+                album_id.as_ptr(),
+                object_id.as_ptr(),
+                none.as_ptr(),
+            )
+        },
+        OK
+    );
+    assert_eq!(unsafe { chur_album_delete(session, child_id.as_ptr()) }, OK);
+    assert_eq!(page(session, 2, album_id, b"").objects.len(), 1);
 
     let tag_name = "Sommer";
     let mut tag_id = [0u8; 16];

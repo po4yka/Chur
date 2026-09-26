@@ -396,6 +396,11 @@ internal object ChurJni {
         outAlbumId: ByteArray,
     ): Int
 
+    external fun albumRename(session: Long, albumId: ByteArray, name: String): Int
+    external fun albumDelete(session: Long, albumId: ByteArray): Int
+    external fun albumMove(session: Long, albumId: ByteArray, parentId: ByteArray, beforeId: ByteArray): Int
+    external fun albumMoveMember(session: Long, albumId: ByteArray, objectId: ByteArray, beforeId: ByteArray): Int
+
     external fun albumSetMembership(
         session: Long,
         albumId: ByteArray,

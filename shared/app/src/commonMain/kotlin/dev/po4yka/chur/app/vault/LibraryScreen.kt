@@ -3,6 +3,7 @@ package dev.po4yka.chur.app.vault
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,11 +21,22 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.theme.ChurSpacing
@@ -155,9 +167,14 @@ fun MediaGrid(
     widthDp: Int,
     onOpen: (ObjectProjection) -> Unit,
     onToggleSelection: (ObjectProjection) -> Unit,
+    onMove: ((ObjectProjection, ObjectProjection?) -> Unit)? = null,
+    onLoadMore: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val geometry = gridGeometry(widthDp)
+    val bounds = remember { mutableMapOf<String, Rect>() }
+    var dragged by remember { mutableStateOf<String?>(null) }
+    var dropPoint by remember { mutableStateOf(Offset.Zero) }
     LazyVerticalGrid(
         columns = GridCells.Fixed(geometry.columns),
         horizontalArrangement = Arrangement.spacedBy(geometry.gap),
@@ -166,24 +183,65 @@ fun MediaGrid(
         modifier = modifier.fillMaxSize(),
     ) {
         items(tiles, key = { it.projection.id }) { tile ->
+            DisposableEffect(tile.projection.id) { onDispose { bounds.remove(tile.projection.id) } }
             MediaTile(
                 tile = tile,
                 onOpen = { onOpen(tile.projection) },
                 onToggleSelection = { onToggleSelection(tile.projection) },
+                modifier = if (onMove == null) Modifier else Modifier
+                    .onGloballyPositioned { bounds[tile.projection.id] = it.boundsInWindow() }
+                    .pointerInput(tile.projection.id, tiles) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = { offset ->
+                                dragged = tile.projection.id
+                                dropPoint = (bounds[tile.projection.id]?.topLeft ?: Offset.Zero) + offset
+                            },
+                            onDragEnd = {
+                                val sourceIndex = tiles.indexOfFirst { it.projection.id == dragged }
+                                val targetIndex = tiles.indexOfFirst {
+                                    it.projection.id != dragged &&
+                                        bounds[it.projection.id]?.contains(dropPoint) == true
+                                }
+                                if (sourceIndex >= 0 && targetIndex >= 0) {
+                                    val beforeIndex = if (sourceIndex < targetIndex) targetIndex + 1 else targetIndex
+                                    onMove(tiles[sourceIndex].projection, tiles.getOrNull(beforeIndex)?.projection)
+                                }
+                                dragged = null
+                            },
+                            onDragCancel = { dragged = null },
+                            onDrag = { change, amount ->
+                                change.consume()
+                                dropPoint += amount
+                            },
+                        )
+                    },
             )
+        }
+        if (onLoadMore != null) {
+            item(key = "load-more") {
+                LaunchedEffect(tiles.size) { onLoadMore() }
+                Box(modifier = Modifier.aspectRatio(1f), contentAlignment = Alignment.Center) {
+                    Text("Loading…", style = MaterialTheme.typography.bodySmall)
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun MediaTile(tile: LibraryTile, onOpen: () -> Unit, onToggleSelection: () -> Unit) {
+private fun MediaTile(
+    tile: LibraryTile,
+    onOpen: () -> Unit,
+    onToggleSelection: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val colors = LocalChurColors.current
     val state = PresentedState.of(tile.projection)
     val severity = severityOf(state)
     // §11.4: selection is a 2dp outline plus a checkmark, never colour alone.
     val selectionBorder = if (tile.selected) ChurSpacing.hairline else 0.dp
     Box(
-        modifier = Modifier
+        modifier = modifier
             .aspectRatio(1f)
             .clip(RoundedCornerShape(ChurSpacing.one))
             .background(colors.surfaceSunken)

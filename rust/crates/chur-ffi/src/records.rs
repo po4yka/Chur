@@ -207,6 +207,7 @@ pub fn query_from(
         0 | 1 => Sort::CaptureDesc,
         2 => Sort::CaptureAsc,
         3 => Sort::ImportDesc,
+        4 => Sort::AlbumManual,
         _ => {
             return Err(Error::new(
                 ChurStatus::InvalidInput,
@@ -356,19 +357,21 @@ pub fn encode_slot_list(slots: Vec<(Id, chur_format::constants::SlotType, u64)>)
     out
 }
 
-/// Encodes `ChurAlbumListV1` of §6.5.
+/// Encodes `ChurAlbumListV2` of §6.19.
 #[must_use]
-pub fn encode_album_list(albums: &[(chur_catalog::model::Album, u64)]) -> Vec<u8> {
+pub fn encode_album_list(albums: &[chur_catalog::store::AlbumListing]) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(
         &u32::try_from(albums.len())
             .unwrap_or(u32::MAX)
             .to_be_bytes(),
     );
-    for (album, members) in albums {
-        out.extend_from_slice(album.album_id.as_bytes());
-        out.extend_from_slice(&members.to_be_bytes());
-        put_text(&mut out, &album.name);
+    for entry in albums {
+        out.extend_from_slice(entry.album.album_id.as_bytes());
+        out.extend_from_slice(&entry.member_count.to_be_bytes());
+        put_text(&mut out, &entry.album.name);
+        out.extend_from_slice(&entry.parent_id.map_or([0u8; 16], |id| *id.as_bytes()));
+        out.extend_from_slice(&entry.position.to_be_bytes());
     }
     out
 }
@@ -423,18 +426,33 @@ pub struct DecodedAlbum {
     pub member_count: u64,
     /// The album name.
     pub name: String,
+    /// Parent album, or root.
+    pub parent_id: Option<Id>,
+    /// Order among siblings.
+    pub position: u64,
 }
 
-/// Decodes `ChurAlbumListV1`.
+/// Decodes `ChurAlbumListV2`.
 pub fn decode_album_list(bytes: &[u8]) -> Result<Vec<DecodedAlbum>> {
     let mut reader = RecordReader::new(bytes);
     let count = reader.u32()?;
     let mut albums = Vec::new();
     for _ in 0..count {
+        let album_id = Id::from_slice(reader.take(16)?)?;
+        let member_count = reader.u64()?;
+        let name = reader.text()?;
+        let parent_bytes = reader.take(16)?;
+        let parent_id = if parent_bytes == [0u8; 16] {
+            None
+        } else {
+            Some(Id::from_slice(parent_bytes)?)
+        };
         albums.push(DecodedAlbum {
-            album_id: Id::from_slice(reader.take(16)?)?,
-            member_count: reader.u64()?,
-            name: reader.text()?,
+            album_id,
+            member_count,
+            name,
+            parent_id,
+            position: reader.u64()?,
         });
     }
     reader.finish()?;

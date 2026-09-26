@@ -887,8 +887,10 @@ pub fn put_album(db: &mut CatalogDb, album: &Album) -> Result<()> {
         }
         transaction
             .execute(
-                "INSERT INTO albums (album_id, name, created_ms, revision)
-                 VALUES (?1, ?2, ?3, ?4)
+                "INSERT INTO albums (album_id, name, created_ms, revision, sort_position)
+                 VALUES (?1, ?2, ?3, ?4,
+                     (SELECT coalesce(max(sort_position) + 1, 0) FROM albums
+                       WHERE parent_album_id IS NULL))
                  ON CONFLICT(album_id) DO UPDATE SET
                      name = excluded.name, revision = excluded.revision",
                 params![
@@ -903,8 +905,21 @@ pub fn put_album(db: &mut CatalogDb, album: &Album) -> Result<()> {
     })
 }
 
-/// Every album, with its membership count, in name order, §9.
-pub fn albums(db: &CatalogDb) -> Result<Vec<(Album, u64)>> {
+/// One logical album with its user-controlled place in the tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AlbumListing {
+    /// Stable logical album.
+    pub album: Album,
+    /// Number of live media objects directly in this album.
+    pub member_count: u64,
+    /// Parent, absent at the root.
+    pub parent_id: Option<Id>,
+    /// Order among siblings.
+    pub position: u64,
+}
+
+/// Every album, with its membership count and tree position, §9.
+pub fn albums(db: &CatalogDb) -> Result<Vec<AlbumListing>> {
     let connection = db.connection();
     let mut statement = connection
         .prepare(
@@ -912,7 +927,8 @@ pub fn albums(db: &CatalogDb) -> Result<Vec<(Album, u64)>> {
                     (SELECT count(*) FROM album_memberships m
                       JOIN objects o ON o.object_id = m.object_id
                      WHERE m.album_id = a.album_id AND o.state = 1)
-               FROM albums a ORDER BY a.name, a.album_id",
+                    , a.parent_album_id, a.sort_position
+               FROM albums a ORDER BY a.parent_album_id, a.sort_position, a.album_id",
         )
         .map_err(|error| map_sqlite(error, "the album query could not be prepared"))?;
     let rows = statement
@@ -923,22 +939,28 @@ pub fn albums(db: &CatalogDb) -> Result<Vec<(Album, u64)>> {
                 row.get::<_, i64>(2)?,
                 row.get::<_, i64>(3)?,
                 row.get::<_, i64>(4)?,
+                row.get::<_, Option<Vec<u8>>>(5)?,
+                row.get::<_, i64>(6)?,
             ))
         })
         .map_err(|error| map_sqlite(error, "the albums could not be read"))?;
     let mut albums = Vec::new();
     for row in rows {
-        let (id, name, created, revision, members) =
+        let (id, name, created, revision, members, parent, position) =
             row.map_err(|error| map_sqlite(error, "an album row could not be read"))?;
-        albums.push((
-            Album {
+        albums.push(AlbumListing {
+            album: Album {
                 album_id: crate::row::id(&id, "the album id is malformed")?,
                 name,
                 created_ms: from_sqlite_integer(created, "the album time is negative")?,
                 revision: from_sqlite_integer(revision, "the album revision is negative")?,
             },
-            from_sqlite_integer(members, "an album count is negative")?,
-        ));
+            member_count: from_sqlite_integer(members, "an album count is negative")?,
+            parent_id: parent
+                .map(|id| crate::row::id(&id, "the parent id is malformed"))
+                .transpose()?,
+            position: from_sqlite_integer(position, "the album position is negative")?,
+        });
     }
     Ok(albums)
 }
@@ -1027,8 +1049,10 @@ pub fn set_album_membership(
             let changed = transaction
                 .execute(
                     "INSERT INTO album_memberships
-                         (album_id, object_id, capture_time_ms, added_ms, revision)
-                     SELECT ?1, object_id, capture_time_ms, ?3, 1
+                         (album_id, object_id, capture_time_ms, added_ms, revision, sort_position)
+                     SELECT ?1, object_id, capture_time_ms, ?3, 1,
+                         (SELECT coalesce(max(sort_position) + 1, 0)
+                            FROM album_memberships WHERE album_id = ?1)
                        FROM objects WHERE object_id = ?2 AND state = 1
                      ON CONFLICT(album_id, object_id) DO NOTHING",
                     params![
@@ -1065,6 +1089,211 @@ pub fn set_album_membership(
                 [album_id.as_bytes().as_slice()],
             )
             .map_err(|error| map_sqlite(error, "the album revision could not advance"))?;
+        bump_generation(transaction)
+    })
+}
+
+/// Changes only an album's label; its identifier, descendants, and members stay put.
+pub fn rename_album(db: &mut CatalogDb, album_id: &Id, name: &str) -> Result<()> {
+    Album {
+        album_id: *album_id,
+        name: name.to_owned(),
+        created_ms: 0,
+        revision: 1,
+    }
+    .check()?;
+    db.transaction(|transaction| {
+        let changed = transaction
+            .execute(
+                "UPDATE albums SET name = ?2, revision = revision + 1 WHERE album_id = ?1",
+                params![album_id.as_bytes().as_slice(), name],
+            )
+            .map_err(|error| map_sqlite(error, "the album could not be renamed"))?;
+        ensure!(changed == 1, NotFound, "no album carries that id");
+        bump_generation(transaction)
+    })
+}
+
+/// Deletes a subtree of logical albums, retaining every media object.
+pub fn delete_album(db: &mut CatalogDb, album_id: &Id) -> Result<()> {
+    db.transaction(|transaction| {
+        let present = count_with(
+            transaction,
+            "SELECT count(*) FROM albums WHERE album_id = ?1",
+            [album_id.as_bytes().as_slice()],
+        )?;
+        ensure!(present == 1, NotFound, "no album carries that id");
+        for table in ["album_memberships", "albums"] {
+            let sql = format!(
+                "WITH RECURSIVE subtree(id) AS (
+                    SELECT album_id FROM albums WHERE album_id = ?1
+                    UNION ALL
+                    SELECT a.album_id FROM albums a JOIN subtree s ON a.parent_album_id = s.id
+                 ) DELETE FROM {table} WHERE album_id IN (SELECT id FROM subtree)",
+            );
+            transaction
+                .execute(&sql, [album_id.as_bytes().as_slice()])
+                .map_err(|error| map_sqlite(error, "the album subtree could not be removed"))?;
+        }
+        bump_generation(transaction)
+    })
+}
+
+/// Moves an album to a parent and a place before one of that parent's children.
+/// A missing `before` appends it. Cycles and cross-parent targets are refused.
+pub fn move_album(
+    db: &mut CatalogDb,
+    album_id: &Id,
+    parent_id: Option<&Id>,
+    before: Option<&Id>,
+) -> Result<()> {
+    ensure!(
+        before != Some(album_id),
+        InvalidInput,
+        "an album cannot precede itself"
+    );
+    ensure!(
+        parent_id != Some(album_id),
+        InvalidInput,
+        "an album cannot contain itself"
+    );
+    db.transaction(|transaction| {
+        let present = count_with(
+            transaction,
+            "SELECT count(*) FROM albums WHERE album_id = ?1",
+            [album_id.as_bytes().as_slice()],
+        )?;
+        ensure!(present == 1, NotFound, "no album carries that id");
+        if let Some(parent) = parent_id {
+            let mut cursor = Some(*parent);
+            for _ in 0..=limits::ALBUMS_MAX {
+                let Some(id) = cursor else { break };
+                ensure!(
+                    id != *album_id,
+                    InvalidInput,
+                    "the move would create an album cycle"
+                );
+                let row: Option<Option<Vec<u8>>> = transaction
+                    .query_row(
+                        "SELECT parent_album_id FROM albums WHERE album_id = ?1",
+                        [id.as_bytes().as_slice()],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(|error| map_sqlite(error, "the parent could not be read"))?;
+                let Some(next) = row else {
+                    bail!(NotFound, "no parent album carries that id")
+                };
+                cursor = next
+                    .map(|bytes| crate::row::id(&bytes, "the parent id is malformed"))
+                    .transpose()?;
+            }
+            ensure!(
+                cursor.is_none(),
+                CatalogCorrupt,
+                "the album hierarchy contains a cycle"
+            );
+        }
+        let parent_bytes = parent_id.map(|id| id.as_bytes().to_vec());
+        let mut siblings = Vec::new();
+        let mut statement = transaction
+            .prepare(
+                "SELECT album_id FROM albums WHERE parent_album_id IS ?1
+             AND album_id <> ?2 ORDER BY sort_position, album_id",
+            )
+            .map_err(|error| map_sqlite(error, "the sibling query could not be prepared"))?;
+        let rows = statement
+            .query_map(
+                params![parent_bytes, album_id.as_bytes().as_slice()],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .map_err(|error| map_sqlite(error, "the siblings could not be read"))?;
+        for row in rows {
+            siblings.push(crate::row::id(
+                &row.map_err(|error| map_sqlite(error, "a sibling row is malformed"))?,
+                "the sibling id is malformed",
+            )?);
+        }
+        drop(statement);
+        let at = match before {
+            Some(id) => siblings
+                .iter()
+                .position(|candidate| candidate == id)
+                .ok_or_else(|| chur_core::err!(InvalidInput, "the target is not a sibling"))?,
+            None => siblings.len(),
+        };
+        siblings.insert(at, *album_id);
+        for (index, id) in siblings.iter().enumerate() {
+            transaction
+                .execute(
+                    "UPDATE albums SET parent_album_id = ?2, sort_position = ?3,
+                    revision = revision + 1 WHERE album_id = ?1",
+                    params![
+                        id.as_bytes().as_slice(),
+                        parent_id.map(|id| id.as_bytes().as_slice()),
+                        as_sqlite_integer(index as u64, "the position is out of range")?
+                    ],
+                )
+                .map_err(|error| map_sqlite(error, "the album position could not be written"))?;
+        }
+        bump_generation(transaction)
+    })
+}
+
+/// Reorders a member inside one album without changing its membership.
+pub fn move_album_member(
+    db: &mut CatalogDb,
+    album_id: &Id,
+    object_id: &Id,
+    before: Option<&Id>,
+) -> Result<()> {
+    db.transaction(|transaction| {
+        let mut members = Vec::new();
+        let mut statement = transaction
+            .prepare(
+                "SELECT object_id FROM album_memberships WHERE album_id = ?1
+             ORDER BY sort_position, object_id",
+            )
+            .map_err(|error| map_sqlite(error, "the album order could not be prepared"))?;
+        let rows = statement
+            .query_map([album_id.as_bytes().as_slice()], |row| {
+                row.get::<_, Vec<u8>>(0)
+            })
+            .map_err(|error| map_sqlite(error, "the album order could not be read"))?;
+        for row in rows {
+            members.push(crate::row::id(
+                &row.map_err(|error| map_sqlite(error, "a membership row is malformed"))?,
+                "the member id is malformed",
+            )?);
+        }
+        drop(statement);
+        let old = members
+            .iter()
+            .position(|id| id == object_id)
+            .ok_or_else(|| chur_core::err!(NotFound, "the object is not in this album"))?;
+        members.remove(old);
+        let at = match before {
+            Some(id) if id == object_id => old.min(members.len()),
+            Some(id) => members
+                .iter()
+                .position(|candidate| candidate == id)
+                .ok_or_else(|| chur_core::err!(InvalidInput, "the target is not in this album"))?,
+            None => members.len(),
+        };
+        members.insert(at, *object_id);
+        for (index, id) in members.iter().enumerate() {
+            transaction
+                .execute(
+                    "UPDATE album_memberships SET sort_position = ?3, revision = revision + 1
+                 WHERE album_id = ?1 AND object_id = ?2",
+                    params![
+                        album_id.as_bytes().as_slice(),
+                        id.as_bytes().as_slice(),
+                        as_sqlite_integer(index as u64, "the position is out of range")?
+                    ],
+                )
+                .map_err(|error| map_sqlite(error, "the member position could not be written"))?;
+        }
         bump_generation(transaction)
     })
 }
@@ -1269,6 +1498,74 @@ mod tests {
     use chur_core::ChurStatus;
     use chur_crypto::{Key, Nonce, random};
     use chur_format::constants::MediaClass;
+
+    #[test]
+    fn nested_album_move_refuses_a_cycle_and_delete_keeps_media() {
+        let mut fixture = fixture();
+        let media = activation(&fixture, 10, "image.jpg");
+        let object_id = media.object.object_id;
+        activate_object(&mut fixture.db, &media).expect("import");
+        let root = random::id().expect("root");
+        let child = random::id().expect("child");
+        for (id, name) in [(root, "Root"), (child, "Child")] {
+            put_album(
+                &mut fixture.db,
+                &Album {
+                    album_id: id,
+                    name: name.to_owned(),
+                    created_ms: 1,
+                    revision: 1,
+                },
+            )
+            .expect("album");
+        }
+        set_album_membership(&mut fixture.db, &child, &object_id, true, 2).expect("member");
+        move_album(&mut fixture.db, &child, Some(&root), None).expect("nest");
+        assert_eq!(
+            rejection(move_album(&mut fixture.db, &root, Some(&child), None)),
+            ChurStatus::InvalidInput
+        );
+        let listed = albums(&fixture.db).expect("albums");
+        assert_eq!(
+            listed
+                .iter()
+                .find(|row| row.album.album_id == child)
+                .unwrap()
+                .parent_id,
+            Some(root)
+        );
+        delete_album(&mut fixture.db, &root).expect("delete tree");
+        assert!(albums(&fixture.db).expect("albums").is_empty());
+        assert_eq!(
+            object(&fixture.db, &object_id).expect("media").object_id,
+            object_id
+        );
+    }
+
+    #[test]
+    fn renaming_and_reordering_albums_preserves_membership() {
+        let mut fixture = fixture();
+        let first = random::id().expect("first");
+        let second = random::id().expect("second");
+        for (id, name) in [(first, "First"), (second, "Second")] {
+            put_album(
+                &mut fixture.db,
+                &Album {
+                    album_id: id,
+                    name: name.to_owned(),
+                    created_ms: 1,
+                    revision: 1,
+                },
+            )
+            .expect("album");
+        }
+        rename_album(&mut fixture.db, &second, "Renamed").expect("rename");
+        move_album(&mut fixture.db, &second, None, Some(&first)).expect("reorder");
+        let listed = albums(&fixture.db).expect("albums");
+        assert_eq!(listed[0].album.album_id, second);
+        assert_eq!(listed[0].album.name, "Renamed");
+        assert_eq!(listed[1].album.album_id, first);
+    }
 
     struct Fixture {
         db: CatalogDb,

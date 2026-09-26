@@ -286,6 +286,7 @@ Each format version field has its own namespace:
 | `catalog_format_version` | `0x0004` | private catalog schema v4 with durable collection-operation streams | [`CATALOG_SCHEMA_V4.md`](CATALOG_SCHEMA_V4.md) |
 | `catalog_format_version` | `0x0005` | private catalog schema v5 with the durable grant-acceptance freeze | [`CATALOG_SCHEMA_V5.md`](CATALOG_SCHEMA_V5.md) |
 | `catalog_format_version` | `0x0006` | private catalog schema v6 with an accepted object-operation index | [`CATALOG_SCHEMA_V6.md`](CATALOG_SCHEMA_V6.md) |
+| `catalog_format_version` | `0x0007` | private catalog schema v7 with album hierarchy and manual order | [`CATALOG_SCHEMA_V7.md`](CATALOG_SCHEMA_V7.md) |
 | `object_store_format_version` | `0x0001` | object store layout v1 | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §6 |
 | `slot_version` | `0x0001` | v1 key-slot families | [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §1 |
 

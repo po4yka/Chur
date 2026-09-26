@@ -228,6 +228,18 @@ class VaultRepository(
     /** Creates an album. */
     suspend fun createAlbum(name: String): ByteArray = withSession { ChurVault.createAlbum(it, name) }
 
+    suspend fun renameAlbum(albumId: ByteArray, name: String) =
+        withSession { ChurVault.renameAlbum(it, albumId, name) }
+
+    suspend fun deleteAlbum(albumId: ByteArray) =
+        withSession { ChurVault.deleteAlbum(it, albumId) }
+
+    suspend fun moveAlbum(albumId: ByteArray, parentId: ByteArray?, beforeId: ByteArray?) =
+        withSession { ChurVault.moveAlbum(it, albumId, parentId, beforeId) }
+
+    suspend fun moveAlbumMember(albumId: ByteArray, objectId: ByteArray, beforeId: ByteArray?) =
+        withSession { ChurVault.moveAlbumMember(it, albumId, objectId, beforeId) }
+
     /** Adds or removes one album membership. */
     suspend fun setAlbumMembership(albumId: ByteArray, objectId: ByteArray, member: Boolean) =
         withSession { ChurVault.setAlbumMembership(it, albumId, objectId, member) }

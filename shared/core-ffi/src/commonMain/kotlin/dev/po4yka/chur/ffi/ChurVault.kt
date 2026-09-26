@@ -620,6 +620,28 @@ object ChurVault {
         return out
     }
 
+    fun renameAlbum(session: Long, albumId: ByteArray, name: String) {
+        ChurFailure.check(ChurNative.albumRename(session, albumId, name), "rename album")
+    }
+
+    fun deleteAlbum(session: Long, albumId: ByteArray) {
+        ChurFailure.check(ChurNative.albumDelete(session, albumId), "delete album")
+    }
+
+    fun moveAlbum(session: Long, albumId: ByteArray, parentId: ByteArray?, beforeId: ByteArray?) {
+        ChurFailure.check(
+            ChurNative.albumMove(session, albumId, parentId ?: ByteArray(ID_LENGTH), beforeId ?: ByteArray(ID_LENGTH)),
+            "move album",
+        )
+    }
+
+    fun moveAlbumMember(session: Long, albumId: ByteArray, objectId: ByteArray, beforeId: ByteArray?) {
+        ChurFailure.check(
+            ChurNative.albumMoveMember(session, albumId, objectId, beforeId ?: ByteArray(ID_LENGTH)),
+            "reorder album",
+        )
+    }
+
     /** Adds or removes one album membership. */
     fun setAlbumMembership(
         session: Long,
@@ -634,12 +656,23 @@ object ChurVault {
     }
 
     /** Every album, with its membership count. */
-    fun albums(session: Long): List<AlbumSummary> =
-        withChurBuffer(ALBUM_LIST_CAPACITY) { buffer ->
-            val written = IntArray(1)
-            ChurFailure.check(ChurNative.albumList(session, buffer, written), "album list")
-            decodeAlbumList(buffer.copyOut(written[0]), written[0])
+    fun albums(session: Long): List<AlbumSummary> {
+        var capacity = ALBUM_LIST_CAPACITY
+        while (true) {
+            val result = withChurBuffer(capacity) { buffer ->
+                val written = IntArray(1)
+                val status = ChurNative.albumList(session, buffer, written)
+                if (status == 0) return@withChurBuffer decodeAlbumList(buffer.copyOut(written[0]), written[0])
+                if (status == ChurStatus.RESOURCE_LIMIT_EXCEEDED.value && written[0] > capacity) {
+                    capacity = written[0]
+                    return@withChurBuffer null
+                }
+                ChurFailure.check(status, "album list")
+                null
+            }
+            if (result != null) return result
         }
+    }
 
     /** Creates a tag and returns its identifier. */
     fun createTag(
@@ -1127,6 +1160,8 @@ enum class QuerySort(
 
     /** Import time descending. */
     IMPORT_DESC(3),
+    /** The user-controlled order within one album. */
+    ALBUM_MANUAL(4),
 }
 
 /** The stream kinds of `CANONICAL_ENCODING_V1.md` §15.4. */

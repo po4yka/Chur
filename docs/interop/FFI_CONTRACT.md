@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. v1 ships 1.14: §6.5 through §6.18 add minor surfaces. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
+- native API version is the (major, minor) pair. The current library reports 2.15: §6.19 changes the album-list record and adds album organization exports. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -229,7 +229,7 @@ The header is 63 bytes and a projection is 79, so a page of `n` rows is `63 + 79
 ```text
 ChurQueryV1
     scope                 uint8_t    1 timeline, 2 album, 3 favorites, 4 tag, 5 search, 6 quarantine
-    sort                  uint8_t    1 capture_desc, 2 capture_asc, 3 import_desc
+    sort                  uint8_t    1 capture_desc, 2 capture_asc, 3 import_desc, 4 album_manual
     kinds                 uint16_t   the §16.2 media-kind mask
     limit                 uint32_t   1 to 500, 0 for the default of 200
     scope_id              uint8_t[16]  the album or tag, zero bytes otherwise
@@ -334,10 +334,11 @@ ChurSlotListV1
     count             u32
     entries           count × { slot_id: bytes[16], slot_type: u8, slot_generation: u64 }
 
-ChurAlbumListV1
+ChurAlbumListV2
     count             u32
     entries           count × { album_id: bytes[16], member_count: u64,
-                                name_length: u16, name: bytes[name_length] }
+                                name_length: u16, name: bytes[name_length],
+                                parent_album_id: bytes[16], sort_position: u64 }
 
 ChurTagListV1
     count             u32
@@ -599,6 +600,12 @@ chur_status_t chur_tag_list(chur_handle_t session, uint8_t *destination,
 ### 6.18 Device-slot platform identifier, ABI 1.14
 
 `chur_vault_platform_slot_identifier` returns the public platform name bound to one Android Keystore or Apple Keychain slot in the unlocked session. The result is the opaque Keystore alias or 16-byte Keychain item ID, never the platform key or device secret. The call refuses other slot families, missing slots, and an identifier shared by another slot. The host reads this name before removing the slot from the vault descriptor. After descriptor removal succeeds, it deletes the platform item by that name and reports a deletion failure to the caller. A crash between these two stores can leave an orphan platform item. It cannot open the vault without its descriptor slot.
+
+### 6.19 Album organization, ABI 2.15
+
+`ChurAlbumListV2` replaces `ChurAlbumListV1` and reports each album's parent and sibling position. A zero parent identifier means root. This wire change requires ABI major 2. If the caller's list buffer is too small, `chur_album_list` writes the required byte count to `bytes_written`, returns `RESOURCE_LIMIT_EXCEEDED`, and leaves the destination unchanged; the caller may allocate that exact size and retry.
+
+`chur_album_rename` changes a name. `chur_album_delete` removes an album subtree and its memberships while retaining media objects. `chur_album_move` sets a parent and a position before a sibling, rejecting cycles and invalid targets. `chur_album_move_member` reorders one album's members. All-zero parent or before identifiers mean root or append, respectively. These mutations commit to the encrypted catalog and advance its generation. Query sort `4` reads an album's manual member order and is invalid for other scopes.
 
 ## 7. Buffer ownership
 

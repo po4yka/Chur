@@ -49,6 +49,8 @@ pub const CATALOG_FORMAT_VERSION_V4: u16 = 0x0004;
 pub const CATALOG_FORMAT_VERSION_V5: u16 = 0x0005;
 /// §15.2: private catalog v6 with an indexed shared-object projection.
 pub const CATALOG_FORMAT_VERSION_V6: u16 = 0x0006;
+/// §15.2: private catalog v7 with nested, ordered logical albums.
+pub const CATALOG_FORMAT_VERSION_V7: u16 = 0x0007;
 /// §15.2: `object_store_format_version`.
 pub const OBJECT_STORE_FORMAT_VERSION_V1: u16 = 0x0001;
 /// §15.2: `slot_version` of the v1 key-slot families.

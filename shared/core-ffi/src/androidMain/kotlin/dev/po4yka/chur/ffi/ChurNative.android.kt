@@ -418,6 +418,18 @@ internal actual object ChurNative {
         outAlbumId: ByteArray,
     ): Int = ChurJni.albumCreate(session, name, outAlbumId)
 
+    actual fun albumRename(session: Long, albumId: ByteArray, name: String): Int =
+        ChurJni.albumRename(session, albumId, name)
+
+    actual fun albumDelete(session: Long, albumId: ByteArray): Int =
+        ChurJni.albumDelete(session, albumId)
+
+    actual fun albumMove(session: Long, albumId: ByteArray, parentId: ByteArray, beforeId: ByteArray): Int =
+        ChurJni.albumMove(session, albumId, parentId, beforeId)
+
+    actual fun albumMoveMember(session: Long, albumId: ByteArray, objectId: ByteArray, beforeId: ByteArray): Int =
+        ChurJni.albumMoveMember(session, albumId, objectId, beforeId)
+
     actual fun albumSetMembership(
         session: Long,
         albumId: ByteArray,

@@ -53,25 +53,16 @@ use crate::panic::guard;
 ///
 /// A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the
 /// library is not called again in that process.
-pub const ABI_VERSION_MAJOR: u32 = 1;
+pub const ABI_VERSION_MAJOR: u32 = 2;
 
 /// Minor component of the native API version.
 ///
 /// A minor difference is negotiated only within explicitly compatible
 /// behaviour; it never selects a cryptographic suite from untrusted input.
 ///
-/// It is 14 rather than 0 because `docs/interop/FFI_CONTRACT.md` §6.5 adds the
-/// exports Phase 1's product scope requires, §6.6 adds the Android Keystore
-/// surface, §6.7 adds portable backup, §6.8 adds the sync inbox, and §6.9 adds
-/// sharing identity. §6.10 adds share preparation, §6.11 adds share
-/// acceptance, §6.12 adds recipient revocation, and §6.13 adds authenticated
-/// multi-device recipients, §6.14 adds sharing discovery, and §6.15 adds the
-/// private tag list, §6.16 adds shared objects, §6.17 adds download resume,
-/// and §6.18 adds device-slot cleanup identifiers.
-/// §6.2 makes an addition a minor bump. Nothing in
-/// the §6.2 list changed, so a host built against 1.0 still works: an export it
-/// does not call costs it nothing.
-pub const ABI_VERSION_MINOR: u32 = 14;
+/// ABI 2 breaks the album list record to carry hierarchy and manual order.
+/// Minor 15 adds album management and member reordering exports (§6.19).
+pub const ABI_VERSION_MINOR: u32 = 15;
 
 /// Capability bit: independent decoy identity supported.
 pub const CHUR_CAP_DECOY_VAULT: u64 = 1 << 0;
@@ -301,8 +292,8 @@ mod tests {
 
     #[test]
     fn the_handshake_answers_every_documented_fact() {
-        assert_eq!(chur_abi_version_major(), 1);
-        assert_eq!(chur_abi_version_minor(), 14);
+        assert_eq!(chur_abi_version_major(), 2);
+        assert_eq!(chur_abi_version_minor(), 15);
         assert_eq!(chur_object_format_min(), 1);
         assert_eq!(chur_object_format_max(), 1);
         assert_eq!(chur_key_slot_format_min(), 1);

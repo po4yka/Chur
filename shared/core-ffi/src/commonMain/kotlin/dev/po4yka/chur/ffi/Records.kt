@@ -94,13 +94,22 @@ data class ObjectPage(
 }
 
 /** One album, §6.5. */
-data class AlbumSummary(val albumId: ByteArray, val memberCount: Long, val name: String) {
+data class AlbumSummary(
+    val albumId: ByteArray,
+    val memberCount: Long,
+    val name: String,
+    val parentId: ByteArray? = null,
+    val position: Long = 0,
+) {
     val id: String get() = albumId.toHex()
 
     override fun equals(other: Any?): Boolean = other is AlbumSummary &&
-        id == other.id && memberCount == other.memberCount && name == other.name
+        id == other.id && memberCount == other.memberCount && name == other.name &&
+            parentId?.toHex() == other.parentId?.toHex() && position == other.position
 
-    override fun hashCode(): Int = (id.hashCode() * 31 + memberCount.hashCode()) * 31 + name.hashCode()
+    override fun hashCode(): Int =
+        (((id.hashCode() * 31 + memberCount.hashCode()) * 31 + name.hashCode()) * 31 +
+            (parentId?.toHex()?.hashCode() ?: 0)) * 31 + position.hashCode()
 }
 
 /** One private tag for the selection picker. */
@@ -567,13 +576,17 @@ fun decodeProjection(bytes: ByteArray): ObjectProjection {
     return projection
 }
 
-/** Decodes `ChurAlbumListV1`, §6.5. */
+/** Decodes `ChurAlbumListV2`, §6.19. */
 fun decodeAlbumList(bytes: ByteArray, length: Int): List<AlbumSummary> {
     val reader = RecordReader(bytes, length)
     val count = reader.int()
     val albums = ArrayList<AlbumSummary>(count)
     repeat(count) {
-        albums.add(AlbumSummary(reader.take(ID_LENGTH), reader.long(), reader.text()))
+        val id = reader.take(ID_LENGTH)
+        val members = reader.long()
+        val name = reader.text()
+        val parent = reader.take(ID_LENGTH).takeUnless { bytes -> bytes.all { it == 0.toByte() } }
+        albums.add(AlbumSummary(id, members, name, parent, reader.long()))
     }
     reader.requireExhausted()
     return albums

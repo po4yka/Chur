@@ -42,6 +42,7 @@ import dev.po4yka.chur.ffi.ObjectPage
 import dev.po4yka.chur.ffi.ObjectProjection
 import dev.po4yka.chur.ffi.ObjectQuery
 import dev.po4yka.chur.ffi.QueryScope
+import dev.po4yka.chur.ffi.QuerySort
 import dev.po4yka.chur.ffi.StreamKind
 import dev.po4yka.chur.imports.IosMediaCodec
 import dev.po4yka.chur.notes.Note
@@ -178,6 +179,9 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     var destination by remember { mutableStateOf(VaultDestination.LIBRARY) }
     var terms by remember { mutableStateOf("") }
     var openAlbum by remember { mutableStateOf<AlbumSummary?>(null) }
+    LaunchedEffect(albums) {
+        openAlbum = openAlbum?.let { current -> albums.firstOrNull { it.id == current.id } }
+    }
     var selection by remember { mutableStateOf(setOf<String>()) }
     var viewing by remember { mutableStateOf<ObjectProjection?>(null) }
     var creatingAlbum by remember { mutableStateOf(false) }
@@ -192,7 +196,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     LaunchedEffect(destination, openAlbum) {
         when {
             openAlbum != null -> controller.load(
-                ObjectQuery(QueryScope.ALBUM, scopeId = openAlbum!!.albumId),
+                ObjectQuery(QueryScope.ALBUM, sort = QuerySort.ALBUM_MANUAL, scopeId = openAlbum!!.albumId),
             )
             destination == VaultDestination.LIBRARY -> controller.load(ObjectQuery())
             destination == VaultDestination.ALBUMS -> controller.loadAlbums()
@@ -323,6 +327,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             progress = message,
             operation = operation,
             selectedCount = selection.size,
+            canLoadMore = page.nextCursor != null,
             deviceSlotAvailable = controller.deviceUnlockAvailable,
             deviceSlotStrict = deviceSlotStrict,
             appLockEnabled = appLockEnabled,
@@ -404,6 +409,21 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             onOpenAlbum = { openAlbum = it },
             onCloseAlbum = { openAlbum = null },
             onCreateAlbum = { creatingAlbum = true },
+            onRenameAlbum = { album, name -> controller.renameAlbum(album.albumId, name) },
+            onDeleteAlbum = { album ->
+                controller.deleteAlbum(album.albumId) {
+                    if (openAlbum?.id == album.id) openAlbum = null
+                }
+            },
+            onMoveAlbum = { album, parent, before ->
+                controller.moveAlbum(album.albumId, parent?.albumId, before?.albumId)
+            },
+            onMoveAlbumMember = { objectToMove, before ->
+                openAlbum?.let { album ->
+                    controller.moveAlbumMember(album.albumId, objectToMove.objectId, before?.objectId)
+                }
+            },
+            onLoadMore = controller::loadNextPage,
             onLock = { controller.lock() },
             onPanic = { controller.panic() },
             onVerifyAll = { controller.verifyEverything() },

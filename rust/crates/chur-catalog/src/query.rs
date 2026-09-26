@@ -70,6 +70,8 @@ pub enum Sort {
     CaptureAsc,
     /// Import time descending.
     ImportDesc,
+    /// The order explicitly arranged inside an album.
+    AlbumManual,
 }
 
 impl Sort {
@@ -79,6 +81,7 @@ impl Sort {
             Sort::CaptureDesc => 1,
             Sort::CaptureAsc => 2,
             Sort::ImportDesc => 3,
+            Sort::AlbumManual => 4,
         }
     }
 
@@ -87,13 +90,14 @@ impl Sort {
             1 => Some(Sort::CaptureDesc),
             2 => Some(Sort::CaptureAsc),
             3 => Some(Sort::ImportDesc),
+            4 => Some(Sort::AlbumManual),
             _ => None,
         }
     }
 
     /// Whether the order is ascending, which decides the keyset comparison.
     const fn ascending(self) -> bool {
-        matches!(self, Sort::CaptureAsc)
+        matches!(self, Sort::CaptureAsc | Sort::AlbumManual)
     }
 
     /// Whether the sort reads the import time rather than the capture time.
@@ -346,6 +350,11 @@ pub struct Page {
 /// Runs one page query.
 pub fn page(db: &CatalogDb, query: &ObjectQuery) -> Result<Page> {
     let limit = check_query_limit(query.limit)?;
+    ensure!(
+        query.sort != Sort::AlbumManual || matches!(query.scope, Scope::Album(_)),
+        InvalidInput,
+        "manual order is available only inside an album"
+    );
     if let Some(cursor) = &query.cursor {
         cursor.check(&query.scope, query.sort)?;
     }
@@ -376,12 +385,17 @@ pub fn page(db: &CatalogDb, query: &ObjectQuery) -> Result<Page> {
         .map_err(|error| map_sqlite(error, "the page query could not be prepared"))?;
     let rows = statement
         .query_map(rusqlite::params_from_iter(plan.row_params.iter()), |row| {
-            projection(row)
+            Ok((projection(row)?, row.get::<_, i64>(14)?))
         })
         .map_err(|error| map_sqlite(error, "the page could not be read"))?;
     let mut objects = Vec::new();
     for row in rows {
-        objects.push(row.map_err(|error| map_sqlite(error, "a page row could not be read"))??);
+        let (object, sort_value) =
+            row.map_err(|error| map_sqlite(error, "a page row could not be read"))?;
+        objects.push((
+            object?,
+            from_sqlite_integer(sort_value, "the sort value is negative")?,
+        ));
     }
 
     let total_count: i64 = connection
@@ -395,12 +409,8 @@ pub fn page(db: &CatalogDb, query: &ObjectQuery) -> Result<Page> {
     let next_cursor = (objects.len() == limit as usize)
         .then(|| objects.last())
         .flatten()
-        .map(|last| Cursor {
-            sort_value: if query.sort.by_import() {
-                last.import_time_ms
-            } else {
-                last.capture_time_ms
-            },
+        .map(|(last, sort_value)| Cursor {
+            sort_value: *sort_value,
             object_id: last.object_id,
             sort: query.sort,
             scope_kind: query.scope.kind(),
@@ -408,7 +418,7 @@ pub fn page(db: &CatalogDb, query: &ObjectQuery) -> Result<Page> {
         });
 
     Ok(Page {
-        objects,
+        objects: objects.into_iter().map(|(object, _)| object).collect(),
         total_count: from_sqlite_integer(total_count, "the scope total is negative")?,
         catalog_generation,
         next_cursor,
@@ -523,7 +533,9 @@ impl Plan {
         // tiebreak names the driving table's object_id, the index's last
         // column, which the join equates with the object row's. The import
         // sort has no duplicated scope column and keeps the objects ones.
-        let (sort_column, tiebreak_column) = if query.sort.by_import() {
+        let (sort_column, tiebreak_column) = if query.sort == Sort::AlbumManual {
+            ("m.sort_position", "m.object_id")
+        } else if query.sort.by_import() {
             ("o.import_time_ms", "o.object_id")
         } else {
             match &query.scope {
@@ -557,7 +569,7 @@ impl Plan {
         params.push(Value::Integer(i64::from(limit)));
 
         let rows_sql = format!(
-            "SELECT {COLUMNS} FROM {from}{filter}{keyset} \
+            "SELECT {COLUMNS}, {sort_column} FROM {from}{filter}{keyset} \
              ORDER BY {sort_column} {direction}, {tiebreak_column} {direction} LIMIT ?"
         );
 
@@ -958,6 +970,37 @@ mod tests {
         // import_time_ms was written as 2_000_000 - capture, so import_desc is
         // the reverse of capture_desc and the test cannot pass by accident.
         assert_eq!(by(Sort::ImportDesc, &vault.db), vec![first, second]);
+    }
+
+    #[test]
+    fn manual_album_order_pages_after_rearranging_members() {
+        let mut vault = vault();
+        let first = import(&mut vault, 1_000, MediaClass::Image, "a.jpg");
+        let second = import(&mut vault, 2_000, MediaClass::Image, "b.jpg");
+        let third = import(&mut vault, 3_000, MediaClass::Image, "c.jpg");
+        let album = random::id().expect("album");
+        store::put_album(
+            &mut vault.db,
+            &crate::model::Album {
+                album_id: album,
+                name: "Trip".to_owned(),
+                created_ms: 1,
+                revision: 1,
+            },
+        )
+        .expect("album");
+        for id in [first, second, third] {
+            store::set_album_membership(&mut vault.db, &album, &id, true, 1).expect("member");
+        }
+        store::move_album_member(&mut vault.db, &album, &third, Some(&first)).expect("reorder");
+        let query = ObjectQuery {
+            scope: Scope::Album(album),
+            sort: Sort::AlbumManual,
+            kinds: 0,
+            cursor: None,
+            limit: 1,
+        };
+        assert_eq!(walk(&vault.db, query), vec![third, first, second]);
     }
 
     #[test]

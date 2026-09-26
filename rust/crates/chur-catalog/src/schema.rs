@@ -15,6 +15,7 @@ use chur_format::{
     constants::{
         CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V3,
         CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V5, CATALOG_FORMAT_VERSION_V6,
+        CATALOG_FORMAT_VERSION_V7,
     },
     envelope::ObjectKeyEnvelope,
 };
@@ -48,6 +49,9 @@ const STEPS: &[Step] = &[
     },
     Step {
         version: CATALOG_FORMAT_VERSION_V6,
+    },
+    Step {
+        version: CATALOG_FORMAT_VERSION_V7,
     },
 ];
 
@@ -546,6 +550,28 @@ CREATE INDEX sharing_object_dirty
     ON sharing_object_projection (key_selector, dirty, object_id);
 "#;
 
+/// Logical album structure and deterministic manual order. Existing members
+/// retain capture-time order until the user rearranges them.
+const V7_DDL: &str = r#"
+ALTER TABLE albums ADD COLUMN parent_album_id BLOB;
+ALTER TABLE albums ADD COLUMN sort_position INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE album_memberships ADD COLUMN sort_position INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX albums_siblings ON albums(parent_album_id, sort_position, album_id);
+CREATE INDEX album_memberships_manual ON album_memberships(album_id, sort_position, object_id);
+UPDATE albums SET sort_position = (
+    SELECT count(*) FROM albums previous
+     WHERE previous.name < albums.name
+        OR (previous.name = albums.name AND previous.album_id < albums.album_id)
+);
+UPDATE album_memberships SET sort_position = (
+    SELECT count(*) FROM album_memberships previous
+     WHERE previous.album_id = album_memberships.album_id
+       AND (previous.capture_time_ms > album_memberships.capture_time_ms
+         OR (previous.capture_time_ms = album_memberships.capture_time_ms
+           AND previous.object_id > album_memberships.object_id))
+);
+"#;
+
 /// Creates the current schema or opens it without performing an implicit migration.
 ///
 /// `docs/format/CATALOG_SCHEMA_V1.md` §18 forbids skipping an untested step, so
@@ -555,15 +581,15 @@ pub fn open_at_current_version(db: &mut CatalogDb, now_ms: u64) -> Result<u16> {
     let present = recorded_version(db.connection())?;
     let Some(present) = present else {
         install(db, now_ms)?;
-        return Ok(CATALOG_FORMAT_VERSION_V6);
+        return Ok(CATALOG_FORMAT_VERSION_V7);
     };
-    if present != CATALOG_FORMAT_VERSION_V6 {
+    if present != CATALOG_FORMAT_VERSION_V7 {
         bail!(
             MigrationRequired,
             "the catalog requires an authenticated schema migration"
         );
     }
-    Ok(CATALOG_FORMAT_VERSION_V6)
+    Ok(CATALOG_FORMAT_VERSION_V7)
 }
 
 /// The version the database records, or `None` when the schema is absent.
@@ -615,6 +641,9 @@ fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
         transaction.execute_batch(V6_DDL).map_err(|error| {
             map_sqlite(error, "the shared-object index schema could not be created")
         })?;
+        transaction.execute_batch(V7_DDL).map_err(|error| {
+            map_sqlite(error, "the album organization schema could not be created")
+        })?;
         transaction
             .execute(
                 "INSERT INTO vault_state (
@@ -622,7 +651,7 @@ fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
                      active_migration_target, object_store_checkpoint,
                      integrity_checkpoint_ms, capability_flags
                  ) VALUES (1, ?1, 1, NULL, 0, ?2, 0)",
-                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V6), checkpoint],
+                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V7), checkpoint],
             )
             .map_err(|error| map_sqlite(error, "the catalog state row could not be written"))?;
         Ok(())
@@ -630,8 +659,20 @@ fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
 }
 
 #[cfg(test)]
+const RESET_V7_DDL: &str = "
+DROP INDEX albums_siblings;
+DROP INDEX album_memberships_manual;
+ALTER TABLE album_memberships DROP COLUMN sort_position;
+ALTER TABLE albums DROP COLUMN sort_position;
+ALTER TABLE albums DROP COLUMN parent_album_id;
+";
+
+#[cfg(test)]
 pub(crate) fn reset_to_v1(db: &mut CatalogDb) -> Result<()> {
     db.transaction(|transaction| {
+        transaction
+            .execute_batch(RESET_V7_DDL)
+            .map_err(|error| map_sqlite(error, "the v7 test columns could not be removed"))?;
         transaction
             .execute_batch(
                 "DROP TABLE sharing_object_projection;
@@ -665,6 +706,9 @@ pub(crate) fn reset_to_v1(db: &mut CatalogDb) -> Result<()> {
 pub(crate) fn reset_to_v2(db: &mut CatalogDb) -> Result<()> {
     db.transaction(|transaction| {
         transaction
+            .execute_batch(RESET_V7_DDL)
+            .map_err(|error| map_sqlite(error, "the v7 test columns could not be removed"))?;
+        transaction
             .execute_batch(
                 "DROP TABLE sharing_object_projection;
                  DROP TABLE sharing_object_operations;
@@ -685,6 +729,9 @@ pub(crate) fn reset_to_v2(db: &mut CatalogDb) -> Result<()> {
 #[cfg(test)]
 pub(crate) fn reset_to_v3(db: &mut CatalogDb) -> Result<()> {
     db.transaction(|transaction| {
+        transaction
+            .execute_batch(RESET_V7_DDL)
+            .map_err(|error| map_sqlite(error, "the v7 test columns could not be removed"))?;
         transaction
             .execute_batch(
                 "DROP TABLE sharing_object_projection;
@@ -859,6 +906,34 @@ pub(crate) fn migrate_v5_to_v6(db: &mut CatalogDb) -> Result<()> {
     })
 }
 
+/// Adds album hierarchy and ordering under the authenticated migration gate.
+pub(crate) fn migrate_v6_to_v7(db: &mut CatalogDb) -> Result<()> {
+    ensure!(
+        recorded_version(db.connection())? == Some(CATALOG_FORMAT_VERSION_V6),
+        MigrationRequired,
+        "the catalog is not at the supported migration source"
+    );
+    db.transaction(|transaction| {
+        transaction
+            .execute(
+                "UPDATE vault_state SET active_migration_target = ?1 WHERE only_row = 1",
+                [i64::from(CATALOG_FORMAT_VERSION_V7)],
+            )
+            .map_err(|error| map_sqlite(error, "the migration target could not be recorded"))?;
+        transaction
+            .execute_batch(V7_DDL)
+            .map_err(|error| map_sqlite(error, "the album organization migration failed"))?;
+        transaction
+            .execute(
+                "UPDATE vault_state SET catalog_format_version = ?1,
+                active_migration_target = NULL WHERE only_row = 1",
+                [i64::from(CATALOG_FORMAT_VERSION_V7)],
+            )
+            .map_err(|error| map_sqlite(error, "the migrated version could not be recorded"))?;
+        Ok(())
+    })
+}
+
 fn backfill_object_envelope_epochs(
     transaction: &rusqlite::Transaction<'_>,
     vault_id: &Id,
@@ -1002,11 +1077,11 @@ mod tests {
     }
 
     #[test]
-    fn a_new_catalog_installs_version_six() {
+    fn a_new_catalog_installs_version_seven() {
         let mut db = open();
         assert_eq!(
             open_at_current_version(&mut db, 1_700_000_000_000).expect("install"),
-            CATALOG_FORMAT_VERSION_V6
+            CATALOG_FORMAT_VERSION_V7
         );
         let sharing_tables: i64 = db
             .connection()
@@ -1078,7 +1153,49 @@ mod tests {
         }
         assert_eq!(
             STEPS.last().map(|step| step.version),
-            Some(CATALOG_FORMAT_VERSION_V6)
+            Some(CATALOG_FORMAT_VERSION_V7)
+        );
+    }
+
+    #[test]
+    fn v6_migration_orders_existing_albums_and_preserves_names() {
+        let mut db = open();
+        open_at_current_version(&mut db, 1).expect("install");
+        db.transaction(|transaction| {
+            transaction
+                .execute_batch(RESET_V7_DDL)
+                .expect("v6 structure");
+            transaction
+                .execute(
+                    "UPDATE vault_state SET catalog_format_version = 6 WHERE only_row = 1",
+                    [],
+                )
+                .expect("v6 version");
+            for (id, name) in [(1u8, "Zulu"), (2u8, "Alpha")] {
+                transaction
+                    .execute(
+                        "INSERT INTO albums (album_id, name, created_ms, revision)
+                     VALUES (?1, ?2, 1, 1)",
+                        rusqlite::params![vec![id; 16], name],
+                    )
+                    .expect("album");
+            }
+            Ok(())
+        })
+        .expect("v6 fixture");
+        migrate_v6_to_v7(&mut db).expect("migrate");
+        let rows: Vec<(String, i64)> = db
+            .connection()
+            .prepare("SELECT name, sort_position FROM albums ORDER BY sort_position")
+            .expect("query")
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .expect("rows")
+            .map(|row| row.expect("row"))
+            .collect();
+        assert_eq!(rows, vec![("Alpha".to_owned(), 0), ("Zulu".to_owned(), 1)]);
+        assert_eq!(
+            recorded_version(db.connection()).expect("version"),
+            Some(CATALOG_FORMAT_VERSION_V7)
         );
     }
 

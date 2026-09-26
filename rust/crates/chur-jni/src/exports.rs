@@ -1905,6 +1905,118 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumCreate<'local>(
     })
 }
 
+/// Renames an album.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumRename<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    album_id: JByteArray<'local>,
+    name: JString<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(album) = fixed_array(env, &album_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        let Some(bytes) = string_bytes(env, &name) else {
+            return INVALID_INPUT;
+        };
+        let Ok(length) = u32::try_from(bytes.len()) else {
+            return INVALID_INPUT;
+        };
+        // SAFETY: both arrays remain live for this call.
+        unsafe {
+            chur_ffi::product::chur_album_rename(
+                handle_of(session),
+                album.as_ptr(),
+                bytes.as_ptr(),
+                length,
+            )
+        }
+    })
+}
+
+/// Deletes an album subtree without deleting its media.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumDelete<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    album_id: JByteArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(album) = fixed_array(env, &album_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        // SAFETY: the array remains live for this call.
+        unsafe { chur_ffi::product::chur_album_delete(handle_of(session), album.as_ptr()) }
+    })
+}
+
+/// Moves an album in the tree.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumMove<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    album_id: JByteArray<'local>,
+    parent_id: JByteArray<'local>,
+    before_id: JByteArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(album) = fixed_array(env, &album_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        let Some(parent) = fixed_array(env, &parent_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        let Some(before) = fixed_array(env, &before_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        // SAFETY: all arrays remain live for this call.
+        unsafe {
+            chur_ffi::product::chur_album_move(
+                handle_of(session),
+                album.as_ptr(),
+                parent.as_ptr(),
+                before.as_ptr(),
+            )
+        }
+    })
+}
+
+/// Moves a media item inside one album.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumMoveMember<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    album_id: JByteArray<'local>,
+    object_id: JByteArray<'local>,
+    before_id: JByteArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(album) = fixed_array(env, &album_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        let Some(object) = fixed_array(env, &object_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        let Some(before) = fixed_array(env, &before_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        // SAFETY: all arrays remain live for this call.
+        unsafe {
+            chur_ffi::product::chur_album_move_member(
+                handle_of(session),
+                album.as_ptr(),
+                object.as_ptr(),
+                before.as_ptr(),
+            )
+        }
+    })
+}
+
 /// Adds or removes one album membership.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumSetMembership<'local>(

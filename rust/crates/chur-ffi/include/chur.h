@@ -18,7 +18,7 @@
  * recipient-device surface of section 6.13, and the sharing discovery surface
  * of section 6.14, and the private tag list of section 6.15. Adding an export raises the minor
  * ABI version; changing or removing one raises the major. The library reports
- * 1.14.
+ * 2.15.
  */
 
 #ifndef CHUR_H
@@ -215,6 +215,7 @@ typedef int32_t chur_status_t;
 #define CHUR_SORT_CAPTURE_DESC 1
 #define CHUR_SORT_CAPTURE_ASC 2
 #define CHUR_SORT_IMPORT_DESC 3
+#define CHUR_SORT_ALBUM_MANUAL 4
 
 /* Unlock factors, KEY_SLOTS.md section 1. */
 #define CHUR_FACTOR_PASSWORD 1
@@ -629,6 +630,14 @@ chur_status_t chur_object_metadata(chur_handle_t session,
                                    size_t *bytes_written);
 chur_status_t chur_album_create(chur_handle_t session, const uint8_t *name,
                                 uint32_t name_length, uint8_t *out_album_id);
+chur_status_t chur_album_rename(chur_handle_t session, const uint8_t *album_id,
+                                const uint8_t *name, uint32_t name_length);
+chur_status_t chur_album_delete(chur_handle_t session, const uint8_t *album_id);
+/* All-zero parent means root; all-zero before means append. */
+chur_status_t chur_album_move(chur_handle_t session, const uint8_t *album_id,
+                              const uint8_t *parent_id, const uint8_t *before_id);
+chur_status_t chur_album_move_member(chur_handle_t session, const uint8_t *album_id,
+                                     const uint8_t *object_id, const uint8_t *before_id);
 chur_status_t chur_album_set_membership(chur_handle_t session,
                                         const uint8_t *album_id,
                                         const ChurObjectRefV1 *object,

@@ -15,6 +15,10 @@ import dev.po4yka.chur.native.ChurUnlockRequestV1
 import dev.po4yka.chur.native.chur_abi_version_major
 import dev.po4yka.chur.native.chur_abi_version_minor
 import dev.po4yka.chur.native.chur_album_create
+import dev.po4yka.chur.native.chur_album_rename
+import dev.po4yka.chur.native.chur_album_delete
+import dev.po4yka.chur.native.chur_album_move
+import dev.po4yka.chur.native.chur_album_move_member
 import dev.po4yka.chur.native.chur_album_list
 import dev.po4yka.chur.native.chur_album_set_membership
 import dev.po4yka.chur.native.chur_backup_create
@@ -977,6 +981,36 @@ internal actual object ChurNative {
             }
         }
     }
+
+    actual fun albumRename(session: Long, albumId: ByteArray, name: String): Int {
+        val bytes = name.encodeToByteArray()
+        return albumId.pinnedPointer { album ->
+            bytes.pinnedPointer { text ->
+                chur_album_rename(session.toULong(), album, text, bytes.size.toUInt())
+            }
+        }
+    }
+
+    actual fun albumDelete(session: Long, albumId: ByteArray): Int =
+        albumId.pinnedPointer { album -> chur_album_delete(session.toULong(), album) }
+
+    actual fun albumMove(session: Long, albumId: ByteArray, parentId: ByteArray, beforeId: ByteArray): Int =
+        albumId.pinnedPointer { album ->
+            parentId.pinnedPointer { parent ->
+                beforeId.pinnedPointer { before ->
+                    chur_album_move(session.toULong(), album, parent, before)
+                }
+            }
+        }
+
+    actual fun albumMoveMember(session: Long, albumId: ByteArray, objectId: ByteArray, beforeId: ByteArray): Int =
+        albumId.pinnedPointer { album ->
+            objectId.pinnedPointer { item ->
+                beforeId.pinnedPointer { before ->
+                    chur_album_move_member(session.toULong(), album, item, before)
+                }
+            }
+        }
 
     actual fun albumSetMembership(
         session: Long,

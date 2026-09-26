@@ -121,6 +121,7 @@ data class VaultUiState(
     val deviceControlAvailable: Boolean = false,
     /** How many tiles the selection holds, §11.4. */
     val selectedCount: Int = 0,
+    val canLoadMore: Boolean = false,
     /**
      * The sync engine's state, or `null` when the host bound no engine.
      *
@@ -152,6 +153,11 @@ data class VaultActions(
     val onCloseAlbum: () -> Unit,
     /** Create an album. */
     val onCreateAlbum: () -> Unit,
+    val onRenameAlbum: (AlbumSummary, String) -> Unit = { _, _ -> },
+    val onDeleteAlbum: (AlbumSummary) -> Unit = {},
+    val onMoveAlbum: (AlbumSummary, AlbumSummary?, AlbumSummary?) -> Unit = { _, _, _ -> },
+    val onMoveAlbumMember: (ObjectProjection, ObjectProjection?) -> Unit = { _, _ -> },
+    val onLoadMore: () -> Unit = {},
     /** Lock the vault now. */
     val onLock: () -> Unit,
     /**
@@ -315,7 +321,7 @@ fun VaultShell(state: VaultUiState, actions: VaultActions) {
             when {
                 state.openAlbum != null || state.destination == VaultDestination.LIBRARY ->
                     LibraryBody(state, actions)
-                state.destination == VaultDestination.ALBUMS -> AlbumsBody(state, actions)
+                state.destination == VaultDestination.ALBUMS -> AlbumOrganizer(state.albums, actions)
                 state.destination == VaultDestination.SEARCH -> SearchBody(state, actions)
                 else -> SettingsBody(state, actions)
             }
@@ -454,47 +460,9 @@ private fun LibraryBody(state: VaultUiState, actions: VaultActions) {
             widthDp = state.widthDp,
             onOpen = actions.onOpen,
             onToggleSelection = actions.onToggleSelection,
+            onMove = if (state.openAlbum != null && state.selectedCount == 0) actions.onMoveAlbumMember else null,
+            onLoadMore = if (state.canLoadMore) actions.onLoadMore else null,
         )
-    }
-}
-
-@Composable
-private fun AlbumsBody(state: VaultUiState, actions: VaultActions) {
-    val colors = LocalChurColors.current
-    if (state.albums.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("No albums yet", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "Group objects you want to find together.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = colors.inkMuted,
-                )
-            }
-        }
-        return
-    }
-    LazyColumn(
-        contentPadding = PaddingValues(ChurSpacing.gutter),
-        verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
-    ) {
-        items(state.albums, key = { it.id }) { album ->
-            Card(onClick = { actions.onOpenAlbum(album) }, modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(ChurSpacing.three)) {
-                    Text(
-                        album.name,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        "${album.memberCount} item${if (album.memberCount == 1L) "" else "s"}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = colors.inkMuted,
-                    )
-                }
-            }
-        }
     }
 }
 
@@ -534,6 +502,7 @@ private fun SearchBody(state: VaultUiState, actions: VaultActions) {
                 widthDp = state.widthDp,
                 onOpen = actions.onOpen,
                 onToggleSelection = actions.onToggleSelection,
+                onLoadMore = if (state.canLoadMore) actions.onLoadMore else null,
             )
         }
     }

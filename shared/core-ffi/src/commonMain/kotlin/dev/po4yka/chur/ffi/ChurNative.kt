@@ -393,6 +393,11 @@ internal expect object ChurNative {
         outAlbumId: ByteArray,
     ): Int
 
+    fun albumRename(session: Long, albumId: ByteArray, name: String): Int
+    fun albumDelete(session: Long, albumId: ByteArray): Int
+    fun albumMove(session: Long, albumId: ByteArray, parentId: ByteArray, beforeId: ByteArray): Int
+    fun albumMoveMember(session: Long, albumId: ByteArray, objectId: ByteArray, beforeId: ByteArray): Int
+
     fun albumSetMembership(
         session: Long,
         albumId: ByteArray,

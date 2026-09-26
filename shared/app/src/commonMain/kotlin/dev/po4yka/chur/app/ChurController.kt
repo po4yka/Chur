@@ -643,6 +643,28 @@ class ChurController(
         _page.value = withContext(Dispatchers.Default) { repository.page(query) }
     }
 
+    private var loadingNextPage = false
+
+    /** Appends one bounded page when the user reaches the end of the grid. */
+    fun loadNextPage() = guarded(clearMessage = false) {
+        if (loadingNextPage) return@guarded
+        val previous = _page.value
+        val cursor = previous.nextCursor ?: return@guarded
+        val query = currentQuery
+        loadingNextPage = true
+        try {
+            val next = withContext(Dispatchers.Default) { repository.page(query.copy(cursor = cursor)) }
+            if (currentQuery !== query) return@guarded
+            _page.value = if (next.catalogGeneration != previous.catalogGeneration) {
+                withContext(Dispatchers.Default) { repository.page(query) }
+            } else {
+                next.copy(objects = previous.objects + next.objects)
+            }
+        } finally {
+            loadingNextPage = false
+        }
+    }
+
     /** Loads the albums. */
     fun loadAlbums() = guarded(clearMessage = false) {
         _albums.value = withContext(Dispatchers.Default) { repository.albums() }
@@ -763,6 +785,40 @@ class ChurController(
     fun createAlbum(name: String) = guarded {
         withContext(Dispatchers.Default) { repository.createAlbum(name) }
         refreshAlbums()
+    }
+
+    fun renameAlbum(albumId: ByteArray, name: String) = guarded {
+        withContext(Dispatchers.Default) { repository.renameAlbum(albumId, name) }
+        refreshAlbums()
+    }
+
+    fun deleteAlbum(albumId: ByteArray, onSuccess: () -> Unit = {}) = guarded {
+        withContext(Dispatchers.Default) { repository.deleteAlbum(albumId) }
+        reload()
+        refreshAlbums()
+        onSuccess()
+    }
+
+    fun moveAlbum(
+        albumId: ByteArray,
+        parentId: ByteArray?,
+        beforeId: ByteArray?,
+        onSuccess: () -> Unit = {},
+    ) = guarded {
+        withContext(Dispatchers.Default) { repository.moveAlbum(albumId, parentId, beforeId) }
+        refreshAlbums()
+        onSuccess()
+    }
+
+    fun moveAlbumMember(
+        albumId: ByteArray,
+        objectId: ByteArray,
+        beforeId: ByteArray?,
+        onSuccess: () -> Unit = {},
+    ) = guarded {
+        withContext(Dispatchers.Default) { repository.moveAlbumMember(albumId, objectId, beforeId) }
+        reload()
+        onSuccess()
     }
 
     /** Applies or removes one tag across the selected objects. */

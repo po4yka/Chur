@@ -343,6 +343,10 @@ fn every_declared_function_is_exported() {
         "chur_object_delete",
         "chur_object_metadata",
         "chur_album_create",
+        "chur_album_rename",
+        "chur_album_delete",
+        "chur_album_move",
+        "chur_album_move_member",
         "chur_album_set_membership",
         "chur_album_list",
         "chur_tag_create",
@@ -389,8 +393,8 @@ fn every_declared_function_is_exported() {
     );
 
     // Calling each one proves the list above is not a stale copy.
-    assert_eq!(chur_ffi::chur_abi_version_major(), 1);
-    assert_eq!(chur_ffi::chur_abi_version_minor(), 14);
+    assert_eq!(chur_ffi::chur_abi_version_major(), 2);
+    assert_eq!(chur_ffi::chur_abi_version_minor(), 15);
     assert_eq!(
         chur_ffi::chur_capabilities(),
         chur_ffi::CHUR_CAP_DECOY_VAULT
@@ -461,6 +465,10 @@ fn the_control_plane_vocabulary_matches_the_rust_side() {
         chur_ffi::records::query_from(value, 1, 0, 0, &id, None, Some(b"x"))
             .unwrap_or_else(|_| panic!("{name} is not a scope the library accepts"));
     }
+    let manual: u8 = defines("CHUR_SORT_ALBUM_MANUAL")["CHUR_SORT_ALBUM_MANUAL"]
+        .parse()
+        .expect("a decimal sort");
+    assert!(chur_ffi::records::query_from(2, manual, 0, 0, &[1u8; 16], None, None).is_ok());
     for name in [
         "CHUR_SORT_CAPTURE_DESC",
         "CHUR_SORT_CAPTURE_ASC",
@@ -473,5 +481,5 @@ fn the_control_plane_vocabulary_matches_the_rust_side() {
     // A value outside each space is refused, which is what makes the two lists
     // above exhaustive rather than merely correct.
     assert!(chur_ffi::records::query_from(7, 1, 0, 0, &scope_id, None, None).is_err());
-    assert!(chur_ffi::records::query_from(1, 4, 0, 0, &scope_id, None, None).is_err());
+    assert!(chur_ffi::records::query_from(1, 5, 0, 0, &scope_id, None, None).is_err());
 }

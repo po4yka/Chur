@@ -51,9 +51,9 @@ int main(void) {
               chur_key_slot_format_min() <= chur_key_slot_format_max(),
           "neither format range is the empty panic fallback");
 
-    check(chur_abi_version_major() == 1, "major ABI version is 1");
-    check(chur_abi_version_minor() == 14,
-          "minor ABI version is 14, including platform slot identifiers");
+    check(chur_abi_version_major() == 2, "major ABI version is 2");
+    check(chur_abi_version_minor() == 15,
+          "minor ABI version is 15, including album organization");
 
     check(chur_object_format_min() <= chur_object_format_max(),
           "object format range is ordered");
