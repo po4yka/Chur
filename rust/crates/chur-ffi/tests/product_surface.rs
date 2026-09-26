@@ -456,6 +456,68 @@ fn the_whole_product_flow_runs_through_the_boundary() {
     assert!(!metadata.capture_time_substituted);
     assert_eq!(metadata.tags.len(), 1);
     assert_eq!(metadata.tags[0].1, "Sommer");
+    let mut tiny_tags = [0x5au8; 1];
+    let mut tag_bytes = 0usize;
+    assert_eq!(
+        status(unsafe { chur_tag_list(session, tiny_tags.as_mut_ptr(), 1, &mut tag_bytes) }),
+        ChurStatus::ResourceLimitExceeded
+    );
+    assert!(tag_bytes > tiny_tags.len());
+    assert_eq!(tiny_tags, [0x5a]);
+
+    assert_eq!(
+        unsafe { chur_favorites_set(session, object_id.as_ptr(), 1, 0) },
+        OK
+    );
+    assert_eq!(page(session, 3, [0; 16], b"").objects.len(), 0);
+    assert_eq!(
+        unsafe { chur_favorites_set(session, object_id.as_ptr(), 1, 1) },
+        OK
+    );
+    assert_eq!(page(session, 3, [0; 16], b"").objects.len(), 1);
+    let mut created_tag = [0u8; 16];
+    assert_eq!(
+        unsafe {
+            chur_tag_apply_selection(
+                session,
+                zero.as_ptr(),
+                b"Travel".as_ptr(),
+                6,
+                object_id.as_ptr(),
+                1,
+                1,
+                created_tag.as_mut_ptr(),
+            )
+        },
+        OK
+    );
+    assert_eq!(page(session, 4, created_tag, b"").objects.len(), 1);
+    assert_eq!(
+        unsafe { chur_tag_rename(session, created_tag.as_ptr(), b"Trips".as_ptr(), 5) },
+        OK
+    );
+    assert_eq!(page(session, 5, zero, b"trips").objects.len(), 1);
+    assert_eq!(
+        unsafe {
+            chur_tag_apply_selection(
+                session,
+                created_tag.as_ptr(),
+                core::ptr::null(),
+                0,
+                object_id.as_ptr(),
+                1,
+                0,
+                created_tag.as_mut_ptr(),
+            )
+        },
+        OK
+    );
+    assert_eq!(page(session, 4, created_tag, b"").objects.len(), 0);
+    assert_eq!(
+        unsafe { chur_tag_delete(session, created_tag.as_ptr()) },
+        OK
+    );
+    assert_eq!(page(session, 5, zero, b"trips").objects.len(), 0);
 
     // MEDIA_PIPELINE §6: the platform hands over a thumbnail and reads it back.
     let thumbnail: Vec<u8> = (0..3_000u32).map(|value| (value % 97) as u8).collect();

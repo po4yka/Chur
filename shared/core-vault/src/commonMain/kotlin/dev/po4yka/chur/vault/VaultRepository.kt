@@ -219,6 +219,9 @@ class VaultRepository(
     suspend fun setFavorite(objectId: ByteArray, favorite: Boolean) =
         withSession { ChurVault.setFavorite(it, objectId, favorite) }
 
+    suspend fun setFavorites(objectIds: List<ByteArray>, favorite: Boolean) =
+        withSession { ChurVault.setFavorites(it, objectIds, favorite) }
+
     /** Deletes an object. */
     suspend fun delete(objectId: ByteArray) = withSession { ChurVault.deleteObject(it, objectId) }
 
@@ -264,6 +267,15 @@ class VaultRepository(
     /** Applies or removes one tag. */
     suspend fun setObjectTag(tagId: ByteArray, objectId: ByteArray, tagged: Boolean) =
         withSession { ChurVault.setObjectTag(it, tagId, objectId, tagged) }
+
+    suspend fun applyTagSelection(tagId: ByteArray?, newName: String,
+                                  objectIds: List<ByteArray>, tagged: Boolean): ByteArray =
+        withSession { ChurVault.applyTagSelection(it, tagId, newName, objectIds, tagged) }
+
+    suspend fun renameTag(tagId: ByteArray, name: String) =
+        withSession { ChurVault.renameTag(it, tagId, name) }
+
+    suspend fun deleteTag(tagId: ByteArray) = withSession { ChurVault.deleteTag(it, tagId) }
 
     /** The key slots, for the settings screen. */
     suspend fun slots(): List<SlotSummary> = withSession { ChurVault.slots(it) }

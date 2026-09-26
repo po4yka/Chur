@@ -22,6 +22,10 @@ import dev.po4yka.chur.native.chur_album_move_member
 import dev.po4yka.chur.native.chur_album_list
 import dev.po4yka.chur.native.chur_album_set_membership
 import dev.po4yka.chur.native.chur_album_place_objects
+import dev.po4yka.chur.native.chur_favorites_set
+import dev.po4yka.chur.native.chur_tag_apply_selection
+import dev.po4yka.chur.native.chur_tag_rename
+import dev.po4yka.chur.native.chur_tag_delete
 import dev.po4yka.chur.native.chur_backup_create
 import dev.po4yka.chur.native.chur_backup_restore
 import dev.po4yka.chur.native.chur_build_flavor
@@ -942,6 +946,12 @@ internal actual object ChurNative {
             )
         }
 
+    actual fun favoritesSet(session: Long, objectIds: ByteArray, favorite: Boolean): Int =
+        objectIds.pinnedPointer { ids ->
+            chur_favorites_set(session.toULong(), ids, (objectIds.size / ID_LENGTH).toUInt(),
+                if (favorite) 1u else 0u)
+        }
+
     actual fun objectDelete(
         session: Long,
         objectId: ByteArray,
@@ -1118,6 +1128,34 @@ internal actual object ChurNative {
                 chur_object_set_tag(session.toULong(), tag, reference.ptr, if (tagged) 1u else 0u)
             }
         }
+
+    actual fun tagApplySelection(session: Long, tagId: ByteArray, name: String,
+                                 objectIds: ByteArray, tagged: Boolean, outTagId: ByteArray): Int {
+        val nameBytes = name.encodeToByteArray()
+        return tagId.pinnedPointer { tag ->
+            nameBytes.pinnedPointer { label ->
+                objectIds.pinnedPointer { ids ->
+                    identifierCall(outTagId) { out ->
+                        chur_tag_apply_selection(session.toULong(), tag, label,
+                            nameBytes.size.toUInt(), ids, (objectIds.size / ID_LENGTH).toUInt(),
+                            if (tagged) 1u else 0u, out)
+                    }
+                }
+            }
+        }
+    }
+
+    actual fun tagRename(session: Long, tagId: ByteArray, name: String): Int {
+        val nameBytes = name.encodeToByteArray()
+        return tagId.pinnedPointer { tag ->
+            nameBytes.pinnedPointer { label ->
+                chur_tag_rename(session.toULong(), tag, label, nameBytes.size.toUInt())
+            }
+        }
+    }
+
+    actual fun tagDelete(session: Long, tagId: ByteArray): Int =
+        tagId.pinnedPointer { tag -> chur_tag_delete(session.toULong(), tag) }
 
     actual fun derivedPut(
         session: Long,

@@ -116,9 +116,9 @@ data class AlbumSummary(
 data class TagSummary(val tagId: ByteArray, val name: String) {
     val id: String get() = tagId.toHex()
 
-    override fun equals(other: Any?): Boolean = other is TagSummary && id == other.id
+    override fun equals(other: Any?): Boolean = other is TagSummary && id == other.id && name == other.name
 
-    override fun hashCode(): Int = id.hashCode()
+    override fun hashCode(): Int = id.hashCode() * 31 + name.hashCode()
 }
 
 /** One key slot, §6.5. */

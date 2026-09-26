@@ -602,6 +602,12 @@ object ChurVault {
         )
     }
 
+    /** Sets the favourite state of the whole selection atomically. */
+    fun setFavorites(session: Long, objectIds: List<ByteArray>, favorite: Boolean) {
+        ChurFailure.check(ChurNative.favoritesSet(session, packSelection(objectIds), favorite),
+            "set favourites")
+    }
+
     /** Deletes an object, `CATALOG_SCHEMA_V1.md` §14.1. */
     fun deleteObject(
         session: Long,
@@ -711,12 +717,23 @@ object ChurVault {
     }
 
     /** Every tag available to the private selection picker. */
-    fun tags(session: Long): List<TagSummary> =
-        withChurBuffer(TAG_LIST_CAPACITY) { buffer ->
-            val written = IntArray(1)
-            ChurFailure.check(ChurNative.tagList(session, buffer, written), "tag list")
-            decodeTagList(buffer.copyOut(written[0]), written[0])
+    fun tags(session: Long): List<TagSummary> {
+        var capacity = TAG_LIST_CAPACITY
+        while (true) {
+            val result = withChurBuffer(capacity) { buffer ->
+                val written = IntArray(1)
+                val status = ChurNative.tagList(session, buffer, written)
+                if (status == 0) return@withChurBuffer decodeTagList(buffer.copyOut(written[0]), written[0])
+                if (status == ChurStatus.RESOURCE_LIMIT_EXCEEDED.value && written[0] > capacity) {
+                    capacity = written[0]
+                    return@withChurBuffer null
+                }
+                ChurFailure.check(status, "tag list")
+                null
+            }
+            if (result != null) return result
         }
+    }
 
     /** Applies or removes one tag on one object. */
     fun setObjectTag(
@@ -726,6 +743,31 @@ object ChurVault {
         tagged: Boolean,
     ) {
         ChurFailure.check(ChurNative.objectSetTag(session, tagId, objectId, tagged), "set tag")
+    }
+
+    /** Applies or removes a tag for the whole selection in one transaction. */
+    fun applyTagSelection(session: Long, tagId: ByteArray?, newName: String,
+                          objectIds: List<ByteArray>, tagged: Boolean): ByteArray {
+        val output = ByteArray(ID_LENGTH)
+        ChurFailure.check(ChurNative.tagApplySelection(session, tagId ?: ByteArray(ID_LENGTH),
+            newName, packSelection(objectIds), tagged, output), "apply tag selection")
+        return output
+    }
+
+    fun renameTag(session: Long, tagId: ByteArray, name: String) {
+        ChurFailure.check(ChurNative.tagRename(session, tagId, name), "rename tag")
+    }
+
+    fun deleteTag(session: Long, tagId: ByteArray) {
+        ChurFailure.check(ChurNative.tagDelete(session, tagId), "delete tag")
+    }
+
+    private fun packSelection(objectIds: List<ByteArray>): ByteArray {
+        require(objectIds.isNotEmpty() && objectIds.size <= 1_000_000)
+        require(objectIds.all { it.size == ID_LENGTH })
+        return ByteArray(objectIds.size * ID_LENGTH).also { packed ->
+            objectIds.forEachIndexed { index, id -> id.copyInto(packed, index * ID_LENGTH) }
+        }
     }
 
     // -----------------------------------------------------------------------

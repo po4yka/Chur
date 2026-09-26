@@ -400,6 +400,9 @@ internal actual object ChurNative {
         favorite: Boolean,
     ): Int = ChurJni.objectSetFavorite(session, objectId, favorite)
 
+    actual fun favoritesSet(session: Long, objectIds: ByteArray, favorite: Boolean): Int =
+        ChurJni.favoritesSet(session, objectIds, favorite)
+
     actual fun objectDelete(
         session: Long,
         objectId: ByteArray,
@@ -474,6 +477,15 @@ internal actual object ChurNative {
         objectId: ByteArray,
         tagged: Boolean,
     ): Int = ChurJni.objectSetTag(session, tagId, objectId, tagged)
+
+    actual fun tagApplySelection(session: Long, tagId: ByteArray, name: String,
+                                 objectIds: ByteArray, tagged: Boolean, outTagId: ByteArray): Int =
+        ChurJni.tagApplySelection(session, tagId, name, objectIds, tagged, outTagId)
+
+    actual fun tagRename(session: Long, tagId: ByteArray, name: String): Int =
+        ChurJni.tagRename(session, tagId, name)
+
+    actual fun tagDelete(session: Long, tagId: ByteArray): Int = ChurJni.tagDelete(session, tagId)
 
     actual fun derivedPut(
         session: Long,

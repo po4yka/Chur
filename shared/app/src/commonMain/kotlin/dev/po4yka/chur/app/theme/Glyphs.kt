@@ -107,6 +107,17 @@ val FavoriteGlyph: ImageVector = glyph("Favorite") {
     }
 }
 
+/** A filled heart marks media already in Favorites. */
+val FavoriteFilledGlyph: ImageVector = glyph("Favorite filled") {
+    path(fill = SolidColor(Color.Black)) {
+        moveTo(12f, 20f)
+        lineTo(4.5f, 12.5f)
+        arcToRelative(4.5f, 4.5f, 0f, true, true, 7.5f, -5f)
+        arcToRelative(4.5f, 4.5f, 0f, true, true, 7.5f, 5f)
+        close()
+    }
+}
+
 /** A lock, for the lock action. */
 val LockGlyph: ImageVector = glyph("Lock") {
     stroke {

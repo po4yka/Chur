@@ -1056,6 +1056,13 @@ pub unsafe extern "C" fn chur_tag_list(
         };
         // SAFETY: the caller guarantees `destination` covers `capacity` bytes.
         let buffer = unsafe { crate::api::borrow_bytes_mut(destination, capacity)? };
+        if buffer.len() < encoded.len() {
+            unsafe { crate::api::write_out(bytes_written, encoded.len())? };
+            bail!(
+                ResourceLimitExceeded,
+                "the destination buffer is smaller than the tag list"
+            );
+        }
         write_record(&encoded, buffer, bytes_written)
     })
 }
@@ -1086,6 +1093,130 @@ pub unsafe extern "C" fn chur_object_set_tag(
             store::set_object_tag(catalog, &tag, &object_id, flag)
         })
     })
+}
+
+/// Sets or clears favourite status for a packed selection in one transaction.
+/// # Safety
+/// `object_ids` points to `object_count * 16` readable bytes.
+#[unsafe(no_mangle)]
+#[expect(unsafe_code, reason = "the C ABI requires an exported symbol")]
+pub unsafe extern "C" fn chur_favorites_set(
+    session: Handle,
+    object_ids: *const u8,
+    object_count: u32,
+    favorite: u8,
+) -> Status {
+    guard_status_for(session, || {
+        let entry = registry::get(session, Kind::Session)?;
+        let ids = unsafe { selection_ids(object_ids, object_count)? };
+        let favorite = boolean(favorite)?;
+        let now = crate::api::now_ms();
+        with_catalog_mut(&entry, |catalog| {
+            store::set_favorites(catalog, &ids, favorite, now)
+        })
+    })
+}
+
+/// Applies or removes a tag on a packed selection, optionally creating it.
+/// Zero `tag_id` creates `name`; a nonzero id requires an empty name.
+/// # Safety
+/// Identifiers, name, selection, and output point to their declared lengths.
+#[unsafe(no_mangle)]
+#[expect(unsafe_code, reason = "the C ABI requires an exported symbol")]
+pub unsafe extern "C" fn chur_tag_apply_selection(
+    session: Handle,
+    tag_id: *const u8,
+    name: *const u8,
+    name_length: u32,
+    object_ids: *const u8,
+    object_count: u32,
+    tagged: u8,
+    out_tag_id: *mut u8,
+) -> Status {
+    guard_status_for(session, || {
+        ensure!(
+            !out_tag_id.is_null(),
+            InvalidInput,
+            "the tag output is null"
+        );
+        let entry = registry::get(session, Kind::Session)?;
+        let id = unsafe { optional_album_id(tag_id)? };
+        let tagged = boolean(tagged)?;
+        let ids = unsafe { selection_ids(object_ids, object_count)? };
+        let new_tag = if id.is_none() {
+            let bytes = unsafe { crate::api::borrow_bytes(name, name_length)? };
+            let text = core::str::from_utf8(bytes)
+                .map_err(|_| Error::new(ChurStatus::InvalidInput, "the tag name is not UTF-8"))?;
+            Some(Tag {
+                tag_id: chur_crypto::random::id()?,
+                name: text.to_owned(),
+                created_ms: crate::api::now_ms(),
+            })
+        } else {
+            ensure!(
+                name_length == 0,
+                InvalidInput,
+                "an existing tag needs no new name"
+            );
+            None
+        };
+        let result = with_catalog_mut(&entry, |catalog| {
+            store::apply_tag_selection(catalog, id.as_ref(), new_tag.as_ref(), &ids, tagged)
+        })?;
+        unsafe { crate::api::write_id(out_tag_id, &result) }
+    })
+}
+
+/// Renames one tag and its search projections.
+/// # Safety
+/// `tag_id` points to 16 bytes and `name` to `name_length` bytes.
+#[unsafe(no_mangle)]
+#[expect(unsafe_code, reason = "the C ABI requires an exported symbol")]
+pub unsafe extern "C" fn chur_tag_rename(
+    session: Handle,
+    tag_id: *const u8,
+    name: *const u8,
+    name_length: u32,
+) -> Status {
+    guard_status_for(session, || {
+        let entry = registry::get(session, Kind::Session)?;
+        let id = Id::from_slice(unsafe { crate::api::borrow_bytes(tag_id, 16)? })?;
+        let bytes = unsafe { crate::api::borrow_bytes(name, name_length)? };
+        let text = core::str::from_utf8(bytes)
+            .map_err(|_| Error::new(ChurStatus::InvalidInput, "the tag name is not UTF-8"))?;
+        with_catalog_mut(&entry, |catalog| store::rename_tag(catalog, &id, text))
+    })
+}
+
+/// Deletes one tag and its memberships, retaining all media objects.
+/// # Safety
+/// `tag_id` points to 16 readable bytes.
+#[unsafe(no_mangle)]
+#[expect(unsafe_code, reason = "the C ABI requires an exported symbol")]
+pub unsafe extern "C" fn chur_tag_delete(session: Handle, tag_id: *const u8) -> Status {
+    guard_status_for(session, || {
+        let entry = registry::get(session, Kind::Session)?;
+        let id = Id::from_slice(unsafe { crate::api::borrow_bytes(tag_id, 16)? })?;
+        with_catalog_mut(&entry, |catalog| store::delete_tag(catalog, &id))
+    })
+}
+
+/// Reads the bounded packed object-id selection without trusting multiplication or pointers.
+#[expect(unsafe_code, reason = "the C ABI supplies a raw selection pointer")]
+unsafe fn selection_ids(pointer: *const u8, count: u32) -> Result<Vec<Id>> {
+    ensure!(
+        count > 0 && u64::from(count) <= chur_core::limits::catalog::OBJECTS_MAX,
+        InvalidInput,
+        "the selection size is outside the object bound"
+    );
+    let size = count.checked_mul(16).ok_or_else(|| {
+        Error::new(
+            ChurStatus::ResourceLimitExceeded,
+            "the selection length overflows",
+        )
+    })?;
+    let bytes = unsafe { crate::api::borrow_bytes(pointer, size)? };
+    bytes.chunks_exact(16).map(Id::from_slice).collect()
 }
 
 // ---------------------------------------------------------------------------

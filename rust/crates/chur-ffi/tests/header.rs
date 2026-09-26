@@ -340,6 +340,7 @@ fn every_declared_function_is_exported() {
         "chur_vault_slots",
         "chur_vault_platform_slot_identifier",
         "chur_object_set_favorite",
+        "chur_favorites_set",
         "chur_object_delete",
         "chur_object_metadata",
         "chur_album_create",
@@ -353,6 +354,9 @@ fn every_declared_function_is_exported() {
         "chur_tag_create",
         "chur_tag_list",
         "chur_object_set_tag",
+        "chur_tag_apply_selection",
+        "chur_tag_rename",
+        "chur_tag_delete",
         "chur_derived_put",
         "chur_derived_read",
         "chur_backup_create",
@@ -395,7 +399,7 @@ fn every_declared_function_is_exported() {
 
     // Calling each one proves the list above is not a stale copy.
     assert_eq!(chur_ffi::chur_abi_version_major(), 2);
-    assert_eq!(chur_ffi::chur_abi_version_minor(), 16);
+    assert_eq!(chur_ffi::chur_abi_version_minor(), 17);
     assert_eq!(
         chur_ffi::chur_capabilities(),
         chur_ffi::CHUR_CAP_DECOY_VAULT

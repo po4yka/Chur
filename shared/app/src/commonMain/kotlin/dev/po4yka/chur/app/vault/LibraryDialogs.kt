@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -114,16 +116,21 @@ fun TagPickerDialog(
     onDismiss: () -> Unit,
 ) {
     var name by remember { mutableStateOf("") }
+    var filter by remember { mutableStateOf("") }
     val existing = tags.firstOrNull { it.name.equals(name.trim(), ignoreCase = true) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Tags") },
         text = {
-            Column(modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
-                tags.forEach { tag ->
+            Column(modifier = Modifier.heightIn(max = 360.dp)) {
+                OutlinedTextField(colors = churOutlinedTextFieldColors(), value = filter,
+                    onValueChange = { filter = it }, singleLine = true, label = { Text("Find tag") })
+                LazyColumn(modifier = Modifier.heightIn(max = 220.dp)) {
+                    items(tags.filter { it.name.contains(filter, ignoreCase = true) }, key = { it.id }) { tag ->
                     Column {
                         TextButton(onClick = { onAdd(tag) }) { Text("Add ${tag.name}") }
-                        TextButton(onClick = { onRemove(tag) }) { Text("Remove ${tag.name}") }
+                        TextButton(onClick = { onRemove(tag) }) { Text("Remove") }
+                    }
                     }
                 }
                 OutlinedTextField(
@@ -144,6 +151,64 @@ fun TagPickerDialog(
         confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/** Browses tag scopes and manages their private names and memberships. */
+@Composable
+fun TagBrowserDialog(
+    tags: List<TagSummary>,
+    onOpen: (TagSummary) -> Unit,
+    onCreate: (String) -> Unit,
+    onRename: (TagSummary, String) -> Unit,
+    onDelete: (TagSummary) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var filter by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf("") }
+    var editing by remember { mutableStateOf<TagSummary?>(null) }
+    var deleting by remember { mutableStateOf<TagSummary?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Tags") },
+        text = {
+            Column(modifier = Modifier.heightIn(max = 420.dp)) {
+                OutlinedTextField(colors = churOutlinedTextFieldColors(), value = filter,
+                    onValueChange = { filter = it }, singleLine = true, label = { Text("Find tag") })
+                LazyColumn(modifier = Modifier.heightIn(max = 270.dp)) {
+                    items(tags.filter { it.name.contains(filter, ignoreCase = true) }, key = { it.id }) { tag ->
+                        Column {
+                            TextButton(onClick = { onOpen(tag) }) { Text(tag.name) }
+                            TextButton(onClick = { editing = tag; name = tag.name }) { Text("Rename ${tag.name}") }
+                            TextButton(onClick = { deleting = tag }) { Text("Delete ${tag.name}") }
+                        }
+                    }
+                }
+                OutlinedTextField(colors = churOutlinedTextFieldColors(), value = name,
+                    onValueChange = { name = it }, singleLine = true,
+                    label = { Text(if (editing == null) "New tag" else "Rename ${editing?.name}") })
+                TextButton(onClick = {
+                    val value = name.trim()
+                    val tag = editing
+                    if (tag == null) onCreate(value) else onRename(tag, value)
+                    editing = null
+                    name = ""
+                }, enabled = name.isNotBlank()) {
+                    Text(if (editing == null) "Create tag" else "Save name")
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+    deleting?.let { tag ->
+        AlertDialog(onDismissRequest = { deleting = null }, title = { Text("Delete ${tag.name}?") },
+            text = { Text("This removes the tag from its media. The media stays in the vault.") },
+            confirmButton = { TextButton(onClick = {
+                deleting = null
+                onDelete(tag)
+            }) { Text("Delete tag") } },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } })
+    }
 }
 
 @Composable

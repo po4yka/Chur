@@ -103,6 +103,8 @@ data class VaultUiState(
     val slots: List<SlotSummary> = emptyList(),
     /** The album whose contents the library is showing, if any. */
     val openAlbum: AlbumSummary? = null,
+    /** Active library scope, if narrower than all media. */
+    val libraryScopeTitle: String? = null,
     /** The available width, which fixes the grid geometry of §11.1. */
     val widthDp: Int = 400,
     /** A bounded operation message, carrying no private value. */
@@ -153,6 +155,9 @@ data class VaultActions(
     val onCloseAlbum: () -> Unit,
     /** Create an album. */
     val onCreateAlbum: () -> Unit,
+    val onShowAllMedia: () -> Unit = {},
+    val onShowFavorites: () -> Unit = {},
+    val onShowTags: () -> Unit = {},
     val onRenameAlbum: (AlbumSummary, String) -> Unit = { _, _ -> },
     val onDeleteAlbum: (AlbumSummary) -> Unit = {},
     val onMoveAlbum: (AlbumSummary, AlbumSummary?, AlbumSummary?) -> Unit = { _, _, _ -> },
@@ -199,6 +204,7 @@ data class VaultActions(
     val onMoveSelectionToAlbum: () -> Unit = {},
     /** Assign or remove a private catalog tag. */
     val onTagSelection: () -> Unit = {},
+    val onSetSelectionFavorite: (Boolean) -> Unit = {},
     /** Remove every selected object from the open album, §11.4. */
     val onRemoveSelectionFromAlbum: () -> Unit = {},
     /** Delete every selected object from this vault, §11.4. */
@@ -237,10 +243,12 @@ fun VaultShell(state: VaultUiState, actions: VaultActions) {
                 SelectionBar(state, actions)
             } else {
                 TopAppBar(
-                    title = { Text(state.openAlbum?.name ?: state.destination.label) },
+                    title = { Text(state.openAlbum?.name ?: state.libraryScopeTitle ?: state.destination.label) },
                     navigationIcon = {
-                        if (state.openAlbum != null) {
-                            IconButton(onClick = actions.onCloseAlbum) {
+                        if (state.openAlbum != null || state.libraryScopeTitle != null) {
+                            IconButton(onClick = {
+                                if (state.openAlbum != null) actions.onCloseAlbum() else actions.onShowAllMedia()
+                            }) {
                                 Icon(
                                     dev.po4yka.chur.app.theme.BackGlyph,
                                     contentDescription = "Back",
@@ -249,6 +257,24 @@ fun VaultShell(state: VaultUiState, actions: VaultActions) {
                         }
                     },
                     actions = {
+                        if (state.destination == VaultDestination.LIBRARY && state.openAlbum == null) {
+                            var scopesExpanded by remember { mutableStateOf(false) }
+                            Box {
+                                TextButton(onClick = { scopesExpanded = true }) { Text("Browse") }
+                                DropdownMenu(expanded = scopesExpanded,
+                                    onDismissRequest = { scopesExpanded = false }) {
+                                    DropdownMenuItem(text = { Text("All media") }, onClick = {
+                                        scopesExpanded = false; actions.onShowAllMedia()
+                                    })
+                                    DropdownMenuItem(text = { Text("Favorites") }, onClick = {
+                                        scopesExpanded = false; actions.onShowFavorites()
+                                    })
+                                    DropdownMenuItem(text = { Text("Tags…") }, onClick = {
+                                        scopesExpanded = false; actions.onShowTags()
+                                    })
+                                }
+                            }
+                        }
                         // `DISCREET_MODE.md` "The panic gesture": a press locks
                         // and a long press performs the panic transition, on one
                         // control so it is reachable from every private screen
@@ -303,7 +329,8 @@ fun VaultShell(state: VaultUiState, actions: VaultActions) {
             // nowhere. §11.4 replaces the ordinary actions while a selection
             // runs, and the floating action is one of them.
             if (state.operation == null && state.selectedCount == 0 &&
-                (state.destination == VaultDestination.LIBRARY || state.openAlbum != null)
+                ((state.destination == VaultDestination.LIBRARY && state.libraryScopeTitle == null) ||
+                    state.openAlbum != null)
             ) {
                 FloatingActionButton(onClick = actions.onImport) {
                     Icon(PlusGlyph, contentDescription = "Import")
@@ -435,6 +462,12 @@ private fun SelectionBar(state: VaultUiState, actions: VaultActions) {
                         text = { Text("Tags") },
                         onClick = { expanded = false; actions.onTagSelection() },
                     )
+                    DropdownMenuItem(text = { Text("Add to favorites") }, onClick = {
+                        expanded = false; actions.onSetSelectionFavorite(true)
+                    })
+                    DropdownMenuItem(text = { Text("Remove from favorites") }, onClick = {
+                        expanded = false; actions.onSetSelectionFavorite(false)
+                    })
                     if (state.openAlbum != null) {
                         DropdownMenuItem(
                             text = { Text("Remove from album") },
@@ -461,7 +494,12 @@ private fun glyphFor(destination: VaultDestination) = when (destination) {
 @Composable
 private fun LibraryBody(state: VaultUiState, actions: VaultActions) {
     if (state.tiles.isEmpty()) {
-        EmptyLibrary()
+        if (state.libraryScopeTitle == null) EmptyLibrary()
+        else Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("No media in ${state.libraryScopeTitle}",
+                color = LocalChurColors.current.inkMuted,
+                style = MaterialTheme.typography.bodyMedium)
+        }
     } else {
         MediaGrid(
             tiles = state.tiles,

@@ -52,6 +52,7 @@ import dev.po4yka.chur.app.vault.ExportOptionsDialog
 import dev.po4yka.chur.app.vault.canSaveToPhotos
 import dev.po4yka.chur.app.vault.NewAlbumDialog
 import dev.po4yka.chur.app.vault.TagPickerDialog
+import dev.po4yka.chur.app.vault.TagBrowserDialog
 import dev.po4yka.chur.app.vault.RecoveryPhraseScreen
 import dev.po4yka.chur.app.vault.RecoveryScreen
 import dev.po4yka.chur.app.vault.RestoreBackupScreen
@@ -75,6 +76,7 @@ import dev.po4yka.chur.ffi.ObjectQuery
 import dev.po4yka.chur.ffi.QueryScope
 import dev.po4yka.chur.ffi.QuerySort
 import dev.po4yka.chur.ffi.StreamKind
+import dev.po4yka.chur.ffi.TagSummary
 import dev.po4yka.chur.ffi.fromHex
 import dev.po4yka.chur.imports.AndroidMediaCodec
 import dev.po4yka.chur.notes.Note
@@ -306,6 +308,11 @@ private fun VaultRoute(controller: ChurController) {
     LaunchedEffect(albums) {
         openAlbum = openAlbum?.let { current -> albums.firstOrNull { it.id == current.id } }
     }
+    var openTag by remember { mutableStateOf<TagSummary?>(null) }
+    var favoritesOnly by remember { mutableStateOf(false) }
+    LaunchedEffect(tags) {
+        openTag = openTag?.let { current -> tags.firstOrNull { it.id == current.id } }
+    }
     var viewing by remember { mutableStateOf<ObjectProjection?>(null) }
     var selection by remember { mutableStateOf(setOf<String>()) }
     var creatingAlbum by remember { mutableStateOf(false) }
@@ -313,6 +320,8 @@ private fun VaultRoute(controller: ChurController) {
     var movingSelection by remember { mutableStateOf(false) }
     var organizingIds by remember { mutableStateOf<List<ByteArray>>(emptyList()) }
     var choosingTag by remember { mutableStateOf(false) }
+    var managingTags by remember { mutableStateOf(false) }
+    var taggingIds by remember { mutableStateOf<List<ByteArray>>(emptyList()) }
     var confirmingDelete by remember { mutableStateOf(false) }
     var choosingExport by remember { mutableStateOf(false) }
     var choosingImport by remember { mutableStateOf(false) }
@@ -374,11 +383,15 @@ private fun VaultRoute(controller: ChurController) {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), onPicked)
     val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), onPicked)
 
-    LaunchedEffect(destination, openAlbum, page.catalogGeneration) {
+    LaunchedEffect(destination, openAlbum, openTag, favoritesOnly, page.catalogGeneration) {
         when {
             openAlbum != null -> controller.load(
                 ObjectQuery(QueryScope.ALBUM, sort = QuerySort.ALBUM_MANUAL, scopeId = openAlbum!!.albumId),
             )
+            destination == VaultDestination.LIBRARY && openTag != null ->
+                controller.load(ObjectQuery(QueryScope.TAG, scopeId = openTag!!.tagId))
+            destination == VaultDestination.LIBRARY && favoritesOnly ->
+                controller.load(ObjectQuery(QueryScope.FAVORITES))
             destination == VaultDestination.LIBRARY -> controller.load(ObjectQuery())
             destination == VaultDestination.ALBUMS -> controller.loadAlbums()
             destination == VaultDestination.SETTINGS -> {
@@ -535,23 +548,40 @@ private fun VaultRoute(controller: ChurController) {
             tags = tags,
             onAdd = { tag ->
                 choosingTag = false
-                controller.setTagForAll(tag.tagId, selectedObjects(page, selection), true) {
+                controller.setTagForAll(tag.tagId, taggingIds, true) {
                     selection = emptySet()
                 }
             },
             onRemove = { tag ->
                 choosingTag = false
-                controller.setTagForAll(tag.tagId, selectedObjects(page, selection), false) {
+                controller.setTagForAll(tag.tagId, taggingIds, false) {
                     selection = emptySet()
                 }
             },
             onCreate = { name ->
                 choosingTag = false
-                controller.createTagWithObjects(name, selectedObjects(page, selection)) {
+                controller.createTagWithObjects(name, taggingIds) {
                     selection = emptySet()
                 }
             },
             onDismiss = { choosingTag = false },
+        )
+    }
+    if (managingTags) {
+        TagBrowserDialog(tags = tags,
+            onOpen = { tag ->
+                managingTags = false
+                selection = emptySet()
+                openTag = tag
+                favoritesOnly = false
+                destination = VaultDestination.LIBRARY
+            },
+            onCreate = controller::createTag,
+            onRename = { tag, name -> controller.renameTag(tag.tagId, name) },
+            onDelete = { tag -> controller.deleteTag(tag.tagId) {
+                if (openTag?.id == tag.id) openTag = null
+            } },
+            onDismiss = { managingTags = false },
         )
     }
     if (confirmingDelete) {
@@ -593,6 +623,7 @@ private fun VaultRoute(controller: ChurController) {
             searchTerms = terms,
             slots = slots,
             openAlbum = openAlbum,
+            libraryScopeTitle = openTag?.name ?: if (favoritesOnly) "Favorites" else null,
             widthDp = configuration.screenWidthDp,
             progress = message,
             operation = operation,
@@ -610,6 +641,8 @@ private fun VaultRoute(controller: ChurController) {
         actions = VaultActions(
             onDestination = {
                 openAlbum = null
+                openTag = null
+                favoritesOnly = false
                 selection = emptySet()
                 destination = it
             },
@@ -632,9 +665,12 @@ private fun VaultRoute(controller: ChurController) {
                 terms = it
                 controller.search(it)
             },
-            onOpenAlbum = { openAlbum = it },
+            onOpenAlbum = { openAlbum = it; openTag = null; favoritesOnly = false },
             onCloseAlbum = { openAlbum = null },
             onCreateAlbum = { creatingAlbum = true },
+            onShowAllMedia = { openTag = null; favoritesOnly = false; selection = emptySet() },
+            onShowFavorites = { openTag = null; favoritesOnly = true; selection = emptySet() },
+            onShowTags = { controller.loadTags(); managingTags = true },
             onRenameAlbum = { album, name -> controller.renameAlbum(album.albumId, name) },
             onDeleteAlbum = { album ->
                 controller.deleteAlbum(album.albumId) {
@@ -676,7 +712,13 @@ private fun VaultRoute(controller: ChurController) {
             },
             onTagSelection = {
                 controller.loadTags()
+                taggingIds = selection.sorted().map { it.fromHex() }
                 choosingTag = true
+            },
+            onSetSelectionFavorite = { favorite ->
+                controller.setFavoritesForAll(selection.sorted().map { it.fromHex() }, favorite) {
+                    selection = emptySet()
+                }
             },
             onRemoveSelectionFromAlbum = {
                 openAlbum?.let { album ->
@@ -722,6 +764,10 @@ private fun ViewerRoute(
     onDeleted: () -> Unit,
 ) {
     var detail by remember(projection.id) { mutableStateOf<ObjectDetail?>(null) }
+    var favorite by remember(projection.id) { mutableStateOf(projection.favorite) }
+    val tags by controller.tags.collectAsState()
+    var choosingTags by remember(projection.id) { mutableStateOf(false) }
+    val viewerScope = rememberCoroutineScope()
     var preview by remember(projection.id) { mutableStateOf<ImageBitmap?>(null) }
     var showDetail by remember(projection.id) { mutableStateOf(false) }
     var waveform by remember(projection.id) { mutableStateOf<ByteArray?>(null) }
@@ -775,14 +821,16 @@ private fun ViewerRoute(
     )
 
     ViewerScreen(
-        projection = projection,
+        projection = projection.copy(favorite = favorite),
         detail = detail,
         preview = preview,
         showDetail = showDetail,
         onBack = onBack,
         onToggleFavorite = {
-            controller.setFavorite(projection.objectId, !projection.favorite)
+            val next = !favorite
+            controller.setFavorite(projection.objectId, next) { favorite = next }
         },
+        onEditTags = { controller.loadTags(); choosingTags = true },
         onExport = { choosingExport = true },
         onDelete = { confirmingDelete = true },
         onToggleDetail = { showDetail = !showDetail },
@@ -794,6 +842,15 @@ private fun ViewerRoute(
         onCancelOperation = controller::cancelActiveOperation,
         status = status,
     )
+    if (choosingTags) {
+        val selected = listOf(projection.objectId)
+        val refresh: () -> Unit = { viewerScope.launch { detail = controller.detailOf(projection.objectId) } }
+        TagPickerDialog(tags = tags,
+            onAdd = { tag -> choosingTags = false; controller.setTagForAll(tag.tagId, selected, true, refresh) },
+            onRemove = { tag -> choosingTags = false; controller.setTagForAll(tag.tagId, selected, false, refresh) },
+            onCreate = { name -> choosingTags = false; controller.createTagWithObjects(name, selected, refresh) },
+            onDismiss = { choosingTags = false })
+    }
     if (confirmingDelete) {
         DeleteSelectionDialog(
             count = 1,

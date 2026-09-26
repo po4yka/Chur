@@ -697,9 +697,17 @@ class ChurController(
     }
 
     /** Sets or clears the favourite flag. */
-    fun setFavorite(objectId: ByteArray, favorite: Boolean) = guarded {
+    fun setFavorite(objectId: ByteArray, favorite: Boolean, onSuccess: () -> Unit = {}) = guarded {
         withContext(Dispatchers.Default) { repository.setFavorite(objectId, favorite) }
         reload()
+        onSuccess()
+    }
+
+    fun setFavoritesForAll(objectIds: List<ByteArray>, favorite: Boolean,
+                           onSuccess: () -> Unit = {}) = guarded {
+        withContext(Dispatchers.Default) { repository.setFavorites(objectIds, favorite) }
+        reload()
+        onSuccess()
     }
 
     /** Deletes an object, `CATALOG_SCHEMA_V1.md` §14.1. */
@@ -825,7 +833,7 @@ class ChurController(
         onSuccess: () -> Unit = {},
     ) = guarded {
         withContext(Dispatchers.Default) {
-            objectIds.forEach { repository.setObjectTag(tagId, it, tagged) }
+            repository.applyTagSelection(tagId, "", objectIds, tagged)
         }
         reload()
         onSuccess()
@@ -833,10 +841,27 @@ class ChurController(
 
     /** Creates a tag and applies it to the selection. */
     fun createTagWithObjects(name: String, objectIds: List<ByteArray>, onSuccess: () -> Unit = {}) = guarded {
-        val tagId = withContext(Dispatchers.Default) { repository.createTag(name) }
         withContext(Dispatchers.Default) {
-            objectIds.forEach { repository.setObjectTag(tagId, it, true) }
+            repository.applyTagSelection(null, name, objectIds, true)
         }
+        reload()
+        _tags.value = withContext(Dispatchers.Default) { repository.tags() }
+        onSuccess()
+    }
+
+    fun createTag(name: String) = guarded {
+        withContext(Dispatchers.Default) { repository.createTag(name) }
+        _tags.value = withContext(Dispatchers.Default) { repository.tags() }
+    }
+
+    fun renameTag(tagId: ByteArray, name: String) = guarded {
+        withContext(Dispatchers.Default) { repository.renameTag(tagId, name) }
+        reload()
+        _tags.value = withContext(Dispatchers.Default) { repository.tags() }
+    }
+
+    fun deleteTag(tagId: ByteArray, onSuccess: () -> Unit = {}) = guarded {
+        withContext(Dispatchers.Default) { repository.deleteTag(tagId) }
         reload()
         _tags.value = withContext(Dispatchers.Default) { repository.tags() }
         onSuccess()

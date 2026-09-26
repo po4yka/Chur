@@ -27,6 +27,7 @@ import dev.po4yka.chur.app.theme.DeleteGlyph
 import dev.po4yka.chur.app.theme.DiagnosticTextStyle
 import dev.po4yka.chur.app.theme.ExportGlyph
 import dev.po4yka.chur.app.theme.FavoriteGlyph
+import dev.po4yka.chur.app.theme.FavoriteFilledGlyph
 import dev.po4yka.chur.app.theme.ViewerColors
 import dev.po4yka.chur.ffi.ObjectDetail
 import dev.po4yka.chur.ffi.ObjectProjection
@@ -52,6 +53,7 @@ fun ViewerScreen(
     showDetail: Boolean,
     onBack: () -> Unit,
     onToggleFavorite: () -> Unit,
+    onEditTags: () -> Unit,
     onExport: () -> Unit,
     onDelete: () -> Unit,
     onToggleDetail: () -> Unit,
@@ -131,10 +133,14 @@ fun ViewerScreen(
         ) {
             IconButton(onClick = onToggleFavorite) {
                 Icon(
-                    FavoriteGlyph,
+                    if (projection.favorite) FavoriteFilledGlyph else FavoriteGlyph,
                     contentDescription = if (projection.favorite) "Remove favourite" else "Favourite",
                     tint = ViewerColors.content,
                 )
+            }
+            IconButton(onClick = onEditTags) {
+                Text("Tags", color = ViewerColors.content,
+                    style = MaterialTheme.typography.labelLarge)
             }
             IconButton(onClick = onExport, enabled = operation == null) {
                 Icon(ExportGlyph, contentDescription = "Export", tint = ViewerColors.content)

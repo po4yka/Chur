@@ -2225,6 +2225,139 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectSetTag<'local>(
     })
 }
 
+/// Sets favourite state for a selection.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_favoritesSet<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    object_ids: JByteArray<'local>,
+    favorite: jboolean,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(ids) = byte_array(env, &object_ids) else {
+            return INVALID_INPUT;
+        };
+        if ids.is_empty() || ids.len() % ID_LEN != 0 {
+            return INVALID_INPUT;
+        }
+        let Ok(count) = u32::try_from(ids.len() / ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        unsafe {
+            chur_ffi::product::chur_favorites_set(
+                handle_of(session),
+                ids.as_ptr(),
+                count,
+                u8::from(favorite),
+            )
+        }
+    })
+}
+
+/// Applies or removes one tag from a selection, optionally creating it.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_tagApplySelection<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    tag_id: JByteArray<'local>,
+    name: JString<'local>,
+    object_ids: JByteArray<'local>,
+    tagged: jboolean,
+    out_tag_id: JByteArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(tag) = fixed_array(env, &tag_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        if fixed_array(env, &out_tag_id, ID_LEN).is_none() {
+            return INVALID_INPUT;
+        }
+        let Some(name) = string_bytes(env, &name) else {
+            return INVALID_INPUT;
+        };
+        let Some(ids) = byte_array(env, &object_ids) else {
+            return INVALID_INPUT;
+        };
+        if ids.is_empty() || ids.len() % ID_LEN != 0 {
+            return INVALID_INPUT;
+        }
+        let (Ok(length), Ok(count)) =
+            (u32::try_from(name.len()), u32::try_from(ids.len() / ID_LEN))
+        else {
+            return INVALID_INPUT;
+        };
+        let mut output = [0u8; ID_LEN];
+        let status = unsafe {
+            chur_ffi::product::chur_tag_apply_selection(
+                handle_of(session),
+                tag.as_ptr(),
+                name.as_ptr(),
+                length,
+                ids.as_ptr(),
+                count,
+                u8::from(tagged),
+                output.as_mut_ptr(),
+            )
+        };
+        if status != 0 {
+            return status;
+        }
+        if write_bytes(env, &out_tag_id, &output) {
+            0
+        } else {
+            INVALID_INPUT
+        }
+    })
+}
+
+/// Renames one tag.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_tagRename<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    tag_id: JByteArray<'local>,
+    name: JString<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(tag) = fixed_array(env, &tag_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        let Some(name) = string_bytes(env, &name) else {
+            return INVALID_INPUT;
+        };
+        let Ok(length) = u32::try_from(name.len()) else {
+            return INVALID_INPUT;
+        };
+        unsafe {
+            chur_ffi::product::chur_tag_rename(
+                handle_of(session),
+                tag.as_ptr(),
+                name.as_ptr(),
+                length,
+            )
+        }
+    })
+}
+
+/// Deletes one tag.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_tagDelete<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    tag_id: JByteArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(tag) = fixed_array(env, &tag_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        unsafe { chur_ffi::product::chur_tag_delete(handle_of(session), tag.as_ptr()) }
+    })
+}
+
 /// Encrypts and records one derived asset from a direct buffer.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_derivedPut<'local>(

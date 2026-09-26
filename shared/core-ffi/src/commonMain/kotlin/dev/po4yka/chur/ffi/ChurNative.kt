@@ -375,6 +375,8 @@ internal expect object ChurNative {
         favorite: Boolean,
     ): Int
 
+    fun favoritesSet(session: Long, objectIds: ByteArray, favorite: Boolean): Int
+
     fun objectDelete(
         session: Long,
         objectId: ByteArray,
@@ -436,6 +438,13 @@ internal expect object ChurNative {
         objectId: ByteArray,
         tagged: Boolean,
     ): Int
+
+    fun tagApplySelection(session: Long, tagId: ByteArray, name: String,
+                          objectIds: ByteArray, tagged: Boolean, outTagId: ByteArray): Int
+
+    fun tagRename(session: Long, tagId: ByteArray, name: String): Int
+
+    fun tagDelete(session: Long, tagId: ByteArray): Int
 
     fun derivedPut(
         session: Long,

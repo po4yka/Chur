@@ -679,6 +679,66 @@ pub fn set_favorite(db: &mut CatalogDb, object_id: &Id, favorite: bool, now_ms: 
     })
 }
 
+/// Changes the favourite state of a selection as one catalog operation.
+pub fn set_favorites(
+    db: &mut CatalogDb,
+    object_ids: &[Id],
+    favorite: bool,
+    now_ms: u64,
+) -> Result<()> {
+    ensure!(
+        !object_ids.is_empty() && object_ids.len() as u64 <= limits::OBJECTS_MAX,
+        InvalidInput,
+        "the selection size is outside the object bound"
+    );
+    let mut distinct = HashSet::with_capacity(object_ids.len());
+    ensure!(
+        object_ids.iter().all(|id| distinct.insert(*id)),
+        InvalidInput,
+        "the selection repeats an object"
+    );
+    let added = as_sqlite_integer(now_ms, "the time is out of range")?;
+    db.transaction(|transaction| {
+        for id in object_ids {
+            ensure!(
+                count_with(
+                    transaction,
+                    "SELECT count(*) FROM objects WHERE object_id = ?1 AND state = 1",
+                    [id.as_bytes().as_slice()]
+                )? == 1,
+                NotFound,
+                "the selection contains no listable object"
+            );
+        }
+        for id in object_ids {
+            transaction
+                .execute(
+                    "UPDATE objects SET favorite = ?2 WHERE object_id = ?1",
+                    params![id.as_bytes().as_slice(), i64::from(favorite)],
+                )
+                .map_err(|error| map_sqlite(error, "the favourite flag could not be set"))?;
+            if favorite {
+                transaction
+                    .execute(
+                        "INSERT INTO favorites (object_id, capture_time_ms, added_ms)
+                     SELECT object_id, capture_time_ms, ?2 FROM objects WHERE object_id = ?1
+                     ON CONFLICT(object_id) DO NOTHING",
+                        params![id.as_bytes().as_slice(), added],
+                    )
+                    .map_err(|error| map_sqlite(error, "the favourite row could not be written"))?;
+            } else {
+                transaction
+                    .execute(
+                        "DELETE FROM favorites WHERE object_id = ?1",
+                        [id.as_bytes().as_slice()],
+                    )
+                    .map_err(|error| map_sqlite(error, "the favourite row could not be removed"))?;
+            }
+        }
+        bump_generation(transaction)
+    })
+}
+
 /// Records a verification verdict, §5.1 and §13.
 ///
 /// Proven corruption is a lifecycle change rather than a verdict, so it is
@@ -1478,6 +1538,183 @@ pub fn put_tag(db: &mut CatalogDb, tag: &Tag) -> Result<()> {
     })
 }
 
+/// Renames a tag and refreshes every affected search projection atomically.
+pub fn rename_tag(db: &mut CatalogDb, tag_id: &Id, name: &str) -> Result<()> {
+    Tag {
+        tag_id: *tag_id,
+        name: name.to_owned(),
+        created_ms: 0,
+    }
+    .check()?;
+    db.transaction(|transaction| {
+        let changed = transaction
+            .execute(
+                "UPDATE tags SET name = ?2 WHERE tag_id = ?1",
+                params![tag_id.as_bytes().as_slice(), name],
+            )
+            .map_err(|error| map_sqlite(error, "the tag could not be renamed"))?;
+        ensure!(changed == 1, NotFound, "the tag does not exist");
+        let ids = tag_member_ids(transaction, tag_id)?;
+        for id in &ids {
+            reindex_search(transaction, id)?;
+        }
+        bump_generation(transaction)
+    })
+}
+
+/// Deletes a tag, removes its memberships, and refreshes search in one transaction.
+pub fn delete_tag(db: &mut CatalogDb, tag_id: &Id) -> Result<()> {
+    db.transaction(|transaction| {
+        let ids = tag_member_ids(transaction, tag_id)?;
+        transaction
+            .execute(
+                "DELETE FROM object_tags WHERE tag_id = ?1",
+                [tag_id.as_bytes().as_slice()],
+            )
+            .map_err(|error| map_sqlite(error, "the tag memberships could not be removed"))?;
+        let changed = transaction
+            .execute(
+                "DELETE FROM tags WHERE tag_id = ?1",
+                [tag_id.as_bytes().as_slice()],
+            )
+            .map_err(|error| map_sqlite(error, "the tag could not be deleted"))?;
+        ensure!(changed == 1, NotFound, "the tag does not exist");
+        for id in &ids {
+            reindex_search(transaction, id)?;
+        }
+        bump_generation(transaction)
+    })
+}
+
+fn tag_member_ids(transaction: &Transaction<'_>, tag_id: &Id) -> Result<Vec<Id>> {
+    let mut statement = transaction
+        .prepare("SELECT object_id FROM object_tags WHERE tag_id = ?1")
+        .map_err(|error| map_sqlite(error, "the tag members could not be read"))?;
+    let rows = statement
+        .query_map([tag_id.as_bytes().as_slice()], |row| {
+            row.get::<_, Vec<u8>>(0)
+        })
+        .map_err(|error| map_sqlite(error, "the tag members could not be read"))?;
+    rows.map(|row| {
+        let bytes = row.map_err(|error| map_sqlite(error, "a tag member could not be read"))?;
+        Id::from_slice(&bytes)
+    })
+    .collect()
+}
+
+/// Uses an existing tag or creates one together with its selected memberships.
+pub fn apply_tag_selection(
+    db: &mut CatalogDb,
+    tag_id: Option<&Id>,
+    new_tag: Option<&Tag>,
+    object_ids: &[Id],
+    tagged: bool,
+) -> Result<Id> {
+    ensure!(
+        !object_ids.is_empty() && object_ids.len() as u64 <= limits::OBJECTS_MAX,
+        InvalidInput,
+        "the selection size is outside the object bound"
+    );
+    ensure!(
+        tag_id.is_some() != new_tag.is_some() && (tagged || new_tag.is_none()),
+        InvalidInput,
+        "the tag target is invalid"
+    );
+    let mut distinct = HashSet::with_capacity(object_ids.len());
+    ensure!(
+        object_ids.iter().all(|id| distinct.insert(*id)),
+        InvalidInput,
+        "the selection repeats an object"
+    );
+    if let Some(tag) = new_tag {
+        tag.check()?;
+    }
+    db.transaction(|transaction| {
+        let id = if let Some(tag) = new_tag {
+            ensure!(
+                count(transaction, "SELECT count(*) FROM tags")? < limits::TAGS_MAX,
+                ResourceLimitExceeded,
+                "the vault holds the maximum of tags"
+            );
+            transaction
+                .execute(
+                    "INSERT INTO tags (tag_id, name, created_ms) VALUES (?1, ?2, ?3)",
+                    params![
+                        tag.tag_id.as_bytes().as_slice(),
+                        tag.name.as_str(),
+                        as_sqlite_integer(tag.created_ms, "the tag time is out of range")?
+                    ],
+                )
+                .map_err(|error| map_sqlite(error, "the tag could not be created"))?;
+            tag.tag_id
+        } else if let Some(id) = tag_id {
+            *id
+        } else {
+            bail!(InvalidInput, "the tag target is missing");
+        };
+        ensure!(
+            count_with(
+                transaction,
+                "SELECT count(*) FROM tags WHERE tag_id = ?1",
+                [id.as_bytes().as_slice()]
+            )? == 1,
+            NotFound,
+            "the tag does not exist"
+        );
+        for object_id in object_ids {
+            ensure!(
+                count_with(
+                    transaction,
+                    "SELECT count(*) FROM objects WHERE object_id = ?1 AND state = 1",
+                    [object_id.as_bytes().as_slice()]
+                )? == 1,
+                NotFound,
+                "the selection contains no listable object"
+            );
+            if tagged {
+                let already = count_with(
+                    transaction,
+                    "SELECT count(*) FROM object_tags WHERE tag_id = ?1 AND object_id = ?2",
+                    [id.as_bytes().as_slice(), object_id.as_bytes().as_slice()],
+                )?;
+                if already == 0 {
+                    ensure!(
+                        count_with(
+                            transaction,
+                            "SELECT count(*) FROM object_tags WHERE object_id = ?1",
+                            [object_id.as_bytes().as_slice()]
+                        )? < u64::from(limits::TAGS_PER_OBJECT_MAX),
+                        ResourceLimitExceeded,
+                        "the object holds the maximum of tags"
+                    );
+                }
+            }
+        }
+        for object_id in object_ids {
+            if tagged {
+                transaction
+                    .execute(
+                        "INSERT INTO object_tags (tag_id, object_id, capture_time_ms)
+                     SELECT ?1, object_id, capture_time_ms FROM objects WHERE object_id = ?2
+                     ON CONFLICT(tag_id, object_id) DO NOTHING",
+                        params![id.as_bytes().as_slice(), object_id.as_bytes().as_slice()],
+                    )
+                    .map_err(|error| map_sqlite(error, "the tag could not be applied"))?;
+            } else {
+                transaction
+                    .execute(
+                        "DELETE FROM object_tags WHERE tag_id = ?1 AND object_id = ?2",
+                        params![id.as_bytes().as_slice(), object_id.as_bytes().as_slice()],
+                    )
+                    .map_err(|error| map_sqlite(error, "the tag could not be removed"))?;
+            }
+            reindex_search(transaction, object_id)?;
+        }
+        bump_generation(transaction)?;
+        Ok(id)
+    })
+}
+
 /// Adds or removes a tag on one object, §9.
 ///
 /// The search index is rewritten in the same transaction, which is the second
@@ -1647,6 +1884,85 @@ mod tests {
     use chur_core::ChurStatus;
     use chur_crypto::{Key, Nonce, random};
     use chur_format::constants::MediaClass;
+
+    #[test]
+    fn tag_selection_and_management_keep_search_and_refusals_atomic() {
+        let mut fixture = fixture();
+        let first = activation(&fixture, 10, "one.jpg");
+        let second = activation(&fixture, 11, "two.jpg");
+        let ids = [first.object.object_id, second.object.object_id];
+        activate_object(&mut fixture.db, &first).expect("first");
+        activate_object(&mut fixture.db, &second).expect("second");
+        let tag = Tag {
+            tag_id: random::id().expect("tag"),
+            name: "Amber".into(),
+            created_ms: 1,
+        };
+        assert_eq!(
+            rejection(apply_tag_selection(
+                &mut fixture.db,
+                None,
+                Some(&tag),
+                &[ids[0], random::id().expect("missing")],
+                true
+            )),
+            ChurStatus::NotFound
+        );
+        assert!(tags(&fixture.db).expect("tags").is_empty());
+        apply_tag_selection(&mut fixture.db, None, Some(&tag), &ids, true)
+            .expect("create and apply");
+        assert_eq!(
+            object_tags(&fixture.db, &ids[0]).expect("first tags").len(),
+            1
+        );
+        assert_eq!(
+            object_tags(&fixture.db, &ids[1])
+                .expect("second tags")
+                .len(),
+            1
+        );
+        rename_tag(&mut fixture.db, &tag.tag_id, "Copper").expect("rename");
+        assert_eq!(
+            object_tags(&fixture.db, &ids[0]).expect("renamed tags")[0].name,
+            "Copper"
+        );
+        apply_tag_selection(&mut fixture.db, Some(&tag.tag_id), None, &[ids[1]], false)
+            .expect("remove one");
+        assert!(
+            object_tags(&fixture.db, &ids[1])
+                .expect("removed tags")
+                .is_empty()
+        );
+        delete_tag(&mut fixture.db, &tag.tag_id).expect("delete");
+        assert!(
+            object_tags(&fixture.db, &ids[0])
+                .expect("deleted tags")
+                .is_empty()
+        );
+        assert!(tags(&fixture.db).expect("tags").is_empty());
+    }
+
+    #[test]
+    fn favourite_selection_refuses_missing_objects_without_partial_update() {
+        let mut fixture = fixture();
+        let first = activation(&fixture, 10, "one.jpg");
+        let id = first.object.object_id;
+        activate_object(&mut fixture.db, &first).expect("first");
+        assert_eq!(
+            rejection(set_favorites(
+                &mut fixture.db,
+                &[id, random::id().expect("missing")],
+                true,
+                2
+            )),
+            ChurStatus::NotFound
+        );
+        assert!(!object(&fixture.db, &id).expect("object").favorite);
+        set_favorites(&mut fixture.db, &[id], true, 3).expect("favorite");
+        assert!(object(&fixture.db, &id).expect("object").favorite);
+        set_favorites(&mut fixture.db, &[id], false, 4).expect("unfavorite");
+        assert!(!object(&fixture.db, &id).expect("object").favorite);
+    }
 
     #[test]
     fn nested_album_move_refuses_a_cycle_and_delete_keeps_media() {

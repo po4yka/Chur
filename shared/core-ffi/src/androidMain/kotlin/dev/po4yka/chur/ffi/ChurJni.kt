@@ -378,6 +378,8 @@ internal object ChurJni {
         favorite: Boolean,
     ): Int
 
+    external fun favoritesSet(session: Long, objectIds: ByteArray, favorite: Boolean): Int
+
     external fun objectDelete(
         session: Long,
         objectId: ByteArray,
@@ -439,6 +441,13 @@ internal object ChurJni {
         objectId: ByteArray,
         tagged: Boolean,
     ): Int
+
+    external fun tagApplySelection(session: Long, tagId: ByteArray, name: String,
+                                   objectIds: ByteArray, tagged: Boolean, outTagId: ByteArray): Int
+
+    external fun tagRename(session: Long, tagId: ByteArray, name: String): Int
+
+    external fun tagDelete(session: Long, tagId: ByteArray): Int
 
     external fun derivedPut(
         session: Long,

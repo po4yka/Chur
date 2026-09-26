@@ -18,7 +18,7 @@
  * recipient-device surface of section 6.13, and the sharing discovery surface
  * of section 6.14, and the private tag list of section 6.15. Adding an export raises the minor
  * ABI version; changing or removing one raises the major. The library reports
- * 2.16.
+ * 2.17.
  */
 
 #ifndef CHUR_H
@@ -661,6 +661,19 @@ chur_status_t chur_tag_list(chur_handle_t session, uint8_t *destination,
                             size_t capacity, size_t *bytes_written);
 chur_status_t chur_object_set_tag(chur_handle_t session, const uint8_t *tag_id,
                                   const ChurObjectRefV1 *object, uint8_t tagged);
+/* object_ids is object_count packed 16-byte identifiers. Zero tag_id creates
+ * name; an existing tag requires an empty name. Output receives the tag id. */
+chur_status_t chur_favorites_set(chur_handle_t session,
+                                const uint8_t *object_ids, uint32_t object_count,
+                                uint8_t favorite);
+chur_status_t chur_tag_apply_selection(chur_handle_t session,
+                                      const uint8_t *tag_id,
+                                      const uint8_t *name, uint32_t name_length,
+                                      const uint8_t *object_ids, uint32_t object_count,
+                                      uint8_t tagged, uint8_t *out_tag_id);
+chur_status_t chur_tag_rename(chur_handle_t session, const uint8_t *tag_id,
+                              const uint8_t *name, uint32_t name_length);
+chur_status_t chur_tag_delete(chur_handle_t session, const uint8_t *tag_id);
 
 chur_status_t chur_derived_put(chur_handle_t session,
                                const ChurObjectRefV1 *object, uint32_t kind,
