@@ -16,6 +16,18 @@ SPEC.loader.exec_module(device)
 
 
 class DeviceProtocolTest(unittest.TestCase):
+    def test_session_link_accepts_only_the_expected_local_session(self):
+        code = "0123456789abcdef" * 2
+        self.assertEqual(device.parse_session_link(f"chur://device-control/v1?port=54321#{code}"),
+                         (54321, code))
+        for link in (f"chur://device-control/v1?port=0#{code}",
+                     f"chur://device-control/v1?port=65536#{code}",
+                     f"chur://device-control/v1?port=54321#{code.upper()}",
+                     f"chur://other/v1?port=54321#{code}",
+                     f"chur://device-control/v1?port=54321#{code}&extra=1"):
+            with self.subTest(link=link), self.assertRaises(ValueError):
+                device.parse_session_link(link)
+
     def test_import_serves_nonsequential_ranges_and_receives_commit(self):
         host, remote = socket.socketpair()
         observed = []

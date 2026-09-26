@@ -1010,7 +1010,19 @@ Use the system Photo Picker and file providers. Transfer open descriptors or see
 
 ### Control from a connected computer
 
-Unlock the vault on Android, open **Settings → Control from computer**, and keep that dialog visible. With USB debugging authorized and `adb` installed on the computer, use the port shown on the phone. The command prompts for the code displayed in the same dialog; `--code-stdin` is available for a private input pipe. Close the dialog to revoke the session.
+Unlock the vault on Android, open **Settings → Control from computer**, and keep that dialog visible. With USB debugging authorized and `adb` installed on the computer, tap **Copy session link** and transfer the link privately to your computer. It contains the session code; do not put it in a command argument, shell history, or a public message. Paste it at the hidden prompt:
+
+```sh
+python3 scripts/chur-device.py --session-stdin list --details
+```
+
+You can also pipe the link from a trusted clipboard tool (for example, after copying it to the macOS clipboard):
+
+```sh
+pbpaste | python3 scripts/chur-device.py --session-stdin list --details
+```
+
+You can still enter the displayed port and code manually. The command prompts for the code; `--code-stdin` is available for a private input pipe. Tap **Stop** or close the dialog to revoke the session.
 
 ```sh
 python3 scripts/chur-device.py --port PORT list --details

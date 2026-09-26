@@ -1,10 +1,27 @@
 package dev.po4yka.chur.android
 
-import android.net.Uri
+import android.content.ClipData
+import android.content.ClipDescription
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.PersistableBundle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -14,11 +31,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.AppRoute
 import dev.po4yka.chur.app.ActiveOperation
 import dev.po4yka.chur.app.ChurController
@@ -428,14 +445,54 @@ private fun VaultRoute(controller: ChurController) {
     }
 
     devicePairing?.let { pairing ->
+        var copied by remember(pairing) { mutableStateOf(false) }
+        val sessionLink = "chur://device-control/v1?port=${pairing.port}#${pairing.code}"
         AlertDialog(
             onDismissRequest = deviceControl::stop,
             title = { Text("Control from computer") },
-            text = { Text(
-                "Keep Chur open on this screen. Run scripts/chur-device.py with " +
-                    "--port ${pairing.port}. Enter this one-session code when asked:\n${pairing.code}"
-            ) },
-            confirmButton = { TextButton(onClick = deviceControl::stop) { Text("Stop") } },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text("Session active", color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelLarge)
+                    Text("Keep Chur open and unlocked. Connect your computer with USB debugging enabled.")
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = MaterialTheme.shapes.medium,
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Text("Port", style = MaterialTheme.typography.labelMedium)
+                            Text("${pairing.port}", fontFamily = FontFamily.Monospace)
+                            Text("One-session code", style = MaterialTheme.typography.labelMedium)
+                            Text(pairing.code, fontFamily = FontFamily.Monospace)
+                        }
+                    }
+                    Text(
+                        "Copy the link to use with scripts/chur-device.py. Keep it private: " +
+                            "anyone with the link and ADB access can control this vault. " +
+                            "Stop revokes the session.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    val clip = ClipData.newPlainText("Chur control session", sessionLink)
+                    clip.description.extras = PersistableBundle().apply {
+                        putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+                    }
+                    (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
+                        .setPrimaryClip(clip)
+                    copied = true
+                }) { Text(if (copied) "Copied" else "Copy session link") }
+            },
+            dismissButton = { TextButton(onClick = deviceControl::stop) { Text("Stop") } },
         )
     }
 

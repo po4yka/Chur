@@ -7,12 +7,21 @@ import getpass
 import json
 import mimetypes
 from pathlib import Path
+import re
 import socket
 import struct
 import subprocess
 import sys
 
 MAX_FRAME = 262_144
+SESSION_LINK = re.compile(r"chur://device-control/v1\?port=([0-9]{1,5})#([0-9a-f]{32})")
+
+
+def parse_session_link(link):
+    match = SESSION_LINK.fullmatch(link)
+    if match is None or not 1 <= int(match[1]) <= 65535:
+        raise ValueError("invalid Chur session link")
+    return int(match[1]), match[2]
 
 
 def frame_send(connection, message):
@@ -80,7 +89,9 @@ def command_request(args):
 
 def parser():
     cli = argparse.ArgumentParser(description=__doc__)
-    cli.add_argument("--port", type=int, required=True, help="device port shown in Chur settings")
+    session = cli.add_mutually_exclusive_group(required=True)
+    session.add_argument("--port", type=int, help="device port shown in Chur settings")
+    session.add_argument("--session-stdin", action="store_true", help="read a copied session link from stdin")
     cli.add_argument("--serial", help="ADB device serial, required if several devices are attached")
     cli.add_argument("--code-stdin", action="store_true", help="read the one-session code from stdin")
     commands = cli.add_subparsers(dest="action", required=True)
@@ -112,11 +123,19 @@ def parser():
 
 def main():
     args = parser().parse_args()
-    if not 1 <= args.port <= 65535:
-        raise ValueError("invalid device port")
-    code = sys.stdin.readline().strip() if args.code_stdin else getpass.getpass("Code shown in Chur: ").strip()
-    if len(code) != 32 or any(char not in "0123456789abcdef" for char in code):
-        raise ValueError("invalid pairing code")
+    if args.session_stdin:
+        if args.code_stdin:
+            raise ValueError("--code-stdin cannot be used with --session-stdin")
+        link = (getpass.getpass("Paste Chur session link: ") if sys.stdin.isatty()
+                else sys.stdin.readline().rstrip("\r\n"))
+        port, code = parse_session_link(link)
+    else:
+        port = args.port
+        if not 1 <= port <= 65535:
+            raise ValueError("invalid device port")
+        code = sys.stdin.readline().strip() if args.code_stdin else getpass.getpass("Code shown in Chur: ").strip()
+        if len(code) != 32 or any(char not in "0123456789abcdef" for char in code):
+            raise ValueError("invalid pairing code")
     if args.action == "import":
         for path in args.paths:
             if not path.is_file():
@@ -125,7 +144,7 @@ def main():
     with socket.socket() as reserved:
         reserved.bind(("127.0.0.1", 0))
         local_port = reserved.getsockname()[1]
-    subprocess.run(adb + ["forward", "--no-rebind", f"tcp:{local_port}", f"tcp:{args.port}"],
+    subprocess.run(adb + ["forward", "--no-rebind", f"tcp:{local_port}", f"tcp:{port}"],
                    check=True, stdout=subprocess.DEVNULL)
     try:
         with socket.create_connection(("127.0.0.1", local_port), timeout=15) as connection:
