@@ -405,6 +405,17 @@ internal expect object ChurNative {
         member: Boolean,
     ): Int
 
+    fun albumPlaceObjects(
+        session: Long,
+        targetId: ByteArray,
+        name: String,
+        parentId: ByteArray,
+        sourceId: ByteArray,
+        objectIds: ByteArray,
+        moveMembers: Boolean,
+        outAlbumId: ByteArray,
+    ): Int
+
     fun albumList(
         session: Long,
         destination: ChurBuffer,

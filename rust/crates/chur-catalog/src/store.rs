@@ -16,6 +16,7 @@ use chur_format::{
     envelope::ObjectKeyEnvelope,
 };
 use rusqlite::{OptionalExtension, Transaction, params};
+use std::collections::HashSet;
 
 use crate::db::{CatalogDb, as_sqlite_integer, from_sqlite_integer, map_sqlite};
 use crate::model::{
@@ -1093,6 +1094,154 @@ pub fn set_album_membership(
     })
 }
 
+/// Destination for one atomic selection placement.
+pub enum AlbumDestination<'a> {
+    /// Use an existing album.
+    Existing(&'a Id),
+    /// Create a new album under the optional parent before placing the objects.
+    New(&'a Album, Option<&'a Id>),
+}
+
+/// Adds a selection to an album, or moves it from one album, in one catalog transaction.
+/// Creating the destination is part of the same transaction.
+pub fn place_album_members(
+    db: &mut CatalogDb,
+    destination: AlbumDestination<'_>,
+    source: Option<&Id>,
+    object_ids: &[Id],
+    move_members: bool,
+    now_ms: u64,
+) -> Result<Id> {
+    ensure!(
+        !object_ids.is_empty() && object_ids.len() as u64 <= limits::ALBUM_MEMBERSHIPS_MAX,
+        InvalidInput,
+        "the selection size is outside the album bound"
+    );
+    ensure!(
+        !move_members || source.is_some(),
+        InvalidInput,
+        "a move needs a source album"
+    );
+    let moving_source = if move_members { source } else { None };
+    let mut distinct = HashSet::with_capacity(object_ids.len());
+    ensure!(
+        object_ids.iter().all(|id| distinct.insert(*id)),
+        InvalidInput,
+        "the selection repeats an object"
+    );
+    if let AlbumDestination::New(album, _) = &destination {
+        album.check()?;
+    }
+    let added = as_sqlite_integer(now_ms, "the time is out of range")?;
+    db.transaction(|transaction| {
+        let target = match destination {
+            AlbumDestination::Existing(id) => {
+                ensure!(
+                    count_with(transaction, "SELECT count(*) FROM albums WHERE album_id = ?1", [id.as_bytes().as_slice()])? == 1,
+                    NotFound,
+                    "the target album does not exist"
+                );
+                *id
+            }
+            AlbumDestination::New(album, parent) => {
+                ensure!(
+                    count(transaction, "SELECT count(*) FROM albums")? < limits::ALBUMS_MAX,
+                    ResourceLimitExceeded,
+                    "the vault holds the maximum of albums"
+                );
+                if let Some(parent) = parent {
+                    ensure!(
+                        count_with(transaction, "SELECT count(*) FROM albums WHERE album_id = ?1", [parent.as_bytes().as_slice()])? == 1,
+                        NotFound,
+                        "the parent album does not exist"
+                    );
+                }
+                transaction.execute(
+                    "INSERT INTO albums (album_id, name, created_ms, revision, parent_album_id, sort_position)
+                     VALUES (?1, ?2, ?3, ?4, ?5,
+                       (SELECT coalesce(max(sort_position) + 1, 0) FROM albums WHERE parent_album_id IS ?5))",
+                    params![
+                        album.album_id.as_bytes().as_slice(), album.name.as_str(),
+                        as_sqlite_integer(album.created_ms, "the creation time is out of range")?,
+                        as_sqlite_integer(album.revision, "the revision is out of range")?,
+                        parent.map(|id| id.as_bytes().as_slice()),
+                    ],
+                ).map_err(|error| map_sqlite(error, "the target album could not be created"))?;
+                album.album_id
+            }
+        };
+        if let Some(source) = moving_source {
+            ensure!(
+                count_with(transaction, "SELECT count(*) FROM albums WHERE album_id = ?1", [source.as_bytes().as_slice()])? == 1,
+                NotFound,
+                "the source album does not exist"
+            );
+        }
+        let mut missing = 0u64;
+        for id in object_ids {
+            ensure!(
+                count_with(transaction, "SELECT count(*) FROM objects WHERE object_id = ?1 AND state = 1", [id.as_bytes().as_slice()])? == 1,
+                NotFound,
+                "the selection contains no listable object"
+            );
+            if let Some(source) = moving_source {
+                ensure!(
+                    count_with(transaction,
+                        "SELECT count(*) FROM album_memberships WHERE album_id = ?1 AND object_id = ?2",
+                        [source.as_bytes().as_slice(), id.as_bytes().as_slice()])? == 1,
+                    Conflict,
+                    "the selection is no longer in the source album"
+                );
+            }
+            if count_with(transaction,
+                "SELECT count(*) FROM album_memberships WHERE album_id = ?1 AND object_id = ?2",
+                [target.as_bytes().as_slice(), id.as_bytes().as_slice()])? == 0 {
+                missing += 1;
+            }
+        }
+        let present = count_with(transaction,
+            "SELECT count(*) FROM album_memberships WHERE album_id = ?1",
+            [target.as_bytes().as_slice()])?;
+        ensure!(
+            present + missing <= limits::ALBUM_MEMBERSHIPS_MAX,
+            ResourceLimitExceeded,
+            "the target album would exceed its membership bound"
+        );
+        for id in object_ids {
+            transaction.execute(
+                "INSERT INTO album_memberships
+                    (album_id, object_id, capture_time_ms, added_ms, revision, sort_position)
+                 SELECT ?1, object_id, capture_time_ms, ?3, 1,
+                    (SELECT coalesce(max(sort_position) + 1, 0)
+                     FROM album_memberships WHERE album_id = ?1)
+                   FROM objects WHERE object_id = ?2 AND state = 1
+                 ON CONFLICT(album_id, object_id) DO NOTHING",
+                params![target.as_bytes().as_slice(), id.as_bytes().as_slice(), added],
+            ).map_err(|error| map_sqlite(error, "the selected object could not be placed"))?;
+        }
+        if let Some(source) = moving_source {
+            if *source != target {
+                for id in object_ids {
+                    transaction.execute(
+                        "DELETE FROM album_memberships WHERE album_id = ?1 AND object_id = ?2",
+                        params![source.as_bytes().as_slice(), id.as_bytes().as_slice()],
+                    ).map_err(|error| map_sqlite(error, "the source membership could not be removed"))?;
+                }
+                transaction.execute(
+                    "UPDATE albums SET revision = revision + 1 WHERE album_id = ?1",
+                    [source.as_bytes().as_slice()],
+                ).map_err(|error| map_sqlite(error, "the source album revision could not advance"))?;
+            }
+        }
+        transaction.execute(
+            "UPDATE albums SET revision = revision + 1 WHERE album_id = ?1",
+            [target.as_bytes().as_slice()],
+        ).map_err(|error| map_sqlite(error, "the target album revision could not advance"))?;
+        bump_generation(transaction)?;
+        Ok(target)
+    })
+}
+
 /// Changes only an album's label; its identifier, descendants, and members stay put.
 pub fn rename_album(db: &mut CatalogDb, album_id: &Id, name: &str) -> Result<()> {
     Album {
@@ -1565,6 +1714,132 @@ mod tests {
         assert_eq!(listed[0].album.album_id, second);
         assert_eq!(listed[0].album.name, "Renamed");
         assert_eq!(listed[1].album.album_id, first);
+    }
+
+    #[test]
+    fn selection_move_is_atomic_and_add_keeps_the_source() {
+        let mut fixture = fixture();
+        let first = activation(&fixture, 10, "first.jpg");
+        let second = activation(&fixture, 11, "second.jpg");
+        let ids = [first.object.object_id, second.object.object_id];
+        activate_object(&mut fixture.db, &first).expect("first");
+        activate_object(&mut fixture.db, &second).expect("second");
+        let source = random::id().expect("source");
+        let target = random::id().expect("target");
+        for (id, name) in [(source, "Source"), (target, "Target")] {
+            put_album(
+                &mut fixture.db,
+                &Album {
+                    album_id: id,
+                    name: name.to_owned(),
+                    created_ms: 1,
+                    revision: 1,
+                },
+            )
+            .expect("album");
+        }
+        set_album_membership(&mut fixture.db, &source, &ids[0], true, 2).expect("source member");
+        assert_eq!(
+            rejection(place_album_members(
+                &mut fixture.db,
+                AlbumDestination::Existing(&target),
+                Some(&source),
+                &ids,
+                true,
+                3
+            )),
+            ChurStatus::Conflict,
+        );
+        let members = |db: &CatalogDb, album: Id| -> u64 {
+            db.connection()
+                .query_row(
+                    "SELECT count(*) FROM album_memberships WHERE album_id = ?1",
+                    [album.as_bytes().as_slice()],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("count") as u64
+        };
+        assert_eq!(members(&fixture.db, target), 0);
+        assert_eq!(members(&fixture.db, source), 1);
+        place_album_members(
+            &mut fixture.db,
+            AlbumDestination::Existing(&target),
+            Some(&source),
+            &ids,
+            false,
+            3,
+        )
+        .expect("add selection");
+        assert_eq!(members(&fixture.db, target), 2);
+        assert_eq!(members(&fixture.db, source), 1);
+        set_album_membership(&mut fixture.db, &source, &ids[1], true, 4)
+            .expect("second source member");
+        place_album_members(
+            &mut fixture.db,
+            AlbumDestination::Existing(&target),
+            Some(&source),
+            &ids,
+            true,
+            5,
+        )
+        .expect("move selection");
+        assert_eq!(members(&fixture.db, target), 2);
+        assert_eq!(members(&fixture.db, source), 0);
+    }
+
+    #[test]
+    fn creating_nested_destination_rolls_back_with_invalid_selection() {
+        let mut fixture = fixture();
+        let parent = random::id().expect("parent");
+        put_album(
+            &mut fixture.db,
+            &Album {
+                album_id: parent,
+                name: "Parent".to_owned(),
+                created_ms: 1,
+                revision: 1,
+            },
+        )
+        .expect("parent");
+        let child = Album {
+            album_id: random::id().expect("child"),
+            name: "Child".to_owned(),
+            created_ms: 2,
+            revision: 1,
+        };
+        assert_eq!(
+            rejection(place_album_members(
+                &mut fixture.db,
+                AlbumDestination::New(&child, Some(&parent)),
+                None,
+                &[random::id().expect("missing object")],
+                false,
+                3
+            )),
+            ChurStatus::NotFound,
+        );
+        assert_eq!(albums(&fixture.db).expect("albums").len(), 1);
+        let media = activation(&fixture, 10, "image.jpg");
+        let object_id = media.object.object_id;
+        activate_object(&mut fixture.db, &media).expect("import");
+        place_album_members(
+            &mut fixture.db,
+            AlbumDestination::New(&child, Some(&parent)),
+            None,
+            &[object_id],
+            false,
+            4,
+        )
+        .expect("create and add");
+        let listing = albums(&fixture.db).expect("albums");
+        assert_eq!(
+            listing
+                .iter()
+                .find(|row| row.album.album_id == child.album_id)
+                .expect("child")
+                .parent_id,
+            Some(parent)
+        );
     }
 
     struct Fixture {

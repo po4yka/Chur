@@ -244,6 +244,17 @@ class VaultRepository(
     suspend fun setAlbumMembership(albumId: ByteArray, objectId: ByteArray, member: Boolean) =
         withSession { ChurVault.setAlbumMembership(it, albumId, objectId, member) }
 
+    suspend fun placeAlbumObjects(
+        targetId: ByteArray?,
+        newName: String,
+        parentId: ByteArray?,
+        sourceId: ByteArray?,
+        objectIds: List<ByteArray>,
+        moveMembers: Boolean,
+    ): ByteArray = withSession {
+        ChurVault.placeAlbumObjects(it, targetId, newName, parentId, sourceId, objectIds, moveMembers)
+    }
+
     /** Creates a tag. */
     suspend fun createTag(name: String): ByteArray = withSession { ChurVault.createTag(it, name) }
 

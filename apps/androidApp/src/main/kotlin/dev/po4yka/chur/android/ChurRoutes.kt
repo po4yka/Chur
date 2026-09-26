@@ -75,6 +75,7 @@ import dev.po4yka.chur.ffi.ObjectQuery
 import dev.po4yka.chur.ffi.QueryScope
 import dev.po4yka.chur.ffi.QuerySort
 import dev.po4yka.chur.ffi.StreamKind
+import dev.po4yka.chur.ffi.fromHex
 import dev.po4yka.chur.imports.AndroidMediaCodec
 import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.vault.VaultState
@@ -308,6 +309,8 @@ private fun VaultRoute(controller: ChurController) {
     var selection by remember { mutableStateOf(setOf<String>()) }
     var creatingAlbum by remember { mutableStateOf(false) }
     var choosingAlbum by remember { mutableStateOf(false) }
+    var movingSelection by remember { mutableStateOf(false) }
+    var organizingIds by remember { mutableStateOf<List<ByteArray>>(emptyList()) }
     var choosingTag by remember { mutableStateOf(false) }
     var confirmingDelete by remember { mutableStateOf(false) }
     var choosingExport by remember { mutableStateOf(false) }
@@ -350,7 +353,7 @@ private fun VaultRoute(controller: ChurController) {
                             else -> null
                         })
                         if (albumId != null) {
-                            controller.putAllInAlbum(albumId, listOf(outcome.objectId)) {
+                            controller.placeObjectsInAlbum(albumId, listOf(outcome.objectId)) {
                                 controller.report(if (outcome.previewsSkipped) {
                                     "Imported original into album; remaining previews cancelled."
                                 } else "Imported into album.")
@@ -509,16 +512,17 @@ private fun VaultRoute(controller: ChurController) {
         AlbumPickerDialog(
             albums = albums,
             currentAlbum = openAlbum,
+            move = movingSelection,
             onChoose = { album ->
                 choosingAlbum = false
-                controller.putAllInAlbum(
-                    album.albumId, selectedObjects(page, selection), openAlbum?.albumId,
+                controller.placeObjectsInAlbum(
+                    album.albumId, organizingIds, openAlbum?.albumId, movingSelection,
                 ) { selection = emptySet() }
             },
-            onCreate = { name ->
+            onCreate = { name, parent ->
                 choosingAlbum = false
                 controller.createAlbumWithObjects(
-                    name, selectedObjects(page, selection), openAlbum?.albumId,
+                    name, parent?.albumId, organizingIds, openAlbum?.albumId, movingSelection,
                 ) { selection = emptySet() }
             },
             onDismiss = { choosingAlbum = false },
@@ -656,8 +660,16 @@ private fun VaultRoute(controller: ChurController) {
             onSelectAll = { selection = page.objects.map { it.id }.toSet() },
             onClearSelection = { selection = emptySet() },
             onExportSelection = { choosingExport = true },
-            onOrganizeSelection = {
+            onAddSelectionToAlbum = {
                 controller.loadAlbums()
+                organizingIds = selection.sorted().map { it.fromHex() }
+                movingSelection = false
+                choosingAlbum = true
+            },
+            onMoveSelectionToAlbum = {
+                controller.loadAlbums()
+                organizingIds = selection.sorted().map { it.fromHex() }
+                movingSelection = true
                 choosingAlbum = true
             },
             onTagSelection = {

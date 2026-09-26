@@ -655,6 +655,32 @@ object ChurVault {
         )
     }
 
+    /** Places a nonempty selection in one transaction, optionally creating its destination. */
+    fun placeAlbumObjects(
+        session: Long,
+        targetId: ByteArray?,
+        newName: String,
+        parentId: ByteArray?,
+        sourceId: ByteArray?,
+        objectIds: List<ByteArray>,
+        moveMembers: Boolean,
+    ): ByteArray {
+        require(objectIds.isNotEmpty() && objectIds.size <= 100_000)
+        require(objectIds.all { it.size == ID_LENGTH })
+        val packed = ByteArray(objectIds.size * ID_LENGTH)
+        objectIds.forEachIndexed { index, id -> id.copyInto(packed, index * ID_LENGTH) }
+        val output = ByteArray(ID_LENGTH)
+        ChurFailure.check(
+            ChurNative.albumPlaceObjects(
+                session, targetId ?: ByteArray(ID_LENGTH), newName,
+                parentId ?: ByteArray(ID_LENGTH), sourceId ?: ByteArray(ID_LENGTH),
+                packed, moveMembers, output,
+            ),
+            "place album objects",
+        )
+        return output
+    }
+
     /** Every album, with its membership count. */
     fun albums(session: Long): List<AlbumSummary> {
         var capacity = ALBUM_LIST_CAPACITY

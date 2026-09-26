@@ -1,10 +1,14 @@
 package dev.po4yka.chur.app.vault
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -47,19 +51,27 @@ fun NewAlbumDialog(onCreate: (String) -> Unit, onDismiss: () -> Unit) {
 fun AlbumPickerDialog(
     albums: List<AlbumSummary>,
     currentAlbum: AlbumSummary?,
+    move: Boolean,
     onChoose: (AlbumSummary) -> Unit,
-    onCreate: (String) -> Unit,
+    onCreate: (String, AlbumSummary?) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var name by remember { mutableStateOf("") }
+    var parent by remember(currentAlbum?.id) { mutableStateOf(currentAlbum) }
+    var parentExpanded by remember { mutableStateOf(false) }
+    val verb = if (move) "Move" else "Add"
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (currentAlbum == null) "Add to album" else "Move to album") },
+        title = { Text("$verb to album") },
         text = {
             Column(modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
-                albums.filterNot { it.id == currentAlbum?.id }.forEach { album ->
-                    TextButton(onClick = { onChoose(album) }) { Text(album.name) }
+                albumRows(albums).filterNot { it.first.id == currentAlbum?.id }.forEach { (album, depth) ->
+                    TextButton(
+                        onClick = { onChoose(album) },
+                        modifier = Modifier.padding(start = (depth * 16).coerceAtMost(96).dp),
+                    ) { Text(album.name) }
                 }
+                Text("Create a new destination")
                 OutlinedTextField(
                     colors = churOutlinedTextFieldColors(),
                     value = name,
@@ -67,8 +79,24 @@ fun AlbumPickerDialog(
                     singleLine = true,
                     label = { Text("New album name") },
                 )
-                TextButton(onClick = { onCreate(name.trim()) }, enabled = name.isNotBlank()) {
-                    Text("Create and ${if (currentAlbum == null) "add" else "move"}")
+                Box {
+                    TextButton(onClick = { parentExpanded = true }) {
+                        Text("Inside: ${parent?.name ?: "Top level"}")
+                    }
+                    DropdownMenu(expanded = parentExpanded, onDismissRequest = { parentExpanded = false }) {
+                        DropdownMenuItem(text = { Text("Top level") }, onClick = {
+                            parent = null; parentExpanded = false
+                        })
+                        albumRows(albums).forEach { (album, depth) ->
+                            DropdownMenuItem(
+                                text = { Text("${"  ".repeat(depth.coerceAtMost(6))}${album.name}") },
+                                onClick = { parent = album; parentExpanded = false },
+                            )
+                        }
+                    }
+                }
+                TextButton(onClick = { onCreate(name.trim(), parent) }, enabled = name.isNotBlank()) {
+                    Text("Create and ${verb.lowercase()}")
                 }
             }
         },

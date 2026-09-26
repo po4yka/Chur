@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. The current library reports 2.15: §6.19 changes the album-list record and adds album organization exports. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
+- native API version is the (major, minor) pair. The current library reports 2.16: §6.19 changes the album-list record and §6.20 adds atomic album placement. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -606,6 +606,10 @@ chur_status_t chur_tag_list(chur_handle_t session, uint8_t *destination,
 `ChurAlbumListV2` replaces `ChurAlbumListV1` and reports each album's parent and sibling position. A zero parent identifier means root. This wire change requires ABI major 2. If the caller's list buffer is too small, `chur_album_list` writes the required byte count to `bytes_written`, returns `RESOURCE_LIMIT_EXCEEDED`, and leaves the destination unchanged; the caller may allocate that exact size and retry.
 
 `chur_album_rename` changes a name. `chur_album_delete` removes an album subtree and its memberships while retaining media objects. `chur_album_move` sets a parent and a position before a sibling, rejecting cycles and invalid targets. `chur_album_move_member` reorders one album's members. All-zero parent or before identifiers mean root or append, respectively. These mutations commit to the encrypted catalog and advance its generation. Query sort `4` reads an album's manual member order and is invalid for other scopes.
+
+### 6.20 Atomic album placement, ABI 2.16
+
+`chur_album_place_objects` accepts 1–100000 packed 16-byte object identifiers. A nonzero target identifies an existing album and requires an empty name and zero parent. A zero target creates a named album under the optional parent. A zero source and `move_members = 0` add the selection without removing other memberships. `move_members = 1` requires a source album and removes those memberships after placing every object in the target. Invalid, repeated, non-listable, or no-longer-in-source objects refuse the whole operation. Album creation, placement, source removal, revisions, and catalog generation commit in one SQLCipher transaction. On success, `out_album_id` receives the target identifier.
 
 ## 7. Buffer ownership
 

@@ -354,6 +354,64 @@ fn the_whole_product_flow_runs_through_the_boundary() {
     assert_eq!(unsafe { chur_album_delete(session, child_id.as_ptr()) }, OK);
     assert_eq!(page(session, 2, album_id, b"").objects.len(), 1);
 
+    let zero = [0u8; 16];
+    let mut nested = [0u8; 16];
+    assert_eq!(
+        unsafe {
+            chur_album_place_objects(
+                session,
+                zero.as_ptr(),
+                b"Nested".as_ptr(),
+                6,
+                album_id.as_ptr(),
+                zero.as_ptr(),
+                object_id.as_ptr(),
+                1,
+                0,
+                nested.as_mut_ptr(),
+            )
+        },
+        OK,
+    );
+    assert_eq!(page(session, 2, nested, b"").objects.len(), 1);
+    assert_eq!(page(session, 2, album_id, b"").objects.len(), 1);
+    assert_eq!(
+        unsafe {
+            chur_album_place_objects(
+                session,
+                nested.as_ptr(),
+                core::ptr::null(),
+                0,
+                zero.as_ptr(),
+                album_id.as_ptr(),
+                object_id.as_ptr(),
+                1,
+                1,
+                nested.as_mut_ptr(),
+            )
+        },
+        OK,
+    );
+    assert_eq!(page(session, 2, album_id, b"").objects.len(), 0);
+    assert_eq!(
+        unsafe {
+            chur_album_place_objects(
+                session,
+                album_id.as_ptr(),
+                core::ptr::null(),
+                0,
+                zero.as_ptr(),
+                nested.as_ptr(),
+                object_id.as_ptr(),
+                1,
+                1,
+                album_id.as_mut_ptr(),
+            )
+        },
+        OK,
+    );
+    assert_eq!(page(session, 2, album_id, b"").objects.len(), 1);
+
     let tag_name = "Sommer";
     let mut tag_id = [0u8; 16];
     assert_eq!(

@@ -2046,6 +2046,75 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumSetMembership<'loca
     })
 }
 
+/// Places a selection in an album in one native transaction.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumPlaceObjects<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    target_id: JByteArray<'local>,
+    name: JString<'local>,
+    parent_id: JByteArray<'local>,
+    source_id: JByteArray<'local>,
+    object_ids: JByteArray<'local>,
+    move_members: jboolean,
+    out_album_id: JByteArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(target) = fixed_array(env, &target_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        let Some(parent) = fixed_array(env, &parent_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        let Some(source) = fixed_array(env, &source_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        if fixed_array(env, &out_album_id, ID_LEN).is_none() {
+            return INVALID_INPUT;
+        }
+        let Some(name) = string_bytes(env, &name) else {
+            return INVALID_INPUT;
+        };
+        let Some(objects) = byte_array(env, &object_ids) else {
+            return INVALID_INPUT;
+        };
+        if objects.is_empty() || objects.len() % ID_LEN != 0 {
+            return INVALID_INPUT;
+        }
+        let (Ok(name_length), Ok(count)) = (
+            u32::try_from(name.len()),
+            u32::try_from(objects.len() / ID_LEN),
+        ) else {
+            return INVALID_INPUT;
+        };
+        let mut output = [0u8; ID_LEN];
+        // SAFETY: every pointer names a live local through the synchronous call.
+        let status = unsafe {
+            chur_ffi::product::chur_album_place_objects(
+                handle_of(session),
+                target.as_ptr(),
+                name.as_ptr(),
+                name_length,
+                parent.as_ptr(),
+                source.as_ptr(),
+                objects.as_ptr(),
+                count,
+                u8::from(move_members),
+                output.as_mut_ptr(),
+            )
+        };
+        if status != 0 {
+            return status;
+        }
+        if write_bytes(env, &out_album_id, &output) {
+            0
+        } else {
+            INVALID_INPUT
+        }
+    })
+}
+
 /// Writes the album list into a direct buffer.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumList<'local>(

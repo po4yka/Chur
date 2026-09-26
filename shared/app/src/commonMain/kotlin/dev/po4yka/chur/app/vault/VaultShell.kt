@@ -193,8 +193,10 @@ data class VaultActions(
     val onClearSelection: () -> Unit = {},
     /** Export every selected object. */
     val onExportSelection: () -> Unit = {},
-    /** Add the selection to an album, or move it from the open album. */
-    val onOrganizeSelection: () -> Unit = {},
+    /** Add the selection while retaining existing memberships. */
+    val onAddSelectionToAlbum: () -> Unit = {},
+    /** Move the selection out of the open album. */
+    val onMoveSelectionToAlbum: () -> Unit = {},
     /** Assign or remove a private catalog tag. */
     val onTagSelection: () -> Unit = {},
     /** Remove every selected object from the open album, §11.4. */
@@ -420,9 +422,15 @@ private fun SelectionBar(state: VaultUiState, actions: VaultActions) {
                         onClick = { expanded = false; actions.onSelectAll() },
                     )
                     DropdownMenuItem(
-                        text = { Text(if (state.openAlbum == null) "Add to album" else "Move to album") },
-                        onClick = { expanded = false; actions.onOrganizeSelection() },
+                        text = { Text("Add to album") },
+                        onClick = { expanded = false; actions.onAddSelectionToAlbum() },
                     )
+                    if (state.openAlbum != null) {
+                        DropdownMenuItem(
+                            text = { Text("Move to album") },
+                            onClick = { expanded = false; actions.onMoveSelectionToAlbum() },
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text("Tags") },
                         onClick = { expanded = false; actions.onTagSelection() },

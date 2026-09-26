@@ -744,37 +744,33 @@ class ChurController(
         onSuccess()
     }
 
-    /** Adds a selection to an album, then removes the old membership for a move. */
-    fun putAllInAlbum(
+    /** Adds or moves a selection in one catalog transaction. */
+    fun placeObjectsInAlbum(
         albumId: ByteArray,
         objectIds: List<ByteArray>,
         fromAlbumId: ByteArray? = null,
+        move: Boolean = false,
         onSuccess: () -> Unit = {},
     ) = guarded {
         withContext(Dispatchers.Default) {
-            objectIds.forEach { repository.setAlbumMembership(albumId, it, true) }
-            if (fromAlbumId != null && !fromAlbumId.contentEquals(albumId)) {
-                objectIds.forEach { repository.setAlbumMembership(fromAlbumId, it, false) }
-            }
+            repository.placeAlbumObjects(albumId, "", null, fromAlbumId.takeIf { move }, objectIds, move)
         }
         reload()
         refreshAlbums()
         onSuccess()
     }
 
-    /** Creates an album and adds the selected objects to it. */
+    /** Creates a destination and places the selection atomically. */
     fun createAlbumWithObjects(
         name: String,
+        parentId: ByteArray?,
         objectIds: List<ByteArray>,
         fromAlbumId: ByteArray? = null,
+        move: Boolean = false,
         onSuccess: () -> Unit = {},
     ) = guarded {
-        val albumId = withContext(Dispatchers.Default) { repository.createAlbum(name) }
         withContext(Dispatchers.Default) {
-            objectIds.forEach { repository.setAlbumMembership(albumId, it, true) }
-            if (fromAlbumId != null) {
-                objectIds.forEach { repository.setAlbumMembership(fromAlbumId, it, false) }
-            }
+            repository.placeAlbumObjects(null, name, parentId, fromAlbumId.takeIf { move }, objectIds, move)
         }
         reload()
         refreshAlbums()

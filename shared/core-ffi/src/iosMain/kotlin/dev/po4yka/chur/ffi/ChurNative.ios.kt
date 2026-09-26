@@ -21,6 +21,7 @@ import dev.po4yka.chur.native.chur_album_move
 import dev.po4yka.chur.native.chur_album_move_member
 import dev.po4yka.chur.native.chur_album_list
 import dev.po4yka.chur.native.chur_album_set_membership
+import dev.po4yka.chur.native.chur_album_place_objects
 import dev.po4yka.chur.native.chur_backup_create
 import dev.po4yka.chur.native.chur_backup_restore
 import dev.po4yka.chur.native.chur_build_flavor
@@ -1029,6 +1030,36 @@ internal actual object ChurNative {
                 )
             }
         }
+
+    actual fun albumPlaceObjects(
+        session: Long,
+        targetId: ByteArray,
+        name: String,
+        parentId: ByteArray,
+        sourceId: ByteArray,
+        objectIds: ByteArray,
+        moveMembers: Boolean,
+        outAlbumId: ByteArray,
+    ): Int {
+        val nameBytes = name.encodeToByteArray()
+        return targetId.pinnedPointer { target ->
+            nameBytes.pinnedPointer { label ->
+                parentId.pinnedPointer { parent ->
+                    sourceId.pinnedPointer { source ->
+                        objectIds.pinnedPointer { objects ->
+                            identifierCall(outAlbumId) { out ->
+                                chur_album_place_objects(
+                                    session.toULong(), target, label, nameBytes.size.toUInt(),
+                                    parent, source, objects, (objectIds.size / ID_LENGTH).toUInt(),
+                                    if (moveMembers) 1u else 0u, out,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     actual fun albumList(
         session: Long,

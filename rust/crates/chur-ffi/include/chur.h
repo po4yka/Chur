@@ -18,7 +18,7 @@
  * recipient-device surface of section 6.13, and the sharing discovery surface
  * of section 6.14, and the private tag list of section 6.15. Adding an export raises the minor
  * ABI version; changing or removing one raises the major. The library reports
- * 2.15.
+ * 2.16.
  */
 
 #ifndef CHUR_H
@@ -642,6 +642,17 @@ chur_status_t chur_album_set_membership(chur_handle_t session,
                                         const uint8_t *album_id,
                                         const ChurObjectRefV1 *object,
                                         uint8_t member);
+/* Zero target creates an album named by name under parent_id. Zero source means
+ * add; move_members=1 requires a nonzero source. object_ids is count packed
+ * 16-byte identifiers. The transaction returns the destination identifier. */
+chur_status_t chur_album_place_objects(chur_handle_t session,
+                                       const uint8_t *target_id,
+                                       const uint8_t *name, uint32_t name_length,
+                                       const uint8_t *parent_id,
+                                       const uint8_t *source_id,
+                                       const uint8_t *object_ids, uint32_t object_count,
+                                       uint8_t move_members,
+                                       uint8_t *out_album_id);
 chur_status_t chur_album_list(chur_handle_t session, uint8_t *destination,
                               size_t capacity, size_t *bytes_written);
 chur_status_t chur_tag_create(chur_handle_t session, const uint8_t *name,

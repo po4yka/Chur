@@ -840,6 +840,109 @@ pub unsafe extern "C" fn chur_album_set_membership(
     })
 }
 
+/// Places a selection in an existing or newly created album atomically.
+/// A zero target creates an album named by `name` under `parent_id`; otherwise
+/// `name_length` must be zero. A zero source means add, and a nonzero source
+/// with `move_members = 1` moves membership from that album.
+///
+/// # Safety
+/// Identifiers point to 16 readable bytes, `object_ids` to `object_count * 16`
+/// readable bytes, `name` to `name_length` bytes, and `out_album_id` to 16
+/// writable bytes.
+#[unsafe(no_mangle)]
+#[expect(unsafe_code, reason = "the C ABI requires an exported symbol")]
+pub unsafe extern "C" fn chur_album_place_objects(
+    session: Handle,
+    target_id: *const u8,
+    name: *const u8,
+    name_length: u32,
+    parent_id: *const u8,
+    source_id: *const u8,
+    object_ids: *const u8,
+    object_count: u32,
+    move_members: u8,
+    out_album_id: *mut u8,
+) -> Status {
+    guard_status_for(session, || {
+        ensure!(
+            object_count > 0
+                && u64::from(object_count) <= chur_core::limits::catalog::ALBUM_MEMBERSHIPS_MAX,
+            InvalidInput,
+            "the selection size is outside the album bound"
+        );
+        let entry = registry::get(session, Kind::Session)?;
+        let target = unsafe { optional_album_id(target_id)? };
+        let parent = unsafe { optional_album_id(parent_id)? };
+        let source = unsafe { optional_album_id(source_id)? };
+        let move_members = boolean(move_members)?;
+        ensure!(
+            move_members || source.is_none(),
+            InvalidInput,
+            "an add must not name a source"
+        );
+        ensure!(
+            !out_album_id.is_null(),
+            InvalidInput,
+            "the album output is null"
+        );
+        let byte_count = usize::try_from(object_count)
+            .ok()
+            .and_then(|count| count.checked_mul(16))
+            .ok_or_else(|| {
+                Error::new(
+                    ChurStatus::ResourceLimitExceeded,
+                    "the selection length overflows",
+                )
+            })?;
+        let length = u32::try_from(byte_count).map_err(|_| {
+            Error::new(
+                ChurStatus::ResourceLimitExceeded,
+                "the selection length overflows",
+            )
+        })?;
+        let bytes = unsafe { crate::api::borrow_bytes(object_ids, length)? };
+        let objects = bytes
+            .chunks_exact(16)
+            .map(Id::from_slice)
+            .collect::<Result<Vec<_>>>()?;
+        let now = crate::api::now_ms();
+        let album = if target.is_none() {
+            let bytes = unsafe { crate::api::borrow_bytes(name, name_length)? };
+            let name = core::str::from_utf8(bytes)
+                .map_err(|_| Error::new(ChurStatus::InvalidInput, "the album name is not UTF-8"))?;
+            Some(Album {
+                album_id: chur_crypto::random::id()?,
+                name: name.to_owned(),
+                created_ms: now,
+                revision: 1,
+            })
+        } else {
+            ensure!(
+                name_length == 0 && parent.is_none(),
+                InvalidInput,
+                "an existing destination cannot carry a new name or parent"
+            );
+            None
+        };
+        let destination = match (&target, &album) {
+            (Some(id), _) => store::AlbumDestination::Existing(id),
+            (None, Some(album)) => store::AlbumDestination::New(album, parent.as_ref()),
+            _ => unreachable!("the target shape was validated"),
+        };
+        let id = with_catalog_mut(&entry, |catalog| {
+            store::place_album_members(
+                catalog,
+                destination,
+                source.as_ref(),
+                &objects,
+                move_members,
+                now,
+            )
+        })?;
+        unsafe { crate::api::write_id(out_album_id, &id) }
+    })
+}
+
 /// Writes the album list of §6.5.
 ///
 /// # Safety
@@ -1138,10 +1241,10 @@ fn with_session_mut<T>(
     body(&mut guard)
 }
 
-fn with_catalog_mut(
+fn with_catalog_mut<T>(
     entry: &std::sync::Arc<Entry>,
-    body: impl FnOnce(&mut chur_catalog::CatalogDb) -> Result<()>,
-) -> Result<()> {
+    body: impl FnOnce(&mut chur_catalog::CatalogDb) -> Result<T>,
+) -> Result<T> {
     with_session_mut(entry, |session| body(session.catalog()?))
 }
 

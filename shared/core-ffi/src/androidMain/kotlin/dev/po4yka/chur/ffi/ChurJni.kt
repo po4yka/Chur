@@ -408,6 +408,17 @@ internal object ChurJni {
         member: Boolean,
     ): Int
 
+    external fun albumPlaceObjects(
+        session: Long,
+        targetId: ByteArray,
+        name: String,
+        parentId: ByteArray,
+        sourceId: ByteArray,
+        objectIds: ByteArray,
+        moveMembers: Boolean,
+        outAlbumId: ByteArray,
+    ): Int
+
     external fun albumList(
         session: Long,
         destination: ByteBuffer,
