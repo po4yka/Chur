@@ -1058,10 +1058,10 @@ pub fn accept_share(
     Ok(collection_state)
 }
 
-type IssuerStates = BTreeMap<Id, BTreeMap<u64, MembershipState>>;
+pub(crate) type IssuerStates = BTreeMap<Id, BTreeMap<u64, MembershipState>>;
 type AuthenticatedOperations = BTreeMap<(Id, Id, u64), Vec<u8>>;
 
-fn authenticate_issuers(
+pub(crate) fn authenticate_issuers(
     issuers: &[IssuerEvidence<'_>],
 ) -> Result<(IssuerStates, AuthenticatedOperations)> {
     let mut states = BTreeMap::new();

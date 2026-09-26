@@ -6,6 +6,9 @@ import dev.po4yka.chur.ffi.PreparedShare
 import dev.po4yka.chur.ffi.PreparedShareRevocation
 import dev.po4yka.chur.ffi.SyncProcessReport
 import dev.po4yka.chur.ffi.SyncRecordKind
+import dev.po4yka.chur.ffi.SharedReceivePlan
+import dev.po4yka.chur.ffi.SharedSourceObject
+import dev.po4yka.chur.ffi.SharedSourceRange
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockRequestHandler
@@ -77,6 +80,35 @@ class SyncCoordinatorTest {
             accepted += packageBytes
             return true
         }
+
+        override suspend fun receiveSharedOperations(
+            packageBytes: ByteArray,
+            operations: List<ByteArray>,
+        ): SharedReceivePlan {
+            accepted += packageBytes
+            return SharedReceivePlan(ByteArray(16), ByteArray(16), ByteArray(16), 0, emptyList())
+        }
+
+        override suspend fun appendSharedDownload(
+            collectionId: ByteArray,
+            objectId: ByteArray,
+            offset: ULong,
+            bytes: ByteArray,
+        ): Boolean = true
+
+        override suspend fun finishSharedDownload(
+            collectionId: ByteArray,
+            objectId: ByteArray,
+            nowMs: Long,
+        ): Boolean = true
+
+        override suspend fun sourceCollectionId(): ByteArray? = null
+
+        override suspend fun sourcePage(collectionId: ByteArray, afterObjectId: ByteArray): List<SharedSourceObject>? = null
+
+        override suspend fun sourceRange(objectId: ByteArray, offset: ULong, maxBytes: Int): SharedSourceRange? = null
+
+        override suspend fun sourceAuthor(source: SharedSourceObject): SharedSourceObject? = null
     }
 
     /** One engine whose every answer comes from [handler], counting requests. */

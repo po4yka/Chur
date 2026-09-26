@@ -24,6 +24,7 @@
 
 pub mod api;
 pub mod sharing;
+pub mod sharing_publish;
 pub mod sync;
 
 /// The number of live handles in this process.
@@ -68,7 +69,7 @@ pub const ABI_VERSION_MAJOR: u32 = 1;
 /// private tag list. §6.2 makes an addition a minor bump. Nothing in
 /// the §6.2 list changed, so a host built against 1.0 still works: an export it
 /// does not call costs it nothing.
-pub const ABI_VERSION_MINOR: u32 = 11;
+pub const ABI_VERSION_MINOR: u32 = 12;
 
 /// Capability bit: independent decoy identity supported.
 pub const CHUR_CAP_DECOY_VAULT: u64 = 1 << 0;
@@ -86,6 +87,8 @@ pub const CHUR_CAP_SYNC: u64 = 1 << 5;
 pub const CHUR_CAP_CONCURRENT_READS: u64 = 1 << 6;
 /// Capability bit: collection-sharing identity and records available.
 pub const CHUR_CAP_COLLECTION_SHARING: u64 = 1 << 7;
+/// Capability bit: authenticated source publication and recipient object activation.
+pub const CHUR_CAP_SHARED_OBJECTS: u64 = 1 << 8;
 
 /// Build-flavor bit: this is a release build.
 pub const CHUR_FLAVOR_RELEASE: u32 = 1 << 0;
@@ -147,7 +150,8 @@ const CAPABILITIES: u64 = CHUR_CAP_DECOY_VAULT
     | CHUR_CAP_INTEGRITY_SCAN
     | CHUR_CAP_BACKUP_PACKAGE
     | CHUR_CAP_SYNC
-    | CHUR_CAP_COLLECTION_SHARING;
+    | CHUR_CAP_COLLECTION_SHARING
+    | CHUR_CAP_SHARED_OBJECTS;
 
 /// The major ABI version.
 // SAFETY: the function takes no pointer, reads no caller memory, and returns a
@@ -296,7 +300,7 @@ mod tests {
     #[test]
     fn the_handshake_answers_every_documented_fact() {
         assert_eq!(chur_abi_version_major(), 1);
-        assert_eq!(chur_abi_version_minor(), 11);
+        assert_eq!(chur_abi_version_minor(), 12);
         assert_eq!(chur_object_format_min(), 1);
         assert_eq!(chur_object_format_max(), 1);
         assert_eq!(chur_key_slot_format_min(), 1);
@@ -346,12 +350,17 @@ mod tests {
             0,
             "the sharing identity surface exists"
         );
+        assert_ne!(
+            declared & CHUR_CAP_SHARED_OBJECTS,
+            0,
+            "shared object verification exists"
+        );
         assert_eq!(
             declared & CHUR_CAP_CONCURRENT_READS,
             0,
             "a capability is declared but every reader handle is still serialized"
         );
-        for bit in 8..64 {
+        for bit in 9..64 {
             assert_eq!(
                 declared & (1 << bit),
                 0,

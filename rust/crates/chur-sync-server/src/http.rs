@@ -90,6 +90,14 @@ pub fn router(server: ReferenceServer, bootstrap_token: [u8; 32]) -> Router {
             post(finish_upload),
         )
         .route("/v1/vaults/{vault}/objects/{store}", get(download_object))
+        .route(
+            "/v1/vaults/{vault}/sharing/collections/{collection}/objects/{store}",
+            post(publish_shared_object),
+        )
+        .route(
+            "/v1/vaults/{vault}/sharing/issuers/{issuer}/collections/{collection}/objects/{store}",
+            get(download_shared_object),
+        )
         .route("/v1/vaults/{vault}/deletions", post(delete))
         .layer(DefaultBodyLimit::max(bounds::RESPONSE_BYTES_MAX))
         .with_state(state)
@@ -482,6 +490,37 @@ async fn download_object(
     let server = lock(&state)?;
     authenticate(&server, vault, &headers)?;
     binary(server.read_object(vault, store, offset, length)?)
+}
+
+async fn publish_shared_object(
+    State(state): State<AppState>,
+    Path((vault, collection, store)): Path<(String, String, String)>,
+    headers: HeaderMap,
+) -> HttpResult<StatusCode> {
+    let vault = id(&vault)?;
+    let collection = id(&collection)?;
+    let store = id(&store)?;
+    let mut server = lock(&state)?;
+    authenticate(&server, vault, &headers)?;
+    server.publish_shared_object(vault, collection, store)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn download_shared_object(
+    State(state): State<AppState>,
+    Path((vault, issuer, collection, store)): Path<(String, String, String, String)>,
+    RawQuery(query): RawQuery,
+    headers: HeaderMap,
+) -> HttpResult<Response> {
+    let vault = id(&vault)?;
+    let issuer = id(&issuer)?;
+    let collection = id(&collection)?;
+    let store = id(&store)?;
+    let offset = query_u64(query.as_deref(), "offset")?;
+    let length = query_u64(query.as_deref(), "length")?;
+    let server = lock(&state)?;
+    let device = authenticate(&server, vault, &headers)?;
+    binary(server.read_shared_object(vault, device, issuer, collection, store, offset, length)?)
 }
 
 async fn delete(

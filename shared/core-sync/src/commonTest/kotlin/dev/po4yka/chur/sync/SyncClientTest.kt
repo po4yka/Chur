@@ -96,6 +96,39 @@ class SyncClientTest {
         assertTrue(requests[4].first.endsWith("/sharing/packages"))
         assertContentEquals(byteArrayOf(7), packages.single())
     }
+
+    @Test
+    fun shared_object_uses_source_publication_and_recipient_bearer_download() = runTest {
+        val paths = mutableListOf<String>()
+        val engine = MockEngine { request ->
+            assertEquals("Bearer ${ByteArray(32) { 9 }.hex()}", request.headers[HttpHeaders.Authorization])
+            paths += request.url.toString()
+            if (request.method == io.ktor.http.HttpMethod.Post) {
+                respond(byteArrayOf(), status = HttpStatusCode.NoContent)
+            } else {
+                respond(byteArrayOf(1, 2, 3), status = HttpStatusCode.OK)
+            }
+        }
+        val client = SyncClient("https://sync.example", { ByteArray(32) { 9 } }, HttpClient(engine))
+        val recipient = ByteArray(16) { 1 }
+        val source = ByteArray(16) { 2 }
+        val collection = ByteArray(16) { 3 }
+        val store = ByteArray(16) { 4 }
+
+        client.publishSharedObject(source, collection, store)
+        val bytes = client.downloadSharedObject(recipient, source, collection, store, 5u, 6u)
+
+        assertTrue(paths[0].endsWith(
+            "/v1/vaults/${source.hex()}/sharing/collections/${collection.hex()}/objects/${store.hex()}",
+        ))
+        assertTrue(paths[1].endsWith(
+            "/v1/vaults/${recipient.hex()}/sharing/issuers/${source.hex()}/collections/${collection.hex()}/objects/${store.hex()}?offset=5&length=6",
+        ))
+        assertContentEquals(byteArrayOf(1, 2, 3), bytes)
+        assertFailsWith<IllegalArgumentException> {
+            client.downloadSharedObject(recipient, source, collection, store, 0u, 16_777_217u)
+        }
+    }
 }
 
 private fun frame(record: ByteArray): ByteArray =

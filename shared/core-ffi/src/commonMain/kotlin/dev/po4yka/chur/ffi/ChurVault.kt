@@ -238,6 +238,134 @@ object ChurVault {
         }
     }
 
+    /** Returns one ordered page of active source objects and stable signed records. */
+    fun sharedSourcePage(
+        session: Long,
+        collectionId: ByteArray,
+        afterObjectId: ByteArray = ByteArray(16),
+    ): List<SharedSourceObject> {
+        require(collectionId.size == 16 && afterObjectId.size == 16) { "invalid source page ID" }
+        return withChurBuffer(8 * 1024) { output ->
+            val written = IntArray(1)
+            ChurFailure.check(
+                ChurNative.sharingPublication(session, collectionId, afterObjectId, output, written),
+                "sharing publication",
+            )
+            decodeSharedSourcePage(collectionId, output.copyOut(written[0]), written[0])
+        }
+    }
+
+    /** Authors one object's stable operations after its ciphertext is uploaded. */
+    fun sharedSourceAuthor(session: Long, source: SharedSourceObject): SharedSourceObject {
+        require(source.collectionId.size == 16 && source.objectId.size == 16 && source.storeId.size == 16)
+        require(source.length <= Long.MAX_VALUE.toULong() && source.fullSha256.size == 32)
+        return withChurBuffer(1024 * 1024) { output ->
+            val written = IntArray(1)
+            ChurFailure.check(
+                ChurNative.sharingAuthor(
+                    session, source.collectionId, source.objectId, source.storeId,
+                    source.length.toLong(), source.fullSha256, output, written,
+                ),
+                "sharing author",
+            )
+            val authored = decodeSharedSourcePage(source.collectionId, output.copyOut(written[0]), written[0]).single()
+            require(
+                authored.objectId.contentEquals(source.objectId) &&
+                    authored.storeId.contentEquals(source.storeId) &&
+                    authored.length == source.length &&
+                    authored.fullSha256.contentEquals(source.fullSha256) &&
+                    authored.createOperation.isNotEmpty() && authored.commitOperation.isNotEmpty(),
+            ) { "source object changed before operation publication" }
+            authored
+        }
+    }
+
+    /** Reads and hashes at most 1 MiB of one committed source ciphertext. */
+    fun sharedSourceRange(
+        session: Long,
+        objectId: ByteArray,
+        offset: ULong,
+        maxBytes: Int,
+    ): SharedSourceRange {
+        require(objectId.size == 16) { "invalid source object ID" }
+        require(offset <= Long.MAX_VALUE.toULong()) { "source range offset exceeds the ABI" }
+        require(maxBytes in 1..1024 * 1024) { "source range exceeds 1 MiB" }
+        return withChurBuffer(maxBytes) { output ->
+            val written = IntArray(1)
+            val sha256 = ByteArray(32)
+            ChurFailure.check(
+                ChurNative.sharingObjectRead(
+                    session, objectId, offset.toLong(), maxBytes, output, written, sha256,
+                ),
+                "sharing object read",
+            )
+            SharedSourceRange(output.copyOut(written[0]), sha256)
+        }
+    }
+
+    /** Authenticates one collection-operation page and returns missing objects. */
+    fun receiveSharedOperations(
+        session: Long,
+        packageBytes: ByteArray,
+        operations: List<ByteArray>,
+    ): SharedReceivePlan {
+        val page = encodeSharedOperationPage(operations)
+        return withChurBuffer(packageBytes.size) { bundle ->
+            bundle.copyIn(packageBytes)
+            withChurBuffer(page.size) { records ->
+                records.copyIn(page)
+                withChurBuffer(256 * 1024) { output ->
+                    val written = IntArray(1)
+                    ChurFailure.check(
+                        ChurNative.sharingReceive(
+                            session, bundle, packageBytes.size, records, page.size,
+                            output, written,
+                        ),
+                        "sharing receive",
+                    )
+                    decodeSharedReceivePlan(output.copyOut(written[0]), written[0])
+                }
+            }
+        }
+    }
+
+    /** Stages one bounded opaque ciphertext range for a signed shared object. */
+    fun appendSharedDownload(
+        session: Long,
+        collectionId: ByteArray,
+        objectId: ByteArray,
+        offset: ULong,
+        bytes: ByteArray,
+    ) {
+        require(collectionId.size == 16 && objectId.size == 16) { "invalid shared download ID" }
+        require(offset <= Long.MAX_VALUE.toULong()) { "shared download offset exceeds the ABI" }
+        require(bytes.size in 1..1024 * 1024) { "shared download range exceeds 1 MiB" }
+        withChurBuffer(bytes.size) { buffer ->
+            buffer.copyIn(bytes)
+            ChurFailure.check(
+                ChurNative.sharingDownloadAppend(
+                    session, collectionId, objectId, offset.toLong(), buffer, bytes.size,
+                ),
+                "sharing download append",
+            )
+        }
+    }
+
+    /** Verifies the complete container and activates its local catalog row. */
+    fun finishSharedDownload(
+        session: Long,
+        collectionId: ByteArray,
+        objectId: ByteArray,
+        nowMs: Long,
+    ) {
+        require(collectionId.size == 16 && objectId.size == 16) { "invalid shared download ID" }
+        require(nowMs >= 0) { "shared download time is negative" }
+        ChurFailure.check(
+            ChurNative.sharingDownloadFinish(session, collectionId, objectId, nowMs),
+            "sharing download finish",
+        )
+    }
+
     /** Revokes one recipient and returns one resumable rotation batch. */
     fun revokeShare(
         session: Long,

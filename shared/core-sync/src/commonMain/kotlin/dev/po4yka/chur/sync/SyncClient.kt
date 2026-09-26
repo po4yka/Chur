@@ -211,6 +211,32 @@ public class SyncClient(
         "/v1/vaults/${vaultId.id()}/objects/${storeId.id()}?offset=$offset&length=$length",
     )
 
+    /** Makes a complete source object available to recipients of one collection. */
+    public suspend fun publishSharedObject(
+        sourceVaultId: ByteArray,
+        collectionId: ByteArray,
+        storeId: ByteArray,
+    ): Unit = success(
+        HttpMethod.Post,
+        "/v1/vaults/${sourceVaultId.id()}/sharing/collections/${collectionId.id()}/objects/${storeId.id()}",
+    )
+
+    /** Downloads one bounded source ciphertext range using this recipient's token. */
+    public suspend fun downloadSharedObject(
+        recipientVaultId: ByteArray,
+        sourceVaultId: ByteArray,
+        collectionId: ByteArray,
+        storeId: ByteArray,
+        offset: ULong,
+        length: ULong,
+    ): ByteArray {
+        require(length in 1uL..16_777_216uL) { "shared download range exceeds 16 MiB" }
+        return body(
+            HttpMethod.Get,
+            "/v1/vaults/${recipientVaultId.id()}/sharing/issuers/${sourceVaultId.id()}/collections/${collectionId.id()}/objects/${storeId.id()}?offset=$offset&length=$length",
+        )
+    }
+
     /** Applies a signed whole-vault deletion authorization without a transport token. */
     public suspend fun delete(vaultId: ByteArray, authorization: ByteArray): Unit =
         success(

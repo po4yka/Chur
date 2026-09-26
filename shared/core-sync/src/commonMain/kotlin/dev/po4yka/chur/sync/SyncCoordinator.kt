@@ -5,6 +5,9 @@ import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.PreparedShare
 import dev.po4yka.chur.ffi.PreparedShareRevocation
 import dev.po4yka.chur.ffi.SharingIdentity
+import dev.po4yka.chur.ffi.SharedReceivePlan
+import dev.po4yka.chur.ffi.SharedSourceObject
+import dev.po4yka.chur.ffi.SharedSourceRange
 import dev.po4yka.chur.ffi.SyncProcessReport
 import dev.po4yka.chur.ffi.SyncRecordKind
 import kotlinx.coroutines.delay
@@ -49,6 +52,39 @@ public interface SyncVaultBoundary {
 
     /** Verifies and installs an addressed share, or `false` if the vault locked. */
     public suspend fun acceptSharePackage(packageBytes: ByteArray): Boolean
+
+    /** Verifies one signed collection-operation page and identifies absent objects. */
+    public suspend fun receiveSharedOperations(
+        packageBytes: ByteArray,
+        operations: List<ByteArray>,
+    ): SharedReceivePlan?
+
+    /** Writes one bounded ciphertext range into native private staging. */
+    public suspend fun appendSharedDownload(
+        collectionId: ByteArray,
+        objectId: ByteArray,
+        offset: ULong,
+        bytes: ByteArray,
+    ): Boolean
+
+    /** Authenticates the complete container and activates its catalog row. */
+    public suspend fun finishSharedDownload(
+        collectionId: ByteArray,
+        objectId: ByteArray,
+        nowMs: Long,
+    ): Boolean
+
+    /** Source collection with an active sharing history, if one exists. */
+    public suspend fun sourceCollectionId(): ByteArray?
+
+    /** Lists a bounded page of already imported source objects. */
+    public suspend fun sourcePage(collectionId: ByteArray, afterObjectId: ByteArray): List<SharedSourceObject>?
+
+    /** Reads and hashes one committed source ciphertext range. */
+    public suspend fun sourceRange(objectId: ByteArray, offset: ULong, maxBytes: Int): SharedSourceRange?
+
+    /** Authors signed Create/Commit only after upload and association. */
+    public suspend fun sourceAuthor(source: SharedSourceObject): SharedSourceObject?
 }
 
 /** The bounded, non-private state one sync surface shows. */
@@ -218,6 +254,9 @@ public class SyncCoordinator(
                 repeat(MAX_ATTEMPTS) { attempt ->
                     try {
                         state = flushPending(client, state)
+                        if (vault.identity()?.let { matches(state, it) } == true) {
+                            publishSourceObjects(client, state, vault)
+                        }
                         val puller =
                             LockedSyncPuller(client) { vaultId, kind, stagedAtMs, record ->
                                 vault.stage(vaultId, kind, stagedAtMs, record)
@@ -226,7 +265,7 @@ public class SyncCoordinator(
                         vault.process()
                         val shares =
                             if (vault.identity()?.let { matches(state, it) } == true) {
-                                SharingPuller(client) { vault.acceptSharePackage(it) }.pullOnce(state.vaultId)
+                                SharingPuller(client, vault).pullOnce(state.vaultId, clock())
                             } else {
                                 0
                             }
@@ -291,6 +330,7 @@ public class SyncCoordinator(
             val client = clientFactory(state.serverUrl) { state.transportToken }
             try {
                 flushPending(client, state)
+                publishSourceObjects(client, state, requireNotNull(boundary))
                 _status.value = SyncStatus(true, state.serverUrl, "Access published.", false)
             } catch (failure: Exception) {
                 _status.value = SyncStatus(true, state.serverUrl, "Sharing changes need upload.", false)
@@ -299,6 +339,36 @@ public class SyncCoordinator(
                 client.close()
             }
         }
+
+    private suspend fun publishSourceObjects(client: SyncClient, state: SyncState, vault: SyncVaultBoundary) {
+        val collectionId = vault.sourceCollectionId() ?: return
+        val pusher = SourceObjectPusher(client)
+        var after = ByteArray(16)
+        while (true) {
+            val page = vault.sourcePage(collectionId, after) ?: return
+            if (page.isEmpty()) return
+            for (source in page) {
+                val publication = SourceObjectPublication(
+                    source.collectionId, source.objectId, source.storeId, source.length, source.fullSha256,
+                )
+                pusher.push(
+                    state.vaultId,
+                    publication,
+                    read = { objectId, offset, maxBytes ->
+                        val range = vault.sourceRange(objectId, offset, maxBytes)
+                            ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "the source vault locked during upload")
+                        SourceObjectRange(range.bytes, range.sha256)
+                    },
+                    author = {
+                        val authored = vault.sourceAuthor(source)
+                            ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "the source vault locked before signing")
+                        SourceObjectOperations(authored.createOperation, authored.commitOperation)
+                    },
+                )
+            }
+            after = page.last().objectId
+        }
+    }
 
     /** Publishes one already prepared forward-only revocation batch. */
     public suspend fun publishRevocation(revocation: PreparedShareRevocation): Unit =

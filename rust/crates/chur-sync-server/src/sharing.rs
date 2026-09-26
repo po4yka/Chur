@@ -198,6 +198,152 @@ fn column_exists(db: &rusqlite::Connection, table: &str, column: &str) -> Result
 }
 
 impl ReferenceServer {
+    /// Publishes a complete source-owned object to one collection's recipients.
+    pub fn publish_shared_object(
+        &mut self,
+        source_vault_id: Id,
+        collection_id: Id,
+        store_id: Id,
+    ) -> Result<()> {
+        let state = collection_state(self, &collection_id)?.ok_or_else(|| {
+            Error::new(
+                ChurStatus::AuthenticationFailed,
+                "source collection is absent",
+            )
+        })?;
+        ensure!(
+            state.source_vault_id() == &source_vault_id,
+            AuthenticationFailed,
+            "source does not own the collection"
+        );
+        let complete: bool = self
+            .db
+            .query_row(
+                "SELECT complete FROM object_transfers WHERE vault_id = ?1 AND store_id = ?2",
+                params![
+                    source_vault_id.as_bytes().as_slice(),
+                    store_id.as_bytes().as_slice()
+                ],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| map_sqlite(error, "shared object lookup failed"))?
+            .unwrap_or(false);
+        ensure!(complete, ObjectIncomplete, "shared object is not complete");
+        let previous: Option<Vec<u8>> = self
+            .db
+            .query_row(
+                "SELECT collection_id FROM shared_objects
+                 WHERE source_vault_id = ?1 AND store_id = ?2",
+                params![
+                    source_vault_id.as_bytes().as_slice(),
+                    store_id.as_bytes().as_slice()
+                ],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| map_sqlite(error, "shared object association lookup failed"))?;
+        if let Some(previous) = previous {
+            ensure!(
+                previous == collection_id.as_bytes(),
+                Conflict,
+                "object is already associated with another collection"
+            );
+            return Ok(());
+        }
+        self.ensure_account_capacity(&source_vault_id, 48)?;
+        self.db
+            .execute(
+                "INSERT INTO shared_objects (source_vault_id, collection_id, store_id)
+                 VALUES (?1, ?2, ?3)",
+                params![
+                    source_vault_id.as_bytes().as_slice(),
+                    collection_id.as_bytes().as_slice(),
+                    store_id.as_bytes().as_slice(),
+                ],
+            )
+            .map_err(|error| map_sqlite(error, "shared object publication failed"))?;
+        Ok(())
+    }
+
+    /// Reads one source object only for a current granted recipient device.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "authorization and range fields stay explicit"
+    )]
+    pub fn read_shared_object(
+        &self,
+        recipient_vault_id: Id,
+        recipient_device_id: Id,
+        source_vault_id: Id,
+        collection_id: Id,
+        store_id: Id,
+        offset: u64,
+        max_length: u64,
+    ) -> Result<Vec<u8>> {
+        let state = collection_state(self, &collection_id)?.ok_or_else(|| {
+            Error::new(
+                ChurStatus::AuthenticationFailed,
+                "shared collection is absent",
+            )
+        })?;
+        ensure!(
+            state.source_vault_id() == &source_vault_id
+                && state.is_authorized(
+                    &recipient_vault_id,
+                    &recipient_device_id,
+                    PermissionProfile::Read,
+                ),
+            AuthenticationFailed,
+            "requester cannot read this collection"
+        );
+        let member = state
+            .member(&recipient_vault_id, &recipient_device_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ChurStatus::AuthenticationFailed,
+                    "recipient membership is absent",
+                )
+            })?;
+        let has_grant = current_grant_pairs(
+            self,
+            collection_id,
+            recipient_vault_id,
+            recipient_device_id,
+            state.collection_epoch(),
+            member.membership_generation(),
+        )?
+        .iter()
+        .any(|(grant, _)| {
+            grant.source_vault_id() == &source_vault_id
+                && grant.collection_epoch() == state.collection_epoch()
+        });
+        ensure!(
+            has_grant,
+            AuthenticationFailed,
+            "recipient has no current grant"
+        );
+        let published: bool = self
+            .db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM shared_objects
+                 WHERE source_vault_id = ?1 AND collection_id = ?2 AND store_id = ?3)",
+                params![
+                    source_vault_id.as_bytes().as_slice(),
+                    collection_id.as_bytes().as_slice(),
+                    store_id.as_bytes().as_slice(),
+                ],
+                |row| row.get(0),
+            )
+            .map_err(|error| map_sqlite(error, "shared object authorization lookup failed"))?;
+        ensure!(
+            published,
+            AuthenticationFailed,
+            "object is not shared with this collection"
+        );
+        self.read_object(source_vault_id, store_id, offset, max_length)
+    }
+
     /// Accepts one opaque collection operation from its authenticated issuer.
     pub fn accept_collection_operation(
         &mut self,

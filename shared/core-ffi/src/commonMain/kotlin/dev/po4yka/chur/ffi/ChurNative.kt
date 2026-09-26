@@ -131,6 +131,61 @@ internal expect object ChurNative {
         length: Int,
     ): Int
 
+    fun sharingPublication(
+        session: Long,
+        collectionId: ByteArray,
+        afterObjectId: ByteArray,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int
+
+    fun sharingAuthor(
+        session: Long,
+        collectionId: ByteArray,
+        objectId: ByteArray,
+        storeId: ByteArray,
+        expectedLength: Long,
+        expectedSha256: ByteArray,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int
+
+    fun sharingObjectRead(
+        session: Long,
+        objectId: ByteArray,
+        offset: Long,
+        maxBytes: Int,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+        rangeSha256: ByteArray,
+    ): Int
+
+    fun sharingReceive(
+        session: Long,
+        bundle: ChurBuffer,
+        bundleLength: Int,
+        operations: ChurBuffer,
+        operationsLength: Int,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int
+
+    fun sharingDownloadAppend(
+        session: Long,
+        collectionId: ByteArray,
+        objectId: ByteArray,
+        offset: Long,
+        bytes: ChurBuffer,
+        length: Int,
+    ): Int
+
+    fun sharingDownloadFinish(
+        session: Long,
+        collectionId: ByteArray,
+        objectId: ByteArray,
+        nowMs: Long,
+    ): Int
+
     fun sharingRevoke(
         session: Long,
         collectionId: ByteArray,

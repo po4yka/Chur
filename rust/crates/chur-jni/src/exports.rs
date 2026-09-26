@@ -710,6 +710,282 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingAccept<'local>(
     })
 }
 
+/// Returns one ordered source publication page.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingPublication<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    collection_id: JByteArray<'local>,
+    after_object_id: JByteArray<'local>,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(collection_id) = fixed_array(env, &collection_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        let Some(after_object_id) = fixed_array(env, &after_object_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        let Some((destination_ptr, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let mut written = 0;
+        // SAFETY: the fixed IDs, direct buffer, and output remain live for this call.
+        let status = unsafe {
+            chur_ffi::sharing_publish::chur_sharing_publication(
+                handle_of(session),
+                collection_id.as_ptr(),
+                after_object_id.as_ptr(),
+                destination_ptr,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Authors one durable source object pair after ciphertext publication.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingAuthor<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    collection_id: JByteArray<'local>,
+    object_id: JByteArray<'local>,
+    store_id: JByteArray<'local>,
+    expected_length: jlong,
+    expected_sha256: JByteArray<'local>,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(collection_id) = fixed_array(env, &collection_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        let Some(object_id) = fixed_array(env, &object_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        let Some(store_id) = fixed_array(env, &store_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        let Some(expected_sha256) = fixed_array(env, &expected_sha256, 32) else {
+            return INVALID_INPUT;
+        };
+        let Some((destination_ptr, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let Ok(expected_length) = u64::try_from(expected_length) else {
+            return INVALID_INPUT;
+        };
+        let mut written = 0;
+        // SAFETY: fixed inputs, direct buffer, and output remain live for this call.
+        let status = unsafe {
+            chur_ffi::sharing_publish::chur_sharing_author(
+                handle_of(session),
+                collection_id.as_ptr(),
+                object_id.as_ptr(),
+                store_id.as_ptr(),
+                expected_length,
+                expected_sha256.as_ptr(),
+                destination_ptr,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Returns one bounded committed source ciphertext range and its SHA-256.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingObjectRead<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    object_id: JByteArray<'local>,
+    offset: jlong,
+    max_bytes: jint,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+    range_sha256: JByteArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(object_id) = fixed_array(env, &object_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        let Some((destination_ptr, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let Some(_) = fixed_array(env, &range_sha256, 32) else {
+            return INVALID_INPUT;
+        };
+        let Ok(offset) = u64::try_from(offset) else {
+            return INVALID_INPUT;
+        };
+        let Ok(max_bytes) = u32::try_from(max_bytes) else {
+            return INVALID_INPUT;
+        };
+        let mut written = 0;
+        let mut sha256 = [0u8; 32];
+        // SAFETY: the fixed ID, direct buffer, and outputs remain live for this call.
+        let status = unsafe {
+            chur_ffi::sharing_publish::chur_sharing_object_read(
+                handle_of(session),
+                object_id.as_ptr(),
+                offset,
+                max_bytes,
+                destination_ptr,
+                capacity,
+                &mut written,
+                sha256.as_mut_ptr(),
+            )
+        };
+        if status == 0 && !write_bytes(env, &range_sha256, &sha256) {
+            return INVALID_INPUT;
+        }
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Applies one bounded page of authenticated shared collection operations.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingReceive<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    bundle: JByteBuffer<'local>,
+    bundle_length: jint,
+    operations: JByteBuffer<'local>,
+    operations_length: jint,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((bundle_ptr, bundle_capacity)) = direct_buffer(env, &bundle) else {
+            return INVALID_INPUT;
+        };
+        let Some((operations_ptr, operations_capacity)) = direct_buffer(env, &operations) else {
+            return INVALID_INPUT;
+        };
+        let Some((destination_ptr, destination_capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let Ok(bundle_length) = usize::try_from(bundle_length) else {
+            return INVALID_INPUT;
+        };
+        let Ok(operations_length) = usize::try_from(operations_length) else {
+            return INVALID_INPUT;
+        };
+        if bundle_length > bundle_capacity || operations_length > operations_capacity {
+            return INVALID_INPUT;
+        }
+        let Ok(bundle_length) = u32::try_from(bundle_length) else {
+            return INVALID_INPUT;
+        };
+        let Ok(operations_length) = u32::try_from(operations_length) else {
+            return INVALID_INPUT;
+        };
+        let mut written = 0;
+        // SAFETY: direct buffers and the out-parameter remain live for the call.
+        let status = unsafe {
+            chur_ffi::sharing::chur_sharing_receive(
+                handle_of(session),
+                bundle_ptr,
+                bundle_length,
+                operations_ptr,
+                operations_length,
+                destination_ptr,
+                destination_capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Appends one bounded opaque ciphertext range to an authenticated plan.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingDownloadAppend<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    collection_id: JByteArray<'local>,
+    object_id: JByteArray<'local>,
+    offset: jlong,
+    bytes: JByteBuffer<'local>,
+    length: jint,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(collection_id) = fixed_array(env, &collection_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        let Some(object_id) = fixed_array(env, &object_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        let Some((bytes_ptr, capacity)) = direct_buffer(env, &bytes) else {
+            return INVALID_INPUT;
+        };
+        let Ok(offset) = u64::try_from(offset) else {
+            return INVALID_INPUT;
+        };
+        let Ok(length) = usize::try_from(length) else {
+            return INVALID_INPUT;
+        };
+        if length > capacity {
+            return INVALID_INPUT;
+        }
+        let Ok(length) = u32::try_from(length) else {
+            return INVALID_INPUT;
+        };
+        // SAFETY: the fixed identifiers and direct buffer remain live for the call.
+        unsafe {
+            chur_ffi::sharing::chur_sharing_download_append(
+                handle_of(session),
+                collection_id.as_ptr(),
+                object_id.as_ptr(),
+                offset,
+                bytes_ptr,
+                length,
+            )
+        }
+    })
+}
+
+/// Verifies and activates one fully downloaded shared container.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingDownloadFinish<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    collection_id: JByteArray<'local>,
+    object_id: JByteArray<'local>,
+    now_ms: jlong,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(collection_id) = fixed_array(env, &collection_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        let Some(object_id) = fixed_array(env, &object_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        let Ok(now_ms) = u64::try_from(now_ms) else {
+            return INVALID_INPUT;
+        };
+        // SAFETY: both fixed identifier arrays remain live for the call.
+        unsafe {
+            chur_ffi::sharing::chur_sharing_download_finish(
+                handle_of(session),
+                collection_id.as_ptr(),
+                object_id.as_ptr(),
+                now_ms,
+            )
+        }
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Catalog queries
 // ---------------------------------------------------------------------------

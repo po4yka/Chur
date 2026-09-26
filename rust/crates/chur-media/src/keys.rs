@@ -8,7 +8,7 @@
 
 use chur_catalog::db::CatalogDb;
 use chur_catalog::vault::Session;
-use chur_core::{Id, Result};
+use chur_core::{Id, Result, ensure};
 use chur_crypto::{Key, Nonce, random};
 use chur_format::envelope::{CollectionKeyEnvelope, ObjectKeyEnvelope};
 
@@ -35,14 +35,22 @@ pub(crate) fn object_key_from_catalog(
 ) -> Result<Key> {
     let object = chur_catalog::store::object(catalog, object_id)?;
     let collection = chur_catalog::store::collection(catalog, &object.collection_id)?;
+    let object_envelope =
+        ObjectKeyEnvelope::decode(&chur_catalog::store::active_envelope(catalog, object_id)?)?;
+    ensure!(
+        object_envelope.object_id() == object_id
+            && object_envelope.collection_id() == &object.collection_id
+            && object_envelope.collection_epoch() <= collection.current_epoch,
+        AuthenticationFailed,
+        "object envelope contradicts its catalog collection"
+    );
     let body = chur_catalog::store::active_collection_envelope(
         catalog,
         &object.collection_id,
-        collection.current_epoch,
+        object_envelope.collection_epoch(),
     )?;
     let collection_key = CollectionKeyEnvelope::decode(&body)?.open(root_secret)?;
-    let body = chur_catalog::store::active_envelope(catalog, object_id)?;
-    ObjectKeyEnvelope::decode(&body)?.open(&collection_key)
+    object_envelope.open(&collection_key)
 }
 
 /// Seals a fresh object key under a collection key.

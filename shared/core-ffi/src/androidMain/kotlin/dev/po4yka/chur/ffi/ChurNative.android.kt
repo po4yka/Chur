@@ -132,6 +132,71 @@ internal actual object ChurNative {
         length: Int,
     ): Int = ChurJni.sharingAccept(session, bundle.buffer, length)
 
+    actual fun sharingPublication(
+        session: Long,
+        collectionId: ByteArray,
+        afterObjectId: ByteArray,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int = ChurJni.sharingPublication(session, collectionId, afterObjectId, destination.buffer, outWritten)
+
+    actual fun sharingAuthor(
+        session: Long,
+        collectionId: ByteArray,
+        objectId: ByteArray,
+        storeId: ByteArray,
+        expectedLength: Long,
+        expectedSha256: ByteArray,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int = ChurJni.sharingAuthor(
+        session, collectionId, objectId, storeId, expectedLength, expectedSha256,
+        destination.buffer, outWritten,
+    )
+
+    actual fun sharingObjectRead(
+        session: Long,
+        objectId: ByteArray,
+        offset: Long,
+        maxBytes: Int,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+        rangeSha256: ByteArray,
+    ): Int = ChurJni.sharingObjectRead(
+        session, objectId, offset, maxBytes, destination.buffer, outWritten, rangeSha256,
+    )
+
+    actual fun sharingReceive(
+        session: Long,
+        bundle: ChurBuffer,
+        bundleLength: Int,
+        operations: ChurBuffer,
+        operationsLength: Int,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int = ChurJni.sharingReceive(
+        session, bundle.buffer, bundleLength, operations.buffer, operationsLength,
+        destination.buffer, outWritten,
+    )
+
+    actual fun sharingDownloadAppend(
+        session: Long,
+        collectionId: ByteArray,
+        objectId: ByteArray,
+        offset: Long,
+        bytes: ChurBuffer,
+        length: Int,
+    ): Int = ChurJni.sharingDownloadAppend(
+        session, collectionId, objectId, offset, bytes.buffer, length,
+    )
+
+    actual fun sharingDownloadFinish(
+        session: Long,
+        collectionId: ByteArray,
+        objectId: ByteArray,
+        nowMs: Long,
+    ): Int = ChurJni.sharingDownloadFinish(session, collectionId, objectId, nowMs)
+
     actual fun sharingRevoke(
         session: Long,
         collectionId: ByteArray,

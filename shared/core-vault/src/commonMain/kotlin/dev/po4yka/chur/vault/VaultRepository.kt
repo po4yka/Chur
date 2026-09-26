@@ -16,6 +16,9 @@ import dev.po4yka.chur.ffi.SharingIdentity
 import dev.po4yka.chur.ffi.SharingOverview
 import dev.po4yka.chur.ffi.SharingPermission
 import dev.po4yka.chur.ffi.SharingRecipient
+import dev.po4yka.chur.ffi.SharedReceivePlan
+import dev.po4yka.chur.ffi.SharedSourceObject
+import dev.po4yka.chur.ffi.SharedSourceRange
 import dev.po4yka.chur.ffi.PreparedShare
 import dev.po4yka.chur.ffi.PreparedShareRevocation
 import dev.po4yka.chur.ffi.SlotSummary
@@ -513,6 +516,53 @@ class VaultRepository(
     suspend fun acceptSharePackage(packageBytes: ByteArray): Boolean = mutex.withLock {
         if (session == 0L) false else {
             ChurVault.acceptSharePackage(session, packageBytes)
+            true
+        }
+    }
+
+    suspend fun receiveSharedOperations(
+        packageBytes: ByteArray,
+        operations: List<ByteArray>,
+    ): SharedReceivePlan? = mutex.withLock {
+        if (session == 0L) null else ChurVault.receiveSharedOperations(session, packageBytes, operations)
+    }
+
+    suspend fun sourceCollectionId(): ByteArray? = mutex.withLock {
+        if (session == 0L) null else ChurVault.sharingOverview(session)
+            .takeIf { it.members.isNotEmpty() }?.collectionId
+    }
+
+    suspend fun sourcePage(collectionId: ByteArray, afterObjectId: ByteArray): List<SharedSourceObject>? = mutex.withLock {
+        if (session == 0L) null else ChurVault.sharedSourcePage(session, collectionId, afterObjectId)
+    }
+
+    suspend fun sourceRange(objectId: ByteArray, offset: ULong, maxBytes: Int): SharedSourceRange? = mutex.withLock {
+        if (session == 0L) null else ChurVault.sharedSourceRange(session, objectId, offset, maxBytes)
+    }
+
+    suspend fun sourceAuthor(source: SharedSourceObject): SharedSourceObject? = mutex.withLock {
+        if (session == 0L) null else ChurVault.sharedSourceAuthor(session, source)
+    }
+
+    suspend fun appendSharedDownload(
+        collectionId: ByteArray,
+        objectId: ByteArray,
+        offset: ULong,
+        bytes: ByteArray,
+    ): Boolean = mutex.withLock {
+        if (session == 0L) false else {
+            ChurVault.appendSharedDownload(session, collectionId, objectId, offset, bytes)
+            true
+        }
+    }
+
+    suspend fun finishSharedDownload(
+        collectionId: ByteArray,
+        objectId: ByteArray,
+        nowMs: Long,
+    ): Boolean = mutex.withLock {
+        if (session == 0L) false else {
+            ChurVault.finishSharedDownload(session, collectionId, objectId, nowMs)
             true
         }
     }

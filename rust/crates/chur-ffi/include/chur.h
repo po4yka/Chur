@@ -18,7 +18,7 @@
  * recipient-device surface of section 6.13, and the sharing discovery surface
  * of section 6.14, and the private tag list of section 6.15. Adding an export raises the minor
  * ABI version; changing or removing one raises the major. The library reports
- * 1.11.
+ * 1.12.
  */
 
 #ifndef CHUR_H
@@ -109,7 +109,7 @@ typedef int32_t chur_status_t;
 /* -------------------------------------------------------------------------
  * Capability bits, returned by chur_capabilities().
  *
- * An unknown set bit is ignored and never enables behaviour. Bits 8 to 63 are
+ * An unknown set bit is ignored and never enables behaviour. Bits 9 to 63 are
  * reserved and are zero in v1.
  * ---------------------------------------------------------------------- */
 
@@ -121,6 +121,7 @@ typedef int32_t chur_status_t;
 #define CHUR_CAP_SYNC (UINT64_C(1) << 5)
 #define CHUR_CAP_CONCURRENT_READS (UINT64_C(1) << 6)
 #define CHUR_CAP_COLLECTION_SHARING (UINT64_C(1) << 7)
+#define CHUR_CAP_SHARED_OBJECTS (UINT64_C(1) << 8)
 
 /* -------------------------------------------------------------------------
  * Build-flavor bits, returned by chur_build_flavor().
@@ -393,6 +394,50 @@ chur_status_t chur_sharing_prepare_device(chur_handle_t session,
 chur_status_t chur_sharing_accept(chur_handle_t session,
                                   const uint8_t *bundle,
                                   uint32_t bundle_length);
+
+/* Source objects in ascending ID order; zero cursor starts a 64-item page.
+ * Record: version:u16, count:u32, then for each item two empty variable
+ * records, object_id[16], store_id[16], length:u64, SHA-256[32]. */
+chur_status_t chur_sharing_publication(chur_handle_t session,
+                                       const uint8_t collection_id[16],
+                                       const uint8_t after_object_id[16],
+                                       uint8_t *destination, size_t capacity,
+                                       size_t *bytes_written);
+
+/* After upload, authors durable CreateObject and CommitObject for one object.
+ * Returns one record in the same page format with both variables populated. */
+chur_status_t chur_sharing_author(chur_handle_t session,
+                                 const uint8_t collection_id[16],
+                                 const uint8_t object_id[16],
+                                 const uint8_t store_id[16],
+                                 uint64_t expected_length,
+                                 const uint8_t expected_sha256[32],
+                                 uint8_t *destination, size_t capacity,
+                                 size_t *bytes_written);
+
+/* At most 1 MiB of committed original ciphertext and SHA-256 of that range. */
+chur_status_t chur_sharing_object_read(chur_handle_t session,
+                                      const uint8_t object_id[16],
+                                      uint64_t offset, uint32_t max_bytes,
+                                      uint8_t *destination, size_t capacity,
+                                      size_t *bytes_written,
+                                      uint8_t range_sha256[32]);
+
+/* Authenticated recipient operation page and verified ciphertext activation. */
+chur_status_t chur_sharing_receive(chur_handle_t session,
+                                   const uint8_t *bundle, uint32_t bundle_length,
+                                   const uint8_t *operations, uint32_t operations_length,
+                                   uint8_t *destination, size_t capacity,
+                                   size_t *bytes_written);
+chur_status_t chur_sharing_download_append(chur_handle_t session,
+                                           const uint8_t collection_id[16],
+                                           const uint8_t object_id[16],
+                                           uint64_t offset,
+                                           const uint8_t *bytes, uint32_t length);
+chur_status_t chur_sharing_download_finish(chur_handle_t session,
+                                           const uint8_t collection_id[16],
+                                           const uint8_t object_id[16],
+                                           uint64_t now_ms);
 
 /* Forward-only recipient revocation and key rotation, section 6.12. */
 chur_status_t chur_sharing_revoke(chur_handle_t session,

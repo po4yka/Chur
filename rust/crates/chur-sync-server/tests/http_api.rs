@@ -460,6 +460,34 @@ async fn sharing_endpoints_authenticate_issuers_and_recipient_inboxes() {
         &recipient_initial,
     )
     .await;
+    let stranger_vault = id(53);
+    let stranger_device = id(54);
+    let stranger_key = DeviceSigningKey::from_seed([55; 32]);
+    let stranger_enrollment = EnrollmentRecord::initial(
+        stranger_vault,
+        stranger_device,
+        stranger_key.verifying_key(),
+        [56; 32],
+    )
+    .expect("stranger enrollment")
+    .sign(&stranger_key);
+    let stranger_initial = operation(
+        stranger_vault,
+        stranger_device,
+        id(57),
+        1,
+        [0; 32],
+        &stranger_key,
+    );
+    let stranger_token = [58; 32];
+    bootstrap_vault(
+        &app,
+        stranger_vault,
+        &stranger_token,
+        &stranger_enrollment,
+        &stranger_initial,
+    )
+    .await;
 
     let collection_id = id(42);
     let membership = CollectionMembershipRecord::new(
@@ -637,6 +665,333 @@ async fn sharing_endpoints_authenticate_issuers_and_recipient_inboxes() {
             grant_outer.encode(),
         ])
     );
+
+    let store = id(45);
+    let transfer = id(46);
+    let object = b"sealed source object";
+    let checksum: [u8; 32] = Sha256::digest(object).into();
+    let publish_uri = format!(
+        "/v1/vaults/{}/sharing/collections/{}/objects/{}",
+        source_vault.to_hex(),
+        collection_id.to_hex(),
+        store.to_hex(),
+    );
+    let read_uri = format!(
+        "/v1/vaults/{}/sharing/issuers/{}/collections/{}/objects/{}?offset=0&length=64",
+        recipient_vault.to_hex(),
+        source_vault.to_hex(),
+        collection_id.to_hex(),
+        store.to_hex(),
+    );
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &publish_uri,
+            Vec::new(),
+            Some(("Bearer", &source_token)),
+        ))
+        .await
+        .expect("incomplete publish response");
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &format!(
+                "/v1/vaults/{}/objects/{}/uploads/{}?length={}",
+                source_vault.to_hex(),
+                store.to_hex(),
+                transfer.to_hex(),
+                object.len()
+            ),
+            Vec::new(),
+            Some(("Bearer", &source_token)),
+        ))
+        .await
+        .expect("begin shared upload");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &publish_uri,
+            Vec::new(),
+            Some(("Bearer", &source_token)),
+        ))
+        .await
+        .expect("partial publish response");
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::PATCH,
+            &format!(
+                "/v1/vaults/{}/uploads/{}?offset=0&sha256={}",
+                source_vault.to_hex(),
+                transfer.to_hex(),
+                hex::encode(checksum)
+            ),
+            object.to_vec(),
+            Some(("Bearer", &source_token)),
+        ))
+        .await
+        .expect("append shared upload");
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &format!(
+                "/v1/vaults/{}/uploads/{}/finish?sha256={}",
+                source_vault.to_hex(),
+                transfer.to_hex(),
+                hex::encode(checksum)
+            ),
+            Vec::new(),
+            Some(("Bearer", &source_token)),
+        ))
+        .await
+        .expect("finish shared upload");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    for (uri, token) in [
+        (read_uri.clone(), None),
+        (read_uri.clone(), Some(("Bearer", &source_token))),
+        (read_uri.clone(), Some(("Bearer", &recipient_token))),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(request(Method::GET, &uri, Vec::new(), token))
+            .await
+            .expect("unpublished read response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &publish_uri,
+            Vec::new(),
+            Some(("Bearer", &recipient_token)),
+        ))
+        .await
+        .expect("foreign publish response");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &publish_uri,
+            Vec::new(),
+            Some(("Bearer", &source_token)),
+        ))
+        .await
+        .expect("publish response");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &publish_uri,
+            Vec::new(),
+            Some(("Bearer", &source_token)),
+        ))
+        .await
+        .expect("publish replay response");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &read_uri,
+            Vec::new(),
+            Some(("Bearer", &recipient_token)),
+        ))
+        .await
+        .expect("recipient object read");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("object body")
+            .as_ref(),
+        object
+    );
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &read_uri.replace(&recipient_vault.to_hex(), &stranger_vault.to_hex()),
+            Vec::new(),
+            Some(("Bearer", &stranger_token)),
+        ))
+        .await
+        .expect("unshared vault response");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    // A grant for another collection does not authorize the first collection's object.
+    let other_collection = id(47);
+    let other_membership = CollectionMembershipRecord::new(
+        source_vault,
+        other_collection,
+        1,
+        [0; 32],
+        CollectionMembershipAction::Upsert(PermissionProfile::Read),
+        recipient_vault,
+        recipient_device,
+        recipient.signing_public_key(),
+        recipient.hpke_public_key(),
+        1,
+        source_vault,
+        source_device,
+        1,
+        4,
+    )
+    .expect("other membership")
+    .sign(&source_key);
+    let other_membership_outer = operation(
+        source_vault,
+        source_device,
+        id(48),
+        4,
+        grant_outer.digest(),
+        &source_key,
+    );
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &membership_uri,
+            pair_body(&other_membership.encode(), &other_membership_outer.encode()),
+            Some(("Bearer", &source_token)),
+        ))
+        .await
+        .expect("other membership response");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let other_grant = CollectionGrant::seal(
+        id(49),
+        source_vault,
+        other_collection,
+        1,
+        1,
+        recipient_vault,
+        recipient_device,
+        &recipient.hpke_public_key(),
+        source_device,
+        PermissionProfile::Read,
+        1,
+        5,
+        &Key::new([50; 32]),
+        &source_key,
+    )
+    .expect("other grant");
+    let other_grant_outer = Operation::new(
+        id(49),
+        source_vault,
+        source_device,
+        5,
+        other_membership_outer.digest(),
+        Vec::new(),
+        id(52),
+        [vec![7; 24], vec![8; 16]].concat(),
+        [0; 64],
+    )
+    .expect("other grant outer")
+    .sign(&source_key);
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &format!("/v1/vaults/{}/sharing/grants", source_vault.to_hex()),
+            pair_body(&other_grant.encode(), &other_grant_outer.encode()),
+            Some(("Bearer", &source_token)),
+        ))
+        .await
+        .expect("other grant response");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &format!(
+                "/v1/vaults/{}/sharing/collections/{}/objects/{}",
+                source_vault.to_hex(),
+                other_collection.to_hex(),
+                store.to_hex()
+            ),
+            Vec::new(),
+            Some(("Bearer", &source_token)),
+        ))
+        .await
+        .expect("second collection publication response");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!(
+                "/v1/vaults/{}/sharing/issuers/{}/collections/{}/objects/{}?offset=0&length=64",
+                recipient_vault.to_hex(),
+                source_vault.to_hex(),
+                other_collection.to_hex(),
+                store.to_hex()
+            ),
+            Vec::new(),
+            Some(("Bearer", &recipient_token)),
+        ))
+        .await
+        .expect("cross collection response");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let revocation = CollectionMembershipRecord::new(
+        source_vault,
+        collection_id,
+        2,
+        membership.commitment(),
+        CollectionMembershipAction::Revoke,
+        recipient_vault,
+        recipient_device,
+        recipient.signing_public_key(),
+        recipient.hpke_public_key(),
+        2,
+        source_vault,
+        source_device,
+        1,
+        6,
+    )
+    .expect("revocation")
+    .sign(&source_key);
+    let revocation_outer = operation(
+        source_vault,
+        source_device,
+        id(51),
+        6,
+        other_grant_outer.digest(),
+        &source_key,
+    );
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &membership_uri,
+            pair_body(&revocation.encode(), &revocation_outer.encode()),
+            Some(("Bearer", &source_token)),
+        ))
+        .await
+        .expect("revocation response");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &read_uri,
+            Vec::new(),
+            Some(("Bearer", &recipient_token)),
+        ))
+        .await
+        .expect("revoked recipient response");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 async fn bootstrap_vault(

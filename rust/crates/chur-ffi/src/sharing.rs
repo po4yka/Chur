@@ -616,6 +616,245 @@ fn decode_accept_bundle(bytes: &[u8]) -> Result<DecodedAcceptBundle, Error> {
     Ok((issuers, membership, grant, grant_operation))
 }
 
+/// Accepts one page of shared collection operations and returns verified download work.
+///
+/// # Safety
+///
+/// Input pointers cover their lengths. `destination` covers `capacity` writable
+/// bytes and `bytes_written` is a writable aligned `size_t`.
+#[unsafe(no_mangle)]
+#[expect(
+    unsafe_code,
+    reason = "the exported C ABI validates bounded caller buffers"
+)]
+pub unsafe extern "C" fn chur_sharing_receive(
+    session: Handle,
+    bundle: *const u8,
+    bundle_length: u32,
+    operations: *const u8,
+    operations_length: u32,
+    destination: *mut u8,
+    capacity: usize,
+    bytes_written: *mut usize,
+) -> Status {
+    guard_status_for(session, || {
+        // SAFETY: the caller owns this writable out-parameter.
+        unsafe { write_out(bytes_written, 0usize)? };
+        ensure!(
+            bundle_length <= BUNDLE_BYTES_MAX && operations_length <= BUNDLE_BYTES_MAX,
+            ResourceLimitExceeded,
+            "shared operation page exceeds the ABI bound"
+        );
+        // SAFETY: the caller guarantees both readable ranges.
+        let (issuers, membership, grant, grant_operation) =
+            decode_accept_bundle(unsafe { borrow_large(bundle, bundle_length)? })?;
+        // SAFETY: the caller guarantees the readable page range.
+        let mut reader = Reader::new(
+            unsafe { borrow_large(operations, operations_length)? },
+            ChurStatus::NonCanonicalEncoding,
+        );
+        let count = bounded_count(
+            &mut reader,
+            BUNDLE_RECORDS_MAX,
+            "collection operation count",
+        )?;
+        let mut records = Vec::with_capacity(count);
+        for _ in 0..count {
+            records.push(
+                chur_sync_protocol::collection_operation::CollectionOperation::decode(
+                    reader.variable(BUNDLE_BYTES_MAX)?,
+                )?,
+            );
+        }
+        reader.finish()?;
+        let evidence = issuers
+            .iter()
+            .map(|issuer| chur_catalog::sharing_service::IssuerEvidence {
+                membership: &issuer.membership,
+                operations: &issuer.operations,
+            })
+            .collect::<Vec<_>>();
+        let entry = registry::get(session, Kind::Session)?;
+        let Entry::Session { session, .. } = entry.as_ref() else {
+            return Err(Error::new(
+                ChurStatus::InvalidInput,
+                "the handle is of another type",
+            ));
+        };
+        let mut session = registry::lock(session);
+        let vault_id = session.vault_id();
+        let root = Key::new(*session.root_secret()?.expose());
+        let plan = chur_catalog::sharing_receive::receive(
+            session.catalog()?,
+            &root,
+            vault_id,
+            &evidence,
+            &membership,
+            &grant,
+            &grant_operation,
+            &records,
+        )?;
+        // The ABI plan is bounded, while a whole vault can contain more
+        // objects. Activated rows leave the pending projection, so the next
+        // sync returns the following page without a separate cursor.
+        let download_count = plan.objects.len().min(BUNDLE_RECORDS_MAX);
+        let mut writer = Writer::new();
+        writer
+            .u16(RECORD_VERSION_V1)
+            .id(&plan.source_vault_id)
+            .id(&plan.collection_id)
+            .id(&plan.selector)
+            .u32(u32::try_from(plan.pending_operations).map_err(|_| {
+                Error::new(
+                    ChurStatus::ResourceLimitExceeded,
+                    "pending operation count exceeds u32",
+                )
+            })?)
+            .u32(u32::try_from(download_count).map_err(|_| {
+                Error::new(
+                    ChurStatus::ResourceLimitExceeded,
+                    "shared object count exceeds u32",
+                )
+            })?);
+        for object in plan.objects.iter().take(download_count) {
+            writer
+                .id(&object.object_id)
+                .id(&object.store_id)
+                .u64(object.container_length);
+        }
+        let encoded = writer.finish();
+        // SAFETY: the caller guarantees the writable destination range.
+        let output = unsafe { borrow_bytes_mut(destination, capacity)? };
+        ensure!(
+            encoded.len() <= output.len(),
+            ResourceLimitExceeded,
+            "shared download plan does not fit the destination"
+        );
+        output[..encoded.len()].copy_from_slice(&encoded);
+        // SAFETY: the caller guarantees this writable out-parameter.
+        unsafe { write_out(bytes_written, encoded.len()) }
+    })
+}
+
+/// Appends one ciphertext range whose destination was signed by the source.
+///
+/// # Safety
+///
+/// The identifier pointers cover 16 bytes and `bytes` covers `length` bytes.
+#[unsafe(no_mangle)]
+#[expect(
+    unsafe_code,
+    reason = "the exported C ABI validates bounded caller buffers"
+)]
+pub unsafe extern "C" fn chur_sharing_download_append(
+    session: Handle,
+    collection_id: *const u8,
+    object_id: *const u8,
+    offset: u64,
+    bytes: *const u8,
+    length: u32,
+) -> Status {
+    guard_status_for(session, || {
+        ensure!(
+            length <= 1_048_576,
+            ResourceLimitExceeded,
+            "shared range exceeds one MiB"
+        );
+        // SAFETY: each identifier and range is caller-owned and readable.
+        let collection_id = Id::from_slice(unsafe { borrow_bytes(collection_id, 16)? })?;
+        let object_id = Id::from_slice(unsafe { borrow_bytes(object_id, 16)? })?;
+        let bytes = unsafe { borrow_large(bytes, length)? };
+        let entry = registry::get(session, Kind::Session)?;
+        let Entry::Session { session, .. } = entry.as_ref() else {
+            return Err(Error::new(
+                ChurStatus::InvalidInput,
+                "the handle is of another type",
+            ));
+        };
+        let session = registry::lock(session);
+        let root = Key::new(*session.root_secret()?.expose());
+        let plan = chur_catalog::sharing_receive::pending_for_collection(
+            session.catalog_ref()?,
+            &root,
+            session.vault_id(),
+            collection_id,
+        )?;
+        let object = plan
+            .objects
+            .iter()
+            .find(|object| object.object_id == object_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ChurStatus::NotFound,
+                    "shared object has no authenticated commit",
+                )
+            })?;
+        let expected = chur_media::sync_download::Expectation::new(
+            object.object_id,
+            object.stream_id,
+            object.container_length,
+            object.container_commitment,
+        )?;
+        chur_media::sync_download::append_range(
+            session.root_dir(),
+            &session.object_store_id(),
+            &object_id,
+            offset,
+            bytes,
+            &expected,
+        )
+    })
+}
+
+/// Verifies every ciphertext record and activates one shared object.
+///
+/// # Safety
+///
+/// The identifier pointers each cover 16 readable bytes.
+#[unsafe(no_mangle)]
+#[expect(
+    unsafe_code,
+    reason = "the exported C ABI validates caller identifiers"
+)]
+pub unsafe extern "C" fn chur_sharing_download_finish(
+    session: Handle,
+    collection_id: *const u8,
+    object_id: *const u8,
+    now_ms: u64,
+) -> Status {
+    guard_status_for(session, || {
+        // SAFETY: both identifiers are caller-owned and readable.
+        let collection_id = Id::from_slice(unsafe { borrow_bytes(collection_id, 16)? })?;
+        let object_id = Id::from_slice(unsafe { borrow_bytes(object_id, 16)? })?;
+        let entry = registry::get(session, Kind::Session)?;
+        let Entry::Session { session, .. } = entry.as_ref() else {
+            return Err(Error::new(
+                ChurStatus::InvalidInput,
+                "the handle is of another type",
+            ));
+        };
+        let mut session = registry::lock(session);
+        let root = Key::new(*session.root_secret()?.expose());
+        let plan = chur_catalog::sharing_receive::pending_for_collection(
+            session.catalog_ref()?,
+            &root,
+            session.vault_id(),
+            collection_id,
+        )?;
+        let object = plan
+            .objects
+            .iter()
+            .find(|object| object.object_id == object_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ChurStatus::NotFound,
+                    "shared object has no authenticated commit",
+                )
+            })?;
+        chur_media::sync_download::activate_shared(&mut session, object, now_ms)
+    })
+}
+
 fn decode_recipient_evidence(bytes: &[u8]) -> Result<DecodedIssuer, Error> {
     let mut reader = Reader::new(bytes, ChurStatus::NonCanonicalEncoding);
     ensure!(

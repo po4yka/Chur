@@ -52,6 +52,8 @@ Server transport checksums do not replace object AEAD/final-commit verification.
 - activate catalog reference only after validation;
 - retain incomplete transfer state without exposing media.
 
+For collection sharing, the source first uploads a complete ciphertext object, then associates its remote store identifier with one collection, and only then publishes the signed `CreateObject` and `CommitObject` collection operations. A recipient reads a source object with its own transport token only while its current collection membership and grant allow `READ`. The server checks the source-object association on every range request. The recipient takes the expected store identifier, length, and commitment from authenticated collection operations and verifies the complete container before it activates a local object. Revocation prevents further server reads; it cannot remove bytes already downloaded.
+
 ## 5. Operation synchronization
 
 Devices exchange:

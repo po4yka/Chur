@@ -63,7 +63,8 @@ impl ReferenceServer {
         let mut db = Connection::open(root.join("server.sqlite"))
             .map_err(|error| map_sqlite(error, "server database open failed"))?;
         db.execute_batch(
-            "PRAGMA journal_mode = WAL;
+            "PRAGMA foreign_keys = ON;
+             PRAGMA journal_mode = WAL;
              PRAGMA synchronous = FULL;
              PRAGMA secure_delete = ON;
              CREATE TABLE IF NOT EXISTS object_transfers (
@@ -78,6 +79,15 @@ impl ReferenceServer {
                  object_sha256 BLOB CHECK(object_sha256 IS NULL OR length(object_sha256) = 32),
                  PRIMARY KEY(vault_id, transfer_id),
                  UNIQUE(vault_id, store_id)
+             );
+             CREATE TABLE IF NOT EXISTS shared_objects (
+                 source_vault_id BLOB NOT NULL CHECK(length(source_vault_id) = 16),
+                 collection_id BLOB NOT NULL CHECK(length(collection_id) = 16),
+                 store_id BLOB NOT NULL CHECK(length(store_id) = 16),
+                 PRIMARY KEY(source_vault_id, collection_id, store_id),
+                 UNIQUE(source_vault_id, store_id),
+                 FOREIGN KEY(source_vault_id, store_id)
+                     REFERENCES object_transfers(vault_id, store_id) ON DELETE CASCADE
              );
              CREATE TABLE IF NOT EXISTS operations (
                  vault_id BLOB NOT NULL CHECK(length(vault_id) = 16),

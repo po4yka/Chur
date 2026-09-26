@@ -283,6 +283,7 @@ dependencies = [
  "chur-format",
  "chur-media",
  "chur-sync-protocol",
+ "sha2",
  "zeroize",
 ]
 

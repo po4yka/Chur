@@ -49,6 +49,12 @@ import dev.po4yka.chur.native.chur_runtime_close
 import dev.po4yka.chur.native.chur_runtime_open
 import dev.po4yka.chur.native.chur_session_close
 import dev.po4yka.chur.native.chur_sharing_accept
+import dev.po4yka.chur.native.chur_sharing_publication
+import dev.po4yka.chur.native.chur_sharing_author
+import dev.po4yka.chur.native.chur_sharing_object_read
+import dev.po4yka.chur.native.chur_sharing_receive
+import dev.po4yka.chur.native.chur_sharing_download_append
+import dev.po4yka.chur.native.chur_sharing_download_finish
 import dev.po4yka.chur.native.chur_sharing_identity
 import dev.po4yka.chur.native.chur_sharing_overview
 import dev.po4yka.chur.native.chur_sharing_inspect_enrollment
@@ -373,6 +379,120 @@ internal actual object ChurNative {
         bundle: ChurBuffer,
         length: Int,
     ): Int = chur_sharing_accept(session.toULong(), bundle.pointer, length.toUInt())
+
+    actual fun sharingPublication(
+        session: Long,
+        collectionId: ByteArray,
+        afterObjectId: ByteArray,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int = collectionId.pinnedPointer { collection ->
+        afterObjectId.pinnedPointer { after ->
+            memScoped {
+                writtenCall(outWritten) { written ->
+                    chur_sharing_publication(
+                        session.toULong(), collection, after,
+                        destination.pointer, destination.size.toULong(), written,
+                    )
+                }
+            }
+        }
+    }
+
+    actual fun sharingAuthor(
+        session: Long,
+        collectionId: ByteArray,
+        objectId: ByteArray,
+        storeId: ByteArray,
+        expectedLength: Long,
+        expectedSha256: ByteArray,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int = collectionId.pinnedPointer { collection ->
+        objectId.pinnedPointer { objectPointer ->
+            storeId.pinnedPointer { storePointer ->
+                expectedSha256.pinnedPointer { sha ->
+                    memScoped {
+                        writtenCall(outWritten) { written ->
+                            chur_sharing_author(
+                                session.toULong(), collection, objectPointer, storePointer,
+                                expectedLength.toULong(), sha,
+                                destination.pointer, destination.size.toULong(), written,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    actual fun sharingObjectRead(
+        session: Long,
+        objectId: ByteArray,
+        offset: Long,
+        maxBytes: Int,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+        rangeSha256: ByteArray,
+    ): Int = objectId.pinnedPointer { objectPointer ->
+        rangeSha256.pinnedPointer { sha ->
+            memScoped {
+                writtenCall(outWritten) { written ->
+                    chur_sharing_object_read(
+                        session.toULong(), objectPointer, offset.toULong(), maxBytes.toUInt(),
+                        destination.pointer, destination.size.toULong(), written, sha,
+                    )
+                }
+            }
+        }
+    }
+
+    actual fun sharingReceive(
+        session: Long,
+        bundle: ChurBuffer,
+        bundleLength: Int,
+        operations: ChurBuffer,
+        operationsLength: Int,
+        destination: ChurBuffer,
+        outWritten: IntArray,
+    ): Int = memScoped {
+        writtenCall(outWritten) { written ->
+            chur_sharing_receive(
+                session.toULong(), bundle.pointer, bundleLength.toUInt(),
+                operations.pointer, operationsLength.toUInt(),
+                destination.pointer, destination.size.toULong(), written,
+            )
+        }
+    }
+
+    actual fun sharingDownloadAppend(
+        session: Long,
+        collectionId: ByteArray,
+        objectId: ByteArray,
+        offset: Long,
+        bytes: ChurBuffer,
+        length: Int,
+    ): Int = collectionId.pinnedPointer { collection ->
+        objectId.pinnedPointer { objectPointer ->
+            chur_sharing_download_append(
+                session.toULong(), collection, objectPointer, offset.toULong(),
+                bytes.pointer, length.toUInt(),
+            )
+        }
+    }
+
+    actual fun sharingDownloadFinish(
+        session: Long,
+        collectionId: ByteArray,
+        objectId: ByteArray,
+        nowMs: Long,
+    ): Int = collectionId.pinnedPointer { collection ->
+        objectId.pinnedPointer { objectPointer ->
+            chur_sharing_download_finish(
+                session.toULong(), collection, objectPointer, nowMs.toULong(),
+            )
+        }
+    }
 
     actual fun sharingRevoke(
         session: Long,

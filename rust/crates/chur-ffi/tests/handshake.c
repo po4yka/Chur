@@ -52,8 +52,8 @@ int main(void) {
           "neither format range is the empty panic fallback");
 
     check(chur_abi_version_major() == 1, "major ABI version is 1");
-    check(chur_abi_version_minor() == 11,
-          "minor ABI version is 11, including private tag list");
+    check(chur_abi_version_minor() == 12,
+          "minor ABI version is 12, including shared object transfer");
 
     check(chur_object_format_min() <= chur_object_format_max(),
           "object format range is ordered");
@@ -79,13 +79,15 @@ int main(void) {
           "the ciphertext sync inbox is declared");
     check((capabilities & CHUR_CAP_COLLECTION_SHARING) != 0,
           "the collection-sharing surface is declared");
+    check((capabilities & CHUR_CAP_SHARED_OBJECTS) != 0,
+          "shared object transfer is declared");
     check((capabilities & CHUR_CAP_CONCURRENT_READS) == 0,
           "no concurrent-reader capability is declared before its evidence exists");
     check((capabilities & ~(CHUR_CAP_DECOY_VAULT | CHUR_CAP_OBJECT_READER |
                             CHUR_CAP_SEQUENTIAL_READER | CHUR_CAP_INTEGRITY_SCAN |
                             CHUR_CAP_BACKUP_PACKAGE | CHUR_CAP_SYNC |
                             CHUR_CAP_CONCURRENT_READS |
-                            CHUR_CAP_COLLECTION_SHARING)) == 0,
+                            CHUR_CAP_COLLECTION_SHARING | CHUR_CAP_SHARED_OBJECTS)) == 0,
           "no reserved capability bit is set");
 
     uint32_t flavor = chur_build_flavor();

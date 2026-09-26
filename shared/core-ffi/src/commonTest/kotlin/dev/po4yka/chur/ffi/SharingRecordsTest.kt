@@ -6,6 +6,16 @@ import kotlin.test.assertFailsWith
 
 class SharingRecordsTest {
     @Test
+    fun shared_download_rejects_short_ids_before_native_calls() {
+        assertFailsWith<IllegalArgumentException> {
+            ChurVault.appendSharedDownload(0, ByteArray(15), ByteArray(16), 0uL, byteArrayOf(1))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ChurVault.finishSharedDownload(0, ByteArray(16), ByteArray(15), 0)
+        }
+    }
+
+    @Test
     fun recipient_evidence_keeps_membership_and_operation_boundaries() {
         val encoded = encodeSharingIssuerEvidence(
             SharingIssuerEvidence(

@@ -134,6 +134,61 @@ internal object ChurJni {
         length: Int,
     ): Int
 
+    external fun sharingPublication(
+        session: Long,
+        collectionId: ByteArray,
+        afterObjectId: ByteArray,
+        destination: ByteBuffer,
+        outWritten: IntArray,
+    ): Int
+
+    external fun sharingAuthor(
+        session: Long,
+        collectionId: ByteArray,
+        objectId: ByteArray,
+        storeId: ByteArray,
+        expectedLength: Long,
+        expectedSha256: ByteArray,
+        destination: ByteBuffer,
+        outWritten: IntArray,
+    ): Int
+
+    external fun sharingObjectRead(
+        session: Long,
+        objectId: ByteArray,
+        offset: Long,
+        maxBytes: Int,
+        destination: ByteBuffer,
+        outWritten: IntArray,
+        rangeSha256: ByteArray,
+    ): Int
+
+    external fun sharingReceive(
+        session: Long,
+        bundle: ByteBuffer,
+        bundleLength: Int,
+        operations: ByteBuffer,
+        operationsLength: Int,
+        destination: ByteBuffer,
+        outWritten: IntArray,
+    ): Int
+
+    external fun sharingDownloadAppend(
+        session: Long,
+        collectionId: ByteArray,
+        objectId: ByteArray,
+        offset: Long,
+        bytes: ByteBuffer,
+        length: Int,
+    ): Int
+
+    external fun sharingDownloadFinish(
+        session: Long,
+        collectionId: ByteArray,
+        objectId: ByteArray,
+        nowMs: Long,
+    ): Int
+
     external fun sharingRevoke(
         session: Long,
         collectionId: ByteArray,

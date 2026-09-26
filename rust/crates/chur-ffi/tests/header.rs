@@ -198,6 +198,11 @@ fn the_capability_bits_match() {
             chur_ffi::CHUR_CAP_COLLECTION_SHARING,
             7,
         ),
+        (
+            "CHUR_CAP_SHARED_OBJECTS",
+            chur_ffi::CHUR_CAP_SHARED_OBJECTS,
+            8,
+        ),
     ];
     assert_eq!(header.len(), expected.len());
     for (name, rust_value, bit) in expected {
@@ -360,6 +365,12 @@ fn every_declared_function_is_exported() {
         "chur_sharing_prepare_device",
         // §6.11, the share acceptance surface added at ABI 1.7.
         "chur_sharing_accept",
+        "chur_sharing_publication",
+        "chur_sharing_author",
+        "chur_sharing_object_read",
+        "chur_sharing_receive",
+        "chur_sharing_download_append",
+        "chur_sharing_download_finish",
         // §6.12, the recipient revocation surface added at ABI 1.8.
         "chur_sharing_revoke",
         // §6.6, the Android Keystore surface added at ABI 1.2.
@@ -377,7 +388,7 @@ fn every_declared_function_is_exported() {
 
     // Calling each one proves the list above is not a stale copy.
     assert_eq!(chur_ffi::chur_abi_version_major(), 1);
-    assert_eq!(chur_ffi::chur_abi_version_minor(), 11);
+    assert_eq!(chur_ffi::chur_abi_version_minor(), 12);
     assert_eq!(
         chur_ffi::chur_capabilities(),
         chur_ffi::CHUR_CAP_DECOY_VAULT
@@ -387,6 +398,7 @@ fn every_declared_function_is_exported() {
             | chur_ffi::CHUR_CAP_BACKUP_PACKAGE
             | chur_ffi::CHUR_CAP_SYNC
             | chur_ffi::CHUR_CAP_COLLECTION_SHARING
+            | chur_ffi::CHUR_CAP_SHARED_OBJECTS
     );
     assert_eq!(chur_ffi::chur_object_format_min(), 1);
     assert_eq!(chur_ffi::chur_object_format_max(), 1);

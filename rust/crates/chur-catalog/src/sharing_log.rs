@@ -3,12 +3,13 @@
 use std::collections::BTreeMap;
 
 use chur_core::{ChurStatus, Error, Id, Result, ensure};
-use chur_crypto::Commitment;
+use chur_crypto::{Commitment, Key, Nonce};
 use chur_sync_protocol::{
     KeyDirectory,
     collection_membership::CollectionMembershipState,
     collection_operation::CollectionOperation,
     collection_operation_log::CollectionOperationLog,
+    operation::DeviceSigningKey,
     operation_log::{ApplyOutcome, ForkState},
     payload::OperationPayload,
     state::MembershipState,
@@ -42,6 +43,52 @@ impl DurableCollectionOperationLog {
         Ok(Self {
             log: CollectionOperationLog::new(collection_id, collection_epoch, key_selector),
         })
+    }
+
+    /// Authors and persists the next signed operation in this collection stream.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the signed collection operation binds its author and both membership states"
+    )]
+    pub fn author(
+        &mut self,
+        db: &mut CatalogDb,
+        operation_id: Id,
+        issuer_vault_id: Id,
+        device_id: Id,
+        key: &Key,
+        nonce: Nonce,
+        payload: &OperationPayload,
+        signing_key: &DeviceSigningKey,
+        issuer_membership: &MembershipState,
+        source_membership: &MembershipState,
+        collection_membership: &CollectionMembershipState,
+    ) -> Result<CollectionOperation> {
+        let operation = self.log.author(
+            operation_id,
+            issuer_vault_id,
+            device_id,
+            key,
+            nonce,
+            payload,
+            signing_key,
+            issuer_membership,
+            source_membership,
+            collection_membership,
+        )?;
+        ensure!(
+            self.accept(
+                db,
+                &operation,
+                payload,
+                issuer_membership,
+                source_membership,
+                collection_membership,
+            )? == ApplyOutcome::Applied,
+            InternalFailure,
+            "fresh collection operation was not accepted"
+        );
+        Ok(operation)
     }
 
     /// Validates and stores one operation without advancing memory before SQL commits.
@@ -232,6 +279,29 @@ pub fn load(
     }
     restore_forks(db, &mut log, &key_selector)?;
     Ok(DurableCollectionOperationLog { log })
+}
+
+/// Returns the authenticated local copy of one collection operation stream.
+pub fn records(db: &CatalogDb, selector: &Id) -> Result<Vec<CollectionOperation>> {
+    let mut statement = db
+        .connection()
+        .prepare(
+            "SELECT record FROM sharing_operations WHERE key_selector = ?1
+             ORDER BY issuer_identity_vault_id, issuer_device_id, device_sequence",
+        )
+        .map_err(|error| map_sqlite(error, "collection operations could not be prepared"))?;
+    statement
+        .query_map([selector.as_bytes().as_slice()], |row| {
+            row.get::<_, Vec<u8>>(0)
+        })
+        .map_err(|error| map_sqlite(error, "collection operations could not be read"))?
+        .map(|row| {
+            CollectionOperation::decode(
+                &row.map_err(|error| map_sqlite(error, "collection operation could not be read"))?,
+            )
+            .map_err(corrupt)
+        })
+        .collect()
 }
 
 fn ensure_stream(

@@ -6,11 +6,15 @@
 use chur_ffi::api::{chur_runtime_close, chur_runtime_open, chur_session_close, chur_vault_unlock};
 use chur_ffi::records::{ChurRuntimeConfigV1, ChurUnlockRequestV1};
 use chur_ffi::sharing::{
-    chur_sharing_accept, chur_sharing_identity, chur_sharing_inspect_enrollment,
-    chur_sharing_overview, chur_sharing_prepare, chur_sharing_prepare_device, chur_sharing_revoke,
+    chur_sharing_accept, chur_sharing_download_append, chur_sharing_download_finish,
+    chur_sharing_identity, chur_sharing_inspect_enrollment, chur_sharing_overview,
+    chur_sharing_prepare, chur_sharing_prepare_device, chur_sharing_receive, chur_sharing_revoke,
 };
+use chur_ffi::sharing_publish::{chur_sharing_author, chur_sharing_publication};
 use chur_format::codec::{Reader, Writer};
+use chur_format::constants::MediaClass;
 use chur_format::envelope::CollectionKeyEnvelope;
+use chur_media::import::{CanonicalMedia, SourceCapability, import_bytes};
 use chur_sync_protocol::{
     collection_membership::{CollectionMembershipAction, CollectionMembershipRecord},
     grant::{CollectionGrant, PermissionProfile},
@@ -18,6 +22,7 @@ use chur_sync_protocol::{
     membership::EnrollmentRecord,
     operation::Operation,
 };
+use sha2::{Digest, Sha256};
 
 const PASSWORD: &[u8] = b"correct horse battery staple";
 
@@ -62,6 +67,36 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
         &envelope.encode(),
     )
     .expect("collection");
+    let plaintext = zeroize::Zeroizing::new(vec![7u8; 4096]);
+    let shared_object_id = import_bytes(
+        &mut direct,
+        SourceCapability {
+            seekable: true,
+            known_length: Some(plaintext.len() as u64),
+            content_type_hint: "image/jpeg".to_owned(),
+            original_filename: Some("shared.jpg".to_owned()),
+            capture_time_ms: Some(1),
+        },
+        CanonicalMedia {
+            media_class: MediaClass::Image,
+            width: 10,
+            height: 10,
+            duration_ms: 0,
+        },
+        "image/jpeg",
+        &plaintext,
+        1,
+    )
+    .expect("import before share");
+    let shared_stream =
+        chur_catalog::store::streams(direct.catalog_ref().expect("catalog"), &shared_object_id)
+            .expect("streams")
+            .into_iter()
+            .find(|stream| stream.stream_kind == chur_format::constants::StreamKind::Original)
+            .expect("original stream");
+    let ciphertext =
+        std::fs::read(root.container(&direct.object_store_id(), &shared_stream.container_path_id))
+            .expect("source ciphertext");
     drop(direct);
     let path_bytes = path.to_str().expect("UTF-8 path").as_bytes();
     let config = ChurRuntimeConfigV1 {
@@ -415,6 +450,231 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
         unsafe { chur_sharing_accept(recipient_session, bundle.as_ptr(), bundle.len() as u32,) },
         0
     );
+
+    // The original existed before the grant. Author it only after its complete
+    // ciphertext is available, then deliver the signed content to the second vault.
+    let mut publication = vec![0u8; 8192];
+    let zero = [0u8; 16];
+    assert_eq!(
+        unsafe {
+            chur_sharing_publication(
+                session,
+                collection_id.as_bytes().as_ptr(),
+                zero.as_ptr(),
+                publication.as_mut_ptr(),
+                publication.len(),
+                &mut written,
+            )
+        },
+        0
+    );
+    let mut publication_reader = Reader::new(
+        &publication[..written],
+        chur_core::ChurStatus::NonCanonicalEncoding,
+    );
+    assert_eq!(publication_reader.u16().expect("version"), 1);
+    assert_eq!(publication_reader.u32().expect("count"), 1);
+    assert!(
+        publication_reader
+            .variable(1_048_576)
+            .expect("unsigned create")
+            .is_empty()
+    );
+    assert!(
+        publication_reader
+            .variable(1_048_576)
+            .expect("unsigned commit")
+            .is_empty()
+    );
+    assert_eq!(publication_reader.id().expect("object"), shared_object_id);
+    let remote_store_id = publication_reader.id().expect("store");
+    assert_eq!(
+        publication_reader.u64().expect("length"),
+        ciphertext.len() as u64
+    );
+    let full_sha256: [u8; 32] = Sha256::digest(&ciphertext).into();
+    assert_eq!(publication_reader.fixed::<32>().expect("hash"), full_sha256);
+    publication_reader.finish().expect("publication page");
+
+    assert_eq!(
+        unsafe {
+            chur_sharing_author(
+                session,
+                collection_id.as_bytes().as_ptr(),
+                shared_object_id.as_bytes().as_ptr(),
+                remote_store_id.as_bytes().as_ptr(),
+                ciphertext.len() as u64,
+                full_sha256.as_ptr(),
+                publication.as_mut_ptr(),
+                publication.len(),
+                &mut written,
+            )
+        },
+        0
+    );
+    let mut authored = Reader::new(
+        &publication[..written],
+        chur_core::ChurStatus::NonCanonicalEncoding,
+    );
+    assert_eq!(authored.u16().expect("version"), 1);
+    assert_eq!(authored.u32().expect("count"), 1);
+    let create = authored.variable(1_048_576).expect("create").to_vec();
+    let commit = authored.variable(1_048_576).expect("commit").to_vec();
+    let mut response = vec![0u8; 8192];
+    let receive = |records: &[&[u8]], response: &mut Vec<u8>| {
+        let mut page = Writer::new();
+        page.u32(records.len() as u32);
+        for record in records {
+            page.variable(record).expect("record");
+        }
+        let page = page.finish();
+        let mut length = 0;
+        let status = unsafe {
+            chur_sharing_receive(
+                recipient_session,
+                bundle.as_ptr(),
+                bundle.len() as u32,
+                page.as_ptr(),
+                page.len() as u32,
+                response.as_mut_ptr(),
+                response.len(),
+                &mut length,
+            )
+        };
+        (status, length)
+    };
+    let (status, pending_length) = receive(&[&commit], &mut response);
+    assert_eq!(status, 0, "out-of-order commit remains pending");
+    let mut pending = Reader::new(
+        &response[..pending_length],
+        chur_core::ChurStatus::NonCanonicalEncoding,
+    );
+    assert_eq!(pending.u16().expect("version"), 1);
+    pending.slice(48).expect("source, collection, selector");
+    assert_eq!(pending.u32().expect("pending count"), 1);
+    let (status, plan_length) = receive(&[&create, &commit], &mut response);
+    assert_eq!(status, 0, "signed source content applies");
+    let mut plan = Reader::new(
+        &response[..plan_length],
+        chur_core::ChurStatus::NonCanonicalEncoding,
+    );
+    assert_eq!(plan.u16().expect("version"), 1);
+    plan.slice(48).expect("source, collection, selector");
+    assert_eq!(plan.u32().expect("pending count"), 0);
+    assert_eq!(plan.u32().expect("download count"), 1);
+    assert_eq!(plan.id().expect("planned object"), shared_object_id);
+    assert_eq!(plan.id().expect("planned store"), remote_store_id);
+    assert_eq!(plan.u64().expect("planned length"), ciphertext.len() as u64);
+    plan.finish().expect("plan");
+
+    let mut corrupt = ciphertext.clone();
+    let corrupt_at = corrupt.len() / 2;
+    corrupt[corrupt_at] ^= 1;
+    assert_eq!(
+        unsafe {
+            chur_sharing_download_append(
+                recipient_session,
+                collection_id.as_bytes().as_ptr(),
+                shared_object_id.as_bytes().as_ptr(),
+                0,
+                corrupt.as_ptr(),
+                corrupt.len() as u32,
+            )
+        },
+        0
+    );
+    assert_ne!(
+        unsafe {
+            chur_sharing_download_finish(
+                recipient_session,
+                collection_id.as_bytes().as_ptr(),
+                shared_object_id.as_bytes().as_ptr(),
+                2,
+            )
+        },
+        0,
+        "modified ciphertext cannot activate"
+    );
+    assert_eq!(
+        unsafe {
+            chur_sharing_download_append(
+                recipient_session,
+                collection_id.as_bytes().as_ptr(),
+                shared_object_id.as_bytes().as_ptr(),
+                0,
+                ciphertext.as_ptr(),
+                ciphertext.len() as u32,
+            )
+        },
+        0
+    );
+
+    // Simulate a disk/SQL failure after the verified container rename but
+    // before catalog activation. A later finish must recover this window.
+    assert_eq!(unsafe { chur_session_close(recipient_session) }, 0);
+    let interrupted = chur_catalog::vault::unlock_with_password(&recipient_root, PASSWORD, 1)
+        .expect("recipient unlock for interrupted activation");
+    let received_key = interrupted.root_secret().expect("root key").duplicate();
+    let planned = chur_catalog::sharing_receive::pending_for_collection(
+        interrupted.catalog_ref().expect("catalog"),
+        &received_key,
+        recipient_vault_id,
+        collection_id,
+    )
+    .expect("verified local plan");
+    let planned_object = planned
+        .objects
+        .iter()
+        .find(|item| item.object_id == shared_object_id)
+        .expect("pending shared object");
+    let received_collection_key =
+        chur_media::keys::collection_key(&interrupted, &collection_id, 1).expect("collection key");
+    let received_object_key = planned_object
+        .object_key_envelope
+        .open(&received_collection_key)
+        .expect("object key");
+    let expectation = chur_media::sync_download::Expectation::new(
+        shared_object_id,
+        planned_object.stream_id,
+        planned_object.container_length,
+        planned_object.container_commitment,
+    )
+    .expect("commitment");
+    let local_store_id = interrupted.object_store_id();
+    chur_media::sync_download::verify_staged(
+        interrupted.root_dir(),
+        &local_store_id,
+        &shared_object_id,
+        &received_object_key,
+        &expectation,
+    )
+    .expect("verified container")
+    .commit(interrupted.root_dir(), &local_store_id, &shared_object_id)
+    .expect("rename before activation");
+    assert!(
+        !chur_catalog::store::object_present(
+            interrupted.catalog_ref().expect("catalog"),
+            &shared_object_id,
+        )
+        .expect("catalog lookup")
+    );
+    drop(interrupted);
+    assert_eq!(
+        unsafe { chur_vault_unlock(recipient_runtime, &unlock, &mut recipient_session) },
+        0
+    );
+    assert_eq!(
+        unsafe {
+            chur_sharing_download_finish(
+                recipient_session,
+                collection_id.as_bytes().as_ptr(),
+                shared_object_id.as_bytes().as_ptr(),
+                3,
+            )
+        },
+        0,
+        "committed ciphertext without a row activates on retry"
+    );
     assert_eq!(
         unsafe { chur_sharing_accept(recipient_session, bundle.as_ptr(), bundle.len() as u32,) },
         0
@@ -530,13 +790,16 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
             .expect("revoked membership operation"),
     )
     .expect("valid revoked membership operation");
-    assert_eq!(revoke_reader.u32().expect("rotation operation count"), 1);
-    Operation::decode(
-        revoke_reader
-            .variable(16_777_216)
-            .expect("rotation operation"),
-    )
-    .expect("valid rotation operation");
+    let rotation_count = revoke_reader.u32().expect("rotation operation count");
+    assert!(rotation_count >= 1);
+    for _ in 0..rotation_count {
+        Operation::decode(
+            revoke_reader
+                .variable(16_777_216)
+                .expect("rotation operation"),
+        )
+        .expect("valid rotation operation");
+    }
     assert_eq!(revoke_reader.u32().expect("grant count"), 0);
     assert_eq!(revoke_reader.u8().expect("rotation complete"), 1);
     revoke_reader.finish().expect("complete revocation record");
@@ -561,6 +824,62 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
     assert_eq!(unsafe { chur_runtime_close(recipient_runtime) }, 0);
     let mut received =
         chur_catalog::vault::unlock_with_password(&recipient_root, PASSWORD, 1).expect("unlock");
+    let received_object =
+        chur_catalog::store::object(received.catalog_ref().expect("catalog"), &shared_object_id)
+            .expect("recipient materialized object");
+    assert_eq!(received_object.plaintext_size, plaintext.len() as u64);
+    assert_eq!(received_object.collection_id, collection_id);
+    let mut before_epoch = chur_media::reader::open(
+        &received,
+        &shared_object_id,
+        chur_format::constants::StreamKind::Original,
+    )
+    .expect("read before epoch change");
+    assert_eq!(
+        before_epoch
+            .read_range(0, plaintext.len() as u64)
+            .expect("original"),
+        plaintext
+    );
+    drop(before_epoch);
+    let recipient_root_key = received.root_secret().expect("recipient root").duplicate();
+    let new_collection_key = chur_crypto::Key::new([53; 32]);
+    let next_envelope = CollectionKeyEnvelope::seal(
+        &recipient_root_key,
+        recipient_vault_id,
+        collection_id,
+        2,
+        1,
+        chur_crypto::Nonce::new([54; 24]),
+        &new_collection_key,
+    )
+    .expect("next epoch envelope");
+    chur_catalog::store::put_collection_with_envelope(
+        received.catalog().expect("catalog"),
+        &chur_catalog::model::Collection {
+            collection_id,
+            current_epoch: 2,
+            policy_type: chur_catalog::model::COLLECTION_POLICY_SHARED,
+            created_revision: 1,
+            status: chur_catalog::model::COLLECTION_STATUS_ACTIVE,
+        },
+        1,
+        &next_envelope.encode(),
+    )
+    .expect("advance recipient collection epoch");
+    let mut after_epoch = chur_media::reader::open(
+        &received,
+        &shared_object_id,
+        chur_format::constants::StreamKind::Original,
+    )
+    .expect("read after epoch change");
+    assert_eq!(
+        after_epoch
+            .read_range(0, plaintext.len() as u64)
+            .expect("retained original"),
+        plaintext
+    );
+    drop(after_epoch);
     assert_eq!(
         chur_catalog::store::collection(received.catalog().expect("catalog"), &collection_id)
             .expect("shared collection")

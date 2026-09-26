@@ -233,6 +233,106 @@ class ShareAcceptance(
     val grantOperation: ByteArray,
 )
 
+/** One source object with native-authored collection operations. */
+class SharedSourceObject(
+    val collectionId: ByteArray,
+    val objectId: ByteArray,
+    val storeId: ByteArray,
+    val length: ULong,
+    val fullSha256: ByteArray,
+    val createOperation: ByteArray,
+    val commitOperation: ByteArray,
+)
+
+/** One bounded committed ciphertext range from the source vault. */
+class SharedSourceRange(val bytes: ByteArray, val sha256: ByteArray)
+
+/** Decodes a native source publication page without inspecting signed payloads. */
+fun decodeSharedSourcePage(
+    collectionId: ByteArray,
+    bytes: ByteArray,
+    length: Int,
+): List<SharedSourceObject> {
+    require(collectionId.size == ID_LENGTH) { "invalid collection ID" }
+    val reader = RecordReader(bytes, length)
+    if (reader.short() != 1) {
+        throw ChurFailure(ChurStatus.NON_CANONICAL_ENCODING, "the source page version")
+    }
+    val count = reader.int()
+    if (count !in 0..64) {
+        throw ChurFailure(ChurStatus.NON_CANONICAL_ENCODING, "the source page count")
+    }
+    val objects = List(count) {
+        val create = reader.bounded()
+        val commit = reader.bounded()
+        SharedSourceObject(
+            collectionId, reader.take(ID_LENGTH), reader.take(ID_LENGTH), reader.long().toULong(),
+            reader.take(32), create, commit,
+        )
+    }
+    reader.requireExhausted()
+    return objects
+}
+
+/** One signed shared object whose ciphertext is still absent locally. */
+class SharedDownload(
+    val objectId: ByteArray,
+    val storeId: ByteArray,
+    val length: ULong,
+)
+
+/** Native-verifier output for one collection-operation page. */
+class SharedReceivePlan(
+    val sourceVaultId: ByteArray,
+    val collectionId: ByteArray,
+    val selector: ByteArray,
+    val pendingOperations: Int,
+    val downloads: List<SharedDownload>,
+)
+
+/** Frames a bounded page without decoding or trusting its encrypted content. */
+fun encodeSharedOperationPage(operations: List<ByteArray>): ByteArray {
+    require(operations.size <= SHARING_RECORDS_MAX) { "too many shared operations" }
+    val size = operations.fold(4L) { total, record -> total + 4 + record.size }
+    require(size <= SHARING_BUNDLE_BYTES_MAX) { "shared operation page is too large" }
+    val bytes = ByteArray(size.toInt())
+    var at = 0
+    fun putInt(value: Int) {
+        bytes[at++] = (value ushr 24).toByte()
+        bytes[at++] = (value ushr 16).toByte()
+        bytes[at++] = (value ushr 8).toByte()
+        bytes[at++] = value.toByte()
+    }
+    putInt(operations.size)
+    operations.forEach { record ->
+        putInt(record.size)
+        record.copyInto(bytes, at)
+        at += record.size
+    }
+    return bytes
+}
+
+/** Decodes only native-authenticated identifiers and lengths. */
+fun decodeSharedReceivePlan(bytes: ByteArray, length: Int): SharedReceivePlan {
+    val reader = RecordReader(bytes, length)
+    if (reader.short() != 1) {
+        throw ChurFailure(ChurStatus.NON_CANONICAL_ENCODING, "the shared plan version")
+    }
+    val sourceVaultId = reader.take(ID_LENGTH)
+    val collectionId = reader.take(ID_LENGTH)
+    val selector = reader.take(ID_LENGTH)
+    val pending = reader.int()
+    val count = reader.int()
+    if (pending < 0 || count !in 0..SHARING_RECORDS_MAX) {
+        throw ChurFailure(ChurStatus.NON_CANONICAL_ENCODING, "the shared plan count")
+    }
+    val downloads = List(count) {
+        SharedDownload(reader.take(ID_LENGTH), reader.take(ID_LENGTH), reader.long().toULong())
+    }
+    reader.requireExhausted()
+    return SharedReceivePlan(sourceVaultId, collectionId, selector, pending, downloads)
+}
+
 /** Encodes one opaque recipient identity-vault history for §6.13. */
 fun encodeSharingIssuerEvidence(evidence: SharingIssuerEvidence): ByteArray {
     require(evidence.membership.size <= SHARING_RECORDS_MAX) { "too many issuer memberships" }

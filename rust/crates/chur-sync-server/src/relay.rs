@@ -291,6 +291,7 @@ impl ReferenceServer {
                   + COALESCE((SELECT SUM(length(record)) FROM collection_membership_records WHERE issuer_vault_id = ?1), 0)
                   + COALESCE((SELECT SUM(length(record)) FROM collection_grants WHERE issuer_vault_id = ?1), 0)
                   + COALESCE((SELECT SUM(length(record)) FROM collection_operations WHERE issuer_vault_id = ?1), 0)
+                  + COALESCE((SELECT COUNT(*) * 48 FROM shared_objects WHERE source_vault_id = ?1), 0)
                   + COALESCE((SELECT SUM(length(record)) FROM deletion_requests WHERE vault_id = ?1), 0)
                   + COALESCE((SELECT SUM(length(record)) FROM checkpoints WHERE vault_id = ?1), 0)",
                 params![vault_id.as_bytes().as_slice()],
