@@ -5,9 +5,11 @@ import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.PersistableBundle
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,10 +35,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
 import dev.po4yka.chur.app.AppRoute
 import dev.po4yka.chur.app.ActiveOperation
 import dev.po4yka.chur.app.ChurController
@@ -890,6 +894,28 @@ private fun ViewerRoute(
     // the Info overlay before it closes the viewer. The overlay is drawn only
     // once the detail has loaded.
     BackHandler(enabled = showDetail && detail != null) { showDetail = false }
+    // §6.2: the viewer's canvas is black in both themes, so the system bars
+    // draw light icons over it while it is shown and get the theme's choice
+    // back when it goes, whether Back, a delete, or a lock ends it. The
+    // activity handles rotation and theme changes itself, and edge-to-edge
+    // then reapplies the theme's icons, so the effect runs again on every
+    // configuration and restores from the theme now in force rather than
+    // from a value saved under the old one.
+    val window = LocalActivity.current?.window
+    val configuration = LocalConfiguration.current
+    DisposableEffect(window, configuration) {
+        val bars = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
+        bars?.isAppearanceLightStatusBars = false
+        bars?.isAppearanceLightNavigationBars = false
+        onDispose {
+            // What `enableEdgeToEdge`'s automatic style picks: dark icons on
+            // the light theme, light icons on the dark one.
+            val night = window?.context?.resources?.configuration?.uiMode
+                ?.and(Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+            bars?.isAppearanceLightStatusBars = !night
+            bars?.isAppearanceLightNavigationBars = !night
+        }
+    }
     val context = LocalContext.current
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         controller.endHostActivity()

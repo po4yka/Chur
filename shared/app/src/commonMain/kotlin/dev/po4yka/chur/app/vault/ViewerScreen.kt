@@ -6,9 +6,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -66,6 +71,12 @@ fun ViewerScreen(
     onCancelOperation: () -> Unit = {},
     status: String? = null,
 ) {
+    // §25.5: the canvas and the scrims run edge to edge, and what is read or
+    // pressed keeps clear of the system bars, the cutout, and the gesture
+    // area. A Back drawn under the status bar is visible but cannot be
+    // pressed, because the bar's window takes the touch first.
+    val topInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+    val bottomInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)
     Box(modifier = Modifier.fillMaxSize().background(ViewerColors.canvas)) {
         if (player != null) {
             // A video or a recording is played rather than shown. The player is
@@ -109,6 +120,7 @@ fun ViewerScreen(
                 .align(Alignment.TopStart)
                 .fillMaxWidth()
                 .background(ViewerColors.chromeScrim)
+                .windowInsetsPadding(topInsets)
                 .padding(ChurSpacing.two),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -130,6 +142,7 @@ fun ViewerScreen(
                 .align(Alignment.BottomStart)
                 .fillMaxWidth()
                 .background(ViewerColors.chromeScrim)
+                .windowInsetsPadding(bottomInsets)
                 .padding(ChurSpacing.two),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically,
@@ -161,14 +174,15 @@ fun ViewerScreen(
             DetailSheet(
                 detail = detail,
                 projection = projection,
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 72.dp()),
+                modifier = Modifier.align(Alignment.BottomCenter).windowInsetsPadding(bottomInsets)
+                    .padding(bottom = 72.dp()),
             )
         }
         if (operation != null) {
             OperationProgressCard(
                 operation = operation,
                 onCancel = onCancelOperation,
-                modifier = Modifier.align(Alignment.BottomCenter)
+                modifier = Modifier.align(Alignment.BottomCenter).windowInsetsPadding(bottomInsets)
                     .padding(horizontal = ChurSpacing.gutter).padding(bottom = 88.dp),
             )
         } else if (status != null) {
@@ -176,7 +190,7 @@ fun ViewerScreen(
                 text = status,
                 color = ViewerColors.content,
                 style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.align(Alignment.BottomCenter)
+                modifier = Modifier.align(Alignment.BottomCenter).windowInsetsPadding(bottomInsets)
                     .padding(bottom = 88.dp)
                     .background(ViewerColors.chromeScrim)
                     .padding(horizontal = ChurSpacing.gutter, vertical = ChurSpacing.two),
