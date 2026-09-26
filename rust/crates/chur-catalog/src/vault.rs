@@ -1158,22 +1158,25 @@ impl Session {
         // `Option` drops the `Key`, and `chur_crypto::Secret` zeroizes on drop,
         // which is SEC-032.
         drop(self.root_secret.take());
-        closed?;
-        recorded?;
         // The session is locked, so the §8.1 advisory lock on the descriptor
         // file releases with it and another process may unlock the vault.
         drop(self.descriptor_lock.take());
         // Step 8: every scratch entry, whatever its journal state.
         let scratch = self.root_dir.scratch(&self.object_store_id());
-        if scratch.exists() {
-            std::fs::remove_dir_all(&scratch).map_err(|_| {
-                chur_core::err!(IoFailure, "the scratch directory could not be cleared")
-            })?;
-            std::fs::create_dir_all(&scratch).map_err(|_| {
-                chur_core::err!(IoFailure, "the scratch directory could not be recreated")
-            })?;
-        }
-        Ok(())
+        let cleaned = (|| {
+            if scratch.exists() {
+                std::fs::remove_dir_all(&scratch).map_err(|_| {
+                    chur_core::err!(IoFailure, "the scratch directory could not be cleared")
+                })?;
+                std::fs::create_dir_all(&scratch).map_err(|_| {
+                    chur_core::err!(IoFailure, "the scratch directory could not be recreated")
+                })?;
+            }
+            Ok(())
+        })();
+        closed?;
+        recorded?;
+        cleaned
     }
 
     /// The key slots this vault carries, for the settings screen.
@@ -2396,6 +2399,21 @@ mod tests {
         );
         let remaining = std::fs::read_dir(&scratch_dir).expect("read").count();
         assert_eq!(remaining, 0, "a scratch entry survived the lock");
+    }
+
+    #[test]
+    fn failed_generation_recording_still_releases_lock_and_clears_scratch() {
+        let root_dir = scratch();
+        let mut session = make(&root_dir);
+        let scratch_dir = root_dir.scratch(&session.object_store_id());
+        std::fs::write(scratch_dir.join("aabbccdd"), b"decoded frame").expect("scratch");
+        session.descriptor.catalog.catalog_generation = 0;
+        session.descriptor.descriptor_generation = u64::MAX;
+
+        assert_eq!(rejection(session.lock()), ChurStatus::VaultCorrupt);
+        assert!(!session.is_unlocked());
+        assert!(session.descriptor_lock.is_none());
+        assert_eq!(std::fs::read_dir(&scratch_dir).expect("read").count(), 0);
     }
 
     #[test]
