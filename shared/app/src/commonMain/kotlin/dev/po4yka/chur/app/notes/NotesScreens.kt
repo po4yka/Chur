@@ -34,6 +34,7 @@ import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.PlusGlyph
 import dev.po4yka.chur.app.theme.SettingsGlyph
 import dev.po4yka.chur.app.theme.LocalChurColors
+import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
 import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.notes.Notes
 
@@ -96,6 +97,7 @@ fun NotesScreen(
                     singleLine = true,
                     label = { Text("Search notes") },
                     modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter),
+                    colors = churOutlinedTextFieldColors(),
                 )
                 val visible = Notes.search(notes, query)
                 if (visible.isEmpty()) {
@@ -246,12 +248,14 @@ fun NoteEditorScreen(note: Note, onSave: (Note) -> Unit, onDelete: () -> Unit, o
                 singleLine = true,
                 label = { Text("Title") },
                 modifier = Modifier.fillMaxWidth(),
+                colors = churOutlinedTextFieldColors(),
             )
             OutlinedTextField(
                 value = body,
                 onValueChange = { body = it },
                 label = { Text("Note") },
                 modifier = Modifier.fillMaxWidth().weight(1f),
+                colors = churOutlinedTextFieldColors(),
             )
         }
     }

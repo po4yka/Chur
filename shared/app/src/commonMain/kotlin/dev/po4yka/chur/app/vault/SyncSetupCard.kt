@@ -20,6 +20,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.LocalChurColors
+import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
 
 /**
  * The bootstrap form of `SYNC_PROTOCOL_V1.md` §6.
@@ -45,6 +46,7 @@ internal fun SyncSetupCard(onConfigure: (serverUrl: String, bootstrapSecret: Str
                 style = MaterialTheme.typography.bodyMedium,
             )
             OutlinedTextField(
+                colors = churOutlinedTextFieldColors(),
                 value = serverUrl,
                 onValueChange = { serverUrl = it },
                 singleLine = true,
@@ -53,6 +55,7 @@ internal fun SyncSetupCard(onConfigure: (serverUrl: String, bootstrapSecret: Str
                 modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
+                colors = churOutlinedTextFieldColors(),
                 value = secret,
                 onValueChange = { secret = it },
                 singleLine = true,

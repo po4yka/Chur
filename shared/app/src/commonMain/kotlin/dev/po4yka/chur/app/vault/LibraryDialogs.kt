@@ -15,6 +15,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
 import dev.po4yka.chur.ffi.AlbumSummary
 import dev.po4yka.chur.ffi.TagSummary
 
@@ -26,6 +27,7 @@ fun NewAlbumDialog(onCreate: (String) -> Unit, onDismiss: () -> Unit) {
         title = { Text("New album") },
         text = {
             OutlinedTextField(
+                colors = churOutlinedTextFieldColors(),
                 value = name,
                 onValueChange = { name = it },
                 singleLine = true,
@@ -59,6 +61,7 @@ fun AlbumPickerDialog(
                     TextButton(onClick = { onChoose(album) }) { Text(album.name) }
                 }
                 OutlinedTextField(
+                    colors = churOutlinedTextFieldColors(),
                     value = name,
                     onValueChange = { name = it },
                     singleLine = true,
@@ -96,6 +99,7 @@ fun TagPickerDialog(
                     }
                 }
                 OutlinedTextField(
+                    colors = churOutlinedTextFieldColors(),
                     value = name,
                     onValueChange = { name = it },
                     singleLine = true,

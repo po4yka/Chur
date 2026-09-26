@@ -27,6 +27,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -55,6 +56,7 @@ import dev.po4yka.chur.app.theme.LockGlyph
 import dev.po4yka.chur.app.theme.PlusGlyph
 import dev.po4yka.chur.app.theme.SearchGlyph
 import dev.po4yka.chur.app.theme.SettingsGlyph
+import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
 import dev.po4yka.chur.ffi.AlbumSummary
 import dev.po4yka.chur.ffi.ObjectProjection
 import dev.po4yka.chur.ffi.SlotSummary
@@ -276,6 +278,13 @@ fun VaultShell(state: VaultUiState, actions: VaultActions) {
                         onClick = { actions.onDestination(destination) },
                         icon = { Icon(glyphFor(destination), contentDescription = null) },
                         label = { Text(destination.label) },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = colors.accent,
+                            selectedTextColor = colors.accent,
+                            indicatorColor = colors.accentSoft,
+                            unselectedIconColor = colors.inkMuted,
+                            unselectedTextColor = colors.inkMuted,
+                        ),
                     )
                 }
             }
@@ -341,6 +350,7 @@ internal fun OperationProgressCard(
     onCancel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val colors = LocalChurColors.current
     Card(modifier = modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter),
@@ -349,9 +359,18 @@ internal fun OperationProgressCard(
             Text(operation.description, style = MaterialTheme.typography.bodyMedium)
             val fraction = operation.fraction
             if (fraction == null) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = colors.accent,
+                    trackColor = colors.surfaceSunken,
+                )
             } else {
-                LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth())
+                LinearProgressIndicator(
+                    progress = { fraction },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = colors.accent,
+                    trackColor = colors.surfaceSunken,
+                )
             }
             if (operation.cancellable) {
                 TextButton(onClick = onCancel, enabled = !operation.cancelling) {
@@ -489,6 +508,7 @@ private fun SearchBody(state: VaultUiState, actions: VaultActions) {
             singleLine = true,
             label = { Text("Search filenames, captions, and tags") },
             modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter),
+            colors = churOutlinedTextFieldColors(),
         )
         when {
             state.searchTerms.isBlank() -> Box(
@@ -761,6 +781,7 @@ private fun ChangePasswordDialog(
                     keyboardOptions = KeyboardOptions(
                         keyboardType = if (usePin) KeyboardType.NumberPassword else KeyboardType.Password,
                     ),
+                    colors = churOutlinedTextFieldColors(),
                 )
                 OutlinedTextField(
                     value = confirmation,
@@ -777,6 +798,7 @@ private fun ChangePasswordDialog(
                         keyboardType = if (usePin) KeyboardType.NumberPassword else KeyboardType.Password,
                     ),
                     isError = confirmation.isNotEmpty() && !matching,
+                    colors = churOutlinedTextFieldColors(),
                 )
             }
         },

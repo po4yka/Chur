@@ -11,6 +11,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -30,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.DiagnosticTextStyle
 import dev.po4yka.chur.app.theme.LocalChurColors
+import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
 
 /**
  * Vault creation, `docs/security/PROVISIONING.md` §3.
@@ -103,6 +105,7 @@ fun CreateVaultScreen(
                     )
                 }
                 OutlinedTextField(
+                    colors = churOutlinedTextFieldColors(),
                     value = password,
                     onValueChange = {
                         if (!usePin || (it.length <= 20 && it.all { digit -> digit in '0'..'9' })) {
@@ -119,6 +122,7 @@ fun CreateVaultScreen(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
+                    colors = churOutlinedTextFieldColors(),
                     value = confirmation,
                     onValueChange = {
                         if (!usePin || (it.length <= 20 && it.all { digit -> digit in '0'..'9' })) {
@@ -144,6 +148,10 @@ fun CreateVaultScreen(
                             checked = offerRecovery,
                             onCheckedChange = { offerRecovery = it },
                             enabled = !busy,
+                            colors = CheckboxDefaults.colors(
+                                checkedColor = colors.accent,
+                                checkmarkColor = colors.onInk,
+                            ),
                         )
                         Text("Create a recovery phrase", style = MaterialTheme.typography.bodyMedium)
                     }
@@ -229,7 +237,14 @@ fun RecoveryPhraseScreen(phrase: String, onAcknowledged: () -> Unit) {
                 androidx.compose.foundation.layout.Row(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Checkbox(checked = acknowledged, onCheckedChange = { acknowledged = it })
+                    Checkbox(
+                        checked = acknowledged,
+                        onCheckedChange = { acknowledged = it },
+                        colors = CheckboxDefaults.colors(
+                            checkedColor = colors.accent,
+                            checkmarkColor = colors.onInk,
+                        ),
+                    )
                     Text(
                         "I have written the phrase down",
                         style = MaterialTheme.typography.bodyMedium,
@@ -291,6 +306,7 @@ fun RestoreBackupScreen(
                     color = colors.inkMuted,
                 )
                 OutlinedTextField(
+                    colors = churOutlinedTextFieldColors(),
                     value = password,
                     onValueChange = { password = it },
                     singleLine = true,

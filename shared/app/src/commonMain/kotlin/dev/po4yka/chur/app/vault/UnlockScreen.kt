@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.LocalChurColors
 import dev.po4yka.chur.app.theme.PrivateBoundaryMark
+import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
 
 /**
  * The session gate of `DESIGN.md` §14.1.
@@ -87,6 +88,7 @@ fun UnlockScreen(
                     Text(if (usePin) "Use a password instead" else "Use a PIN instead")
                 }
                 OutlinedTextField(
+                    colors = churOutlinedTextFieldColors(),
                     value = password,
                     onValueChange = {
                         if (!usePin || (it.length <= 20 && it.all { digit -> digit in '0'..'9' })) {
@@ -167,6 +169,7 @@ fun RecoveryScreen(
                     color = colors.inkMuted,
                 )
                 OutlinedTextField(
+                    colors = churOutlinedTextFieldColors(),
                     value = phrase,
                     onValueChange = { phrase = it },
                     enabled = !busy,

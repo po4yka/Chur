@@ -9,9 +9,11 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -22,6 +24,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.text.selection.SelectionContainer
 import dev.po4yka.chur.app.theme.ChurSpacing
+import dev.po4yka.chur.app.theme.LocalChurColors
+import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
 import dev.po4yka.chur.ffi.SharingMember
 import dev.po4yka.chur.ffi.SharingPermission
 import dev.po4yka.chur.ffi.toHex
@@ -29,6 +33,7 @@ import dev.po4yka.chur.ffi.toHex
 /** One Settings flow for sharing the vault's whole cryptographic collection. */
 @Composable
 internal fun SharingCard(state: VaultUiState, actions: VaultActions) {
+    val colors = LocalChurColors.current
     var enrollment by remember { mutableStateOf("") }
     var inspected by remember { mutableStateOf("") }
     var fingerprintConfirmed by remember(enrollment) { mutableStateOf(false) }
@@ -61,6 +66,7 @@ internal fun SharingCard(state: VaultUiState, actions: VaultActions) {
             }
             TextButton(onClick = actions.onSyncNow) { Text("Check for incoming access") }
             OutlinedTextField(
+                colors = churOutlinedTextFieldColors(),
                 value = enrollment,
                 onValueChange = { enrollment = it; inspected = "" },
                 label = { Text("Recipient enrollment (hex)") },
@@ -86,7 +92,11 @@ internal fun SharingCard(state: VaultUiState, actions: VaultActions) {
                 Text("Permission", style = MaterialTheme.typography.titleSmall)
                 SharingPermission.entries.forEach { option ->
                     Row(modifier = Modifier.fillMaxWidth()) {
-                        RadioButton(selected = permission == option, onClick = { permission = option })
+                        RadioButton(
+                            selected = permission == option,
+                            onClick = { permission = option },
+                            colors = RadioButtonDefaults.colors(selectedColor = colors.accent),
+                        )
                         Text(option.displayName(), modifier = Modifier.padding(top = ChurSpacing.two))
                     }
                 }
@@ -141,8 +151,16 @@ internal fun SharingCard(state: VaultUiState, actions: VaultActions) {
 
 @Composable
 private fun ConfirmRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    val colors = LocalChurColors.current
     Row(modifier = Modifier.fillMaxWidth()) {
-        Checkbox(checked = checked, onCheckedChange = onChange)
+        Checkbox(
+            checked = checked,
+            onCheckedChange = onChange,
+            colors = CheckboxDefaults.colors(
+                checkedColor = colors.accent,
+                checkmarkColor = colors.onInk,
+            ),
+        )
         Text(label, modifier = Modifier.padding(top = ChurSpacing.two))
     }
 }
