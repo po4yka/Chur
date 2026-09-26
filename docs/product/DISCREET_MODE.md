@@ -101,6 +101,8 @@ The reason reaches Rust as `LockReason::PANIC`, which the vault records and trea
 
 ## Launcher and icon presentation
 
+The default launcher presentation uses the Chur name and boundary-post icon; the public shell remains Notes.
+
 Any alternate icon or launcher presentation must be user-selected, documented, reversible, and supported by platform APIs. The default store listing must accurately describe Chur as an encrypted private archive with optional discreet interfaces.
 
 Do not dynamically remove all discoverable means of reopening or managing the feature.
