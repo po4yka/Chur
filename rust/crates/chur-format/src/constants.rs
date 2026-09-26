@@ -47,6 +47,8 @@ pub const CATALOG_FORMAT_VERSION_V3: u16 = 0x0003;
 pub const CATALOG_FORMAT_VERSION_V4: u16 = 0x0004;
 /// §15.2: private catalog v5 with the durable grant-acceptance freeze.
 pub const CATALOG_FORMAT_VERSION_V5: u16 = 0x0005;
+/// §15.2: private catalog v6 with an indexed shared-object projection.
+pub const CATALOG_FORMAT_VERSION_V6: u16 = 0x0006;
 /// §15.2: `object_store_format_version`.
 pub const OBJECT_STORE_FORMAT_VERSION_V1: u16 = 0x0001;
 /// §15.2: `slot_version` of the v1 key-slot families.
@@ -241,6 +243,8 @@ discriminant_enum! {
         Tombstoned = 0x03;
         /// A check proved the object unusable and no repair path remains.
         Corrupt = 0x04;
+        /// A signed shared-collection delete hides the object while retaining its key for restore.
+        SharedDeleted = 0x05;
     }
 }
 

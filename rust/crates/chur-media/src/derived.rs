@@ -17,7 +17,7 @@ use chur_catalog::store;
 use chur_catalog::vault::Session;
 use chur_core::{Id, Result, ensure, limits::media as media_bounds};
 use chur_crypto::{Nonce, random};
-use chur_format::constants::{CONTAINER_VERSION_V1, MediaClass, SUITE_V1, StreamKind};
+use chur_format::constants::{CONTAINER_VERSION_V1, MediaClass, ObjectState, SUITE_V1, StreamKind};
 use chur_format::container::{
     CanonicalManifest, ContainerWriter, MediaProperties, StreamIdentity, StreamReader,
 };
@@ -96,6 +96,11 @@ pub fn put(
     }
 
     let object = store::object(session.catalog_ref()?, object_id)?;
+    ensure!(
+        object.state == ObjectState::Active,
+        NotFound,
+        "the object is not listable"
+    );
     let source_content_revision = object.object_generation.try_into().map_err(|_| {
         chur_core::err!(
             ResourceLimitExceeded,

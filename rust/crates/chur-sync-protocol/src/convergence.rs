@@ -5,15 +5,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use chur_core::{ChurStatus, Error, Id, Result};
 use chur_crypto::Commitment;
 
+use crate::collection_operation::CollectionOperation;
 use crate::operation::Operation;
 
 /// Minimal authenticated causal position retained by materialized state.
 #[derive(Clone, PartialEq, Eq)]
 pub struct CausalStamp {
     operation_id: Id,
+    identity_vault_id: Id,
     device_id: Id,
     device_sequence: u64,
-    observed_heads: Vec<(Id, u64)>,
+    observed_heads: Vec<(Id, Id, u64)>,
     digest: Commitment,
 }
 
@@ -23,12 +25,42 @@ impl CausalStamp {
     pub fn from_operation(operation: &Operation) -> Self {
         Self {
             operation_id: *operation.operation_id(),
+            identity_vault_id: *operation.vault_id(),
             device_id: *operation.device_id(),
             device_sequence: operation.device_sequence(),
             observed_heads: operation
                 .observed_heads()
                 .iter()
-                .map(|head| (*head.device_id(), head.device_sequence()))
+                .map(|head| {
+                    (
+                        *operation.vault_id(),
+                        *head.device_id(),
+                        head.device_sequence(),
+                    )
+                })
+                .collect(),
+            digest: operation.digest(),
+        }
+    }
+
+    /// Extracts the signed participant and causal position of a shared collection operation.
+    #[must_use]
+    pub fn from_collection_operation(operation: &CollectionOperation) -> Self {
+        Self {
+            operation_id: *operation.operation_id(),
+            identity_vault_id: *operation.issuer_identity_vault_id(),
+            device_id: *operation.issuer_device_id(),
+            device_sequence: operation.device_sequence(),
+            observed_heads: operation
+                .observed_heads()
+                .iter()
+                .map(|head| {
+                    (
+                        *head.issuer_identity_vault_id(),
+                        *head.issuer_device_id(),
+                        head.device_sequence(),
+                    )
+                })
                 .collect(),
             digest: operation.digest(),
         }
@@ -60,13 +92,15 @@ impl CausalStamp {
 
     /// Whether this operation directly observes the named accepted head.
     #[must_use]
-    pub fn observes(&self, device_id: &Id, sequence: u64) -> bool {
-        if &self.device_id == device_id {
+    pub fn observes(&self, identity_vault_id: &Id, device_id: &Id, sequence: u64) -> bool {
+        if &self.identity_vault_id == identity_vault_id && &self.device_id == device_id {
             return self.device_sequence >= sequence;
         }
         self.observed_heads
-            .binary_search_by_key(device_id, |(observed_id, _)| *observed_id)
-            .is_ok_and(|index| self.observed_heads[index].1 >= sequence)
+            .binary_search_by_key(&(*identity_vault_id, *device_id), |(vault, device, _)| {
+                (*vault, *device)
+            })
+            .is_ok_and(|index| self.observed_heads[index].2 >= sequence)
     }
 }
 
@@ -94,7 +128,7 @@ pub fn causal_relation(left: &CausalStamp, right: &CausalStamp) -> Result<Causal
             "operation identifier names different signed records",
         ));
     }
-    if left.device_id == right.device_id {
+    if left.identity_vault_id == right.identity_vault_id && left.device_id == right.device_id {
         if left.device_sequence == right.device_sequence {
             return Err(Error::new(
                 ChurStatus::SyncChainFork,
@@ -113,8 +147,16 @@ pub fn causal_relation(left: &CausalStamp, right: &CausalStamp) -> Result<Causal
             "distinct operations have the same operation digest",
         ));
     }
-    let left_after = left.observes(&right.device_id, right.device_sequence);
-    let right_after = right.observes(&left.device_id, left.device_sequence);
+    let left_after = left.observes(
+        &right.identity_vault_id,
+        &right.device_id,
+        right.device_sequence,
+    );
+    let right_after = right.observes(
+        &left.identity_vault_id,
+        &left.device_id,
+        left.device_sequence,
+    );
     match (left_after, right_after) {
         (false, false) => Ok(CausalRelation::Concurrent),
         (true, false) => Ok(CausalRelation::After),
@@ -313,6 +355,18 @@ impl ObjectLifecycle {
             // restore undoes has not been materialized yet; both wait.
             return Ok(MergeOutcome::PendingCause);
         }
+        let named_delete = self
+            .tombstones
+            .versions
+            .iter()
+            .find(|version| version.stamp.operation_id() == tombstone_id)
+            .ok_or_else(|| Error::new(ChurStatus::InternalFailure, "named delete disappeared"))?;
+        if causal_relation(&named_delete.stamp, &stamp)? != CausalRelation::Before {
+            return Err(Error::new(
+                ChurStatus::AuthenticationFailed,
+                "restore does not causally observe its tombstone",
+            ));
+        }
         let delete_stamps = self
             .tombstones
             .versions
@@ -432,7 +486,11 @@ fn tombstone_retention_elapsed(
     age >= 30 * DAY_MS
         && active_devices.iter().all(|device_id| {
             latest_operations.get(device_id).is_some_and(|latest| {
-                latest.observes(tombstone.device_id(), tombstone.device_sequence())
+                latest.observes(
+                    &tombstone.identity_vault_id,
+                    tombstone.device_id(),
+                    tombstone.device_sequence(),
+                )
             })
         })
 }

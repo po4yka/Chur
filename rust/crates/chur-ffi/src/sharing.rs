@@ -771,24 +771,16 @@ pub unsafe extern "C" fn chur_sharing_download_append(
                 "the handle is of another type",
             ));
         };
-        let session = registry::lock(session);
+        let mut session = registry::lock(session);
+        let vault_id = session.vault_id();
         let root = Key::new(*session.root_secret()?.expose());
-        let plan = chur_catalog::sharing_receive::pending_for_collection(
-            session.catalog_ref()?,
+        let object = chur_catalog::sharing_receive::pending_object_for_collection(
+            session.catalog()?,
             &root,
-            session.vault_id(),
+            vault_id,
             collection_id,
+            object_id,
         )?;
-        let object = plan
-            .objects
-            .iter()
-            .find(|object| object.object_id == object_id)
-            .ok_or_else(|| {
-                Error::new(
-                    ChurStatus::NotFound,
-                    "shared object has no authenticated commit",
-                )
-            })?;
         let expected = chur_media::sync_download::Expectation::new(
             object.object_id,
             object.stream_id,
@@ -834,24 +826,16 @@ pub unsafe extern "C" fn chur_sharing_download_finish(
             ));
         };
         let mut session = registry::lock(session);
+        let vault_id = session.vault_id();
         let root = Key::new(*session.root_secret()?.expose());
-        let plan = chur_catalog::sharing_receive::pending_for_collection(
-            session.catalog_ref()?,
+        let object = chur_catalog::sharing_receive::pending_object_for_collection(
+            session.catalog()?,
             &root,
-            session.vault_id(),
+            vault_id,
             collection_id,
+            object_id,
         )?;
-        let object = plan
-            .objects
-            .iter()
-            .find(|object| object.object_id == object_id)
-            .ok_or_else(|| {
-                Error::new(
-                    ChurStatus::NotFound,
-                    "shared object has no authenticated commit",
-                )
-            })?;
-        chur_media::sync_download::activate_shared(&mut session, object, now_ms)
+        chur_media::sync_download::activate_shared(&mut session, &object, now_ms)
     })
 }
 

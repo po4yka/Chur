@@ -72,7 +72,7 @@ object_generation
 primary_stream_id
 creation/import metadata (private)
 logical media kind (private)
-state: ACTIVE / DELETING / TOMBSTONED / CORRUPT
+state: ACTIVE / DELETING / TOMBSTONED / CORRUPT / SHARED_DELETED
 integrity_summary
 ```
 
@@ -88,6 +88,7 @@ An object row carries two independent enums and this specification is the author
 | `DELETING` | deletion has started and the object is no longer listable, §14.1 |
 | `TOMBSTONED` | every object-key envelope is destroyed and a tombstone row exists, §14.1 |
 | `CORRUPT` | a structural or cryptographic check proved the object unusable and no repair path remains |
+| `SHARED_DELETED` | a signed shared-collection delete hides a received object while retaining its encrypted container and key for a signed restore |
 
 `integrity_summary` is the verification verdict, and it is meaningful only while `state` is `ACTIVE`:
 
@@ -104,7 +105,7 @@ An object row carries two independent enums and this specification is the author
 
 Proven corruption is a lifecycle change, not an integrity value: a check that proves corruption sets `state` to `CORRUPT`. Quarantine is the opposite case and stays an integrity value, because an absent container is a fact about this device rather than a verdict on the object. Two names used by lower-authority documents are values of neither enum: `Incoming` is the `stage` of an `ImportTransaction` row, §11, and a purged object is the absence of the row after garbage collection, §14.1.
 
-Transitions: `ACTIVE` to `DELETING` to `TOMBSTONED` is the only deletion path and it never reverses; `ACTIVE` to `CORRUPT` is terminal; `integrity_summary` changes only while `state` is `ACTIVE`.
+Transitions: `ACTIVE` to `DELETING` to `TOMBSTONED` is the irreversible local deletion path; `ACTIVE` to `CORRUPT` is terminal. A received shared object can move between `ACTIVE` and `SHARED_DELETED` only by accepted collection DeleteObject and RestoreObject operations. `SHARED_DELETED` is excluded from deletion garbage collection, and its key and container remain available for restore. `integrity_summary` changes only while `state` is `ACTIVE`.
 
 The user-facing states of [`../../DESIGN.md`](../../DESIGN.md) §20.1 are derived from the pair and are never stored:
 
@@ -118,7 +119,7 @@ The user-facing states of [`../../DESIGN.md`](../../DESIGN.md) §20.1 are derive
 | `ACTIVE` | `UNSUPPORTED` | Unsupported format |
 | `ACTIVE` | `MIGRATION_REQUIRED` | Migration required |
 | `CORRUPT` | any | Corrupt |
-| `DELETING` or `TOMBSTONED` | any | not presented |
+| `DELETING`, `TOMBSTONED`, or `SHARED_DELETED` | any | not presented |
 
 ## 6. Object streams
 
@@ -376,6 +377,8 @@ Skipping untested version steps is forbidden.
 Raw SQLCipher pages are not synced. Rust emits canonical encrypted operations from logical changes. The local catalog is a materialized state; the operation log is a separate protocol.
 
 Catalog v1 allocates no physical sync tables. Phase 3 state is the forward catalog-v2 extension in [`CATALOG_SCHEMA_V2.md`](CATALOG_SCHEMA_V2.md); [ADR-0049](../adr/0049-add-sync-state-in-catalog-v2.md) owns the migration.
+
+The accepted collection-operation index is the forward catalog-v6 extension in [`CATALOG_SCHEMA_V6.md`](CATALOG_SCHEMA_V6.md).
 
 ## 20. Test requirements
 

@@ -4,28 +4,44 @@ use std::collections::BTreeMap;
 
 use chur_core::{ChurStatus, Error, Id, Result, ensure};
 use chur_crypto::{Commitment, Key, Nonce};
+use chur_format::constants::{IntegritySummary, ObjectState};
 use chur_sync_protocol::{
     KeyDirectory,
     collection_membership::CollectionMembershipState,
     collection_operation::CollectionOperation,
     collection_operation_log::CollectionOperationLog,
+    convergence::CausalStamp,
     operation::DeviceSigningKey,
     operation_log::{ApplyOutcome, ForkState},
-    payload::OperationPayload,
+    payload::{OperationPayload, PayloadBody},
     state::MembershipState,
 };
 use rusqlite::{OptionalExtension, Transaction, params};
 
 use crate::{
     db::{CatalogDb, as_sqlite_integer, from_sqlite_integer, map_sqlite},
+    model::COLLECTION_POLICY_SHARED,
     schema::bump_generation,
 };
 
 type StoredOperation = (Vec<u8>, Vec<u8>, i64, Vec<u8>, Vec<u8>, Vec<u8>);
 
+#[cfg(test)]
+thread_local! {
+    static LOG_LOADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// One collection operation log rebuilt from authenticated durable rows.
 pub struct DurableCollectionOperationLog {
     log: CollectionOperationLog,
+    revision: u64,
+}
+
+/// One validated log retained only while its decrypted catalog stays open.
+pub(crate) struct CachedCollectionLog {
+    selector: Id,
+    revision: u64,
+    log: DurableCollectionOperationLog,
 }
 
 impl DurableCollectionOperationLog {
@@ -42,6 +58,7 @@ impl DurableCollectionOperationLog {
         })?;
         Ok(Self {
             log: CollectionOperationLog::new(collection_id, collection_epoch, key_selector),
+            revision: 0,
         })
     }
 
@@ -101,6 +118,67 @@ impl DurableCollectionOperationLog {
         source_membership: &MembershipState,
         collection_membership: &CollectionMembershipState,
     ) -> Result<ApplyOutcome> {
+        self.accept_inner(
+            db,
+            None,
+            operation,
+            payload,
+            issuer_membership,
+            source_membership,
+            collection_membership,
+        )
+    }
+
+    /// Accepts object lifecycle records only after their content cause verifies.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the signed record and membership evidence are explicit"
+    )]
+    pub fn accept_with_keys(
+        &mut self,
+        db: &mut CatalogDb,
+        keys: &KeyDirectory,
+        operation: &CollectionOperation,
+        payload: &OperationPayload,
+        issuer_membership: &MembershipState,
+        source_membership: &MembershipState,
+        collection_membership: &CollectionMembershipState,
+    ) -> Result<ApplyOutcome> {
+        self.accept_inner(
+            db,
+            Some(keys),
+            operation,
+            payload,
+            issuer_membership,
+            source_membership,
+            collection_membership,
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the signed record and membership evidence are explicit"
+    )]
+    fn accept_inner(
+        &mut self,
+        db: &mut CatalogDb,
+        keys: Option<&KeyDirectory>,
+        operation: &CollectionOperation,
+        payload: &OperationPayload,
+        issuer_membership: &MembershipState,
+        source_membership: &MembershipState,
+        collection_membership: &CollectionMembershipState,
+    ) -> Result<ApplyOutcome> {
+        if matches!(
+            payload.body(),
+            PayloadBody::DeleteObject { .. } | PayloadBody::RestoreObject { .. }
+        ) {
+            ensure!(
+                keys.is_some(),
+                AuthenticationFailed,
+                "object lifecycle requires content-cause validation"
+            );
+        }
         let mut candidate = self.log.clone();
         let accepted = candidate.accept(
             operation,
@@ -111,6 +189,30 @@ impl DurableCollectionOperationLog {
         );
         match accepted {
             Ok(ApplyOutcome::Applied) => {
+                let next_revision = self.revision.checked_add(1).ok_or_else(|| {
+                    Error::new(
+                        ChurStatus::ResourceLimitExceeded,
+                        "collection log revision overflowed",
+                    )
+                })?;
+                if let Some(keys) = keys {
+                    ensure_object_index(db, operation.key_selector(), keys)?;
+                    let cause = crate::sharing_receive::validate_lifecycle_candidate(
+                        db,
+                        keys,
+                        collection_membership.source_vault_id(),
+                        operation,
+                        payload,
+                    )?;
+                    if cause == ApplyOutcome::PendingCause {
+                        return Ok(ApplyOutcome::PendingCause);
+                    }
+                    ensure!(
+                        cause == ApplyOutcome::Applied,
+                        InternalFailure,
+                        "lifecycle validator returned an invalid state"
+                    );
+                }
                 db.transaction(|transaction| {
                     ensure_stream(
                         transaction,
@@ -119,9 +221,13 @@ impl DurableCollectionOperationLog {
                         self.log.key_selector(),
                     )?;
                     insert_operation(transaction, operation)?;
+                    insert_object_event(transaction, operation, payload)?;
+                    hide_accepted_shared_delete(transaction, payload)?;
+                    bump_log_revision(transaction, self.log.key_selector())?;
                     bump_generation(transaction)
                 })?;
                 self.log = candidate;
+                self.revision = next_revision;
                 Ok(ApplyOutcome::Applied)
             }
             Ok(ApplyOutcome::Duplicate) => {
@@ -130,6 +236,12 @@ impl DurableCollectionOperationLog {
             }
             Ok(outcome @ (ApplyOutcome::PendingGap | ApplyOutcome::PendingCause)) => Ok(outcome),
             Err(error) if error.status() == ChurStatus::SyncChainFork => {
+                let next_revision = self.revision.checked_add(1).ok_or_else(|| {
+                    Error::new(
+                        ChurStatus::ResourceLimitExceeded,
+                        "collection log revision overflowed",
+                    )
+                })?;
                 let evidence = candidate
                     .fork(
                         operation.issuer_identity_vault_id(),
@@ -162,9 +274,11 @@ impl DurableCollectionOperationLog {
                         .map_err(|sqlite| {
                             map_sqlite(sqlite, "collection fork evidence could not be stored")
                         })?;
+                    bump_log_revision(transaction, self.log.key_selector())?;
                     bump_generation(transaction)
                 })?;
                 self.log = candidate;
+                self.revision = next_revision;
                 Err(error)
             }
             Err(error) => Err(error),
@@ -188,6 +302,9 @@ pub fn load(
     memberships: &BTreeMap<Id, MembershipState>,
     collection_membership: &CollectionMembershipState,
 ) -> Result<DurableCollectionOperationLog> {
+    #[cfg(test)]
+    LOG_LOADS.with(|loads| loads.set(loads.get() + 1));
+    let revision = stream_revision(db, &key_selector)?;
     let stored_stream: Option<(Vec<u8>, i64)> = db
         .connection()
         .query_row(
@@ -199,8 +316,14 @@ pub fn load(
         .optional()
         .map_err(|error| map_sqlite(error, "collection operation stream could not be read"))?;
     let Some((stored_collection, stored_epoch)) = stored_stream else {
+        ensure!(
+            stream_revision(db, &key_selector)? == revision,
+            Conflict,
+            "collection log changed during replay"
+        );
         return Ok(DurableCollectionOperationLog {
             log: CollectionOperationLog::new(collection_id, collection_epoch, key_selector),
+            revision,
         });
     };
     ensure!(
@@ -278,30 +401,455 @@ pub fn load(
         pending = next;
     }
     restore_forks(db, &mut log, &key_selector)?;
-    Ok(DurableCollectionOperationLog { log })
+    ensure!(
+        stream_revision(db, &key_selector)? == revision,
+        Conflict,
+        "collection log changed during replay"
+    );
+    Ok(DurableCollectionOperationLog { log, revision })
 }
 
-/// Returns the authenticated local copy of one collection operation stream.
-pub fn records(db: &CatalogDb, selector: &Id) -> Result<Vec<CollectionOperation>> {
+/// Reuses a validated chain until its durable accepted-row revision changes.
+///
+/// The cache is owned by `CatalogDb` and drops when the vault locks. A failed
+/// body leaves no cached state: a committed prefix can be replayed next time.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the log's authenticated epoch context is explicit"
+)]
+pub fn with_cached_log<T>(
+    db: &mut CatalogDb,
+    collection_id: Id,
+    collection_epoch: u64,
+    selector: Id,
+    keys: &KeyDirectory,
+    memberships: &BTreeMap<Id, MembershipState>,
+    collection_membership: &CollectionMembershipState,
+    body: impl FnOnce(&mut CatalogDb, &mut DurableCollectionOperationLog) -> Result<T>,
+) -> Result<T> {
+    let mut log = take_cached_log(
+        db,
+        collection_id,
+        collection_epoch,
+        selector,
+        keys,
+        memberships,
+        collection_membership,
+    )?;
+    let result = body(db, &mut log);
+    if result.is_ok() {
+        store_cached_log(db, selector, log)?;
+    }
+    result
+}
+
+/// Takes the session cache for an author that persists several operations.
+pub fn take_cached_log(
+    db: &mut CatalogDb,
+    collection_id: Id,
+    collection_epoch: u64,
+    selector: Id,
+    keys: &KeyDirectory,
+    memberships: &BTreeMap<Id, MembershipState>,
+    collection_membership: &CollectionMembershipState,
+) -> Result<DurableCollectionOperationLog> {
+    let revision = stream_revision(db, &selector)?;
+    let cached = db.sharing_log_cache.take();
+    let log = match cached {
+        Some(entry) if entry.selector == selector && entry.revision == revision => entry.log,
+        _ => load(
+            db,
+            collection_id,
+            collection_epoch,
+            selector,
+            keys,
+            memberships,
+            collection_membership,
+        )?,
+    };
+    Ok(log)
+}
+
+/// Stores only a successfully advanced log under its committed revision.
+pub fn store_cached_log(
+    db: &mut CatalogDb,
+    selector: Id,
+    log: DurableCollectionOperationLog,
+) -> Result<()> {
+    let current = stream_revision(db, &selector)?;
+    db.sharing_log_cache = (log.revision == current).then_some(CachedCollectionLog {
+        selector,
+        revision: log.revision,
+        log,
+    });
+    Ok(())
+}
+
+fn stream_revision(db: &CatalogDb, selector: &Id) -> Result<u64> {
+    let value: Option<i64> = db
+        .connection()
+        .query_row(
+            "SELECT log_revision FROM sharing_operation_streams WHERE key_selector = ?1",
+            [selector.as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| map_sqlite(error, "collection log revision could not be read"))?;
+    value.map_or(Ok(0), |revision| {
+        from_sqlite_integer(revision, "collection log revision is malformed")
+    })
+}
+
+/// Visits the durable local copy of one collection operation stream in order.
+pub fn visit_records(
+    db: &CatalogDb,
+    selector: &Id,
+    mut visit: impl FnMut(CollectionOperation) -> Result<()>,
+) -> Result<()> {
     let mut statement = db
         .connection()
         .prepare(
-            "SELECT record FROM sharing_operations WHERE key_selector = ?1
+            "SELECT issuer_identity_vault_id, issuer_device_id, device_sequence,
+                    operation_id, digest, record
+               FROM sharing_operations WHERE key_selector = ?1
              ORDER BY issuer_identity_vault_id, issuer_device_id, device_sequence",
         )
         .map_err(|error| map_sqlite(error, "collection operations could not be prepared"))?;
-    statement
+    let rows = statement
         .query_map([selector.as_bytes().as_slice()], |row| {
-            row.get::<_, Vec<u8>>(0)
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
         })
-        .map_err(|error| map_sqlite(error, "collection operations could not be read"))?
-        .map(|row| {
-            CollectionOperation::decode(
-                &row.map_err(|error| map_sqlite(error, "collection operation could not be read"))?,
+        .map_err(|error| map_sqlite(error, "collection operations could not be read"))?;
+    for row in rows {
+        let stored: StoredOperation =
+            row.map_err(|error| map_sqlite(error, "collection operation could not be read"))?;
+        let operation = CollectionOperation::decode(&stored.5).map_err(corrupt)?;
+        ensure_operation_projection(&operation, &stored)?;
+        ensure!(
+            operation.key_selector() == selector,
+            CatalogCorrupt,
+            "collection selector projection disagrees"
+        );
+        visit(operation)?;
+    }
+    Ok(())
+}
+
+/// Returns the durable local copy of one collection operation stream.
+pub fn records(db: &CatalogDb, selector: &Id) -> Result<Vec<CollectionOperation>> {
+    let mut operations = Vec::new();
+    visit_records(db, selector, |operation| {
+        operations.push(operation);
+        Ok(())
+    })?;
+    Ok(operations)
+}
+
+/// Builds the v6 object index once from already accepted SQLCipher rows.
+///
+/// Old rows passed chain and signature validation when accepted. This replay
+/// checks their stored outer projection, encrypted payload, selector, and
+/// object identity. Issuer evidence is not available on an offline read, so
+/// it does not claim a new signature or causal-chain validation.
+pub fn ensure_object_index(db: &mut CatalogDb, selector: &Id, keys: &KeyDirectory) -> Result<()> {
+    let ready: Option<i64> = db
+        .connection()
+        .query_row(
+            "SELECT object_index_ready FROM sharing_operation_streams WHERE key_selector = ?1",
+            [selector.as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| map_sqlite(error, "shared object index state could not be read"))?;
+    if ready.is_none() || ready == Some(1) {
+        return Ok(());
+    }
+    ensure!(
+        ready == Some(0),
+        CatalogCorrupt,
+        "shared object index state is invalid"
+    );
+    let domain = keys.domain(selector)?;
+    db.transaction(|transaction| {
+        let stream: (Vec<u8>, i64, i64) = transaction
+            .query_row(
+                "SELECT collection_id, collection_epoch, object_index_ready
+                   FROM sharing_operation_streams WHERE key_selector = ?1",
+                [selector.as_bytes().as_slice()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
-            .map_err(corrupt)
+            .map_err(|error| map_sqlite(error, "shared object index state could not be checked"))?;
+        ensure!(
+            Id::from_slice(&stream.0).map_err(corrupt)? == *domain.collection_id()
+                && from_sqlite_integer(stream.1, "collection epoch is malformed")?
+                    == domain.collection_epoch(),
+            CatalogCorrupt,
+            "shared object index selector contradicts its stream"
+        );
+        if stream.2 == 1 {
+            return Ok(());
+        }
+        ensure!(stream.2 == 0, CatalogCorrupt, "shared object index state is invalid");
+        let source_bytes: Vec<u8> = transaction
+            .query_row(
+                "SELECT source_vault_id FROM sharing_collections WHERE collection_id = ?1",
+                [domain.collection_id().as_bytes().as_slice()],
+                |row| row.get(0),
+            )
+            .map_err(|error| map_sqlite(error, "shared collection source could not be read"))?;
+        let source_vault_id = Id::from_slice(&source_bytes).map_err(corrupt)?;
+        transaction
+            .execute(
+                "DELETE FROM sharing_object_projection WHERE key_selector = ?1",
+                [selector.as_bytes().as_slice()],
+            )
+            .map_err(|error| map_sqlite(error, "shared object projection could not be rebuilt"))?;
+        let mut statement = transaction
+            .prepare(
+                "SELECT issuer_identity_vault_id, issuer_device_id, device_sequence,
+                        operation_id, digest, record
+                   FROM sharing_operations WHERE key_selector = ?1
+                  ORDER BY issuer_identity_vault_id, issuer_device_id, device_sequence",
+            )
+            .map_err(|error| map_sqlite(error, "collection operations could not be prepared"))?;
+        let rows = statement
+            .query_map([selector.as_bytes().as_slice()], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
+            })
+            .map_err(|error| map_sqlite(error, "collection operations could not be read"))?;
+        let mut indexed = 0i64;
+        let mut lifecycle_by_object = BTreeMap::<Id, Vec<(CausalStamp, OperationPayload)>>::new();
+        for row in rows {
+            let stored: StoredOperation = row
+                .map_err(|error| map_sqlite(error, "collection operation could not be read"))?;
+            let operation = CollectionOperation::decode(&stored.5).map_err(corrupt)?;
+            ensure_operation_projection(&operation, &stored)?;
+            ensure!(operation.key_selector() == selector, CatalogCorrupt, "collection selector projection disagrees");
+            let payload = OperationPayload::open_for_collection_operation(&operation, keys).map_err(corrupt)?;
+            ensure!(
+                payload.collection_id() == domain.collection_id()
+                    && payload.collection_epoch() == domain.collection_epoch(),
+                CatalogCorrupt,
+                "shared object payload contradicts its stream"
+            );
+            payload.validate_for_collection_operation(domain.collection_id(), domain.collection_epoch()).map_err(corrupt)?;
+            let Some((object_id, kind)) = object_event(&payload) else {
+                continue;
+            };
+            if matches!(kind, 1 | 3 | 4) {
+                lifecycle_by_object.entry(object_id).or_default().push((
+                    CausalStamp::from_collection_operation(&operation),
+                    payload.clone(),
+                ));
+            }
+            transaction
+                .execute(
+                    "INSERT INTO sharing_object_operations
+                         (key_selector, object_id, operation_id, kind)
+                     VALUES (?1, ?2, ?3, ?4) ON CONFLICT DO NOTHING",
+                    params![
+                        selector.as_bytes().as_slice(),
+                        object_id.as_bytes().as_slice(),
+                        operation.operation_id().as_bytes().as_slice(),
+                        kind,
+                    ],
+                )
+                .map_err(|error| map_sqlite(error, "shared object event could not be indexed"))?;
+            let stored_event: Option<(Vec<u8>, i64)> = transaction
+                .query_row(
+                    "SELECT object_id, kind FROM sharing_object_operations
+                      WHERE key_selector = ?1 AND operation_id = ?2",
+                    params![selector.as_bytes().as_slice(), operation.operation_id().as_bytes().as_slice()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(|error| map_sqlite(error, "shared object event could not be checked"))?;
+            ensure!(
+                stored_event.is_some_and(|(id, stored_kind)| id == object_id.as_bytes() && stored_kind == kind),
+                CatalogCorrupt,
+                "shared object event index contradicts signed payload"
+            );
+            transaction
+                .execute(
+                    "INSERT INTO sharing_object_projection
+                         (key_selector, object_id, revision, dirty) VALUES (?1, ?2, 1, 1)
+                     ON CONFLICT(key_selector, object_id) DO UPDATE SET
+                         revision = revision + 1, dirty = 1",
+                    params![selector.as_bytes().as_slice(), object_id.as_bytes().as_slice()],
+                )
+                .map_err(|error| map_sqlite(error, "shared object projection could not be rebuilt"))?;
+            indexed += 1;
+        }
+        for records in lifecycle_by_object.values() {
+            crate::sharing_receive::validate_backfill_lifecycle(records, &source_vault_id)?;
+        }
+        let stored_count: i64 = transaction
+            .query_row(
+                "SELECT count(*) FROM sharing_object_operations WHERE key_selector = ?1",
+                [selector.as_bytes().as_slice()],
+                |row| row.get(0),
+            )
+            .map_err(|error| map_sqlite(error, "shared object event count could not be checked"))?;
+        ensure!(stored_count == indexed, CatalogCorrupt, "shared object index has extra events");
+        transaction
+            .execute(
+                "UPDATE sharing_operation_streams SET object_index_ready = 1 WHERE key_selector = ?1",
+                [selector.as_bytes().as_slice()],
+            )
+            .map_err(|error| map_sqlite(error, "shared object index could not be activated"))?;
+        bump_generation(transaction)
+    })
+}
+
+/// Visits only the signed events indexed for one object.
+pub fn visit_object_records(
+    db: &CatalogDb,
+    keys: &KeyDirectory,
+    selector: &Id,
+    object_id: &Id,
+    mut visit: impl FnMut(CollectionOperation, OperationPayload) -> Result<()>,
+) -> Result<()> {
+    ensure_index_ready(db, selector)?;
+    let domain = keys.domain(selector)?;
+    let mut statement = db
+        .connection()
+        .prepare(
+            "SELECT i.kind, s.issuer_identity_vault_id, s.issuer_device_id,
+                    s.device_sequence, s.operation_id, s.digest, s.record
+               FROM sharing_object_operations i
+               JOIN sharing_operations s
+                 ON s.key_selector = i.key_selector AND s.operation_id = i.operation_id
+              WHERE i.key_selector = ?1 AND i.object_id = ?2
+              ORDER BY s.issuer_identity_vault_id, s.issuer_device_id, s.device_sequence",
+        )
+        .map_err(|error| map_sqlite(error, "shared object records could not be prepared"))?;
+    let rows = statement
+        .query_map(
+            params![
+                selector.as_bytes().as_slice(),
+                object_id.as_bytes().as_slice()
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    (
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                    ),
+                ))
+            },
+        )
+        .map_err(|error| map_sqlite(error, "shared object records could not be read"))?;
+    for row in rows {
+        let (kind, stored): (i64, StoredOperation) =
+            row.map_err(|error| map_sqlite(error, "shared object record could not be read"))?;
+        let operation = CollectionOperation::decode(&stored.5).map_err(corrupt)?;
+        ensure_operation_projection(&operation, &stored)?;
+        ensure!(
+            operation.key_selector() == selector,
+            CatalogCorrupt,
+            "shared object selector contradicts the record"
+        );
+        let payload =
+            OperationPayload::open_for_collection_operation(&operation, keys).map_err(corrupt)?;
+        ensure!(
+            payload.collection_id() == domain.collection_id()
+                && payload.collection_epoch() == domain.collection_epoch()
+                && object_event(&payload) == Some((*object_id, kind)),
+            CatalogCorrupt,
+            "shared object index contradicts signed payload"
+        );
+        visit(operation, payload)?;
+    }
+    Ok(())
+}
+
+/// Returns a bounded queue of objects changed by accepted signed events.
+pub fn dirty_object_ids(db: &CatalogDb, selector: &Id, limit: usize) -> Result<Vec<(Id, u64)>> {
+    ensure!(
+        limit > 0 && limit <= 4096,
+        InvalidInput,
+        "shared object page limit is invalid"
+    );
+    ensure_index_ready(db, selector)?;
+    let mut statement = db
+        .connection()
+        .prepare(
+            "SELECT object_id, revision FROM sharing_object_projection
+              WHERE key_selector = ?1 AND dirty = 1 ORDER BY object_id LIMIT ?2",
+        )
+        .map_err(|error| map_sqlite(error, "shared object queue could not be prepared"))?;
+    statement
+        .query_map(
+            params![selector.as_bytes().as_slice(), limit as i64],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .map_err(|error| map_sqlite(error, "shared object queue could not be read"))?
+        .map(|row| {
+            let (id, revision) = row
+                .map_err(|error| map_sqlite(error, "shared object queue row could not be read"))?;
+            Ok((
+                Id::from_slice(&id).map_err(corrupt)?,
+                from_sqlite_integer(revision, "shared object revision is malformed")?,
+            ))
         })
         .collect()
+}
+
+/// Clears only the revision that the recipient actually reconciled.
+pub fn mark_object_clean(
+    db: &mut CatalogDb,
+    selector: &Id,
+    object_id: &Id,
+    expected_revision: u64,
+) -> Result<bool> {
+    ensure_index_ready(db, selector)?;
+    db.transaction(|transaction| {
+        let changed = transaction
+            .execute(
+                "UPDATE sharing_object_projection SET dirty = 0
+                  WHERE key_selector = ?1 AND object_id = ?2 AND revision = ?3 AND dirty = 1",
+                params![
+                    selector.as_bytes().as_slice(),
+                    object_id.as_bytes().as_slice(),
+                    as_sqlite_integer(expected_revision, "shared object revision is too large")?,
+                ],
+            )
+            .map_err(|error| map_sqlite(error, "shared object queue could not be advanced"))?;
+        if changed == 1 {
+            bump_generation(transaction)?;
+        }
+        Ok(changed == 1)
+    })
+}
+
+fn ensure_index_ready(db: &CatalogDb, selector: &Id) -> Result<()> {
+    let ready: Option<i64> = db
+        .connection()
+        .query_row(
+            "SELECT object_index_ready FROM sharing_operation_streams WHERE key_selector = ?1",
+            [selector.as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| map_sqlite(error, "shared object index state could not be read"))?;
+    ensure!(
+        ready.is_none() || ready == Some(1),
+        MigrationRequired,
+        "shared object index needs backfill"
+    );
+    Ok(())
 }
 
 fn ensure_stream(
@@ -313,7 +861,8 @@ fn ensure_stream(
     transaction
         .execute(
             "INSERT INTO sharing_operation_streams
-                 (key_selector, collection_id, collection_epoch) VALUES (?1, ?2, ?3)
+                 (key_selector, collection_id, collection_epoch, object_index_ready, log_revision)
+             VALUES (?1, ?2, ?3, 1, 0)
              ON CONFLICT DO NOTHING",
             params![
                 key_selector.as_bytes().as_slice(),
@@ -340,6 +889,22 @@ fn ensure_stream(
     Ok(())
 }
 
+fn bump_log_revision(transaction: &Transaction<'_>, selector: &Id) -> Result<()> {
+    let changed = transaction
+        .execute(
+            "UPDATE sharing_operation_streams SET log_revision = log_revision + 1
+              WHERE key_selector = ?1",
+            [selector.as_bytes().as_slice()],
+        )
+        .map_err(|error| map_sqlite(error, "collection log revision could not advance"))?;
+    ensure!(
+        changed == 1,
+        CatalogCorrupt,
+        "collection log stream is absent"
+    );
+    Ok(())
+}
+
 fn insert_operation(transaction: &Transaction<'_>, operation: &CollectionOperation) -> Result<()> {
     transaction
         .execute(
@@ -361,6 +926,89 @@ fn insert_operation(transaction: &Transaction<'_>, operation: &CollectionOperati
             ],
         )
         .map_err(|error| map_sqlite(error, "collection operation could not be stored"))?;
+    Ok(())
+}
+
+fn object_event(payload: &OperationPayload) -> Option<(Id, i64)> {
+    match payload.body() {
+        PayloadBody::CreateObject { object_id, .. } => Some((*object_id, 1)),
+        PayloadBody::CommitObject { object_id, .. } => Some((*object_id, 2)),
+        PayloadBody::DeleteObject { object_id, .. } => Some((*object_id, 3)),
+        PayloadBody::RestoreObject { object_id, .. } => Some((*object_id, 4)),
+        PayloadBody::RewrapObjectKey { object_id, .. } => Some((*object_id, 5)),
+        _ => None,
+    }
+}
+
+fn insert_object_event(
+    transaction: &Transaction<'_>,
+    operation: &CollectionOperation,
+    payload: &OperationPayload,
+) -> Result<()> {
+    let Some((object_id, kind)) = object_event(payload) else {
+        return Ok(());
+    };
+    transaction
+        .execute(
+            "INSERT INTO sharing_object_operations
+                 (key_selector, object_id, operation_id, kind) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                operation.key_selector().as_bytes().as_slice(),
+                object_id.as_bytes().as_slice(),
+                operation.operation_id().as_bytes().as_slice(),
+                kind,
+            ],
+        )
+        .map_err(|error| map_sqlite(error, "shared object event could not be indexed"))?;
+    transaction
+        .execute(
+            "INSERT INTO sharing_object_projection
+                 (key_selector, object_id, revision, dirty) VALUES (?1, ?2, 1, 1)
+             ON CONFLICT(key_selector, object_id) DO UPDATE SET
+                 revision = revision + 1, dirty = 1",
+            params![
+                operation.key_selector().as_bytes().as_slice(),
+                object_id.as_bytes().as_slice(),
+            ],
+        )
+        .map_err(|error| map_sqlite(error, "shared object projection could not be updated"))?;
+    Ok(())
+}
+
+/// Hides a recipient copy in the same commit as its signed DeleteObject.
+/// Source default collections are excluded; RestoreObject remains visible only
+/// after the recipient checks and reconciles the full signed lifecycle.
+fn hide_accepted_shared_delete(
+    transaction: &Transaction<'_>,
+    payload: &OperationPayload,
+) -> Result<()> {
+    let PayloadBody::DeleteObject {
+        object_id,
+        object_generation,
+        ..
+    } = payload.body()
+    else {
+        return Ok(());
+    };
+    transaction
+        .execute(
+            "UPDATE objects SET state = ?1, integrity_summary = ?2
+              WHERE object_id = ?3 AND collection_id = ?4 AND state = ?5
+                AND object_generation <= ?6
+                AND EXISTS (
+                    SELECT 1 FROM collections WHERE collection_id = ?4 AND policy_type = ?7
+                )",
+            params![
+                i64::from(ObjectState::SharedDeleted.value()),
+                i64::from(IntegritySummary::Unverified.value()),
+                object_id.as_bytes().as_slice(),
+                payload.collection_id().as_bytes().as_slice(),
+                i64::from(ObjectState::Active.value()),
+                as_sqlite_integer(*object_generation, "shared delete generation is too large")?,
+                i64::from(COLLECTION_POLICY_SHARED),
+            ],
+        )
+        .map_err(|error| map_sqlite(error, "accepted shared delete could not hide its object"))?;
     Ok(())
 }
 
@@ -472,6 +1120,7 @@ mod tests {
 
     use crate::{
         db::{CatalogKey, CatalogLocation},
+        model::COLLECTION_POLICY_VAULT_DEFAULT,
         schema, sharing,
     };
 
@@ -633,5 +1282,560 @@ mod tests {
             .status(),
             ChurStatus::CatalogCorrupt
         );
+    }
+
+    #[test]
+    fn cached_authored_log_replays_once_per_session_and_reopens_with_same_records() {
+        let directory = std::env::temp_dir().join(format!(
+            "chur-log-cache-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).expect("test directory");
+        let path = directory.join("catalog.db");
+        let root = Key::new([40; 32]);
+        let catalog_key = CatalogKey::derive(&root, &id(1)).expect("catalog key");
+        let mut db = CatalogDb::open(&CatalogLocation::File(&path), &catalog_key).expect("open");
+        schema::open_at_current_version(&mut db, 1).expect("schema");
+        let (signing, membership) = identity(id(1), id(2), 10);
+        let state = sharing::provision(&mut db, id(1), id(5), 1).expect("sharing");
+        let domain = KeyDomain::collection(&Key::new([30; 32]), &id(5), 1).expect("domain");
+        let selector = *domain.selector();
+        let mut keys = KeyDirectory::new(&root, &id(1)).expect("keys");
+        keys.insert(domain).expect("domain");
+        let memberships = BTreeMap::from([(id(1), membership.clone())]);
+        LOG_LOADS.with(|loads| loads.set(0));
+        let mut authored = Vec::new();
+        for index in 0..2 {
+            let payload = OperationPayload::new(
+                id(5),
+                1,
+                PayloadBody::CreateAlbum {
+                    album_id: id(6 + index),
+                    name: format!("Album {index}"),
+                },
+            )
+            .expect("payload");
+            let operation = with_cached_log(
+                &mut db,
+                id(5),
+                1,
+                selector,
+                &keys,
+                &memberships,
+                &state,
+                |db, log| {
+                    log.author(
+                        db,
+                        id(8 + index),
+                        id(1),
+                        id(2),
+                        keys.domain(&selector)?.operation_key(),
+                        Nonce::new([50 + index; 24]),
+                        &payload,
+                        &signing,
+                        &membership,
+                        &membership,
+                        &state,
+                    )
+                },
+            )
+            .expect("author");
+            authored.push(operation);
+        }
+        assert_eq!(LOG_LOADS.with(std::cell::Cell::get), 1);
+        let mut other =
+            CatalogDb::open(&CatalogLocation::File(&path), &catalog_key).expect("second writer");
+        let external_payload = OperationPayload::new(
+            id(5),
+            1,
+            PayloadBody::CreateAlbum {
+                album_id: id(20),
+                name: "External".to_owned(),
+            },
+        )
+        .expect("external payload");
+        let external = with_cached_log(
+            &mut other,
+            id(5),
+            1,
+            selector,
+            &keys,
+            &memberships,
+            &state,
+            |db, log| {
+                log.author(
+                    db,
+                    id(21),
+                    id(1),
+                    id(2),
+                    keys.domain(&selector)?.operation_key(),
+                    Nonce::new([53; 24]),
+                    &external_payload,
+                    &signing,
+                    &membership,
+                    &membership,
+                    &state,
+                )
+            },
+        )
+        .expect("external author");
+        authored.push(external);
+        other.close().expect("close second writer");
+        assert_eq!(LOG_LOADS.with(std::cell::Cell::get), 2);
+        with_cached_log(
+            &mut db,
+            id(5),
+            1,
+            selector,
+            &keys,
+            &memberships,
+            &state,
+            |_, log| {
+                assert_eq!(log.head(&id(1), &id(2)).map(|head| head.0), Some(3));
+                Ok(())
+            },
+        )
+        .expect("other writer invalidates cache");
+        assert_eq!(LOG_LOADS.with(std::cell::Cell::get), 3);
+        let stale = take_cached_log(&mut db, id(5), 1, selector, &keys, &memberships, &state)
+            .expect("take before another writer");
+        let mut other = CatalogDb::open(&CatalogLocation::File(&path), &catalog_key)
+            .expect("interleaved writer");
+        let interleaved_payload = OperationPayload::new(
+            id(5),
+            1,
+            PayloadBody::CreateAlbum {
+                album_id: id(22),
+                name: "Interleaved".to_owned(),
+            },
+        )
+        .expect("interleaved payload");
+        let interleaved = with_cached_log(
+            &mut other,
+            id(5),
+            1,
+            selector,
+            &keys,
+            &memberships,
+            &state,
+            |db, log| {
+                log.author(
+                    db,
+                    id(23),
+                    id(1),
+                    id(2),
+                    keys.domain(&selector)?.operation_key(),
+                    Nonce::new([54; 24]),
+                    &interleaved_payload,
+                    &signing,
+                    &membership,
+                    &membership,
+                    &state,
+                )
+            },
+        )
+        .expect("interleaved author");
+        authored.push(interleaved);
+        other.close().expect("close interleaved writer");
+        assert_eq!(LOG_LOADS.with(std::cell::Cell::get), 4);
+        store_cached_log(&mut db, selector, stale).expect("store stale log");
+        assert!(db.sharing_log_cache.is_none());
+        with_cached_log(
+            &mut db,
+            id(5),
+            1,
+            selector,
+            &keys,
+            &memberships,
+            &state,
+            |_, log| {
+                assert_eq!(log.head(&id(1), &id(2)).map(|head| head.0), Some(4));
+                Ok(())
+            },
+        )
+        .expect("stale cache was discarded");
+        assert_eq!(LOG_LOADS.with(std::cell::Cell::get), 5);
+        db.close().expect("close");
+
+        let mut db = CatalogDb::open(&CatalogLocation::File(&path), &catalog_key).expect("reopen");
+        schema::open_at_current_version(&mut db, 2).expect("schema after reopen");
+        with_cached_log(
+            &mut db,
+            id(5),
+            1,
+            selector,
+            &keys,
+            &memberships,
+            &state,
+            |db, log| {
+                assert_eq!(log.head(&id(1), &id(2)).map(|head| head.0), Some(4));
+                let payload = OperationPayload::new(
+                    id(5),
+                    1,
+                    PayloadBody::CreateAlbum {
+                        album_id: id(6),
+                        name: "Album 0".to_owned(),
+                    },
+                )?;
+                assert_eq!(
+                    log.accept(db, &authored[0], &payload, &membership, &membership, &state,)?,
+                    ApplyOutcome::Duplicate
+                );
+                Ok(())
+            },
+        )
+        .expect("idempotent replay");
+        assert_eq!(LOG_LOADS.with(std::cell::Cell::get), 6);
+        let durable = records(&db, &selector).expect("durable records");
+        assert_eq!(
+            durable
+                .iter()
+                .map(CollectionOperation::encode)
+                .collect::<Vec<_>>(),
+            authored
+                .iter()
+                .map(CollectionOperation::encode)
+                .collect::<Vec<_>>()
+        );
+        db.close().expect("close after reopen");
+        std::fs::remove_dir_all(directory).expect("remove test catalog");
+    }
+
+    #[test]
+    fn v5_object_index_backfill_checks_stored_rows_and_is_atomic() {
+        let mut db = open();
+        schema::reset_to_v3(&mut db).expect("v3");
+        schema::migrate_v3_to_v4(&mut db).expect("v4");
+        schema::migrate_v4_to_v5(&mut db).expect("v5");
+        let (signing, _) = identity(id(1), id(2), 10);
+        sharing::provision(&mut db, id(1), id(5), 1).expect("sharing");
+        let root = Key::new([31; 32]);
+        let domain = KeyDomain::collection(&Key::new([30; 32]), &id(5), 1).expect("domain");
+        let selector = *domain.selector();
+        let create_payload = OperationPayload::new(
+            id(5),
+            1,
+            PayloadBody::CreateObject {
+                object_id: id(6),
+                object_generation: 1,
+                store_id: id(8),
+                stream_id: id(9),
+                metadata_fields: Vec::new(),
+            },
+        )
+        .expect("create payload");
+        let create = CollectionOperation::seal(
+            id(10),
+            id(1),
+            id(2),
+            1,
+            [0; 32],
+            Vec::new(),
+            selector,
+            domain.operation_key(),
+            Nonce::new([31; 24]),
+            &create_payload.encode(),
+        )
+        .expect("create")
+        .sign(&signing);
+        let payload = OperationPayload::new(
+            id(5),
+            1,
+            PayloadBody::DeleteObject {
+                object_id: id(6),
+                object_generation: 1,
+                authored_at_ms: 1,
+            },
+        )
+        .expect("payload");
+        let operation = CollectionOperation::seal(
+            id(7),
+            id(1),
+            id(2),
+            2,
+            create.digest(),
+            Vec::new(),
+            selector,
+            domain.operation_key(),
+            Nonce::new([32; 24]),
+            &payload.encode(),
+        )
+        .expect("operation")
+        .sign(&signing);
+        let mut keys = KeyDirectory::new(&root, &id(1)).expect("keys");
+        keys.insert(domain).expect("domain");
+        db.connection()
+            .execute(
+                "INSERT INTO sharing_operation_streams VALUES (?1, ?2, 1)",
+                params![selector.as_bytes().as_slice(), id(5).as_bytes().as_slice()],
+            )
+            .expect("v5 stream");
+        // v5 had already accepted these signed rows; backfill rechecks the
+        // stored projection and decrypted content, not unavailable issuer evidence.
+        insert_operation_raw_v5(&db, &create);
+        insert_operation_raw_v5(&db, &operation);
+        schema::migrate_v5_to_v6(&mut db).expect("v6");
+
+        db.connection()
+            .execute(
+                "UPDATE sharing_operations SET digest = ?1 WHERE operation_id = ?2",
+                params![[9u8; 32], id(7).as_bytes().as_slice()],
+            )
+            .expect("tamper projection");
+        assert_eq!(
+            ensure_object_index(&mut db, &selector, &keys)
+                .expect_err("tamper rejected")
+                .status(),
+            ChurStatus::CatalogCorrupt
+        );
+        let indexed: i64 = db
+            .connection()
+            .query_row(
+                "SELECT count(*) FROM sharing_object_operations",
+                [],
+                |row| row.get(0),
+            )
+            .expect("index count");
+        assert_eq!(indexed, 0);
+        db.connection()
+            .execute(
+                "UPDATE sharing_operations SET digest = ?1 WHERE operation_id = ?2",
+                params![operation.digest().as_slice(), id(7).as_bytes().as_slice()],
+            )
+            .expect("restore projection");
+        db.connection()
+            .execute(
+                "DELETE FROM sharing_operations WHERE operation_id = ?1",
+                [create.operation_id().as_bytes().as_slice()],
+            )
+            .expect("remove cause");
+        assert_eq!(
+            ensure_object_index(&mut db, &selector, &keys)
+                .expect_err("legacy lifecycle without cause rejected")
+                .status(),
+            ChurStatus::CatalogCorrupt
+        );
+        insert_operation_raw_v5(&db, &create);
+        ensure_object_index(&mut db, &selector, &keys).expect("backfill");
+        ensure_object_index(&mut db, &selector, &keys).expect("repeat backfill");
+        let mut found = Vec::new();
+        visit_object_records(&db, &keys, &selector, &id(6), |record, opened| {
+            if record.operation_id() == create.operation_id() {
+                assert_eq!(record.encode(), create.encode());
+                assert!(opened.body() == create_payload.body());
+            } else {
+                assert_eq!(record.encode(), operation.encode());
+                assert!(opened.body() == payload.body());
+            }
+            found.push(record);
+            Ok(())
+        })
+        .expect("target records");
+        assert_eq!(found.len(), 2);
+        assert_eq!(
+            dirty_object_ids(&db, &selector, 64).expect("dirty"),
+            vec![(id(6), 2)]
+        );
+        assert!(mark_object_clean(&mut db, &selector, &id(6), 2).expect("clean"));
+        assert!(
+            dirty_object_ids(&db, &selector, 64)
+                .expect("clean queue")
+                .is_empty()
+        );
+    }
+
+    fn insert_operation_raw_v5(db: &CatalogDb, operation: &CollectionOperation) {
+        db.connection()
+            .execute(
+                "INSERT INTO sharing_operations VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    operation.key_selector().as_bytes().as_slice(),
+                    operation.issuer_identity_vault_id().as_bytes().as_slice(),
+                    operation.issuer_device_id().as_bytes().as_slice(),
+                    operation.device_sequence() as i64,
+                    operation.operation_id().as_bytes().as_slice(),
+                    operation.digest().as_slice(),
+                    operation.encode(),
+                ],
+            )
+            .expect("v5 accepted row");
+    }
+
+    #[test]
+    fn accepted_delete_hides_only_a_recipient_shared_object_in_its_transaction() {
+        for (policy, expected) in [
+            (COLLECTION_POLICY_SHARED, ObjectState::SharedDeleted),
+            (COLLECTION_POLICY_VAULT_DEFAULT, ObjectState::Active),
+        ] {
+            let mut db = open();
+            let (signing, membership) = identity(id(1), id(2), 10);
+            let state = sharing::provision(&mut db, id(1), id(5), 1).expect("sharing");
+            db.connection()
+                .execute(
+                    "INSERT INTO collections VALUES (?1, 1, ?2, 1, 1)",
+                    params![id(5).as_bytes().as_slice(), i64::from(policy)],
+                )
+                .expect("collection");
+            db.connection()
+                .execute(
+                    "INSERT INTO objects VALUES (
+                        ?1, 1, ?2, ?3, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 4, 0, 1, 1
+                    )",
+                    params![
+                        id(6).as_bytes().as_slice(),
+                        id(5).as_bytes().as_slice(),
+                        id(7).as_bytes().as_slice(),
+                    ],
+                )
+                .expect("object");
+            let domain = KeyDomain::collection(&Key::new([30; 32]), &id(5), 1).expect("domain");
+            let create_payload = OperationPayload::new(
+                id(5),
+                1,
+                PayloadBody::CreateObject {
+                    object_id: id(6),
+                    object_generation: 1,
+                    store_id: id(7),
+                    stream_id: id(7),
+                    metadata_fields: Vec::new(),
+                },
+            )
+            .expect("create payload");
+            let create = CollectionOperation::seal(
+                id(8),
+                id(1),
+                id(2),
+                1,
+                [0; 32],
+                Vec::new(),
+                *domain.selector(),
+                domain.operation_key(),
+                Nonce::new([30; 24]),
+                &create_payload.encode(),
+            )
+            .expect("create")
+            .sign(&signing);
+            let payload = OperationPayload::new(
+                id(5),
+                1,
+                PayloadBody::DeleteObject {
+                    object_id: id(6),
+                    object_generation: 1,
+                    authored_at_ms: 1,
+                },
+            )
+            .expect("payload");
+            let operation = CollectionOperation::seal(
+                id(9),
+                id(1),
+                id(2),
+                2,
+                create.digest(),
+                Vec::new(),
+                *domain.selector(),
+                domain.operation_key(),
+                Nonce::new([31; 24]),
+                &payload.encode(),
+            )
+            .expect("operation")
+            .sign(&signing);
+            let mut keys = KeyDirectory::new(&Key::new([32; 32]), &id(1)).expect("keys");
+            let selector = *domain.selector();
+            keys.insert(domain).expect("domain");
+            let mut log =
+                DurableCollectionOperationLog::provision(&mut db, id(5), 1, selector).expect("log");
+            assert_eq!(
+                log.accept(
+                    &mut db,
+                    &create,
+                    &create_payload,
+                    &membership,
+                    &membership,
+                    &state
+                )
+                .expect("create accepted"),
+                ApplyOutcome::Applied
+            );
+            let pending_payload = OperationPayload::new(
+                id(5),
+                1,
+                PayloadBody::DeleteObject {
+                    object_id: id(6),
+                    object_generation: 2,
+                    authored_at_ms: 1,
+                },
+            )
+            .expect("pending payload");
+            let pending = CollectionOperation::seal(
+                id(10),
+                id(1),
+                id(2),
+                2,
+                create.digest(),
+                Vec::new(),
+                selector,
+                keys.domain(&selector).expect("domain").operation_key(),
+                Nonce::new([33; 24]),
+                &pending_payload.encode(),
+            )
+            .expect("pending delete")
+            .sign(&signing);
+            assert_eq!(
+                log.accept_with_keys(
+                    &mut db,
+                    &keys,
+                    &pending,
+                    &pending_payload,
+                    &membership,
+                    &membership,
+                    &state
+                )
+                .expect("missing generation stays pending"),
+                ApplyOutcome::PendingCause
+            );
+            let state_before: i64 = db
+                .connection()
+                .query_row(
+                    "SELECT state FROM objects WHERE object_id = ?1",
+                    [id(6).as_bytes().as_slice()],
+                    |row| row.get(0),
+                )
+                .expect("state before valid delete");
+            assert_eq!(state_before, i64::from(ObjectState::Active.value()));
+            assert_eq!(
+                log.accept_with_keys(
+                    &mut db,
+                    &keys,
+                    &operation,
+                    &payload,
+                    &membership,
+                    &membership,
+                    &state
+                )
+                .expect("accepted"),
+                ApplyOutcome::Applied
+            );
+            let row: (i64, i64) = db
+                .connection()
+                .query_row(
+                    "SELECT state, integrity_summary FROM objects WHERE object_id = ?1",
+                    [id(6).as_bytes().as_slice()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .expect("object after accepted delete");
+            assert_eq!(row.0, i64::from(expected.value()));
+            assert_eq!(
+                row.1,
+                i64::from(if policy == COLLECTION_POLICY_SHARED {
+                    IntegritySummary::Unverified.value()
+                } else {
+                    IntegritySummary::CompleteVerified.value()
+                })
+            );
+        }
     }
 }

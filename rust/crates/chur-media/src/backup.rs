@@ -661,7 +661,7 @@ pub fn restore(
             &catalog_key,
         )?;
         if vault::prepare_restored_catalog(&mut catalog, &local)? {
-            let target = chur_format::constants::CATALOG_FORMAT_VERSION_V5;
+            let target = chur_format::constants::CATALOG_FORMAT_VERSION_V6;
             let migration_steps = target - local.catalog.catalog_format_version;
             local.descriptor_generation = local
                 .descriptor_generation

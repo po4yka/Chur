@@ -117,6 +117,7 @@ pub enum CatalogLocation<'a> {
 /// zeroizes the root.
 pub struct CatalogDb {
     connection: Connection,
+    pub(crate) sharing_log_cache: Option<crate::sharing_log::CachedCollectionLog>,
 }
 
 impl fmt::Debug for CatalogDb {
@@ -139,7 +140,10 @@ impl CatalogDb {
             CatalogLocation::Memory => Connection::open_in_memory()
                 .map_err(|error| map_sqlite(error, "an in-memory catalog could not be created"))?,
         };
-        let db = Self { connection };
+        let db = Self {
+            connection,
+            sharing_log_cache: None,
+        };
         db.apply_batch(PRE_KEY_PRAGMAS, "a catalog memory pragma was refused")?;
         db.apply_key(key)?;
         db.check_readable()?;

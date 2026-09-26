@@ -15,7 +15,7 @@ use chur_catalog::vault::{self, Session};
 use chur_catalog::{deletion, store};
 use chur_core::{ChurStatus, Error, Id, Result, ensure};
 use chur_crypto::password::Argon2Params;
-use chur_format::constants::StreamKind;
+use chur_format::constants::{ObjectState, StreamKind};
 use zeroize::Zeroizing;
 
 use crate::api::Status;
@@ -644,6 +644,11 @@ pub unsafe extern "C" fn chur_object_metadata(
             let guard = registry::lock(guarded);
             let catalog = guard.catalog_ref()?;
             let row = store::object(catalog, &object_id)?;
+            ensure!(
+                row.state == ObjectState::Active,
+                NotFound,
+                "the object is not listable"
+            );
             let metadata = store::active_metadata(catalog, &object_id)?;
             let tags = store::object_tags(catalog, &object_id)?;
             crate::records::encode_object_metadata(&row, &metadata, &tags)
