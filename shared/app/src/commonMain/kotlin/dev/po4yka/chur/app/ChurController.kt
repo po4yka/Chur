@@ -110,6 +110,7 @@ class ChurController(
     private val _albums = MutableStateFlow<List<AlbumSummary>>(emptyList())
     private val _tags = MutableStateFlow<List<TagSummary>>(emptyList())
     private var currentQuery = ObjectQuery()
+    private var queryRevision = 0L
     private val _slots = MutableStateFlow<List<SlotSummary>>(emptyList())
     private val _sharingIdentity = MutableStateFlow<SharingIdentity?>(null)
     private val _sharingOverview = MutableStateFlow<SharingOverview?>(null)
@@ -638,30 +639,38 @@ class ChurController(
     }
 
     /** Loads one query scope. */
-    fun load(query: ObjectQuery) = guarded(clearMessage = false) {
+    fun load(query: ObjectQuery) {
         currentQuery = query
-        _page.value = withContext(Dispatchers.Default) { repository.page(query) }
+        val revision = ++queryRevision
+        _page.value = ObjectPage(emptyList(), 0, 0, null)
+        if (query.scope == QueryScope.SEARCH && query.terms.isNullOrBlank()) return
+        guarded(clearMessage = false) {
+            val result = withContext(Dispatchers.Default) { repository.page(query) }
+            if (revision == queryRevision) _page.value = result
+        }
     }
 
-    private var loadingNextPage = false
+    private var loadingNextPageRevision: Long? = null
 
     /** Appends one bounded page when the user reaches the end of the grid. */
     fun loadNextPage() = guarded(clearMessage = false) {
-        if (loadingNextPage) return@guarded
+        val query = currentQuery
+        val revision = queryRevision
+        if (loadingNextPageRevision == revision) return@guarded
         val previous = _page.value
         val cursor = previous.nextCursor ?: return@guarded
-        val query = currentQuery
-        loadingNextPage = true
+        loadingNextPageRevision = revision
         try {
             val next = withContext(Dispatchers.Default) { repository.page(query.copy(cursor = cursor)) }
-            if (currentQuery !== query) return@guarded
-            _page.value = if (next.catalogGeneration != previous.catalogGeneration) {
+            if (revision != queryRevision) return@guarded
+            val result = if (next.catalogGeneration != previous.catalogGeneration) {
                 withContext(Dispatchers.Default) { repository.page(query) }
             } else {
                 next.copy(objects = previous.objects + next.objects)
             }
+            if (revision == queryRevision) _page.value = result
         } finally {
-            loadingNextPage = false
+            if (loadingNextPageRevision == revision) loadingNextPageRevision = null
         }
     }
 
@@ -685,15 +694,6 @@ class ChurController(
     /** Loads the key slots. */
     fun loadSlots() = guarded(clearMessage = false) {
         _slots.value = withContext(Dispatchers.Default) { repository.slots() }
-    }
-
-    /** Searches, `CATALOG_SCHEMA_V1.md` §16.4. */
-    fun search(terms: String) = guarded {
-        val query = ObjectQuery(QueryScope.SEARCH, terms = terms)
-        currentQuery = query
-        _page.value = withContext(Dispatchers.Default) {
-            repository.page(query)
-        }
     }
 
     /** Sets or clears the favourite flag. */
@@ -1418,7 +1418,12 @@ class ChurController(
 
     private suspend fun reload() {
         if (repository.state.value is VaultState.Unlocked) {
-            _page.value = withContext(Dispatchers.Default) { repository.page(currentQuery) }
+            val query = currentQuery
+            val revision = queryRevision
+            val result = if (query.scope == QueryScope.SEARCH && query.terms.isNullOrBlank()) {
+                ObjectPage(emptyList(), 0, 0, null)
+            } else withContext(Dispatchers.Default) { repository.page(query) }
+            if (revision == queryRevision) _page.value = result
         }
     }
 
@@ -1430,6 +1435,7 @@ class ChurController(
         _activeOperation.value = null
         exports.cancelPending()
         currentQuery = ObjectQuery()
+        queryRevision++
         // §10.3: a lock transition destroys private back-stack projections, and
         // these flows are that projection. §4 of `PLAINTEXT_LIFECYCLE.md` and
         // §8 step 7 add the decoded-image cache, which leaves with them.

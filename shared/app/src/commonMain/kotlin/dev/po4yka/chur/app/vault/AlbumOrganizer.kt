@@ -44,12 +44,28 @@ import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
 import dev.po4yka.chur.ffi.AlbumSummary
 import dev.po4yka.chur.ffi.toHex
 
-/** Tree order is entirely supplied by the encrypted catalog. */
-internal fun albumRows(albums: List<AlbumSummary>): List<Pair<AlbumSummary, Int>> {
+enum class AlbumOrder(val label: String) {
+    MANUAL("Manual order"),
+    NAME_ASC("Name A–Z"),
+    NAME_DESC("Name Z–A"),
+    COUNT_DESC("Most items"),
+    COUNT_ASC("Fewest items"),
+}
+
+/** Keep the catalog hierarchy while ordering siblings for presentation. */
+internal fun albumRows(albums: List<AlbumSummary>, order: AlbumOrder = AlbumOrder.MANUAL,
+    filter: String = ""): List<Pair<AlbumSummary, Int>> {
     val result = ArrayList<Pair<AlbumSummary, Int>>(albums.size)
     val visited = HashSet<String>()
+    val comparator = when (order) {
+        AlbumOrder.MANUAL -> compareBy<AlbumSummary> { it.position }.thenBy { it.id }
+        AlbumOrder.NAME_ASC -> compareBy<AlbumSummary> { it.name.lowercase() }.thenBy { it.id }
+        AlbumOrder.NAME_DESC -> compareByDescending<AlbumSummary> { it.name.lowercase() }.thenBy { it.id }
+        AlbumOrder.COUNT_DESC -> compareByDescending<AlbumSummary> { it.memberCount }.thenBy { it.id }
+        AlbumOrder.COUNT_ASC -> compareBy<AlbumSummary> { it.memberCount }.thenBy { it.id }
+    }
     val children = albums.groupBy { it.parentId?.toHex() }
-        .mapValues { (_, siblings) -> siblings.sortedWith(compareBy<AlbumSummary> { it.position }.thenBy { it.id }) }
+        .mapValues { (_, siblings) -> siblings.sortedWith(comparator) }
     val pending = ArrayDeque<Pair<AlbumSummary, Int>>()
     children[null].orEmpty().asReversed().forEach { pending.addLast(it to 0) }
     while (pending.isNotEmpty()) {
@@ -59,10 +75,23 @@ internal fun albumRows(albums: List<AlbumSummary>): List<Pair<AlbumSummary, Int>
             children[album.id].orEmpty().asReversed().forEach { pending.addLast(it to depth + 1) }
         }
     }
-    albums.sortedWith(compareBy<AlbumSummary> { it.position }.thenBy { it.id })
+    albums.sortedWith(comparator)
         .filterNot { it.id in visited }
         .forEach { result += it to 0 }
-    return result
+    if (filter.isBlank()) return result
+    val byId = albums.associateBy { it.id }
+    val visible = HashSet<String>()
+    result.filter { (album, _) -> album.name.contains(filter.trim(), ignoreCase = true) }
+        .forEach { (album, _) ->
+            var current: AlbumSummary? = album
+            var steps = 0
+            while (current != null && steps++ < albums.size) {
+                val node = current ?: break
+                if (!visible.add(node.id)) break
+                current = node.parentId?.toHex()?.let(byId::get)
+            }
+        }
+    return result.filter { (album, _) -> album.id in visible }
 }
 
 private fun parentOf(album: AlbumSummary, albums: List<AlbumSummary>): AlbumSummary? =
@@ -87,7 +116,9 @@ private fun descendantOf(candidate: AlbumSummary, ancestor: AlbumSummary, albums
 /** Album navigation, editing, nesting, and drag placement for both hosts. */
 @Composable
 fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
-    view: ContentView, onViewChange: (ContentView) -> Unit) {
+    view: ContentView, onViewChange: (ContentView) -> Unit,
+    order: AlbumOrder, onOrderChange: (AlbumOrder) -> Unit,
+    filter: String, onFilterChange: (String) -> Unit) {
     val colors = LocalChurColors.current
     var renaming by remember { mutableStateOf<AlbumSummary?>(null) }
     var renameText by remember { mutableStateOf("") }
@@ -96,7 +127,8 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
     val bounds = remember { mutableMapOf<String, Rect>() }
     var dragged by remember { mutableStateOf<AlbumSummary?>(null) }
     var dropPoint by remember { mutableStateOf(Offset.Zero) }
-    val rows = remember(albums) { albumRows(albums) }
+    val rows = remember(albums, order, filter) { albumRows(albums, order, filter) }
+    val canReorder = order == AlbumOrder.MANUAL && filter.isBlank()
 
     val grid = view == ContentView.GRID
     val albumCard: @Composable (AlbumSummary, Int) -> Unit = { album, depth ->
@@ -111,7 +143,8 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
                 .fillMaxWidth()
                 .padding(start = if (grid) 0.dp else (depth * 16).coerceAtMost(96).dp)
                 .onGloballyPositioned { bounds[album.id] = it.boundsInWindow() }
-                .pointerInput(album.id, albums) {
+                .pointerInput(album.id, albums, canReorder) {
+                    if (!canReorder) return@pointerInput
                     detectDragGesturesAfterLongPress(
                         onDragStart = { offset ->
                             dragged = album
@@ -158,7 +191,8 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
                             color = colors.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     Text(
-                        "${album.memberCount} item${if (album.memberCount == 1L) "" else "s"} · Hold to drag",
+                        "${album.memberCount} item${if (album.memberCount == 1L) "" else "s"}" +
+                            if (canReorder) " · Hold to drag" else "",
                         style = MaterialTheme.typography.bodySmall, color = colors.inkMuted,
                     )
                 }
@@ -171,13 +205,13 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
                         DropdownMenuItem(text = { Text("Move to…") }, onClick = {
                             menu = false; moving = album
                         })
-                        if (index > 0) {
+                        if (canReorder && index > 0) {
                             DropdownMenuItem(text = { Text("Move up") }, onClick = {
                                 menu = false
                                 actions.onMoveAlbum(album, parent, siblings[index - 1])
                             })
                         }
-                        if (index in 0 until siblings.lastIndex) {
+                        if (canReorder && index in 0 until siblings.lastIndex) {
                             DropdownMenuItem(text = { Text("Move down") }, onClick = {
                                 menu = false
                                 actions.onMoveAlbum(album, parent, siblings.getOrNull(index + 2))
@@ -194,12 +228,39 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
 
     Column(modifier = Modifier.fillMaxSize()) {
         ContentViewToggle(view, onViewChange)
+        var sortExpanded by remember { mutableStateOf(false) }
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = ChurSpacing.gutter)) {
+            Box {
+                TextButton(onClick = { sortExpanded = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Text("Sort: ${order.label} ▾")
+                }
+                DropdownMenu(expanded = sortExpanded, onDismissRequest = { sortExpanded = false }) {
+                    AlbumOrder.entries.forEach { choice ->
+                        DropdownMenuItem(text = { Text("${if (choice == order) "✓ " else ""}${choice.label}") },
+                            onClick = { sortExpanded = false; onOrderChange(choice) })
+                    }
+                }
+            }
+        }
+        OutlinedTextField(
+            value = filter, onValueChange = onFilterChange,
+            label = { Text("Find album") }, singleLine = true,
+            trailingIcon = if (filter.isNotEmpty()) {
+                { TextButton(onClick = { onFilterChange("") }) { Text("Clear") } }
+            } else null,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = ChurSpacing.gutter),
+            colors = churOutlinedTextFieldColors(),
+        )
         if (albums.isEmpty()) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("No albums yet", style = MaterialTheme.typography.titleMedium)
                     Text("Group objects you want to find together.", color = colors.inkMuted)
                 }
+            }
+        } else if (rows.isEmpty()) {
+            Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text("No matching albums", color = colors.inkMuted)
             }
         } else {
             if (grid) {

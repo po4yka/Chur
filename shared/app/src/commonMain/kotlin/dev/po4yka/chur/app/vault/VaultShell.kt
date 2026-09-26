@@ -59,6 +59,7 @@ import dev.po4yka.chur.app.theme.SettingsGlyph
 import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
 import dev.po4yka.chur.ffi.AlbumSummary
 import dev.po4yka.chur.ffi.ObjectProjection
+import dev.po4yka.chur.ffi.QuerySort
 import dev.po4yka.chur.ffi.SlotSummary
 import dev.po4yka.chur.ffi.SharingIdentity
 import dev.po4yka.chur.ffi.SharingMember
@@ -109,6 +110,10 @@ data class VaultUiState(
     /** Session-only presentation choices; never written outside the unlocked vault. */
     val mediaView: ContentView = ContentView.GRID,
     val albumView: ContentView = ContentView.LIST,
+    val sort: QuerySort = QuerySort.CAPTURE_DESC,
+    val kinds: Int = 0,
+    val albumOrder: AlbumOrder = AlbumOrder.MANUAL,
+    val albumFilter: String = "",
     /** A bounded operation message, carrying no private value. */
     val progress: String? = null,
     val operation: ActiveOperation? = null,
@@ -217,6 +222,10 @@ data class VaultActions(
     val onRestoreSelection: () -> Unit = {},
     val onMediaViewChange: (ContentView) -> Unit = {},
     val onAlbumViewChange: (ContentView) -> Unit = {},
+    val onSortChange: (QuerySort) -> Unit = {},
+    val onKindsChange: (Int) -> Unit = {},
+    val onAlbumOrderChange: (AlbumOrder) -> Unit = {},
+    val onAlbumFilterChange: (String) -> Unit = {},
     /** Stop the native operation at its next cooperative cancellation point. */
     val onCancelOperation: () -> Unit = {},
     /** Connect the vault to the server the user named, `SYNC_PROTOCOL_V1.md` §6. */
@@ -370,7 +379,9 @@ fun VaultShell(state: VaultUiState, actions: VaultActions) {
                 state.openAlbum != null || state.destination == VaultDestination.LIBRARY ->
                     LibraryBody(state, actions, state.mediaView, actions.onMediaViewChange)
                 state.destination == VaultDestination.ALBUMS ->
-                    AlbumOrganizer(state.albums, actions, state.albumView, actions.onAlbumViewChange)
+                    AlbumOrganizer(state.albums, actions, state.albumView, actions.onAlbumViewChange,
+                        state.albumOrder, actions.onAlbumOrderChange,
+                        state.albumFilter, actions.onAlbumFilterChange)
                 state.destination == VaultDestination.SEARCH ->
                     SearchBody(state, actions, state.mediaView, actions.onMediaViewChange)
                 else -> SettingsBody(state, actions)
@@ -520,10 +531,16 @@ private fun LibraryBody(state: VaultUiState, actions: VaultActions,
     view: ContentView, onViewChange: (ContentView) -> Unit) {
     Column(modifier = Modifier.fillMaxSize()) {
         ContentViewToggle(view, onViewChange)
+        if (state.selectedCount == 0) MediaSortFilterControls(
+            sort = state.sort, kinds = state.kinds,
+            album = state.openAlbum != null, trash = state.trashOpen,
+            onSort = actions.onSortChange, onKinds = actions.onKindsChange,
+        )
         if (state.tiles.isEmpty()) {
-            if (state.libraryScopeTitle == null) EmptyLibrary(modifier = Modifier.weight(1f))
+            if (state.libraryScopeTitle == null && state.kinds == 0) EmptyLibrary(modifier = Modifier.weight(1f))
             else Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Text("No media in ${state.libraryScopeTitle}",
+                Text(if (state.kinds != 0) "No media matches these filters" else
+                    "No media in ${state.libraryScopeTitle}",
                     color = LocalChurColors.current.inkMuted,
                     style = MaterialTheme.typography.bodyMedium)
             }
@@ -533,7 +550,8 @@ private fun LibraryBody(state: VaultUiState, actions: VaultActions,
                 view = view,
                 onOpen = actions.onOpen,
                 onToggleSelection = actions.onToggleSelection,
-                onMove = if (state.openAlbum != null && state.selectedCount == 0) actions.onMoveAlbumMember else null,
+                onMove = if (state.openAlbum != null && state.sort == QuerySort.ALBUM_MANUAL &&
+                    state.kinds == 0 && state.selectedCount == 0) actions.onMoveAlbumMember else null,
                 onLoadMore = if (state.canLoadMore) actions.onLoadMore else null,
                 modifier = Modifier.weight(1f),
             )
@@ -555,6 +573,10 @@ private fun SearchBody(state: VaultUiState, actions: VaultActions,
             colors = churOutlinedTextFieldColors(),
         )
         ContentViewToggle(view, onViewChange)
+        if (state.selectedCount == 0) MediaSortFilterControls(
+            sort = state.sort, kinds = state.kinds, album = false, trash = false,
+            onSort = actions.onSortChange, onKinds = actions.onKindsChange,
+        )
         when {
             state.searchTerms.isBlank() -> Box(
                 modifier = Modifier.fillMaxSize(),
@@ -572,7 +594,8 @@ private fun SearchBody(state: VaultUiState, actions: VaultActions,
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("No results", style = MaterialTheme.typography.bodyMedium, color = colors.inkMuted)
+                Text("No matching items. Try another word or remove a filter.",
+                    style = MaterialTheme.typography.bodyMedium, color = colors.inkMuted)
             }
             else -> MediaBrowser(
                 tiles = state.tiles,

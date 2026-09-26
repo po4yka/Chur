@@ -60,6 +60,8 @@ import dev.po4yka.chur.app.vault.UnlockScreen
 import dev.po4yka.chur.app.vault.VaultActions
 import dev.po4yka.chur.app.vault.VaultDestination
 import dev.po4yka.chur.app.vault.ContentView
+import dev.po4yka.chur.app.vault.AlbumOrder
+import dev.po4yka.chur.app.vault.browseQuery
 import dev.po4yka.chur.app.vault.VaultShell
 import dev.po4yka.chur.app.vault.VaultUiState
 import androidx.compose.ui.graphics.ImageBitmap
@@ -304,6 +306,11 @@ private fun VaultRoute(controller: ChurController) {
     var destination by remember { mutableStateOf(VaultDestination.LIBRARY) }
     var mediaView by remember { mutableStateOf(ContentView.GRID) }
     var albumView by remember { mutableStateOf(ContentView.LIST) }
+    var mediaSort by remember { mutableStateOf(QuerySort.CAPTURE_DESC) }
+    var albumSort by remember { mutableStateOf(QuerySort.ALBUM_MANUAL) }
+    var mediaKinds by remember { mutableStateOf(0) }
+    var albumOrder by remember { mutableStateOf(AlbumOrder.MANUAL) }
+    var albumFilter by remember { mutableStateOf("") }
     var terms by remember { mutableStateOf("") }
     var openAlbum by remember { mutableStateOf<AlbumSummary?>(null) }
     LaunchedEffect(albums) {
@@ -386,18 +393,14 @@ private fun VaultRoute(controller: ChurController) {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), onPicked)
     val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), onPicked)
 
-    LaunchedEffect(destination, openAlbum, openTag, favoritesOnly, trashOpen, page.catalogGeneration) {
+    LaunchedEffect(destination, openAlbum, openTag, favoritesOnly, trashOpen,
+        terms, mediaSort, albumSort, mediaKinds) {
+        val query = browseQuery(destination, openAlbum, openTag, favoritesOnly,
+            trashOpen, terms, mediaSort, albumSort, mediaKinds)
         when {
-            openAlbum != null -> controller.load(
-                ObjectQuery(QueryScope.ALBUM, sort = QuerySort.ALBUM_MANUAL, scopeId = openAlbum!!.albumId),
-            )
-            destination == VaultDestination.LIBRARY && trashOpen ->
-                controller.load(ObjectQuery(QueryScope.TRASH))
-            destination == VaultDestination.LIBRARY && openTag != null ->
-                controller.load(ObjectQuery(QueryScope.TAG, scopeId = openTag!!.tagId))
-            destination == VaultDestination.LIBRARY && favoritesOnly ->
-                controller.load(ObjectQuery(QueryScope.FAVORITES))
-            destination == VaultDestination.LIBRARY -> controller.load(ObjectQuery())
+            query != null -> controller.load(query)
+            destination == VaultDestination.SEARCH -> controller.load(
+                ObjectQuery(QueryScope.SEARCH, terms = ""))
             destination == VaultDestination.ALBUMS -> controller.loadAlbums()
             destination == VaultDestination.SETTINGS -> {
                 controller.loadSlots()
@@ -439,7 +442,8 @@ private fun VaultRoute(controller: ChurController) {
             onBack = { viewing = null },
             onDeleted = {
                 viewing = null
-                controller.load(ObjectQuery(if (trashOpen) QueryScope.TRASH else QueryScope.TIMELINE))
+                browseQuery(destination, openAlbum, openTag, favoritesOnly, trashOpen,
+                    terms, mediaSort, albumSort, mediaKinds)?.let(controller::load)
             },
         )
         return
@@ -644,6 +648,10 @@ private fun VaultRoute(controller: ChurController) {
             trashOpen = trashOpen,
             mediaView = mediaView,
             albumView = albumView,
+            sort = if (openAlbum != null) albumSort else mediaSort,
+            kinds = mediaKinds,
+            albumOrder = albumOrder,
+            albumFilter = albumFilter,
             progress = message,
             operation = operation,
             selectedCount = selection.size,
@@ -683,13 +691,19 @@ private fun VaultRoute(controller: ChurController) {
             onImport = { choosingImport = true },
             onSearch = {
                 terms = it
-                controller.search(it)
             },
             onOpenAlbum = { openAlbum = it; openTag = null; favoritesOnly = false; trashOpen = false },
             onCloseAlbum = { openAlbum = null },
             onCreateAlbum = { creatingAlbum = true },
             onMediaViewChange = { mediaView = it },
             onAlbumViewChange = { albumView = it },
+            onSortChange = {
+                if (openAlbum != null) albumSort = it else mediaSort = it
+                selection = emptySet()
+            },
+            onKindsChange = { mediaKinds = it; selection = emptySet() },
+            onAlbumOrderChange = { albumOrder = it },
+            onAlbumFilterChange = { albumFilter = it },
             onShowAllMedia = { openTag = null; favoritesOnly = false; trashOpen = false; selection = emptySet() },
             onShowFavorites = { openTag = null; favoritesOnly = true; trashOpen = false; selection = emptySet() },
             onShowTags = { controller.loadTags(); managingTags = true },
