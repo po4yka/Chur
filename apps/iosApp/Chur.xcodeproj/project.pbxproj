@@ -7,12 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0B89FE5F310BFE65CBCA410E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BA457393957CC3760250CA00 /* Assets.xcassets */; };
 		F45227CA2321CC19791DBBA6 /* ChurApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31B0CA2861DF43D785A14AA2 /* ChurApp.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		31B0CA2861DF43D785A14AA2 /* ChurApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChurApp.swift; sourceTree = "<group>"; };
 		8C652D17A053110BD2DA9F40 /* Chur.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Chur.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		BA457393957CC3760250CA00 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -27,6 +29,7 @@
 		08EEBBC5F11E809F5B8BE3DF = {
 			isa = PBXGroup;
 			children = (
+				BA457393957CC3760250CA00 /* Assets.xcassets */,
 				02A8F559F87009166EBB3A44 /* Sources */,
 				19985ADCB5C3FD6A634305D9 /* Products */,
 			);
@@ -49,6 +52,7 @@
 			buildPhases = (
 				A1FFB4BC62A6FEDADFC513D0 /* Build shared framework */,
 				45147A62F65556BAF0218434 /* Sources */,
+				4AF3C00A1F41212ED50AEF7B /* Resources */,
 			);
 			buildRules = (
 			);
@@ -90,6 +94,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		4AF3C00A1F41212ED50AEF7B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0B89FE5F310BFE65CBCA410E /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
 		A1FFB4BC62A6FEDADFC513D0 /* Build shared framework */ = {

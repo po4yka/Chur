@@ -496,16 +496,10 @@ The name suggests a boundary around what belongs to the user. The visual identit
 
 ### 5.2 Mark direction
 
-Preferred direction: an interrupted boundary or squared `C`.
-
-```text
-┌─────────┐
-│       ┌─┘
-│       │
-└───────┘
-```
-
-The opening represents authorized passage, not weakness.
+The primary launcher mark is a carved boundary post wrapped with a red cord
+that forms an interrupted ring. The opening represents authorized passage,
+not weakness. The selected source and its light/dark adaptations are in
+`art/app-icon/`.
 
 Do not use as the primary mark:
 
@@ -1652,24 +1646,24 @@ Screenshot/golden tests should never commit genuine private user data. Use deter
 
 No item in this list blocks Phase 1. An item that did block it has been decided, or moved to the document that owns it, and is recorded under "Closed" below.
 
-1. Final primary app icon and interrupted-boundary geometry.
-2. Whether custom Geist fonts are bundled or only used as optional Latin display fonts.
-3. Dynamic color policy.
-4. Shared-element media transitions versus simpler privacy-first navigation.
-5. Screenshot/capture warning behavior on iOS.
-6. Alternate launcher/icon policy on both platforms.
-7. Local-AI search presentation beyond the v1 query surface.
-8. Live Photo, RAW pair, spatial media, and compound-object badges.
-9. Public and decoy sample-content onboarding.
-10. Tablet three-pane breakpoints.
-11. Exact semantic colors after contrast testing on real displays.
-12. Haptic policy.
-13. Design-token code generation and linting.
+1. Whether custom Geist fonts are bundled or only used as optional Latin display fonts.
+2. Dynamic color policy.
+3. Shared-element media transitions versus simpler privacy-first navigation.
+4. Screenshot/capture warning behavior on iOS.
+5. Alternate launcher/icon policy on both platforms.
+6. Local-AI search presentation beyond the v1 query surface.
+7. Live Photo, RAW pair, spatial media, and compound-object badges.
+8. Public and decoy sample-content onboarding.
+9. Tablet three-pane breakpoints.
+10. Exact semantic colors after contrast testing on real displays.
+11. Haptic policy.
+12. Design-token code generation and linting.
 
 ### Closed
 
 | Was | Now |
 | --- | --- |
+| Primary launcher icon | Carved boundary post with interrupted red cord; `art/app-icon/` |
 | Public shell shipped at launch | Notes, fixed by [`ROADMAP.md`](ROADMAP.md) Phase 1 |
 | Compact navigation destinations and import placement | §10.1 |
 | Library grid density and adaptive column algorithm | §11.1 |

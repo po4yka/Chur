@@ -51,3 +51,7 @@ photo-library permission because it grants access only to selected items.
 `Info.plist` contains the background task identifier, `fetch` mode, scene
 configuration, and Compose's required frame-duration setting. Keep these in
 `project.yml` so project regeneration preserves them.
+
+## App icon
+
+`Assets.xcassets` is a target source in `project.yml`, and `ASSETCATALOG_COMPILER_APPICON_NAME` selects `AppIcon`. The checked-in `AppIcon.appiconset` contains Default, Dark, and Tinted appearances of the selected Chur boundary marker.

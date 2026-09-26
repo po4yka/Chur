@@ -2,4 +2,5 @@
 <!-- The dark canvas of DESIGN.md section 6.2. -->
 <resources>
     <color name="canvas">#0A0A0A</color>
+    <color name="launcher_background">#080808</color>
 </resources>
