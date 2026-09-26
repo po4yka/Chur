@@ -544,6 +544,10 @@ class VaultRepository(
         if (session == 0L) null else ChurVault.sharedSourceAuthor(session, source)
     }
 
+    suspend fun sharedDownloadOffset(collectionId: ByteArray, objectId: ByteArray): ULong? = mutex.withLock {
+        if (session == 0L) null else ChurVault.sharedDownloadOffset(session, collectionId, objectId)
+    }
+
     suspend fun appendSharedDownload(
         collectionId: ByteArray,
         objectId: ByteArray,

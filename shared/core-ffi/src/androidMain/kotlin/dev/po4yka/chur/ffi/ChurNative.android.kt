@@ -179,6 +179,13 @@ internal actual object ChurNative {
         destination.buffer, outWritten,
     )
 
+    actual fun sharingDownloadOffset(
+        session: Long,
+        collectionId: ByteArray,
+        objectId: ByteArray,
+        outOffset: LongArray,
+    ): Int = ChurJni.sharingDownloadOffset(session, collectionId, objectId, outOffset)
+
     actual fun sharingDownloadAppend(
         session: Long,
         collectionId: ByteArray,

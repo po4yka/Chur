@@ -906,6 +906,44 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingReceive<'local>(
     })
 }
 
+/// Reads the durable private staging offset for an authenticated plan.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingDownloadOffset<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    collection_id: JByteArray<'local>,
+    object_id: JByteArray<'local>,
+    out_offset: JLongArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(collection_id) = fixed_array(env, &collection_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        let Some(object_id) = fixed_array(env, &object_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        let mut offset = 0u64;
+        // SAFETY: the fixed identifier arrays and output local remain live for the call.
+        let status = unsafe {
+            chur_ffi::sharing::chur_sharing_download_offset(
+                handle_of(session),
+                collection_id.as_ptr(),
+                object_id.as_ptr(),
+                &mut offset,
+            )
+        };
+        if status != 0 {
+            return status;
+        }
+        if write_long(env, &out_offset, 0, offset as jlong) {
+            0
+        } else {
+            INVALID_INPUT
+        }
+    })
+}
+
 /// Appends one bounded opaque ciphertext range to an authenticated plan.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingDownloadAppend<'local>(

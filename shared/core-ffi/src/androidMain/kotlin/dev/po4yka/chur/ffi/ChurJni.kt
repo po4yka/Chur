@@ -173,6 +173,13 @@ internal object ChurJni {
         outWritten: IntArray,
     ): Int
 
+    external fun sharingDownloadOffset(
+        session: Long,
+        collectionId: ByteArray,
+        objectId: ByteArray,
+        outOffset: LongArray,
+    ): Int
+
     external fun sharingDownloadAppend(
         session: Long,
         collectionId: ByteArray,

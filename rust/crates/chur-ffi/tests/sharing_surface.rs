@@ -7,8 +7,9 @@ use chur_ffi::api::{chur_runtime_close, chur_runtime_open, chur_session_close, c
 use chur_ffi::records::{ChurRuntimeConfigV1, ChurUnlockRequestV1};
 use chur_ffi::sharing::{
     chur_sharing_accept, chur_sharing_download_append, chur_sharing_download_finish,
-    chur_sharing_identity, chur_sharing_inspect_enrollment, chur_sharing_overview,
-    chur_sharing_prepare, chur_sharing_prepare_device, chur_sharing_receive, chur_sharing_revoke,
+    chur_sharing_download_offset, chur_sharing_identity, chur_sharing_inspect_enrollment,
+    chur_sharing_overview, chur_sharing_prepare, chur_sharing_prepare_device, chur_sharing_receive,
+    chur_sharing_revoke,
 };
 use chur_ffi::sharing_publish::{chur_sharing_author, chur_sharing_publication};
 use chur_format::codec::{Reader, Writer};
@@ -567,9 +568,71 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
     assert_eq!(plan.u64().expect("planned length"), ciphertext.len() as u64);
     plan.finish().expect("plan");
 
+    let mut offset = u64::MAX;
+    assert_eq!(
+        unsafe {
+            chur_sharing_download_offset(
+                recipient_session,
+                collection_id.as_bytes().as_ptr(),
+                shared_object_id.as_bytes().as_ptr(),
+                &mut offset,
+            )
+        },
+        0
+    );
+    assert_eq!(offset, 0, "absent staging starts at zero");
     let mut corrupt = ciphertext.clone();
     let corrupt_at = corrupt.len() / 2;
     corrupt[corrupt_at] ^= 1;
+    assert_eq!(
+        unsafe {
+            chur_sharing_download_append(
+                recipient_session,
+                collection_id.as_bytes().as_ptr(),
+                shared_object_id.as_bytes().as_ptr(),
+                0,
+                corrupt.as_ptr(),
+                corrupt_at as u32,
+            )
+        },
+        0
+    );
+    assert_eq!(
+        unsafe {
+            chur_sharing_download_offset(
+                recipient_session,
+                collection_id.as_bytes().as_ptr(),
+                shared_object_id.as_bytes().as_ptr(),
+                &mut offset,
+            )
+        },
+        0
+    );
+    assert_eq!(
+        offset, corrupt_at as u64,
+        "staging length survives the call"
+    );
+    assert_eq!(unsafe { chur_session_close(recipient_session) }, 0);
+    assert_eq!(
+        unsafe { chur_vault_unlock(recipient_runtime, &unlock, &mut recipient_session) },
+        0
+    );
+    offset = 0;
+    assert_eq!(
+        unsafe {
+            chur_sharing_download_offset(
+                recipient_session,
+                collection_id.as_bytes().as_ptr(),
+                shared_object_id.as_bytes().as_ptr(),
+                &mut offset,
+            )
+        },
+        0
+    );
+    assert_eq!(
+        offset, corrupt_at as u64,
+        "staging survives session restart"
+    );
     assert_eq!(
         unsafe {
             chur_sharing_download_append(
@@ -612,11 +675,11 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
     // Simulate a disk/SQL failure after the verified container rename but
     // before catalog activation. A later finish must recover this window.
     assert_eq!(unsafe { chur_session_close(recipient_session) }, 0);
-    let interrupted = chur_catalog::vault::unlock_with_password(&recipient_root, PASSWORD, 1)
+    let mut interrupted = chur_catalog::vault::unlock_with_password(&recipient_root, PASSWORD, 1)
         .expect("recipient unlock for interrupted activation");
     let received_key = interrupted.root_secret().expect("root key").duplicate();
     let planned = chur_catalog::sharing_receive::pending_for_collection(
-        interrupted.catalog_ref().expect("catalog"),
+        interrupted.catalog().expect("catalog"),
         &received_key,
         recipient_vault_id,
         collection_id,
@@ -662,6 +725,23 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
     assert_eq!(
         unsafe { chur_vault_unlock(recipient_runtime, &unlock, &mut recipient_session) },
         0
+    );
+    offset = 0;
+    assert_eq!(
+        unsafe {
+            chur_sharing_download_offset(
+                recipient_session,
+                collection_id.as_bytes().as_ptr(),
+                shared_object_id.as_bytes().as_ptr(),
+                &mut offset,
+            )
+        },
+        0
+    );
+    assert_eq!(
+        offset,
+        ciphertext.len() as u64,
+        "committed ciphertext resumes at its signed length after restart"
     );
     assert_eq!(
         unsafe {

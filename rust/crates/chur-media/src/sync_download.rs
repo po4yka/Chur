@@ -20,6 +20,50 @@ use chur_sync_protocol::payload::MetadataFieldId;
 
 const RANGE_BYTES: usize = 1024 * 1024;
 
+/// Reads a durable download prefix without creating a container.
+/// A committed container from a crash before catalog activation is verified by finish.
+pub fn staged_offset(
+    root_dir: &VaultRoot,
+    local_store_id: &Id,
+    temp_path_id: &Id,
+    expected: &Expectation,
+) -> Result<u64> {
+    let path = root_dir.temporary_container(local_store_id, temp_path_id);
+    let length = match std::fs::metadata(path) {
+        Ok(metadata) => {
+            return Ok(if metadata.len() <= expected.container_length {
+                metadata.len()
+            } else {
+                0
+            });
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let committed = root_dir.container(local_store_id, temp_path_id);
+            match std::fs::metadata(committed) {
+                Ok(metadata) => metadata.len(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+                Err(_) => {
+                    return Err(chur_core::err!(
+                        IoFailure,
+                        "committed download length could not be read"
+                    ));
+                }
+            }
+        }
+        Err(_) => {
+            return Err(chur_core::err!(
+                IoFailure,
+                "staged download length could not be read"
+            ));
+        }
+    };
+    Ok(if length == expected.container_length {
+        length
+    } else {
+        0
+    })
+}
+
 /// Authenticated values carried by a committed object operation.
 pub struct Expectation {
     identity: StreamIdentity,

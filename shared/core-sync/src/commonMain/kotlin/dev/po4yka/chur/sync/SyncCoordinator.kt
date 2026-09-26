@@ -59,6 +59,9 @@ public interface SyncVaultBoundary {
         operations: List<ByteArray>,
     ): SharedReceivePlan?
 
+    /** Reads the durable prefix of one authenticated pending shared object. */
+    public suspend fun sharedDownloadOffset(collectionId: ByteArray, objectId: ByteArray): ULong?
+
     /** Writes one bounded ciphertext range into native private staging. */
     public suspend fun appendSharedDownload(
         collectionId: ByteArray,

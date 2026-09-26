@@ -1,6 +1,8 @@
 package dev.po4yka.chur.sync
 
+import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.ChurVault
+import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.SharedReceivePlan
 
 /** Pulls signed collection records, then verifies missing source containers locally. */
@@ -80,17 +82,37 @@ public class SharingPuller internal constructor(
         length: ULong,
         nowMs: Long,
     ): Boolean {
-        var offset = 0uL
-        while (offset < length) {
-            val amount = minOf(1_048_576uL, length - offset)
-            val bytes = client.downloadSharedObject(
-                recipientVaultId, plan.sourceVaultId, plan.collectionId, storeId, offset, amount,
-            )
-            require(bytes.size.toULong() == amount) { "shared ciphertext range is short" }
-            if (!vault.appendSharedDownload(plan.collectionId, objectId, offset, bytes)) return false
-            offset += amount
+        val savedOffset = vault.sharedDownloadOffset(plan.collectionId, objectId) ?: return false
+        require(savedOffset <= length) { "shared staged length exceeds signed length" }
+        suspend fun transfer(start: ULong): Boolean {
+            var offset = start
+            while (offset < length) {
+                val amount = minOf(1_048_576uL, length - offset)
+                val bytes = client.downloadSharedObject(
+                    recipientVaultId, plan.sourceVaultId, plan.collectionId, storeId, offset, amount,
+                )
+                require(bytes.size.toULong() == amount) { "shared ciphertext range is short" }
+                if (!vault.appendSharedDownload(plan.collectionId, objectId, offset, bytes)) return false
+                offset += amount
+            }
+            return true
         }
-        return vault.finishSharedDownload(plan.collectionId, objectId, nowMs)
+        if (!transfer(savedOffset)) return false
+        try {
+            return vault.finishSharedDownload(plan.collectionId, objectId, nowMs)
+        } catch (failure: ChurFailure) {
+            // A stale staged prefix can pass the length check. Restart once;
+            // native finish authenticates every byte before catalog activation.
+            if (savedOffset == 0uL || failure.status !in setOf(
+                    ChurStatus.OBJECT_CORRUPT,
+                    ChurStatus.OBJECT_INCOMPLETE,
+                    ChurStatus.AUTHENTICATION_FAILED,
+                    ChurStatus.NON_CANONICAL_ENCODING,
+                )
+            ) throw failure
+            if (!transfer(0uL)) return false
+            return vault.finishSharedDownload(plan.collectionId, objectId, nowMs)
+        }
     }
 
     private fun cursorOf(record: ByteArray): CollectionOperationCursor {

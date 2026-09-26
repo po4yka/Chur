@@ -329,6 +329,20 @@ object ChurVault {
         }
     }
 
+    /** Returns the durable ciphertext prefix for a signed shared object. */
+    fun sharedDownloadOffset(session: Long, collectionId: ByteArray, objectId: ByteArray): ULong {
+        require(collectionId.size == 16 && objectId.size == 16) { "invalid shared download ID" }
+        // ABI 1.12 can receive shared objects but has no resume export.
+        if (ChurNative.abiVersionMinor() < 13) return 0uL
+        val out = LongArray(1)
+        ChurFailure.check(
+            ChurNative.sharingDownloadOffset(session, collectionId, objectId, out),
+            "sharing download offset",
+        )
+        require(out[0] >= 0) { "shared download offset exceeds the ABI" }
+        return out[0].toULong()
+    }
+
     /** Stages one bounded opaque ciphertext range for a signed shared object. */
     fun appendSharedDownload(
         session: Long,

@@ -55,6 +55,7 @@ import dev.po4yka.chur.native.chur_sharing_object_read
 import dev.po4yka.chur.native.chur_sharing_receive
 import dev.po4yka.chur.native.chur_sharing_download_append
 import dev.po4yka.chur.native.chur_sharing_download_finish
+import dev.po4yka.chur.native.chur_sharing_download_offset
 import dev.po4yka.chur.native.chur_sharing_identity
 import dev.po4yka.chur.native.chur_sharing_overview
 import dev.po4yka.chur.native.chur_sharing_inspect_enrollment
@@ -462,6 +463,22 @@ internal actual object ChurNative {
                 operations.pointer, operationsLength.toUInt(),
                 destination.pointer, destination.size.toULong(), written,
             )
+        }
+    }
+
+    actual fun sharingDownloadOffset(
+        session: Long,
+        collectionId: ByteArray,
+        objectId: ByteArray,
+        outOffset: LongArray,
+    ): Int = collectionId.pinnedPointer { collection ->
+        objectId.pinnedPointer { objectPointer ->
+            memScoped {
+                val offset = alloc<ULongVar>()
+                val status = chur_sharing_download_offset(session.toULong(), collection, objectPointer, offset.ptr)
+                if (status == 0) outOffset[0] = offset.value.toLong()
+                status
+            }
         }
     }
 

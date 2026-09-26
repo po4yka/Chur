@@ -18,7 +18,7 @@
  * recipient-device surface of section 6.13, and the sharing discovery surface
  * of section 6.14, and the private tag list of section 6.15. Adding an export raises the minor
  * ABI version; changing or removing one raises the major. The library reports
- * 1.12.
+ * 1.13.
  */
 
 #ifndef CHUR_H
@@ -429,6 +429,10 @@ chur_status_t chur_sharing_receive(chur_handle_t session,
                                    const uint8_t *operations, uint32_t operations_length,
                                    uint8_t *destination, size_t capacity,
                                    size_t *bytes_written);
+chur_status_t chur_sharing_download_offset(chur_handle_t session,
+                                           const uint8_t collection_id[16],
+                                           const uint8_t object_id[16],
+                                           uint64_t *out_offset);
 chur_status_t chur_sharing_download_append(chur_handle_t session,
                                            const uint8_t collection_id[16],
                                            const uint8_t object_id[16],

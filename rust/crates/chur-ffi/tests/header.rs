@@ -369,6 +369,7 @@ fn every_declared_function_is_exported() {
         "chur_sharing_author",
         "chur_sharing_object_read",
         "chur_sharing_receive",
+        "chur_sharing_download_offset",
         "chur_sharing_download_append",
         "chur_sharing_download_finish",
         // §6.12, the recipient revocation surface added at ABI 1.8.
@@ -388,7 +389,7 @@ fn every_declared_function_is_exported() {
 
     // Calling each one proves the list above is not a stale copy.
     assert_eq!(chur_ffi::chur_abi_version_major(), 1);
-    assert_eq!(chur_ffi::chur_abi_version_minor(), 12);
+    assert_eq!(chur_ffi::chur_abi_version_minor(), 13);
     assert_eq!(
         chur_ffi::chur_capabilities(),
         chur_ffi::CHUR_CAP_DECOY_VAULT

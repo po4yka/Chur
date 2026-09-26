@@ -89,6 +89,8 @@ class SyncCoordinatorTest {
             return SharedReceivePlan(ByteArray(16), ByteArray(16), ByteArray(16), 0, emptyList())
         }
 
+        override suspend fun sharedDownloadOffset(collectionId: ByteArray, objectId: ByteArray): ULong? = 0uL
+
         override suspend fun appendSharedDownload(
             collectionId: ByteArray,
             objectId: ByteArray,

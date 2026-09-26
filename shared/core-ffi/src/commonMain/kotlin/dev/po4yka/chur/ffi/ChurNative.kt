@@ -170,6 +170,13 @@ internal expect object ChurNative {
         outWritten: IntArray,
     ): Int
 
+    fun sharingDownloadOffset(
+        session: Long,
+        collectionId: ByteArray,
+        objectId: ByteArray,
+        outOffset: LongArray,
+    ): Int
+
     fun sharingDownloadAppend(
         session: Long,
         collectionId: ByteArray,

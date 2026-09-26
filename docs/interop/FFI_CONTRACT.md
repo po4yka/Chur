@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. v1 ships 1.12: §6.5 through §6.16 add minor surfaces. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
+- native API version is the (major, minor) pair. v1 ships 1.13: §6.5 through §6.17 add minor surfaces. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -591,6 +591,10 @@ chur_status_t chur_tag_list(chur_handle_t session, uint8_t *destination,
 `CHUR_CAP_SHARED_OBJECTS` covers source publication and recipient activation. The source page lists active originals in object ID order. It returns no signed content operations until `chur_sharing_author` verifies the uploaded object's store ID, length, and SHA-256 digest. The host uploads complete ciphertext and associates it with the source collection before it calls `chur_sharing_author` and sends its CreateObject and CommitObject records.
 
 `chur_sharing_receive` accepts a bounded page of signed collection operations after it verifies the addressed share. Its plan contains only missing objects with accepted commits. The recipient downloads ciphertext into private staging with `chur_sharing_download_append`. `chur_sharing_download_finish` checks the object envelope, AEAD records, final commitment, and exact length before catalog activation. A retry can finish a verified container that was renamed before its catalog row committed. See `chur.h` for the exact pointer and length contract of each export.
+
+### 6.17 Shared download resume, ABI 1.13
+
+`chur_sharing_download_offset` reads the durable private staging length only for an object in the current authenticated receive plan. If staging is absent, a committed container with the signed length returns that length to recover a crash before catalog activation. A missing or oversized file returns offset zero. The host resumes at that offset, and `chur_sharing_download_finish` still verifies every ciphertext record and the signed final commitment before activation. If verification of resumed bytes fails, the host restarts the download at offset zero once.
 
 ## 7. Buffer ownership
 

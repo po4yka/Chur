@@ -736,6 +736,59 @@ pub unsafe extern "C" fn chur_sharing_receive(
     })
 }
 
+/// Reads the durable staging offset for a currently authenticated shared object.
+///
+/// # Safety
+///
+/// The identifier pointers cover 16 bytes and `out_offset` is writable and aligned.
+#[unsafe(no_mangle)]
+#[expect(unsafe_code, reason = "the exported C ABI validates caller pointers")]
+pub unsafe extern "C" fn chur_sharing_download_offset(
+    session: Handle,
+    collection_id: *const u8,
+    object_id: *const u8,
+    out_offset: *mut u64,
+) -> Status {
+    guard_status_for(session, || {
+        // SAFETY: the caller guarantees a writable out-parameter.
+        unsafe { write_out(out_offset, 0u64)? };
+        // SAFETY: both identifiers cover 16 readable bytes.
+        let collection_id = Id::from_slice(unsafe { borrow_bytes(collection_id, 16)? })?;
+        let object_id = Id::from_slice(unsafe { borrow_bytes(object_id, 16)? })?;
+        let entry = registry::get(session, Kind::Session)?;
+        let Entry::Session { session, .. } = entry.as_ref() else {
+            return Err(Error::new(
+                ChurStatus::InvalidInput,
+                "the handle is of another type",
+            ));
+        };
+        let mut session = registry::lock(session);
+        let vault_id = session.vault_id();
+        let root = Key::new(*session.root_secret()?.expose());
+        let object = chur_catalog::sharing_receive::pending_object_for_collection(
+            session.catalog()?,
+            &root,
+            vault_id,
+            collection_id,
+            object_id,
+        )?;
+        let expected = chur_media::sync_download::Expectation::new(
+            object.object_id,
+            object.stream_id,
+            object.container_length,
+            object.container_commitment,
+        )?;
+        let offset = chur_media::sync_download::staged_offset(
+            session.root_dir(),
+            &session.object_store_id(),
+            &object_id,
+            &expected,
+        )?;
+        // SAFETY: the caller guarantees a writable out-parameter.
+        unsafe { write_out(out_offset, offset) }
+    })
+}
+
 /// Appends one ciphertext range whose destination was signed by the source.
 ///
 /// # Safety

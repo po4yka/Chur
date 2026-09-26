@@ -39,6 +39,9 @@ class RepositorySyncBoundary(
         operations: List<ByteArray>,
     ): SharedReceivePlan? = repository.receiveSharedOperations(packageBytes, operations)
 
+    override suspend fun sharedDownloadOffset(collectionId: ByteArray, objectId: ByteArray): ULong? =
+        repository.sharedDownloadOffset(collectionId, objectId)
+
     override suspend fun appendSharedDownload(
         collectionId: ByteArray,
         objectId: ByteArray,
