@@ -552,8 +552,42 @@ fn the_whole_product_flow_runs_through_the_boundary() {
     );
     assert_eq!(&read[..written], thumbnail.as_slice());
 
+    // Trash keeps the key, preview, and organization until restore or purge.
+    assert_eq!(
+        unsafe { chur_trash_set(session, object_id.as_ptr(), 1, 0) },
+        OK
+    );
+    assert!(page(session, 1, [0; 16], b"").objects.is_empty());
+    assert!(page(session, 3, [0; 16], b"").objects.is_empty());
+    assert_eq!(page(session, 7, [0; 16], b"").objects.len(), 1);
+    assert_eq!(
+        unsafe {
+            chur_derived_read(
+                session,
+                &reference,
+                2,
+                read.as_mut_ptr(),
+                read.len(),
+                &mut written,
+            )
+        },
+        OK
+    );
+    assert_eq!(
+        unsafe { chur_trash_set(session, object_id.as_ptr(), 1, 1) },
+        OK
+    );
+    assert_eq!(page(session, 1, [0; 16], b"").objects.len(), 1);
+    assert_eq!(page(session, 3, [0; 16], b"").objects.len(), 1);
+    assert!(page(session, 7, [0; 16], b"").objects.is_empty());
+    assert_eq!(
+        unsafe { chur_trash_set(session, object_id.as_ptr(), 1, 0) },
+        OK
+    );
+
     // Deletion runs the whole §14.1 transaction.
     assert_eq!(unsafe { chur_object_delete(session, &reference) }, OK);
+    assert!(page(session, 7, [0; 16], b"").objects.is_empty());
     assert!(page(session, 1, [0; 16], b"").objects.is_empty());
     assert!(page(session, 3, [0; 16], b"").objects.is_empty());
     assert!(page(session, 5, [0; 16], b"backerei").objects.is_empty());

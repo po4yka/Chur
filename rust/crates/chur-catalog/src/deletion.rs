@@ -74,15 +74,26 @@ pub fn begin(db: &mut CatalogDb, object_id: &Id) -> Result<()> {
     db.transaction(|transaction| {
         let changed = transaction
             .execute(
-                "UPDATE objects SET state = ?2 WHERE object_id = ?1 AND state = ?3",
+                "UPDATE objects SET state = ?2 WHERE object_id = ?1 AND state IN (?3, ?4)",
                 params![
                     object_id.as_bytes().as_slice(),
                     i64::from(ObjectState::Deleting.value()),
                     i64::from(ObjectState::Active.value()),
+                    i64::from(ObjectState::Trashed.value()),
                 ],
             )
             .map_err(|error| map_sqlite(error, "the object could not enter deletion"))?;
-        ensure!(changed == 1, NotFound, "no active object carries that id");
+        ensure!(
+            changed == 1,
+            NotFound,
+            "no deletable object carries that id"
+        );
+        transaction
+            .execute(
+                "DELETE FROM trash_entries WHERE object_id = ?1",
+                [object_id.as_bytes().as_slice()],
+            )
+            .map_err(|error| map_sqlite(error, "the trash entry could not be removed"))?;
         // The object is no longer listable, so it is no longer searchable.
         unindex_search(transaction, &object_id)?;
         bump_generation(transaction)
@@ -330,6 +341,7 @@ mod tests {
     use crate::query::{ObjectQuery, Scope, page};
     use crate::schema::open_at_current_version;
     use crate::store;
+    use crate::trash;
     use chur_core::ChurStatus;
     use chur_crypto::{Key, Nonce, random};
     use chur_format::constants::{IntegritySummary, MediaClass, StreamKind};
@@ -463,6 +475,72 @@ mod tests {
             panic!("deletion accepted something the specification forbids");
         };
         error.status()
+    }
+
+    #[test]
+    fn trash_hides_then_restores_an_object_without_losing_its_key() {
+        let mut vault = vault();
+        let (id, _) = import(&mut vault);
+        trash::set(&mut vault.db, &[id], false, 1_000).expect("trash");
+        assert_eq!(listed(&vault.db), 0);
+        assert_eq!(searchable(&vault.db), 0);
+        assert_eq!(
+            page(
+                &vault.db,
+                &ObjectQuery {
+                    scope: Scope::Trash,
+                    ..ObjectQuery::timeline()
+                }
+            )
+            .expect("trash page")
+            .objects
+            .len(),
+            1
+        );
+        assert!(store::active_envelope(&vault.db, &id).is_ok());
+        assert!(
+            trash::pending(&vault.db, Some(1_000 + trash::RETENTION_MS - 1))
+                .expect("early expiry")
+                .is_empty()
+        );
+        assert_eq!(
+            trash::pending(&vault.db, Some(1_000 + trash::RETENTION_MS)).expect("expiry"),
+            vec![id]
+        );
+        assert_eq!(
+            rejection(trash::set(
+                &mut vault.db,
+                &[id],
+                true,
+                1_000 + trash::RETENTION_MS
+            )),
+            ChurStatus::NotFound
+        );
+        trash::set(&mut vault.db, &[id], true, 2_000).expect("restore");
+        assert_eq!(listed(&vault.db), 1);
+        assert_eq!(searchable(&vault.db), 1);
+        assert!(trash::pending(&vault.db, None).expect("pending").is_empty());
+    }
+
+    #[test]
+    fn trash_selection_is_atomic_and_permanent_deletion_removes_its_entry() {
+        let mut vault = vault();
+        let (id, _) = import(&mut vault);
+        let unknown = random::id().expect("id");
+        assert_eq!(
+            rejection(trash::set(&mut vault.db, &[id, unknown], false, 1)),
+            ChurStatus::NotFound
+        );
+        assert_eq!(listed(&vault.db), 1);
+        assert!(trash::pending(&vault.db, None).expect("pending").is_empty());
+        trash::set(&mut vault.db, &[id], false, 1).expect("trash");
+        begin(&mut vault.db, &id).expect("purge");
+        assert!(trash::pending(&vault.db, None).expect("pending").is_empty());
+        erase(&mut vault.db, &id, 2).expect("erase");
+        assert_eq!(
+            rejection(store::active_envelope(&vault.db, &id)),
+            ChurStatus::NotFound
+        );
     }
 
     #[test]

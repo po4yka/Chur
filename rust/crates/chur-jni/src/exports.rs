@@ -1836,6 +1836,61 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectDelete<'local>(
     })
 }
 
+/// Moves or restores a packed selection in one catalog transaction.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_trashSet<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    object_ids: JByteArray<'local>,
+    restore: jboolean,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(ids) = byte_array(env, &object_ids) else {
+            return INVALID_INPUT;
+        };
+        if ids.is_empty() || ids.len() % ID_LEN != 0 {
+            return INVALID_INPUT;
+        }
+        let Ok(count) = u32::try_from(ids.len() / ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        // SAFETY: the byte array remains live through the synchronous call.
+        unsafe {
+            chur_ffi::product::chur_trash_set(
+                handle_of(session),
+                ids.as_ptr(),
+                count,
+                u8::from(restore),
+            )
+        }
+    })
+}
+
+/// Permanently deletes all objects in trash.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_trashEmpty<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |_env| {
+        chur_ffi::product::chur_trash_empty(handle_of(session))
+    })
+}
+
+/// Restores all unexpired trash entries.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_trashRestoreAll<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |_env| {
+        chur_ffi::product::chur_trash_restore_all(handle_of(session))
+    })
+}
+
 /// Writes one object's metadata record into a direct buffer.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectMetadata<'local>(

@@ -112,8 +112,15 @@ fn after_unlock(mut session: Session) -> Result<Session> {
     // them.
     let killed = import::reconcile(&mut session, now_ms())?;
     let swept = collect_deletions(&mut session)?;
-    if killed > 0 || swept > 0 {
-        println!("recovered: {killed} dead import(s), {swept} pending deletion(s)");
+    let expired = chur_catalog::trash::pending(session.catalog_ref()?, Some(now_ms()))?;
+    for id in &expired {
+        purge(&mut session, id)?;
+    }
+    if killed > 0 || swept > 0 || !expired.is_empty() {
+        println!(
+            "recovered: {killed} dead import(s), {swept} pending deletion(s), {} expired trash item(s)",
+            expired.len()
+        );
     }
     Ok(session)
 }
@@ -345,20 +352,41 @@ pub fn read_range(session: &Session, object_id: &Id, offset: u64, length: u64) -
         .map_err(|_| chur_core::err!(IoFailure, "standard output rejected a write"))
 }
 
-/// Deletes one object whole, §14.1.
+/// Moves one active object to trash.
 pub fn delete(session: &mut Session, object_id: &Id) -> Result<()> {
-    let store_id = session.object_store_id();
-    let root = session.root_dir().clone();
-    deletion::begin(session.catalog()?, object_id)?;
-    let pending = deletion::sweep(session.catalog_ref()?)?;
-    deletion::erase(session.catalog()?, object_id, now_ms())?;
-    for entry in pending.iter().filter(|entry| entry.object_id == *object_id) {
-        for container in &entry.containers {
-            chur_media::store::unlink_container(&root, &store_id, container)?;
-        }
+    chur_catalog::trash::set(session.catalog()?, &[*object_id], false, now_ms())
+}
+
+/// Restores one trashed object.
+pub fn restore(session: &mut Session, object_id: &Id) -> Result<()> {
+    chur_catalog::trash::set(session.catalog()?, &[*object_id], true, now_ms())
+}
+
+/// Restores every unexpired trash entry atomically.
+pub fn restore_all(session: &mut Session) -> Result<()> {
+    let ids = chur_catalog::trash::pending(session.catalog_ref()?, None)?;
+    if ids.is_empty() {
+        return Ok(());
     }
-    deletion::finish(session.catalog()?, object_id)?;
-    deletion::discard_tombstone(session.catalog()?, object_id)
+    chur_catalog::trash::set(session.catalog()?, &ids, true, now_ms())
+}
+
+/// Permanently erases one object and rolls its garbage collection forward.
+pub fn purge(session: &mut Session, object_id: &Id) -> Result<()> {
+    if store::object(session.catalog_ref()?, object_id)?.state != ObjectState::Trashed {
+        bail!(InvalidInput, "only a trashed object can be purged");
+    }
+    deletion::begin(session.catalog()?, object_id)?;
+    collect_deletions(session).map(|_| ())
+}
+
+/// Permanently erases all objects in trash.
+pub fn empty_trash(session: &mut Session) -> Result<()> {
+    let ids = chur_catalog::trash::pending(session.catalog_ref()?, None)?;
+    for id in ids {
+        purge(session, &id)?;
+    }
+    Ok(())
 }
 
 /// Parses a 32-character hexadecimal identifier.
@@ -378,6 +406,7 @@ pub fn parse_scope(name: &str, id: Option<&str>, terms: Option<&str>) -> Result<
         "timeline" => Scope::Timeline,
         "favorites" => Scope::Favorites,
         "quarantine" => Scope::Quarantine,
+        "trash" => Scope::Trash,
         "album" => Scope::Album(parse_id(id.ok_or_else(|| {
             chur_core::err!(InvalidInput, "the album scope names an album")
         })?)?),

@@ -138,7 +138,7 @@ enum VaultAction {
     },
     /// List one query scope, `docs/format/CATALOG_SCHEMA_V1.md` §16.2.
     List {
-        /// timeline, favorites, quarantine, album, tag, or search.
+        /// timeline, favorites, quarantine, trash, album, tag, or search.
         #[arg(long, default_value = "timeline")]
         scope: String,
         /// The album or tag identifier, for those scopes.
@@ -185,11 +185,25 @@ enum VaultAction {
         #[arg(long)]
         clear: bool,
     },
-    /// Delete one object, `docs/format/CATALOG_SCHEMA_V1.md` §14.1.
+    /// Move one object to the thirty-day trash.
     Delete {
         /// The object identifier.
         object: String,
     },
+    /// Restore one object from trash.
+    Restore {
+        /// The object identifier.
+        object: String,
+    },
+    /// Restore every unexpired object from trash.
+    RestoreAll,
+    /// Permanently erase one object from trash.
+    Purge {
+        /// The object identifier.
+        object: String,
+    },
+    /// Permanently erase every object in trash.
+    EmptyTrash,
     /// Scan every object and report its verdict.
     Verify,
     /// Unlock with the recovery phrase in `CHUR_RECOVERY_PHRASE` and set a new
@@ -386,6 +400,10 @@ fn run_vault(
             )
         }
         VaultAction::Delete { object } => vault::delete(&mut session, &vault::parse_id(&object)?),
+        VaultAction::Restore { object } => vault::restore(&mut session, &vault::parse_id(&object)?),
+        VaultAction::RestoreAll => vault::restore_all(&mut session),
+        VaultAction::Purge { object } => vault::purge(&mut session, &vault::parse_id(&object)?),
+        VaultAction::EmptyTrash => vault::empty_trash(&mut session),
         VaultAction::Verify => vault::verify(&mut session),
     }
 }

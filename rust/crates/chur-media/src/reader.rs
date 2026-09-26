@@ -73,7 +73,7 @@ pub struct ObjectReader {
 pub fn open(session: &Session, object_id: &Id, stream_kind: StreamKind) -> Result<ObjectReader> {
     let object = store::object(session.catalog_ref()?, object_id)?;
     ensure!(
-        object.state == ObjectState::Active,
+        matches!(object.state, ObjectState::Active | ObjectState::Trashed),
         NotFound,
         "the object is not listable"
     );

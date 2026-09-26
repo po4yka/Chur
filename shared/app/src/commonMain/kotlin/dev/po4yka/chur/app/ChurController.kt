@@ -710,7 +710,7 @@ class ChurController(
         onSuccess()
     }
 
-    /** Deletes an object, `CATALOG_SCHEMA_V1.md` §14.1. */
+    /** Moves an object to the recoverable trash. */
     fun delete(objectId: ByteArray, onSuccess: () -> Unit = {}) = guarded {
         withContext(Dispatchers.Default) { repository.delete(objectId) }
         reload()
@@ -719,15 +719,49 @@ class ChurController(
     }
 
     /**
-     * Deletes every selected object, `DESIGN.md` §11.4.
+     * Moves every selected object to trash in one transaction.
      *
      * One reload rather than one per object: the page is read once at the end,
      * so a selection of two hundred does not redraw the grid two hundred times.
      */
     fun deleteAll(objectIds: List<ByteArray>, onSuccess: () -> Unit = {}) = guarded {
-        withContext(Dispatchers.Default) {
-            objectIds.forEach { repository.delete(it) }
+        withContext(Dispatchers.Default) { repository.deleteAll(objectIds) }
+        reload()
+        refreshAlbums()
+        onSuccess()
+    }
+
+    fun restoreAll(objectIds: List<ByteArray>, onSuccess: () -> Unit = {}) = guarded {
+        withContext(Dispatchers.Default) { repository.restoreAll(objectIds) }
+        reload()
+        refreshAlbums()
+        onSuccess()
+    }
+
+    fun permanentlyDeleteAll(objectIds: List<ByteArray>, onSuccess: () -> Unit = {}) = guarded {
+        try {
+            withContext(Dispatchers.Default) { objectIds.forEach { repository.permanentlyDelete(it) } }
+        } finally {
+            thumbnails.clear()
+            reload()
+            refreshAlbums()
         }
+        onSuccess()
+    }
+
+    fun emptyTrash(onSuccess: () -> Unit = {}) = guarded {
+        try {
+            withContext(Dispatchers.Default) { repository.emptyTrash() }
+        } finally {
+            thumbnails.clear()
+            reload()
+            refreshAlbums()
+        }
+        onSuccess()
+    }
+
+    fun restoreTrash(onSuccess: () -> Unit = {}) = guarded {
+        withContext(Dispatchers.Default) { repository.restoreTrash() }
         reload()
         refreshAlbums()
         onSuccess()
@@ -736,8 +770,8 @@ class ChurController(
     /**
      * Removes every selected object from one album, §11.4.
      *
-     * It is a separate action from [deleteAll] because §11.4 forbids collapsing
-     * the two: one changes a membership and the other destroys the object.
+     * It is a separate action from [deleteAll]: one changes a membership and
+     * the other moves the object out of ordinary library scopes.
      */
     fun removeAllFromAlbum(
         albumId: ByteArray,

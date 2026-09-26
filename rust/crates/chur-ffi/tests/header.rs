@@ -342,6 +342,9 @@ fn every_declared_function_is_exported() {
         "chur_object_set_favorite",
         "chur_favorites_set",
         "chur_object_delete",
+        "chur_trash_set",
+        "chur_trash_empty",
+        "chur_trash_restore_all",
         "chur_object_metadata",
         "chur_album_create",
         "chur_album_rename",
@@ -399,7 +402,7 @@ fn every_declared_function_is_exported() {
 
     // Calling each one proves the list above is not a stale copy.
     assert_eq!(chur_ffi::chur_abi_version_major(), 2);
-    assert_eq!(chur_ffi::chur_abi_version_minor(), 17);
+    assert_eq!(chur_ffi::chur_abi_version_minor(), 18);
     assert_eq!(
         chur_ffi::chur_capabilities(),
         chur_ffi::CHUR_CAP_DECOY_VAULT
@@ -458,6 +461,7 @@ fn the_control_plane_vocabulary_matches_the_rust_side() {
         "CHUR_SCOPE_TAG",
         "CHUR_SCOPE_SEARCH",
         "CHUR_SCOPE_QUARANTINE",
+        "CHUR_SCOPE_TRASH",
     ] {
         let value: u8 = defines(name)[name].parse().expect("a decimal scope");
         // An album and a tag scope need a non-zero identifier, so those two are
@@ -485,6 +489,6 @@ fn the_control_plane_vocabulary_matches_the_rust_side() {
     }
     // A value outside each space is refused, which is what makes the two lists
     // above exhaustive rather than merely correct.
-    assert!(chur_ffi::records::query_from(7, 1, 0, 0, &scope_id, None, None).is_err());
+    assert!(chur_ffi::records::query_from(8, 1, 0, 0, &scope_id, None, None).is_err());
     assert!(chur_ffi::records::query_from(1, 5, 0, 0, &scope_id, None, None).is_err());
 }

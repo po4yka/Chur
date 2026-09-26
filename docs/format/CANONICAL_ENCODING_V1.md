@@ -287,6 +287,7 @@ Each format version field has its own namespace:
 | `catalog_format_version` | `0x0005` | private catalog schema v5 with the durable grant-acceptance freeze | [`CATALOG_SCHEMA_V5.md`](CATALOG_SCHEMA_V5.md) |
 | `catalog_format_version` | `0x0006` | private catalog schema v6 with an accepted object-operation index | [`CATALOG_SCHEMA_V6.md`](CATALOG_SCHEMA_V6.md) |
 | `catalog_format_version` | `0x0007` | private catalog schema v7 with album hierarchy and manual order | [`CATALOG_SCHEMA_V7.md`](CATALOG_SCHEMA_V7.md) |
+| `catalog_format_version` | `0x0008` | private catalog schema v8 with recoverable trash | [`CATALOG_SCHEMA_V8.md`](CATALOG_SCHEMA_V8.md) |
 | `object_store_format_version` | `0x0001` | object store layout v1 | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §6 |
 | `slot_version` | `0x0001` | v1 key-slot families | [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §1 |
 
@@ -388,6 +389,7 @@ An unallocated `record_type` is a parse failure, never an ignorable record.
 | `0x03` | `TOMBSTONED` |
 | `0x04` | `CORRUPT` |
 | `0x05` | `SHARED_DELETED` |
+| `0x06` | `TRASHED` |
 
 This is a second, independent space from the vault-descriptor `state` above. The two share three names and no values, which is deliberate: a vault and an object are different subjects, and a shared numbering would let a reader that confused them produce a plausible wrong answer instead of failing. The object row's value crosses the boundary in the `state` byte of the object projection, [`CATALOG_SCHEMA_V1.md`](CATALOG_SCHEMA_V1.md) §16.1, which is why it is registered here rather than left to the catalog.
 

@@ -408,6 +408,13 @@ internal actual object ChurNative {
         objectId: ByteArray,
     ): Int = ChurJni.objectDelete(session, objectId)
 
+    actual fun trashSet(session: Long, objectIds: ByteArray, restore: Boolean): Int =
+        ChurJni.trashSet(session, objectIds, restore)
+
+    actual fun trashEmpty(session: Long): Int = ChurJni.trashEmpty(session)
+
+    actual fun trashRestoreAll(session: Long): Int = ChurJni.trashRestoreAll(session)
+
     actual fun objectMetadata(
         session: Long,
         objectId: ByteArray,

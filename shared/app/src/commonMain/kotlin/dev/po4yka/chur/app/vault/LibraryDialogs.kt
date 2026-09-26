@@ -212,12 +212,19 @@ fun TagBrowserDialog(
 }
 
 @Composable
-fun DeleteSelectionDialog(count: Int, onDelete: () -> Unit, onDismiss: () -> Unit) {
+fun DeleteSelectionDialog(count: Int, onDelete: () -> Unit, onDismiss: () -> Unit,
+    permanent: Boolean = false, emptyTrash: Boolean = false) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Delete from this vault?") },
-        text = { Text("Delete $count selected ${if (count == 1) "item" else "items"} from this vault?") },
-        confirmButton = { TextButton(onClick = onDelete) { Text("Delete from this vault") } },
+        title = { Text(if (permanent) "Delete permanently?" else "Move to Trash?") },
+        text = { Text(when {
+            emptyTrash -> "Everything in Trash will be permanently deleted. This cannot be undone."
+            permanent -> "Permanently delete $count selected ${if (count == 1) "item" else "items"}? This cannot be undone."
+            else -> "Move $count selected ${if (count == 1) "item" else "items"} to Trash? They are kept for 30 days."
+        }) },
+        confirmButton = { TextButton(onClick = onDelete) {
+            Text(if (emptyTrash) "Empty trash" else if (permanent) "Delete permanently" else "Move to Trash")
+        } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

@@ -222,8 +222,21 @@ class VaultRepository(
     suspend fun setFavorites(objectIds: List<ByteArray>, favorite: Boolean) =
         withSession { ChurVault.setFavorites(it, objectIds, favorite) }
 
-    /** Deletes an object. */
+    /** Moves an object to trash. */
     suspend fun delete(objectId: ByteArray) = withSession { ChurVault.deleteObject(it, objectId) }
+
+    suspend fun deleteAll(objectIds: List<ByteArray>) =
+        withSession { ChurVault.deleteObjects(it, objectIds) }
+
+    suspend fun restoreAll(objectIds: List<ByteArray>) =
+        withSession { ChurVault.restoreObjects(it, objectIds) }
+
+    suspend fun permanentlyDelete(objectId: ByteArray) =
+        withSession { ChurVault.permanentlyDeleteObject(it, objectId) }
+
+    suspend fun emptyTrash() = withSession { ChurVault.emptyTrash(it) }
+
+    suspend fun restoreTrash() = withSession { ChurVault.restoreTrash(it) }
 
     /** Every album. */
     suspend fun albums(): List<AlbumSummary> = withSession { ChurVault.albums(it) }

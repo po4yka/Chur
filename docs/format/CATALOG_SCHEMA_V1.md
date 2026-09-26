@@ -72,7 +72,7 @@ object_generation
 primary_stream_id
 creation/import metadata (private)
 logical media kind (private)
-state: ACTIVE / DELETING / TOMBSTONED / CORRUPT / SHARED_DELETED
+state: ACTIVE / DELETING / TOMBSTONED / CORRUPT / SHARED_DELETED / TRASHED
 integrity_summary
 ```
 
@@ -89,6 +89,7 @@ An object row carries two independent enums and this specification is the author
 | `TOMBSTONED` | every object-key envelope is destroyed and a tombstone row exists, §14.1 |
 | `CORRUPT` | a structural or cryptographic check proved the object unusable and no repair path remains |
 | `SHARED_DELETED` | a signed shared-collection delete hides a received object while retaining its encrypted container and key for a signed restore |
+| `TRASHED` | a local user deletion hides the object from ordinary scopes while retaining it for 30 days; see [catalog v8](CATALOG_SCHEMA_V8.md) |
 
 `integrity_summary` is the verification verdict, and it is meaningful only while `state` is `ACTIVE`:
 
@@ -105,7 +106,7 @@ An object row carries two independent enums and this specification is the author
 
 Proven corruption is a lifecycle change, not an integrity value: a check that proves corruption sets `state` to `CORRUPT`. Quarantine is the opposite case and stays an integrity value, because an absent container is a fact about this device rather than a verdict on the object. Two names used by lower-authority documents are values of neither enum: `Incoming` is the `stage` of an `ImportTransaction` row, §11, and a purged object is the absence of the row after garbage collection, §14.1.
 
-Transitions: `ACTIVE` to `DELETING` to `TOMBSTONED` is the irreversible local deletion path; `ACTIVE` to `CORRUPT` is terminal. A received shared object can move between `ACTIVE` and `SHARED_DELETED` only by accepted collection DeleteObject and RestoreObject operations. `SHARED_DELETED` is excluded from deletion garbage collection, and its key and container remain available for restore. `integrity_summary` changes only while `state` is `ACTIVE`.
+Transitions: `ACTIVE` to `TRASHED` to `ACTIVE` is the recoverable local path; `ACTIVE` or `TRASHED` to `DELETING` to `TOMBSTONED` is irreversible. `ACTIVE` to `CORRUPT` is terminal. A received shared object can move between `ACTIVE` and `SHARED_DELETED` only by accepted collection DeleteObject and RestoreObject operations. `SHARED_DELETED` is excluded from deletion garbage collection, and its key and container remain available for restore. `integrity_summary` changes only while `state` is `ACTIVE`.
 
 The user-facing states of [`../../DESIGN.md`](../../DESIGN.md) §20.1 are derived from the pair and are never stored:
 
@@ -120,6 +121,7 @@ The user-facing states of [`../../DESIGN.md`](../../DESIGN.md) §20.1 are derive
 | `ACTIVE` | `MIGRATION_REQUIRED` | Migration required |
 | `CORRUPT` | any | Corrupt |
 | `DELETING`, `TOMBSTONED`, or `SHARED_DELETED` | any | not presented |
+| `TRASHED` | any | Trash only |
 
 ## 6. Object streams
 
@@ -310,7 +312,7 @@ The last three fields are what make "issued for a different scope or sort" detec
 
 Paging is keyset, never offset. The cursor is the sort value of the last row returned followed by its `object_id`, and the next page selects the rows ordered strictly after that pair. Every page therefore costs the same whatever its position, and a page boundary stays valid while rows are inserted and deleted. The consequence is stated rather than hidden: a row whose sort key changes between two pages may be returned twice or skipped, so a caller whose page carries a `catalog_generation` different from the previous page's restarts the scope instead of continuing the cursor. A cursor that does not parse, or that was issued for a different scope or sort, is `INVALID_INPUT`.
 
-Rows with `state` `DELETING` or `TOMBSTONED` are never returned. A row with `integrity_summary` `QUARANTINED` is returned only in the `quarantine` scope, which is what keeps it out of the ordinary library under [`../../DESIGN.md`](../../DESIGN.md) §20.3.
+Rows with `state` `DELETING` or `TOMBSTONED` are never returned. Rows with `state` `TRASHED` are returned only in the `trash` scope. A row with `integrity_summary` `QUARANTINED` is returned only in the `quarantine` scope, which is what keeps it out of the ordinary library under [`../../DESIGN.md`](../../DESIGN.md) §20.3.
 
 ### 16.3 Required indexes
 

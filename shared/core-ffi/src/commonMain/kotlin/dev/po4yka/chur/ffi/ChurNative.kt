@@ -382,6 +382,12 @@ internal expect object ChurNative {
         objectId: ByteArray,
     ): Int
 
+    fun trashSet(session: Long, objectIds: ByteArray, restore: Boolean): Int
+
+    fun trashEmpty(session: Long): Int
+
+    fun trashRestoreAll(session: Long): Int
+
     fun objectMetadata(
         session: Long,
         objectId: ByteArray,

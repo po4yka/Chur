@@ -876,7 +876,9 @@ Destructive actions require precise scope:
 
 ```text
 Remove from album
-Delete from this vault
+Move to Trash
+Restore from Trash
+Delete permanently
 Delete exported/source copy
 ```
 
@@ -1531,7 +1533,10 @@ Access denied: invalid cryptographic secret!
 Prefer:
 
 ```text
-Delete from this vault?
+Move to Trash?
+Chur keeps this item for 30 days so you can restore it.
+
+Delete permanently?
 This removes Chur's local key and encrypted object. Copies exported elsewhere are not affected.
 ```
 

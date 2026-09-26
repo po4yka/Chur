@@ -310,6 +310,7 @@ private fun VaultRoute(controller: ChurController) {
     }
     var openTag by remember { mutableStateOf<TagSummary?>(null) }
     var favoritesOnly by remember { mutableStateOf(false) }
+    var trashOpen by remember { mutableStateOf(false) }
     LaunchedEffect(tags) {
         openTag = openTag?.let { current -> tags.firstOrNull { it.id == current.id } }
     }
@@ -323,6 +324,7 @@ private fun VaultRoute(controller: ChurController) {
     var managingTags by remember { mutableStateOf(false) }
     var taggingIds by remember { mutableStateOf<List<ByteArray>>(emptyList()) }
     var confirmingDelete by remember { mutableStateOf(false) }
+    var confirmingEmptyTrash by remember { mutableStateOf(false) }
     var choosingExport by remember { mutableStateOf(false) }
     var choosingImport by remember { mutableStateOf(false) }
     var importAlbumId by remember { mutableStateOf<ByteArray?>(null) }
@@ -383,11 +385,13 @@ private fun VaultRoute(controller: ChurController) {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), onPicked)
     val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), onPicked)
 
-    LaunchedEffect(destination, openAlbum, openTag, favoritesOnly, page.catalogGeneration) {
+    LaunchedEffect(destination, openAlbum, openTag, favoritesOnly, trashOpen, page.catalogGeneration) {
         when {
             openAlbum != null -> controller.load(
                 ObjectQuery(QueryScope.ALBUM, sort = QuerySort.ALBUM_MANUAL, scopeId = openAlbum!!.albumId),
             )
+            destination == VaultDestination.LIBRARY && trashOpen ->
+                controller.load(ObjectQuery(QueryScope.TRASH))
             destination == VaultDestination.LIBRARY && openTag != null ->
                 controller.load(ObjectQuery(QueryScope.TAG, scopeId = openTag!!.tagId))
             destination == VaultDestination.LIBRARY && favoritesOnly ->
@@ -407,6 +411,8 @@ private fun VaultRoute(controller: ChurController) {
     // arrives, so nothing jumps.
     var thumbnails by remember { mutableStateOf(mapOf<String, ImageBitmap>()) }
     LaunchedEffect(page, generation) {
+        val visible = page.objects.map { it.id }.toSet()
+        thumbnails = thumbnails.filterKeys { it in visible }
         page.objects.filter { it.thumbnailReady }.forEach { projection ->
             val image = cache.load(
                 repository = controller.vault,
@@ -428,10 +434,11 @@ private fun VaultRoute(controller: ChurController) {
             cache = cache,
             generation = generation,
             projection = projection,
+            trashOpen = trashOpen,
             onBack = { viewing = null },
             onDeleted = {
                 viewing = null
-                controller.load(ObjectQuery())
+                controller.load(ObjectQuery(if (trashOpen) QueryScope.TRASH else QueryScope.TIMELINE))
             },
         )
         return
@@ -574,6 +581,7 @@ private fun VaultRoute(controller: ChurController) {
                 selection = emptySet()
                 openTag = tag
                 favoritesOnly = false
+                trashOpen = false
                 destination = VaultDestination.LIBRARY
             },
             onCreate = controller::createTag,
@@ -587,12 +595,20 @@ private fun VaultRoute(controller: ChurController) {
     if (confirmingDelete) {
         DeleteSelectionDialog(
             count = selection.size,
+            permanent = trashOpen,
             onDelete = {
                 confirmingDelete = false
-                controller.deleteAll(selectedObjects(page, selection)) { selection = emptySet() }
+                val ids = selectedObjects(page, selection)
+                if (trashOpen) controller.permanentlyDeleteAll(ids) { selection = emptySet() }
+                else controller.deleteAll(ids) { selection = emptySet() }
             },
             onDismiss = { confirmingDelete = false },
         )
+    }
+    if (confirmingEmptyTrash) {
+        DeleteSelectionDialog(count = 0, permanent = true, emptyTrash = true,
+            onDelete = { confirmingEmptyTrash = false; controller.emptyTrash { selection = emptySet() } },
+            onDismiss = { confirmingEmptyTrash = false })
     }
     if (choosingExport) {
         val selected = page.objects.filter { it.id in selection }
@@ -623,7 +639,8 @@ private fun VaultRoute(controller: ChurController) {
             searchTerms = terms,
             slots = slots,
             openAlbum = openAlbum,
-            libraryScopeTitle = openTag?.name ?: if (favoritesOnly) "Favorites" else null,
+            libraryScopeTitle = if (trashOpen) "Trash" else openTag?.name ?: if (favoritesOnly) "Favorites" else null,
+            trashOpen = trashOpen,
             widthDp = configuration.screenWidthDp,
             progress = message,
             operation = operation,
@@ -643,6 +660,7 @@ private fun VaultRoute(controller: ChurController) {
                 openAlbum = null
                 openTag = null
                 favoritesOnly = false
+                trashOpen = false
                 selection = emptySet()
                 destination = it
             },
@@ -665,12 +683,15 @@ private fun VaultRoute(controller: ChurController) {
                 terms = it
                 controller.search(it)
             },
-            onOpenAlbum = { openAlbum = it; openTag = null; favoritesOnly = false },
+            onOpenAlbum = { openAlbum = it; openTag = null; favoritesOnly = false; trashOpen = false },
             onCloseAlbum = { openAlbum = null },
             onCreateAlbum = { creatingAlbum = true },
-            onShowAllMedia = { openTag = null; favoritesOnly = false; selection = emptySet() },
-            onShowFavorites = { openTag = null; favoritesOnly = true; selection = emptySet() },
+            onShowAllMedia = { openTag = null; favoritesOnly = false; trashOpen = false; selection = emptySet() },
+            onShowFavorites = { openTag = null; favoritesOnly = true; trashOpen = false; selection = emptySet() },
             onShowTags = { controller.loadTags(); managingTags = true },
+            onShowTrash = { openTag = null; favoritesOnly = false; trashOpen = true; selection = emptySet() },
+            onEmptyTrash = { confirmingEmptyTrash = true },
+            onRestoreTrash = { controller.restoreTrash { selection = emptySet() } },
             onRenameAlbum = { album, name -> controller.renameAlbum(album.albumId, name) },
             onDeleteAlbum = { album ->
                 controller.deleteAlbum(album.albumId) {
@@ -728,6 +749,9 @@ private fun VaultRoute(controller: ChurController) {
                 }
             },
             onDeleteSelection = { confirmingDelete = true },
+            onRestoreSelection = { controller.restoreAll(selectedObjects(page, selection)) {
+                selection = emptySet()
+            } },
             onCancelOperation = controller::cancelActiveOperation,
             onAddDeviceSlot = controller::enrollDeviceSlot,
             onToggleDeviceSlotPolicy = controller::toggleDeviceSlotPolicy,
@@ -760,6 +784,7 @@ private fun ViewerRoute(
     cache: ThumbnailCache,
     generation: Long,
     projection: ObjectProjection,
+    trashOpen: Boolean,
     onBack: () -> Unit,
     onDeleted: () -> Unit,
 ) {
@@ -833,6 +858,8 @@ private fun ViewerRoute(
         onEditTags = { controller.loadTags(); choosingTags = true },
         onExport = { choosingExport = true },
         onDelete = { confirmingDelete = true },
+        trashOpen = trashOpen,
+        onRestore = { controller.restoreAll(listOf(projection.objectId), onDeleted) },
         onToggleDetail = { showDetail = !showDetail },
         player = playback?.let { source ->
             { modifier -> VaultPlayer(source, modifier) }
@@ -854,9 +881,11 @@ private fun ViewerRoute(
     if (confirmingDelete) {
         DeleteSelectionDialog(
             count = 1,
+            permanent = trashOpen,
             onDelete = {
                 confirmingDelete = false
-                controller.delete(projection.objectId, onDeleted)
+                if (trashOpen) controller.permanentlyDeleteAll(listOf(projection.objectId), onDeleted)
+                else controller.delete(projection.objectId, onDeleted)
             },
             onDismiss = { confirmingDelete = false },
         )

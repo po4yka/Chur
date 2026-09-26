@@ -12,7 +12,7 @@
 
 use chur_catalog::model::{Album, Tag};
 use chur_catalog::vault::{self, Session};
-use chur_catalog::{deletion, store};
+use chur_catalog::{deletion, store, trash};
 use chur_core::{ChurStatus, Error, Id, Result, bail, ensure};
 use chur_crypto::password::Argon2Params;
 use chur_format::constants::{ObjectState, StreamKind};
@@ -644,6 +644,85 @@ pub unsafe extern "C" fn chur_object_delete(
     })
 }
 
+/// Moves a packed selection to trash, or restores it, as one catalog transaction.
+/// # Safety
+/// `object_ids` points to `object_count * 16` readable bytes.
+#[unsafe(no_mangle)]
+#[expect(unsafe_code, reason = "the C ABI supplies a raw selection pointer")]
+pub unsafe extern "C" fn chur_trash_set(
+    session: Handle,
+    object_ids: *const u8,
+    object_count: u32,
+    restore: u8,
+) -> Status {
+    guard_status_for(session, || {
+        let entry = registry::get(session, Kind::Session)?;
+        let ids = unsafe { selection_ids(object_ids, object_count)? };
+        let restore = boolean(restore)?;
+        let Entry::Session {
+            session: guarded, ..
+        } = entry.as_ref()
+        else {
+            return Err(wrong_type());
+        };
+        let mut guard = registry::lock(guarded);
+        let now = crate::api::now_ms();
+        sweep_expired_trash(&mut guard, now)?;
+        trash::set(guard.catalog()?, &ids, restore, now)
+    })
+}
+
+/// Permanently deletes every object currently in trash.
+#[unsafe(no_mangle)]
+#[expect(
+    unsafe_code,
+    reason = "ADR-0016: the C ABI requires an exported symbol"
+)]
+pub extern "C" fn chur_trash_empty(session: Handle) -> Status {
+    guard_status_for(session, || {
+        let entry = registry::get(session, Kind::Session)?;
+        let Entry::Session {
+            session: guarded, ..
+        } = entry.as_ref()
+        else {
+            return Err(wrong_type());
+        };
+        let mut guard = registry::lock(guarded);
+        sweep_expired_trash(&mut guard, crate::api::now_ms())?;
+        let ids = trash::pending(guard.catalog_ref()?, None)?;
+        for id in ids {
+            run_deletion(&mut guard, &id, crate::api::now_ms())?;
+        }
+        Ok(())
+    })
+}
+
+/// Restores all unexpired objects in trash as one catalog transaction.
+#[unsafe(no_mangle)]
+#[expect(
+    unsafe_code,
+    reason = "ADR-0016: the C ABI requires an exported symbol"
+)]
+pub extern "C" fn chur_trash_restore_all(session: Handle) -> Status {
+    guard_status_for(session, || {
+        let entry = registry::get(session, Kind::Session)?;
+        let Entry::Session {
+            session: guarded, ..
+        } = entry.as_ref()
+        else {
+            return Err(wrong_type());
+        };
+        let mut guard = registry::lock(guarded);
+        let now = crate::api::now_ms();
+        sweep_expired_trash(&mut guard, now)?;
+        let ids = trash::pending(guard.catalog_ref()?, None)?;
+        if ids.is_empty() {
+            return Ok(());
+        }
+        trash::set(guard.catalog()?, &ids, true, now)
+    })
+}
+
 /// Writes one object's metadata record, §6.5.
 ///
 /// # Safety
@@ -678,7 +757,7 @@ pub unsafe extern "C" fn chur_object_metadata(
             let catalog = guard.catalog_ref()?;
             let row = store::object(catalog, &object_id)?;
             ensure!(
-                row.state == ObjectState::Active,
+                matches!(row.state, ObjectState::Active | ObjectState::Trashed),
                 NotFound,
                 "the object is not listable"
             );
@@ -1215,7 +1294,14 @@ unsafe fn selection_ids(pointer: *const u8, count: u32) -> Result<Vec<Id>> {
             "the selection length overflows",
         )
     })?;
-    let bytes = unsafe { crate::api::borrow_bytes(pointer, size)? };
+    ensure!(
+        !pointer.is_null(),
+        InvalidInput,
+        "the selection pointer is null"
+    );
+    // SAFETY: the caller supplies `count * 16` readable bytes for this call.
+    // The size was checked above against the catalog's object bound.
+    let bytes = unsafe { core::slice::from_raw_parts(pointer, size as usize) };
     bytes.chunks_exact(16).map(Id::from_slice).collect()
 }
 
@@ -1401,20 +1487,35 @@ fn write_record(record: &[u8], buffer: &mut [u8], bytes_written: *mut usize) -> 
 
 /// The deletion of §14.1, driven whole.
 pub(crate) fn run_deletion(session: &mut Session, object_id: &Id, now_ms: u64) -> Result<()> {
+    deletion::begin(session.catalog()?, object_id)?;
+    finish_pending_deletions(session, now_ms)
+}
+
+/// Rolls forward interrupted permanent deletions, then purges expired trash.
+pub(crate) fn sweep_expired_trash(session: &mut Session, now_ms: u64) -> Result<()> {
+    finish_pending_deletions(session, now_ms)?;
+    let ids = trash::pending(session.catalog_ref()?, Some(now_ms))?;
+    for id in ids {
+        run_deletion(session, &id, now_ms)?;
+    }
+    Ok(())
+}
+
+fn finish_pending_deletions(session: &mut Session, now_ms: u64) -> Result<()> {
     let store_id = session.object_store_id();
     let root = session.root_dir().clone();
-    deletion::begin(session.catalog()?, object_id)?;
     let pending = deletion::sweep(session.catalog_ref()?)?;
-    deletion::erase(session.catalog()?, object_id, now_ms)?;
-    for entry in pending.iter().filter(|entry| entry.object_id == *object_id) {
+    for entry in pending {
+        if !entry.erased {
+            deletion::erase(session.catalog()?, &entry.object_id, now_ms)?;
+        }
         for container in &entry.containers {
             chur_media::store::unlink_container(&root, &store_id, container)?;
         }
+        deletion::finish(session.catalog()?, &entry.object_id)?;
+        deletion::discard_tombstone(session.catalog()?, &entry.object_id)?;
     }
-    deletion::finish(session.catalog()?, object_id)?;
-    // §14: a vault with no enrolled peer discards the tombstone once garbage
-    // collection has completed, and v1 enrols no peer.
-    deletion::discard_tombstone(session.catalog()?, object_id)
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

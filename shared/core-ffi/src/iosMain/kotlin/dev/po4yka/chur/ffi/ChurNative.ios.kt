@@ -40,6 +40,9 @@ import dev.po4yka.chur.native.chur_integrity_scan_begin
 import dev.po4yka.chur.native.chur_key_slot_format_max
 import dev.po4yka.chur.native.chur_key_slot_format_min
 import dev.po4yka.chur.native.chur_object_delete
+import dev.po4yka.chur.native.chur_trash_set
+import dev.po4yka.chur.native.chur_trash_empty
+import dev.po4yka.chur.native.chur_trash_restore_all
 import dev.po4yka.chur.native.chur_object_format_max
 import dev.po4yka.chur.native.chur_object_format_min
 import dev.po4yka.chur.native.chur_object_metadata
@@ -960,6 +963,16 @@ internal actual object ChurNative {
             val reference = objectReference(objectId)
             chur_object_delete(session.toULong(), reference.ptr)
         }
+
+    actual fun trashSet(session: Long, objectIds: ByteArray, restore: Boolean): Int =
+        objectIds.pinnedPointer { ids ->
+            chur_trash_set(session.toULong(), ids, (objectIds.size / ID_LENGTH).toUInt(),
+                if (restore) 1u else 0u)
+        }
+
+    actual fun trashEmpty(session: Long): Int = chur_trash_empty(session.toULong())
+
+    actual fun trashRestoreAll(session: Long): Int = chur_trash_restore_all(session.toULong())
 
     actual fun objectMetadata(
         session: Long,

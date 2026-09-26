@@ -415,6 +415,10 @@ pub unsafe extern "C" fn chur_vault_unlock(
         // call observes an entry that is about to be deleted and a crash the
         // previous process died in leaves no readable plaintext behind it.
         export::clear_scratch(&session)?;
+        if let Err(error) = crate::product::sweep_expired_trash(&mut session, now) {
+            let _ = session.lock();
+            return Err(error);
+        }
         let handle = registry::insert(Entry::Session {
             runtime,
             session: std::sync::Mutex::new(session),
@@ -553,7 +557,8 @@ pub unsafe extern "C" fn chur_catalog_query(
             ));
         };
         let page = {
-            let guard = registry::lock(guarded);
+            let mut guard = registry::lock(guarded);
+            crate::product::sweep_expired_trash(&mut guard, now_ms())?;
             chur_catalog::query::page(guard.catalog_ref()?, &built)?
         };
         // SAFETY: the caller guarantees `destination` covers `capacity` bytes.

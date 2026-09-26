@@ -608,12 +608,32 @@ object ChurVault {
             "set favourites")
     }
 
-    /** Deletes an object, `CATALOG_SCHEMA_V1.md` §14.1. */
+    /** Moves an object into the thirty-day trash. */
     fun deleteObject(
         session: Long,
         objectId: ByteArray,
     ) {
-        ChurFailure.check(ChurNative.objectDelete(session, objectId), "delete object")
+        deleteObjects(session, listOf(objectId))
+    }
+
+    fun deleteObjects(session: Long, objectIds: List<ByteArray>) {
+        ChurFailure.check(ChurNative.trashSet(session, packSelection(objectIds), false), "move to trash")
+    }
+
+    fun restoreObjects(session: Long, objectIds: List<ByteArray>) {
+        ChurFailure.check(ChurNative.trashSet(session, packSelection(objectIds), true), "restore from trash")
+    }
+
+    fun permanentlyDeleteObject(session: Long, objectId: ByteArray) {
+        ChurFailure.check(ChurNative.objectDelete(session, objectId), "delete permanently")
+    }
+
+    fun emptyTrash(session: Long) {
+        ChurFailure.check(ChurNative.trashEmpty(session), "empty trash")
+    }
+
+    fun restoreTrash(session: Long) {
+        ChurFailure.check(ChurNative.trashRestoreAll(session), "restore trash")
     }
 
     /** Creates an album and returns its identifier. */
@@ -1214,6 +1234,8 @@ enum class QueryScope(
 
     /** The objects §16.2 keeps out of the ordinary library. */
     QUARANTINE(6),
+    /** Recoverable deleted media. */
+    TRASH(7),
 }
 
 /** The sorts of §16.2. */

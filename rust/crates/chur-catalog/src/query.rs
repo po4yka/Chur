@@ -36,6 +36,8 @@ pub enum Scope {
     Search(String),
     /// The objects §16.2 keeps out of the ordinary library.
     Quarantine,
+    /// Recoverable objects awaiting purge.
+    Trash,
 }
 
 impl Scope {
@@ -48,6 +50,7 @@ impl Scope {
             Scope::Tag(_) => 4,
             Scope::Search(_) => 5,
             Scope::Quarantine => 6,
+            Scope::Trash => 7,
         }
     }
 
@@ -143,7 +146,7 @@ impl Cursor {
         let Some(sort) = Sort::from_code(bytes[24]) else {
             bail!(InvalidInput, "the page cursor names an unallocated sort");
         };
-        if bytes[25] == 0 || bytes[25] > 6 {
+        if bytes[25] == 0 || bytes[25] > 7 {
             bail!(InvalidInput, "the page cursor names an unallocated scope");
         }
         let mut scope_id = [0u8; ID_LEN];
@@ -441,6 +444,7 @@ const COLUMNS: &str = "o.object_id, o.primary_stream_id, o.media_kind, o.capture
 impl Plan {
     fn build(query: &ObjectQuery, limit: u32) -> Result<Self> {
         let active = i64::from(ObjectState::Active.value());
+        let trashed = i64::from(ObjectState::Trashed.value());
         let quarantined = i64::from(IntegritySummary::Quarantined.value());
 
         // §16.2: a DELETING or TOMBSTONED row is never returned, and a
@@ -467,6 +471,13 @@ impl Plan {
             Scope::Quarantine => (
                 format!(
                     "objects o WHERE o.state = {active} AND o.integrity_summary = {quarantined}"
+                ),
+                Vec::new(),
+            ),
+            Scope::Trash => (
+                format!(
+                    "trash_entries t CROSS JOIN objects o ON o.object_id = t.object_id \
+                    WHERE o.state = {trashed}"
                 ),
                 Vec::new(),
             ),
@@ -542,6 +553,7 @@ impl Plan {
                 Scope::Album(_) => ("m.capture_time_ms", "m.object_id"),
                 Scope::Favorites => ("f.capture_time_ms", "f.object_id"),
                 Scope::Tag(_) => ("g.capture_time_ms", "g.object_id"),
+                Scope::Trash => ("t.deleted_ms", "t.object_id"),
                 Scope::Timeline | Scope::Quarantine | Scope::Search(_) => {
                     ("o.capture_time_ms", "o.object_id")
                 }
@@ -901,7 +913,7 @@ mod tests {
             },
             {
                 let mut bytes = good;
-                bytes[25] = 7;
+                bytes[25] = 8;
                 bytes.to_vec()
             },
         ] {

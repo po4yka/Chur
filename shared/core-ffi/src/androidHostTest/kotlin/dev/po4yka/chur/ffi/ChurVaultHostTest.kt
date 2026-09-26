@@ -228,8 +228,8 @@ class ChurVaultHostTest {
     @Test
     fun the_handshake_matches_the_frozen_abi() {
         val handshake = ChurVault.handshake()
-        assertEquals(1, handshake.major)
-        assertEquals(14, handshake.minor, "§6.18 added device slot key cleanup")
+        assertEquals(2, handshake.major)
+        assertEquals(18, handshake.minor, "§6.22 added recoverable trash")
         assertEquals(1, handshake.objectFormatMin)
         assertEquals(1, handshake.objectFormatMax)
         assertTrue(handshake.capabilities and 0b0000_0010L != 0L, "the reader is declared")
@@ -422,7 +422,7 @@ class ChurVaultHostTest {
     }
 
     @Test
-    fun deletion_removes_the_object_from_every_scope() {
+    fun trash_hides_restores_and_permanently_deletes_the_object() {
         val runtime = openRuntime()
         val session = createVault(runtime)
         val objectId = import(session, ByteArray(4_096) { 1 }, "a.jpg")
@@ -432,6 +432,14 @@ class ChurVaultHostTest {
 
         assertTrue(ChurVault.query(session, ObjectQuery()).objects.isEmpty())
         assertTrue(ChurVault.query(session, ObjectQuery(QueryScope.FAVORITES)).objects.isEmpty())
+        assertEquals(1, ChurVault.query(session, ObjectQuery(QueryScope.TRASH)).objects.size)
+        ChurVault.detail(session, objectId)
+        ChurVault.restoreTrash(session)
+        assertEquals(1, ChurVault.query(session, ObjectQuery()).objects.size)
+        assertEquals(1, ChurVault.query(session, ObjectQuery(QueryScope.FAVORITES)).objects.size)
+        ChurVault.deleteObject(session, objectId)
+        ChurVault.emptyTrash(session)
+        assertTrue(ChurVault.query(session, ObjectQuery(QueryScope.TRASH)).objects.isEmpty())
         assertEquals(
             ChurStatus.NOT_FOUND,
             assertFailsWith<ChurFailure> { ChurVault.detail(session, objectId) }.status,

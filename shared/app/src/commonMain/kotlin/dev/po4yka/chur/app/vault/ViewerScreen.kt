@@ -13,6 +13,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,6 +57,8 @@ fun ViewerScreen(
     onEditTags: () -> Unit,
     onExport: () -> Unit,
     onDelete: () -> Unit,
+    trashOpen: Boolean = false,
+    onRestore: () -> Unit = {},
     onToggleDetail: () -> Unit,
     player: (@Composable (Modifier) -> Unit)? = null,
     waveform: ByteArray? = null,
@@ -131,22 +134,26 @@ fun ViewerScreen(
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onToggleFavorite) {
+            if (!trashOpen) IconButton(onClick = onToggleFavorite) {
                 Icon(
                     if (projection.favorite) FavoriteFilledGlyph else FavoriteGlyph,
                     contentDescription = if (projection.favorite) "Remove favourite" else "Favourite",
                     tint = ViewerColors.content,
                 )
             }
-            IconButton(onClick = onEditTags) {
+            if (!trashOpen) IconButton(onClick = onEditTags) {
                 Text("Tags", color = ViewerColors.content,
                     style = MaterialTheme.typography.labelLarge)
             }
-            IconButton(onClick = onExport, enabled = operation == null) {
+            if (!trashOpen) IconButton(onClick = onExport, enabled = operation == null) {
                 Icon(ExportGlyph, contentDescription = "Export", tint = ViewerColors.content)
             }
+            if (trashOpen) TextButton(onClick = onRestore) {
+                Text("Restore", color = ViewerColors.content)
+            }
             IconButton(onClick = onDelete) {
-                Icon(DeleteGlyph, contentDescription = "Delete", tint = ViewerColors.content)
+                Icon(DeleteGlyph, contentDescription = if (trashOpen) "Delete permanently" else "Move to Trash",
+                    tint = ViewerColors.content)
             }
         }
 

@@ -15,7 +15,7 @@ use chur_format::{
     constants::{
         CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V3,
         CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V5, CATALOG_FORMAT_VERSION_V6,
-        CATALOG_FORMAT_VERSION_V7,
+        CATALOG_FORMAT_VERSION_V7, CATALOG_FORMAT_VERSION_V8,
     },
     envelope::ObjectKeyEnvelope,
 };
@@ -52,6 +52,9 @@ const STEPS: &[Step] = &[
     },
     Step {
         version: CATALOG_FORMAT_VERSION_V7,
+    },
+    Step {
+        version: CATALOG_FORMAT_VERSION_V8,
     },
 ];
 
@@ -572,6 +575,16 @@ UPDATE album_memberships SET sort_position = (
 );
 "#;
 
+const V8_DDL: &str = r#"
+CREATE TABLE trash_entries (
+    object_id BLOB PRIMARY KEY REFERENCES objects(object_id),
+    deleted_ms INTEGER NOT NULL,
+    expires_ms INTEGER NOT NULL
+) STRICT;
+CREATE INDEX trash_entries_expiry ON trash_entries(expires_ms, object_id);
+CREATE INDEX trash_entries_recent ON trash_entries(deleted_ms DESC, object_id DESC);
+"#;
+
 /// Creates the current schema or opens it without performing an implicit migration.
 ///
 /// `docs/format/CATALOG_SCHEMA_V1.md` §18 forbids skipping an untested step, so
@@ -581,15 +594,15 @@ pub fn open_at_current_version(db: &mut CatalogDb, now_ms: u64) -> Result<u16> {
     let present = recorded_version(db.connection())?;
     let Some(present) = present else {
         install(db, now_ms)?;
-        return Ok(CATALOG_FORMAT_VERSION_V7);
+        return Ok(CATALOG_FORMAT_VERSION_V8);
     };
-    if present != CATALOG_FORMAT_VERSION_V7 {
+    if present != CATALOG_FORMAT_VERSION_V8 {
         bail!(
             MigrationRequired,
             "the catalog requires an authenticated schema migration"
         );
     }
-    Ok(CATALOG_FORMAT_VERSION_V7)
+    Ok(CATALOG_FORMAT_VERSION_V8)
 }
 
 /// The version the database records, or `None` when the schema is absent.
@@ -645,13 +658,16 @@ fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
             map_sqlite(error, "the album organization schema could not be created")
         })?;
         transaction
+            .execute_batch(V8_DDL)
+            .map_err(|error| map_sqlite(error, "the trash schema could not be created"))?;
+        transaction
             .execute(
                 "INSERT INTO vault_state (
                      only_row, catalog_format_version, catalog_generation,
                      active_migration_target, object_store_checkpoint,
                      integrity_checkpoint_ms, capability_flags
                  ) VALUES (1, ?1, 1, NULL, 0, ?2, 0)",
-                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V7), checkpoint],
+                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V8), checkpoint],
             )
             .map_err(|error| map_sqlite(error, "the catalog state row could not be written"))?;
         Ok(())
@@ -660,6 +676,7 @@ fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
 
 #[cfg(test)]
 const RESET_V7_DDL: &str = "
+DROP TABLE trash_entries;
 DROP INDEX albums_siblings;
 DROP INDEX album_memberships_manual;
 ALTER TABLE album_memberships DROP COLUMN sort_position;
@@ -934,6 +951,28 @@ pub(crate) fn migrate_v6_to_v7(db: &mut CatalogDb) -> Result<()> {
     })
 }
 
+/// Adds the recoverable trash under the authenticated migration gate.
+pub(crate) fn migrate_v7_to_v8(db: &mut CatalogDb) -> Result<()> {
+    ensure!(
+        recorded_version(db.connection())? == Some(CATALOG_FORMAT_VERSION_V7),
+        MigrationRequired,
+        "the catalog is not at the supported migration source"
+    );
+    db.transaction(|transaction| {
+        transaction.execute(
+            "UPDATE vault_state SET active_migration_target = ?1 WHERE only_row = 1",
+            [i64::from(CATALOG_FORMAT_VERSION_V8)],
+        ).map_err(|error| map_sqlite(error, "the migration target could not be recorded"))?;
+        transaction.execute_batch(V8_DDL)
+            .map_err(|error| map_sqlite(error, "the trash migration failed"))?;
+        transaction.execute(
+            "UPDATE vault_state SET catalog_format_version = ?1, active_migration_target = NULL WHERE only_row = 1",
+            [i64::from(CATALOG_FORMAT_VERSION_V8)],
+        ).map_err(|error| map_sqlite(error, "the migrated version could not be recorded"))?;
+        Ok(())
+    })
+}
+
 fn backfill_object_envelope_epochs(
     transaction: &rusqlite::Transaction<'_>,
     vault_id: &Id,
@@ -1077,11 +1116,11 @@ mod tests {
     }
 
     #[test]
-    fn a_new_catalog_installs_version_seven() {
+    fn a_new_catalog_installs_version_eight() {
         let mut db = open();
         assert_eq!(
             open_at_current_version(&mut db, 1_700_000_000_000).expect("install"),
-            CATALOG_FORMAT_VERSION_V7
+            CATALOG_FORMAT_VERSION_V8
         );
         let sharing_tables: i64 = db
             .connection()
@@ -1153,7 +1192,7 @@ mod tests {
         }
         assert_eq!(
             STEPS.last().map(|step| step.version),
-            Some(CATALOG_FORMAT_VERSION_V7)
+            Some(CATALOG_FORMAT_VERSION_V8)
         );
     }
 
@@ -1197,6 +1236,34 @@ mod tests {
             recorded_version(db.connection()).expect("version"),
             Some(CATALOG_FORMAT_VERSION_V7)
         );
+    }
+
+    #[test]
+    fn v7_migration_adds_trash_without_touching_existing_albums() {
+        let mut db = open();
+        open_at_current_version(&mut db, 1).expect("install");
+        let album_id = vec![7u8; 16];
+        db.transaction(|tx| {
+            tx.execute("INSERT INTO albums (album_id, name, created_ms, revision) VALUES (?1, 'Saved', 1, 1)",
+                [album_id.as_slice()]).expect("album");
+            tx.execute_batch("DROP TABLE trash_entries; UPDATE vault_state SET catalog_format_version = 7 WHERE only_row = 1;")
+                .expect("v7 fixture");
+            Ok(())
+        }).expect("fixture");
+        migrate_v7_to_v8(&mut db).expect("migrate");
+        assert_eq!(
+            recorded_version(db.connection()).expect("version"),
+            Some(CATALOG_FORMAT_VERSION_V8)
+        );
+        let album: String = db
+            .connection()
+            .query_row(
+                "SELECT name FROM albums WHERE album_id = ?1",
+                [album_id.as_slice()],
+                |row| row.get(0),
+            )
+            .expect("album preserved");
+        assert_eq!(album, "Saved");
     }
 
     #[test]

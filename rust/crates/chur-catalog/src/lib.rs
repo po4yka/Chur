@@ -38,6 +38,7 @@ pub mod sync_membership;
 pub mod sync_receive;
 pub mod sync_rotation;
 pub mod sync_staging;
+pub mod trash;
 pub mod vault;
 
 pub use db::{CatalogDb, CatalogKey, CatalogLocation};

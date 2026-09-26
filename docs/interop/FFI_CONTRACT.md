@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. The current library reports 2.17: §6.19 changes the album-list record, §6.20 adds atomic album placement, and §6.21 adds tag and favourite selection controls. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
+- native API version is the (major, minor) pair. The current library reports 2.18: §6.19 changes the album-list record, §6.20 adds atomic album placement, §6.21 adds tag and favourite selection controls, and §6.22 adds recoverable trash. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -282,6 +282,10 @@ chur_status_t chur_object_set_favorite(chur_handle_t session,
                                        const ChurObjectRefV1 *object,
                                        uint8_t favorite);
 chur_status_t chur_object_delete(chur_handle_t session, const ChurObjectRefV1 *object);
+chur_status_t chur_trash_set(chur_handle_t session, const uint8_t *object_ids,
+                             uint32_t object_count, uint8_t restore);
+chur_status_t chur_trash_empty(chur_handle_t session);
+chur_status_t chur_trash_restore_all(chur_handle_t session);
 chur_status_t chur_object_metadata(chur_handle_t session,
                                    const ChurObjectRefV1 *object,
                                    uint8_t *destination, size_t capacity,
@@ -615,6 +619,12 @@ chur_status_t chur_tag_list(chur_handle_t session, uint8_t *destination,
 
 `chur_favorites_set` and `chur_tag_apply_selection` accept a nonempty, bounded array of packed 16-byte object identifiers. A zero tag id in `chur_tag_apply_selection` creates the named tag and requires `tagged = 1`; otherwise the existing tag is used and the name is empty. Both selection edits reject repeated or non-listable objects and commit once, without partial changes. `chur_tag_rename` and `chur_tag_delete` also update search projections in the same encrypted catalog transaction; deletion removes tag memberships while retaining media. Tag creation, rename, and deletion enforce the catalog name and count bounds.
 When the caller's tag-list buffer is too small, `chur_tag_list` reports the required byte count and leaves that buffer unchanged so the host can retry.
+
+### 6.22 Recoverable trash, ABI 2.18
+
+`chur_trash_set` accepts a nonempty packed selection of 16-byte object identifiers and a strict boolean `restore`. The transaction moves all active objects to trash with a 30-day deadline, or restores all selected trashed objects. Invalid identifiers refuse the whole selection. Trash retains encrypted containers, key envelopes, metadata, tags, album memberships, and favourite flags. Scope 7 of `chur_catalog_query` lists trash newest first by deletion time; ordinary scopes and search hide it.
+
+`chur_trash_restore_all` restores every unexpired entry in one transaction. `chur_object_delete` is the irreversible cryptographic erasure path. `chur_trash_empty` invokes it for every trash entry. Expired entries are purged on unlock and before catalog queries. An interrupted purge rolls forward at the next unlock. Final deletion may progress through several objects before an error; successful objects stay deleted and remaining entries stay in trash.
 
 ## 7. Buffer ownership
 

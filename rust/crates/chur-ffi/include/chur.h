@@ -18,7 +18,7 @@
  * recipient-device surface of section 6.13, and the sharing discovery surface
  * of section 6.14, and the private tag list of section 6.15. Adding an export raises the minor
  * ABI version; changing or removing one raises the major. The library reports
- * 2.17.
+ * 2.18.
  */
 
 #ifndef CHUR_H
@@ -210,6 +210,7 @@ typedef int32_t chur_status_t;
 #define CHUR_SCOPE_TAG 4
 #define CHUR_SCOPE_SEARCH 5
 #define CHUR_SCOPE_QUARANTINE 6
+#define CHUR_SCOPE_TRASH 7
 
 /* Query sorts, CATALOG_SCHEMA_V1.md section 16.2. */
 #define CHUR_SORT_CAPTURE_DESC 1
@@ -624,6 +625,10 @@ chur_status_t chur_object_set_favorite(chur_handle_t session,
                                        uint8_t favorite);
 chur_status_t chur_object_delete(chur_handle_t session,
                                  const ChurObjectRefV1 *object);
+chur_status_t chur_trash_set(chur_handle_t session, const uint8_t *object_ids,
+                             uint32_t object_count, uint8_t restore);
+chur_status_t chur_trash_empty(chur_handle_t session);
+chur_status_t chur_trash_restore_all(chur_handle_t session);
 chur_status_t chur_object_metadata(chur_handle_t session,
                                    const ChurObjectRefV1 *object,
                                    uint8_t *destination, size_t capacity,

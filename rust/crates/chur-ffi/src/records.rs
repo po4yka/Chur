@@ -196,6 +196,7 @@ pub fn query_from(
             Scope::Search(text.to_owned())
         }
         6 => Scope::Quarantine,
+        7 => Scope::Trash,
         _ => {
             return Err(Error::new(
                 ChurStatus::InvalidInput,

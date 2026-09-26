@@ -105,6 +105,7 @@ data class VaultUiState(
     val openAlbum: AlbumSummary? = null,
     /** Active library scope, if narrower than all media. */
     val libraryScopeTitle: String? = null,
+    val trashOpen: Boolean = false,
     /** The available width, which fixes the grid geometry of §11.1. */
     val widthDp: Int = 400,
     /** A bounded operation message, carrying no private value. */
@@ -158,6 +159,9 @@ data class VaultActions(
     val onShowAllMedia: () -> Unit = {},
     val onShowFavorites: () -> Unit = {},
     val onShowTags: () -> Unit = {},
+    val onShowTrash: () -> Unit = {},
+    val onEmptyTrash: () -> Unit = {},
+    val onRestoreTrash: () -> Unit = {},
     val onRenameAlbum: (AlbumSummary, String) -> Unit = { _, _ -> },
     val onDeleteAlbum: (AlbumSummary) -> Unit = {},
     val onMoveAlbum: (AlbumSummary, AlbumSummary?, AlbumSummary?) -> Unit = { _, _, _ -> },
@@ -207,8 +211,9 @@ data class VaultActions(
     val onSetSelectionFavorite: (Boolean) -> Unit = {},
     /** Remove every selected object from the open album, §11.4. */
     val onRemoveSelectionFromAlbum: () -> Unit = {},
-    /** Delete every selected object from this vault, §11.4. */
+    /** Move or permanently delete the selection, according to the current scope. */
     val onDeleteSelection: () -> Unit = {},
+    val onRestoreSelection: () -> Unit = {},
     /** Stop the native operation at its next cooperative cancellation point. */
     val onCancelOperation: () -> Unit = {},
     /** Connect the vault to the server the user named, `SYNC_PROTOCOL_V1.md` §6. */
@@ -272,6 +277,17 @@ fun VaultShell(state: VaultUiState, actions: VaultActions) {
                                     DropdownMenuItem(text = { Text("Tags…") }, onClick = {
                                         scopesExpanded = false; actions.onShowTags()
                                     })
+                                    DropdownMenuItem(text = { Text("Trash") }, onClick = {
+                                        scopesExpanded = false; actions.onShowTrash()
+                                    })
+                                    if (state.trashOpen) DropdownMenuItem(
+                                        text = { Text("Restore all") },
+                                        onClick = { scopesExpanded = false; actions.onRestoreTrash() },
+                                    )
+                                    if (state.trashOpen) DropdownMenuItem(
+                                        text = { Text("Empty trash") },
+                                        onClick = { scopesExpanded = false; actions.onEmptyTrash() },
+                                    )
                                 }
                             }
                         }
@@ -420,7 +436,7 @@ internal fun OperationProgressCard(
  * The selection bar of `DESIGN.md` §11.4.
  *
  * §11.4 fixes both the contents and the wording. The count comes first; the
- * destructive actions name their scope, so "Delete from this vault" and "Remove
+ * destructive actions name their scope, so "Move to Trash" and "Remove
  * from album" are two actions and never one ambiguous `Delete`; and the album
  * action appears only where it has a scope to act in.
  *
@@ -438,9 +454,8 @@ private fun SelectionBar(state: VaultUiState, actions: VaultActions) {
             }
         },
         actions = {
-            TextButton(onClick = actions.onExportSelection, enabled = state.operation == null) {
-                Text("Export")
-            }
+            if (!state.trashOpen) TextButton(onClick = actions.onExportSelection,
+                enabled = state.operation == null) { Text("Export") }
             Box {
                 TextButton(onClick = { expanded = true }) { Text("More") }
                 DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
@@ -448,34 +463,38 @@ private fun SelectionBar(state: VaultUiState, actions: VaultActions) {
                         text = { Text("Select all") },
                         onClick = { expanded = false; actions.onSelectAll() },
                     )
-                    DropdownMenuItem(
+                    if (!state.trashOpen) DropdownMenuItem(
                         text = { Text("Add to album") },
                         onClick = { expanded = false; actions.onAddSelectionToAlbum() },
                     )
-                    if (state.openAlbum != null) {
+                    if (state.openAlbum != null && !state.trashOpen) {
                         DropdownMenuItem(
                             text = { Text("Move to album") },
                             onClick = { expanded = false; actions.onMoveSelectionToAlbum() },
                         )
                     }
-                    DropdownMenuItem(
+                    if (!state.trashOpen) DropdownMenuItem(
                         text = { Text("Tags") },
                         onClick = { expanded = false; actions.onTagSelection() },
                     )
-                    DropdownMenuItem(text = { Text("Add to favorites") }, onClick = {
+                    if (!state.trashOpen) DropdownMenuItem(text = { Text("Add to favorites") }, onClick = {
                         expanded = false; actions.onSetSelectionFavorite(true)
                     })
-                    DropdownMenuItem(text = { Text("Remove from favorites") }, onClick = {
+                    if (!state.trashOpen) DropdownMenuItem(text = { Text("Remove from favorites") }, onClick = {
                         expanded = false; actions.onSetSelectionFavorite(false)
                     })
-                    if (state.openAlbum != null) {
+                    if (state.openAlbum != null && !state.trashOpen) {
                         DropdownMenuItem(
                             text = { Text("Remove from album") },
                             onClick = { expanded = false; actions.onRemoveSelectionFromAlbum() },
                         )
                     }
+                    if (state.trashOpen) DropdownMenuItem(
+                        text = { Text("Restore") },
+                        onClick = { expanded = false; actions.onRestoreSelection() },
+                    )
                     DropdownMenuItem(
-                        text = { Text("Delete from this vault") },
+                        text = { Text(if (state.trashOpen) "Delete permanently" else "Move to Trash") },
                         onClick = { expanded = false; actions.onDeleteSelection() },
                     )
                 }

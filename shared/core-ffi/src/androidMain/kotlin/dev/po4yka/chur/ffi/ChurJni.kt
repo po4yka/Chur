@@ -385,6 +385,12 @@ internal object ChurJni {
         objectId: ByteArray,
     ): Int
 
+    external fun trashSet(session: Long, objectIds: ByteArray, restore: Boolean): Int
+
+    external fun trashEmpty(session: Long): Int
+
+    external fun trashRestoreAll(session: Long): Int
+
     external fun objectMetadata(
         session: Long,
         objectId: ByteArray,
