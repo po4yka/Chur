@@ -170,6 +170,37 @@ class VaultRepositoryHostTest {
     }
 
     @Test
+    fun a_lock_without_a_vault_keeps_no_vault() = runBlocking {
+        val repository = repository()
+        repository.start()
+        // A new user leaves the application before creating anything. The
+        // background lock has nothing to close, and `Locked` would send the
+        // vault entry to an unlock screen no credential can pass.
+        repository.onBackground()
+        assertIs<VaultState.NoVault>(repository.state.value)
+        repository.lock(LockReason.PANIC)
+        assertIs<VaultState.NoVault>(repository.state.value)
+        assertNull(repository.create(PASSWORD.encodeToByteArray(), offerRecovery = false))
+        assertIs<VaultState.Unlocked>(repository.state.value)
+        repository.shutdown()
+    }
+
+    @Test
+    fun a_refused_first_creation_keeps_no_vault() = runBlocking {
+        val repository = repository()
+        repository.start()
+        // Past the 1 024-byte canonical password limit, so Rust refuses
+        // before anything reaches the disk.
+        assertFailsWith<ChurFailure> {
+            repository.create(ByteArray(1_025) { 'x'.code.toByte() }, offerRecovery = false)
+        }
+        assertIs<VaultState.NoVault>(repository.state.value)
+        repository.onBackground()
+        assertIs<VaultState.NoVault>(repository.state.value)
+        repository.shutdown()
+    }
+
+    @Test
     fun a_second_start_finds_the_vault_the_first_created() = runBlocking {
         val repository = repository()
         repository.start()

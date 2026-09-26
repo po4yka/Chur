@@ -131,7 +131,13 @@ class VaultRepository(
                 if (creation != 0L) {
                     runCatching { ChurVault.abandonCreation(creation) }
                 }
-                _state.value = VaultState.Locked(failure.status)
+                // A refused first creation leaves no vault, and `Locked` would
+                // put the unlock screen in front of nothing, as in [lockSession].
+                // The disk decides; a check that cannot answer keeps the old
+                // report. The failure itself reaches the user as the thrown
+                // status either way.
+                val present = runCatching { ChurVault.vaultPresent(runtime) }.getOrDefault(true)
+                _state.value = if (present) VaultState.Locked(failure.status) else VaultState.NoVault
                 throw failure
             }
         }
@@ -169,7 +175,14 @@ class VaultRepository(
             runCatching { ChurVault.closeSession(session) }
             session = 0L
         }
-        _state.value = VaultState.Locked()
+        // `Locked` says a vault exists. Every trigger can fire before the
+        // user has created one, and the background lock does on a first run
+        // that leaves the application; the vault entry then routes to the
+        // unlock screen of a vault that is not there. No vault means nothing
+        // to lock, so the state stays what `start` found.
+        if (_state.value !is VaultState.NoVault) {
+            _state.value = VaultState.Locked()
+        }
     }
 
     /** Locks when the policy says the session has been idle too long. */

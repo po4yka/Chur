@@ -1202,11 +1202,9 @@ class ChurController(
      * platform cannot reclaim.
      *
      * The bracket is [enrollDeviceSlot]'s, for a longer reason. A restore is
-     * the longest operation here, and `VaultRepository.lock` publishes `Locked`
-     * whether or not a session or a vault exists, so a background transition
-     * during one would leave a storage root that holds no identity reported as
-     * locked - an unlock gate with nothing behind it, and no route back to
-     * creation.
+     * the longest operation here, and a background transition during one would
+     * move the shell to the public route and take the restore screen, and the
+     * progress it shows, with it.
      *
      * The repository published `NoVault` and nothing has asked it since;
      * `start` is that question, it opens no runtime that is already open, and
