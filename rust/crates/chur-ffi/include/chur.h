@@ -608,7 +608,7 @@ chur_status_t chur_derived_read(chur_handle_t session,
  * chur_backup_restore takes the runtime rather than a session: a restore
  * installs an identity, so at the moment it runs there may be no session and
  * no vault at all, and the credential comes from the package's own portable
- * descriptor.
+ * descriptor. The credential can be a password or recovery phrase.
  * ---------------------------------------------------------------------- */
 
 chur_status_t chur_backup_create(chur_handle_t session, int32_t destination_fd,

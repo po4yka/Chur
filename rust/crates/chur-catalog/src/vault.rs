@@ -1340,6 +1340,46 @@ pub fn open_password_slot_of(descriptor: &VaultDescriptor, password: &[u8]) -> R
     open_password_slot(descriptor, &canonical)
 }
 
+/// Opens a recovery slot of a descriptor that is not yet in the registry.
+/// A malformed or wrong phrase has the same external result during restore.
+pub fn open_recovery_slot_of(descriptor: &VaultDescriptor, phrase: &[u8]) -> Result<Key> {
+    let phrase = std::str::from_utf8(phrase).map_err(|_| {
+        chur_core::err!(
+            AuthenticationFailed,
+            "the credential did not open the backup"
+        )
+    })?;
+    let secret = recovery::decode(phrase).map_err(|_| {
+        chur_core::err!(
+            AuthenticationFailed,
+            "the credential did not open the backup"
+        )
+    })?;
+    let mut found = false;
+    for entry in descriptor
+        .key_slots
+        .iter()
+        .filter(|entry| entry.slot_type == SlotType::Recovery)
+    {
+        found = true;
+        let binding = entry.binding(descriptor.vault_id);
+        if let Ok(root) =
+            RecoverySlotBody::decode(&entry.slot_body).and_then(|body| body.open(&binding, &secret))
+        {
+            return Ok(root);
+        }
+    }
+    ensure!(
+        found,
+        VaultIncomplete,
+        "the descriptor carries no recovery slot"
+    );
+    bail!(
+        AuthenticationFailed,
+        "the credential did not open the backup"
+    )
+}
+
 /// Installs a descriptor body into the registry by atomic rename.
 ///
 /// It is the last step of `VAULT_DESCRIPTOR_V1.md` §9 and of

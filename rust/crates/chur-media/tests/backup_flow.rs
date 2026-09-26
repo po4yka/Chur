@@ -16,7 +16,7 @@ use chur_catalog::paths::VaultRoot;
 use chur_catalog::query::{ObjectQuery, page};
 use chur_catalog::vault::{self, Session};
 use chur_core::{ChurStatus, Id, Result};
-use chur_crypto::{Key, Nonce, random};
+use chur_crypto::{Key, Nonce, random, recovery};
 use chur_format::constants::{MediaClass, StreamKind};
 use chur_media::import::{CanonicalMedia, SourceCapability};
 use chur_media::progress::Uninterrupted;
@@ -497,6 +497,61 @@ fn a_device_bound_slot_does_not_travel() {
             .all(|(_, kind, _)| *kind != chur_format::constants::SlotType::AppleKeychain),
         "a device-bound slot reached the restored vault"
     );
+}
+
+#[test]
+fn recovery_phrase_restores_backups_with_and_without_a_password_slot() {
+    let (_root, mut session) = new_vault();
+    let (object_id, bytes) = import_one(&mut session, 4_096, "recover.jpg", 0x9090);
+    let secret = session.add_recovery_slot().expect("recovery");
+    let phrase = recovery::to_phrase(&secret);
+
+    let mut both_slots = Cursor::new(Vec::new());
+    backup::create(&mut session, &mut both_slots, NOW, &mut Uninterrupted).expect("backup");
+    let destination = scratch_root();
+    backup::restore(
+        &destination,
+        &mut both_slots,
+        phrase.as_bytes(),
+        &mut Uninterrupted,
+    )
+    .expect("restore with recovery despite password slot");
+    let opened = vault::unlock_with_recovery(&destination, &phrase, NOW + 1).expect("unlock");
+    assert_eq!(exported(&opened, &object_id), bytes);
+
+    let password_slot = session
+        .slots()
+        .into_iter()
+        .find(|(_, kind, _)| *kind == chur_format::constants::SlotType::Password)
+        .expect("password slot")
+        .0;
+    session
+        .remove_slot(&password_slot)
+        .expect("remove password");
+    let mut recovery_only = Cursor::new(Vec::new());
+    backup::create(&mut session, &mut recovery_only, NOW, &mut Uninterrupted).expect("backup");
+    let wrong_phrase = recovery::to_phrase(&random::secret::<32>().expect("secret"));
+    let destination = scratch_root();
+    assert_eq!(
+        rejection(backup::restore(
+            &destination,
+            &mut Cursor::new(recovery_only.get_ref().clone()),
+            wrong_phrase.as_bytes(),
+            &mut Uninterrupted,
+        )),
+        ChurStatus::AuthenticationFailed
+    );
+    assert!(destination.registry_names().expect("registry").is_empty());
+    let destination = scratch_root();
+    backup::restore(
+        &destination,
+        &mut recovery_only,
+        phrase.as_bytes(),
+        &mut Uninterrupted,
+    )
+    .expect("restore with recovery only");
+    let opened = vault::unlock_with_recovery(&destination, &phrase, NOW + 1).expect("unlock");
+    assert_eq!(exported(&opened, &object_id), bytes);
 }
 
 /// §11: one package holds one vault identity. A restore into a root that

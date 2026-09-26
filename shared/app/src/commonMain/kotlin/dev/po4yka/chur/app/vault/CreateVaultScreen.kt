@@ -284,9 +284,9 @@ fun RestoreBackupScreen(
             ) {
                 Text("Restore from a backup", style = MaterialTheme.typography.headlineSmall)
                 Text(
-                    "Enter the password of the vault the backup came from. Then choose " +
-                        "the backup file. The file is read on this device. Chur keeps no " +
-                        "copy of the file and no copy of the password.",
+                    "Enter the password or recovery phrase of the vault the backup came from. " +
+                        "Then choose the backup file. The file is read on this device. Chur keeps " +
+                        "no copy of the file or credential.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = colors.inkMuted,
                 )
@@ -295,7 +295,7 @@ fun RestoreBackupScreen(
                     onValueChange = { password = it },
                     singleLine = true,
                     enabled = !busy,
-                    label = { Text("Backup password") },
+                    label = { Text("Backup password or recovery phrase") },
                     visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth(),
                 )

@@ -1121,7 +1121,7 @@ pub unsafe extern "C" fn chur_backup_create(
 /// It takes the runtime rather than a session, and deliberately: a restore
 /// installs an identity, so at the moment it runs there may be no session and
 /// no vault at all. §8 step 2 obtains the credential from the package's own
-/// portable descriptor.
+/// portable descriptor. The credential may be a password or recovery phrase.
 ///
 /// The operation belongs to the runtime, so closing the runtime tears it down
 /// and locking an unrelated session does not.
@@ -1130,7 +1130,7 @@ pub unsafe extern "C" fn chur_backup_create(
 ///
 /// `source_fd` is open, readable, and seekable for the duration of the call,
 /// `password` points to `password_length` readable bytes, and `out_operation`
-/// points to a writable handle. The password is not retained after the call
+/// points to a writable handle. The credential is not retained after the call
 /// returns.
 #[unsafe(no_mangle)]
 #[expect(

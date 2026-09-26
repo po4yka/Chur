@@ -102,8 +102,8 @@ enum BackupAction {
     /// Restore a package into the storage root.
     ///
     /// The root is not unlocked first: a restore installs an identity rather
-    /// than operating one, and the credential opens the package's own portable
-    /// descriptor.
+    /// than operating one. Set CHUR_RECOVERY_PHRASE to restore with a phrase;
+    /// otherwise the password opens the package's portable descriptor.
     Restore {
         /// The package to read.
         package: PathBuf,
@@ -287,14 +287,20 @@ fn run_backup(
         return backup::inspect(package);
     }
     let root = vault::root_of(root);
-    let password = vault::read_password(password_file)?;
     match action {
         BackupAction::Inspect { .. } => Ok(()),
         BackupAction::Create { package } => {
+            let password = vault::read_password(password_file)?;
             let mut session = vault::unlock(&root, &password)?;
             backup::create(&mut session, &package)
         }
-        BackupAction::Restore { package } => backup::restore(&root, &package, &password),
+        BackupAction::Restore { package } => {
+            let credential = match std::env::var("CHUR_RECOVERY_PHRASE") {
+                Ok(phrase) => zeroize::Zeroizing::new(phrase.into_bytes()),
+                Err(_) => vault::read_password(password_file)?,
+            };
+            backup::restore(&root, &package, &credential)
+        }
     }
 }
 

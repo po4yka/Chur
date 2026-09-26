@@ -27,7 +27,7 @@ use std::path::Path;
 use chur_catalog::paths::{RegistryName, VaultRoot};
 use chur_catalog::vault::{self, Session};
 use chur_catalog::{schema, store};
-use chur_core::{Id, Result, bail, ensure, limits::backup as bounds};
+use chur_core::{ChurStatus, Id, Result, bail, ensure, limits::backup as bounds};
 use chur_crypto::{Key, Nonce, random};
 use chur_format::backup::{
     BackupManifest, FinalBackupCommit, Framing, InventoryCommitter, PublicPreamble,
@@ -502,7 +502,7 @@ struct RecordSlot {
 pub fn restore(
     root_dir: &VaultRoot,
     source: &mut (impl Read + Seek),
-    password: &[u8],
+    credential: &[u8],
     progress: &mut impl Progress,
 ) -> Result<RestoreSummary> {
     // §11 and `VAULT_DESCRIPTOR_V1.md` §11: the registry holds two identities.
@@ -525,7 +525,7 @@ pub fn restore(
         find(&slots, RecordType::Descriptor)?,
         chur_core::limits::descriptor::LENGTH_MAX as u64,
     )?;
-    let (descriptor, root_secret) = open_portable_descriptor(&descriptor_bytes, password)?;
+    let (descriptor, root_secret) = open_portable_descriptor(&descriptor_bytes, credential)?;
     let key = manifest_key(&root_secret, &descriptor.vault_id)?;
 
     let manifest_payload = read_payload_bounded(
@@ -1133,7 +1133,7 @@ fn extract_range(
 }
 
 /// Opens the package's descriptor with the credential, §8 steps 2 and 3.
-fn open_portable_descriptor(bytes: &[u8], password: &[u8]) -> Result<(VaultDescriptor, Key)> {
+fn open_portable_descriptor(bytes: &[u8], credential: &[u8]) -> Result<(VaultDescriptor, Key)> {
     let parsed = VaultDescriptor::parse(bytes)?;
     for slot in &parsed.key_slots {
         ensure!(
@@ -1142,7 +1142,21 @@ fn open_portable_descriptor(bytes: &[u8], password: &[u8]) -> Result<(VaultDescr
             "the package carries a device-bound slot §3 excludes"
         );
     }
-    let root = vault::open_password_slot_of(&parsed, password)?;
+    let root = match vault::open_password_slot_of(&parsed, credential) {
+        Ok(root) => root,
+        Err(error)
+            if matches!(
+                error.status(),
+                ChurStatus::AuthenticationFailed | ChurStatus::VaultIncomplete
+            ) && parsed
+                .key_slots
+                .iter()
+                .any(|slot| slot.slot_type == SlotType::Recovery) =>
+        {
+            vault::open_recovery_slot_of(&parsed, credential)?
+        }
+        Err(error) => return Err(error),
+    };
     // §8 step 5 of KEY_SLOTS: the descriptor is authenticated under the root the
     // slot returned, so a package whose body was edited fails here.
     let authenticated = VaultDescriptor::authenticate(bytes, Some(&root))?;

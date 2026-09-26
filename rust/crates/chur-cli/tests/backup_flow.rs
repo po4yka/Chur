@@ -118,6 +118,34 @@ fn a_package_written_by_the_cli_restores_through_the_cli() {
     assert_eq!(std::fs::read(&destination).unwrap(), bytes);
 }
 
+#[test]
+fn a_recovery_phrase_restores_a_cli_backup() {
+    let scratch = scratch();
+    let source = scratch.join("source");
+    let restored = scratch.join("restored");
+    let created = expect_ok(&run("vault", &source, &["create", "--recovery"]), "create");
+    let phrase = created.lines().nth(1).expect("recovery phrase");
+    let package = scratch.join("vault.churbak");
+    expect_ok(
+        &run("backup", &source, &["create", package.to_str().unwrap()]),
+        "backup create",
+    );
+
+    let output = Command::new(BINARY)
+        .arg("backup")
+        .arg("--root")
+        .arg(&restored)
+        .arg("restore")
+        .arg(&package)
+        .env("CHUR_RECOVERY_PHRASE", phrase)
+        .env("CHUR_PASSWORD", "wrong password")
+        .output()
+        .expect("the binary ran");
+    expect_ok(&output, "recovery restore");
+    let status = expect_ok(&run("vault", &restored, &["status"]), "status");
+    assert!(status.contains("1 vault identity"));
+}
+
 /// A package is never written over an existing file. §7 finalizes atomically,
 /// and overwriting would destroy a good package to make room for one that may
 /// fail halfway.
