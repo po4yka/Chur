@@ -1,5 +1,6 @@
 package dev.po4yka.chur.app
 
+import dev.po4yka.chur.app.vault.PresentedState
 import dev.po4yka.chur.app.vault.ThumbnailCache
 import dev.po4yka.chur.app.vault.isValidVaultPin
 import dev.po4yka.chur.core.model.ChurStatus
@@ -17,6 +18,7 @@ import dev.po4yka.chur.ffi.SharingPermission
 import dev.po4yka.chur.ffi.SharingRecipient
 import dev.po4yka.chur.ffi.fromHex
 import dev.po4yka.chur.ffi.QueryScope
+import dev.po4yka.chur.ffi.QuerySort
 import dev.po4yka.chur.sync.SyncCoordinator
 import dev.po4yka.chur.sync.SyncStatus
 import dev.po4yka.chur.ffi.SlotSummary
@@ -1332,13 +1334,29 @@ class ChurController(
         _route.value = AppRoute.CreateVault
     }
 
+    /**
+     * Checks every library object and says what the check found, `DESIGN.md` §20.
+     *
+     * "Verified" is the §20.1 name of one presented state, so the result never
+     * uses it for a count: it says how many objects were checked and names each
+     * kind of problem. The scan's status carries proven corruption alone,
+     * `ERROR_MODEL.md` "Integrity states versus errors", and a `CORRUPT` row is
+     * in no `CATALOG_SCHEMA_V1.md` §16.2 scope, so "at least one" is the only
+     * count there is for it.
+     * The other verdicts are integrity states the catalog records, read back
+     * after the scan: the quarantine scope's total and the timeline rows left
+     * Incomplete or Unsupported. Both are the catalog's present state rather
+     * than a difference from before the scan, so an import or a sync racing the
+     * scan cannot turn a problem into "no problems found".
+     */
     fun verifyEverything() = guarded {
         tracked("verification") { token ->
             val operation = withContext(Dispatchers.Default) { repository.beginIntegrityScan(null) }
             try {
                 val result = drainProgress(operation, token)
-                _message.value = if (result.status == 0) {
-                    "Verified ${result.processed} object(s)."
+                val corrupt = result.status == ChurStatus.OBJECT_CORRUPT.value
+                _message.value = if (result.status == 0 || corrupt) {
+                    verificationSummary(result.processed, corrupt, quarantinedCount(), unverifiableCount())
                 } else {
                     statusMessage(result.status)
                 }
@@ -1498,6 +1516,55 @@ class ChurController(
 
     private fun statusMessage(status: Int): String =
         if (status == ChurStatus.CANCELLED.value) "Cancelled." else ChurStatus.fromValue(status).name
+
+    /** Every object `CATALOG_SCHEMA_V1.md` §16.2 keeps in the quarantine scope, whichever scan put it there. */
+    private suspend fun quarantinedCount(): Long = withContext(Dispatchers.Default) {
+        repository.page(ObjectQuery(QueryScope.QUARANTINE, limit = 1)).totalCount
+    }
+
+    /**
+     * The timeline rows a scan left Incomplete or Unsupported, `DESIGN.md` §20.1.
+     *
+     * Import time never changes, so under that sort no row moves between two
+     * pages and the restart after a `catalog_generation` change that
+     * `CATALOG_SCHEMA_V1.md` §16.2 requires is not needed: a concurrent write
+     * only adds or removes rows, which a count of the present state should
+     * see. 500 is the largest page `CATALOG_SCHEMA_V1.md` §16.2 allows.
+     */
+    private suspend fun unverifiableCount(): Long {
+        var query = ObjectQuery(sort = QuerySort.IMPORT_DESC, limit = 500)
+        var count = 0L
+        while (true) {
+            val page = withContext(Dispatchers.Default) { repository.page(query) }
+            count += page.objects.count { projection ->
+                when (PresentedState.of(projection)) {
+                    PresentedState.INCOMPLETE, PresentedState.UNSUPPORTED -> true
+                    else -> false
+                }
+            }
+            query = query.copy(cursor = page.nextCursor ?: return count)
+        }
+    }
+
+    /**
+     * The result line of a whole-vault check, in the voice of `DESIGN.md` §27.
+     *
+     * Each problem is named by its `DESIGN.md` §20.1 state, the name the
+     * library shows on the same item.
+     */
+    private fun verificationSummary(checked: Long, corrupt: Boolean, quarantined: Long, unverifiable: Long): String {
+        val problems = buildList {
+            if (corrupt) add("at least 1 corrupt and no longer shown in the library")
+            if (quarantined > 0) add("$quarantined quarantined (see Browse > Quarantine)")
+            if (unverifiable > 0) add("$unverifiable incomplete or in an unsupported format (marked in the library)")
+        }
+        val checkedLine = "Checked $checked ${if (checked == 1L) "item" else "items"}."
+        return if (problems.isEmpty()) {
+            "$checkedLine No problems found."
+        } else {
+            "$checkedLine Some items could not be verified: ${problems.joinToString("; ")}."
+        }
+    }
 
     /** Polls one native operation and forwards its redacted snapshot to the UI. */
     private suspend fun drainProgress(operation: Long, token: Long): OperationProgress {

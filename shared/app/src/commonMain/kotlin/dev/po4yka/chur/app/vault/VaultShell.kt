@@ -166,6 +166,7 @@ data class VaultActions(
     val onShowFavorites: () -> Unit = {},
     val onShowTags: () -> Unit = {},
     val onShowTrash: () -> Unit = {},
+    val onShowQuarantine: () -> Unit = {},
     val onEmptyTrash: () -> Unit = {},
     val onRestoreTrash: () -> Unit = {},
     val onRenameAlbum: (AlbumSummary, String) -> Unit = { _, _ -> },
@@ -325,6 +326,9 @@ fun VaultShell(
                                     })
                                     DropdownMenuItem(text = { Text("Trash") }, onClick = {
                                         scopesExpanded = false; actions.onShowTrash()
+                                    })
+                                    DropdownMenuItem(text = { Text("Quarantine") }, onClick = {
+                                        scopesExpanded = false; actions.onShowQuarantine()
                                     })
                                     if (state.trashOpen) DropdownMenuItem(
                                         text = { Text("Restore all") },

@@ -19,7 +19,7 @@ use core::ffi::c_int;
 use chur_catalog::vault;
 use chur_core::{ChurStatus, Error, Id, Result};
 use chur_crypto::Key;
-use chur_format::constants::{MediaClass, StreamKind};
+use chur_format::constants::{MediaClass, ObjectState, StreamKind};
 use chur_media::import::{CanonicalMedia, SourceCapability};
 use chur_media::{export, import, integrity, reader};
 
@@ -1130,7 +1130,15 @@ fn run_scan(
             all
         }
     };
-    let total = targets.len() as u64;
+    // `docs/ERROR_MODEL.md` "Integrity states versus errors": each target
+    // reaches an outcome, either an integrity state the catalog records or
+    // proven corruption, which reaches the caller as OBJECT_CORRUPT. No outcome
+    // ends the scan: it goes on to every remaining target, so one corrupt
+    // object never hides the outcome for the rest, and the terminal snapshot's
+    // `processed` still counts every object checked. A cancellation, or a
+    // failure that reaches no outcome for a target, still ends the scan early
+    // with its status.
+    let mut corrupt = false;
     for (index, object_id) in targets.iter().enumerate() {
         if shared.cancelled() {
             return Err(Error::new(ChurStatus::Cancelled, "the scan was cancelled"));
@@ -1142,11 +1150,18 @@ fn run_scan(
             // multi-gigabyte object verifies for minutes, and a scan that
             // checked only between objects would ignore a cancellation for all
             // of it.
-            integrity::scan_object_with(&mut session, object_id, now_ms, &mut progress)?;
+            let outcome =
+                integrity::scan_object_with(&mut session, object_id, now_ms, &mut progress)?;
+            corrupt |= outcome.state == ObjectState::Corrupt;
         }
         shared.advance(index as u64 + 1, Stage::Running);
     }
-    let _ = total;
+    if corrupt {
+        return Err(Error::new(
+            ChurStatus::ObjectCorrupt,
+            "at least one object is corrupt",
+        ));
+    }
     Ok(None)
 }
 

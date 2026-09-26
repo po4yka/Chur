@@ -77,6 +77,7 @@ import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_VIDEO
 import dev.po4yka.chur.app.vault.VaultPlayer
 import dev.po4yka.chur.app.vault.ViewerScreen
+import dev.po4yka.chur.app.vault.PresentedState
 import dev.po4yka.chur.app.vault.playbackFor
 import dev.po4yka.chur.ffi.AlbumSummary
 import dev.po4yka.chur.ffi.ObjectDetail
@@ -381,6 +382,7 @@ private fun VaultRoute(controller: ChurController) {
     var openTag by remember { mutableStateOf<TagSummary?>(null) }
     var favoritesOnly by remember { mutableStateOf(false) }
     var trashOpen by remember { mutableStateOf(false) }
+    var quarantineOpen by remember { mutableStateOf(false) }
     LaunchedEffect(tags) {
         openTag = openTag?.let { current -> tags.firstOrNull { it.id == current.id } }
     }
@@ -458,10 +460,10 @@ private fun VaultRoute(controller: ChurController) {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), onPicked)
     val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), onPicked)
 
-    LaunchedEffect(destination, openAlbum, openTag, favoritesOnly, trashOpen,
+    LaunchedEffect(destination, openAlbum, openTag, favoritesOnly, trashOpen, quarantineOpen,
         terms, mediaSort, albumSort, mediaKinds) {
         val query = browseQuery(destination, openAlbum, openTag, favoritesOnly,
-            trashOpen, terms, mediaSort, albumSort, mediaKinds)
+            trashOpen, terms, mediaSort, albumSort, mediaKinds, quarantine = quarantineOpen)
         when {
             query != null -> controller.load(query)
             destination == VaultDestination.SEARCH -> controller.load(
@@ -508,7 +510,7 @@ private fun VaultRoute(controller: ChurController) {
             onDeleted = {
                 viewing = null
                 browseQuery(destination, openAlbum, openTag, favoritesOnly, trashOpen,
-                    terms, mediaSort, albumSort, mediaKinds)?.let(controller::load)
+                    terms, mediaSort, albumSort, mediaKinds, quarantine = quarantineOpen)?.let(controller::load)
             },
         )
         return
@@ -652,6 +654,7 @@ private fun VaultRoute(controller: ChurController) {
                 openTag = tag
                 favoritesOnly = false
                 trashOpen = false
+                quarantineOpen = false
                 destination = VaultDestination.LIBRARY
             },
             onCreate = controller::createTag,
@@ -709,7 +712,7 @@ private fun VaultRoute(controller: ChurController) {
             searchTerms = terms,
             slots = slots,
             openAlbum = openAlbum,
-            libraryScopeTitle = if (trashOpen) "Trash" else openTag?.name ?: if (favoritesOnly) "Favorites" else null,
+            libraryScopeTitle = if (trashOpen) "Trash" else if (quarantineOpen) "Quarantine" else openTag?.name ?: if (favoritesOnly) "Favorites" else null,
             trashOpen = trashOpen,
             mediaView = mediaView,
             albumView = albumView,
@@ -736,6 +739,7 @@ private fun VaultRoute(controller: ChurController) {
                 openTag = null
                 favoritesOnly = false
                 trashOpen = false
+                quarantineOpen = false
                 selection = emptySet()
                 destination = it
             },
@@ -757,7 +761,7 @@ private fun VaultRoute(controller: ChurController) {
             onSearch = {
                 terms = it
             },
-            onOpenAlbum = { openAlbum = it; openTag = null; favoritesOnly = false; trashOpen = false },
+            onOpenAlbum = { openAlbum = it; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = false },
             onCloseAlbum = { openAlbum = null },
             onCreateAlbum = { creatingAlbum = true },
             onMediaViewChange = { mediaView = it },
@@ -769,10 +773,11 @@ private fun VaultRoute(controller: ChurController) {
             onKindsChange = { mediaKinds = it; selection = emptySet() },
             onAlbumOrderChange = { albumOrder = it },
             onAlbumFilterChange = { albumFilter = it },
-            onShowAllMedia = { openTag = null; favoritesOnly = false; trashOpen = false; selection = emptySet() },
-            onShowFavorites = { openTag = null; favoritesOnly = true; trashOpen = false; selection = emptySet() },
+            onShowAllMedia = { openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = false; selection = emptySet() },
+            onShowFavorites = { openTag = null; favoritesOnly = true; trashOpen = false; quarantineOpen = false; selection = emptySet() },
             onShowTags = { controller.loadTags(); managingTags = true },
-            onShowTrash = { openTag = null; favoritesOnly = false; trashOpen = true; selection = emptySet() },
+            onShowTrash = { openTag = null; favoritesOnly = false; trashOpen = true; quarantineOpen = false; selection = emptySet() },
+            onShowQuarantine = { openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = true; selection = emptySet() },
             onEmptyTrash = { confirmingEmptyTrash = true },
             onRestoreTrash = { controller.restoreTrash { selection = emptySet() } },
             onRenameAlbum = { album, name -> controller.renameAlbum(album.albumId, name) },
@@ -963,12 +968,20 @@ private fun ViewerRoute(
         detail = controller.detailOf(projection.objectId)
     }
 
-    val playback = playbackFor(
-        vault = controller.vault,
-        objectId = projection.objectId,
-        mediaKind = projection.mediaKind,
-        detail = detail,
-    )
+    // DESIGN.md §20.3: a quarantined object is never silently retried in a
+    // viewer, and CATALOG_SCHEMA_V1.md §5.1 says its container is absent or
+    // unreadable. A player would retry the failed lease with no sign to the
+    // user, so the viewer opens it without one.
+    val playback = if (PresentedState.of(projection) == PresentedState.QUARANTINED) {
+        null
+    } else {
+        playbackFor(
+            vault = controller.vault,
+            objectId = projection.objectId,
+            mediaKind = projection.mediaKind,
+            detail = detail,
+        )
+    }
 
     ViewerScreen(
         projection = projection.copy(favorite = favorite),

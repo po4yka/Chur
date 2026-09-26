@@ -195,6 +195,8 @@ chur_status_t chur_object_reader_verify_complete(chur_handle_t reader, uint32_t 
 chur_status_t chur_object_reader_close(chur_handle_t reader);
 ```
 
+Each target of an integrity scan begun by `chur_integrity_scan_begin` reaches an outcome: an `integrity_summary` verdict the catalog records, or proven corruption, which is a lifecycle change rather than a verification verdict (§6.4). No outcome ends the scan: it goes on to every remaining target, and its terminal status is `OBJECT_CORRUPT` when it proved at least one target corrupt, and `0` otherwise. A cancellation (§9), or a failure that reaches no outcome for a target (§11), ends the scan early with that status instead.
+
 ### 6.3 Range reads
 
 `chur_object_reader_read_at` never mixes an error with a byte count: the status is the return value, the count is written through `bytes_written`.
@@ -691,7 +693,7 @@ chur_operation_poll(operation, out_progress) -> chur_status_t
 
 - polling is synchronous and cheap: it takes the per-slot lock only long enough to copy a snapshot, and never waits on the operation;
 - the caller polls on its own dispatcher or queue, at a rate it chooses, and republishes to the UI on the platform's main thread. The delivery thread is therefore the caller's, by construction;
-- `ChurProgressV1` contains only bounded non-private numbers: operation kind, encrypted or plain bytes processed when safe, total bytes if known, stage code, terminal flag, and the terminal status. A terminal successful import also carries the object identifier it activated;
+- `ChurProgressV1` contains only bounded non-private numbers: operation kind, encrypted or plain bytes processed when safe (for an integrity scan, the number of objects checked), total bytes if known, stage code, terminal flag, and the terminal status. A terminal successful import also carries the object identifier it activated;
 - once the terminal flag is set the snapshot is frozen; every later poll returns the same terminal result until the handle is closed, so exactly one terminal result is observable;
 - polling a stale-generation handle returns `SESSION_EXPIRED` rather than a partial snapshot;
 - no filename, path, album, or real/decoy identity appears in progress. The one identifier this section admits is the object a terminal successful import activated: the caller that began the import needs it to attach the derivatives the media pipeline produces next, and it is an opaque value the caller's own object queries already return for that object.

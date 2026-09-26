@@ -71,11 +71,15 @@ fun browseQuery(
     mediaSort: QuerySort,
     albumSort: QuerySort,
     kinds: Int,
+    quarantine: Boolean = false,
 ): ObjectQuery? = when {
     album != null -> ObjectQuery(QueryScope.ALBUM, sort = albumSort,
         kinds = kinds, scopeId = album.albumId)
     destination == VaultDestination.LIBRARY && trash ->
         ObjectQuery(QueryScope.TRASH, sort = mediaSort, kinds = kinds)
+    // `DESIGN.md` §20.3: quarantined objects stay out of the ordinary library; this is where they stay reachable.
+    destination == VaultDestination.LIBRARY && quarantine ->
+        ObjectQuery(QueryScope.QUARANTINE, sort = mediaSort, kinds = kinds)
     destination == VaultDestination.LIBRARY && tag != null ->
         ObjectQuery(QueryScope.TAG, sort = mediaSort, kinds = kinds, scopeId = tag.tagId)
     destination == VaultDestination.LIBRARY && favorites ->

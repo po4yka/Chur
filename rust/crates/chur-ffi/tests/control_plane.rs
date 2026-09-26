@@ -97,6 +97,14 @@ fn timeline_query() -> ChurQueryV1 {
 
 /// Imports one object through the ABI and returns its identifier.
 fn import(session: u64, bytes: &[u8]) -> [u8; 16] {
+    import_at(session, bytes, 1_700_000_000_000)
+}
+
+/// Imports one object captured at `capture_time_ms` and returns its identifier.
+///
+/// The timeline sorts by capture time, newest first, so an object imported
+/// later with an earlier capture time is the last row and the one returned.
+fn import_at(session: u64, bytes: &[u8], capture_time_ms: u64) -> [u8; 16] {
     let mut file = tempfile();
     file.write_all(bytes).unwrap();
     file.rewind().unwrap();
@@ -113,7 +121,7 @@ fn import(session: u64, bytes: &[u8]) -> [u8; 16] {
         height: 3_000,
         duration_ms: 0,
         known_length: bytes.len() as u64,
-        capture_time_ms: 1_700_000_000_000,
+        capture_time_ms,
         capture_time_present: 1,
         reserved_two: [0; 7],
         content_type: content_type.as_ptr(),
@@ -633,6 +641,132 @@ fn an_integrity_scan_runs_over_every_object() {
     assert_eq!(progress.kind, 3);
     assert_eq!(progress.processed, 2);
     assert_eq!(unsafe { chur_operation_close(operation) }, OK);
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+}
+
+/// The one committed container, `vaults/<id>/objects/<xx>/<rest>`.
+fn only_container(root: &std::path::Path) -> std::path::PathBuf {
+    let only = |dir: std::path::PathBuf| -> std::path::PathBuf {
+        let entries: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(entries.len(), 1);
+        entries.into_iter().next().unwrap()
+    };
+    only(only(only(root.join("vaults")).join("objects")))
+}
+
+/// Scans every object and returns the terminal status and `processed`.
+fn scan_every_object(session: u64) -> (i32, u64) {
+    let request = ChurScanRequestV1 {
+        single_object: 0,
+        reserved: [0; 7],
+        object_id: [0; 16],
+    };
+    let mut operation = 0u64;
+    assert_eq!(
+        unsafe { chur_integrity_scan_begin(session, &request, &mut operation) },
+        OK
+    );
+    let status = drain(operation);
+    let mut progress = zeroed_progress();
+    assert_eq!(unsafe { chur_operation_poll(operation, &mut progress) }, OK);
+    assert_eq!(unsafe { chur_operation_close(operation) }, OK);
+    (status, progress.processed)
+}
+
+/// The `integrity_summary` of every row the timeline shows.
+fn timeline_summaries(session: u64) -> Vec<u8> {
+    let mut buffer = vec![0u8; 63 + 79 * 8];
+    let mut written = 0usize;
+    let query = timeline_query();
+    assert_eq!(
+        unsafe {
+            chur_catalog_query(
+                session,
+                &query,
+                buffer.as_mut_ptr(),
+                buffer.len(),
+                &mut written,
+            )
+        },
+        OK
+    );
+    let page = decode_page(&buffer[..written]).unwrap();
+    page.objects
+        .iter()
+        .map(|object| object.integrity_summary)
+        .collect()
+}
+
+/// `docs/ERROR_MODEL.md` "Integrity states versus errors": proven corruption
+/// reaches the caller as `OBJECT_CORRUPT`, and the scan still checks every
+/// target before it reports.
+///
+/// The damaged object has the later capture time, so the timeline scans it
+/// first on every run. A scan that stopped at it would leave the healthy object
+/// unverified and `processed` short of two.
+#[test]
+fn a_scan_that_proves_corruption_checks_every_object_and_ends_object_corrupt() {
+    let root = scratch();
+    create_vault(&root);
+    let runtime = open_runtime(&root);
+    let (_, session) = unlock(runtime, PASSWORD, 1);
+    let damaged: Vec<u8> = (0..70_000u32).map(|value| (value % 199) as u8).collect();
+    import_at(session, &damaged, 1_700_000_000_001);
+
+    // The same flipped ciphertext bit as chur-media's
+    // `a_flipped_ciphertext_bit_is_proven_corruption`.
+    let path = only_container(&root);
+    let mut bytes = std::fs::read(&path).unwrap();
+    let at = bytes.len() / 2;
+    bytes[at] ^= 0x01;
+    std::fs::write(&path, &bytes).unwrap();
+    // Imported only now, so the container above was the only one.
+    import(session, &[2u8; 4_096]);
+
+    let (status, processed) = scan_every_object(session);
+    assert_eq!(status, ChurStatus::ObjectCorrupt.as_i32());
+    assert_eq!(processed, 2, "every target was checked");
+
+    // `docs/format/CATALOG_SCHEMA_V1.md` §16.2: the corrupt row is in no scope,
+    // and the healthy one was verified rather than left behind.
+    assert_eq!(
+        timeline_summaries(session),
+        [chur_format::constants::IntegritySummary::CompleteVerified.value()]
+    );
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+}
+
+/// `docs/interop/FFI_CONTRACT.md` §6.2: an outcome other than proven corruption
+/// is an `integrity_summary` the catalog records, so a scan that proves nothing
+/// corrupt checks every target and ends `0`.
+///
+/// The object whose container is gone has the later capture time, so the
+/// timeline scans it first on every run. A scan that stopped at it would leave
+/// the healthy object unverified and `processed` short of two.
+#[test]
+fn a_scan_that_quarantines_an_object_checks_every_object_and_ends_ok() {
+    let root = scratch();
+    create_vault(&root);
+    let runtime = open_runtime(&root);
+    let (_, session) = unlock(runtime, PASSWORD, 1);
+    import_at(session, &[1u8; 4_096], 1_700_000_000_001);
+    std::fs::remove_file(only_container(&root)).unwrap();
+    // Imported only now, so the container above was the only one.
+    import(session, &[2u8; 4_096]);
+
+    let (status, processed) = scan_every_object(session);
+    assert_eq!(status, OK);
+    assert_eq!(processed, 2, "every target was checked");
+
+    // `docs/format/CATALOG_SCHEMA_V1.md` §16.2: the quarantined row appears
+    // only in the quarantine scope, and the healthy one was verified.
+    assert_eq!(
+        timeline_summaries(session),
+        [chur_format::constants::IntegritySummary::CompleteVerified.value()]
+    );
     assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
 }
 

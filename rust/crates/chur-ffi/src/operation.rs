@@ -62,7 +62,8 @@ pub enum Stage {
 pub struct Progress {
     /// The kind of work.
     pub kind: OperationKind,
-    /// Plaintext bytes processed.
+    /// Bytes processed, or for an integrity scan the number of objects
+    /// checked, `docs/interop/FFI_CONTRACT.md` §10.
     pub processed: u64,
     /// The total when it is known, zero otherwise.
     pub total: u64,

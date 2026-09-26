@@ -137,7 +137,8 @@ pub struct ChurProgressV1 {
     pub kind: u32,
     /// The stage.
     pub stage: u32,
-    /// Plaintext bytes processed.
+    /// Bytes processed, or for an integrity scan the number of objects
+    /// checked, `docs/interop/FFI_CONTRACT.md` §10.
     pub processed: u64,
     /// The total when known, zero otherwise.
     pub total: u64,
