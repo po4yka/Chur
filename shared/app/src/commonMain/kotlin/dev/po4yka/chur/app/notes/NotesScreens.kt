@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
@@ -72,8 +73,10 @@ fun NotesScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = onCreate) {
-                Icon(PlusGlyph, contentDescription = "New note")
+            if (notes.isNotEmpty()) {
+                FloatingActionButton(onClick = onCreate) {
+                    Icon(PlusGlyph, contentDescription = "New note")
+                }
             }
         },
     ) { padding ->
@@ -81,26 +84,33 @@ fun NotesScreen(
             if (showFirstWriteDisclosure) {
                 FirstWriteDisclosure(onAcknowledge = onAcknowledgeDisclosure)
             }
-            OutlinedTextField(
-                value = query,
-                onValueChange = onQueryChange,
-                singleLine = true,
-                label = { Text("Search notes") },
-                modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter),
-            )
-            val visible = Notes.search(notes, query)
-            if (visible.isEmpty()) {
-                EmptyNotes(hasQuery = query.isNotBlank())
+            if (notes.isEmpty()) {
+                EmptyNotes(hasQuery = false, onCreate = {
+                    onQueryChange("")
+                    onCreate()
+                })
             } else {
-                LazyColumn(
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                        horizontal = ChurSpacing.gutter,
-                        vertical = ChurSpacing.two,
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
-                ) {
-                    items(visible, key = { it.id }) { note ->
-                        NoteRow(note = note, onClick = { onOpen(note) })
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    singleLine = true,
+                    label = { Text("Search notes") },
+                    modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter),
+                )
+                val visible = Notes.search(notes, query)
+                if (visible.isEmpty()) {
+                    EmptyNotes(hasQuery = true)
+                } else {
+                    LazyColumn(
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                            horizontal = ChurSpacing.gutter,
+                            vertical = ChurSpacing.two,
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
+                    ) {
+                        items(visible, key = { it.id }) { note ->
+                            NoteRow(note = note, onClick = { onOpen(note) })
+                        }
                     }
                 }
             }
@@ -171,7 +181,7 @@ private fun NoteRow(note: Note, onClick: () -> Unit) {
  * semantic colours: nothing has gone wrong.
  */
 @Composable
-private fun EmptyNotes(hasQuery: Boolean) {
+private fun EmptyNotes(hasQuery: Boolean, onCreate: (() -> Unit)? = null) {
     val colors = LocalChurColors.current
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
@@ -195,6 +205,7 @@ private fun EmptyNotes(hasQuery: Boolean) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = colors.inkMuted,
             )
+            onCreate?.let { Button(onClick = it) { Text("Create note") } }
         }
     }
 }
