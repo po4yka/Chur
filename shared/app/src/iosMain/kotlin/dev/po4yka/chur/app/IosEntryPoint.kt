@@ -24,7 +24,8 @@ import platform.UIKit.UIViewController
  *
  * The Xcode project in `apps/iosApp` creates one [ChurController], presents
  * this controller, and drives the two transitions no Kotlin code can see: the
- * privacy cover on `sceneWillResignActive`, and the picker and share sheet.
+ * privacy cover on `sceneWillResignActive` and `sceneDidEnterBackground`, and
+ * the picker and share sheet.
  * Everything else is the shared controller, so the two hosts differ in binding
  * and nowhere else.
  *

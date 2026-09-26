@@ -114,10 +114,20 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneWillResignActive(_ scene: UIScene) {
-        host.privacy.attach()
+        // The cover exists only while the scene is inactive, and only over a
+        // screen the switcher must not show; `IosPrivacyCover` says why.
+        if host.controller.privacyCoverNeeded { host.privacy.attach() }
         guard host.storageReady, host.gate is GateResultCompatible else { return }
         host.controller.background()
         IosSyncBackground.shared.schedule(earliestBeginDate: nil)
+    }
+
+    func sceneDidEnterBackground(_ scene: UIScene) {
+        // UIKit takes the switcher picture after this returns, and a session
+        // can have opened since the scene resigned active: a vault creation
+        // finishes its key derivation without the lock epoch check an unlock
+        // has. `attach` does nothing when the cover is already up.
+        if host.controller.privacyCoverNeeded { host.privacy.attach() }
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {

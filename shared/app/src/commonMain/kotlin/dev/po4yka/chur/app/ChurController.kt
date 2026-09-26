@@ -174,6 +174,17 @@ class ChurController(
     /** The vault state machine. */
     val vaultState: StateFlow<VaultState> = repository.state
 
+    /**
+     * Whether the switcher must not show the screen now: [needsPrivacyCover]
+     * of the current state.
+     *
+     * The iOS scene delegate reads it on `sceneWillResignActive` and on
+     * `sceneDidEnterBackground`. Kotlin/Native gives Swift a `StateFlow` value
+     * only as an untyped object, so the check is made here and not in the host.
+     */
+    val privacyCoverNeeded: Boolean
+        get() = needsPrivacyCover(vaultState.value, route.value)
+
     /** The public notes. */
     val notesState: StateFlow<List<Note>> = _notes.asStateFlow()
 
