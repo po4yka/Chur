@@ -205,7 +205,7 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions) {
             }
             if (grid) {
                 LazyVerticalGrid(
-                    columns = GridCells.Adaptive(240.dp),
+                    columns = GridCells.Adaptive(150.dp),
                     modifier = Modifier.weight(1f),
                     contentPadding = PaddingValues(ChurSpacing.gutter),
                     horizontalArrangement = Arrangement.spacedBy(ChurSpacing.two),
