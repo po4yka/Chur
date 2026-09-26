@@ -119,6 +119,16 @@ kotlin {
             definitionFile.set(project.file("src/nativeInterop/cinterop/chur.def"))
             includeDirs(rootProject.file("rust/crates/chur-ffi/include"))
         }
+        target.binaries
+            .withType<org.jetbrains.kotlin.gradle.plugin.mpp.TestExecutable>()
+            .configureEach {
+                val archive = cargoTargetDirectory.file("${appleTriples.getValue(target.name)}/debug/libchur_ffi.a")
+                linkerOpts(archive.asFile.absolutePath)
+                linkTaskProvider.configure {
+                    inputs.file(archive)
+                    dependsOn(cargoBuildApple.getValue(target.name))
+                }
+            }
     }
 
     sourceSets {

@@ -229,7 +229,7 @@ class ChurVaultHostTest {
     fun the_handshake_matches_the_frozen_abi() {
         val handshake = ChurVault.handshake()
         assertEquals(1, handshake.major)
-        assertEquals(11, handshake.minor, "§6.15 added the private tag list")
+        assertEquals(12, handshake.minor, "§6.16 added shared object transfer")
         assertEquals(1, handshake.objectFormatMin)
         assertEquals(1, handshake.objectFormatMax)
         assertTrue(handshake.capabilities and 0b0000_0010L != 0L, "the reader is declared")
@@ -248,6 +248,10 @@ class ChurVaultHostTest {
         assertTrue(
             handshake.capabilities and 0b1000_0000L != 0L,
             "collection sharing is declared",
+        )
+        assertTrue(
+            handshake.capabilities and 0b1_0000_0000L != 0L,
+            "shared object transfer is declared",
         )
         assertTrue(ChurVault.statusIsKnown(ChurStatus.AUTHENTICATION_FAILED.value))
         assertFalse(ChurVault.statusIsKnown(42))
