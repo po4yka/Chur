@@ -21,7 +21,7 @@ public class SharingPusher(private val client: SyncClient) {
             revocation.membership,
             revocation.membershipOperation,
         )
-        revocation.rotationOperations.forEach { client.putCollectionOperation(vaultId, it) }
+        revocation.rotationOperations.forEach { client.putOperation(vaultId, it) }
         revocation.grants.forEach { grant ->
             client.putSharingGrant(vaultId, grant.grant, grant.operation)
         }
