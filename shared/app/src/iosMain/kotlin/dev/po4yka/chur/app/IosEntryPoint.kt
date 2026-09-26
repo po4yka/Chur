@@ -137,7 +137,8 @@ fun churNoteStore(): NoteStore {
  * [churNoteStore] does. The file holds the device's transport token — a bearer
  * credential — so it lives beside the vault root, in the directory the Xcode
  * project marks excluded from iCloud and iTunes backup, which
- * `SYNC_PROTOCOL_V1.md` §7 (SEC-034) requires of sync state.
+ * `SYNC_PROTOCOL_V1.md` §7 (SEC-034) requires of sync state. The store
+ * applies Data Protection and backup exclusion when it accesses this path.
  */
 fun churSyncStateRoot(): String {
     val documents = NSSearchPathForDirectoriesInDomains(

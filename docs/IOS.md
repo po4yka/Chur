@@ -481,6 +481,8 @@ Data Protection complements Chur encryption; it does not replace it.
 
 Private key-slot files, private catalog, and plaintext scratch target the strongest compatible protection, with `NSFileProtectionComplete` as the strict default direction.
 
+The sync state contains a bearer transport token. Its directory and JSON file use `NSFileProtectionCompleteUntilFirstUserAuthentication` so background sync can read them after the device's first unlock. Atomic replacement writes the auxiliary file with that protection class, and backup exclusion is reasserted on the directory and the replaced file.
+
 Strict profile behavior:
 
 - protected files become inaccessible after device lock;
