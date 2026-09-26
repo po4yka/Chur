@@ -46,8 +46,9 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         if storageReady, gate is GateResultCompatible {
             IosSyncBackground.shared.register(controller: controller)
         }
+        let mediaScratchReady = MediaPickerDelegate.prepareScratch()
         IosMediaPicker.shared.present = { [weak self] answer in
-            guard let scene = self?.scene else { _ = answer(nil); return }
+            guard mediaScratchReady, let scene = self?.scene else { _ = answer(nil); return }
             scene.presentMediaPicker(answer)
         }
         IosBackupPicker.shared.present = { [weak self] answer in
@@ -241,8 +242,27 @@ private final class ExportPickerDelegate: NSObject, UIDocumentPickerDelegate {
 }
 
 private final class MediaPickerDelegate: NSObject, PHPickerViewControllerDelegate {
+    private static let scratch = FileManager.default.temporaryDirectory
+        .appendingPathComponent("chur-media-imports", isDirectory: true)
     private var answer: ((String?) -> KotlinUnit)?
     private let done: () -> Void
+
+    static func prepareScratch() -> Bool {
+        do {
+            if FileManager.default.fileExists(atPath: scratch.path) {
+                try FileManager.default.removeItem(at: scratch)
+            }
+            try FileManager.default.createDirectory(
+                at: scratch,
+                withIntermediateDirectories: true,
+                attributes: [.protectionKey: FileProtectionType.complete]
+            )
+            try (scratch as NSURL).setResourceValue(true, forKey: .isExcludedFromBackupKey)
+            return true
+        } catch {
+            return false
+        }
+    }
 
     init(answer: @escaping (String?) -> KotlinUnit, done: @escaping () -> Void) {
         self.answer = answer
@@ -263,11 +283,21 @@ private final class MediaPickerDelegate: NSObject, PHPickerViewControllerDelegat
             let path: String?
             if let source {
                 let ext = source.pathExtension.isEmpty ? (UTType(identifier)?.preferredFilenameExtension ?? "bin") : source.pathExtension
-                let target = FileManager.default.temporaryDirectory
-                    .appendingPathComponent(UUID().uuidString).appendingPathExtension(ext)
+                let target = Self.scratch.appendingPathComponent(UUID().uuidString).appendingPathExtension(ext)
                 do {
-                    try FileManager.default.copyItem(at: source, to: target)
-                    try FileManager.default.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: target.path)
+                    guard FileManager.default.createFile(
+                        atPath: target.path,
+                        contents: nil,
+                        attributes: [.protectionKey: FileProtectionType.complete]
+                    ) else { throw CocoaError(.fileWriteUnknown) }
+                    let reader = try FileHandle(forReadingFrom: source)
+                    defer { try? reader.close() }
+                    let writer = try FileHandle(forWritingTo: target)
+                    defer { try? writer.close() }
+                    while let chunk = try reader.read(upToCount: 64 * 1024), !chunk.isEmpty {
+                        try writer.write(contentsOf: chunk)
+                    }
+                    try writer.close()
                     path = target.path
                 } catch {
                     try? FileManager.default.removeItem(at: target)
