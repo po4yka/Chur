@@ -198,11 +198,11 @@ fn a_password_is_never_an_argument() {
 }
 
 #[test]
-fn a_password_file_is_accepted_without_its_trailing_newline() {
+fn a_password_file_is_accepted_without_its_trailing_line_ending() {
     let base = scratch();
     let root = base.join("v");
     let file = base.join("password");
-    std::fs::write(&file, format!("{PASSWORD}\n")).unwrap();
+    std::fs::write(&file, format!("{PASSWORD}\r\n")).unwrap();
 
     let create = Command::new(BINARY)
         .arg("vault")
@@ -216,8 +216,7 @@ fn a_password_file_is_accepted_without_its_trailing_newline() {
         .expect("the binary ran");
     expect_ok(&create, "create with a password file");
 
-    // The same password without the newline opens it, which is what proves the
-    // newline was trimmed rather than made part of the credential.
+    // The same password without CRLF opens it, proving the line ending was trimmed.
     expect_ok(&run(&root, PASSWORD, &["status"]), "status");
     expect_ok(&run(&root, PASSWORD, &["list"]), "list");
 }

@@ -37,16 +37,19 @@ pub fn read_password(file: Option<&Path>) -> Result<Zeroizing<Vec<u8>>> {
             "set CHUR_PASSWORD or pass --password-file; a password is never an argument"
         );
     };
-    let bytes = std::fs::read(path)
-        .map_err(|_| chur_core::err!(IoFailure, "the password file could not be read"))?;
+    let mut bytes = Zeroizing::new(
+        std::fs::read(path)
+            .map_err(|_| chur_core::err!(IoFailure, "the password file could not be read"))?,
+    );
     // A trailing newline is what an editor and `echo` both leave, and a user who
     // typed the password into a file did not intend it.
-    let trimmed = bytes
-        .strip_suffix(b"\n")
-        .unwrap_or(&bytes)
-        .strip_suffix(b"\r")
-        .unwrap_or_else(|| bytes.strip_suffix(b"\n").unwrap_or(&bytes));
-    Ok(Zeroizing::new(trimmed.to_vec()))
+    if bytes.ends_with(b"\n") {
+        bytes.pop();
+    }
+    if bytes.ends_with(b"\r") {
+        bytes.pop();
+    }
+    Ok(bytes)
 }
 
 /// The current time in milliseconds, `CATALOG_SCHEMA_V1.md` §8.1.
