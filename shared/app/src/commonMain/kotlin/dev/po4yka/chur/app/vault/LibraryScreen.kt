@@ -54,6 +54,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
@@ -447,19 +449,14 @@ private fun MediaRow(tile: LibraryTile, selecting: Boolean, onOpen: () -> Unit, 
     val colors = LocalChurColors.current
     val projection = tile.projection
     val state = PresentedState.of(projection)
-    val kind = when (projection.mediaKind) {
-        MEDIA_CLASS_IMAGE -> "Photo"
-        MEDIA_CLASS_VIDEO -> "Video"
-        MEDIA_CLASS_AUDIO -> "Audio"
-        else -> "File"
-    }
     Row(
         modifier = modifier.fillMaxWidth()
             .clip(RoundedCornerShape(ChurSpacing.one))
             .background(if (tile.selected) colors.accentSoft else colors.surfaceSunken)
             .border(if (dropHint != null) 2.dp else if (tile.selected) ChurSpacing.hairline else 0.dp, colors.accent,
                 RoundedCornerShape(ChurSpacing.one))
-            .then(selectionSemantics(tile, onToggleSelection))
+            .then(selectionSemantics(tile, listOfNotNull(rowLabel(projection), dropHint).joinToString(", "),
+                onToggleSelection))
             .clickable(onClickLabel = clickLabel(tile, selecting), onClick = onOpen)
             .padding(ChurSpacing.two),
         verticalAlignment = Alignment.CenterVertically,
@@ -472,8 +469,9 @@ private fun MediaRow(tile: LibraryTile, selecting: Boolean, onOpen: () -> Unit, 
                     contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             } ?: Icon(IntegrityGlyph, contentDescription = null, tint = colors.inkMuted)
         }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(kind, style = MaterialTheme.typography.bodyMedium, maxLines = 1,
+        // The label above says all of this in words, §23.2.
+        Column(modifier = Modifier.weight(1f).clearAndSetSemantics {}) {
+            Text(kindLabel(projection.mediaKind), style = MaterialTheme.typography.bodyMedium, maxLines = 1,
                 overflow = TextOverflow.Ellipsis)
             Text(mediaDetails(projection), style = MaterialTheme.typography.bodySmall,
                 color = colors.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -489,21 +487,65 @@ private fun MediaRow(tile: LibraryTile, selecting: Boolean, onOpen: () -> Unit, 
 }
 
 internal fun mediaDetails(projection: ObjectProjection): String {
-    val size = projection.plaintextSize
-    val sizeLabel = when {
-        size >= 1_048_576 -> "${size / 1_048_576} MB"
-        size >= 1_024 -> "${size / 1_024} KB"
-        else -> "$size B"
-    }
     val details = buildList {
         if (projection.durationMs > 0) add(durationLabel(projection.durationMs))
         if (projection.width > 0 && projection.height > 0) {
             add("${projection.width}×${projection.height}")
         }
-        add(sizeLabel)
+        add(sizeLabel(projection.plaintextSize))
         if (projection.favorite) add("Favorite")
     }
     return details.joinToString(" · ")
+}
+
+/**
+ * What a screen reader says for one tile, `DESIGN.md` §23.2: the kind, the
+ * length in words, a favorite, and an integrity state that is not ordinary.
+ * The reader adds the selected state from the tile's `selected` semantics.
+ * The label names no object ID and no file, §23.2 and `ANDROID.md` §31, and no
+ * capture time, which the grid does not show either.
+ */
+internal fun tileLabel(projection: ObjectProjection): String = buildList {
+    add(kindLabel(projection.mediaKind))
+    if (projection.durationMs > 0) add(spokenDuration(projection.durationMs))
+    if (projection.favorite) add("Favorite")
+    val state = PresentedState.of(projection)
+    if (state != PresentedState.ORDINARY) add(state.label)
+}.joinToString(", ")
+
+/**
+ * What a screen reader says for one list row: the [tileLabel], then the
+ * dimensions in words and the size, because a row shows them in its details
+ * line, §23.2. "1920 by 1080", because "1920×1080" is not a phrase.
+ */
+internal fun rowLabel(projection: ObjectProjection): String = buildList {
+    add(tileLabel(projection))
+    if (projection.width > 0 && projection.height > 0) add("${projection.width} by ${projection.height}")
+    add(sizeLabel(projection.plaintextSize))
+}.joinToString(", ")
+
+private fun kindLabel(mediaKind: Int): String = when (mediaKind) {
+    MEDIA_CLASS_IMAGE -> "Photo"
+    MEDIA_CLASS_VIDEO -> "Video"
+    MEDIA_CLASS_AUDIO -> "Audio"
+    else -> "File"
+}
+
+private fun sizeLabel(size: Long): String = when {
+    size >= 1_048_576 -> "${size / 1_048_576} MB"
+    size >= 1_024 -> "${size / 1_024} KB"
+    else -> "$size B"
+}
+
+/** A length in words, "2 minutes 18 seconds", because "2:18" is read as a time of day. */
+private fun spokenDuration(durationMs: Long): String {
+    val seconds = durationMs / 1_000
+    if (seconds == 0L) return "less than 1 second"
+    fun count(n: Long, unit: String) = "$n $unit${if (n == 1L) "" else "s"}"
+    return buildList {
+        if (seconds >= 60) add(count(seconds / 60, "minute"))
+        if (seconds % 60 > 0 || seconds < 60) add(count(seconds % 60, "second"))
+    }.joinToString(" ")
 }
 
 private fun durationLabel(durationMs: Long): String {
@@ -531,7 +573,7 @@ private fun MediaTile(
             .clip(RoundedCornerShape(ChurSpacing.one))
             .background(colors.surfaceSunken)
             .border(selectionBorder, colors.accent, RoundedCornerShape(ChurSpacing.one))
-            .then(selectionSemantics(tile, onToggleSelection))
+            .then(selectionSemantics(tile, tileLabel(tile.projection), onToggleSelection))
             .clickable(onClickLabel = clickLabel(tile, selecting), onClick = onOpen),
     ) {
         val bitmap = tile.thumbnail
@@ -554,12 +596,13 @@ private fun MediaTile(
             }
         }
         if (severity != StateSeverity.NONE) {
-            StateBadge(state = state, severity = severity, modifier = Modifier.align(Alignment.TopStart))
+            StateBadge(severity = severity, modifier = Modifier.align(Alignment.TopStart))
         }
         if (tile.projection.durationMs > 0) {
             Text(
                 durationLabel(tile.projection.durationMs),
-                modifier = Modifier.align(Alignment.BottomEnd).padding(ChurSpacing.one)
+                // The label says the length in words, §23.2.
+                modifier = Modifier.align(Alignment.BottomEnd).clearAndSetSemantics {}.padding(ChurSpacing.one)
                     .clip(RoundedCornerShape(ChurSpacing.one))
                     .background(colors.surface).padding(horizontal = ChurSpacing.one),
                 color = colors.ink,
@@ -579,14 +622,15 @@ private fun MediaTile(
 }
 
 /**
- * The selected state and the long press of a tile as semantics, `DESIGN.md`
- * §23.5 and §11.4: a screen reader hears the state that the outline and the
- * checkmark show, and a screen reader or a switch selects through the
- * long-click action. The action is not a custom action, so the reorder actions
- * of an album stay beside it.
+ * The name, the selected state and the long press of a tile as semantics,
+ * `DESIGN.md` §23.2, §23.5 and §11.4: a screen reader hears [label] and the
+ * state that the outline and the checkmark show, and a screen reader or a
+ * switch selects through the long-click action. The action is not a custom
+ * action, so the reorder actions of an album stay beside it.
  */
-private fun selectionSemantics(tile: LibraryTile, onToggleSelection: () -> Unit): Modifier =
+private fun selectionSemantics(tile: LibraryTile, label: String, onToggleSelection: () -> Unit): Modifier =
     Modifier.semantics {
+        contentDescription = label
         selected = tile.selected
         onLongClick(label = if (tile.selected) "Deselect" else "Select") { onToggleSelection(); true }
     }
@@ -599,7 +643,7 @@ private fun clickLabel(tile: LibraryTile, selecting: Boolean): String = when {
 }
 
 @Composable
-private fun StateBadge(state: PresentedState, severity: StateSeverity, modifier: Modifier) {
+private fun StateBadge(severity: StateSeverity, modifier: Modifier) {
     val colors = LocalChurColors.current
     val tint = when (severity) {
         StateSeverity.ERROR -> colors.error
@@ -614,7 +658,8 @@ private fun StateBadge(state: PresentedState, severity: StateSeverity, modifier:
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(ChurSpacing.one),
     ) {
-        Icon(IntegrityGlyph, contentDescription = state.label, tint = tint)
+        // The tile's label names the state, §23.2.
+        Icon(IntegrityGlyph, contentDescription = null, tint = tint)
     }
 }
 
@@ -622,7 +667,10 @@ private fun StateBadge(state: PresentedState, severity: StateSeverity, modifier:
 private fun SelectionCheck(modifier: Modifier, onClick: () -> Unit) {
     val colors = LocalChurColors.current
     Box(
+        // The tile already speaks its selected state and offers Deselect, so
+        // a screen reader does not meet the mark as a second control, §23.2.
         modifier = modifier
+            .clearAndSetSemantics {}
             .padding(ChurSpacing.one)
             .clip(RoundedCornerShape(50))
             .background(colors.accent)

@@ -89,7 +89,8 @@ import org.junit.runner.RunWith
  * that does not move starts a selection, `DESIGN.md` §11.4, in the Library, in
  * an album and in Trash, and a screen reader starts one through the tile's
  * long-click action; the selection bar then reaches the bulk actions. A long
- * press that moves still drops the item into an album.
+ * press that moves still drops the item into an album. A tile is named by its
+ * kind and its length in words, §23.2.
  */
 @RunWith(AndroidJUnit4::class)
 class BackNavigationTest {
@@ -481,8 +482,7 @@ class BackNavigationTest {
     fun privatePlaybackYieldsTheAudioFocusAndTheLockGivesItUp() = inTestVault {
         // The recording is imported on the first run only.
         if (!await(3_000) { controller.page.value.objects.any { it.mediaKind == MEDIA_CLASS_AUDIO } }) importRecording()
-        // A recording's tile shows its length and nothing else.
-        tap { it.text?.matches(Regex("\\d+:\\d{2}")) == true }
+        tap(::isRecording)
         tap(label("Play"))
         assertTrue("playback takes the media focus", await { focusEntries().any { "usage=USAGE_MEDIA" in it } })
         assertFalse(
@@ -535,8 +535,7 @@ class BackNavigationTest {
     fun theLockInTheViewerStopsPlayback() = inTestVault {
         // The recording is imported on the first run only.
         if (!await(3_000) { controller.page.value.objects.any { it.mediaKind == MEDIA_CLASS_AUDIO } }) importRecording()
-        // A recording's tile shows its length and nothing else.
-        tap { it.text?.matches(Regex("\\d+:\\d{2}")) == true }
+        tap(::isRecording)
         tap(label("Play"))
         assertTrue("playback takes the media focus", await { focusEntries().isNotEmpty() })
 
@@ -555,7 +554,7 @@ class BackNavigationTest {
         longPress(photoTile())
         assertTrue("the long press starts a selection", await { find(label("1 selected")) != null })
         assertNull("and does not open the viewer", find(label("Info")))
-        tap(::isDuration)
+        tap(::isRecording)
         assertTrue("a tap adds to the selection", await { find(label("2 selected")) != null })
 
         pressBack()
@@ -576,12 +575,17 @@ class BackNavigationTest {
         // a screen reader speaks as selected or not selected, §23.5.
         assertFalse("nothing is selected yet", tile.isChecked)
         assertEquals("Select", tile.longClickLabel())
+        // §23.2: a tile is named by its kind and its length in words, and
+        // its length is not read a second time as a time of day.
+        assertEquals("Audio, 1 minute", find(::isRecording)?.contentDescription?.toString())
+        assertNull("the length is read once", find { it.text?.matches(Regex("\\d+:\\d{2}")) == true })
 
         assertTrue(tile.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK))
 
         assertTrue("the action starts a selection", await { find(label("1 selected")) != null })
         assertNull("and does not open the viewer", find(label("Info")))
         assertTrue("the tile says it is selected", await { tile.refresh() && tile.isChecked })
+        assertNull("the checkmark is not a second control", find(label("✓")))
         assertEquals("Deselect", tile.longClickLabel())
         assertTrue(tile.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK))
         assertTrue("the same action ends it", await { find(label("1 selected")) == null })
@@ -611,7 +615,7 @@ class BackNavigationTest {
         // reorders and one that stays put selects.
         longPress(photoTile())
         assertTrue("the long press starts a selection", await { find(label("1 selected")) != null })
-        tap(::isDuration)
+        tap(::isRecording)
         assertTrue("a tap adds to the selection", await { find(label("2 selected")) != null })
 
         tap(label("More"))
@@ -720,8 +724,8 @@ class BackNavigationTest {
         return checkNotNull(tile)
     }
 
-    /** A recording's tile shows its length and nothing else. */
-    private fun isDuration(node: AccessibilityNodeInfo): Boolean = node.text?.matches(Regex("\\d+:\\d{2}")) == true
+    /** The label of the recording's tile: its kind and its length, `DESIGN.md` §23.2. */
+    private fun isRecording(node: AccessibilityNodeInfo): Boolean = node.contentDescription?.startsWith("Audio, ") == true
 
     private fun AccessibilityNodeInfo.longClickLabel(): String? =
         actionList.firstOrNull { it.id == AccessibilityNodeInfo.ACTION_LONG_CLICK }?.label?.toString()
@@ -1078,23 +1082,15 @@ class BackNavigationTest {
         { it.text?.toString() == text || it.contentDescription?.toString() == text }
 
     /**
-     * A photo tile: a clickable node of the media grid's collection with no
-     * label of its own and no text beneath it. Compose puts a control's label
-     * on a child, so every other clickable node here - tabs, buttons, the
-     * load-more row - has text somewhere beneath it; a video tile does too,
-     * its duration.
+     * A photo tile: the clickable node of the media grid's collection whose
+     * label, `DESIGN.md` §23.2, starts with its kind. Compose puts a control's
+     * label on a child, so the search climbs from the label to the tile.
      */
     private fun findTile(): AccessibilityNodeInfo? =
         findAll { it.collectionInfo != null }.firstNotNullOfOrNull { grid ->
-            find(grid) {
-                it.isClickable && it.text.isNullOrEmpty() && it.contentDescription.isNullOrEmpty() && !it.hasTextBelow()
-            }
-        }
-
-    private fun AccessibilityNodeInfo.hasTextBelow(): Boolean =
-        (0 until childCount).any { index ->
-            val child = getChild(index) ?: return@any false
-            !child.text.isNullOrEmpty() || child.hasTextBelow()
+            var node = find(grid) { it.contentDescription?.startsWith("Photo") == true }
+            while (node != null && !node.isClickable) node = node.parent
+            node
         }
 
     private fun find(match: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? =
