@@ -8,7 +8,10 @@ import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import android.view.Choreographer
+import android.view.InputDevice
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
@@ -451,6 +454,51 @@ class BackNavigationTest {
 
             shell("input swipe $left $y $right $y 250")
             assertEquals("a swipe back returns to the first item", first, nameInInfo(names, previous = second))
+            pressBack()
+            assertTrue("the viewer closes", await { find(label("Info")) == null })
+        } finally {
+            settle { done -> controller.deleteAll(imported, done) }
+            settle { done -> controller.permanentlyDeleteAll(imported, done) }
+        }
+    }
+
+    @Test
+    fun aZoomedPhotoPansUnderOneFingerAndDoesNotSwipe() = inTestVault {
+        // `DESIGN.md` §13.1: zoom and pan follow platform expectations.
+        val names = (1..3).map { "zoom-test-$it.jpg" }
+        val imported = names.mapIndexed { index, name ->
+            val bitmap = Bitmap.createBitmap(320, 240, Bitmap.Config.ARGB_8888)
+                .apply { eraseColor(0xFF000000.toInt() or (index + 1) * 0x304050) }
+            importFile(name) { bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+        }
+        try {
+            val tile = photoTile()
+            tap { it == tile }
+            assertTrue("the viewer opens", await { find(label("Info")) != null })
+            val first = nameInInfo(names)
+            val media = boundsOf { node ->
+                node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK && it.label?.toString() == "Hide controls" }
+            }
+            val (left, right, y) = Triple(media.left + media.width() / 6, media.right - media.width() / 6, media.centerY())
+            // A swipe the pager took has landed by then.
+            val landed = { Thread.sleep(1_000) }
+
+            doubleTap(media.centerX(), media.centerY())
+            assertFalse("a double tap is not a tap and keeps the chrome", await(1_000) { find(label("Back")) == null })
+            shell("input swipe $right $y $left $y 250")
+            landed()
+            assertEquals("one finger pans the zoomed photo and stays on it", first, nameInInfo(names))
+
+            doubleTap(media.centerX(), media.centerY())
+            awaitFrames()
+            shell("input swipe $right $y $left $y 250")
+            val second = nameInInfo(names, previous = first)
+
+            pinch(media.centerX(), media.centerY(), from = media.height() / 12, to = media.height() / 3)
+            awaitFrames()
+            shell("input swipe $left $y $right $y 250")
+            landed()
+            assertEquals("a pinch zooms, and one finger pans", second, nameInInfo(names))
             pressBack()
             assertTrue("the viewer closes", await { find(label("Info")) == null })
         } finally {
@@ -1075,6 +1123,51 @@ class BackNavigationTest {
         val y = bounds.centerY()
         shell("input swipe $x $y ${x + drift} $y 800")
         awaitFrames()
+    }
+
+    /** Two taps at [x], [y], as close together as a user's double tap. */
+    private fun doubleTap(x: Int, y: Int) {
+        repeat(2) {
+            val down = SystemClock.uptimeMillis()
+            inject(down, MotionEvent.ACTION_DOWN, listOf(x to y))
+            Thread.sleep(40)
+            inject(down, MotionEvent.ACTION_UP, listOf(x to y))
+            Thread.sleep(80)
+        }
+        awaitFrames()
+    }
+
+    /** Two fingers above and below [x], [y] that spread from [from] to [to] pixels off it. */
+    private fun pinch(x: Int, y: Int, from: Int, to: Int) {
+        val fingers = { gap: Int -> listOf(x to y - gap, x to y + gap) }
+        val down = SystemClock.uptimeMillis()
+        inject(down, MotionEvent.ACTION_DOWN, fingers(from).take(1))
+        inject(down, MotionEvent.ACTION_POINTER_DOWN or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), fingers(from))
+        for (step in 1..10) {
+            Thread.sleep(16)
+            inject(down, MotionEvent.ACTION_MOVE, fingers(from + (to - from) * step / 10))
+        }
+        inject(down, MotionEvent.ACTION_POINTER_UP or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), fingers(to))
+        inject(down, MotionEvent.ACTION_UP, fingers(to).take(1))
+        awaitFrames()
+    }
+
+    private fun inject(downTime: Long, action: Int, points: List<Pair<Int, Int>>) {
+        val properties = points.indices.map { id ->
+            MotionEvent.PointerProperties().apply { this.id = id; toolType = MotionEvent.TOOL_TYPE_FINGER }
+        }
+        val coords = points.map { (px, py) ->
+            MotionEvent.PointerCoords().apply { x = px.toFloat(); y = py.toFloat(); pressure = 1f; size = 1f }
+        }
+        val event = MotionEvent.obtain(
+            downTime, SystemClock.uptimeMillis(), action, points.size, properties.toTypedArray(), coords.toTypedArray(),
+            0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0,
+        )
+        try {
+            assertTrue(instrumentation.uiAutomation.injectInputEvent(event, true))
+        } finally {
+            event.recycle()
+        }
     }
 
     private fun shell(command: String): String =

@@ -8,6 +8,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,21 +28,31 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.center
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.toSize
 import dev.po4yka.chur.app.ActiveOperation
 import dev.po4yka.chur.app.Notice
 import dev.po4yka.chur.app.theme.BackGlyph
@@ -53,6 +65,7 @@ import dev.po4yka.chur.app.theme.FavoriteFilledGlyph
 import dev.po4yka.chur.app.theme.ViewerColors
 import dev.po4yka.chur.ffi.ObjectDetail
 import dev.po4yka.chur.ffi.ObjectProjection
+import kotlin.math.min
 
 /**
  * The media viewer, `DESIGN.md` §13.
@@ -126,9 +139,26 @@ fun ViewerScreen(
     // drag in any direction would pass its slop first on a swipe that is not
     // quite level and take it from the pager.
     val toggleChrome by rememberUpdatedState(onToggleChrome)
+    // §13.1: a photo zooms and pans, [ViewerZoom]. The zoom is the item's on
+    // screen, so a swipe lands on the next one at 1x. A video or a recording
+    // does not zoom: its player has gestures of its own. While the photo is
+    // zoomed the pager does not swipe, and one finger pans the photo instead.
+    val zoom = remember(projection.id) { mutableStateOf(ViewerZoom()) }
+    val zoomed by remember(zoom) { derivedStateOf { zoom.value.zoomed } }
+    val photo = projection.mediaKind == MEDIA_CLASS_IMAGE
+    val still by rememberUpdatedState(preview ?: thumbnails[projection.id])
     Box(
         modifier = Modifier.fillMaxSize().background(ViewerColors.canvas)
-            .pointerInput(Unit) { detectTapGestures(onTap = { toggleChrome() }) }
+            .pointerInput(zoom, photo) {
+                // The pager's pages fill this box, so a tap here is where it
+                // lands on the photo. On a photo a tap waits out the double-tap
+                // timeout before it toggles the chrome, as a platform viewer's
+                // does.
+                val zoomAt: (Offset) -> Unit = { tap ->
+                    still?.let { zoom.value = zoom.value.doubleTapped(tap, it.size(), size.toSize()) }
+                }
+                detectTapGestures(onTap = { toggleChrome() }, onDoubleTap = zoomAt.takeIf { photo })
+            }
             .pointerInput(Unit) { detectVerticalDragGestures { change, _ -> change.consume() } },
     ) {
         // The same toggle for TalkBack and VoiceOver, which activate the
@@ -148,6 +178,7 @@ fun ViewerScreen(
                 canLoadMore = canLoadMore,
                 onLoadMore = onLoadMore,
                 onSettled = onSettled,
+                userScrollEnabled = !zoomed,
                 modifier = Modifier.fillMaxSize(),
             ) { page, settled ->
                 // The page a swipe brings in shows the grid's thumbnail until
@@ -155,7 +186,7 @@ fun ViewerScreen(
                 // open its player. Without a thumbnail it shows the canvas, as
                 // nothing is being decrypted for it.
                 if (settled) {
-                    ViewerMedia(preview ?: thumbnails[page.id], player, waveform)
+                    ViewerMedia(preview ?: thumbnails[page.id], player, waveform, zoom.takeIf { photo })
                 } else {
                     thumbnails[page.id]?.let { ViewerMedia(it, player = null, waveform = null) }
                 }
@@ -256,12 +287,16 @@ fun ViewerScreen(
     }
 }
 
-/** One page's media: its player, its waveform over the player, or its still. */
+/**
+ * One page's media: its player, its waveform over the player, or its still,
+ * which a pinch zooms when the page is given a [zoom].
+ */
 @Composable
 private fun ViewerMedia(
     preview: ImageBitmap?,
     player: (@Composable (Modifier) -> Unit)?,
     waveform: ByteArray?,
+    zoom: MutableState<ViewerZoom>? = null,
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         if (player != null) {
@@ -282,6 +317,8 @@ private fun ViewerMedia(
                     WaveformStrip(record = waveform, color = ViewerColors.content)
                 }
             }
+        } else if (preview != null && zoom != null) {
+            ZoomableStill(preview, zoom)
         } else if (preview != null) {
             Image(
                 bitmap = preview,
@@ -300,6 +337,76 @@ private fun ViewerMedia(
         }
     }
 }
+
+/**
+ * A photo that a pinch zooms and, while it is zoomed, one finger pans,
+ * [ViewerZoom]. The detector is on the page, inside the pager, so it sees a
+ * two-finger gesture before the pager does. At 1x one finger is not a pan,
+ * and the pager keeps it as a swipe.
+ */
+@Composable
+private fun ZoomableStill(still: ImageBitmap, zoom: MutableState<ViewerZoom>) {
+    var viewer by remember { mutableStateOf(Size.Zero) }
+    val transform = rememberTransformableState { centroid, zoomChange, pan, _ ->
+        zoom.value = zoom.value.transformed(centroid, zoomChange, pan, still.size(), viewer)
+    }
+    Image(
+        bitmap = still,
+        contentDescription = null,
+        contentScale = ContentScale.Fit,
+        modifier = Modifier
+            .fillMaxSize()
+            .onSizeChanged { viewer = it.toSize() }
+            .transformable(transform, canPan = { zoom.value.zoomed })
+            // Read in the layer, so a pinch redraws the photo and composes
+            // nothing.
+            .graphicsLayer {
+                val now = zoom.value
+                scaleX = now.scale
+                scaleY = now.scale
+                translationX = now.offset.x
+                translationY = now.offset.y
+            },
+    )
+}
+
+private fun ImageBitmap.size() = Size(width.toFloat(), height.toFloat())
+
+/**
+ * How far the photo on screen is zoomed, `DESIGN.md` §13.1: zoom and pan
+ * follow platform expectations. A pinch zooms about the fingers, from 1x to
+ * [MAX_ZOOM]. A double tap zooms to [DOUBLE_TAP_ZOOM] with the tapped point
+ * kept under the finger, and a double tap on a zoomed photo returns it to 1x.
+ * While the photo is [zoomed], one finger pans it and the pager does not
+ * swipe.
+ *
+ * [offset] moves the photo from the centre of the viewer after [scale]. The
+ * viewer fits the photo and centres it, so a pan stops where an edge of the
+ * photo meets the edge of the viewer, and along a side that the photo does
+ * not fill, the photo stays centred. `still` is the photo's size in pixels
+ * and `viewer` is the viewer's.
+ */
+@Immutable
+internal data class ViewerZoom(val scale: Float = 1f, val offset: Offset = Offset.Zero) {
+    val zoomed: Boolean get() = scale > 1f
+
+    fun transformed(centroid: Offset, zoomChange: Float, pan: Offset, still: Size, viewer: Size): ViewerZoom {
+        val next = (scale * zoomChange).coerceIn(1f, MAX_ZOOM)
+        // The point of the photo under the fingers stays under them.
+        val focus = centroid - viewer.center
+        val moved = (offset - focus) * (next / scale) + focus + pan
+        val fit = min(viewer.width / still.width, viewer.height / still.height)
+        val slackX = ((still.width * fit * next - viewer.width) / 2).coerceAtLeast(0f)
+        val slackY = ((still.height * fit * next - viewer.height) / 2).coerceAtLeast(0f)
+        return ViewerZoom(next, Offset(moved.x.coerceIn(-slackX, slackX), moved.y.coerceIn(-slackY, slackY)))
+    }
+
+    fun doubleTapped(tap: Offset, still: Size, viewer: Size): ViewerZoom =
+        if (zoomed) ViewerZoom() else transformed(tap, DOUBLE_TAP_ZOOM, Offset.Zero, still, viewer)
+}
+
+internal const val MAX_ZOOM = 5f
+internal const val DOUBLE_TAP_ZOOM = 2.5f
 
 private fun Int.dp() = androidx.compose.ui.unit.Dp(this.toFloat())
 

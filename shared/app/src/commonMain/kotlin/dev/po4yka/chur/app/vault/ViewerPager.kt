@@ -56,7 +56,9 @@ private const val LOAD_AHEAD = 3
  * are keyed by item, so a reload or a next page that moves the item on screen
  * moves the pager with it. [onSettled] answers when a swipe lands on another item, and
  * the next page of the scope is asked for through [onLoadMore] as the swipes
- * near the end of what is loaded.
+ * near the end of what is loaded. [userScrollEnabled] is false while the photo
+ * on screen is zoomed, so one finger pans the photo rather than swipe,
+ * [ViewerZoom].
  */
 @Composable
 internal fun ViewerPager(
@@ -65,6 +67,7 @@ internal fun ViewerPager(
     canLoadMore: Boolean,
     onLoadMore: () -> Unit,
     onSettled: (ObjectProjection) -> Unit,
+    userScrollEnabled: Boolean,
     modifier: Modifier = Modifier,
     page: @Composable (projection: ObjectProjection, settled: Boolean) -> Unit,
 ) {
@@ -95,6 +98,7 @@ internal fun ViewerPager(
             state = state,
             modifier = modifier,
             beyondViewportPageCount = 0,
+            userScrollEnabled = userScrollEnabled,
             key = { pages[it].id },
         ) { index ->
             val projection = pages[index]
