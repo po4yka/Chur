@@ -3,8 +3,11 @@ package dev.po4yka.chur.android
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Rect
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
+import android.os.ParcelFileDescriptor
 import android.view.Choreographer
 import android.view.View
 import android.view.ViewGroup
@@ -26,12 +29,16 @@ import androidx.test.platform.app.InstrumentationRegistry
 import dev.po4yka.chur.app.AppRoute
 import dev.po4yka.chur.app.ChurController
 import dev.po4yka.chur.app.MediaImporter
+import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
+import dev.po4yka.chur.app.vault.MEDIA_CLASS_IMAGE
 import dev.po4yka.chur.imports.AndroidMediaCodec
 import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.sync.FileSyncStateStore
 import dev.po4yka.chur.sync.SyncState
 import dev.po4yka.chur.vault.VaultState
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
@@ -72,7 +79,9 @@ import org.junit.runner.RunWith
  * own action does what the form's button does. A screen reader hears every
  * refused unlock, not only the first, §23.2. The vault's lock settings are
  * switches that show the state in force, and a tap flips it. Stopping sync
- * asks first, §26, and only the confirm forgets the server.
+ * asks first, §26, and only the confirm forgets the server. Private playback
+ * holds the audio focus, so another app's playback pauses it, and the lock
+ * gives the focus up, `ANDROID.md` §17.3, with no media session published.
  */
 @RunWith(AndroidJUnit4::class)
 class BackNavigationTest {
@@ -307,7 +316,7 @@ class BackNavigationTest {
     @Test
     fun backClosesTheInfoOverlayAndThenTheViewer() = inTestVault {
         // The photo is imported on the first run only.
-        if (!await(3_000) { controller.page.value.objects.isNotEmpty() }) importPhoto()
+        if (!await(3_000) { controller.page.value.objects.any { it.mediaKind == MEDIA_CLASS_IMAGE } }) importPhoto()
         var tile: AccessibilityNodeInfo? = null
         assertTrue("a media tile", await { findTile()?.also { tile = it } != null })
         tap { it == tile }
@@ -460,9 +469,51 @@ class BackNavigationTest {
         }
     }
 
+    @Test
+    fun privatePlaybackYieldsTheAudioFocusAndTheLockGivesItUp() = inTestVault {
+        // The recording is imported on the first run only.
+        if (!await(3_000) { controller.page.value.objects.any { it.mediaKind == MEDIA_CLASS_AUDIO } }) importRecording()
+        // A recording's tile shows its length and nothing else.
+        tap { it.text?.matches(Regex("\\d+:\\d{2}")) == true }
+        tap(label("Play"))
+        assertTrue("playback takes the media focus", await { focusEntries().any { "usage=USAGE_MEDIA" in it } })
+        assertFalse(
+            "playback publishes no media session",
+            "package=${activity.packageName}" in shell("dumpsys media_session"),
+        )
+
+        // Another app that starts to play asks for the whole focus.
+        val audio = activity.getSystemService(AudioManager::class.java)
+        val other = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN).setOnAudioFocusChangeListener {}.build()
+        assertEquals(AudioManager.AUDIOFOCUS_REQUEST_GRANTED, audio.requestAudioFocus(other))
+        try {
+            assertTrue("the vault's playback pauses", await { find(label("Play")) != null })
+        } finally {
+            audio.abandonAudioFocusRequest(other)
+        }
+
+        tap(label("Play"))
+        assertTrue("playing again takes the focus again", await { focusEntries().isNotEmpty() })
+        lockQuietly()
+        assertTrue("the lock gives the focus up", await { focusEntries().isEmpty() })
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
+
+    private fun shell(command: String): String =
+        ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command))
+            .bufferedReader()
+            .use { it.readText() }
+
+    /** This application's entries in the audio focus stack of `dumpsys audio`. */
+    private fun focusEntries(): List<String> =
+        shell("dumpsys audio").lineSequence()
+            .dropWhile { !it.startsWith("Audio Focus stack entries") }
+            .takeWhile { "focus policy" !in it }
+            .filter { "pack: ${activity.packageName}" in it }
+            .toList()
 
     /**
      * The settings row named [title], scrolled into view: a switch, which a
@@ -744,20 +795,44 @@ class BackNavigationTest {
 
     /** Imports one generated photograph through the production importer. */
     private fun importPhoto() {
+        val bitmap = Bitmap.createBitmap(320, 240, Bitmap.Config.ARGB_8888).apply { eraseColor(0xFF3366CC.toInt()) }
+        importFile("back-test.jpg") { bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+        assertTrue("the page shows it", await { controller.page.value.objects.any { it.mediaKind == MEDIA_CLASS_IMAGE } })
+    }
+
+    /**
+     * Imports a generated recording of silence through the production
+     * importer: a 16-bit mono WAV, long enough to still play when a check
+     * that needs it paused looks.
+     */
+    private fun importRecording() {
+        val samples = 8_000 * 60
+        val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN).apply {
+            put("RIFF".toByteArray()).putInt(36 + samples * 2).put("WAVE".toByteArray())
+            put("fmt ".toByteArray()).putInt(16).putShort(1).putShort(1).putInt(8_000).putInt(16_000)
+            putShort(2).putShort(16)
+            put("data".toByteArray()).putInt(samples * 2)
+        }
+        importFile("focus-test.wav") { it.write(header.array()); it.write(ByteArray(samples * 2)) }
+        assertTrue(
+            "the page shows it",
+            await { controller.page.value.objects.any { it.mediaKind == MEDIA_CLASS_AUDIO } },
+        )
+    }
+
+    private fun importFile(name: String, write: (java.io.OutputStream) -> Unit) {
         val context = instrumentation.targetContext
-        // The application's own provider serves this directory, so the photo
+        // The application's own provider serves this directory, so the file
         // arrives as a content URI with a name, a size and a type, as a picked
         // one does.
-        val file = File(context.cacheDir, "export-scratch/back-test.jpg")
+        val file = File(context.cacheDir, "export-scratch/$name")
         file.parentFile?.mkdirs()
-        val bitmap = Bitmap.createBitmap(320, 240, Bitmap.Config.ARGB_8888).apply { eraseColor(0xFF3366CC.toInt()) }
-        file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+        file.outputStream().use(write)
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.exports", file)
         val codec = AndroidMediaCodec(context.contentResolver)
         val outcome = runBlocking { controller.importMedia(MediaImporter(codec)) { codec.open(uri) } }
-        assertTrue("the photo must import: $outcome", outcome is MediaImporter.Outcome.Imported)
+        assertTrue("$name must import: $outcome", outcome is MediaImporter.Outcome.Imported)
         instrumentation.runOnMainSync { controller.reportImport(null) }
-        assertTrue("the page shows it", await { controller.page.value.objects.isNotEmpty() })
     }
 
     private fun label(text: String): (AccessibilityNodeInfo) -> Boolean =

@@ -7,6 +7,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
@@ -38,6 +40,24 @@ actual fun VaultPlayer(source: PlaybackSource, modifier: Modifier) {
         val factory = ChurDataSource.Factory(source)
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(ProgressiveMediaSource.Factory(factory))
+            // Media3 takes audio focus and reacts to a headset disconnect only
+            // when asked. With the focus, the player pauses when another app
+            // starts to play or a call rings, and a lock has a focus to give
+            // up, step 5 of `ANDROID.md` §17.3: `release()` below abandons it.
+            // "Becoming noisy" pauses it when headphones are unplugged or a
+            // Bluetooth headset drops, so a private recording does not go on
+            // through the loudspeaker. Neither publishes a media session or a
+            // notification, which §17.3 and §20.3 keep off.
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(
+                        if (source.contentType.startsWith("video/")) C.AUDIO_CONTENT_TYPE_MOVIE else C.AUDIO_CONTENT_TYPE_MUSIC,
+                    )
+                    .build(),
+                /* handleAudioFocus = */ true,
+            )
+            .setHandleAudioBecomingNoisy(true)
             .build()
             .apply {
                 setMediaItem(
