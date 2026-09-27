@@ -28,4 +28,18 @@ class ActiveOperationTest {
         assertEquals("Cancelling export…", start.copy(total = 10, stage = 2, cancelling = true).spoken)
         assertEquals(start.copy(stage = 2).description, start.copy(stage = 2).spoken)
     }
+
+    @Test
+    fun an_import_names_its_item_and_phase_and_no_byte_count() {
+        // `DESIGN.md` §15.2 phases and the §23.2 "Importing item 3 of 12".
+        val batch = ActiveOperation(id = 1, name = "import", item = 3, items = 12)
+        assertEquals("Importing item 3 of 12 · Preparing", batch.description)
+        val encrypting = batch.copy(stage = 2, processed = 46, total = 100)
+        assertEquals("Importing item 3 of 12 · Encrypting", encrypting.description)
+        assertEquals("Importing item 3 of 12, 40 percent", encrypting.spoken)
+        assertEquals("Importing item 3 of 12 · Adding to library", batch.copy(stage = 4).description)
+        assertEquals("Importing item 3 of 12, Adding to library", batch.copy(stage = 4).spoken)
+        assertEquals("Importing · Encrypting", encrypting.copy(item = 1, items = 1).description)
+        assertEquals("Cancelling import…", encrypting.copy(cancelling = true).spoken)
+    }
 }

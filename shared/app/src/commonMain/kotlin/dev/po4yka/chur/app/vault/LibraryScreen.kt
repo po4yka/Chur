@@ -25,8 +25,9 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Icon
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -685,10 +686,13 @@ private fun SelectionCheck(modifier: Modifier, onClick: () -> Unit) {
  * The empty library, §11.3.
  *
  * The copy avoids security marketing after onboarding, which §11.3 says
- * explicitly.
+ * explicitly. §11.3 ends the state with [Import], so the way out of an empty
+ * library is on it and not only in the floating action. [onImport] is `null`
+ * while another operation runs, and the button is then left out, as the
+ * floating action is.
  */
 @Composable
-fun EmptyLibrary(modifier: Modifier = Modifier) {
+fun EmptyLibrary(onImport: (() -> Unit)?, modifier: Modifier = Modifier) {
     val colors = LocalChurColors.current
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
@@ -708,6 +712,7 @@ fun EmptyLibrary(modifier: Modifier = Modifier) {
                 color = colors.inkMuted,
                 textAlign = TextAlign.Center,
             )
+            if (onImport != null) Button(onClick = onImport) { Text("Import") }
         }
     }
 }

@@ -492,29 +492,10 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                             if (path != null) {
                                 scope.launch {
                                     try {
-                                        val outcome = controller.importMedia(importer) {
+                                        // The picker answers with one item, so
+                                        // this is a batch of one.
+                                        controller.importAll(importer, 1, albumId) {
                                             codec.open(NSURL.fileURLWithPath(path))
-                                        }
-                                        if (controller.vaultState.value !is VaultState.Unlocked) return@launch
-                                        when (outcome) {
-                                            is MediaImporter.Outcome.Imported -> {
-                                                controller.reportImport(when {
-                                                    outcome.previewsSkipped -> "Imported original; remaining previews cancelled."
-                                                    albumId == null -> "Imported into vault."
-                                                    else -> null
-                                                })
-                                                if (albumId != null) {
-                                                    controller.placeObjectsInAlbum(albumId, listOf(outcome.objectId)) {
-                                                        controller.report(if (outcome.previewsSkipped) {
-                                                            "Imported original into album; remaining previews cancelled."
-                                                        } else "Imported into album.")
-                                                    }
-                                                }
-                                            }
-                                            is MediaImporter.Outcome.TooLarge -> controller.reportImport(outcome.reason)
-                                            MediaImporter.Outcome.Unreadable -> controller.reportImport("That file could not be opened.")
-                                            is MediaImporter.Outcome.Refused -> controller.reportImport(userCopy(outcome.status))
-                                            null -> Unit
                                         }
                                     } finally {
                                         if (path.startsWith(NSTemporaryDirectory())) unlink(path)

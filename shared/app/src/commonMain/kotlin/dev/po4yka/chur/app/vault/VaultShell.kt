@@ -658,7 +658,10 @@ private fun LibraryBody(state: VaultUiState, actions: VaultActions,
             onSort = actions.onSortChange, onKinds = actions.onKindsChange,
         )
         if (state.tiles.isEmpty()) {
-            if (state.libraryScopeTitle == null && state.kinds == 0) EmptyLibrary(modifier = Modifier.weight(1f))
+            if (state.libraryScopeTitle == null && state.kinds == 0) EmptyLibrary(
+                onImport = actions.onImport.takeIf { state.operation == null },
+                modifier = Modifier.weight(1f),
+            )
             else Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Text(if (state.kinds != 0) "No media matches these filters" else
                     "No media in ${state.libraryScopeTitle}",

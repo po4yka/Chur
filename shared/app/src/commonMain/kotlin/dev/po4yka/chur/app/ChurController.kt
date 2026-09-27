@@ -1607,26 +1607,76 @@ class ChurController(
         }
     }
 
-    /** Runs a picker import with the same progress and cancellation as other work. */
+    /**
+     * Runs a single import with the same progress and cancellation as other
+     * work. It is a pick of one, so its card reads in the `DESIGN.md` §15.2
+     * phases, as [importAll] does, and not in bytes.
+     */
     suspend fun importMedia(importer: MediaImporter, open: () -> PickedMedia?): MediaImporter.Outcome? =
-        try {
-            tracked("import") { token ->
-                withContext(Dispatchers.Default) {
-                    importer.import(
-                        repository = repository,
-                        source = open(),
-                        onProgress = { updateOperation(token, it, keepCancellableOnSuccess = true) },
-                        cancelRequested = { cancellationRequested(token) },
-                    )
-                }
+        tracked("import") { token ->
+            _activeOperation.update { current ->
+                current?.takeIf { it.id == token }?.copy(item = 1, items = 1) ?: current
             }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (failure: ChurFailure) {
-            MediaImporter.Outcome.Refused(failure.status)
-        } catch (_: Exception) {
-            MediaImporter.Outcome.Refused(ChurStatus.INTERNAL_FAILURE)
+            importItem(importer, token) { open() }
         }
+
+    /**
+     * Imports what one picker session returned, as one operation.
+     *
+     * A picker hands back many items at once, and each used to need its own
+     * round trip through the picker, because a second import was refused
+     * while the first ran. Here the items run one after another under one
+     * progress card, "Importing item 3 of 12", `DESIGN.md` §15.2 and §23.2.
+     * One at a time keeps the bound of `MEDIA_PIPELINE.md` §12 on what is in
+     * flight.
+     *
+     * Each item commits on its own, so a cancel or a lock keeps the items
+     * already imported and stops before the next one. An item that cannot be
+     * opened or is refused does not stop the rest, unless the refusal is about
+     * the vault or the device rather than the item, [PICK_STOPPING_STATUSES]:
+     * the rest would meet the same full disk or damaged vault, so none of them
+     * opens an import. The imported items go into [albumId] in one placement,
+     * and one line then says what happened to the whole pick; no line follows
+     * a lock, whose route change drops it anyway.
+     *
+     * [open] opens the item at an index. The picked items stay with the host,
+     * which never keeps them past this call, `ANDROID.md` §14.2.
+     */
+    suspend fun importAll(
+        importer: MediaImporter,
+        count: Int,
+        albumId: ByteArray?,
+        open: suspend (Int) -> PickedMedia?,
+    ): List<MediaImporter.Outcome> {
+        val outcomes = mutableListOf<MediaImporter.Outcome>()
+        tracked("import") { token ->
+            for (index in 0 until count) {
+                if (cancellationRequested(token) || repository.state.value !is VaultState.Unlocked) break
+                _activeOperation.update { current ->
+                    current?.takeIf { it.id == token }?.copy(
+                        processed = 0,
+                        total = 0,
+                        stage = 1,
+                        cancellable = true,
+                        item = index + 1,
+                        items = count,
+                    ) ?: current
+                }
+                val outcome = importItem(importer, token) { open(index) }
+                outcomes += outcome
+                if (outcome is MediaImporter.Outcome.Refused && outcome.status in PICK_STOPPING_STATUSES) break
+            }
+        } ?: return outcomes
+        if (outcomes.isEmpty() || repository.state.value !is VaultState.Unlocked) return outcomes
+        val summary = importSummary(outcomes, count, intoAlbum = albumId != null)
+        val imported = outcomes.filterIsInstance<MediaImporter.Outcome.Imported>().map { it.objectId }
+        if (albumId != null && imported.isNotEmpty()) {
+            placeObjectsInAlbum(albumId, imported) { report(summary) }
+        } else {
+            reportImport(summary)
+        }
+        return outcomes
+    }
 
     /** Closes the runtime, which a finishing host does. */
     suspend fun shutdown() {
@@ -1646,6 +1696,28 @@ class ChurController(
         } finally {
             _activeOperation.update { current -> current?.takeUnless { it.id == token } }
         }
+    }
+
+    /** Imports one picked item under the operation that [token] owns. */
+    private suspend fun importItem(
+        importer: MediaImporter,
+        token: Long,
+        open: suspend () -> PickedMedia?,
+    ): MediaImporter.Outcome = try {
+        withContext(Dispatchers.Default) {
+            importer.import(
+                repository = repository,
+                source = open(),
+                onProgress = { updateOperation(token, it, keepCancellableOnSuccess = true) },
+                cancelRequested = { cancellationRequested(token) },
+            )
+        }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (failure: ChurFailure) {
+        MediaImporter.Outcome.Refused(failure.status)
+    } catch (_: Exception) {
+        MediaImporter.Outcome.Refused(ChurStatus.INTERNAL_FAILURE)
     }
 
     private fun cancellationRequested(token: Long): Boolean =
@@ -2037,11 +2109,88 @@ class ChurController(
             ChurStatus.OBJECT_CORRUPT,
         )
 
+        /**
+         * The refusals that end a pick in [importAll].
+         *
+         * `ERROR_MODEL.md` puts their cause in the device or the vault, not in
+         * the picked item: protected data the locked device keeps closed, a
+         * volume that is full, detached or unwritable, and a vault or a
+         * library that failed its integrity check. Every later item would
+         * open an import into the same state, and write more to a vault
+         * already reported damaged.
+         *
+         * `IO_FAILURE` is not one of them: a failed read of the picked item
+         * itself also maps to it, `ANDROID.md` §27 and `IOS.md` §29, as when
+         * a cloud-backed item loses its network. `ANDROID.md` §14.4 has import
+         * handle such transient network errors, so that item fails alone and
+         * the rest of the pick goes on.
+         */
+        val PICK_STOPPING_STATUSES: Set<ChurStatus> = setOf(
+            ChurStatus.PROTECTED_DATA_UNAVAILABLE,
+            ChurStatus.VAULT_CORRUPT,
+            ChurStatus.CATALOG_CORRUPT,
+            ChurStatus.STORAGE_UNAVAILABLE,
+        )
+
         /** Fast enough to feel immediate, slow enough not to spin a core. */
         const val POLL_INTERVAL_MS = 50L
 
         /** A count of library items for a notice: "1 item", "3 items". */
         fun items(count: Int): String = if (count == 1) "1 item" else "$count items"
+
+        /**
+         * The one line an import ends with, `MEDIA_PIPELINE.md` §13.
+         *
+         * A pick of one item keeps the line it always had. A larger pick
+         * counts what its items ended as, "11 imported, 1 could not be
+         * opened", and names none of them: `DESIGN.md` §26 keeps file names
+         * out of a snackbar. The items a cancel kept from starting count as
+         * cancelled, and the ones a [PICK_STOPPING_STATUSES] refusal kept
+         * from starting count as skipped.
+         *
+         * §13 tells storage full, permission denied, an unsupported codec and
+         * corruption apart, and the next step differs for each, so a refused
+         * item adds the [userCopy] line a pick of one shows. A pick gives one
+         * reason: an integrity verdict first, so a damaged vault is not hidden
+         * behind a lesser refusal, then the refusal that ended the pick, then
+         * the first one.
+         */
+        fun importSummary(outcomes: List<MediaImporter.Outcome>, requested: Int, intoAlbum: Boolean): String {
+            val single = outcomes.singleOrNull()
+            if (requested == 1 && single != null) return when (single) {
+                is MediaImporter.Outcome.Imported -> when {
+                    single.previewsSkipped && intoAlbum -> "Imported original into album; remaining previews cancelled."
+                    single.previewsSkipped -> "Imported original; remaining previews cancelled."
+                    intoAlbum -> "Imported into album."
+                    else -> "Imported into vault."
+                }
+                is MediaImporter.Outcome.TooLarge -> single.reason
+                MediaImporter.Outcome.Unreadable -> "That file could not be opened."
+                is MediaImporter.Outcome.Refused -> userCopy(single.status)
+            }
+            val imported = outcomes.filterIsInstance<MediaImporter.Outcome.Imported>()
+            val unreadable = outcomes.count { it == MediaImporter.Outcome.Unreadable }
+            val tooLarge = outcomes.count { it is MediaImporter.Outcome.TooLarge }
+            val refused = outcomes.filterIsInstance<MediaImporter.Outcome.Refused>()
+            val failed = refused.filter { it.status != ChurStatus.CANCELLED }
+            // A stopping refusal ends the loop, so it is always the last one.
+            val stopped = failed.lastOrNull()?.status in PICK_STOPPING_STATUSES
+            val unopened = requested - outcomes.size
+            val skipped = if (stopped) unopened else 0
+            val cancelled = refused.size - failed.size + unopened - skipped
+            val counts = listOfNotNull(
+                "${imported.size} imported",
+                "$unreadable could not be opened".takeIf { unreadable > 0 },
+                "$tooLarge too large to import".takeIf { tooLarge > 0 },
+                "${failed.size} could not be imported".takeIf { failed.isNotEmpty() },
+                "$cancelled cancelled".takeIf { cancelled > 0 },
+                "$skipped skipped".takeIf { skipped > 0 },
+            ).joinToString(", ")
+            val previews = if (imported.any { it.previewsSkipped }) "; remaining previews cancelled" else ""
+            val reason = failed.firstOrNull { it.status in SECURITY_STATUSES }
+                ?: if (stopped) failed.last() else failed.firstOrNull()
+            return "$counts$previews." + reason?.let { " " + userCopy(it.status) }.orEmpty()
+        }
 
         /**
          * How often the idle timer looks.

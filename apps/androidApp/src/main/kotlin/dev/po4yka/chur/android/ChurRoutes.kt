@@ -13,6 +13,7 @@ import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,7 +24,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -42,7 +46,10 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
@@ -59,7 +66,6 @@ import dev.po4yka.chur.app.notes.NotesScreen
 import dev.po4yka.chur.app.notes.OpenNote
 import dev.po4yka.chur.app.notes.PublicSettingsScreen
 import dev.po4yka.chur.app.notes.rememberOpenNote
-import dev.po4yka.chur.app.userCopy
 import dev.po4yka.chur.app.vault.CreateVaultScreen
 import dev.po4yka.chur.app.vault.LibraryTile
 import dev.po4yka.chur.app.vault.AlbumPickerDialog
@@ -374,6 +380,7 @@ private fun RestoreRoute(controller: ChurController) {
     )
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun VaultRoute(controller: ChurController) {
     val page by controller.page.collectAsState()
@@ -453,41 +460,23 @@ private fun VaultRoute(controller: ChurController) {
 
     val codec = remember { AndroidMediaCodec(context.contentResolver) }
     val importer = remember { MediaImporter(codec) }
-    val onPicked: (Uri?) -> Unit = { uri ->
+    val onPicked: (List<Uri>) -> Unit = { uris ->
         // The picker is an activity of ours, so the vault stayed open while it
         // ran. It ends here whether the user chose something or dismissed it.
         controller.endHostActivity()
         val albumId = importAlbumId
         importAlbumId = null
-        if (uri != null) {
-            scope.launch {
-                val outcome = controller.importMedia(importer) { codec.open(uri) }
-                if (controller.vaultState.value !is VaultState.Unlocked) return@launch
-                when (outcome) {
-                    is MediaImporter.Outcome.Imported -> {
-                        controller.reportImport(when {
-                            outcome.previewsSkipped -> "Imported original; remaining previews cancelled."
-                            albumId == null -> "Imported into vault."
-                            else -> null
-                        })
-                        if (albumId != null) {
-                            controller.placeObjectsInAlbum(albumId, listOf(outcome.objectId)) {
-                                controller.report(if (outcome.previewsSkipped) {
-                                    "Imported original into album; remaining previews cancelled."
-                                } else "Imported into album.")
-                            }
-                        }
-                    }
-                    is MediaImporter.Outcome.TooLarge -> controller.reportImport(outcome.reason)
-                    MediaImporter.Outcome.Unreadable -> controller.reportImport("That file could not be opened.")
-                    is MediaImporter.Outcome.Refused -> controller.reportImport(userCopy(outcome.status))
-                    null -> Unit
-                }
-            }
+        // The grants live in this list for the one batch and never reach
+        // saved state, `ANDROID.md` §14.2.
+        if (uris.isNotEmpty()) {
+            scope.launch { controller.importAll(importer, uris.size, albumId) { codec.open(uris[it]) } }
         }
     }
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), onPicked)
-    val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), onPicked)
+    // Both pickers take many items in one session. The photo picker keeps
+    // its platform limit, and on API levels without it the contract falls
+    // back to a document picker that allows multiple selection (§14.1).
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(), onPicked)
+    val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments(), onPicked)
 
     LaunchedEffect(destination, openAlbum, openTag, favoritesOnly, trashOpen, quarantineOpen,
         terms, mediaSort, albumSort, mediaKinds) {
@@ -527,27 +516,35 @@ private fun VaultRoute(controller: ChurController) {
     }
 
     if (choosingImport) {
-        AlertDialog(
-            onDismissRequest = { choosingImport = false },
-            title = { Text("Import media") },
-            text = { Text("Choose photos and videos or an audio file.") },
-            confirmButton = {
-                TextButton(onClick = {
+        // `DESIGN.md` §26: a sheet for a contextual choice. Each source is a
+        // row of its own, and the scrim and Back dismiss the sheet. The
+        // dialog it replaces put "Audio files" in the dismiss slot, so no
+        // button only closed it.
+        ModalBottomSheet(onDismissRequest = { choosingImport = false }) {
+            Text(
+                "Import media",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).semantics { heading() },
+            )
+            ListItem(
+                headlineContent = { Text("Photos and videos") },
+                modifier = Modifier.clickable(role = Role.Button) {
                     choosingImport = false
                     importAlbumId = openAlbum?.albumId
                     controller.beginHostActivity()
                     picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
-                }) { Text("Photos and videos") }
-            },
-            dismissButton = {
-                TextButton(onClick = {
+                },
+            )
+            ListItem(
+                headlineContent = { Text("Audio files") },
+                modifier = Modifier.clickable(role = Role.Button) {
                     choosingImport = false
                     importAlbumId = openAlbum?.albumId
                     controller.beginHostActivity()
                     audioPicker.launch(arrayOf("audio/*"))
-                }) { Text("Audio files") }
-            },
-        )
+                },
+            )
+        }
     }
 
     devicePairing?.let { pairing ->
