@@ -31,4 +31,21 @@ class ViewerChromeTest {
         assertTrue(chrome.visible(pinned = true), "a sheet opened later shows the hidden chrome")
         assertFalse(chrome.visible(pinned = false))
     }
+
+    /** §13.2: a tap on a video reaches its player, and the chrome follows the player's controls. */
+    @Test
+    fun the_chrome_goes_with_the_player_controls_unless_it_is_pinned() {
+        val chrome = ViewerChrome()
+
+        chrome.follow(visible = false, pinned = false)
+        assertFalse(chrome.visible(pinned = false), "controls that hide take the chrome")
+        chrome.follow(visible = false, pinned = false)
+        assertFalse(chrome.visible(pinned = false), "a second report is not a toggle")
+
+        chrome.follow(visible = true, pinned = false)
+        assertTrue(chrome.visible(pinned = false), "controls that show bring it back")
+
+        chrome.follow(visible = false, pinned = true)
+        assertTrue(chrome.visible(pinned = false), "a sheet or dialog keeps the chrome, and the controls come back to it")
+    }
 }

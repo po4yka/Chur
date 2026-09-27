@@ -6,6 +6,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
@@ -13,9 +15,12 @@ import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.add
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.only
@@ -33,6 +38,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -44,6 +50,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.center
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
@@ -93,6 +100,10 @@ import kotlin.math.min
  * here is its own: [preview], [player] and [detail] are the route's for that
  * item alone. A swipe moves to the adjacent page, and [onSettled] tells the
  * route which item it landed on, [ViewerPager].
+ *
+ * [player] is given the padding that keeps a player's own controls between
+ * the chrome rows, [VaultPlayer]. [onTouch] reports each touch on the viewer,
+ * a chrome control's too, which a player counts as activity.
  */
 @Composable
 fun ViewerScreen(
@@ -107,6 +118,7 @@ fun ViewerScreen(
     showDetail: Boolean,
     chromeVisible: Boolean,
     onToggleChrome: () -> Unit,
+    onTouch: () -> Unit = {},
     onBack: () -> Unit,
     onLock: () -> Unit,
     onPanic: () -> Unit,
@@ -117,7 +129,7 @@ fun ViewerScreen(
     trashOpen: Boolean = false,
     onRestore: () -> Unit = {},
     onToggleDetail: () -> Unit,
-    player: (@Composable (Modifier) -> Unit)? = null,
+    player: (@Composable (Modifier, PaddingValues) -> Unit)? = null,
     waveform: ByteArray? = null,
     operation: ActiveOperation? = null,
     onCancelOperation: () -> Unit = {},
@@ -139,6 +151,7 @@ fun ViewerScreen(
     // drag in any direction would pass its slop first on a swipe that is not
     // quite level and take it from the pager.
     val toggleChrome by rememberUpdatedState(onToggleChrome)
+    val touch by rememberUpdatedState(onTouch)
     // §13.1: a photo zooms and pans, [ViewerZoom]. The zoom is the item's on
     // screen, so a swipe lands on the next one at 1x. A video or a recording
     // does not zoom: its player has gestures of its own. While the photo is
@@ -147,8 +160,26 @@ fun ViewerScreen(
     val zoomed by remember(zoom) { derivedStateOf { zoom.value.zoomed } }
     val photo = projection.mediaKind == MEDIA_CLASS_IMAGE
     val still by rememberUpdatedState(preview ?: thumbnails[projection.id])
+    // §13.2 and §25.5: a player's controls sit between the chrome rows and
+    // clear of the cutout, so its time and its settings are not under the
+    // actions. The rows keep their last height while hidden, and so do the
+    // controls, which hide with them.
+    var chromeTop by remember { mutableIntStateOf(0) }
+    var chromeBottom by remember { mutableIntStateOf(0) }
+    val controlsPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+        .add(WindowInsets(top = chromeTop, bottom = chromeBottom))
+        .asPaddingValues()
     Box(
         modifier = Modifier.fillMaxSize().background(ViewerColors.canvas)
+            .pointerInput(Unit) {
+                // §13.4: the chrome hides after inactivity, and a touch
+                // anywhere on the viewer is activity, a chrome control's too.
+                // The root sees each touch first and consumes nothing.
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    touch()
+                }
+            }
             .pointerInput(zoom, photo) {
                 // The pager's pages fill this box, so a tap here is where it
                 // lands on the photo. On a photo a tap waits out the double-tap
@@ -186,9 +217,9 @@ fun ViewerScreen(
                 // open its player. Without a thumbnail it shows the canvas, as
                 // nothing is being decrypted for it.
                 if (settled) {
-                    ViewerMedia(preview ?: thumbnails[page.id], player, waveform, zoom.takeIf { photo })
+                    ViewerMedia(preview ?: thumbnails[page.id], player, controlsPadding, waveform, zoom.takeIf { photo })
                 } else {
-                    thumbnails[page.id]?.let { ViewerMedia(it, player = null, waveform = null) }
+                    thumbnails[page.id]?.let { ViewerMedia(it, player = null, controlsPadding = controlsPadding, waveform = null) }
                 }
             }
         }
@@ -206,6 +237,7 @@ fun ViewerScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .onSizeChanged { chromeTop = it.height }
                     .background(ViewerColors.chromeScrim)
                     .windowInsetsPadding(topInsets)
                     .padding(ChurSpacing.two),
@@ -234,6 +266,7 @@ fun ViewerScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .onSizeChanged { chromeBottom = it.height }
                     .background(ViewerColors.chromeScrim)
                     .windowInsetsPadding(bottomInsets)
                     .padding(ChurSpacing.two),
@@ -294,7 +327,8 @@ fun ViewerScreen(
 @Composable
 private fun ViewerMedia(
     preview: ImageBitmap?,
-    player: (@Composable (Modifier) -> Unit)?,
+    player: (@Composable (Modifier, PaddingValues) -> Unit)?,
+    controlsPadding: PaddingValues,
     waveform: ByteArray?,
     zoom: MutableState<ViewerZoom>? = null,
 ) {
@@ -304,7 +338,7 @@ private fun ViewerMedia(
             // a slot rather than a call, because it is the one part of this
             // screen that reads a repository, and this file's rule is that a
             // screen is a pure function of a state value.
-            player(Modifier.fillMaxSize())
+            player(Modifier.fillMaxSize(), controlsPadding)
             // A recording has nothing to look at, so the waveform is what the
             // screen shows: `MEDIA_PIPELINE.md` §6.1 makes it a peak envelope
             // rather than a picture, which is why it can be drawn in the
@@ -417,9 +451,11 @@ private const val CHROME_FADE_MS = 150
  * hides it, and the next tap brings it back.
  *
  * §13.4 names when chrome must not hide by itself. Nothing here hides it on a
- * timer, and while the route says it is pinned, because the Info sheet, a
- * dialog, a confirmation or an operation is open, it stays shown and a tap
- * leaves it as it is. Both hosts keep one, so they follow the same rule.
+ * timer; a player's controls hide after a time of playback with no touch, and
+ * the chrome follows them, [follow]. While the route says it is pinned,
+ * because the Info sheet, a dialog, a confirmation or an operation is open, it
+ * stays shown and a tap leaves it as it is, and the player holds its controls
+ * with it. Both hosts keep one, so they follow the same rule.
  */
 @Stable
 class ViewerChrome {
@@ -429,6 +465,29 @@ class ViewerChrome {
 
     fun toggle(pinned: Boolean) {
         if (!pinned) hidden = !hidden
+    }
+
+    /**
+     * A player's own controls showed or hid, as a tap on a video does, or
+     * hid after a time of playback with no touch, [VaultPlayer]. The chrome
+     * goes with them, so one tap shows or hides both, and a pinned chrome
+     * stays.
+     */
+    fun follow(visible: Boolean, pinned: Boolean) {
+        if (!pinned) hidden = !visible
+    }
+
+    /**
+     * How many touches the viewer has had, [touched]. A player's controls,
+     * and the chrome with them, hide after a time of playback with no touch,
+     * and a touch on a chrome control that leaves the chrome as it is, as
+     * Favourite does, starts that time again, [VaultPlayer].
+     */
+    var touches by mutableIntStateOf(0)
+        private set
+
+    fun touched() {
+        touches++
     }
 }
 

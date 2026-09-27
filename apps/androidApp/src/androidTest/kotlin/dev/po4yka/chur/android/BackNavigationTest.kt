@@ -1,5 +1,6 @@
 package dev.po4yka.chur.android
 
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Rect
@@ -38,11 +39,18 @@ import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_IMAGE
 import dev.po4yka.chur.app.vault.ThumbnailCache
 import dev.po4yka.chur.app.vault.viewerStill
+import dev.po4yka.chur.ffi.StreamKind
 import dev.po4yka.chur.imports.AndroidMediaCodec
+import dev.po4yka.chur.imports.Derivative
+import dev.po4yka.chur.imports.MediaBounds
+import dev.po4yka.chur.imports.MediaCodec
+import dev.po4yka.chur.imports.PickedMedia
+import dev.po4yka.chur.imports.ProbedMedia
 import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.sync.FileSyncStateStore
 import dev.po4yka.chur.sync.SyncState
 import dev.po4yka.chur.vault.VaultState
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -94,6 +102,11 @@ import org.junit.runner.RunWith
  * asks first, §26, and only the confirm forgets the server. Private playback
  * holds the audio focus, so another app's playback pauses it, and the lock
  * gives the focus up, `ANDROID.md` §17.3, with no media session published.
+ * The player's own controls sit clear of the viewer's actions, `DESIGN.md`
+ * §13.2, and show and hide with the viewer's chrome. A swipe away from the
+ * player keeps the chrome. After the first play, a pause or the end brings
+ * the controls back, and the chrome with them. A video's poster keeps the
+ * controls under it off.
  * The viewer carries the lock control of `DISCREET_MODE.md` "The panic
  * gesture": a press locks and releases the player, and the panic is a screen
  * reader's custom action on the same control. A long press on a media tile
@@ -116,6 +129,10 @@ class BackNavigationTest {
 
     @Before
     fun start() {
+        // Each case starts as a finger leaves the screen. A key press, from an
+        // earlier case or run, leaves touch mode for the whole display, and
+        // the player holds its controls while the keyboard moves the focus.
+        instrumentation.setInTouchMode(true)
         activity = instrumentation.startActivitySync(
             Intent(instrumentation.targetContext, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
@@ -769,6 +786,266 @@ class BackNavigationTest {
         pressBack()
         assertTrue("the viewer closes", await { find(label("Info")) == null })
         assertTrue("the system bars stay", barsShown())
+    }
+
+    @Test
+    fun thePlayerControlsSitClearOfTheActionsAndGoWithTheChrome() = inTestVault {
+        // The recording is imported on the first run only. It plays in the
+        // same player view as a video, with the same controls.
+        if (!await(3_000) { controller.page.value.objects.any { it.mediaKind == MEDIA_CLASS_AUDIO } }) importRecording()
+        tap(::isRecording)
+        // The controls move until the chrome rows have their size, so they
+        // are measured and tapped once two looks agree.
+        var progress = Rect()
+        assertTrue("the controls settle", await {
+            val now = boundsOf(playerControl("exo_progress"))
+            (now == progress).also { progress = now }
+        })
+
+        // `DESIGN.md` §13.2: the time and the settings are not under the
+        // viewer's actions, and one item has no previous or next.
+        val settings = boundsOf(playerControl("exo_settings"))
+        for (action in listOf("Favourite", "Export", "Move to Trash")) {
+            val bounds = boundsOf(label(action))
+            assertFalse("the time bar clears $action", Rect.intersects(progress, bounds))
+            assertFalse("the settings clear $action", Rect.intersects(settings, bounds))
+        }
+        assertNull("no previous item", find(playerControl("exo_prev")))
+        assertNull("no next item", find(playerControl("exo_next")))
+
+        // §13.1: a tap on the player reaches the player, and the chrome goes
+        // with its controls.
+        val media = boundsOf { node ->
+            node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK && it.label?.toString() == "Hide controls" }
+        }
+        shell("input tap ${media.centerX()} ${media.top + media.height() / 4}")
+        assertTrue("the controls go", await { find(playerControl("exo_progress")) == null })
+        assertTrue("and the chrome with them", await { find(label("Back")) == null })
+
+        // The chrome brings the controls back when a screen reader shows it.
+        val hidden = find { node ->
+            node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK && it.label?.toString() == "Show controls" }
+        }
+        assertTrue(checkNotNull(hidden).performAction(AccessibilityNodeInfo.ACTION_CLICK))
+        assertTrue("the chrome comes back", await { find(label("Back")) != null })
+        assertTrue("with the controls", await { find(playerControl("exo_progress")) != null })
+        pressBack()
+    }
+
+    @Test
+    fun theChromeHidesWithThePlayerControlsAfterPlaybackWithNoTouch() = inTestVault {
+        // `DESIGN.md` §13.4: the chrome hides after a time of playback with no
+        // touch, and not while it is pinned. The recording plays in the same
+        // player view as a video, with the same controls.
+        val imported = listOf(importRecording("inactivity-test.wav", seconds = 120))
+        try {
+            tap(label("Audio, 2 minutes"))
+            val media = boundsOf { node ->
+                node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK && it.label?.toString() == "Hide controls" }
+            }
+            tap(playerControl("exo_play_pause"))
+            assertTrue("playback hides the controls", await { find(playerControl("exo_progress")) == null })
+            assertTrue("and the chrome with them", await { find(label("Back")) == null })
+
+            // A touch on a chrome control that leaves the chrome as it is,
+            // as Favourite does, is activity, and the time starts again. The
+            // touch comes 3 s into the 5 s, and the controls stay 3 s more.
+            shell("input tap ${media.centerX()} ${media.top + media.height() / 4}")
+            assertTrue("a tap brings the chrome back", await { find(label("Favourite")) != null })
+            Thread.sleep(3_000)
+            val favourite = boundsOf(label("Favourite"))
+            shell("input tap ${favourite.centerX()} ${favourite.centerY()}")
+            assertFalse("a touch on Favourite holds them", await(3_000) { find(playerControl("exo_progress")) == null })
+            assertTrue("then the controls go", await { find(playerControl("exo_progress")) == null })
+            assertTrue("and the chrome with them", await { find(label("Back")) == null })
+
+            // The Info sheet pins the chrome, and the player holds its
+            // controls with it. Without the hold, each timeout would hide
+            // them and the pinned chrome would show them again.
+            shell("input tap ${media.centerX()} ${media.top + media.height() / 4}")
+            assertTrue("a tap brings the chrome back", await { find(label("Info")) != null })
+            assertTrue("the controls time out", (controlsTimeoutMs() ?: 0) > 0)
+            tap(label("Info"))
+            assertEquals("the pinned chrome holds the controls", 0, controlsTimeoutMs())
+            assertFalse("the controls stay", await(7_000) { find(playerControl("exo_progress")) == null || find(label("Back")) == null })
+
+            // The accessibility snapshot can keep the old label for seconds,
+            // so the sheet closes through the semantics, as in [nameInInfo].
+            onScreen { nodes -> nodes.first { "Hide info" in it.labels }.config.getOrNull(SemanticsActions.OnClick)?.action?.invoke() }
+            awaitFrames()
+            assertTrue("without the sheet the controls go", await { find(playerControl("exo_progress")) == null })
+            assertTrue("and the chrome with them", await { find(label("Back")) == null })
+            pressBack()
+            assertTrue("the viewer closes", await { find(label("Info")) == null })
+        } finally {
+            settle { done -> controller.deleteAll(imported, done) }
+            settle { done -> controller.permanentlyDeleteAll(imported, done) }
+        }
+    }
+
+    @Test
+    fun aScreenReaderOrAKeyboardHoldsThePlayerControls() = inTestVault {
+        // `DESIGN.md` §13.4 and §23.3: the controls, and the chrome with them,
+        // do not hide by themselves while a screen reader explores the screen
+        // or the keyboard moves the focus. The test's own accessibility
+        // service asks for touch exploration, as TalkBack does.
+        if (!await(3_000) { controller.page.value.objects.any { it.mediaKind == MEDIA_CLASS_AUDIO } }) importRecording()
+        tap(::isRecording)
+        assertTrue("the controls time out", await { (controlsTimeoutMs() ?: 0) > 0 })
+        val automation = instrumentation.uiAutomation
+        val explore = { on: Boolean ->
+            automation.serviceInfo = automation.serviceInfo.apply {
+                val flag = AccessibilityServiceInfo.FLAG_REQUEST_TOUCH_EXPLORATION_MODE
+                flags = if (on) flags or flag else flags and flag.inv()
+            }
+        }
+        try {
+            explore(true)
+            assertTrue("a screen reader holds them", await { controlsTimeoutMs() == 0 })
+        } finally {
+            explore(false)
+        }
+        assertTrue("without it they time out again", await { (controlsTimeoutMs() ?: 0) > 0 })
+
+        // A key that moves the focus leaves touch mode, and a touch ends it.
+        shell("input keyevent KEYCODE_TAB")
+        assertTrue("the keyboard holds them", await { controlsTimeoutMs() == 0 })
+        val media = boundsOf { node ->
+            node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK && it.label?.toString() == "Hide controls" }
+        }
+        shell("input tap ${media.centerX()} ${media.top + media.height() / 4}")
+        assertTrue("a touch lets them time out", await { (controlsTimeoutMs() ?: 0) > 0 })
+        pressBack()
+    }
+
+    @Test
+    fun thePosterKeepsThePlayerControlsOffUntilPlay() = inTestVault {
+        // `DESIGN.md` §6.2 and §13.2: a video opens on its poster, and the
+        // player's controls under it are off, so a tap there cannot seek or
+        // open the settings unseen, and a screen reader hears one Play. The
+        // poster also goes when the player draws a frame, and many decoders
+        // draw one while paused. No player can read this video, so the
+        // poster stays until the press on every device.
+        val imported = listOf(importUnplayableVideo("poster-test.mp4"))
+        try {
+            tap { it.contentDescription?.startsWith("Video, ") == true }
+            val poster = { node: AccessibilityNodeInfo -> label("Play")(node) && node.viewIdResourceName == null }
+            assertTrue("the poster shows", await { find(poster) != null })
+            assertNotNull("with the chrome", find(label("Back")))
+            for (id in listOf("exo_play_pause", "exo_rew_with_amount", "exo_ffwd_with_amount", "exo_progress", "exo_settings")) {
+                assertNull("no $id under the poster", find(playerControl(id)))
+            }
+            assertNotNull("the poster still covers the player", find(poster))
+
+            // §13.1: a tap on the poster reaches the viewer, and the chrome
+            // goes.
+            val media = boundsOf { node ->
+                node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK && it.label?.toString() == "Hide controls" }
+            }
+            shell("input tap ${media.centerX()} ${media.top + media.height() / 4}")
+            assertTrue("a tap on the poster hides the chrome", await { find(label("Back")) == null })
+
+            tap(poster)
+            // The player failed on the stream, and the press brings no new
+            // state. It then shows its own state, and the chrome with it, not
+            // a black canvas or a poster that looks playable, §13.4.
+            assertTrue("the press brings the controls", await { find(playerControl("exo_play_pause")) != null })
+            assertTrue("and the chrome", await { find(label("Back")) != null })
+            assertTrue("in place of the poster", await { find(poster) == null })
+            assertFalse(
+                "the failure holds them",
+                await(7_000) { find(playerControl("exo_play_pause")) == null || find(label("Back")) == null },
+            )
+            pressBack()
+            assertTrue("the viewer closes", await { find(label("Info")) == null })
+        } finally {
+            settle { done -> controller.deleteAll(imported, done) }
+            settle { done -> controller.permanentlyDeleteAll(imported, done) }
+        }
+    }
+
+    @Test
+    fun aPauseOrTheEndBringsBackThePlayerControlsAndTheChrome() = inTestVault {
+        // `DESIGN.md` §13.2 and §13.4: the controls and the chrome hide after a
+        // time of playback with no touch. A pause that the user did not make,
+        // or the end of playback, then shows the controls again, and the
+        // chrome with them, so Back and the state of playback are in view.
+        val imported = listOf(importRecording("resume-test.wav", seconds = 20))
+        try {
+            tap(label("Audio, 20 seconds"))
+            tap(playerControl("exo_play_pause"))
+            assertTrue("playback hides the controls", await { find(playerControl("exo_progress")) == null })
+            assertTrue("and the chrome with them", await { find(label("Back")) == null })
+
+            // Another app that starts to play takes the whole focus, and the
+            // vault's playback pauses.
+            val audio = activity.getSystemService(AudioManager::class.java)
+            val other = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN).setOnAudioFocusChangeListener {}.build()
+            assertEquals(AudioManager.AUDIOFOCUS_REQUEST_GRANTED, audio.requestAudioFocus(other))
+            try {
+                assertTrue("the pause brings the controls back", await { find(playerControl("exo_progress")) != null })
+                assertTrue("and the chrome with them", await { find(label("Back")) != null })
+            } finally {
+                audio.abandonAudioFocusRequest(other)
+            }
+
+            tap(playerControl("exo_play_pause"))
+            assertTrue("playback hides them again", await { find(playerControl("exo_progress")) == null })
+            assertTrue("the end brings the controls back", await(30_000) { find(playerControl("exo_progress")) != null })
+            assertTrue("and the chrome with them", await { find(label("Back")) != null })
+            pressBack()
+            assertTrue("the viewer closes", await { find(label("Info")) == null })
+        } finally {
+            settle { done -> controller.deleteAll(imported, done) }
+            settle { done -> controller.permanentlyDeleteAll(imported, done) }
+        }
+    }
+
+    @Test
+    fun aSwipeOffOrOntoThePlayerLeavesTheChromeAsItIs() = inTestVault {
+        // `DESIGN.md` §13.1: a swipe is not a tap. The player's view hides
+        // its controls when its page leaves, and that must not hide the
+        // chrome of the page the swipe lands on. A paused player shows its
+        // controls by itself, and that must not show a chrome the user hid.
+        // The newest items lead the scope, so the recording is the first
+        // item and the photo the second.
+        val names = listOf("swipe-from-player.jpg", "swipe-from-player.wav")
+        val photo = Bitmap.createBitmap(320, 240, Bitmap.Config.ARGB_8888).apply { eraseColor(0xFF304050.toInt()) }
+        val imported = listOf(
+            importFile(names[0]) { photo.compress(Bitmap.CompressFormat.JPEG, 90, it) },
+            importRecording(names[1], seconds = 120),
+        )
+        try {
+            tap(label("Audio, 2 minutes"))
+            assertTrue("the controls show", await { find(playerControl("exo_progress")) != null })
+            assertEquals(names[1], nameInInfo(names))
+            val media = boundsOf { node ->
+                node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK && it.label?.toString() == "Hide controls" }
+            }
+            val (left, right, y) = Triple(media.left + media.width() / 6, media.right - media.width() / 6, media.centerY())
+
+            shell("input swipe $right $y $left $y 250")
+            // The released view hides its controls well inside this wait.
+            assertFalse("the chrome stays", await(3_000) { onScreen { nodes -> nodes.none { "Back" in it.labels } } })
+            assertEquals("the swipe lands on the photo", names[0], nameInInfo(names, previous = names[1]))
+
+            shell("input tap ${media.centerX()} ${media.centerY()}")
+            assertTrue("a tap on the photo hides the chrome", await { find(label("Back")) == null })
+            shell("input swipe $left $y $right $y 250")
+            assertFalse("the chrome stays hidden", await(3_000) {
+                onScreen { nodes -> nodes.any { "Back" in it.labels } } || find(playerControl("exo_progress")) != null
+            })
+            val hidden = find { node ->
+                node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK && it.label?.toString() == "Show controls" }
+            }
+            assertTrue(checkNotNull(hidden).performAction(AccessibilityNodeInfo.ACTION_CLICK))
+            assertEquals("the swipe lands on the recording", names[1], nameInInfo(names, previous = names[0]))
+            pressBack()
+            assertTrue("the viewer closes", await { find(label("Info")) == null })
+        } finally {
+            settle { done -> controller.deleteAll(imported, done) }
+            settle { done -> controller.permanentlyDeleteAll(imported, done) }
+        }
     }
 
     @Test
@@ -1461,6 +1738,22 @@ class BackNavigationTest {
             ((this as? ViewGroup)?.let { group -> (0 until group.childCount).flatMap { group.getChildAt(it).composeRoots() } }
                 ?: emptyList())
 
+    /**
+     * How long the player view keeps its controls with no touch during
+     * playback, in milliseconds, 0 while it holds them, or `null` before the
+     * view is there. The test does not link Media3, so it finds the view and
+     * its getter by name.
+     */
+    private fun controlsTimeoutMs(): Int? {
+        fun View.player(): View? = takeIf { it.javaClass.name == "androidx.media3.ui.PlayerView" }
+            ?: (this as? ViewGroup)?.let { group -> (0 until group.childCount).firstNotNullOfOrNull { group.getChildAt(it).player() } }
+        var timeout: Int? = null
+        instrumentation.runOnMainSync {
+            timeout = activity.window.decorView.player()?.let { it.javaClass.getMethod("getControllerShowTimeoutMs").invoke(it) as Int }
+        }
+        return timeout
+    }
+
     /** Imports one generated photograph through the production importer. */
     private fun importPhoto() {
         val bitmap = Bitmap.createBitmap(320, 240, Bitmap.Config.ARGB_8888).apply { eraseColor(0xFF3366CC.toInt()) }
@@ -1471,21 +1764,44 @@ class BackNavigationTest {
     /**
      * Imports a generated recording of silence through the production
      * importer: a 16-bit mono WAV, long enough to still play when a check
-     * that needs it paused looks.
+     * that needs it paused looks. Returns its object ID.
      */
-    private fun importRecording() {
-        val samples = 8_000 * 60
+    private fun importRecording(name: String = "focus-test.wav", seconds: Int = 60): ByteArray {
+        val samples = 8_000 * seconds
         val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN).apply {
             put("RIFF".toByteArray()).putInt(36 + samples * 2).put("WAVE".toByteArray())
             put("fmt ".toByteArray()).putInt(16).putShort(1).putShort(1).putInt(8_000).putInt(16_000)
             putShort(2).putShort(16)
             put("data".toByteArray()).putInt(samples * 2)
         }
-        importFile("focus-test.wav") { it.write(header.array()); it.write(ByteArray(samples * 2)) }
+        val id = importFile(name) { it.write(header.array()); it.write(ByteArray(samples * 2)) }
         assertTrue(
             "the page shows it",
             await { controller.page.value.objects.any { it.mediaKind == MEDIA_CLASS_AUDIO } },
         )
+        return id
+    }
+
+    /**
+     * Imports a video that no player can read through the production
+     * importer: its bytes are zeros, so no frame ever replaces its poster. The
+     * platform cannot probe such a file or take a frame from it, so a test
+     * codec gives the importer the size, the length and a poster of one
+     * colour. Returns its object ID.
+     */
+    private fun importUnplayableVideo(name: String): ByteArray {
+        val codec = object : MediaCodec {
+            override fun probe(media: PickedMedia) = ProbedMedia(MediaBounds.CLASS_VIDEO, 320, 240, 2_000, "video/mp4")
+
+            override fun derive(media: PickedMedia, probe: ProbedMedia, kind: StreamKind, cancelRequested: () -> Boolean): Derivative? {
+                val (width, height) = MediaBounds.targetSize(kind, probe.width, probe.height) ?: return null
+                val out = ByteArrayOutputStream()
+                Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).apply { eraseColor(0xFF405060.toInt()) }
+                    .compress(Bitmap.CompressFormat.JPEG, 90, out)
+                return Derivative(kind, out.toByteArray(), width, height)
+            }
+        }
+        return importFile(name, codec) { it.write(ByteArray(16_384)) }
     }
 
     /** Runs [call] on the main thread and waits for its success callback. */
@@ -1525,7 +1841,7 @@ class BackNavigationTest {
         return count
     }
 
-    private fun importFile(name: String, write: (java.io.OutputStream) -> Unit): ByteArray {
+    private fun importFile(name: String, codec: MediaCodec? = null, write: (java.io.OutputStream) -> Unit): ByteArray {
         val context = instrumentation.targetContext
         // The application's own provider serves this directory, so the file
         // arrives as a content URI with a name, a size and a type, as a picked
@@ -1534,8 +1850,8 @@ class BackNavigationTest {
         file.parentFile?.mkdirs()
         file.outputStream().use(write)
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.exports", file)
-        val codec = AndroidMediaCodec(context.contentResolver)
-        val outcome = runBlocking { controller.importMedia(MediaImporter(codec)) { codec.open(uri) } }
+        val platform = AndroidMediaCodec(context.contentResolver)
+        val outcome = runBlocking { controller.importMedia(MediaImporter(codec ?: platform)) { platform.open(uri) } }
         assertTrue("$name must import: $outcome", outcome is MediaImporter.Outcome.Imported)
         instrumentation.runOnMainSync { controller.reportImport(null) }
         return (outcome as MediaImporter.Outcome.Imported).objectId
@@ -1543,6 +1859,10 @@ class BackNavigationTest {
 
     private fun label(text: String): (AccessibilityNodeInfo) -> Boolean =
         { it.text?.toString() == text || it.contentDescription?.toString() == text }
+
+    /** A view of Media3's player controls, by its resource name. */
+    private fun playerControl(id: String): (AccessibilityNodeInfo) -> Boolean =
+        { it.viewIdResourceName?.endsWith(":id/$id") == true }
 
     /**
      * A photo tile: the clickable node of the media grid's collection whose

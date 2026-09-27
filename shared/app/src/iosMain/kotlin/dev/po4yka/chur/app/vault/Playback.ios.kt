@@ -2,10 +2,18 @@
 
 package dev.po4yka.chur.app.vault
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.viewinterop.UIKitView
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.vault.VaultRepository
@@ -13,6 +21,7 @@ import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.usePinned
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import platform.AVFoundation.AVAsset
 import platform.AVFoundation.AVAssetResourceLoader
@@ -20,8 +29,10 @@ import platform.AVFoundation.AVAssetResourceLoaderDelegateProtocol
 import platform.AVFoundation.AVAssetResourceLoadingRequest
 import platform.AVFoundation.AVPlayer
 import platform.AVFoundation.AVPlayerItem
+import platform.AVFoundation.AVPlayerItemStatusFailed
 import platform.AVFoundation.AVPlayerLayer
 import platform.AVFoundation.AVURLAsset
+import platform.AVFoundation.currentItem
 import platform.AVFoundation.resourceLoader
 import platform.AVFoundation.pause
 import platform.AVFoundation.play
@@ -49,7 +60,18 @@ import platform.darwin.dispatch_queue_create
  * for.
  */
 @Composable
-actual fun VaultPlayer(source: PlaybackSource, modifier: Modifier) {
+actual fun VaultPlayer(
+    source: PlaybackSource,
+    modifier: Modifier,
+    poster: ImageBitmap?,
+    // The layer draws no controls, so it has nothing to show, hide, hold,
+    // pad or time.
+    controlsVisible: Boolean,
+    controlsPinned: Boolean,
+    onControlsVisibleChange: (Boolean) -> Unit,
+    controlsPadding: PaddingValues,
+    touches: Int,
+) {
     val loader = remember(source.objectId, source.plaintextSize) { ChurResourceLoader(source) }
     val player = remember(loader) {
         val asset = AVURLAsset(NSURL(string = "chur://vault/object"), options = null)
@@ -63,6 +85,20 @@ actual fun VaultPlayer(source: PlaybackSource, modifier: Modifier) {
         asset.resourceLoader.setDelegate(loader, loaderQueue)
         AVPlayer().apply { replaceCurrentItemWithPlayerItem(AVPlayerItem(asset as AVAsset)) }
     }
+    val layer = remember(player) { AVPlayerLayer.playerLayerWithPlayer(player) }
+    // The poster covers the layer until the layer has a frame to show, or
+    // until the item fails and the layer never will. A recording has no
+    // poster, so nothing waits for it.
+    // ponytail: polled, because Kotlin/Native declares the key-value observing
+    // callback as an extension that an observer cannot override; a Swift or
+    // Objective-C observer replaces the loop if the latency ever shows.
+    var covered by remember(layer) { mutableStateOf(true) }
+    if (poster != null) {
+        LaunchedEffect(layer) {
+            while (!layer.readyForDisplay && player.currentItem?.status != AVPlayerItemStatusFailed) delay(READY_POLL_MS)
+            covered = false
+        }
+    }
     DisposableEffect(player) {
         player.play()
         onDispose {
@@ -73,21 +109,28 @@ actual fun VaultPlayer(source: PlaybackSource, modifier: Modifier) {
             loader.release()
         }
     }
-    UIKitView(
-        modifier = modifier,
-        factory = {
-            val view = UIView(frame = CGRectMake(0.0, 0.0, 0.0, 0.0))
-            val layer = AVPlayerLayer.playerLayerWithPlayer(player)
-            view.layer.addSublayer(layer)
-            view
-        },
-        update = { view ->
-            // The layer does not follow its host's bounds on its own, and a
-            // Compose surface resizes on rotation and on a split view.
-            (view.layer.sublayers?.firstOrNull() as? AVPlayerLayer)?.setFrame(view.bounds)
-        },
-    )
+    Box(modifier = modifier) {
+        UIKitView(
+            modifier = Modifier.fillMaxSize(),
+            factory = {
+                val view = UIView(frame = CGRectMake(0.0, 0.0, 0.0, 0.0))
+                view.layer.addSublayer(layer)
+                view
+            },
+            update = { view ->
+                // The layer does not follow its host's bounds on its own, and a
+                // Compose surface resizes on rotation and on a split view.
+                (view.layer.sublayers?.firstOrNull() as? AVPlayerLayer)?.setFrame(view.bounds)
+            },
+        )
+        // Compose draws over the interop view, so the poster is on top. This
+        // player starts on open, so the poster has no play control.
+        if (covered && poster != null) PlayerPoster(poster, onPlay = null)
+    }
 }
+
+/** How often the poster asks whether the layer can show a frame. */
+private const val READY_POLL_MS = 50L
 
 /**
  * Serves one vault object's ranges to AVFoundation.

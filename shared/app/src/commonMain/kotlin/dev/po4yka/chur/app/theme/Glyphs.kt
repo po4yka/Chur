@@ -146,6 +146,13 @@ val DeleteGlyph: ImageVector = glyph("Delete") {
     }
 }
 
+/** A triangle, for the play control over a video's poster. */
+val PlayGlyph: ImageVector = glyph("Play") {
+    stroke {
+        moveTo(8f, 5.5f); lineTo(18.5f, 12f); lineTo(8f, 18.5f); close()
+    }
+}
+
 /** A shield outline, for the integrity states of §20. */
 val IntegrityGlyph: ImageVector = glyph("Integrity") {
     stroke {

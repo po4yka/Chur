@@ -740,6 +740,7 @@ private fun IosViewerRoute(
         showDetail = showDetail,
         chromeVisible = chromeVisible,
         onToggleChrome = { chrome.toggle(chromePinned) },
+        onTouch = chrome::touched,
         onBack = onBack,
         onLock = { controller.lock() },
         onPanic = { controller.panic() },
@@ -754,7 +755,20 @@ private fun IosViewerRoute(
         onRestore = { controller.restoreAll(listOf(projection.objectId), onDeleted) },
         onToggleDetail = { showDetail = !showDetail },
         player = playback?.let { source ->
-            { modifier -> VaultPlayer(source, modifier) }
+            { modifier, controlsPadding ->
+                // `DESIGN.md` §13.1 and §13.2: the video opens on its poster,
+                // and its controls show and hide with the chrome.
+                VaultPlayer(
+                    source = source,
+                    modifier = modifier,
+                    poster = preview,
+                    controlsVisible = chromeVisible,
+                    controlsPinned = chromePinned,
+                    onControlsVisibleChange = { chrome.follow(it, chromePinned) },
+                    controlsPadding = controlsPadding,
+                    touches = chrome.touches,
+                )
+            }
         },
         waveform = waveform,
         operation = operation,
