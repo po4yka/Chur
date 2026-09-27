@@ -22,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.privateKeyboardOptions
+import dev.po4yka.chur.app.theme.DestructiveButton
 import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
 import dev.po4yka.chur.ffi.AlbumSummary
 import dev.po4yka.chur.ffi.TagSummary
@@ -210,7 +211,7 @@ fun TagBrowserDialog(
     deleting?.let { tag ->
         AlertDialog(onDismissRequest = { deleting = null }, title = { Text("Delete ${tag.name}?") },
             text = { Text("This removes the tag from its media. The media stays in the vault.") },
-            confirmButton = { TextButton(onClick = {
+            confirmButton = { DestructiveButton(onClick = {
                 deleting = null
                 onDelete(tag)
             }) { Text("Delete tag") } },
@@ -218,6 +219,13 @@ fun TagBrowserDialog(
     }
 }
 
+/**
+ * Confirms a move to Trash or a permanent deletion, in the words of
+ * `DESIGN.md` §27.
+ *
+ * Only the permanent one gets the destructive button of §26: a move to Trash
+ * can be taken back, from Trash or from the snackbar's undo.
+ */
 @Composable
 fun DeleteSelectionDialog(count: Int, onDelete: () -> Unit, onDismiss: () -> Unit,
     permanent: Boolean = false, emptyTrash: Boolean = false) {
@@ -225,13 +233,22 @@ fun DeleteSelectionDialog(count: Int, onDelete: () -> Unit, onDismiss: () -> Uni
         onDismissRequest = onDismiss,
         title = { Text(if (permanent) "Delete permanently?" else "Move to Trash?") },
         text = { Text(when {
-            emptyTrash -> "Everything in Trash will be permanently deleted. This cannot be undone."
-            permanent -> "Permanently delete $count selected ${if (count == 1) "item" else "items"}? This cannot be undone."
-            else -> "Move $count selected ${if (count == 1) "item" else "items"} to Trash? They are kept for 30 days."
+            emptyTrash -> "This removes Chur's local keys and encrypted objects for everything in Trash. " +
+                "Copies exported elsewhere are not affected."
+            permanent && count == 1 -> "This removes Chur's local key and encrypted object. " +
+                "Copies exported elsewhere are not affected."
+            permanent -> "This removes Chur's local keys and encrypted objects for these $count items. " +
+                "Copies exported elsewhere are not affected."
+            count == 1 -> "Chur keeps this item for 30 days so you can restore it."
+            else -> "Chur keeps these $count items for 30 days so you can restore them."
         }) },
-        confirmButton = { TextButton(onClick = onDelete) {
-            Text(if (emptyTrash) "Empty trash" else if (permanent) "Delete permanently" else "Move to Trash")
-        } },
+        confirmButton = {
+            if (permanent) {
+                DestructiveButton(onClick = onDelete) { Text(if (emptyTrash) "Empty trash" else "Delete permanently") }
+            } else {
+                TextButton(onClick = onDelete) { Text("Move to Trash") }
+            }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

@@ -48,6 +48,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.privateKeyboardOptions
 import dev.po4yka.chur.app.theme.ChurSpacing
+import dev.po4yka.chur.app.theme.DestructiveButton
 import dev.po4yka.chur.app.theme.LocalChurColors
 import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
 import dev.po4yka.chur.ffi.AlbumSummary
@@ -386,7 +387,7 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
                 )
             },
             confirmButton = {
-                TextButton(onClick = { actions.onDeleteAlbum(album); deleting = null }) { Text("Delete albums") }
+                DestructiveButton(onClick = { actions.onDeleteAlbum(album); deleting = null }) { Text("Delete albums") }
             },
             dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } },
         )

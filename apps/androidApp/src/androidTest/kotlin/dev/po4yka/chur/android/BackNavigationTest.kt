@@ -667,6 +667,8 @@ class BackNavigationTest {
             shell("input motionevent UP $x $y")
             down = false
             assertTrue("the drop adds the photo", await { albumMembers() == count + 1 })
+            // §26: the outcome is a count, and never the album's private name.
+            assertTrue("the drop is confirmed", await { find(label("Added 1 item to the album.")) != null })
         } finally {
             if (down) shell("input motionevent UP $x $y")
         }
@@ -706,6 +708,56 @@ class BackNavigationTest {
             instrumentation.runOnMainSync { controller.restoreTrash { restored.countDown() } }
             restored.await(30, TimeUnit.SECONDS)
         }
+    }
+
+    @Test
+    fun theSnackbarUndoesAMoveToTrashFromTheViewer() = inTestVault {
+        withMedia()
+        val before = controller.page.value.objects.map { it.id }.toSet()
+        val tile = photoTile()
+        tap { it == tile }
+        tap(label("Move to Trash"))
+        // §27: the single item is still confirmed first.
+        assertTrue("the confirmation", await { find(label("Chur keeps this item for 30 days so you can restore it.")) != null })
+        tap(label("Move to Trash"))
+        try {
+            // §26: the outcome is counted, and a mis-tap is taken back here
+            // rather than from Trash.
+            assertTrue("the move is confirmed", await { find(label("Moved 1 item to Trash.")) != null })
+            assertTrue("the item left All media", controller.page.value.objects.size == before.size - 1)
+            tap(label("Undo"))
+            assertTrue("the item is back in All media", await { controller.page.value.objects.map { it.id }.toSet() == before })
+            assertTrue("the undo is confirmed", await { find(label("Restored 1 item.")) != null })
+        } finally {
+            val restored = CountDownLatch(1)
+            instrumentation.runOnMainSync { controller.restoreTrash { restored.countDown() } }
+            restored.await(30, TimeUnit.SECONDS)
+        }
+    }
+
+    @Test
+    fun emptyingTrashSaysTheDeletionIsPermanent() = inTestVault {
+        withMedia()
+        val tile = photoTile()
+        tap { it == tile }
+        tap(label("Move to Trash"))
+        tap(label("Move to Trash"))
+        assertTrue("the move is confirmed", await { find(label("Moved 1 item to Trash.")) != null })
+        tap(label("Browse"))
+        tap(label("Trash"))
+        assertTrue("Trash shows it", await { controller.page.value.objects.isNotEmpty() })
+        tap(label("Browse"))
+        tap(label("Empty trash"))
+        // §27: what goes and what stays.
+        assertTrue(
+            "the confirmation",
+            await { find(label("This removes Chur's local keys and encrypted objects for everything in Trash. " +
+                "Copies exported elsewhere are not affected.")) != null },
+        )
+        tap(label("Empty trash"))
+
+        assertTrue("the outcome", await { find(label("Deleted permanently.")) != null })
+        assertTrue("Trash is empty", await { controller.page.value.objects.isEmpty() })
     }
 
     // -----------------------------------------------------------------------

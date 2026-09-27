@@ -893,14 +893,23 @@ class ChurController(
                            onSuccess: () -> Unit = {}) = guarded {
         withContext(Dispatchers.Default) { repository.setFavorites(objectIds, favorite) }
         reload()
+        say("Updated ${items(objectIds.size)}.")
         onSuccess()
     }
 
-    /** Moves an object to the recoverable trash. */
+    /**
+     * Moves an object to the recoverable trash.
+     *
+     * The move is confirmed with a count and an undo, `DESIGN.md` §26: a
+     * mis-tap is taken back from the snackbar rather than from Trash. The
+     * notice is set before [onSuccess], so a host that closes the viewer
+     * there shows it in the shell.
+     */
     fun delete(objectId: ByteArray, onSuccess: () -> Unit = {}) = guarded {
         withContext(Dispatchers.Default) { repository.delete(objectId) }
         reload()
         refreshAlbums()
+        sayTrashed(listOf(objectId))
         onSuccess()
     }
 
@@ -914,6 +923,7 @@ class ChurController(
         withContext(Dispatchers.Default) { repository.deleteAll(objectIds) }
         reload()
         refreshAlbums()
+        sayTrashed(objectIds)
         onSuccess()
     }
 
@@ -921,6 +931,7 @@ class ChurController(
         withContext(Dispatchers.Default) { repository.restoreAll(objectIds) }
         reload()
         refreshAlbums()
+        say("Restored ${items(objectIds.size)}.")
         onSuccess()
     }
 
@@ -932,6 +943,7 @@ class ChurController(
             reload()
             refreshAlbums()
         }
+        say("Deleted permanently.")
         onSuccess()
     }
 
@@ -943,6 +955,7 @@ class ChurController(
             reload()
             refreshAlbums()
         }
+        say("Deleted permanently.")
         onSuccess()
     }
 
@@ -950,6 +963,8 @@ class ChurController(
         withContext(Dispatchers.Default) { repository.restoreTrash() }
         reload()
         refreshAlbums()
+        // The engine does not return how many it restored.
+        say("Restored everything in Trash.")
         onSuccess()
     }
 
@@ -969,10 +984,17 @@ class ChurController(
         }
         reload()
         refreshAlbums()
+        say("Removed ${items(objectIds.size)} from the album.")
         onSuccess()
     }
 
-    /** Adds or moves a selection in one catalog transaction. */
+    /**
+     * Adds or moves a selection in one catalog transaction.
+     *
+     * The notice names a count and never the album: `DESIGN.md` §26 keeps
+     * private names out of a snackbar. A host that reports its own outcome
+     * from [onSuccess], as an import into an album does, replaces it.
+     */
     fun placeObjectsInAlbum(
         albumId: ByteArray,
         objectIds: List<ByteArray>,
@@ -985,6 +1007,7 @@ class ChurController(
         }
         reload()
         refreshAlbums()
+        sayPlaced(objectIds.size, move)
         onSuccess()
     }
 
@@ -1002,6 +1025,7 @@ class ChurController(
         }
         reload()
         refreshAlbums()
+        sayPlaced(objectIds.size, move)
         onSuccess()
     }
 
@@ -1020,6 +1044,7 @@ class ChurController(
         withContext(Dispatchers.Default) { repository.deleteAlbum(albumId) }
         reload()
         refreshAlbums()
+        say("Album deleted.")
         onSuccess()
     }
 
@@ -1056,6 +1081,7 @@ class ChurController(
             repository.applyTagSelection(tagId, "", objectIds, tagged)
         }
         reload()
+        say("Updated ${items(objectIds.size)}.")
         onSuccess()
     }
 
@@ -1066,6 +1092,7 @@ class ChurController(
         }
         reload()
         _tags.value = withContext(Dispatchers.Default) { repository.tags() }
+        say("Updated ${items(objectIds.size)}.")
         onSuccess()
     }
 
@@ -1084,7 +1111,17 @@ class ChurController(
         withContext(Dispatchers.Default) { repository.deleteTag(tagId) }
         reload()
         _tags.value = withContext(Dispatchers.Default) { repository.tags() }
+        say("Tag deleted.")
         onSuccess()
+    }
+
+    /** Confirms a move to Trash with its count and an undo that restores it. */
+    private suspend fun sayTrashed(objectIds: List<ByteArray>) {
+        say("Moved ${items(objectIds.size)} to Trash.", action = "Undo" to { restoreAll(objectIds) })
+    }
+
+    private suspend fun sayPlaced(count: Int, move: Boolean) {
+        say("${if (move) "Moved" else "Added"} ${items(count)} to the album.")
     }
 
     // -----------------------------------------------------------------------
@@ -1911,18 +1948,27 @@ class ChurController(
      * credential. A credential form gets [formError]; every other route gets
      * a [notice], and `null` clears whichever the route shows.
      */
-    private fun post(text: String?, visit: Long = routeVisit, security: Boolean = false) {
+    private fun post(
+        text: String?,
+        visit: Long = routeVisit,
+        security: Boolean = false,
+        action: Pair<String, () -> Unit>? = null,
+    ) {
         if (visit != routeVisit) return
         if (_route.value in FORM_ROUTES) {
             _formError.value = text
         } else {
-            _notice.value = text?.let { Notice(++noticeCount, it, security) }
+            _notice.value = text?.let { Notice(++noticeCount, it, security, action) }
         }
     }
 
     /** [post], from work that [guarded] started, for the visit it started in. */
-    private suspend fun say(text: String?, security: Boolean = false) {
-        post(text, currentCoroutineContext()[RouteVisit]?.number ?: routeVisit, security)
+    private suspend fun say(
+        text: String?,
+        security: Boolean = false,
+        action: Pair<String, () -> Unit>? = null,
+    ) {
+        post(text, currentCoroutineContext()[RouteVisit]?.number ?: routeVisit, security, action)
     }
 
     /** The [routeVisit] a piece of guarded work started in. */
@@ -1958,6 +2004,9 @@ class ChurController(
 
         /** Fast enough to feel immediate, slow enough not to spin a core. */
         const val POLL_INTERVAL_MS = 50L
+
+        /** A count of library items for a notice: "1 item", "3 items". */
+        fun items(count: Int): String = if (count == 1) "1 item" else "$count items"
 
         /**
          * How often the idle timer looks.
