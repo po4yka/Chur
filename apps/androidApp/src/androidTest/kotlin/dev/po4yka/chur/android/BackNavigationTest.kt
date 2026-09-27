@@ -28,6 +28,8 @@ import dev.po4yka.chur.app.ChurController
 import dev.po4yka.chur.app.MediaImporter
 import dev.po4yka.chur.imports.AndroidMediaCodec
 import dev.po4yka.chur.notes.Note
+import dev.po4yka.chur.sync.FileSyncStateStore
+import dev.po4yka.chur.sync.SyncState
 import dev.po4yka.chur.vault.VaultState
 import java.io.File
 import java.util.concurrent.CountDownLatch
@@ -69,7 +71,8 @@ import org.junit.runner.RunWith
  * clears the status bar and the keyboard, `DESIGN.md` §25.5, and the keyboard's
  * own action does what the form's button does. A screen reader hears every
  * refused unlock, not only the first, §23.2. The vault's lock settings are
- * switches that show the state in force, and a tap flips it.
+ * switches that show the state in force, and a tap flips it. Stopping sync
+ * asks first, §26, and only the confirm forgets the server.
  */
 @RunWith(AndroidJUnit4::class)
 class BackNavigationTest {
@@ -402,6 +405,58 @@ class BackNavigationTest {
                 instrumentation.runOnMainSync { controller.toggleAppLock() }
                 await { controller.appLockEnabled.value == before }
             }
+        }
+    }
+
+    @Test
+    fun stoppingSyncAsksFirstAndOnlyTheConfirmForgetsTheServer() = inTestVault {
+        val sync = ChurHost.of(activity).sync
+        // The state file `ChurHost` gives the engine. Disconnecting never
+        // talks to the server, so a saved state that names no reachable server
+        // stands in for a bootstrap, and the case needs no server of its own.
+        val store = FileSyncStateStore(File(activity.noBackupFilesDir, "chur-sync.json").path)
+        assumeTrue("a sync server this test did not configure", runBlocking { store.load() } == null)
+        val objects = controller.page.value.objects.size
+        try {
+            runBlocking {
+                store.save(
+                    SyncState(
+                        serverUrl = "https://sync.invalid",
+                        vaultId = ByteArray(16),
+                        deviceId = ByteArray(16),
+                        transportToken = ByteArray(32),
+                        cursors = emptyList(),
+                    ),
+                )
+                sync.refresh()
+            }
+            tap(label("Settings"))
+            assertTrue(
+                "the server's row must be on screen",
+                await {
+                    find(label("Stop using the server")) != null ||
+                        find { it.isScrollable }?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD).let { false }
+                },
+            )
+
+            tap(label("Stop using the server"))
+            assertTrue("it asks first", await { find(label("Stop syncing with this server?")) != null })
+            assertTrue("the server is kept while it asks", sync.status.value.configured)
+            tap(label("Cancel"))
+            assertTrue("Cancel closes the question", await { find(label("Stop syncing with this server?")) == null })
+            assertFalse("Cancel must keep the server", await(1_000) { !sync.status.value.configured })
+
+            tap(label("Stop using the server"))
+            tap(label("Stop syncing"))
+            assertTrue("the confirm forgets the server", await { !sync.status.value.configured })
+            assertTrue(
+                "the setup form returns and says what sync does not copy",
+                await { find { it.text?.contains("Sync is not a backup.") == true } != null },
+            )
+            assertEquals("nothing in the vault changes", objects, controller.page.value.objects.size)
+        } finally {
+            // The case began with no state, so it leaves none.
+            runBlocking { sync.disconnect() }
         }
     }
 

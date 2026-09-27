@@ -24,6 +24,23 @@ import dev.po4yka.chur.app.theme.LocalChurColors
 import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
 
 /**
+ * What the setup form says before the user connects.
+ *
+ * `DESIGN.md` §27 asks copy to be "precise about local versus external
+ * copies", and this is the one statement a user reads before deciding. Media
+ * objects leave this device only through sharing publication today, so the
+ * limit and the fact that sync is not a backup are stated here, not first
+ * after connecting. The server is one the user runs, ADR-0033. It is a
+ * constant so a test can hold it to that; it changes when own-device object
+ * sync ships.
+ */
+internal object SyncSetupCopy {
+    const val INTRO: String =
+        "Connect this vault to a sync server you run. Photos, videos, and audio " +
+            "are not copied to your other devices yet. Sync is not a backup."
+}
+
+/**
  * The bootstrap form of `SYNC_PROTOCOL_V1.md` §6.
  *
  * It is the whole first-run flow of sync: a server address and the operator's
@@ -41,17 +58,14 @@ internal fun SyncSetupCard(onConfigure: (serverUrl: String, bootstrapSecret: Str
             modifier = Modifier.padding(ChurSpacing.three),
             verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
         ) {
-            Text(
-                "Keep this vault current on your other devices by connecting " +
-                    "it to your own server.",
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            Text(SyncSetupCopy.INTRO, style = MaterialTheme.typography.bodyMedium)
             OutlinedTextField(
                 colors = churOutlinedTextFieldColors(),
                 value = serverUrl,
                 onValueChange = { serverUrl = it },
                 singleLine = true,
                 label = { Text("Server address") },
+                placeholder = { Text("https://") },
                 keyboardOptions = privateKeyboardOptions(KeyboardType.Uri),
                 modifier = Modifier.fillMaxWidth(),
             )

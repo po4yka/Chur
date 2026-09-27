@@ -71,6 +71,7 @@ import dev.po4yka.chur.app.secretKeyboardOptions
 import dev.po4yka.chur.app.syncCopy
 import dev.po4yka.chur.app.theme.AlbumsGlyph
 import dev.po4yka.chur.app.theme.ChurSpacing
+import dev.po4yka.chur.app.theme.DestructiveButton
 import dev.po4yka.chur.app.theme.LibraryGlyph
 import dev.po4yka.chur.app.theme.LocalChurColors
 import dev.po4yka.chur.app.theme.LockGlyph
@@ -718,6 +719,7 @@ private fun SearchBody(state: VaultUiState, actions: VaultActions,
 private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
     val colors = LocalChurColors.current
     var changingPassword by remember { mutableStateOf(false) }
+    var confirmingDisconnect by remember { mutableStateOf(false) }
     LazyColumn(
         contentPadding = PaddingValues(ChurSpacing.gutter),
         verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
@@ -870,7 +872,7 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
                     )
                 }
                 item {
-                    SettingsAction("Stop using the server", actions.onDisconnectSync)
+                    SettingsAction("Stop using the server", { confirmingDisconnect = true })
                 }
             }
         }
@@ -910,6 +912,25 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
                 SettingsAction("Control from computer", actions.onDeviceControl, enabled = state.operation == null)
             }
         }
+    }
+    if (confirmingDisconnect) {
+        // `DESIGN.md` §26: a dialog for a short, high-consequence decision.
+        // The disconnect forgets this device's transport token at once, and
+        // that cannot be taken back, so the confirm is destructive. §27: the
+        // copy says only what is true. Nothing on this device is deleted, and
+        // it promises nothing about connecting again.
+        AlertDialog(
+            onDismissRequest = { confirmingDisconnect = false },
+            title = { Text("Stop syncing with this server?") },
+            text = { Text("This device stops sending and receiving changes. Nothing is deleted from this device.") },
+            confirmButton = {
+                DestructiveButton(onClick = {
+                    confirmingDisconnect = false
+                    actions.onDisconnectSync()
+                }) { Text("Stop syncing") }
+            },
+            dismissButton = { TextButton(onClick = { confirmingDisconnect = false }) { Text("Cancel") } },
+        )
     }
     if (changingPassword) {
         ChangePasswordDialog(
