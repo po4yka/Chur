@@ -26,7 +26,7 @@
 | Rust workspace | complete suite passed with no failure | `cd rust && cargo test --locked --workspace` |
 | Rust formatting | clean | `cd rust && cargo fmt --all -- --check` |
 | Rust lints | clean at `-D warnings` | `cd rust && cargo clippy --locked --workspace --all-targets -- -D warnings` |
-| Rust MSRV | workspace check passed on 1.85 | `cd rust && cargo +1.85 check --locked --workspace` |
+| Rust MSRV | workspace check passed on 1.89 | `cd rust && cargo +1.89.0 check --locked --workspace` |
 | Dependency policy | advisories, bans, licenses, and sources passed; permitted duplicate-version warnings remain visible | `cd rust && cargo deny check` |
 | Protocol vectors | 99 vectors and two fixtures rebuilt and compared byte for byte | `cd rust && cargo run --locked -p chur-cli -- vectors verify --dir ../test-vectors/v1` |
 | Mobile workspace | full build passed; 535 tasks were evaluated | `./gradlew --no-daemon --no-configuration-cache --no-build-cache --refresh-dependencies -Pkotlin.incremental=false build -x lint` |

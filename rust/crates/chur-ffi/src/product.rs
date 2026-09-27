@@ -1033,8 +1033,10 @@ pub unsafe extern "C" fn chur_album_place_objects(
         })?;
         let bytes = unsafe { crate::api::borrow_bytes(object_ids, length)? };
         let objects = bytes
-            .chunks_exact(16)
-            .map(Id::from_slice)
+            .as_chunks::<16>()
+            .0
+            .iter()
+            .map(|chunk| Id::new(*chunk))
             .collect::<Result<Vec<_>>>()?;
         let now = crate::api::now_ms();
         let album = if target.is_none() {
@@ -1354,7 +1356,12 @@ unsafe fn selection_ids(pointer: *const u8, count: u32) -> Result<Vec<Id>> {
     // SAFETY: the caller supplies `count * 16` readable bytes for this call.
     // The size was checked above against the catalog's object bound.
     let bytes = unsafe { core::slice::from_raw_parts(pointer, size as usize) };
-    bytes.chunks_exact(16).map(Id::from_slice).collect()
+    bytes
+        .as_chunks::<16>()
+        .0
+        .iter()
+        .map(|chunk| Id::new(*chunk))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

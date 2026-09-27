@@ -95,7 +95,7 @@ A skill synchronisation updates both hashes and the commit, and the checker is w
 
 - **Capability:** RFC 9180 Base-mode sealing and opening of one 32-byte collection key with DHKEM(X25519, HKDF-SHA-256), HKDF-SHA-256, and ChaCha20-Poly1305. Phase 4 and ADR-0053 require this exact interoperable construction.
 - **Alternatives:** the Rust standard library has no HPKE API. The existing X25519, HKDF, and ChaCha20-Poly1305 primitives are not an HPKE implementation; composing RFC 9180 locally would create a new unaudited cryptographic protocol. A TLS library adds unrelated transport, certificate, native, and configuration surfaces.
-- **Owner and maintenance:** `rozbb/rust-hpke` is the active upstream. Version 0.14.0 was the current crates.io release at adoption and declares MSRV 1.85, matching this workspace.
+- **Owner and maintenance:** `rozbb/rust-hpke` is the active upstream. Version 0.14.0 was the current crates.io release at adoption and declares MSRV 1.85, below this workspace's floor of 1.89.
 - **License and review:** the crate is MIT OR Apache-2.0. No independent audit of this release was found. RFC 9180 known-answer vectors, Chur grant vectors, mobile-target builds, and the separate Gate 6 sharing audit remain mandatory.
 - **Unsafe and native footprint:** the crate is pure Rust and advertises RFC 9180 compliance. The published source has no native library requirement. Its cryptographic backends remain part of the sharing audit scope.
 - **Features:** exact version `=0.14.0`, default features disabled, only `alloc`, `getrandom`, `x25519`, and `chacha` enabled. ML-KEM/X-Wing, SHAKE, NIST curves, AES-GCM, and the broad KAT feature are absent.
@@ -126,7 +126,7 @@ A skill synchronisation updates both hashes and the commit, and the checker is w
 
 - **Capability:** X25519 device key pairs for Phase 3 enrollment, collection-key grants, and portable identity recovery. The protocol already selects X25519 and requires a key separate from Ed25519.
 - **Alternatives:** the Rust standard library and the existing Chur crates have no X25519 API. A local implementation would add an unaudited cryptographic primitive. A general TLS or cryptography library would add unrelated protocols and native code.
-- **Owner and maintenance:** the dalek-cryptography project maintains it in the same active `curve25519-dalek` workspace as `ed25519-dalek`. Version 3.0.0 has MSRV 1.85, which matches this workspace.
+- **Owner and maintenance:** the dalek-cryptography project maintains it in the same active `curve25519-dalek` workspace as `ed25519-dalek`. Version 3.0.0 has MSRV 1.85, below this workspace's floor of 1.89.
 - **License:** BSD-3-Clause, with the same notice obligation as the repository.
 - **Review history:** it uses the dalek Curve25519 implementation covered by the project's public review history. This does not replace the independent Phase 3 protocol review required by Gate 5.
 - **Unsafe and native footprint:** `x25519-dalek` is pure Rust, has no `build.rs`, and contains no `unsafe`. Its existing `curve25519-dalek` dependency has the reviewed build and optimized arithmetic surface recorded for `ed25519-dalek` below.
@@ -139,7 +139,7 @@ A skill synchronisation updates both hashes and the commit, and the checker is w
 
 - **Capability:** RFC 8032 Ed25519 signatures for Phase 3 device identities, operation records, enrollment, revocation, and checkpoints. `CRYPTOGRAPHY.md` §5 and §52 already select Ed25519 and name this implementation direction.
 - **Alternatives:** the Rust standard library has no Ed25519. A local implementation would create a new cryptographic primitive to audit. A TLS or general cryptography library adds unrelated protocol, native, and configuration surface.
-- **Owner and maintenance:** the dalek-cryptography project maintains it in the active `curve25519-dalek` workspace. Version 3.0.0 uses Rust 2024 and MSRV 1.85, matching this workspace.
+- **Owner and maintenance:** the dalek-cryptography project maintains it in the active `curve25519-dalek` workspace. Version 3.0.0 uses Rust 2024 and MSRV 1.85, below this workspace's floor of 1.89.
 - **License:** BSD-3-Clause, the repository license. The transitive RustCrypto `ed25519` and `signature` interfaces are Apache-2.0 OR MIT.
 - **Review history:** the dalek libraries received a public Quarkslab review in 2019. That is supporting evidence, not the independent Phase 3 protocol review required by Gate 5.
 - **Unsafe and native footprint:** `ed25519-dalek` is pure Rust, has no `build.rs`, and forbids unsafe code when batch verification is disabled. Chur enables no batch or hazardous low-level API. Its `curve25519-dalek` dependency uses a build script only to select compiler and target capabilities, a derive macro, and target-specific unsafe optimized arithmetic; `sha2` also uses target-specific unsafe optimized code. These transitive paths perform no network, process, or application-file I/O and remain in the cryptographic review scope.

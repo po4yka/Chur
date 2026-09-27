@@ -2,6 +2,7 @@
 name = "chur-media"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Streaming import and export, random-access authenticated reads."

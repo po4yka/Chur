@@ -123,15 +123,13 @@ impl ImportTransaction {
         )
     }
 
-    #[allow(
-        clippy::manual_is_multiple_of,
-        reason = "is_multiple_of requires a newer Rust version than the workspace MSRV"
-    )]
     fn check(&self) -> Result<()> {
         ensure!(
             self.chunk_size >= container::CHUNK_SIZE_MIN
                 && self.chunk_size <= container::CHUNK_SIZE_MAX
-                && self.chunk_size % container::CHUNK_SIZE_MULTIPLE == 0,
+                && self
+                    .chunk_size
+                    .is_multiple_of(container::CHUNK_SIZE_MULTIPLE),
             ResourceLimitExceeded,
             "the chunk size is outside container §16"
         );

@@ -524,10 +524,6 @@ impl CanonicalManifest {
     }
 }
 
-#[allow(
-    clippy::manual_is_multiple_of,
-    reason = "is_multiple_of requires a newer Rust version than the workspace MSRV"
-)]
 fn check_chunk_size(chunk_size: u32) -> Result<()> {
     ensure!(
         (bounds::CHUNK_SIZE_MIN..=bounds::CHUNK_SIZE_MAX).contains(&chunk_size),
@@ -535,7 +531,7 @@ fn check_chunk_size(chunk_size: u32) -> Result<()> {
         "chunk size is outside the v1 range"
     );
     ensure!(
-        chunk_size % bounds::CHUNK_SIZE_MULTIPLE == 0,
+        chunk_size.is_multiple_of(bounds::CHUNK_SIZE_MULTIPLE),
         ObjectCorrupt,
         "chunk size is not a whole multiple of 4096"
     );

@@ -1279,19 +1279,19 @@ pub fn place_album_members(
                 params![target.as_bytes().as_slice(), id.as_bytes().as_slice(), added],
             ).map_err(|error| map_sqlite(error, "the selected object could not be placed"))?;
         }
-        if let Some(source) = moving_source {
-            if *source != target {
-                for id in object_ids {
-                    transaction.execute(
-                        "DELETE FROM album_memberships WHERE album_id = ?1 AND object_id = ?2",
-                        params![source.as_bytes().as_slice(), id.as_bytes().as_slice()],
-                    ).map_err(|error| map_sqlite(error, "the source membership could not be removed"))?;
-                }
+        if let Some(source) = moving_source
+            && *source != target
+        {
+            for id in object_ids {
                 transaction.execute(
-                    "UPDATE albums SET revision = revision + 1 WHERE album_id = ?1",
-                    [source.as_bytes().as_slice()],
-                ).map_err(|error| map_sqlite(error, "the source album revision could not advance"))?;
+                    "DELETE FROM album_memberships WHERE album_id = ?1 AND object_id = ?2",
+                    params![source.as_bytes().as_slice(), id.as_bytes().as_slice()],
+                ).map_err(|error| map_sqlite(error, "the source membership could not be removed"))?;
             }
+            transaction.execute(
+                "UPDATE albums SET revision = revision + 1 WHERE album_id = ?1",
+                [source.as_bytes().as_slice()],
+            ).map_err(|error| map_sqlite(error, "the source album revision could not advance"))?;
         }
         transaction.execute(
             "UPDATE albums SET revision = revision + 1 WHERE album_id = ?1",

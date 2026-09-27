@@ -2,6 +2,7 @@
 name = "chur-sync-server"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Self-hosted opaque storage and relay service for Chur sync."
