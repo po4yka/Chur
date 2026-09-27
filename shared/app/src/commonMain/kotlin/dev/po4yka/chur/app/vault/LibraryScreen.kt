@@ -549,7 +549,7 @@ private fun spokenDuration(durationMs: Long): String {
     }.joinToString(" ")
 }
 
-private fun durationLabel(durationMs: Long): String {
+internal fun durationLabel(durationMs: Long): String {
     val seconds = durationMs / 1_000
     return "${seconds / 60}:${(seconds % 60).toString().padStart(2, '0')}"
 }

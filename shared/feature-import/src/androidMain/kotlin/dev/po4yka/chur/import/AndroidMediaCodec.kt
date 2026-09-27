@@ -3,11 +3,13 @@ package dev.po4yka.chur.imports
 import android.content.ContentResolver
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.ExifInterface
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.system.ErrnoException
 import android.system.Os
@@ -15,6 +17,12 @@ import android.system.OsConstants
 import dev.po4yka.chur.ffi.StreamKind
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
+import java.time.DateTimeException
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import java.time.format.ResolverStyle
 
 /**
  * The Android codec side of `MEDIA_PIPELINE.md` §1.
@@ -51,6 +59,7 @@ class AndroidMediaCodec(private val resolver: ContentResolver) : MediaCodec {
             }
             var name: String? = null
             var size: Long? = null
+            var taken: Long? = null
             resolver.query(uri, null, null, null, null)?.use { cursor ->
                 if (cursor.moveToFirst()) {
                     val nameColumn = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
@@ -61,16 +70,22 @@ class AndroidMediaCodec(private val resolver: ContentResolver) : MediaCodec {
                     if (sizeColumn >= 0 && !cursor.isNull(sizeColumn)) {
                         size = cursor.getLong(sizeColumn).takeIf { it >= 0 }
                     }
+                    // The photo picker and the media store publish the time
+                    // an item was taken under one column name.
+                    val takenColumn = cursor.getColumnIndex(MediaStore.MediaColumns.DATE_TAKEN)
+                    if (takenColumn >= 0 && !cursor.isNull(takenColumn)) {
+                        taken = cursor.getLong(takenColumn).takeIf { it > 0 }
+                    }
                 }
             }
+            val type = resolver.getType(uri) ?: "application/octet-stream"
             return PickedMedia(
                 descriptor = descriptor.fd,
                 seekable = seekable,
                 knownLength = size,
-                contentTypeHint = resolver.getType(uri) ?: "application/octet-stream",
+                contentTypeHint = type,
                 originalFilename = name,
-                // §8.1 of the catalog: a plain content URI publishes no capture time.
-                captureTimeMs = null,
+                captureTimeMs = taken ?: embeddedCaptureTime(uri, normalizeType(type)),
                 platformHandle = uri,
                 close = { descriptor.close() },
             )
@@ -78,6 +93,34 @@ class AndroidMediaCodec(private val resolver: ContentResolver) : MediaCodec {
             descriptor.close()
             return null
         }
+    }
+
+    /**
+     * The capture time the source itself records, for a provider that
+     * publishes none, §8.1 of the catalog.
+     *
+     * A document provider has no taken-time column, so the time is read
+     * from the file: a photo's EXIF original time, and a video container's
+     * creation date. Each read opens its own stream, as every decode here
+     * does. The value is a hint, `MEDIA_PIPELINE.md` §3, and Rust stores a
+     * substituted time for an absent one.
+     */
+    private fun embeddedCaptureTime(uri: Uri, type: String): Long? = when {
+        type.startsWith("image/") -> read(uri) { stream ->
+            val exif = ExifInterface(stream)
+            // The offset tag is API 30. The name is a constant the compiler
+            // inlines, and an API 29 reader that does not know the tag
+            // returns null, so the time is read in the device's zone.
+            exifCaptureTimeMs(
+                exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL),
+                exif.getAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL),
+                ZoneId.systemDefault(),
+            )
+        }
+        type.startsWith("video/") -> withRetriever(uri) { retriever ->
+            containerCaptureTimeMs(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE))
+        }
+        else -> null
     }
 
     override fun probe(media: PickedMedia): ProbedMedia? {
@@ -349,3 +392,47 @@ class AndroidMediaCodec(private val resolver: ContentResolver) : MediaCodec {
         const val DECODE_STALL_LIMIT = 200
     }
 }
+
+/**
+ * An EXIF `DateTimeOriginal`, "2019:05:01 12:00:00", in milliseconds since
+ * the epoch.
+ *
+ * EXIF records the time on the camera's clock. `OffsetTimeOriginal`,
+ * "+02:00", says which zone that clock was in; a time with no offset is read
+ * in [zone], the device's zone at import, `MEDIA_PIPELINE.md` §4. A value
+ * that does not parse, as the "0000:00:00 00:00:00" of a camera whose clock
+ * was never set, is no capture time.
+ */
+internal fun exifCaptureTimeMs(dateTime: String?, offset: String?, zone: ZoneId): Long? {
+    val local = try {
+        LocalDateTime.parse(dateTime?.trim() ?: return null, EXIF_DATE_TIME)
+    } catch (_: DateTimeException) {
+        return null
+    }
+    val at = try {
+        offset?.trim()?.let(ZoneOffset::of)
+    } catch (_: DateTimeException) {
+        null
+    }
+    return local.atZone(at ?: zone).toInstant().toEpochMilli().takeIf { it >= 0 }
+}
+
+/**
+ * A video container's creation date as `MediaMetadataRetriever` reports it,
+ * "20190501T120000.000Z", in milliseconds since the epoch.
+ *
+ * The container stores UTC. A container with no date stores zero seconds
+ * since 1904, which comes back as a time before 1970 and is no capture time.
+ */
+internal fun containerCaptureTimeMs(date: String?): Long? = try {
+    LocalDateTime.parse(date?.trim() ?: return null, CONTAINER_DATE)
+        .toInstant(ZoneOffset.UTC).toEpochMilli().takeIf { it >= 0 }
+} catch (_: DateTimeException) {
+    null
+}
+
+private val EXIF_DATE_TIME: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("uuuu:MM:dd HH:mm:ss").withResolverStyle(ResolverStyle.STRICT)
+
+private val CONTAINER_DATE: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("uuuuMMdd'T'HHmmss[.SSS]'Z'").withResolverStyle(ResolverStyle.STRICT)

@@ -525,24 +525,12 @@ private fun DetailSheet(
             )
         }
         Text(
-            text = buildString {
-                append(detail.contentType)
-                if (detail.width > 0 && detail.height > 0) {
-                    append("  ·  ${detail.width} × ${detail.height}")
-                }
-                append("  ·  ${humanSize(detail.plaintextSize)}")
-            },
+            text = detailFacts(detail),
             color = ViewerColors.content,
             style = DiagnosticTextStyle,
         )
-        // §8.1 of the catalog: a substituted capture time is not a capture
-        // time, and the interface declines to present one it does not have.
         Text(
-            text = if (detail.captureTimeSubstituted) {
-                "No capture date recorded"
-            } else {
-                "Captured"
-            },
+            text = captureLine(detail),
             color = ViewerColors.content,
             style = MaterialTheme.typography.bodySmall,
         )
@@ -559,6 +547,31 @@ private fun DetailSheet(
         }
     }
 }
+
+/**
+ * The facts line of the detail sheet: the type, the dimensions, the length
+ * of a video or a recording in the grid's "1:05" form, and the size.
+ */
+internal fun detailFacts(detail: ObjectDetail): String = buildList {
+    add(detail.contentType)
+    if (detail.width > 0 && detail.height > 0) add("${detail.width} × ${detail.height}")
+    if (detail.durationMs > 0) add(durationLabel(detail.durationMs))
+    add(humanSize(detail.plaintextSize))
+}.joinToString("  ·  ")
+
+/**
+ * When the item was captured, in the reader's own date and time format.
+ *
+ * §8.1 of the catalog: a substituted capture time is not a capture time, and
+ * the interface declines to present one it does not have. The viewer is a
+ * private screen, so the exact time `DESIGN.md` §11.2 keeps off public
+ * surfaces is shown here.
+ */
+internal fun captureLine(detail: ObjectDetail, format: (Long) -> String = ::formatCaptureDate): String =
+    if (detail.captureTimeSubstituted) "No capture date recorded" else "Captured ${format(detail.captureTimeMs)}"
+
+/** A date and time in milliseconds since the epoch, in the device's zone and locale. */
+internal expect fun formatCaptureDate(epochMs: Long): String
 
 /**
  * A size a person reads.

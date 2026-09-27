@@ -1,8 +1,11 @@
 package dev.po4yka.chur.app
 
+import dev.po4yka.chur.app.vault.captureLine
+import dev.po4yka.chur.app.vault.detailFacts
 import dev.po4yka.chur.app.vault.mediaDetails
 import dev.po4yka.chur.app.vault.rowLabel
 import dev.po4yka.chur.app.vault.tileLabel
+import dev.po4yka.chur.ffi.ObjectDetail
 import dev.po4yka.chur.ffi.ObjectProjection
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -50,5 +53,25 @@ class MediaDetailsTest {
             // §23.2 do-not-announce: no object ID, not even a part of it.
             assertFalse(Regex("[0-9a-f]{6}").containsMatchIn(label), label)
         }
+    }
+
+    /**
+     * The viewer's Info names the capture date it has, §8.1 of the catalog,
+     * and never one that was substituted, and it gives a video its length.
+     */
+    @Test
+    fun info_shows_the_capture_date_and_the_length() {
+        val video = ObjectDetail(
+            captureTimeMs = 1_556_712_000_000, importTimeMs = 1_786_000_000_000, captureTimeSubstituted = false,
+            width = 1920, height = 1080, durationMs = 65_000, plaintextSize = 12_345_678,
+            contentType = "video/mp4", filename = "", caption = "", tags = emptyList(),
+        )
+        val format = { ms: Long -> "at $ms" }
+        assertEquals("Captured at 1556712000000", captureLine(video, format))
+        assertEquals("No capture date recorded", captureLine(video.copy(captureTimeSubstituted = true), format))
+        assertEquals("video/mp4  ·  1920 × 1080  ·  1:05  ·  12.3 MB", detailFacts(video))
+        assertEquals("image/jpeg  ·  319.4 kB",
+            detailFacts(video.copy(contentType = "image/jpeg", width = 0, height = 0, durationMs = 0,
+                plaintextSize = 319_488)))
     }
 }

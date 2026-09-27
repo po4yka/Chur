@@ -74,6 +74,8 @@ Normalized model may include:
 
 Rust validates ranges and serializes/encrypts the canonical representation. Raw provider dictionaries are not persisted wholesale without review.
 
+Capture time comes from the provider when it publishes one; on Android that is the `DATE_TAKEN` column of the photo picker and the media store. When the provider publishes none, the platform reads the file: a photo's EXIF `DateTimeOriginal` with its `OffsetTimeOriginal`, and a video container's creation date, which is UTC. An EXIF time with no offset is read in the device's time zone at import. A time that does not parse, or that falls before 1970, is absent, and the catalog substitutes the import time under [`CATALOG_SCHEMA_V1.md`](../format/CATALOG_SCHEMA_V1.md) §8.1.
+
 ## 5. Originals
 
 Original bytes are preserved whenever feasible. Transforming import requires an explicit user/product policy because transcoding may lose metadata/quality and creates a new original content revision.

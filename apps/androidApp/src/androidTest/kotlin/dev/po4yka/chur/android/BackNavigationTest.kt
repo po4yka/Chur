@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Rect
+import android.media.ExifInterface
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
@@ -367,7 +368,7 @@ class BackNavigationTest {
         // The overlay is drawn, and Back closes it, once the detail has loaded.
         assertTrue(
             "the overlay opens",
-            await { find(label("Captured")) != null || find(label("No capture date recorded")) != null },
+            await { find(::isCaptureLine) != null },
         )
 
         pressBack()
@@ -776,7 +777,7 @@ class BackNavigationTest {
         tap(label("Info"))
         assertTrue(
             "the overlay opens",
-            await { find(label("Captured")) != null || find(label("No capture date recorded")) != null },
+            await { find(::isCaptureLine) != null },
         )
         shell("input tap ${media.centerX()} ${media.top + media.height() / 4}")
         assertFalse("a tap keeps the chrome under Info", await(1_000) { find(label("Back")) == null })
@@ -786,6 +787,29 @@ class BackNavigationTest {
         pressBack()
         assertTrue("the viewer closes", await { find(label("Info")) == null })
         assertTrue("the system bars stay", barsShown())
+    }
+
+    /**
+     * A provider that publishes no taken time, as a document provider does,
+     * leaves the importer to read the photo's EXIF, and the time it records
+     * is kept rather than substituted, `CATALOG_SCHEMA_V1.md` §8.1.
+     */
+    @Test
+    fun anImportKeepsTheCaptureTimeThePhotoRecords() = inTestVault {
+        val source = File(instrumentation.targetContext.cacheDir, "exif-source.jpg")
+        source.outputStream().use {
+            Bitmap.createBitmap(320, 240, Bitmap.Config.ARGB_8888).apply { eraseColor(0xFF669933.toInt()) }
+                .compress(Bitmap.CompressFormat.JPEG, 90, it)
+        }
+        ExifInterface(source).apply {
+            setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, "2019:05:01 12:00:00")
+            setAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL, "+02:00")
+            saveAttributes()
+        }
+        val id = importFile("exif-capture.jpg") { it.write(source.readBytes()) }
+        val detail = checkNotNull(runBlocking { controller.detailOf(id) })
+        assertFalse("the capture time is the photo's", detail.captureTimeSubstituted)
+        assertEquals(1_556_704_800_000, detail.captureTimeMs)
     }
 
     @Test
@@ -1856,6 +1880,10 @@ class BackNavigationTest {
         instrumentation.runOnMainSync { controller.reportImport(null) }
         return (outcome as MediaImporter.Outcome.Imported).objectId
     }
+
+    /** The Info line that says when the item was captured, or that no date was recorded. */
+    private fun isCaptureLine(node: AccessibilityNodeInfo): Boolean =
+        node.text?.toString()?.let { it.startsWith("Captured ") || it == "No capture date recorded" } == true
 
     private fun label(text: String): (AccessibilityNodeInfo) -> Boolean =
         { it.text?.toString() == text || it.contentDescription?.toString() == text }
