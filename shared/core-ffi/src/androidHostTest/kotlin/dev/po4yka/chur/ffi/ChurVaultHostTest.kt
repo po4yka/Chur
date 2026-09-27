@@ -318,6 +318,12 @@ class ChurVaultHostTest {
             bytes.copyOfRange(262_100, 262_400),
             ChurVault.readRange(reader, 262_100, 300),
         )
+        // The viewer's whole read: each chunk lands after the last in one
+        // native buffer, not over the start of it.
+        withChurBuffer(bytes.size) { buffer ->
+            ChurVault.readInto(reader, buffer)
+            assertContentEquals(bytes, buffer.copyOut(bytes.size))
+        }
         assertEquals(4, ChurVault.verifyComplete(reader))
         ChurVault.closeReader(reader)
     }

@@ -108,6 +108,7 @@ import kotlinx.cinterop.alloc
 import kotlinx.cinterop.allocArray
 import kotlinx.cinterop.get
 import kotlinx.cinterop.memScoped
+import kotlinx.cinterop.plus
 import kotlinx.cinterop.ptr
 import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.set
@@ -779,6 +780,7 @@ internal actual object ChurNative {
         reader: Long,
         offset: Long,
         destination: ChurBuffer,
+        destinationOffset: Int,
         outWritten: IntArray,
     ): Int =
         memScoped {
@@ -786,8 +788,8 @@ internal actual object ChurNative {
                 chur_object_reader_read_at(
                     reader.toULong(),
                     offset.toULong(),
-                    destination.pointer,
-                    destination.size.toULong(),
+                    destination.pointer + destinationOffset,
+                    (destination.size - destinationOffset).toULong(),
                     written,
                 )
             }

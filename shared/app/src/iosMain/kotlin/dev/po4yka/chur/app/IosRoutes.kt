@@ -45,7 +45,7 @@ import dev.po4yka.chur.app.vault.AlbumOrder
 import dev.po4yka.chur.app.vault.browseQuery
 import dev.po4yka.chur.app.vault.VaultShell
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
-import dev.po4yka.chur.app.vault.MEDIA_CLASS_VIDEO
+import dev.po4yka.chur.app.vault.viewerStill
 import dev.po4yka.chur.app.vault.VaultPlayer
 import dev.po4yka.chur.app.vault.VaultUiState
 import dev.po4yka.chur.app.vault.ViewerChrome
@@ -670,7 +670,7 @@ private fun IosViewerRoute(
     val tags by controller.tags.collectAsState()
     var choosingTags by remember(projection.id) { mutableStateOf(false) }
     val viewerScope = rememberCoroutineScope()
-    var preview by remember(projection.id) { mutableStateOf<ImageBitmap?>(null) }
+    var preview by remember(projection.id, generation) { mutableStateOf<ImageBitmap?>(null) }
     var showDetail by remember(projection.id) { mutableStateOf(false) }
     var waveform by remember(projection.id) { mutableStateOf<ByteArray?>(null) }
     var confirmingDelete by remember(projection.id) { mutableStateOf(false) }
@@ -687,31 +687,15 @@ private fun IosViewerRoute(
     }
 
     LaunchedEffect(projection.id, generation) {
-        // A video's still is its poster frame, which `MEDIA_PIPELINE.md` §6
-        // generates for every video; a photograph's is its screen preview. Both
-        // fall back to the thumbnail, which every object has.
-        val first = if (projection.mediaKind == MEDIA_CLASS_VIDEO) {
-            StreamKind.VIDEO_POSTER
-        } else {
-            StreamKind.SCREEN_PREVIEW
-        }
-        preview = cache.load(
-            repository = controller.vault,
-            generation = generation,
-            objectId = projection.objectId,
-            id = projection.id,
-            kind = first,
-        ) ?: cache.load(
-            repository = controller.vault,
-            generation = generation,
-            objectId = projection.objectId,
-            id = projection.id,
-            kind = StreamKind.THUMBNAIL,
-        )
+        // `IOS.md` §18: a preview before full-resolution ranges. The cached
+        // thumbnail shows at once, and the sharper still comes last so the
+        // detail does not wait for an original to decode.
+        preview = cache.load(controller.vault, generation, projection.objectId, projection.id)
         if (projection.mediaKind == MEDIA_CLASS_AUDIO) {
             waveform = controller.derivativeOf(projection.objectId, StreamKind.AUDIO_WAVEFORM)
         }
         detail = controller.detailOf(projection.objectId)
+        viewerStill(controller.vault, cache, generation, projection)?.let { preview = it }
     }
 
     // DESIGN.md §20.3: a quarantined object is never silently retried in a

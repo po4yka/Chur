@@ -32,6 +32,8 @@ import dev.po4yka.chur.app.ChurController
 import dev.po4yka.chur.app.MediaImporter
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_IMAGE
+import dev.po4yka.chur.app.vault.ThumbnailCache
+import dev.po4yka.chur.app.vault.viewerStill
 import dev.po4yka.chur.imports.AndroidMediaCodec
 import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.sync.FileSyncStateStore
@@ -98,7 +100,8 @@ import org.junit.runner.RunWith
  * kind and its length in words, §23.2. The viewer is drawn over the grid:
  * closing it, or a delete from it, leaves the grid where it was, a screen
  * reader and the keyboard focus cannot reach the shell under it, and Back
- * closes it before the scope under it.
+ * closes it before the scope under it. A photo too small for a screen preview
+ * is shown from its original, at full size and upright.
  */
 @RunWith(AndroidJUnit4::class)
 class BackNavigationTest {
@@ -681,6 +684,32 @@ class BackNavigationTest {
         pressBack()
         assertTrue("the viewer closes", await { find(label("Info")) == null })
         assertTrue("the system bars stay", barsShown())
+    }
+
+    @Test
+    fun aPhotoWithNoScreenPreviewIsShownFromItsOriginalUpright() = inTestVault {
+        // `MEDIA_PIPELINE.md` §8: 1600 by 1200 as stored is inside the 2048 px
+        // edge, so the photo has no screen preview and the viewer decodes the
+        // original. Its EXIF orientation 6 turns it to 1200 by 1600, which §11
+        // leaves to that decoder.
+        val jpeg = java.io.ByteArrayOutputStream().also {
+            Bitmap.createBitmap(1_600, 1_200, Bitmap.Config.ARGB_8888).compress(Bitmap.CompressFormat.JPEG, 90, it)
+        }.toByteArray()
+        val objectId = importFile("still-test.jpg") { out ->
+            out.write(jpeg, 0, 2)
+            out.write(EXIF_ORIENTATION_6)
+            out.write(jpeg, 2, jpeg.size - 2)
+        }
+        try {
+            assertTrue("the page shows it", await { controller.page.value.objects.any { it.objectId.contentEquals(objectId) } })
+            val photo = controller.page.value.objects.first { it.objectId.contentEquals(objectId) }
+            val generation = (controller.vaultState.value as VaultState.Unlocked).generation
+            val still = runBlocking { viewerStill(controller.vault, ThumbnailCache(), generation, photo) }
+            assertEquals("the original, upright", 1_200 to 1_600, still?.let { it.width to it.height })
+        } finally {
+            settle { done -> controller.deleteAll(listOf(objectId), done) }
+            settle { done -> controller.permanentlyDeleteAll(listOf(objectId), done) }
+        }
     }
 
     @Test
@@ -1371,5 +1400,9 @@ class BackNavigationTest {
         const val ALBUM = "Back test album"
         const val SCROLLING_LIBRARY = 40
         const val NOTE_TEXT = "BackNavigationTest note"
+
+        /** An EXIF segment that holds only orientation 6, a quarter turn clockwise. */
+        val EXIF_ORIENTATION_6: ByteArray = "ffe100224578696600004d4d002a00000008000101120003000000010006000000000000"
+            .chunked(2).map { it.toInt(16).toByte() }.toByteArray()
     }
 }

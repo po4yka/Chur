@@ -331,8 +331,14 @@ internal actual object ChurNative {
         reader: Long,
         offset: Long,
         destination: ChurBuffer,
+        destinationOffset: Int,
         outWritten: IntArray,
-    ): Int = ChurJni.objectReaderReadAt(reader, offset, destination.buffer, outWritten)
+    ): Int {
+        // A slice of a direct buffer is direct, and JNI's address and capacity
+        // for it start at the slice, so Rust writes at the offset without a copy.
+        val window = destination.buffer.duplicate().apply { position(destinationOffset) }.slice()
+        return ChurJni.objectReaderReadAt(reader, offset, window, outWritten)
+    }
 
     actual fun objectReaderVerifyComplete(
         reader: Long,

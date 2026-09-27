@@ -12,7 +12,12 @@ import java.nio.ByteBuffer
 actual class ChurBuffer actual constructor(
     capacity: Int,
 ) {
-    internal val buffer: ByteBuffer = ByteBuffer.allocateDirect(capacity)
+    /**
+     * The direct buffer itself, for a platform API that reads it in place,
+     * such as the viewer's image decoder. Use it only inside [withChurBuffer],
+     * which clears it afterwards.
+     */
+    val buffer: ByteBuffer = ByteBuffer.allocateDirect(capacity)
 
     actual val capacityBytes: Int get() = buffer.capacity()
 

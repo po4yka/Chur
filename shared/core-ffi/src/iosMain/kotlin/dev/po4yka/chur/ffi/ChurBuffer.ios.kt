@@ -18,7 +18,12 @@ import kotlinx.cinterop.set
  */
 @OptIn(ExperimentalForeignApi::class)
 actual class ChurBuffer actual constructor(capacity: Int) {
-    internal val pointer: CPointer<UByteVar> = nativeHeap.allocArray(capacity)
+    /**
+     * The native allocation itself, for a platform API that reads it in place,
+     * such as the viewer's image decoder. Use it only inside [withChurBuffer],
+     * which clears and frees it afterwards.
+     */
+    val pointer: CPointer<UByteVar> = nativeHeap.allocArray(capacity)
     internal val size: Int = capacity
 
     actual val capacityBytes: Int get() = size

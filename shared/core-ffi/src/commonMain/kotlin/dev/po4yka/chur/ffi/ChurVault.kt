@@ -906,7 +906,7 @@ object ChurVault {
             var at = 0
             while (at < length) {
                 ChurFailure.check(
-                    ChurNative.objectReaderReadAt(reader, offset + at, buffer, written),
+                    ChurNative.objectReaderReadAt(reader, offset + at, buffer, 0, written),
                     "read at",
                 )
                 if (written[0] == 0) break
@@ -925,6 +925,36 @@ object ChurVault {
             }
         }
         return out
+    }
+
+    /**
+     * Fills [destination] with the plaintext from its start, looping as
+     * [readRange] does.
+     *
+     * Each read lands where the last one stopped, so the whole object ends up
+     * in the one native buffer and never in a Kotlin array: §6 forbids a
+     * whole-file `ByteArray`, and §7 lets Rust write straight into a buffer the
+     * host owns. The caller sizes the buffer to the object and clears it, which
+     * [withChurBuffer] does.
+     */
+    fun readInto(
+        reader: Long,
+        destination: ChurBuffer,
+    ) {
+        val length = destination.capacityBytes
+        val written = IntArray(1)
+        var at = 0
+        while (at < length) {
+            ChurFailure.check(
+                ChurNative.objectReaderReadAt(reader, at.toLong(), destination, at, written),
+                "read at",
+            )
+            if (written[0] == 0) break
+            at += written[0]
+        }
+        if (at < length) {
+            throw ChurFailure(ChurStatus.OBJECT_INCOMPLETE, "the range ended early")
+        }
     }
 
     /** Runs complete verification and returns the state it reached. */

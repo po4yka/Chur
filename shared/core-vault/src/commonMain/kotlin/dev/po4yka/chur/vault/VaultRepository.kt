@@ -4,6 +4,7 @@ import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.core.platformkeys.DeviceSlot
 import dev.po4yka.chur.core.platformkeys.DeviceSlotException
 import dev.po4yka.chur.ffi.AlbumSummary
+import dev.po4yka.chur.ffi.ChurBuffer
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.ChurVault
 import dev.po4yka.chur.ffi.ContentInfo
@@ -617,6 +618,15 @@ class VaultRepository(
      */
     fun readLeased(reader: Long, offset: Long, length: Int): ByteArray =
         ChurVault.readRange(reader, offset, length)
+
+    /**
+     * Fills [destination] with a leased object from its start, off the mutex.
+     *
+     * For a small object a platform decoder needs whole: the bytes go straight
+     * into the caller's native buffer, never a Kotlin array, [ChurVault.readInto].
+     */
+    fun readLeasedInto(reader: Long, destination: ChurBuffer) =
+        ChurVault.readInto(reader, destination)
 
     /**
      * Closes one lease.

@@ -158,6 +158,8 @@ Live Photos, spatial media, RAW+JPEG pairs, sidecar metadata, and similar items 
 
 Timeline uses encrypted thumbnail/preview assets. Full-resolution original is decrypted only for detailed viewing/export. Decoder buffers are session-scoped; disk plaintext cache is prohibited.
 
+Import makes no screen preview for a photograph whose long edge is at or below the 2048 px target of §12, so the viewer shows its original. A platform image decoder needs the whole encoded file in memory, so the viewer reads such an original, only when its long edge is 2048 px or less and its size is 32 MiB or less, with `read_at` into one caller-owned native buffer of that size ([`FFI_CONTRACT.md`](FFI_CONTRACT.md) §7). The decoder reads that buffer in place, and the viewer clears it after the decode. The original never becomes a Kotlin `ByteArray` or a Swift `Data` ([`FFI_CONTRACT.md`](FFI_CONTRACT.md) §6). The viewer never reads the original of a quarantined object.
+
 ## 9. Video/audio playback
 
 Player asks for plaintext ranges. Rust:

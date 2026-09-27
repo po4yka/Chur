@@ -1,6 +1,7 @@
 package dev.po4yka.chur.app.vault
 
 import androidx.compose.ui.graphics.ImageBitmap
+import dev.po4yka.chur.ffi.ChurBuffer
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.StreamKind
 import dev.po4yka.chur.vault.VaultRepository
@@ -94,3 +95,17 @@ class ThumbnailCache(private val capacity: Int = DEFAULT_CAPACITY) {
  * a placeholder for it exactly as it does for one that is not ready.
  */
 internal expect fun decodeThumbnail(bytes: ByteArray): ImageBitmap?
+
+/**
+ * Decodes an original for the viewer, upright and scaled down to no more than
+ * [maxEdgePx] on its long edge.
+ *
+ * [original] holds the whole encoded file and nothing else. The decoder reads
+ * it in place and keeps no reference to it once it returns, because the caller
+ * clears it next. Unlike [decodeThumbnail] it applies the EXIF orientation: §11
+ * of the media pipeline normalizes the orientation of a derivative, and an
+ * original has not been through that step. It returns `null` for a file the
+ * platform decoder refuses or fails on, and the viewer then shows a derivative
+ * instead.
+ */
+internal expect fun decodeForDisplay(original: ChurBuffer, maxEdgePx: Int): ImageBitmap?

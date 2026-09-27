@@ -302,10 +302,15 @@ internal expect object ChurNative {
         outContentType: ByteArray,
     ): Int
 
+    /**
+     * Reads into [destination] from its byte `destinationOffset` to its end,
+     * so a caller can fill one buffer across the short reads §6.3 permits.
+     */
     fun objectReaderReadAt(
         reader: Long,
         offset: Long,
         destination: ChurBuffer,
+        destinationOffset: Int,
         outWritten: IntArray,
     ): Int
 
