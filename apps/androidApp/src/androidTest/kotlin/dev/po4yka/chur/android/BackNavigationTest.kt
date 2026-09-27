@@ -18,6 +18,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import androidx.lifecycle.Lifecycle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
@@ -66,7 +67,8 @@ import org.junit.runner.RunWith
  * The gate's forms are checked here too, since they share the harness: each
  * clears the status bar and the keyboard, `DESIGN.md` §25.5, and the keyboard's
  * own action does what the form's button does. A screen reader hears every
- * refused unlock, not only the first, §23.2.
+ * refused unlock, not only the first, §23.2. The vault's lock settings are
+ * switches that show the state in force, and a tap flips it.
  */
 @RunWith(AndroidJUnit4::class)
 class BackNavigationTest {
@@ -361,9 +363,58 @@ class BackNavigationTest {
         assertTrue("back in the vault", await { isOpen() })
     }
 
+    @Test
+    fun theLockSettingsAreSwitchesThatShowTheirState() = inTestVault {
+        tap(label("Settings"))
+        // `KEY_SLOTS.md` §1: the row shows the device-slot policy in force.
+        assertEquals(controller.deviceSlotStrict.value, switchRow("Biometrics only").isChecked)
+
+        val before = controller.appLockEnabled.value
+        try {
+            assertEquals(before, switchRow("Lock whole app").isChecked)
+            tap(label("Lock whole app"))
+            assertTrue("the setting flips", await { controller.appLockEnabled.value != before })
+            assertTrue("the switch shows it", await { switchRow("Lock whole app").isChecked != before })
+            tap(label("Lock whole app"))
+            assertTrue(
+                "a second tap restores it",
+                await { controller.appLockEnabled.value == before && switchRow("Lock whole app").isChecked == before },
+            )
+        } finally {
+            // Whole-app lock left on would gate the Notes cases that follow.
+            if (controller.appLockEnabled.value != before) {
+                instrumentation.runOnMainSync { controller.toggleAppLock() }
+                await { controller.appLockEnabled.value == before }
+            }
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
+
+    /**
+     * The settings row named [title], scrolled into view: a switch, which a
+     * screen reader announces with its name and its state, `DESIGN.md` §23.5.
+     */
+    private fun switchRow(title: String): AccessibilityNodeInfo {
+        var row: AccessibilityNodeInfo? = null
+        assertTrue(
+            "$title must be on screen",
+            await {
+                row = find(label(title))?.let { node -> generateSequence(node) { it.parent }.firstOrNull { it.isCheckable } }
+                row != null ||
+                    find { it.isScrollable }?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD).let { false }
+            },
+        )
+        // Compose gives a row with children its role on a child of its own,
+        // as a role description, and the reader speaks it with the row.
+        assertNotNull(
+            "$title must be a switch",
+            find(row) { AccessibilityNodeInfoCompat.wrap(it).roleDescription?.toString() == "Switch" },
+        )
+        return checkNotNull(row)
+    }
 
     /** Shows [route], presses Back once, and returns where the press landed. */
     private fun backFrom(route: AppRoute): AppRoute {

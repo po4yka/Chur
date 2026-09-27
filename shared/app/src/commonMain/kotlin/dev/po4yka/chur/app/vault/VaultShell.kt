@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -24,6 +25,8 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -35,6 +38,8 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -46,8 +51,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
@@ -765,46 +772,41 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
             }
             state.deviceSlotStrict?.let { strict ->
                 item {
-                    // `KEY_SLOTS.md` §1: the policy is a per-vault setting shown
-                    // at device-slot creation, and strict is the only
-                    // configuration that resists an adversary who knows the
-                    // device unlock code. The label names what toggling does.
-                    // The controller re-enrolls an existing slot under the new
-                    // policy (`ANDROID.md` §9.3), so the state the label implies
-                    // is the state in force.
-                    SettingsAction(
+                    // `KEY_SLOTS.md` §1: the policy is a per-vault setting, and
+                    // strict is the only configuration that resists an
+                    // adversary who knows the device unlock code, so the row
+                    // shows which one is in force and what it means. The
+                    // controller re-enrolls an existing slot under the new
+                    // policy (`ANDROID.md` §9.3) and publishes the policy that
+                    // survives, so after a cancelled prompt the switch still
+                    // shows the policy in force.
+                    SettingsSwitch(
+                        "Biometrics only",
                         if (strict) {
-                            "Allow the device screen lock to unlock"
+                            "Unlocking with this device needs your biometrics. " +
+                                "Your screen lock can't open the vault."
                         } else {
-                            "Require biometrics only to unlock"
+                            "Unlocking with this device also accepts your screen lock, " +
+                                "so anyone who knows it can open the vault."
                         },
-                        actions.onToggleDeviceSlotPolicy,
+                        checked = strict,
+                        onToggle = actions.onToggleDeviceSlotPolicy,
+                        enabled = state.operation == null,
                     )
                 }
             }
         }
         item {
-            SettingsAction(
-                if (state.appLockEnabled) "Lock vault only" else "Lock whole app",
-                actions.onToggleAppLock,
-            )
-        }
-        item {
-            Text(
-                "Whole-app lock also hides public Notes until you unlock. " +
+            SettingsSwitch(
+                "Lock whole app",
+                "Also hides public Notes until you unlock. " +
                     "Public Notes remain unencrypted on this device.",
-                style = MaterialTheme.typography.bodySmall,
-                color = colors.inkMuted,
-                modifier = Modifier.padding(horizontal = ChurSpacing.three),
+                checked = state.appLockEnabled,
+                onToggle = actions.onToggleAppLock,
             )
         }
         item {
             Text("Backup", style = MaterialTheme.typography.titleMedium)
-        }
-        if (state.deviceControlAvailable) {
-            item {
-                SettingsAction("Control from computer", actions.onDeviceControl, enabled = state.operation == null)
-            }
         }
         item {
             SettingsAction("Write a backup file", actions.onCreateBackup, enabled = state.operation == null)
@@ -898,6 +900,15 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
                 color = colors.inkMuted,
                 modifier = Modifier.padding(horizontal = ChurSpacing.three),
             )
+        }
+        // A desktop session is not a backup, so it has a heading of its own.
+        if (state.deviceControlAvailable) {
+            item {
+                Text("Advanced", style = MaterialTheme.typography.titleMedium)
+            }
+            item {
+                SettingsAction("Control from computer", actions.onDeviceControl, enabled = state.operation == null)
+            }
         }
     }
     if (changingPassword) {
@@ -995,4 +1006,51 @@ private fun SettingsAction(label: String, onClick: () -> Unit, enabled: Boolean 
     Card(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
         Text(label, modifier = Modifier.padding(ChurSpacing.three))
     }
+}
+
+/**
+ * A setting that is on or off, named by what it is rather than by what a tap
+ * does, so the row reads the same whichever state it is in.
+ *
+ * The whole row toggles, with the switch role, so a screen reader hears the
+ * name and the state. The switch's shape carries the state as well as its
+ * color, `DESIGN.md` §23.5, and its checked track is the accent, not Material
+ * primary, §25.2. The row is transparent, as the `settings-row` token says.
+ *
+ * Off is the default for both rows, so the unchecked thumb and border are
+ * `inkMuted`, as the unchecked Checkbox is. Material's defaults map them to
+ * `outline`, the hairline token (`#DCDCD8` light, `#2A2A2A` dark), which is
+ * about 1.2:1 against the `surfaceSunken` track (`#EEEEEB`) and 1.3:1 against
+ * the canvas. `inkMuted` (`#5C5C58` light, `#A3A39D` dark) is about 5.8:1 on
+ * the light track and 6.6:1 on the dark `surfaceRaised` track (`#1D1D1D`),
+ * which meets the 3:1 of §6.4 and WCAG 2.2 SC 1.4.11.
+ */
+@Composable
+private fun SettingsSwitch(
+    title: String,
+    detail: String,
+    checked: Boolean,
+    onToggle: () -> Unit,
+    enabled: Boolean = true,
+) {
+    val colors = LocalChurColors.current
+    ListItem(
+        headlineContent = { Text(title) },
+        supportingContent = { Text(detail) },
+        trailingContent = {
+            Switch(
+                checked = checked,
+                onCheckedChange = null,
+                enabled = enabled,
+                colors = SwitchDefaults.colors(
+                    checkedTrackColor = colors.accent,
+                    checkedThumbColor = colors.onInk,
+                    uncheckedThumbColor = colors.inkMuted,
+                    uncheckedBorderColor = colors.inkMuted,
+                ),
+            )
+        },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier.toggleable(value = checked, enabled = enabled, role = Role.Switch) { onToggle() },
+    )
 }
