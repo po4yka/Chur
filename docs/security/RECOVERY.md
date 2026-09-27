@@ -32,7 +32,7 @@ Adds authenticated peer-device enrollment and remote ciphertext. This uses the d
 
 The 32 bytes are encoded as 24 BIP-39 English words: 256 bits of entropy followed by the BIP-39 checksum, which is the first 8 bits of `SHA-256` over those 32 bytes, split into 24 groups of 11 bits, each group indexing the 2048-word BIP-39 English list. This is the standard construction and Chur adds nothing to it.
 
-The displayed and printed artifact carries the version marker on its own line above the numbered words:
+The displayed artifact carries the version marker on its own line above the numbered words:
 
 ```text
 chur-recovery-v1
@@ -56,9 +56,9 @@ The failures are distinct, and neither of the first two is an oracle, because wh
 - the version marker of §2.1 and the BIP-39 checksum are both present;
 - canonical binary round trip;
 - clear word separation and typography, with the words numbered;
-- offline display/print option;
+- an offline display: the words appear on the device only, after an explicit reveal, numbered under the version marker. Chur offers no print path, because a print job hands the plaintext phrase to the system print spooler and to any installed print service, some of which are cloud services;
 - explicit warning not to store beside an unlocked device;
-- confirmation by re-entry or verified scan;
+- confirmation by re-entry or verified scan. Re-entry asks for three words at random positions, each trimmed, lowercased, and matched by its first four letters as in §2.2. The NFKD step of §2.2 is not applied, so a word typed in compatibility forms, such as full-width letters, is asked for again; a mismatch names only the position, and the slot commits only after all three match;
 - no upload to Chur server in plaintext.
 
 ## 3. Recovery slot

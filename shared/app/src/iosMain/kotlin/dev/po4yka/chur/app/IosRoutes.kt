@@ -99,7 +99,12 @@ internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: 
             UIApplication.sharedApplication.idleTimerDisabled = true
             onDispose { UIApplication.sharedApplication.idleTimerDisabled = false }
         }
-        RecoveryPhraseScreen(phrase = value, onAcknowledged = controller::acknowledgeRecoveryPhrase)
+        RecoveryPhraseScreen(
+            phrase = value,
+            onAcknowledged = controller::acknowledgeRecoveryPhrase,
+            onLock = { controller.lock() },
+            onPanic = { controller.panic() },
+        )
         return
     }
 

@@ -6,6 +6,7 @@ import dev.po4yka.chur.vault.LockPolicy
 import dev.po4yka.chur.vault.VaultState
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.resetMain
@@ -88,6 +89,35 @@ class RecoveryPhraseHostTest {
         controller.goTo(AppRoute.Recover)
         controller.recover(phrase)
         withTimeout(10_000) { controller.route.first { it == AppRoute.Vault } }
+    }
+
+    @Test
+    fun a_confirmed_phrase_from_settings_commits_one_slot_and_says_so(): Unit = runBlocking {
+        controller.create(PASSWORD, offerRecovery = false)
+        withTimeout(10_000) { controller.route.first { it == AppRoute.Vault } }
+        val before = controller.vault.slots().size
+
+        // The creation's request ends only after the Library loads, which is
+        // after the route reads `Vault`, and a request made before it ends is
+        // ignored. A repeat is also ignored once the phrase shows, so asking
+        // until it shows stages exactly one slot.
+        withTimeout(10_000) {
+            while (controller.recoveryPhrase.value == null) {
+                controller.addRecoverySlot()
+                delay(10)
+            }
+        }
+        // `PROVISIONING.md` §4: the phrase on screen commits nothing yet.
+        assertEquals(before, controller.vault.slots().size)
+
+        // `DESIGN.md` §17.1 step 6: the user is told the slot committed.
+        controller.acknowledgeRecoveryPhrase()
+        assertEquals(
+            "Recovery phrase saved.",
+            withTimeout(10_000) { controller.notice.first { it != null } }?.text,
+        )
+        assertEquals(before + 1, controller.vault.slots().size)
+        assertEquals(AppRoute.Vault, controller.route.value)
     }
 
     @Test

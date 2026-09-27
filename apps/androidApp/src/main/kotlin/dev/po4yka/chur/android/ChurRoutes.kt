@@ -151,7 +151,12 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
             view.keepScreenOn = true
             onDispose { view.keepScreenOn = false }
         }
-        RecoveryPhraseScreen(phrase = value, onAcknowledged = controller::acknowledgeRecoveryPhrase)
+        RecoveryPhraseScreen(
+            phrase = value,
+            onAcknowledged = controller::acknowledgeRecoveryPhrase,
+            onLock = { controller.lock() },
+            onPanic = { controller.panic() },
+        )
         return
     }
 

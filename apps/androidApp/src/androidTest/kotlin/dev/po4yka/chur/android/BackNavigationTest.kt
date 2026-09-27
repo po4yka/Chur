@@ -564,6 +564,11 @@ class BackNavigationTest {
         pressBack()
 
         assertNotNull("Back must not leave the phrase", controller.recoveryPhrase.value)
+        // Nor the step that asks for words of it back.
+        tap(label("Show words"))
+        tap(label("I have written them down"))
+        pressBack()
+        assertNotNull("Back must not leave the check", controller.recoveryPhrase.value)
         // The slot commits only when the phrase is confirmed, and a lock
         // discards it. A descriptor holds at most 16 slots, so the test vault
         // must not keep one per run; a failure above leaves through the same
@@ -576,6 +581,62 @@ class BackNavigationTest {
         }
         assertTrue("the vault opens again", await(60_000) { isOpen() })
         assertEquals(before, runBlocking { controller.vault.slots() }.map { it.id }.toSet())
+    }
+
+    /**
+     * `RECOVERY.md` §2.3 in the steps of `DESIGN.md` §17.1: the words appear
+     * only on request, under the version marker and in order, and the slot
+     * commits only once three of them are typed back.
+     */
+    @Test
+    fun theRecoveryPhraseShowsOnRequestAndCommitsOnceThreeWordsAreTypedBack() = inTestVault {
+        val before = runBlocking { controller.vault.slots() }.map { it.id }.toSet()
+        instrumentation.runOnMainSync { controller.addRecoverySlot() }
+        assertTrue("the vault shows a new phrase", await(60_000) { controller.recoveryPhrase.value != null })
+        val words = checkNotNull(controller.recoveryPhrase.value).split(" ")
+        val cell = Regex("""^ ?\d{1,2}\. \S+$""")
+        fun cells() = onScreen { nodes -> nodes.flatMap { it.labels }.filter { cell.matches(it) } }
+
+        assertTrue("the reveal", await { find(label("Show words")) != null })
+        assertEquals("no word before the reveal", emptyList<String>(), cells())
+        tap(label("Show words"))
+        assertTrue("the marker", await { find(label("chur-recovery-v1")) != null })
+        assertEquals(words.mapIndexed { index, word -> "${index + 1}".padStart(2) + ". $word" }, cells())
+
+        tap(label("I have written them down"))
+        val asked = onScreen { nodes ->
+            nodes.filter { it.config.getOrNull(SemanticsProperties.EditableText) != null }
+                .map { field -> field.labels.first { it.startsWith("Word ") }.removePrefix("Word ").toInt() - 1 }
+        }
+        assertEquals(3, asked.size)
+        fun type(position: Int, text: String) = onScreen { nodes ->
+            nodes.first { "Word ${position + 1}" in it.labels && it.config.getOrNull(SemanticsProperties.EditableText) != null }
+                .config[SemanticsActions.SetText].action?.invoke(AnnotatedString(text))
+        }
+        fun canContinue() = onScreen { nodes ->
+            nodes.first { "Continue" in it.labels }.config.getOrNull(SemanticsProperties.Disabled) == null
+        }
+
+        // A wrong word names its position and never the word.
+        type(asked[0], "zzzz")
+        type(asked[1], words[asked[1]])
+        type(asked[2], words[asked[2]])
+        awaitFrames()
+        assertTrue("the mismatch", onScreen { nodes -> nodes.any { "Word ${asked[0] + 1} does not match." in it.labels } })
+        assertFalse("Continue waits for all three", canContinue())
+        assertEquals("nothing commits yet", before, runBlocking { controller.vault.slots() }.map { it.id }.toSet())
+
+        // §2.2: the first four letters decide, whatever the case.
+        type(asked[0], words[asked[0]].uppercase() + "x")
+        awaitFrames()
+        assertTrue("three matching words allow Continue", canContinue())
+        tap(label("Continue"))
+
+        assertTrue("the user is told", await(60_000) { controller.notice.value?.text == "Recovery phrase saved." })
+        val added = runBlocking { controller.vault.slots() }.filter { it.id !in before }
+        assertEquals(listOf("Recovery"), added.map { it.familyName })
+        // A descriptor holds at most 16 slots, so the test vault keeps none of these.
+        runBlocking { added.forEach { controller.vault.removeSlot(it.slotId) } }
     }
 
     @Test

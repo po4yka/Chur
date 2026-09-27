@@ -1,7 +1,9 @@
 package dev.po4yka.chur.app.vault
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -20,17 +22,25 @@ import androidx.compose.material3.TextButton
 import dev.po4yka.chur.app.ActiveOperation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.isTraversalGroup
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.secretKeyboardOptions
 import dev.po4yka.chur.app.theme.ChurSpacing
-import dev.po4yka.chur.app.theme.DiagnosticTextStyle
 import dev.po4yka.chur.app.theme.LocalChurColors
 import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
 
@@ -190,17 +200,42 @@ fun CreateVaultScreen(
 }
 
 /**
- * The recovery presentation of `RECOVERY.md` §2.
+ * The recovery presentation of `RECOVERY.md` §2.3, in the steps of
+ * `DESIGN.md` §17.1.
  *
- * The phrase is shown once and never again, which is why the confirmation is
- * explicit rather than a dismissal: §4 of `PROVISIONING.md` says declining is a
- * choice and not the dismissal of a sheet, and the same reasoning applies to
- * acknowledging.
+ * - The words appear only after the user asks for them (§17.1 step 3), so
+ *   neither a glance nor a screen reader meets them when the screen opens
+ *   (§23.2).
+ * - [PhraseGrid] shows them numbered under the version marker of
+ *   `RECOVERY.md` §2.1. There is no selection container, so they cannot be
+ *   copied (§17.2).
+ * - The warning is the "not beside an unlocked device" of §2.3. Screenshots
+ *   are blocked only where the platform can block them (§17.1 step 4), so the
+ *   copy asks the user not to take one and does not say they cannot.
+ * - The user confirms by typing three words at random positions again, which
+ *   is the re-entry of §2.3 and `PASSWORD_PROFILE.md` §12. Each word is matched
+ *   by its first four letters as in §2.2, by [recoveryWordMatches], and a
+ *   mismatch names only the position. Continue is the only way on and stays off until all three
+ *   match, because the phrase is shown once: `PROVISIONING.md` §4 commits the
+ *   slot only after this confirmation.
+ * - [onLock] and [onPanic] are the secure exit of §17.1 step 7. A lock
+ *   discards the words and commits nothing, as the copy says.
+ *
+ * All state is `remember`ed and keyed to the phrase: `PASSWORD_PROFILE.md` §2
+ * keeps a secret out of saved state, and a step or an answer given for one
+ * phrase says nothing about the next.
  */
 @Composable
-fun RecoveryPhraseScreen(phrase: String, onAcknowledged: () -> Unit) {
-    // Keyed to the phrase: a tick given to one phrase says nothing about the next.
-    var acknowledged by remember(phrase) { mutableStateOf(false) }
+fun RecoveryPhraseScreen(
+    phrase: String,
+    onAcknowledged: () -> Unit,
+    onLock: () -> Unit,
+    onPanic: () -> Unit,
+) {
+    val words = remember(phrase) { phrase.split(" ") }
+    var step by remember(phrase) { mutableStateOf(PhraseStep.EXPLAIN) }
+    val positions = remember(phrase) { words.indices.shuffled().take(CHECKED_WORDS).sorted() }
+    val answers = remember(phrase) { mutableStateListOf(*Array(CHECKED_WORDS) { "" }) }
     val colors = LocalChurColors.current
     Surface(color = colors.canvas, modifier = Modifier.fillMaxSize()) {
         Column(
@@ -213,54 +248,161 @@ fun RecoveryPhraseScreen(phrase: String, onAcknowledged: () -> Unit) {
                 modifier = Modifier.widthIn(max = 480.dp),
                 verticalArrangement = Arrangement.spacedBy(ChurSpacing.three),
             ) {
-                Text("Your recovery phrase", style = MaterialTheme.typography.headlineSmall)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Your recovery phrase",
+                        style = MaterialTheme.typography.headlineSmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    LockControl(onLock = onLock, onPanic = onPanic)
+                }
                 Text(
-                    "These 24 words open your vault without the password. They are shown " +
-                        "once. Write them down and keep them somewhere safe and offline. " +
-                        "Nothing is saved until you tap Continue. If the app locks or you " +
-                        "leave it before then, these words are discarded.",
+                    "These 24 words open your vault without the password. You see them " +
+                        "once, on this screen. Nothing is saved until you confirm them. If " +
+                        "the app locks or you leave it before then, the words are discarded.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = colors.inkMuted,
                 )
-                Surface(
-                    color = colors.surfaceSunken,
-                    shape = MaterialTheme.shapes.medium,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Column(modifier = Modifier.padding(ChurSpacing.gutter)) {
-                        phrase.split(" ").chunked(4).forEachIndexed { row, words ->
-                            Text(
-                                text = words.mapIndexed { index, word ->
-                                    "${row * 4 + index + 1}. $word"
-                                }.joinToString("   "),
-                                style = DiagnosticTextStyle,
-                                modifier = Modifier.padding(vertical = ChurSpacing.hairline),
+                when (step) {
+                    PhraseStep.EXPLAIN, PhraseStep.WORDS -> {
+                        Text(
+                            "Write the words on paper, in order. Do not keep them on or beside " +
+                                "this phone while it is unlocked. Do not take a screenshot or copy them.",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        if (step == PhraseStep.EXPLAIN) {
+                            Button(onClick = { step = PhraseStep.WORDS }, modifier = Modifier.fillMaxWidth()) {
+                                Text("Show words")
+                            }
+                        } else {
+                            PhraseGrid(words)
+                            Button(onClick = { step = PhraseStep.CHECK }, modifier = Modifier.fillMaxWidth()) {
+                                Text("I have written them down")
+                            }
+                        }
+                    }
+                    PhraseStep.CHECK -> {
+                        Text(
+                            "To check what you wrote, enter these words from your paper.",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        positions.forEachIndexed { index, position ->
+                            val expected = words[position]
+                            val answer = answers[index]
+                            // Judged once it is as long as the part §2.2 compares,
+                            // so a word being typed is not called wrong.
+                            val wrong = answer.trim().length >= expected.take(MATCHED_LETTERS).length &&
+                                !recoveryWordMatches(expected, answer)
+                            OutlinedTextField(
+                                colors = churOutlinedTextFieldColors(),
+                                value = answer,
+                                onValueChange = { answers[index] = it },
+                                singleLine = true,
+                                label = { Text("Word ${position + 1}") },
+                                isError = wrong,
+                                supportingText = if (wrong) {
+                                    { Text("Word ${position + 1} does not match.") }
+                                } else {
+                                    null
+                                },
+                                keyboardOptions = secretKeyboardOptions(
+                                    imeAction = if (index < positions.lastIndex) ImeAction.Next else ImeAction.Done,
+                                ),
+                                modifier = Modifier.fillMaxWidth(),
                             )
+                        }
+                        Button(
+                            onClick = onAcknowledged,
+                            enabled = positions.indices.all { recoveryWordMatches(words[positions[it]], answers[it]) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Continue")
+                        }
+                        TextButton(
+                            onClick = { step = PhraseStep.WORDS },
+                            modifier = Modifier.padding(bottom = 8.dp),
+                        ) {
+                            Text("Show the words again")
                         }
                     }
                 }
-                androidx.compose.foundation.layout.Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Checkbox(
-                        checked = acknowledged,
-                        onCheckedChange = { acknowledged = it },
-                        colors = CheckboxDefaults.colors(
-                            checkedColor = colors.accent,
-                            checkmarkColor = colors.onInk,
-                        ),
-                    )
-                    Text(
-                        "I have written the phrase down",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
+            }
+        }
+    }
+}
+
+private enum class PhraseStep { EXPLAIN, WORDS, CHECK }
+
+/** How many words the user types again, `RECOVERY.md` §2.3. */
+private const val CHECKED_WORDS = 3
+
+/** The letters a word is matched by, `RECOVERY.md` §2.2. */
+private const val MATCHED_LETTERS = 4
+
+/**
+ * Whether [typed] is the word [expected] by the rule `RECOVERY.md` §2.2 uses
+ * to tell the words apart: trimmed and lowercased, then compared by its first
+ * four letters, which are unique across the BIP-39 English list. A correctly
+ * remembered word survives a mistyped ending, as it does when the phrase is
+ * entered to recover.
+ *
+ * The NFKD step of §2.2 is not repeated, so a compatibility form that recovery
+ * accepts, such as a word in full-width letters, is refused here. That
+ * difference is accepted: the check asks whether the paper holds the right
+ * word, and the words on the paper were copied from the ASCII list on screen.
+ * A refused word names only its position, and the user types it again.
+ */
+internal fun recoveryWordMatches(expected: String, typed: String): Boolean =
+    typed.trim().lowercase().take(MATCHED_LETTERS) == expected.take(MATCHED_LETTERS)
+
+/**
+ * The words under the version marker, `RECOVERY.md` §2.1: numbered and read
+ * down two columns, 1–12 and then 13–24.
+ *
+ * The numbers are monospaced and padded to two digits, so the words line up
+ * at any font size. `DESIGN.md` §17.2 never truncates, and a cell that wraps
+ * breaks the reading order, so where two columns cannot hold the widest cell
+ * on one line (a narrow screen at a large font scale) one column holds all 24.
+ * Each column is a traversal group, so a screen reader also reads 1–12 before
+ * 13–24 and not across the rows.
+ */
+@Composable
+private fun PhraseGrid(words: List<String>) {
+    val colors = LocalChurColors.current
+    val style = MaterialTheme.typography.bodyLarge
+    val cells = remember(words, colors.inkMuted) {
+        words.mapIndexed { index, word ->
+            buildAnnotatedString {
+                withStyle(SpanStyle(fontFamily = FontFamily.Monospace, color = colors.inkMuted)) {
+                    append("${index + 1}".padStart(2) + ".")
                 }
-                Button(
-                    onClick = onAcknowledged,
-                    enabled = acknowledged,
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                ) {
-                    Text("Continue")
+                append(" $word")
+            }
+        }
+    }
+    val measurer = rememberTextMeasurer()
+    val widest = remember(cells, style, measurer) {
+        cells.maxOf { measurer.measure(it, style, softWrap = false, maxLines = 1).size.width }
+    }
+    val density = LocalDensity.current
+    Surface(
+        color = colors.surfaceSunken,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        BoxWithConstraints(modifier = Modifier.padding(ChurSpacing.gutter)) {
+            val twoColumns = with(density) { widest.toDp() } * 2 + ChurSpacing.gutter <= maxWidth
+            Column(verticalArrangement = Arrangement.spacedBy(ChurSpacing.two)) {
+                Text("chur-recovery-v1", style = style.copy(fontFamily = FontFamily.Monospace))
+                Row(horizontalArrangement = Arrangement.spacedBy(ChurSpacing.gutter)) {
+                    cells.chunked(if (twoColumns) cells.size / 2 else cells.size).forEach { column ->
+                        Column(
+                            modifier = Modifier.weight(1f).semantics { isTraversalGroup = true },
+                            verticalArrangement = Arrangement.spacedBy(ChurSpacing.one),
+                        ) {
+                            column.forEach { Text(it, style = style) }
+                        }
+                    }
                 }
             }
         }

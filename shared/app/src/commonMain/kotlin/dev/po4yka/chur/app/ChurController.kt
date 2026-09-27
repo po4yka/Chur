@@ -418,6 +418,9 @@ class ChurController(
      * discarded what the phrase belonged to, and the user is told that the
      * phrase they wrote down was not saved.
      *
+     * A committed slot is confirmed on the Library it opens, `DESIGN.md`
+     * §17.1 step 6.
+     *
      * An activation that fails reaches the user as a message, as a failed
      * [create] does, and leaves nothing to clear: the repository abandons the
      * creation, and [endOpenSession] cleared the projections of an open
@@ -428,7 +431,7 @@ class ChurController(
         _recoveryPhrase.value = null
         guarded {
             if (withContext(Dispatchers.Default) { repository.confirmRecoveryPhrase() }) {
-                enterVault()
+                enterVault(notice = "Recovery phrase saved.")
             } else {
                 say("This recovery phrase was not saved.")
             }
@@ -1957,16 +1960,25 @@ class ChurController(
         }
     }
 
-    private suspend fun enterVault() {
+    /**
+     * Opens the Library of the session that just began.
+     *
+     * [notice] is posted to the Library's own visit before anything here
+     * suspends, so a lock that follows cannot carry it to the screen after
+     * the lock. The route change already cleared what the last screen showed,
+     * so the sync below does not clear again and leaves [notice] standing.
+     */
+    private suspend fun enterVault(notice: String? = null) {
         privacy.setEnabled(true)
         setRoute(AppRoute.Vault)
+        post(notice)
         _page.value = withContext(Dispatchers.Default) { repository.page(ObjectQuery()) }
         // `SYNC_PROTOCOL_V1.md` §7: "Decrypted application occurs after
         // explicit unlock". Whatever the locked puller staged while the vault
         // was closed is validated and applied here, off the first frame, and
         // then a configured engine pulls what arrived since the last run.
         sync?.takeIf { it.status.value.configured }?.let { engine ->
-            guarded {
+            guarded(clearMessage = false) {
                 withContext(Dispatchers.Default) { repository.processSync() }
                 engine.syncNow()
             }
