@@ -282,11 +282,7 @@ class SyncCoordinatorTest {
             assertFalse(completed)
             assertEquals(listOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L), sleeps)
             assertEquals(SyncCoordinator.MAX_ATTEMPTS, engine.requests)
-            assertEquals(
-                ChurStatus.NETWORK_FAILURE.name,
-                coordinator.status.value.message!!
-                    .substringBefore(" "),
-            )
+            assertEquals(ChurStatus.NETWORK_FAILURE, coordinator.status.value.failure)
             // Nothing was applied and no cursor advanced, so the next run re-pulls.
             assertEquals(
                 0uL,
@@ -353,7 +349,10 @@ class SyncCoordinatorTest {
             assertFalse(completed)
             assertEquals(1, engine.requests)
             assertEquals(0, sleeps.size)
-            assertEquals(ChurStatus.AUTHENTICATION_FAILED.name, coordinator.status.value.message)
+            // The engine owns no copy: the status goes up typed, and no line
+            // carries its name, `ERROR_MODEL.md` "Layer mapping".
+            assertEquals(ChurStatus.AUTHENTICATION_FAILED, coordinator.status.value.failure)
+            assertNull(coordinator.status.value.message)
         }
 
     @Test

@@ -1,5 +1,6 @@
 package dev.po4yka.chur.app
 
+import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.ImportRequest
 import dev.po4yka.chur.ffi.OperationProgress
@@ -48,9 +49,15 @@ class MediaImporter(
         /** The provider could not open the source. */
         data object Unreadable : Outcome
 
-        /** The boundary refused, carrying its stable status. */
+        /**
+         * The boundary refused, carrying its stable status.
+         *
+         * The status and not its text: a host tells a cancellation from a
+         * failure by the code, and `userCopy` turns it into what the user
+         * reads, `docs/ERROR_MODEL.md` "Layer mapping".
+         */
         data class Refused(
-            val status: String,
+            val status: ChurStatus,
         ) : Outcome
     }
 
@@ -63,14 +70,14 @@ class MediaImporter(
     ): Outcome {
         val media = source ?: return Outcome.Unreadable
         try {
-            if (cancelRequested()) return Outcome.Refused("CANCELLED")
+            if (cancelRequested()) return Outcome.Refused(ChurStatus.CANCELLED)
             // §2 stage 3, before stage 4: an over-large source is refused
             // before an object key exists.
             val probe =
                 codec.probe(media)
-                    ?: return Outcome.Refused("UNSUPPORTED_VERSION")
+                    ?: return Outcome.Refused(ChurStatus.UNSUPPORTED_VERSION)
             MediaBounds.check(probe)?.let { return Outcome.TooLarge(it) }
-            if (cancelRequested()) return Outcome.Refused("CANCELLED")
+            if (cancelRequested()) return Outcome.Refused(ChurStatus.CANCELLED)
 
             val operation =
                 repository.beginImport(
@@ -98,7 +105,7 @@ class MediaImporter(
                 }
             }
             if (terminal.status != 0) {
-                return Outcome.Refused(statusName(terminal.status))
+                return Outcome.Refused(ChurStatus.fromValue(terminal.status))
             }
 
             // §10 of the FFI contract: the terminal snapshot names the object
@@ -107,7 +114,7 @@ class MediaImporter(
             // timeline happens to put first.
             val objectId =
                 terminal.importedObjectId()
-                    ?: return Outcome.Refused("NOT_FOUND")
+                    ?: return Outcome.Refused(ChurStatus.NOT_FOUND)
 
             // §2 stage 7 and §13: a codec failure here leaves the object
             // imported with fewer derivatives rather than failing the import,
@@ -135,7 +142,7 @@ class MediaImporter(
             }
             return Outcome.Imported(objectId, written)
         } catch (failure: ChurFailure) {
-            return Outcome.Refused(failure.status.name)
+            return Outcome.Refused(failure.status)
         } finally {
             // §2 stage 10, and §13 of the FFI contract: Rust duplicated the
             // descriptor, so closing the caller's is deterministic here.
@@ -169,11 +176,6 @@ class MediaImporter(
             kotlinx.coroutines.delay(POLL_INTERVAL_MS)
         }
     }
-
-    private fun statusName(code: Int): String =
-        dev.po4yka.chur.core.model.ChurStatus
-            .fromValue(code)
-            .name
 
     private companion object {
         /** Fast enough to feel immediate, slow enough not to spin a core. */

@@ -5,6 +5,7 @@ import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.notes.InMemoryNoteStore
 import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.notes.NoteStore
+import dev.po4yka.chur.sync.SyncTransportFailure
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -17,6 +18,7 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 /**
@@ -58,7 +60,7 @@ class ControllerContainmentTest {
 
         // Folded the way `ChurStatus.fromValue` folds an unrecognized code: not
         // success, not benign, and not a reason to end the process.
-        assertEquals(ChurStatus.INTERNAL_FAILURE.name, controller.message.value)
+        assertEquals(userCopy(ChurStatus.INTERNAL_FAILURE), controller.message.value)
     }
 
     @Test
@@ -71,7 +73,27 @@ class ControllerContainmentTest {
         advanceUntilIdle()
 
         // The backstop must not swallow the status a normalized failure carries.
-        assertEquals(ChurStatus.NOT_FOUND.name, controller.message.value)
+        assertEquals(userCopy(ChurStatus.NOT_FOUND), controller.message.value)
+    }
+
+    @Test
+    fun a_sync_transport_failure_reports_its_own_status() = runTest(dispatcher) {
+        // Sync setup rethrows the transport's failure, which is not a
+        // `ChurFailure`. The note store stands in for that seam here: the
+        // guard must read the status it carries, not fold it into the backstop.
+        // A wrong bootstrap secret is `AUTHENTICATION_FAILED` on the server
+        // (`SERVER_OPERATOR.md`), and it must not read as a failed unlock.
+        val controller = controllerOver(
+            FailingNotes {
+                throw SyncTransportFailure(ChurStatus.AUTHENTICATION_FAILED, "sync server rejected bootstrap")
+            },
+        )
+
+        controller.putNote(note())
+        advanceUntilIdle()
+
+        assertEquals(syncCopy(ChurStatus.AUTHENTICATION_FAILED), controller.message.value)
+        assertNotEquals(userCopy(ChurStatus.AUTHENTICATION_FAILED), controller.message.value)
     }
 
     @Test
@@ -87,7 +109,7 @@ class ControllerContainmentTest {
         controller.putNote(note())
         advanceUntilIdle()
 
-        assertEquals(ChurStatus.INTERNAL_FAILURE.name, controller.message.value)
+        assertEquals(userCopy(ChurStatus.INTERNAL_FAILURE), controller.message.value)
     }
 
     @Test
@@ -112,17 +134,20 @@ class ControllerContainmentTest {
         // opening the same file again. This controller has no open runtime, so
         // the repository refuses before the boundary is reached.
         val controller = controllerOver(InertNotes)
-        val returned = CompletableDeferred<Unit>()
+        val returned = CompletableDeferred<Boolean>()
 
-        controller.restoreBackup(sourceFd = -1, password = "not this package's") {
-            returned.complete(Unit)
+        controller.restoreBackup(sourceFd = -1, password = "not this package's") { cancelled ->
+            returned.complete(cancelled)
         }
         // The body suspends on `Dispatchers.Default`, which this scheduler does
         // not drive, so the wait is on the lambda rather than on the queue.
-        returned.await()
+        val cancelled = returned.await()
         advanceUntilIdle()
 
-        assertEquals(ChurStatus.INTERNAL_FAILURE.name, controller.message.value)
+        assertEquals(userCopy(ChurStatus.INTERNAL_FAILURE), controller.message.value)
+        // A refusal is a failure, not a cancellation: the route must not show
+        // it as the calm cancelled state.
+        assertFalse(cancelled)
     }
 
     @Test

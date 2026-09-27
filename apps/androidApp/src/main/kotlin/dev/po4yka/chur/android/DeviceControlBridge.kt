@@ -309,7 +309,7 @@ internal class DeviceControlBridge(
                 is MediaImporter.Outcome.Imported -> JSONObject().put("id", outcome.objectId.hex())
                     .put("derivatives", outcome.derivatives)
                     .put("previews_skipped", outcome.previewsSkipped)
-                is MediaImporter.Outcome.Refused -> JSONObject().put("error", outcome.status)
+                is MediaImporter.Outcome.Refused -> JSONObject().put("error", outcome.status.name)
                 is MediaImporter.Outcome.TooLarge -> JSONObject().put("error", "RESOURCE_LIMIT_EXCEEDED")
                 MediaImporter.Outcome.Unreadable -> JSONObject().put("error", "UNREADABLE_SOURCE")
                 null -> JSONObject().put("error", "BUSY")

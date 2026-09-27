@@ -1,5 +1,6 @@
 package dev.po4yka.chur.app
 
+import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.ObjectQuery
 import dev.po4yka.chur.ffi.StreamKind
 import dev.po4yka.chur.imports.Derivative
@@ -114,5 +115,42 @@ class MediaImporterHostTest {
             vault.shutdown()
             root.deleteRecursively()
         }
+    }
+
+    @Test
+    fun a_refusal_carries_its_status_rather_than_its_name() = runBlocking {
+        // Both refusals return before the repository is reached, so it is
+        // never started. The host tells a cancellation from a failure by this
+        // code, never by text, `ERROR_MODEL.md` "Layer mapping".
+        val vault = VaultRepository(System.getProperty("java.io.tmpdir"), { 1_700_000_000_000L })
+        val unidentified = object : MediaCodec {
+            override fun probe(media: PickedMedia): ProbedMedia? = null
+
+            override fun derive(
+                media: PickedMedia,
+                probe: ProbedMedia,
+                kind: StreamKind,
+                cancelRequested: () -> Boolean,
+            ): Derivative = error("a refused source has no derivatives")
+        }
+        fun picked() = PickedMedia(
+            descriptor = -1,
+            seekable = true,
+            knownLength = null,
+            contentTypeHint = "image/jpeg",
+            originalFilename = null,
+            captureTimeMs = null,
+            platformHandle = null,
+            close = {},
+        )
+
+        assertEquals(
+            MediaImporter.Outcome.Refused(ChurStatus.CANCELLED),
+            MediaImporter(unidentified).import(vault, picked(), cancelRequested = { true }),
+        )
+        assertEquals(
+            MediaImporter.Outcome.Refused(ChurStatus.UNSUPPORTED_VERSION),
+            MediaImporter(unidentified).import(vault, picked()),
+        )
     }
 }

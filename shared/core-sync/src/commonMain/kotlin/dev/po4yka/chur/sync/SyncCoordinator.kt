@@ -96,10 +96,19 @@ public data class SyncStatus(
     public val configured: Boolean,
     /** The configured server address, which the user typed and may see. */
     public val serverUrl: String?,
-    /** One bounded line about the last run, carrying counts and status names. */
+    /** One bounded line about the last run, carrying counts and no status name. */
     public val message: String?,
     /** Whether a run is in progress. */
     public val busy: Boolean,
+    /**
+     * The status that stopped the last run, or `null` when none did.
+     *
+     * The engine hands over the code rather than a sentence for it:
+     * `docs/ERROR_MODEL.md` "Layer mapping" puts user-facing copy in the
+     * feature layer, which also decides what a security state such as
+     * [ChurStatus.SYNC_CHAIN_FORK] asks the user to do.
+     */
+    public val failure: ChurStatus? = null,
 )
 
 /**
@@ -207,7 +216,7 @@ public class SyncCoordinator(
                 // A refused bootstrap leaves whatever was configured before intact:
                 // a user fixing a typo must not lose a working server over it.
                 if (!_status.value.configured) {
-                    _status.value = SyncStatus(false, null, failure.status.name, false)
+                    _status.value = SyncStatus(false, null, null, false, failure.status)
                 }
                 throw failure
             } finally {
@@ -290,17 +299,11 @@ public class SyncCoordinator(
                         // §10: corruption and refusals stop the run; only the
                         // network backs off, and only up to the cap.
                         if (failure.status != ChurStatus.NETWORK_FAILURE) {
-                            _status.value = SyncStatus(true, state.serverUrl, failure.status.name, false)
+                            _status.value = SyncStatus(true, state.serverUrl, null, false, failure.status)
                             return false
                         }
                         if (attempt == MAX_ATTEMPTS - 1) {
-                            _status.value =
-                                SyncStatus(
-                                    true,
-                                    state.serverUrl,
-                                    "${failure.status.name} after $MAX_ATTEMPTS attempt(s).",
-                                    false,
-                                )
+                            _status.value = SyncStatus(true, state.serverUrl, null, false, failure.status)
                             return false
                         }
                         _status.value = SyncStatus(true, state.serverUrl, "The server is unreachable; retrying.", true)

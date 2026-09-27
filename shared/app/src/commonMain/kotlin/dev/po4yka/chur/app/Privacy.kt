@@ -50,7 +50,7 @@ interface PrivacyCover {
  * An open session is private, and so is the gate, because `IOS.md` §22.1 keeps
  * authentication errors out of the snapshot. The restore screen is private for
  * the same reason: it takes the vault's password or recovery phrase, and a
- * wrong one shows `AUTHENTICATION_FAILED`. The public shell is not private,
+ * wrong one shows an authentication failure. The public shell is not private,
  * for the reason [PrivacyCover.setEnabled] gives. Android sets its flag from
  * this while the activity is resumed, and sets it on every route when the
  * activity pauses. iOS asks as the scene resigns active and again as it

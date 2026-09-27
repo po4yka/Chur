@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.ActiveOperation
 import dev.po4yka.chur.app.privateKeyboardOptions
 import dev.po4yka.chur.app.secretKeyboardOptions
+import dev.po4yka.chur.app.syncCopy
 import dev.po4yka.chur.app.theme.AlbumsGlyph
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.LibraryGlyph
@@ -788,7 +789,9 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
                 item {
                     SharingCard(state, actions)
                 }
-                sync.message?.let { message ->
+                // The engine reports a stop as a status, and the copy for it
+                // is this layer's, `ERROR_MODEL.md` "Layer mapping".
+                (sync.failure?.let(::syncCopy) ?: sync.message)?.let { message ->
                     item {
                         Text(
                             message,

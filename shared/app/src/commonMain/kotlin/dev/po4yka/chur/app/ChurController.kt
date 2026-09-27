@@ -21,6 +21,7 @@ import dev.po4yka.chur.ffi.QueryScope
 import dev.po4yka.chur.ffi.QuerySort
 import dev.po4yka.chur.sync.SyncCoordinator
 import dev.po4yka.chur.sync.SyncStatus
+import dev.po4yka.chur.sync.SyncTransportFailure
 import dev.po4yka.chur.ffi.SlotSummary
 import dev.po4yka.chur.ffi.StreamKind
 import dev.po4yka.chur.ffi.TagSummary
@@ -96,7 +97,7 @@ class ChurController(
      * stops the cancellation of a sibling, not the report of a failure.
      */
     private val uncaught = CoroutineExceptionHandler { _, _ ->
-        _message.value = ChurStatus.INTERNAL_FAILURE.name
+        _message.value = userCopy(ChurStatus.INTERNAL_FAILURE)
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main + uncaught)
@@ -1048,7 +1049,8 @@ class ChurController(
      *
      * The secret is the operator bootstrap secret and lives only for this
      * call. A refusal lands in [message] the way every other boundary failure
-     * does, and the engine's own status keeps whatever it showed before.
+     * does, and an engine that was already configured keeps the status it
+     * showed before.
      */
     fun configureSync(serverUrl: String, bootstrapSecret: String) = guarded {
         sync?.configure(serverUrl, bootstrapSecret)
@@ -1181,7 +1183,7 @@ class ChurController(
     suspend fun detailOf(objectId: ByteArray): ObjectDetail? = try {
         withContext(Dispatchers.Default) { repository.detail(objectId) }
     } catch (failure: ChurFailure) {
-        _message.value = failure.status.name
+        _message.value = userCopy(failure.status)
         null
     }
 
@@ -1236,13 +1238,6 @@ class ChurController(
         }
     }
 
-    /**
-     * Verifies every object, `CATALOG_SCHEMA_V1.md` §13.
-     *
-     * The scan runs on a worker inside Rust and this polls it, which §10 makes
-     * the only way to observe a terminal result. The message carries a count
-     * and a status name and nothing private.
-     */
     /**
      * Exports every selected object, one destination each.
      *
@@ -1353,12 +1348,16 @@ class ChurController(
      * `start` is that question, it opens no runtime that is already open, and
      * it is what moves the shell from creation to the unlock gate.
      *
-     * The message is the status name and nothing more, as every other boundary
-     * failure is: `docs/ERROR_MODEL.md` "Safe metadata" keeps a private value
-     * out of it, and the package's password is one.
+     * The message is the status's [userCopy] and nothing more, as every other
+     * boundary failure's is: `docs/ERROR_MODEL.md` "Safe metadata" keeps a
+     * private value out of it, and the package's password is one. [close] is
+     * told whether the user cancelled, so the route can show that calmly
+     * rather than as a failure (principle 4 of the same document) without
+     * reading the text, which its "Layer mapping" forbids a branch on.
      */
-    fun restoreBackup(sourceFd: Int, password: String, close: () -> Unit) = guarded {
+    fun restoreBackup(sourceFd: Int, password: String, close: (cancelled: Boolean) -> Unit) = guarded {
         val bytes = password.encodeToByteArray()
+        var cancelled = false
         beginHostActivity()
         try {
             tracked("restore") { token ->
@@ -1371,6 +1370,7 @@ class ChurController(
                     closeOperation(operation)
                 }
                 if (terminal != 0) {
+                    cancelled = terminal == ChurStatus.CANCELLED.value
                     throw ChurFailure(ChurStatus.fromValue(terminal), "the restore")
                 }
                 withContext(Dispatchers.Default) { repository.start() }
@@ -1379,7 +1379,7 @@ class ChurController(
         } finally {
             bytes.fill(0)
             endHostActivity()
-            close()
+            close(cancelled)
         }
     }
 
@@ -1424,7 +1424,7 @@ class ChurController(
                 _message.value = if (result.status == 0 || corrupt) {
                     verificationSummary(result.processed, corrupt, quarantinedCount(), unverifiableCount())
                 } else {
-                    statusMessage(result.status)
+                    userCopy(ChurStatus.fromValue(result.status))
                 }
             } finally {
                 closeOperation(operation)
@@ -1527,9 +1527,9 @@ class ChurController(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: ChurFailure) {
-            MediaImporter.Outcome.Refused(statusMessage(failure.status.value))
+            MediaImporter.Outcome.Refused(failure.status)
         } catch (_: Exception) {
-            MediaImporter.Outcome.Refused(ChurStatus.INTERNAL_FAILURE.name)
+            MediaImporter.Outcome.Refused(ChurStatus.INTERNAL_FAILURE)
         }
 
     /** Closes the runtime, which a finishing host does. */
@@ -1579,9 +1579,6 @@ class ChurController(
             }
         }
     }
-
-    private fun statusMessage(status: Int): String =
-        if (status == ChurStatus.CANCELLED.value) "Cancelled." else ChurStatus.fromValue(status).name
 
     /** Every object `CATALOG_SCHEMA_V1.md` §16.2 keeps in the quarantine scope, whichever scan put it there. */
     private suspend fun quarantinedCount(): Long = withContext(Dispatchers.Default) {
@@ -1765,9 +1762,15 @@ class ChurController(
      * Runs work and turns a boundary failure into a message.
      *
      * `docs/ERROR_MODEL.md` keeps a private value out of a message, and the
-     * boundary carries only a status, so the message is the status name.
+     * boundary carries only a status, so the message is [userCopy] of that
+     * status: the feature layer's copy of "Layer mapping", never the name of
+     * the code. The sync transport carries its stable status in a
+     * [SyncTransportFailure] rather than a [ChurFailure], and it gets
+     * [syncCopy]: a refused bootstrap secret or an unreachable server at sync
+     * setup is a status the user can act on, not an internal failure, and a
+     * refusal by the server is not a failed unlock.
      *
-     * The second catch is the backstop. Every action a surface can invoke goes
+     * The last catch is the backstop. Every action a surface can invoke goes
      * through here, and a platform adapter that raised something other than a
      * [ChurFailure] would otherwise leave an uncaught exception in a coroutine
      * and take the process with it — a crash that ends the session without the
@@ -1787,9 +1790,11 @@ class ChurController(
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (failure: ChurFailure) {
-                _message.value = statusMessage(failure.status.value)
+                _message.value = userCopy(failure.status)
+            } catch (failure: SyncTransportFailure) {
+                _message.value = syncCopy(failure.status)
             } catch (_: Exception) {
-                _message.value = ChurStatus.INTERNAL_FAILURE.name
+                _message.value = userCopy(ChurStatus.INTERNAL_FAILURE)
             }
         }
     }

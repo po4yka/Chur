@@ -52,6 +52,7 @@ import dev.po4yka.chur.app.notes.NotesScreen
 import dev.po4yka.chur.app.notes.OpenNote
 import dev.po4yka.chur.app.notes.PublicSettingsScreen
 import dev.po4yka.chur.app.notes.rememberOpenNote
+import dev.po4yka.chur.app.userCopy
 import dev.po4yka.chur.app.vault.CreateVaultScreen
 import dev.po4yka.chur.app.vault.LibraryTile
 import dev.po4yka.chur.app.vault.AlbumPickerDialog
@@ -300,6 +301,7 @@ private fun RestoreRoute(controller: ChurController) {
     val context = LocalContext.current
     var password by remember { mutableStateOf("") }
     var running by remember { mutableStateOf(false) }
+    var cancelled by remember { mutableStateOf(false) }
 
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
@@ -325,9 +327,10 @@ private fun RestoreRoute(controller: ChurController) {
             running = false
             password = ""
         } else {
-            controller.restoreBackup(handle.fd, password) {
+            controller.restoreBackup(handle.fd, password) { wasCancelled ->
                 handle.close()
                 running = false
+                cancelled = wasCancelled
                 password = ""
             }
         }
@@ -339,6 +342,7 @@ private fun RestoreRoute(controller: ChurController) {
     RestoreBackupScreen(
         busy = running,
         error = message,
+        cancelled = cancelled,
         operation = operation,
         onChoose = { entered ->
             // The flag is what stops a second package being restored on top of
@@ -347,6 +351,11 @@ private fun RestoreRoute(controller: ChurController) {
             // identities behind one credential.
             password = entered
             running = true
+            // The flag and the message it styles clear together. A dismissed
+            // picker reports nothing, so a "Cancelled." left from the last
+            // attempt would otherwise stay on screen as an error.
+            cancelled = false
+            controller.report(null)
             controller.beginHostActivity()
             picker.launch(arrayOf("*/*"))
         },
@@ -459,9 +468,7 @@ private fun VaultRoute(controller: ChurController) {
                     }
                     is MediaImporter.Outcome.TooLarge -> controller.reportImport(outcome.reason)
                     MediaImporter.Outcome.Unreadable -> controller.reportImport("That file could not be opened.")
-                    is MediaImporter.Outcome.Refused -> controller.reportImport(
-                        if (outcome.status == "CANCELLED") "Cancelled." else outcome.status,
-                    )
+                    is MediaImporter.Outcome.Refused -> controller.reportImport(userCopy(outcome.status))
                     null -> Unit
                 }
             }

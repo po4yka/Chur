@@ -272,11 +272,16 @@ fun RecoveryPhraseScreen(phrase: String, onAcknowledged: () -> Unit) {
  * `../security/DECOY_VAULT.md` §10 forbids a surface that differs by whether a
  * second identity exists, and the hosts offer this screen only while the
  * storage root holds no identity at all.
+ *
+ * [cancelled] comes from the restore's own result rather than from [error]'s
+ * text, because `docs/ERROR_MODEL.md` "Layer mapping" forbids branching on
+ * copy. A cancellation reads as muted text, not as a failure (principle 4).
  */
 @Composable
 fun RestoreBackupScreen(
     busy: Boolean,
     error: String?,
+    cancelled: Boolean,
     operation: ActiveOperation? = null,
     onChoose: (password: String) -> Unit,
     onBack: () -> Unit,
@@ -318,7 +323,7 @@ fun RestoreBackupScreen(
                     Text(
                         error,
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (error == "Cancelled.") colors.inkMuted else colors.error,
+                        color = if (cancelled) colors.inkMuted else colors.error,
                     )
                 }
                 Button(

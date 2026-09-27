@@ -480,9 +480,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                                         }
                                         is MediaImporter.Outcome.TooLarge -> controller.reportImport(outcome.reason)
                                         MediaImporter.Outcome.Unreadable -> controller.reportImport("That file could not be opened.")
-                                        is MediaImporter.Outcome.Refused -> controller.reportImport(
-                                            if (outcome.status == "CANCELLED") "Cancelled." else outcome.status,
-                                        )
+                                        is MediaImporter.Outcome.Refused -> controller.reportImport(userCopy(outcome.status))
                                         null -> Unit
                                     }
                                 } finally {
@@ -777,12 +775,18 @@ private fun IosRestoreRoute(controller: ChurController) {
     val message by controller.message.collectAsState()
     val operation by controller.activeOperation.collectAsState()
     var running by remember { mutableStateOf(false) }
+    var cancelled by remember { mutableStateOf(false) }
 
     RestoreBackupScreen(
         busy = running,
         error = message,
+        cancelled = cancelled,
         operation = operation,
         onChoose = { password ->
+            // The flag and the message it styles clear together, as on the
+            // other host: a dismissed picker reports nothing.
+            cancelled = false
+            controller.report(null)
             val present = IosBackupPicker.present
             if (present == null) {
                 controller.report("This build cannot open the file picker.")
@@ -800,10 +804,11 @@ private fun IosRestoreRoute(controller: ChurController) {
                         path?.let { unlink(it) }
                         running = false
                     } else {
-                        controller.restoreBackup(descriptor, password) {
+                        controller.restoreBackup(descriptor, password) { wasCancelled ->
                             close(descriptor)
                             path?.let { unlink(it) }
                             running = false
+                            cancelled = wasCancelled
                         }
                     }
                 }
