@@ -230,8 +230,8 @@ The header is 63 bytes and a projection is 79, so a page of `n` rows is `63 + 79
 
 ```text
 ChurQueryV1
-    scope                 uint8_t    1 timeline, 2 album, 3 favorites, 4 tag, 5 search, 6 quarantine
-    sort                  uint8_t    1 capture_desc, 2 capture_asc, 3 import_desc, 4 album_manual
+    scope                 uint8_t    1 timeline, 2 album, 3 favorites, 4 tag, 5 search, 6 quarantine, 7 trash
+    sort                  uint8_t    0 or 1 capture_desc, 2 capture_asc, 3 import_desc, 4 album_manual
     kinds                 uint16_t   the §16.2 media-kind mask
     limit                 uint32_t   1 to 500, 0 for the default of 200
     scope_id              uint8_t[16]  the album or tag, zero bytes otherwise
