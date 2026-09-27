@@ -75,7 +75,7 @@ class DeviceSlotPolicyHostTest {
             // A cancelled prompt leaves the slot, the setting and the row as they were.
             cancel = true
             controller.toggleDeviceSlotPolicy()
-            assertEquals(userCopy(ChurStatus.CANCELLED), withTimeout(10_000) { controller.message.first { it != null } })
+            assertEquals(userCopy(ChurStatus.CANCELLED), withTimeout(10_000) { controller.notice.first { it != null } }?.text)
             assertFalse(controller.deviceSlotStrict.value)
             assertFalse(strict)
             assertEquals(listOf(convenient), controller.vault.slots().filter { it.slotType == 2 })

@@ -27,6 +27,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.ActiveOperation
+import dev.po4yka.chur.app.Notice
 import dev.po4yka.chur.app.theme.BackGlyph
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.DeleteGlyph
@@ -69,7 +70,8 @@ fun ViewerScreen(
     waveform: ByteArray? = null,
     operation: ActiveOperation? = null,
     onCancelOperation: () -> Unit = {},
-    status: String? = null,
+    notice: Notice? = null,
+    onNoticeShown: (Long) -> Unit = {},
 ) {
     // §25.5: the canvas and the scrims run edge to edge, and what is read or
     // pressed keeps clear of the system bars, the cutout, and the gesture
@@ -178,23 +180,17 @@ fun ViewerScreen(
                     .padding(bottom = 72.dp()),
             )
         }
-        if (operation != null) {
-            OperationProgressCard(
-                operation = operation,
-                onCancel = onCancelOperation,
-                modifier = Modifier.align(Alignment.BottomCenter).windowInsetsPadding(bottomInsets)
-                    .padding(horizontal = ChurSpacing.gutter).padding(bottom = 88.dp),
-            )
-        } else if (status != null) {
-            Text(
-                text = status,
-                color = ViewerColors.content,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.align(Alignment.BottomCenter).windowInsetsPadding(bottomInsets)
-                    .padding(bottom = 88.dp)
-                    .background(ViewerColors.chromeScrim)
-                    .padding(horizontal = ChurSpacing.gutter, vertical = ChurSpacing.two),
-            )
+        // `DESIGN.md` §26: an outcome is the shell's snackbar, drawn above
+        // the progress of a running operation rather than over it.
+        Column(
+            modifier = Modifier.align(Alignment.BottomCenter).windowInsetsPadding(bottomInsets)
+                .padding(horizontal = ChurSpacing.gutter).padding(bottom = 88.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            NoticeHost(notice, onNoticeShown)
+            if (operation != null) {
+                OperationProgressCard(operation = operation, onCancel = onCancelOperation)
+            }
         }
     }
 }

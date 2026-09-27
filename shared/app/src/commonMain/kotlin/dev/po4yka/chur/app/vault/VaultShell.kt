@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -29,10 +30,16 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,6 +53,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.ActiveOperation
+import dev.po4yka.chur.app.Notice
 import dev.po4yka.chur.app.privateKeyboardOptions
 import dev.po4yka.chur.app.secretKeyboardOptions
 import dev.po4yka.chur.app.syncCopy
@@ -115,8 +123,8 @@ data class VaultUiState(
     val kinds: Int = 0,
     val albumOrder: AlbumOrder = AlbumOrder.MANUAL,
     val albumFilter: String = "",
-    /** A bounded operation message, carrying no private value. */
-    val progress: String? = null,
+    /** The outcome of the last action, shown once as a snackbar. */
+    val notice: Notice? = null,
     val operation: ActiveOperation? = null,
     /** Whether this platform can hold a device slot at all. */
     val deviceSlotAvailable: Boolean = false,
@@ -231,6 +239,8 @@ data class VaultActions(
     val onAlbumFilterChange: (String) -> Unit = {},
     /** Stop the native operation at its next cooperative cancellation point. */
     val onCancelOperation: () -> Unit = {},
+    /** The snackbar showed [VaultUiState.notice] with this id, or left it. */
+    val onNoticeShown: (Long) -> Unit = {},
     /** Connect the vault to the server the user named, `SYNC_PROTOCOL_V1.md` §6. */
     val onConfigureSync: (serverUrl: String, bootstrapSecret: String) -> Unit = { _, _ -> },
     /** Run one sync cycle now. */
@@ -390,6 +400,9 @@ fun VaultShell(
                 }
             }
         },
+        // §26: the outcome of an action is a snackbar, which the scaffold
+        // places above the floating action and the navigation bar.
+        snackbarHost = { NoticeHost(state.notice, actions.onNoticeShown) },
         floatingActionButton = {
             // §10.1: import is the primary floating action on Library and a
             // contextual action inside an open album, and a destination
@@ -435,18 +448,42 @@ fun VaultShell(
                     ),
                 )
             }
-            if (state.operation == null) state.progress?.let { message ->
-                // §10 of the FFI contract: progress carries only bounded
-                // non-private numbers, so this line never names a file.
-                Text(
-                    text = message,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colors.inkMuted,
-                    modifier = Modifier.align(Alignment.BottomStart).padding(ChurSpacing.gutter),
-                )
-            }
         }
     }
+}
+
+/**
+ * Shows [notice] once, as the snackbar of `DESIGN.md` §26.
+ *
+ * A routine confirmation times out, and a security notice stays until it is
+ * dismissed or its action is taken. Material's host marks the snackbar a
+ * polite live region, so a screen reader announces the outcome (§23.2), and
+ * it lengthens the timeout to the platform's accessibility setting. Its
+ * container is the inverse surface, which `ChurTheme` maps to `ink`, the
+ * `surface-inverse` of the `DESIGN.md` `components.snackbar` token, and the
+ * shape is that token's `md` radius of 10dp.
+ *
+ * [onShown] runs when the snackbar ends and when this host leaves the
+ * screen, so a notice shows on one screen once and never comes back.
+ */
+@Composable
+internal fun NoticeHost(notice: Notice?, onShown: (Long) -> Unit, modifier: Modifier = Modifier) {
+    val host = remember { SnackbarHostState() }
+    LaunchedEffect(notice?.id) {
+        val shown = notice ?: return@LaunchedEffect
+        try {
+            val result = host.showSnackbar(
+                message = shown.text,
+                actionLabel = shown.action?.first,
+                withDismissAction = shown.security,
+                duration = if (shown.security) SnackbarDuration.Indefinite else SnackbarDuration.Short,
+            )
+            if (result == SnackbarResult.ActionPerformed) shown.action?.second?.invoke()
+        } finally {
+            onShown(shown.id)
+        }
+    }
+    SnackbarHost(host, modifier) { Snackbar(it, shape = RoundedCornerShape(10.dp)) }
 }
 
 /** Progress uses only the bounded numeric snapshot published by the FFI. */

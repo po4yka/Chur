@@ -8,6 +8,7 @@ import dev.po4yka.chur.notes.NoteStore
 import dev.po4yka.chur.sync.SyncTransportFailure
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -19,6 +20,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -60,7 +62,7 @@ class ControllerContainmentTest {
 
         // Folded the way `ChurStatus.fromValue` folds an unrecognized code: not
         // success, not benign, and not a reason to end the process.
-        assertEquals(userCopy(ChurStatus.INTERNAL_FAILURE), controller.message.value)
+        assertEquals(userCopy(ChurStatus.INTERNAL_FAILURE), controller.notice.value?.text)
     }
 
     @Test
@@ -73,7 +75,7 @@ class ControllerContainmentTest {
         advanceUntilIdle()
 
         // The backstop must not swallow the status a normalized failure carries.
-        assertEquals(userCopy(ChurStatus.NOT_FOUND), controller.message.value)
+        assertEquals(userCopy(ChurStatus.NOT_FOUND), controller.notice.value?.text)
     }
 
     @Test
@@ -92,8 +94,8 @@ class ControllerContainmentTest {
         controller.putNote(note())
         advanceUntilIdle()
 
-        assertEquals(syncCopy(ChurStatus.AUTHENTICATION_FAILED), controller.message.value)
-        assertNotEquals(userCopy(ChurStatus.AUTHENTICATION_FAILED), controller.message.value)
+        assertEquals(syncCopy(ChurStatus.AUTHENTICATION_FAILED), controller.notice.value?.text)
+        assertNotEquals(userCopy(ChurStatus.AUTHENTICATION_FAILED), controller.notice.value?.text)
     }
 
     @Test
@@ -109,7 +111,7 @@ class ControllerContainmentTest {
         controller.putNote(note())
         advanceUntilIdle()
 
-        assertEquals(userCopy(ChurStatus.INTERNAL_FAILURE), controller.message.value)
+        assertEquals(userCopy(ChurStatus.INTERNAL_FAILURE), controller.notice.value?.text)
     }
 
     @Test
@@ -122,7 +124,7 @@ class ControllerContainmentTest {
         controller.reportImport("Imported 3 items.")
         advanceUntilIdle()
 
-        assertEquals("Imported 3 items.", controller.message.value)
+        assertEquals("Imported 3 items.", controller.notice.value?.text)
     }
 
     @Test
@@ -136,6 +138,7 @@ class ControllerContainmentTest {
         val controller = controllerOver(InertNotes)
         val returned = CompletableDeferred<Boolean>()
 
+        controller.goTo(AppRoute.RestoreBackup)
         controller.restoreBackup(sourceFd = -1, password = "not this package's") { cancelled ->
             returned.complete(cancelled)
         }
@@ -144,10 +147,94 @@ class ControllerContainmentTest {
         val cancelled = returned.await()
         advanceUntilIdle()
 
-        assertEquals(userCopy(ChurStatus.INTERNAL_FAILURE), controller.message.value)
+        assertEquals(userCopy(ChurStatus.INTERNAL_FAILURE), controller.formError.value)
         // A refusal is a failure, not a cancellation: the route must not show
         // it as the calm cancelled state.
         assertFalse(cancelled)
+    }
+
+    @Test
+    fun a_notice_does_not_outlive_the_route_it_was_shown_on() = runTest(dispatcher) {
+        // `DESIGN.md` §26: an outcome is shown once, on the screen of the
+        // action. It used to stay in one untyped message across routes, so a
+        // second vault set up from Settings opened its creation form with the
+        // vault's last outcome in error red.
+        val controller = controllerOver(InertNotes)
+
+        controller.goTo(AppRoute.Vault)
+        controller.report("Imported into vault.")
+        val shown = assertNotNull(controller.notice.value)
+        assertEquals("Imported into vault.", shown.text)
+        // A snackbar that ends marks its own notice, never a newer one.
+        controller.report("Imported into album.")
+        controller.consume(shown.id)
+        assertEquals("Imported into album.", controller.notice.value?.text)
+
+        controller.createSecondIdentity()
+        assertEquals(null, controller.notice.value)
+        assertEquals(null, controller.formError.value)
+
+        controller.goTo(AppRoute.Vault)
+        controller.report("Imported into vault.")
+        controller.goTo(AppRoute.PublicSettings)
+        assertEquals(null, controller.notice.value)
+
+        controller.goTo(AppRoute.Vault)
+        controller.report("Imported into vault.")
+        controller.lock()
+        controller.route.first { it == AppRoute.PublicShell }
+        assertEquals(null, controller.notice.value)
+    }
+
+    @Test
+    fun a_vault_failure_is_a_notice_and_never_a_form_error() = runTest(dispatcher) {
+        val controller = controllerOver(
+            FailingNotes { throw ChurFailure(ChurStatus.NOT_FOUND, "notes") },
+        )
+        controller.goTo(AppRoute.Vault)
+
+        controller.putNote(note())
+        advanceUntilIdle()
+
+        assertEquals(userCopy(ChurStatus.NOT_FOUND), controller.notice.value?.text)
+        assertEquals(null, controller.formError.value)
+    }
+
+    @Test
+    fun a_vault_action_that_ends_after_the_route_changed_reports_nowhere() = runTest(dispatcher) {
+        // The unlock screens read any refusal as a failed attempt, so an
+        // outcome that arrived after a lock or a route change used to show a
+        // credential the user had not entered yet as refused.
+        val release = CompletableDeferred<Unit>()
+        val controller = controllerOver(
+            FailingNotes {
+                release.await()
+                throw ChurFailure(ChurStatus.NOT_FOUND, "notes")
+            },
+        )
+        controller.goTo(AppRoute.Vault)
+        controller.putNote(note())
+        advanceUntilIdle()
+
+        controller.createSecondIdentity()
+        release.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(AppRoute.CreateVault, controller.route.value)
+        assertEquals(null, controller.formError.value)
+        assertEquals(null, controller.notice.value)
+    }
+
+    @Test
+    fun a_credential_form_shows_its_own_refusal() = runTest(dispatcher) {
+        val controller = controllerOver(InertNotes)
+        controller.goTo(AppRoute.CreateVault)
+
+        controller.create("123", offerRecovery = false)
+        advanceUntilIdle()
+
+        assertEquals("Use at least 12 digits for a vault PIN.", controller.formError.value)
+        assertEquals(null, controller.notice.value)
     }
 
     @Test
@@ -209,7 +296,7 @@ class ControllerContainmentTest {
     private fun note() = Note(id = "n", title = "t", body = "b", updatedMs = 0L)
 
     /** A store whose every read and write fails the way [raise] says. */
-    private class FailingNotes(private val raise: () -> Nothing) : NoteStore {
+    private class FailingNotes(private val raise: suspend () -> Nothing) : NoteStore {
         override suspend fun all(): List<Note> = raise()
 
         override suspend fun put(note: Note) = raise()

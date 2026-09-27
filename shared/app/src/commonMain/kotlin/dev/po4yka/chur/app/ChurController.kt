@@ -38,6 +38,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -46,6 +47,8 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
 
 /**
  * The application state machine, shared by both hosts.
@@ -96,8 +99,8 @@ class ChurController(
      * §8 replaces with an orderly lock. `SupervisorJob` does not help here: it
      * stops the cancellation of a sibling, not the report of a failure.
      */
-    private val uncaught = CoroutineExceptionHandler { _, _ ->
-        _message.value = userCopy(ChurStatus.INTERNAL_FAILURE)
+    private val uncaught = CoroutineExceptionHandler { context, _ ->
+        post(userCopy(ChurStatus.INTERNAL_FAILURE), context[RouteVisit]?.number ?: routeVisit)
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main + uncaught)
@@ -119,7 +122,16 @@ class ChurController(
     private val _sharingOverview = MutableStateFlow<SharingOverview?>(null)
     private val _sharingRecipient = MutableStateFlow<SharingRecipient?>(null)
     private var recipientEnrollment: ByteArray? = null
-    private val _message = MutableStateFlow<String?>(null)
+    private val _notice = MutableStateFlow<Notice?>(null)
+    private val _formError = MutableStateFlow<String?>(null)
+    private var noticeCount = 0L
+
+    /**
+     * How many times the route has changed, which [post] compares.
+     *
+     * Touched only from the main dispatcher, where every route write runs.
+     */
+    private var routeVisit = 0L
     private val _activeOperation = MutableStateFlow<ActiveOperation?>(null)
     private var operationToken = 0L
     private val _recoveryPhrase = MutableStateFlow<String?>(null)
@@ -205,8 +217,33 @@ class ChurController(
     val sharingOverview: StateFlow<SharingOverview?> = _sharingOverview.asStateFlow()
     val sharingRecipient: StateFlow<SharingRecipient?> = _sharingRecipient.asStateFlow()
 
-    /** A bounded message that carries no private value. */
-    val message: StateFlow<String?> = _message.asStateFlow()
+    /**
+     * The outcome of the last action on the vault, shown once as the snackbar
+     * of `DESIGN.md` §26.
+     *
+     * Its text is [userCopy], [syncCopy], a count, or a fixed line, so it
+     * carries no private value, `ERROR_MODEL.md` "Safe metadata". Only the
+     * vault shell and the viewer read it. A route change clears it, so an
+     * outcome never reaches another screen: not the public shell, which must
+     * not show a vault outcome (`DECOY_VAULT.md` §10), and not a credential
+     * form, where it would read as a refusal.
+     */
+    val notice: StateFlow<Notice?> = _notice.asStateFlow()
+
+    /**
+     * Why the credential form on screen was refused: creation, restore,
+     * unlock or recovery.
+     *
+     * It is separate from [notice] because a form shows its refusal beside
+     * its fields for as long as the form is up, and an unlock screen reads
+     * any refusal as a failed attempt. A route change clears it.
+     */
+    val formError: StateFlow<String?> = _formError.asStateFlow()
+
+    /** Marks [notice] [id] as shown, so no screen shows it again. */
+    fun consume(id: Long) {
+        _notice.update { current -> current?.takeUnless { it.id == id } }
+    }
 
     /** The current user-visible import, export, backup, restore, or scan. */
     val activeOperation: StateFlow<ActiveOperation?> = _activeOperation.asStateFlow()
@@ -256,7 +293,7 @@ class ChurController(
         if (initialState is VaultState.NoVault && _appLockEnabled.value) {
             withContext(Dispatchers.Default) { appLockSetting.write(false) }
             _appLockEnabled.value = false
-            _route.value = AppRoute.PublicShell
+            setRoute(AppRoute.PublicShell)
         }
         _notes.value = notes.all()
         _deviceSlotStrict.value =
@@ -333,7 +370,7 @@ class ChurController(
     fun create(password: String, offerRecovery: Boolean) = requestPhrase {
         if (password.isNotEmpty() && password.all { it in '0'..'9' } &&
             password.length <= 20 && !isValidVaultPin(password)) {
-            _message.value = "Use at least 12 digits for a vault PIN."
+            say("Use at least 12 digits for a vault PIN.")
             return@requestPhrase
         }
         endOpenSession()
@@ -350,7 +387,7 @@ class ChurController(
             // would answer, from inside a decoy session, the question the
             // design refuses to answer. The residual signal that a creation
             // failed at all is structural and is recorded in §5 there.
-            _message.value = "This vault could not be created. Try a different credential."
+            say("This vault could not be created. Try a different credential.")
             return@requestPhrase
         } finally {
             bytes.fill(0)
@@ -381,7 +418,7 @@ class ChurController(
             if (withContext(Dispatchers.Default) { repository.confirmRecoveryPhrase() }) {
                 enterVault()
             } else {
-                _message.value = "This recovery phrase was not saved."
+                say("This recovery phrase was not saved.")
             }
         }
     }
@@ -502,7 +539,7 @@ class ChurController(
         } finally {
             endHostActivity()
         }
-        _message.value = "This device can now open the vault."
+        say("This device can now open the vault.")
         loadSlots()
         refreshDeviceUnlockOffer()
     }
@@ -515,7 +552,7 @@ class ChurController(
         } finally {
             endHostActivity()
         }
-        _message.value = "This device can now open the vault."
+        say("This device can now open the vault.")
         loadSlots()
         refreshDeviceUnlockOffer()
     }
@@ -661,7 +698,7 @@ class ChurController(
         withContext(Dispatchers.Default) { repository.lock(reason) }
         privacy.setEnabled(false)
         clearPrivateProjections()
-        _route.value = if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell
+        setRoute(if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell)
     }
 
     /**
@@ -715,7 +752,7 @@ class ChurController(
         val after = repository.state.value
         if (after !is VaultState.Unlocked && after !is VaultState.Creating) {
             clearPrivateProjections()
-            _route.value = if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell
+            setRoute(if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell)
         }
     }
 
@@ -756,25 +793,23 @@ class ChurController(
             }) {
                 privacy.setEnabled(false)
                 clearPrivateProjections()
-                _route.value = if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell
+                setRoute(if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell)
             }
         }
     }
 
     /** Moves to a route the public shell offers. */
     fun goTo(next: AppRoute) {
-        if (next == AppRoute.Unlock || next == AppRoute.AppUnlock) _message.value = null
-        _route.value = next
+        setRoute(next)
     }
 
     /** The route the visible settings entry of §2 leads to. */
     fun openVaultEntry() {
-        _message.value = null
-        _route.value = if (repository.state.value is VaultState.NoVault) {
+        setRoute(if (repository.state.value is VaultState.NoVault) {
             AppRoute.CreateVault
         } else {
             AppRoute.Unlock
-        }
+        })
     }
 
     /** Loads one query scope. */
@@ -1048,7 +1083,7 @@ class ChurController(
      * Connects the open vault to the server the user named, §6.
      *
      * The secret is the operator bootstrap secret and lives only for this
-     * call. A refusal lands in [message] the way every other boundary failure
+     * call. A refusal lands in [notice] the way every other boundary failure
      * does, and an engine that was already configured keeps the status it
      * showed before.
      */
@@ -1103,7 +1138,7 @@ class ChurController(
         _sharingOverview.value = withContext(Dispatchers.Default) { repository.sharingOverview() }
         recipientEnrollment = null
         _sharingRecipient.value = null
-        _message.value = "Access published."
+        say("Access published.")
     }
 
     /** Rotates the collection key and publishes the forward-only revocation. */
@@ -1124,7 +1159,7 @@ class ChurController(
             }
         }
         _sharingOverview.value = withContext(Dispatchers.Default) { repository.sharingOverview() }
-        _message.value = "Access revoked for future updates."
+        say("Access revoked for future updates.")
     }
 
     /**
@@ -1166,7 +1201,7 @@ class ChurController(
     fun changePassword(password: String) = guarded {
         if (password.isEmpty() ||
             (password.all { it in '0'..'9' } && password.length <= 20 && !isValidVaultPin(password))) {
-            _message.value = "Use a password or a PIN of at least 12 digits."
+            say("Use a password or a PIN of at least 12 digits.")
             return@guarded
         }
         val bytes = password.encodeToByteArray()
@@ -1175,7 +1210,7 @@ class ChurController(
         } finally {
             bytes.fill(0)
         }
-        _message.value = "Vault credential changed. Existing backups still use the old credential."
+        say("Vault credential changed. Existing backups still use the old credential.")
         _slots.value = withContext(Dispatchers.Default) { repository.slots() }
     }
 
@@ -1183,7 +1218,7 @@ class ChurController(
     suspend fun detailOf(objectId: ByteArray): ObjectDetail? = try {
         withContext(Dispatchers.Default) { repository.detail(objectId) }
     } catch (failure: ChurFailure) {
-        _message.value = userCopy(failure.status)
+        say(userCopy(failure.status))
         null
     }
 
@@ -1228,7 +1263,7 @@ class ChurController(
             }
             output.publish()
             published = true
-            _message.value = "Export prepared. The destination may keep a plaintext copy."
+            say("Export prepared. The destination may keep a plaintext copy.")
         } finally {
             try {
                 if (!published) destination?.discard()
@@ -1267,7 +1302,7 @@ class ChurController(
             }
         } catch (failure: ChurFailure) {
             if (failure.status == ChurStatus.CANCELLED && exported > 0) {
-                _message.value = "Cancelled after exporting $exported. Exported copies remain outside the vault."
+                say("Cancelled after exporting $exported. Exported copies remain outside the vault.")
             } else {
                 throw failure
             }
@@ -1309,8 +1344,7 @@ class ChurController(
                 }
                 destination.publish()
                 published = true
-                _message.value =
-                    "Backup written. It opens with the password or phrase you use now."
+                say("Backup written. It opens with the password or phrase you use now.")
             } finally {
                 try {
                     if (!published) destination.discard()
@@ -1374,7 +1408,7 @@ class ChurController(
                     throw ChurFailure(ChurStatus.fromValue(terminal), "the restore")
                 }
                 withContext(Dispatchers.Default) { repository.start() }
-                _route.value = AppRoute.Unlock
+                setRoute(AppRoute.Unlock)
             }
         } finally {
             bytes.fill(0)
@@ -1397,7 +1431,7 @@ class ChurController(
      * identity under a shared password would be unreachable forever.
      */
     fun createSecondIdentity() {
-        _route.value = AppRoute.CreateVault
+        setRoute(AppRoute.CreateVault)
     }
 
     /**
@@ -1421,10 +1455,18 @@ class ChurController(
             try {
                 val result = drainProgress(operation, token)
                 val corrupt = result.status == ChurStatus.OBJECT_CORRUPT.value
-                _message.value = if (result.status == 0 || corrupt) {
-                    verificationSummary(result.processed, corrupt, quarantinedCount(), unverifiableCount())
+                if (result.status == 0 || corrupt) {
+                    val quarantined = quarantinedCount()
+                    val unverifiable = unverifiableCount()
+                    // A problem found is an integrity verdict the user acts
+                    // on, so it stays until dismissed, `DESIGN.md` §26.
+                    say(
+                        verificationSummary(result.processed, corrupt, quarantined, unverifiable),
+                        security = corrupt || quarantined > 0 || unverifiable > 0,
+                    )
                 } else {
-                    userCopy(ChurStatus.fromValue(result.status))
+                    val status = ChurStatus.fromValue(result.status)
+                    say(userCopy(status), security = status in SECURITY_STATUSES)
                 }
             } finally {
                 closeOperation(operation)
@@ -1495,13 +1537,18 @@ class ChurController(
     fun reportImport(message: String?) = guarded {
         // The order is the point: `guarded` clears the message first, so the
         // one this call carries is set after it, not before.
-        _message.value = message
+        say(message)
         reload()
     }
 
-    /** Sets the message a host flow produced. */
+    /**
+     * Sets the message a host flow produced, or clears it with `null`.
+     *
+     * A credential form shows it as its [formError], and every other route as
+     * its [notice].
+     */
     fun report(message: String?) {
-        _message.value = message
+        post(message)
     }
 
     /** Requests cancellation; the worker sends it to Rust before its next poll. */
@@ -1539,7 +1586,7 @@ class ChurController(
 
     private suspend fun <T> tracked(name: String, body: suspend (Long) -> T): T? {
         if (_activeOperation.value != null) {
-            _message.value = "Finish the current operation first."
+            say("Finish the current operation first.")
             return null
         }
         val token = ++operationToken
@@ -1729,14 +1776,14 @@ class ChurController(
             exports.cancelPending()
             withContext(Dispatchers.Default) { repository.lock(LockReason.BACKGROUND) }
             clearPrivateProjections()
-            _route.value = if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell
+            setRoute(if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell)
             return
         }
         if (target == AppRoute.AppUnlock || target == AppRoute.AppRecover) {
             exports.cancelPending()
             withContext(Dispatchers.Default) { repository.lock(LockReason.USER) }
             privacy.setEnabled(false)
-            _route.value = AppRoute.PublicShell
+            setRoute(AppRoute.PublicShell)
         } else {
             enterVault()
         }
@@ -1744,7 +1791,7 @@ class ChurController(
 
     private suspend fun enterVault() {
         privacy.setEnabled(true)
-        _route.value = AppRoute.Vault
+        setRoute(AppRoute.Vault)
         _page.value = withContext(Dispatchers.Default) { repository.page(ObjectQuery()) }
         // `SYNC_PROTOCOL_V1.md` §7: "Decrypted application occurs after
         // explicit unlock". Whatever the locked puller staged while the vault
@@ -1781,25 +1828,98 @@ class ChurController(
      * way `fromValue` folds an unrecognized code. `CancellationException` is
      * re-thrown ahead of it, because swallowing it would break the cancellation
      * of the scope itself.
+     *
+     * The work carries the [routeVisit] it started in, so what it reports
+     * reaches the screen it was started from or nothing: see [post].
      */
     private fun guarded(clearMessage: Boolean = true, body: suspend () -> Unit) {
-        scope.launch {
+        scope.launch(RouteVisit(routeVisit)) {
             try {
-                if (clearMessage) _message.value = null
+                if (clearMessage) say(null)
                 body()
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (failure: ChurFailure) {
-                _message.value = userCopy(failure.status)
+                say(userCopy(failure.status), security = failure.status in SECURITY_STATUSES)
             } catch (failure: SyncTransportFailure) {
-                _message.value = syncCopy(failure.status)
+                say(syncCopy(failure.status), security = failure.status in SECURITY_STATUSES)
             } catch (_: Exception) {
-                _message.value = userCopy(ChurStatus.INTERNAL_FAILURE)
+                say(userCopy(ChurStatus.INTERNAL_FAILURE))
             }
         }
     }
 
+    /**
+     * Moves to [next] and drops what the last screen was showing.
+     *
+     * Every route write goes through here, so an outcome or a refusal never
+     * outlives the screen it was for. A second vault set up from Settings
+     * used to open its creation form with the vault's last outcome painted
+     * in error red, and an unlock screen read any leftover as a failed
+     * attempt.
+     */
+    private fun setRoute(next: AppRoute) {
+        routeVisit += 1
+        _notice.value = null
+        _formError.value = null
+        _route.value = next
+    }
+
+    /**
+     * Shows [text] on the current screen if it is still the one [visit] was
+     * taken on, and drops it otherwise.
+     *
+     * An action that ends after the user moved on, or after a lock, reports
+     * to a screen it was not started from; an export that fails after the
+     * lock would otherwise show its outcome on the unlock form as a refused
+     * credential. A credential form gets [formError]; every other route gets
+     * a [notice], and `null` clears whichever the route shows.
+     */
+    private fun post(text: String?, visit: Long = routeVisit, security: Boolean = false) {
+        if (visit != routeVisit) return
+        if (_route.value in FORM_ROUTES) {
+            _formError.value = text
+        } else {
+            _notice.value = text?.let { Notice(++noticeCount, it, security) }
+        }
+    }
+
+    /** [post], from work that [guarded] started, for the visit it started in. */
+    private suspend fun say(text: String?, security: Boolean = false) {
+        post(text, currentCoroutineContext()[RouteVisit]?.number ?: routeVisit, security)
+    }
+
+    /** The [routeVisit] a piece of guarded work started in. */
+    private class RouteVisit(val number: Long) : AbstractCoroutineContextElement(RouteVisit) {
+        companion object Key : CoroutineContext.Key<RouteVisit>
+    }
+
     private companion object {
+        /** The routes whose screen is a credential form, which reads [formError]. */
+        val FORM_ROUTES: Set<AppRoute> = setOf(
+            AppRoute.CreateVault,
+            AppRoute.RestoreBackup,
+            AppRoute.Unlock,
+            AppRoute.AppUnlock,
+            AppRoute.Recover,
+            AppRoute.AppRecover,
+        )
+
+        /**
+         * The failures `DESIGN.md` §26 keeps on screen until dismissed.
+         *
+         * They are the security states of `ERROR_MODEL.md`: the sync verdicts
+         * that stop sync until the fork state clears, and the integrity
+         * verdicts whose copy tells the user to restore from a backup.
+         */
+        val SECURITY_STATUSES: Set<ChurStatus> = setOf(
+            ChurStatus.SYNC_CHAIN_FORK,
+            ChurStatus.SYNC_HEAD_ROLLBACK,
+            ChurStatus.VAULT_CORRUPT,
+            ChurStatus.CATALOG_CORRUPT,
+            ChurStatus.OBJECT_CORRUPT,
+        )
+
         /** Fast enough to feel immediate, slow enough not to spin a core. */
         const val POLL_INTERVAL_MS = 50L
 
@@ -1854,3 +1974,18 @@ interface ExportSink {
 }
 
 enum class ExportTarget { DEFAULT, FILES, MEDIA_LIBRARY, SHARE }
+
+/**
+ * One outcome message, the snackbar of `DESIGN.md` §26.
+ *
+ * [id] tells two equal texts apart, so the same outcome twice is shown twice.
+ * A [security] notice stays until the user dismisses it or takes its
+ * [action]; any other one times out.
+ */
+data class Notice(
+    val id: Long,
+    val text: String,
+    val security: Boolean = false,
+    /** A label and what it does, such as an undo. */
+    val action: Pair<String, () -> Unit>? = null,
+)

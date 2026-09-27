@@ -38,7 +38,7 @@ class AppLockHostTest {
             first.create("123456789012", offerRecovery = false)
             withTimeout(10_000) { first.route.first { it == AppRoute.Vault } }
             delay(250)
-            assertEquals(null, first.message.value)
+            assertEquals(null, first.notice.value)
             first.toggleAppLock()
             withTimeout(10_000) { first.appLockEnabled.first { it } }
 

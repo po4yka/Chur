@@ -102,7 +102,7 @@ class RecoveryPhraseHostTest {
 
         assertEquals(
             "This recovery phrase was not saved.",
-            withTimeout(10_000) { controller.message.first { it != null } },
+            withTimeout(10_000) { controller.formError.first { it != null } },
         )
         assertIs<VaultState.NoVault>(controller.vaultState.value)
     }

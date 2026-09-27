@@ -47,6 +47,7 @@ import dev.po4yka.chur.app.ActiveOperation
 import dev.po4yka.chur.app.ChurController
 import dev.po4yka.chur.app.ExportTarget
 import dev.po4yka.chur.app.MediaImporter
+import dev.po4yka.chur.app.Notice
 import dev.po4yka.chur.app.notes.NoteEditorScreen
 import dev.po4yka.chur.app.notes.NotesScreen
 import dev.po4yka.chur.app.notes.OpenNote
@@ -118,7 +119,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultState) {
     val phrase by controller.recoveryPhrase.collectAsState()
-    val message by controller.message.collectAsState()
+    val formError by controller.formError.collectAsState()
 
     // The phrase is shown once and takes precedence over every route, because
     // `RECOVERY.md` §2 shows it exactly once and a navigation that skipped it
@@ -157,7 +158,7 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
             BackHandler(onBack = leave)
             CreateVaultScreen(
                 busy = vaultState is VaultState.Creating,
-                error = message,
+                error = formError,
                 onCreate = controller::create,
                 onCancel = leave,
                 // The offer exists only where no identity does. `DECOY_VAULT.md`
@@ -179,7 +180,7 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
             BackHandler { controller.goTo(AppRoute.PublicSettings) }
             UnlockScreen(
                 busy = false,
-                failed = (vaultState as? VaultState.Locked)?.lastFailure != null || message != null,
+                failed = (vaultState as? VaultState.Locked)?.lastFailure != null || formError != null,
                 onUnlock = controller::unlock,
                 onUseRecovery = { controller.goTo(AppRoute.Recover) },
                 deviceUnlockOffered = controller.deviceUnlockOffered.collectAsState().value,
@@ -188,7 +189,7 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
         }
         AppRoute.AppUnlock -> UnlockScreen(
             busy = false,
-            failed = (vaultState as? VaultState.Locked)?.lastFailure != null || message != null,
+            failed = (vaultState as? VaultState.Locked)?.lastFailure != null || formError != null,
             onUnlock = controller::unlock,
             onUseRecovery = { controller.goTo(AppRoute.AppRecover) },
             deviceUnlockOffered = controller.deviceUnlockOffered.collectAsState().value,
@@ -210,7 +211,7 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
             BackHandler(onBack = back)
             RecoveryScreen(
                 busy = false,
-                failed = (vaultState as? VaultState.Locked)?.lastFailure != null || message != null,
+                failed = (vaultState as? VaultState.Locked)?.lastFailure != null || formError != null,
                 onRecover = controller::recover,
                 onBack = back,
             )
@@ -296,7 +297,7 @@ private fun PublicShell(controller: ChurController, route: AppRoute) {
  */
 @Composable
 private fun RestoreRoute(controller: ChurController) {
-    val message by controller.message.collectAsState()
+    val formError by controller.formError.collectAsState()
     val operation by controller.activeOperation.collectAsState()
     val context = LocalContext.current
     var password by remember { mutableStateOf("") }
@@ -341,7 +342,7 @@ private fun RestoreRoute(controller: ChurController) {
     BackHandler { if (!running) back() }
     RestoreBackupScreen(
         busy = running,
-        error = message,
+        error = formError,
         cancelled = cancelled,
         operation = operation,
         onChoose = { entered ->
@@ -370,7 +371,7 @@ private fun VaultRoute(controller: ChurController) {
     val albums by controller.albums.collectAsState()
     val tags by controller.tags.collectAsState()
     val slots by controller.slots.collectAsState()
-    val message by controller.message.collectAsState()
+    val notice by controller.notice.collectAsState()
     val operation by controller.activeOperation.collectAsState()
     val vaultState by controller.vaultState.collectAsState()
     val syncStatus by controller.syncStatus.collectAsState()
@@ -518,7 +519,7 @@ private fun VaultRoute(controller: ChurController) {
         ViewerRoute(
             controller = controller,
             operation = operation,
-            status = message,
+            notice = notice,
             cache = cache,
             generation = generation,
             projection = projection,
@@ -737,7 +738,7 @@ private fun VaultRoute(controller: ChurController) {
             kinds = mediaKinds,
             albumOrder = albumOrder,
             albumFilter = albumFilter,
-            progress = message,
+            notice = notice,
             operation = operation,
             selectedCount = selection.size,
             canLoadMore = page.nextCursor != null,
@@ -869,6 +870,7 @@ private fun VaultRoute(controller: ChurController) {
                 selection = emptySet()
             } },
             onCancelOperation = controller::cancelActiveOperation,
+            onNoticeShown = controller::consume,
             onAddDeviceSlot = controller::enrollDeviceSlot,
             onToggleDeviceSlotPolicy = controller::toggleDeviceSlotPolicy,
             onConfigureSync = controller::configureSync,
@@ -897,7 +899,7 @@ private fun Set<String>.toggle(id: String): Set<String> =
 private fun ViewerRoute(
     controller: ChurController,
     operation: ActiveOperation?,
-    status: String?,
+    notice: Notice?,
     cache: ThumbnailCache,
     generation: Long,
     projection: ObjectProjection,
@@ -1022,7 +1024,8 @@ private fun ViewerRoute(
         waveform = waveform,
         operation = operation,
         onCancelOperation = controller::cancelActiveOperation,
-        status = status,
+        notice = notice,
+        onNoticeShown = controller::consume,
     )
     if (choosingTags) {
         val selected = listOf(projection.objectId)

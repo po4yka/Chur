@@ -78,7 +78,7 @@ import platform.posix.unlink
 @Composable
 internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: VaultState) {
     val phrase by controller.recoveryPhrase.collectAsState()
-    val message by controller.message.collectAsState()
+    val formError by controller.formError.collectAsState()
 
     phrase?.let { value ->
         // Copying 24 words by hand, `RECOVERY.md` §2.3, outlasts the
@@ -96,7 +96,7 @@ internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: 
         AppRoute.PublicShell, AppRoute.PublicSettings -> PublicShell(controller, route)
         AppRoute.CreateVault -> CreateVaultScreen(
             busy = vaultState is VaultState.Creating,
-            error = message,
+            error = formError,
             onCreate = controller::create,
             // A second vault is set up over an open session, and the public
             // shell is the last step of a lock, `PLAINTEXT_LIFECYCLE.md` §8.
@@ -116,7 +116,7 @@ internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: 
         AppRoute.RestoreBackup -> IosRestoreRoute(controller)
         AppRoute.Unlock -> UnlockScreen(
             busy = false,
-            failed = (vaultState as? VaultState.Locked)?.lastFailure != null || message != null,
+            failed = (vaultState as? VaultState.Locked)?.lastFailure != null || formError != null,
             onUnlock = controller::unlock,
             onUseRecovery = { controller.goTo(AppRoute.Recover) },
             deviceUnlockOffered = controller.deviceUnlockOffered.collectAsState().value,
@@ -124,7 +124,7 @@ internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: 
         )
         AppRoute.AppUnlock -> UnlockScreen(
             busy = false,
-            failed = (vaultState as? VaultState.Locked)?.lastFailure != null || message != null,
+            failed = (vaultState as? VaultState.Locked)?.lastFailure != null || formError != null,
             onUnlock = controller::unlock,
             onUseRecovery = { controller.goTo(AppRoute.AppRecover) },
             deviceUnlockOffered = controller.deviceUnlockOffered.collectAsState().value,
@@ -139,7 +139,7 @@ internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: 
         )
         AppRoute.AppRecover -> RecoveryScreen(
             busy = false,
-            failed = (vaultState as? VaultState.Locked)?.lastFailure != null || message != null,
+            failed = (vaultState as? VaultState.Locked)?.lastFailure != null || formError != null,
             onRecover = controller::recover,
             onBack = { controller.goTo(AppRoute.AppUnlock) },
         )
@@ -196,7 +196,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     val slots by controller.slots.collectAsState()
     val deviceSlotStrict by controller.deviceSlotStrict.collectAsState()
     val appLockEnabled by controller.appLockEnabled.collectAsState()
-    val message by controller.message.collectAsState()
+    val notice by controller.notice.collectAsState()
     val operation by controller.activeOperation.collectAsState()
     val syncStatus by controller.syncStatus.collectAsState()
     val sharingIdentity by controller.sharingIdentity.collectAsState()
@@ -411,7 +411,9 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             kinds = mediaKinds,
             albumOrder = albumOrder,
             albumFilter = albumFilter,
-            progress = message,
+            // The viewer is drawn over the shell here, so the shell leaves
+            // the notice to it while it is open rather than show it twice.
+            notice = notice.takeIf { viewing == null },
             operation = operation,
             selectedCount = selection.size,
             canLoadMore = page.nextCursor != null,
@@ -586,6 +588,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 selection = emptySet()
             } },
             onCancelOperation = controller::cancelActiveOperation,
+            onNoticeShown = controller::consume,
             onConfigureSync = controller::configureSync,
             onSyncNow = controller::syncNow,
             onDisconnectSync = controller::disconnectSync,
@@ -601,7 +604,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         IosViewerRoute(
             controller = controller,
             operation = operation,
-            status = message,
+            notice = notice,
             cache = cache,
             generation = generation,
             projection = projection,
@@ -624,7 +627,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
 private fun IosViewerRoute(
     controller: ChurController,
     operation: ActiveOperation?,
-    status: String?,
+    notice: Notice?,
     cache: ThumbnailCache,
     generation: Long,
     projection: ObjectProjection,
@@ -708,7 +711,8 @@ private fun IosViewerRoute(
         waveform = waveform,
         operation = operation,
         onCancelOperation = controller::cancelActiveOperation,
-        status = status,
+        notice = notice,
+        onNoticeShown = controller::consume,
     )
     if (choosingTags) {
         val selected = listOf(projection.objectId)
@@ -772,14 +776,14 @@ public object IosMediaPicker {
  */
 @Composable
 private fun IosRestoreRoute(controller: ChurController) {
-    val message by controller.message.collectAsState()
+    val formError by controller.formError.collectAsState()
     val operation by controller.activeOperation.collectAsState()
     var running by remember { mutableStateOf(false) }
     var cancelled by remember { mutableStateOf(false) }
 
     RestoreBackupScreen(
         busy = running,
-        error = message,
+        error = formError,
         cancelled = cancelled,
         operation = operation,
         onChoose = { password ->

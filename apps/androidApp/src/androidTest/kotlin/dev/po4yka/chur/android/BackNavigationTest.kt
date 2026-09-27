@@ -253,6 +253,37 @@ class BackNavigationTest {
         assertEquals(before, runBlocking { controller.vault.slots() }.map { it.id }.toSet())
     }
 
+    @Test
+    fun anImportOutcomeIsAnnouncedOnceAndStaysOnItsScreen() = inTestVault {
+        val outcome = "Imported into vault."
+        instrumentation.runOnMainSync { controller.reportImport(outcome) }
+
+        // `DESIGN.md` §23.2: a screen reader hears the outcome. Material's
+        // snackbar host makes its container a polite live region.
+        assertTrue(
+            "the outcome is in a polite live region",
+            await { find { it.liveRegion == View.ACCESSIBILITY_LIVE_REGION_POLITE && find(it, label(outcome)) != null } != null },
+        )
+        // §26: a routine confirmation times out, and a tab change does not
+        // bring it back.
+        assertTrue("the snackbar times out", await(20_000) { find(label(outcome)) == null })
+        tap(label("Albums"))
+        pressBack()
+        assertFalse("the outcome does not come back", await(2_000) { find(label(outcome)) != null })
+        assertEquals(null, controller.notice.value)
+
+        // "Set up a second vault" opens a clean creation form. It used to
+        // show the vault's last outcome there, in error red.
+        instrumentation.runOnMainSync {
+            controller.report(outcome)
+            controller.createSecondIdentity()
+        }
+        assertTrue("the creation form opens", await { find(label("Create a vault")) != null })
+        assertTrue("with nothing left from the vault", find(label(outcome)) == null)
+        tap(label("Not now"))
+        assertTrue("back in the vault", await { isOpen() })
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
@@ -336,7 +367,10 @@ class BackNavigationTest {
         instrumentation.runOnMainSync {
             controller.report(null)
             when (opening) {
-                is VaultState.NoVault -> controller.create(PASSWORD, offerRecovery = false)
+                is VaultState.NoVault -> {
+                    controller.goTo(AppRoute.CreateVault)
+                    controller.create(PASSWORD, offerRecovery = false)
+                }
                 is VaultState.Unlocked -> controller.goTo(AppRoute.Vault)
                 else -> {
                     controller.goTo(AppRoute.Unlock)
@@ -344,12 +378,12 @@ class BackNavigationTest {
                 }
             }
         }
-        await(60_000) { isOpen() || controller.message.value != null }
+        await(60_000) { isOpen() || controller.formError.value != null }
         if (!isOpen()) {
             // Only a vault this test did not create refuses its password. Any
             // other way of not opening is a failure, not a reason to skip.
-            assumeTrue("a vault this test did not create", opening is VaultState.Locked && controller.message.value != null)
-            fail("the test vault did not open: ${controller.message.value}")
+            assumeTrue("a vault this test did not create", opening is VaultState.Locked && controller.formError.value != null)
+            fail("the test vault did not open: ${controller.formError.value}")
         }
         try {
             awaitFrames()

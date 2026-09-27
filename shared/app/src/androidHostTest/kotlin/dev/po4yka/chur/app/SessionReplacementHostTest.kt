@@ -76,7 +76,7 @@ class SessionReplacementHostTest {
         controller.goTo(AppRoute.Unlock)
         controller.unlock("not the password")
         withTimeout(10_000) { controller.vaultState.first { it is VaultState.Locked } }
-        withTimeout(10_000) { controller.message.first { it != null } }
+        withTimeout(10_000) { controller.formError.first { it != null } }
 
         // The session ended as the attempt began, on both sides: nothing of
         // it on screen, and nothing of it left open behind the gate.
@@ -95,7 +95,7 @@ class SessionReplacementHostTest {
         assertIs<VaultState.Unlocked>(controller.vaultState.value)
         assertTrue(controller.albums.value.isEmpty(), "the first identity's albums")
         assertTrue(controller.slots.value.isEmpty(), "the first identity's slots")
-        assertEquals(null, controller.message.value)
+        assertEquals(null, controller.notice.value)
     }
 
     private object NoExports : ExportSink {
