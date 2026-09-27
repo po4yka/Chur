@@ -45,6 +45,25 @@ class UserCopyTest {
     }
 
     @Test
+    fun a_refused_recovery_phrase_says_whether_its_words_are_wrong() {
+        // `RECOVERY.md` §2.2: a wrong word or checksum is no oracle, and a
+        // phrase that opens no slot reads as every credential failure does.
+        val words = recoveryCopy(ChurStatus.INVALID_INPUT)
+        val opened = recoveryCopy(ChurStatus.AUTHENTICATION_FAILED)
+        assertNotEquals(words, opened)
+        assertEquals(
+            setOf(opened),
+            listOf(
+                ChurStatus.PLATFORM_KEY_UNAVAILABLE,
+                ChurStatus.PLATFORM_KEY_INVALIDATED,
+                ChurStatus.RECOVERY_REQUIRED,
+            ).map(::recoveryCopy).toSet(),
+        )
+        assertFalse("recovery" in opened.lowercase(), "sends the user back to recovery: $opened")
+        assertEquals(userCopy(ChurStatus.KDF_MEMORY_UNAVAILABLE), recoveryCopy(ChurStatus.KDF_MEMORY_UNAVAILABLE))
+    }
+
+    @Test
     fun a_sync_refusal_names_the_bootstrap_secret_and_not_an_unlock() {
         // `SERVER_OPERATOR.md` answers every failed token check, a wrong
         // bootstrap secret included, with `AUTHENTICATION_FAILED`.

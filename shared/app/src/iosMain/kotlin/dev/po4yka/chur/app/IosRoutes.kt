@@ -79,6 +79,7 @@ import platform.posix.unlink
 internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: VaultState) {
     val phrase by controller.recoveryPhrase.collectAsState()
     val formError by controller.formError.collectAsState()
+    val unlocking by controller.unlocking.collectAsState()
 
     phrase?.let { value ->
         // Copying 24 words by hand, `RECOVERY.md` §2.3, outlasts the
@@ -115,7 +116,7 @@ internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: 
         )
         AppRoute.RestoreBackup -> IosRestoreRoute(controller)
         AppRoute.Unlock -> UnlockScreen(
-            busy = false,
+            busy = unlocking,
             failed = (vaultState as? VaultState.Locked)?.lastFailure != null || formError != null,
             onUnlock = controller::unlock,
             onUseRecovery = { controller.goTo(AppRoute.Recover) },
@@ -123,7 +124,7 @@ internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: 
             onUseDevice = controller::unlockWithAppleDevice,
         )
         AppRoute.AppUnlock -> UnlockScreen(
-            busy = false,
+            busy = unlocking,
             failed = (vaultState as? VaultState.Locked)?.lastFailure != null || formError != null,
             onUnlock = controller::unlock,
             onUseRecovery = { controller.goTo(AppRoute.AppRecover) },
@@ -132,14 +133,14 @@ internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: 
             appGate = true,
         )
         AppRoute.Recover -> RecoveryScreen(
-            busy = false,
-            failed = (vaultState as? VaultState.Locked)?.lastFailure != null,
+            busy = unlocking,
+            error = formError,
             onRecover = controller::recover,
             onBack = { controller.goTo(AppRoute.Unlock) },
         )
         AppRoute.AppRecover -> RecoveryScreen(
-            busy = false,
-            failed = (vaultState as? VaultState.Locked)?.lastFailure != null || formError != null,
+            busy = unlocking,
+            error = formError,
             onRecover = controller::recover,
             onBack = { controller.goTo(AppRoute.AppUnlock) },
         )

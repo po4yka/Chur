@@ -65,7 +65,8 @@ import org.junit.runner.RunWith
  *
  * The gate's forms are checked here too, since they share the harness: each
  * clears the status bar and the keyboard, `DESIGN.md` §25.5, and the keyboard's
- * own action does what the form's button does.
+ * own action does what the form's button does. A screen reader hears every
+ * refused unlock, not only the first, §23.2.
  */
 @RunWith(AndroidJUnit4::class)
 class BackNavigationTest {
@@ -165,6 +166,28 @@ class BackNavigationTest {
     @Test
     fun theRecoveryFormScrollsAboveTheKeyboard() = onGateRoute(AppRoute.Recover) {
         assertFormEndsAbove(showKeyboardFor(findAll { it.isEditable }.first()), "Recover")
+    }
+
+    @Test
+    fun everyRefusedUnlockIsSpokenAgain() = inTestVault {
+        lockQuietly()
+        instrumentation.runOnMainSync { controller.goTo(AppRoute.Unlock) }
+        assertTrue("the unlock form", await { find { it.isEditable } != null })
+        val refusal = "Unable to unlock."
+        repeat(2) { attempt ->
+            instrumentation.runOnMainSync { controller.unlock("not the password") }
+            // The refusal of the last attempt leaves the same locked state, so
+            // the error region goes blank while this one runs.
+            assertTrue(
+                "attempt $attempt is busy",
+                await { find(label("Opening")) != null && find(label(refusal)) == null },
+            )
+            assertTrue("attempt $attempt is refused", await(60_000) { find(label(refusal)) != null })
+            // `DESIGN.md` §23.2: a polite live region speaks the refusal, and
+            // the field carries it as its error rather than a generic one.
+            assertEquals(View.ACCESSIBILITY_LIVE_REGION_POLITE, find(label(refusal))?.liveRegion)
+            assertEquals(refusal, find { it.isEditable }?.error?.toString())
+        }
     }
 
     // -----------------------------------------------------------------------

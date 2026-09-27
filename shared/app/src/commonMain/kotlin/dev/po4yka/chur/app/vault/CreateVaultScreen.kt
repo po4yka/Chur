@@ -170,9 +170,7 @@ fun CreateVaultScreen(
                         color = colors.inkMuted,
                     )
                 }
-                if (error != null) {
-                    Text(error, style = MaterialTheme.typography.bodySmall, color = colors.error)
-                }
+                FormMessage(error)
                 Button(
                     onClick = { onCreate(password, offerRecovery) },
                     enabled = !busy && matching,
@@ -328,13 +326,7 @@ fun RestoreBackupScreen(
                     keyboardOptions = secretKeyboardOptions(),
                     modifier = Modifier.fillMaxWidth(),
                 )
-                if (error != null) {
-                    Text(
-                        error,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (cancelled) colors.inkMuted else colors.error,
-                    )
-                }
+                FormMessage(error, color = if (cancelled) colors.inkMuted else colors.error)
                 Button(
                     onClick = { onChoose(password) },
                     enabled = !busy && password.isNotEmpty(),

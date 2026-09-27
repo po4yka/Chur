@@ -47,7 +47,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -487,7 +491,13 @@ internal fun NoticeHost(notice: Notice?, onShown: (Long) -> Unit, modifier: Modi
     SnackbarHost(host, modifier) { Snackbar(it, shape = RoundedCornerShape(10.dp)) }
 }
 
-/** Progress uses only the bounded numeric snapshot published by the FFI. */
+/**
+ * Progress uses only the bounded numeric snapshot published by the FFI.
+ *
+ * A screen reader hears [ActiveOperation.spoken] from a polite live region,
+ * `DESIGN.md` §23.2. The byte count on screen is kept out of the semantics:
+ * it changes on every poll, and each change would be spoken.
+ */
 @Composable
 internal fun OperationProgressCard(
     operation: ActiveOperation,
@@ -500,7 +510,14 @@ internal fun OperationProgressCard(
             modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter),
             verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
         ) {
-            Text(operation.description, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                operation.description,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.clearAndSetSemantics {
+                    contentDescription = operation.spoken
+                    liveRegion = LiveRegionMode.Polite
+                },
+            )
             val fraction = operation.fraction
             if (fraction == null) {
                 LinearProgressIndicator(

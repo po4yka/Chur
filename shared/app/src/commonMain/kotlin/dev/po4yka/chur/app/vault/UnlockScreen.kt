@@ -23,6 +23,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.error
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -47,6 +52,11 @@ import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
  * The form sits inside the safe area and scrolls in the space the keyboard
  * leaves, `DESIGN.md` §25.5, so Unlock can always be reached. The keyboard's
  * Go key submits as the button does and under the same condition, §23.4.
+ *
+ * [failed] can stay true across attempts, because a second refusal leaves the
+ * same locked state. The error is therefore blank while [busy], so each
+ * refusal puts the sentence back and the live region of [FormMessage] speaks
+ * it again, §23.2.
  */
 @Composable
 fun UnlockScreen(
@@ -61,6 +71,9 @@ fun UnlockScreen(
     var password by remember { mutableStateOf("") }
     var usePin by remember { mutableStateOf(false) }
     val canUnlock = !busy && password.isNotEmpty() && (!usePin || isValidVaultPin(password))
+    // §14.1: one message for every credential failure. It names no slot, no
+    // identity, and no count.
+    val message = if (failed && !busy) "Unable to unlock." else null
     val colors = LocalChurColors.current
     Surface(color = colors.canvas, modifier = Modifier.fillMaxSize()) {
         Column(
@@ -107,16 +120,10 @@ fun UnlockScreen(
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = secretKeyboardOptions(pin = usePin, imeAction = ImeAction.Go),
                     keyboardActions = KeyboardActions(onGo = { if (canUnlock) onUnlock(password) }),
-                    isError = failed,
-                    modifier = Modifier.fillMaxWidth(),
+                    isError = message != null,
+                    modifier = Modifier.fillMaxWidth().semantics { if (message != null) error(message) },
                 )
-                // §14.1: one message for every credential failure. It names no
-                // slot, no identity, and no count.
-                Text(
-                    text = if (failed) "Unable to unlock." else " ",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (failed) colors.error else colors.inkMuted,
-                )
+                FormMessage(message)
                 Button(
                     onClick = { onUnlock(password) },
                     enabled = canUnlock,
@@ -148,16 +155,22 @@ fun UnlockScreen(
  *
  * The phrase field is several lines tall, so the form scrolls above the
  * keyboard as the unlock form does, and Go submits it.
+ *
+ * [error] is the controller's sentence for the refusal on this screen, so a
+ * phrase with a wrong word or checksum reads differently from one that opened
+ * nothing, `RECOVERY.md` §2.2. A password the unlock form refused is not
+ * carried over to this screen.
  */
 @Composable
 fun RecoveryScreen(
     busy: Boolean,
-    failed: Boolean,
+    error: String?,
     onRecover: (String) -> Unit,
     onBack: () -> Unit,
 ) {
     var phrase by remember { mutableStateOf("") }
     val canRecover = !busy && phrase.isNotBlank()
+    val message = error.takeUnless { busy }
     val colors = LocalChurColors.current
     Surface(color = colors.canvas, modifier = Modifier.fillMaxSize()) {
         Column(
@@ -186,14 +199,10 @@ fun RecoveryScreen(
                     // PASSWORD_PROFILE.md §2: the phrase opens the vault as a password does.
                     keyboardOptions = secretKeyboardOptions(imeAction = ImeAction.Go),
                     keyboardActions = KeyboardActions(onGo = { if (canRecover) onRecover(phrase) }),
-                    isError = failed,
-                    modifier = Modifier.fillMaxWidth(),
+                    isError = message != null,
+                    modifier = Modifier.fillMaxWidth().semantics { if (message != null) error(message) },
                 )
-                Text(
-                    text = if (failed) "That phrase did not open a vault." else " ",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (failed) colors.error else colors.inkMuted,
-                )
+                FormMessage(message)
                 Button(
                     onClick = { onRecover(phrase) },
                     enabled = canRecover,
@@ -205,4 +214,22 @@ fun RecoveryScreen(
             }
         }
     }
+}
+
+/**
+ * The one error region of a credential form, `DESIGN.md` §14.1.
+ *
+ * It stays in the layout as a blank line when there is nothing to say, so the
+ * form does not move, and it is a polite live region, §23.2: a screen reader
+ * speaks each new message, where it used to hear nothing after a refusal. A
+ * live region speaks a change, so a form blanks it while an attempt runs.
+ */
+@Composable
+internal fun FormMessage(text: String?, color: Color = LocalChurColors.current.error) {
+    Text(
+        text = text ?: " ",
+        style = MaterialTheme.typography.bodySmall,
+        color = color,
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+    )
 }

@@ -136,6 +136,7 @@ class ChurController(
     private var operationToken = 0L
     private val _recoveryPhrase = MutableStateFlow<String?>(null)
     private val _deviceUnlockOffered = MutableStateFlow(false)
+    private val _unlocking = MutableStateFlow(false)
 
     /**
      * The decoded-image cache of `PLAINTEXT_LIFECYCLE.md` §4, which the
@@ -268,6 +269,17 @@ class ChurController(
      * that appears when no slot exists would say a slot exists.
      */
     val deviceUnlockOffered: StateFlow<Boolean> = _deviceUnlockOffered.asStateFlow()
+
+    /**
+     * Whether an unlock or a recovery is being tried, [attempt].
+     *
+     * The unlock and recovery forms are busy while it holds: the button says
+     * "Opening" and cannot be pressed again, and the error region is blank.
+     * The repository keeps an equal `Locked` state after a second refusal, so
+     * without the blank a screen reader would hear only the first one,
+     * `DESIGN.md` §23.2.
+     */
+    val unlocking: StateFlow<Boolean> = _unlocking.asStateFlow()
 
     /** The repository, for a host flow that drives operations itself. */
     val vault: VaultRepository get() = repository
@@ -424,7 +436,7 @@ class ChurController(
     }
 
     /** Unlocks with a password. */
-    fun unlock(password: String) = guarded {
+    fun unlock(password: String) = attempt {
         endOpenSession()
         val target = _route.value
         val epoch = lockEpoch
@@ -437,8 +449,8 @@ class ChurController(
         completeUnlock(target, epoch)
     }
 
-    /** Unlocks with the recovery phrase. */
-    fun recover(phrase: String) = guarded {
+    /** Unlocks with the recovery phrase, and says why a phrase was refused. */
+    fun recover(phrase: String) = attempt(::recoveryCopy) {
         endOpenSession()
         val target = _route.value
         val epoch = lockEpoch
@@ -453,7 +465,7 @@ class ChurController(
      * repository clears once the session is open. Every enrolled slot is tried
      * in turn, because the material names no identity.
      */
-    fun unlockWithDevice() = guarded {
+    fun unlockWithDevice() = attempt {
         endOpenSession()
         val target = _route.value
         val epoch = lockEpoch
@@ -483,7 +495,7 @@ class ChurController(
     }
 
     /** Opens the vault with a Keychain secret released by local authorization. */
-    fun unlockWithAppleDevice() = guarded {
+    fun unlockWithAppleDevice() = attempt {
         endOpenSession()
         val target = _route.value
         val epoch = lockEpoch
@@ -1832,7 +1844,11 @@ class ChurController(
      * The work carries the [routeVisit] it started in, so what it reports
      * reaches the screen it was started from or nothing: see [post].
      */
-    private fun guarded(clearMessage: Boolean = true, body: suspend () -> Unit) {
+    private fun guarded(
+        clearMessage: Boolean = true,
+        copy: (ChurStatus) -> String = ::userCopy,
+        body: suspend () -> Unit,
+    ) {
         scope.launch(RouteVisit(routeVisit)) {
             try {
                 if (clearMessage) say(null)
@@ -1840,11 +1856,31 @@ class ChurController(
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (failure: ChurFailure) {
-                say(userCopy(failure.status), security = failure.status in SECURITY_STATUSES)
+                say(copy(failure.status), security = failure.status in SECURITY_STATUSES)
             } catch (failure: SyncTransportFailure) {
                 say(syncCopy(failure.status), security = failure.status in SECURITY_STATUSES)
             } catch (_: Exception) {
                 say(userCopy(ChurStatus.INTERNAL_FAILURE))
+            }
+        }
+    }
+
+    /**
+     * Runs an unlock or a recovery as [guarded] does, with [unlocking] set.
+     *
+     * The flag is set on Main before the work starts, as [requestPhrase]
+     * sets its own, so a second tap in the same frame is ignored rather than
+     * starting a second key derivation. It clears before [guarded] reports a
+     * refusal, so the form shows the refusal once it is no longer busy.
+     */
+    private fun attempt(copy: (ChurStatus) -> String = ::userCopy, body: suspend () -> Unit) {
+        if (_unlocking.value) return
+        _unlocking.value = true
+        guarded(copy = copy) {
+            try {
+                body()
+            } finally {
+                _unlocking.value = false
             }
         }
     }

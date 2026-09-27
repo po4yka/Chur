@@ -120,6 +120,7 @@ import kotlinx.coroutines.withContext
 fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultState) {
     val phrase by controller.recoveryPhrase.collectAsState()
     val formError by controller.formError.collectAsState()
+    val unlocking by controller.unlocking.collectAsState()
 
     // The phrase is shown once and takes precedence over every route, because
     // `RECOVERY.md` §2 shows it exactly once and a navigation that skipped it
@@ -179,7 +180,7 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
             // returns to that entry either way.
             BackHandler { controller.goTo(AppRoute.PublicSettings) }
             UnlockScreen(
-                busy = false,
+                busy = unlocking,
                 failed = (vaultState as? VaultState.Locked)?.lastFailure != null || formError != null,
                 onUnlock = controller::unlock,
                 onUseRecovery = { controller.goTo(AppRoute.Recover) },
@@ -188,7 +189,7 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
             )
         }
         AppRoute.AppUnlock -> UnlockScreen(
-            busy = false,
+            busy = unlocking,
             failed = (vaultState as? VaultState.Locked)?.lastFailure != null || formError != null,
             onUnlock = controller::unlock,
             onUseRecovery = { controller.goTo(AppRoute.AppRecover) },
@@ -200,8 +201,8 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
             val back = { controller.goTo(AppRoute.Unlock) }
             BackHandler(onBack = back)
             RecoveryScreen(
-                busy = false,
-                failed = (vaultState as? VaultState.Locked)?.lastFailure != null,
+                busy = unlocking,
+                error = formError,
                 onRecover = controller::recover,
                 onBack = back,
             )
@@ -210,8 +211,8 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
             val back = { controller.goTo(AppRoute.AppUnlock) }
             BackHandler(onBack = back)
             RecoveryScreen(
-                busy = false,
-                failed = (vaultState as? VaultState.Locked)?.lastFailure != null || formError != null,
+                busy = unlocking,
+                error = formError,
                 onRecover = controller::recover,
                 onBack = back,
             )

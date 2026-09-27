@@ -68,6 +68,29 @@ fun userCopy(status: ChurStatus): String = when (status) {
 }
 
 /**
+ * The sentence the recovery form shows for a refused phrase.
+ *
+ * `RECOVERY.md` §2.2 makes a word off the list and a failed checksum
+ * [ChurStatus.INVALID_INPUT], checked before any slot is tried, and says
+ * neither is an oracle: whoever holds the phrase can check both offline. So
+ * the form says the words are wrong, which is the checksum feedback of
+ * `DESIGN.md` §17.2. A phrase that passes the checksum and opens no slot is a
+ * credential failure, and it reads the same as every other one, §14.1. The
+ * unlock line of [userCopy] would send the user to the recovery phrase they
+ * just entered, so this form has its own. Every other status reads as
+ * [userCopy] has it.
+ */
+fun recoveryCopy(status: ChurStatus): String = when (status) {
+    ChurStatus.INVALID_INPUT -> "These words are not a valid recovery phrase. Check the spelling and the order."
+    ChurStatus.AUTHENTICATION_FAILED,
+    ChurStatus.PLATFORM_KEY_UNAVAILABLE,
+    ChurStatus.PLATFORM_KEY_INVALIDATED,
+    ChurStatus.RECOVERY_REQUIRED,
+    -> "That phrase did not open a vault."
+    else -> userCopy(status)
+}
+
+/**
  * The sentence a user reads when the sync server refuses a request.
  *
  * A server refusal reuses the stable codes, and two of them mean something
