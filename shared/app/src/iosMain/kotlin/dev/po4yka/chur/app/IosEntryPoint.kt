@@ -18,7 +18,16 @@ import platform.Foundation.NSSearchPathForDirectoriesInDomains
 import platform.Foundation.NSUserDomainMask
 import platform.Foundation.NSUserDefaults
 import platform.Foundation.timeIntervalSince1970
+import platform.UIKit.UIStatusBarAnimation
+import platform.UIKit.UIStatusBarStyle
+import platform.UIKit.UIStatusBarStyleDefault
+import platform.UIKit.UIStatusBarStyleLightContent
+import platform.UIKit.UIView
+import platform.UIKit.UIViewAutoresizingFlexibleHeight
+import platform.UIKit.UIViewAutoresizingFlexibleWidth
 import platform.UIKit.UIViewController
+import platform.UIKit.addChildViewController
+import platform.UIKit.didMoveToParentViewController
 
 /**
  * The iOS entry point.
@@ -40,13 +49,53 @@ import platform.UIKit.UIViewController
  * that would move the field a second time.
  */
 fun ChurViewController(controller: ChurController, gate: GateResult): UIViewController =
-    ComposeUIViewController(configure = { onFocusBehavior = OnFocusBehavior.DoNothing }) {
-        val route by controller.route.collectAsState()
-        val state by controller.vaultState.collectAsState()
-        ChurApp(gate = gate, route = route) {
-            IosRoutes(controller = controller, route = route, vaultState = state)
+    ChurRootViewController(
+        ComposeUIViewController(configure = { onFocusBehavior = OnFocusBehavior.DoNothing }) {
+            val route by controller.route.collectAsState()
+            val state by controller.vaultState.collectAsState()
+            ChurApp(gate = gate, route = route) {
+                IosRoutes(controller = controller, route = route, vaultState = state)
+            }
+        },
+    )
+
+/**
+ * The root the Xcode host presents, with the Compose controller as its child.
+ *
+ * UIKit asks the root controller how to draw the status bar. Compose
+ * deprecated its own hook for that in favour of a parent controller, and this
+ * is that parent. The viewer sets [viewerChrome]: `DESIGN.md` §6.2 gives the
+ * viewer a black canvas in both themes, so the status bar is light over it,
+ * and §13.1 has a tap hide the chrome, so the status bar goes with it.
+ */
+internal class ChurRootViewController(
+    private val content: UIViewController,
+) : UIViewController(nibName = null, bundle = null) {
+    /** `null` outside the viewer, else whether the viewer shows its chrome. */
+    var viewerChrome: Boolean? = null
+        set(value) {
+            if (field == value) return
+            field = value
+            UIView.animateWithDuration(0.15) { setNeedsStatusBarAppearanceUpdate() }
         }
+
+    override fun viewDidLoad() {
+        super.viewDidLoad()
+        addChildViewController(content)
+        content.view.setFrame(view.bounds)
+        content.view.setAutoresizingMask(UIViewAutoresizingFlexibleWidth or UIViewAutoresizingFlexibleHeight)
+        view.addSubview(content.view)
+        content.didMoveToParentViewController(this)
     }
+
+    override fun preferredStatusBarStyle(): UIStatusBarStyle =
+        if (viewerChrome == null) UIStatusBarStyleDefault else UIStatusBarStyleLightContent
+
+    override fun prefersStatusBarHidden(): Boolean = viewerChrome == false
+
+    override fun preferredStatusBarUpdateAnimation(): UIStatusBarAnimation =
+        UIStatusBarAnimation.UIStatusBarAnimationFade
+}
 
 /** Check the linked native library before opening a runtime. */
 fun churNativeGate(releaseApplication: Boolean): GateResult {

@@ -532,6 +532,55 @@ class BackNavigationTest {
     }
 
     @Test
+    fun aTapOnThePhotoHidesTheChromeAndTheSystemBars() = inTestVault {
+        // The photo is imported on the first run only.
+        if (!await(3_000) { controller.page.value.objects.any { it.mediaKind == MEDIA_CLASS_IMAGE } }) importPhoto()
+        val tile = photoTile()
+        tap { it == tile }
+        assertTrue("the viewer opens", await { find(label("Info")) != null })
+        val showsControls = { action: String -> { node: AccessibilityNodeInfo ->
+            node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK && it.label?.toString() == action }
+        } }
+        val media = boundsOf(showsControls("Hide controls"))
+        // The status bar stands for both: `isVisible` of `systemBars()` also
+        // asks for a caption bar, which a phone window never has.
+        val barsShown = { onWindow { insets, _ -> insets.isVisible(WindowInsetsCompat.Type.statusBars()) } }
+
+        // A drag is not a tap.
+        shell("input swipe ${media.centerX()} ${media.centerY()} ${media.centerX()} ${media.centerY() + media.height() / 4} 300")
+        assertFalse("a drag keeps the chrome", await(1_000) { find(label("Back")) == null })
+
+        // `DESIGN.md` §13.1: a finger on the photo, as a user taps.
+        shell("input tap ${media.centerX()} ${media.centerY()}")
+
+        assertTrue("the chrome goes", await { find(label("Back")) == null && find(label("Info")) == null })
+        assertTrue("the system bars go with it", await { !barsShown() })
+
+        // A screen reader brings it back through the media's own action.
+        val hidden = find(showsControls("Show controls"))
+        assertNotNull("the media offers to show the controls", hidden)
+        assertTrue(checkNotNull(hidden).performAction(AccessibilityNodeInfo.ACTION_CLICK))
+
+        assertTrue("the chrome comes back", await { find(label("Back")) != null })
+        assertTrue("with the system bars", await { barsShown() })
+
+        // §13.4: the chrome stays while the sheet it opened is up.
+        tap(label("Info"))
+        assertTrue(
+            "the overlay opens",
+            await { find(label("Captured")) != null || find(label("No capture date recorded")) != null },
+        )
+        shell("input tap ${media.centerX()} ${media.top + media.height() / 4}")
+        assertFalse("a tap keeps the chrome under Info", await(1_000) { find(label("Back")) == null })
+
+        pressBack()
+        assertTrue("the overlay closes", await { find(label("Info")) != null })
+        pressBack()
+        assertTrue("the viewer closes", await { find(label("Info")) == null })
+        assertTrue("the system bars stay", barsShown())
+    }
+
+    @Test
     fun theLockInTheViewerStopsPlayback() = inTestVault {
         // The recording is imported on the first run only.
         if (!await(3_000) { controller.page.value.objects.any { it.mediaKind == MEDIA_CLASS_AUDIO } }) importRecording()

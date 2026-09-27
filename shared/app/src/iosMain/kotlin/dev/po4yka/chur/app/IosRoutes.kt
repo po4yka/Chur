@@ -12,6 +12,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.uikit.LocalUIViewController
 import dev.po4yka.chur.app.notes.NoteEditorScreen
 import dev.po4yka.chur.app.notes.NotesScreen
 import dev.po4yka.chur.app.notes.OpenNote
@@ -41,6 +42,7 @@ import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_VIDEO
 import dev.po4yka.chur.app.vault.VaultPlayer
 import dev.po4yka.chur.app.vault.VaultUiState
+import dev.po4yka.chur.app.vault.ViewerChrome
 import dev.po4yka.chur.app.vault.ViewerScreen
 import dev.po4yka.chur.app.vault.PresentedState
 import dev.po4yka.chur.app.vault.playbackFor
@@ -646,6 +648,16 @@ private fun IosViewerRoute(
     var waveform by remember(projection.id) { mutableStateOf<ByteArray?>(null) }
     var confirmingDelete by remember(projection.id) { mutableStateOf(false) }
     var choosingExport by remember(projection.id) { mutableStateOf(false) }
+    val chrome = remember { ViewerChrome() }
+    val chromePinned = showDetail || choosingTags || choosingExport || confirmingDelete || operation != null
+    val chromeVisible = chrome.visible(chromePinned)
+    // §6.2 and §13.1: the status bar is light over the black canvas and goes
+    // with the chrome, and it gets the theme's style back when the viewer goes.
+    val root = LocalUIViewController.current.parentViewController as? ChurRootViewController
+    DisposableEffect(root, chromeVisible) {
+        root?.viewerChrome = chromeVisible
+        onDispose { root?.viewerChrome = null }
+    }
 
     LaunchedEffect(projection.id, generation) {
         // A video's still is its poster frame, which `MEDIA_PIPELINE.md` §6
@@ -695,6 +707,8 @@ private fun IosViewerRoute(
         detail = detail,
         preview = preview,
         showDetail = showDetail,
+        chromeVisible = chromeVisible,
+        onToggleChrome = { chrome.toggle(chromePinned) },
         onBack = onBack,
         onLock = { controller.lock() },
         onPanic = { controller.panic() },

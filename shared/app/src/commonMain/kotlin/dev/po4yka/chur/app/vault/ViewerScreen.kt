@@ -1,7 +1,13 @@
 package dev.po4yka.chur.app.vault
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,10 +26,19 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.ActiveOperation
@@ -56,6 +71,10 @@ import dev.po4yka.chur.ffi.ObjectProjection
  * that draws its own chrome over the shell's, so `DISCREET_MODE.md` "The
  * panic gesture" holds here only if this screen carries the lock control,
  * and a host that does not bind both does not compile.
+ *
+ * [chromeVisible] belongs to the route, which keeps it in a [ViewerChrome]:
+ * the Android route hides the system bars with the chrome, and the iOS route
+ * hides the status bar with it.
  */
 @Composable
 fun ViewerScreen(
@@ -63,6 +82,8 @@ fun ViewerScreen(
     detail: ObjectDetail?,
     preview: ImageBitmap?,
     showDetail: Boolean,
+    chromeVisible: Boolean,
+    onToggleChrome: () -> Unit,
     onBack: () -> Unit,
     onLock: () -> Unit,
     onPanic: () -> Unit,
@@ -86,97 +107,132 @@ fun ViewerScreen(
     // pressed, because the bar's window takes the touch first.
     val topInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
     val bottomInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)
-    Box(modifier = Modifier.fillMaxSize().background(ViewerColors.canvas)) {
-        if (player != null) {
-            // A video or a recording is played rather than shown. The player is
-            // a slot rather than a call, because it is the one part of this
-            // screen that reads a repository, and this file's rule is that a
-            // screen is a pure function of a state value.
-            player(Modifier.fillMaxSize())
-            // A recording has nothing to look at, so the waveform is what the
-            // screen shows: `MEDIA_PIPELINE.md` §6.1 makes it a peak envelope
-            // rather than a picture, which is why it can be drawn in the
-            // viewer's own palette rather than baked into a second derivative.
-            if (waveform != null) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    WaveformStrip(record = waveform, color = ViewerColors.content)
+    // §13.1: a tap toggles the chrome. The detectors are on the root, so a
+    // tap or a drag anywhere on the viewer stays in the viewer: a root without
+    // one lets the event through to the screen drawn under it. A chrome
+    // control takes its own tap first, and the drag detector takes a drag
+    // before the tap detector sees it, so a drag is not a tap.
+    val toggleChrome by rememberUpdatedState(onToggleChrome)
+    Box(
+        modifier = Modifier.fillMaxSize().background(ViewerColors.canvas)
+            .pointerInput(Unit) { detectTapGestures(onTap = { toggleChrome() }) }
+            .pointerInput(Unit) { detectDragGestures { change, _ -> change.consume() } },
+    ) {
+        // The same toggle for TalkBack and VoiceOver, which activate the
+        // focused element rather than tap where a finger is.
+        Box(
+            modifier = Modifier.fillMaxSize().semantics {
+                contentDescription = tileLabel(projection)
+                onClick(label = if (chromeVisible) "Hide controls" else "Show controls") {
+                    toggleChrome()
+                    true
                 }
-            }
-        } else if (preview != null) {
-            Image(
-                bitmap = preview,
-                contentDescription = null,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize(),
-            )
-        } else {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    "Decrypting",
-                    color = ViewerColors.content,
-                    style = MaterialTheme.typography.bodyMedium,
+            },
+        ) {
+            if (player != null) {
+                // A video or a recording is played rather than shown. The player is
+                // a slot rather than a call, because it is the one part of this
+                // screen that reads a repository, and this file's rule is that a
+                // screen is a pure function of a state value.
+                player(Modifier.fillMaxSize())
+                // A recording has nothing to look at, so the waveform is what the
+                // screen shows: `MEDIA_PIPELINE.md` §6.1 makes it a peak envelope
+                // rather than a picture, which is why it can be drawn in the
+                // viewer's own palette rather than baked into a second derivative.
+                if (waveform != null) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        WaveformStrip(record = waveform, color = ViewerColors.content)
+                    }
+                }
+            } else if (preview != null) {
+                Image(
+                    bitmap = preview,
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize(),
                 )
+            } else {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        "Decrypting",
+                        color = ViewerColors.content,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
             }
         }
 
         // §13: the chrome sits over a scrim so controls stay legible against
         // both bright and dark media, which §6.4 requires them to be tested on.
-        Row(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .fillMaxWidth()
-                .background(ViewerColors.chromeScrim)
-                .windowInsetsPadding(topInsets)
-                .padding(ChurSpacing.two),
-            verticalAlignment = Alignment.CenterVertically,
+        // §22.2 gives a simple state change 120-180 ms, and a fade is also
+        // what §22.3 keeps under reduced motion.
+        AnimatedVisibility(
+            visible = chromeVisible,
+            modifier = Modifier.align(Alignment.TopStart),
+            enter = fadeIn(tween(CHROME_FADE_MS)),
+            exit = fadeOut(tween(CHROME_FADE_MS)),
         ) {
-            IconButton(onClick = onBack) {
-                Icon(BackGlyph, contentDescription = "Back", tint = ViewerColors.content)
-            }
-            Box(modifier = Modifier.weight(1f))
-            LockControl(onLock = onLock, onPanic = onPanic, tint = ViewerColors.content)
-            IconButton(onClick = onToggleDetail) {
-                Text(
-                    if (showDetail) "Hide info" else "Info",
-                    color = ViewerColors.content,
-                    style = MaterialTheme.typography.labelLarge,
-                )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(ViewerColors.chromeScrim)
+                    .windowInsetsPadding(topInsets)
+                    .padding(ChurSpacing.two),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = onBack) {
+                    Icon(BackGlyph, contentDescription = "Back", tint = ViewerColors.content)
+                }
+                Box(modifier = Modifier.weight(1f))
+                LockControl(onLock = onLock, onPanic = onPanic, tint = ViewerColors.content)
+                IconButton(onClick = onToggleDetail) {
+                    Text(
+                        if (showDetail) "Hide info" else "Info",
+                        color = ViewerColors.content,
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
             }
         }
-
-        Row(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .fillMaxWidth()
-                .background(ViewerColors.chromeScrim)
-                .windowInsetsPadding(bottomInsets)
-                .padding(ChurSpacing.two),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically,
+        AnimatedVisibility(
+            visible = chromeVisible,
+            modifier = Modifier.align(Alignment.BottomStart),
+            enter = fadeIn(tween(CHROME_FADE_MS)),
+            exit = fadeOut(tween(CHROME_FADE_MS)),
         ) {
-            if (!trashOpen) IconButton(onClick = onToggleFavorite) {
-                Icon(
-                    if (projection.favorite) FavoriteFilledGlyph else FavoriteGlyph,
-                    contentDescription = if (projection.favorite) "Remove favourite" else "Favourite",
-                    tint = ViewerColors.content,
-                )
-            }
-            if (!trashOpen) IconButton(onClick = onEditTags) {
-                Text("Tags", color = ViewerColors.content,
-                    style = MaterialTheme.typography.labelLarge)
-            }
-            if (!trashOpen) IconButton(onClick = onExport, enabled = operation == null) {
-                Icon(ExportGlyph, contentDescription = "Export", tint = ViewerColors.content)
-            }
-            if (trashOpen) TextButton(onClick = onRestore) {
-                Text("Restore", color = ViewerColors.content)
-            }
-            IconButton(onClick = onDelete) {
-                Icon(DeleteGlyph, contentDescription = if (trashOpen) "Delete permanently" else "Move to Trash",
-                    tint = ViewerColors.content)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(ViewerColors.chromeScrim)
+                    .windowInsetsPadding(bottomInsets)
+                    .padding(ChurSpacing.two),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (!trashOpen) IconButton(onClick = onToggleFavorite) {
+                    Icon(
+                        if (projection.favorite) FavoriteFilledGlyph else FavoriteGlyph,
+                        contentDescription = if (projection.favorite) "Remove favourite" else "Favourite",
+                        tint = ViewerColors.content,
+                    )
+                }
+                if (!trashOpen) IconButton(onClick = onEditTags) {
+                    Text("Tags", color = ViewerColors.content,
+                        style = MaterialTheme.typography.labelLarge)
+                }
+                if (!trashOpen) IconButton(onClick = onExport, enabled = operation == null) {
+                    Icon(ExportGlyph, contentDescription = "Export", tint = ViewerColors.content)
+                }
+                if (trashOpen) TextButton(onClick = onRestore) {
+                    Text("Restore", color = ViewerColors.content)
+                }
+                IconButton(onClick = onDelete) {
+                    Icon(DeleteGlyph, contentDescription = if (trashOpen) "Delete permanently" else "Move to Trash",
+                        tint = ViewerColors.content)
+                }
             }
         }
 
@@ -204,6 +260,28 @@ fun ViewerScreen(
 }
 
 private fun Int.dp() = androidx.compose.ui.unit.Dp(this.toFloat())
+
+private const val CHROME_FADE_MS = 150
+
+/**
+ * Whether the viewer shows its chrome, `DESIGN.md` §13.1: a tap on the media
+ * hides it, and the next tap brings it back.
+ *
+ * §13.4 names when chrome must not hide by itself. Nothing here hides it on a
+ * timer, and while the route says it is pinned, because the Info sheet, a
+ * dialog, a confirmation or an operation is open, it stays shown and a tap
+ * leaves it as it is. Both hosts keep one, so they follow the same rule.
+ */
+@Stable
+class ViewerChrome {
+    private var hidden by mutableStateOf(false)
+
+    fun visible(pinned: Boolean): Boolean = pinned || !hidden
+
+    fun toggle(pinned: Boolean) {
+        if (!pinned) hidden = !hidden
+    }
+}
 
 /**
  * The one place a filename, a caption, and a tag reach the screen.

@@ -42,6 +42,8 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import dev.po4yka.chur.app.AppRoute
 import dev.po4yka.chur.app.ActiveOperation
 import dev.po4yka.chur.app.ChurController
@@ -79,6 +81,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_VIDEO
 import dev.po4yka.chur.app.vault.VaultPlayer
+import dev.po4yka.chur.app.vault.ViewerChrome
 import dev.po4yka.chur.app.vault.ViewerScreen
 import dev.po4yka.chur.app.vault.PresentedState
 import dev.po4yka.chur.app.vault.playbackFor
@@ -948,6 +951,22 @@ private fun ViewerRoute(
             bars?.isAppearanceLightNavigationBars = !night
         }
     }
+    val chrome = remember { ViewerChrome() }
+    val chromePinned = showDetail || choosingTags || choosingExport || confirmingDelete || operation != null
+    val chromeVisible = chrome.visible(chromePinned)
+    // §13.1: the system bars go with the chrome, so a tap leaves the media
+    // alone on the screen. An edge swipe shows them for a moment without the
+    // chrome, and they come back for good when the viewer goes.
+    DisposableEffect(window, chromeVisible) {
+        val bars = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
+        bars?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        if (chromeVisible) {
+            bars?.show(WindowInsetsCompat.Type.systemBars())
+        } else {
+            bars?.hide(WindowInsetsCompat.Type.systemBars())
+        }
+        onDispose { bars?.show(WindowInsetsCompat.Type.systemBars()) }
+    }
     val context = LocalContext.current
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         controller.endHostActivity()
@@ -1008,6 +1027,8 @@ private fun ViewerRoute(
         detail = detail,
         preview = preview,
         showDetail = showDetail,
+        chromeVisible = chromeVisible,
+        onToggleChrome = { chrome.toggle(chromePinned) },
         onBack = onBack,
         onLock = { controller.lock() },
         onPanic = { controller.panic() },
