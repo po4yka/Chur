@@ -4,6 +4,7 @@ package dev.po4yka.chur.app
 
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.uikit.OnFocusBehavior
 import androidx.compose.ui.window.ComposeUIViewController
 import dev.po4yka.chur.ffi.ChurVault
 import dev.po4yka.chur.notes.FileNoteStore
@@ -33,9 +34,13 @@ import platform.UIKit.UIViewController
  * rather than a style: Kotlin/Native cannot map a composable lambda to
  * Objective-C, so a signature with one is silently absent from the framework
  * header instead of being an error.
+ *
+ * The controller does not pan the view to a focused field. [ChurApp] already
+ * ends every route above the keyboard, `DESIGN.md` §25.5, and a pan on top of
+ * that would move the field a second time.
  */
 fun ChurViewController(controller: ChurController, gate: GateResult): UIViewController =
-    ComposeUIViewController {
+    ComposeUIViewController(configure = { onFocusBehavior = OnFocusBehavior.DoNothing }) {
         val route by controller.route.collectAsState()
         val state by controller.vaultState.collectAsState()
         ChurApp(gate = gate, route = route) {

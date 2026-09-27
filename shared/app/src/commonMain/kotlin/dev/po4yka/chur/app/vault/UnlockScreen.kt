@@ -5,8 +5,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -41,6 +43,10 @@ import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
  * underneath it.
  *
  * The locked state is neutral rather than red, §6.3.
+ *
+ * The form sits inside the safe area and scrolls in the space the keyboard
+ * leaves, `DESIGN.md` §25.5, so Unlock can always be reached. The keyboard's
+ * Go key submits as the button does and under the same condition, §23.4.
  */
 @Composable
 fun UnlockScreen(
@@ -54,11 +60,12 @@ fun UnlockScreen(
 ) {
     var password by remember { mutableStateOf("") }
     var usePin by remember { mutableStateOf(false) }
+    val canUnlock = !busy && password.isNotEmpty() && (!usePin || isValidVaultPin(password))
     val colors = LocalChurColors.current
     Surface(color = colors.canvas, modifier = Modifier.fillMaxSize()) {
         Column(
-            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-                .padding(ChurSpacing.gutterExpanded),
+            modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState())
+                .padding(ChurSpacing.gutter),
             verticalArrangement = Arrangement.spacedBy(ChurSpacing.three, Alignment.CenterVertically),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -99,6 +106,7 @@ fun UnlockScreen(
                     label = { Text(if (usePin) "PIN" else "Password") },
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = secretKeyboardOptions(pin = usePin, imeAction = ImeAction.Go),
+                    keyboardActions = KeyboardActions(onGo = { if (canUnlock) onUnlock(password) }),
                     isError = failed,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -111,7 +119,7 @@ fun UnlockScreen(
                 )
                 Button(
                     onClick = { onUnlock(password) },
-                    enabled = !busy && password.isNotEmpty() && (!usePin || isValidVaultPin(password)),
+                    enabled = canUnlock,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(if (busy) "Opening" else "Unlock")
@@ -137,6 +145,9 @@ fun UnlockScreen(
  * §10 there is what the copy has to survive: a forgotten password with no
  * recovery slot is unrecoverable and support cannot help. The screen says so
  * before the user types, rather than after the attempt fails.
+ *
+ * The phrase field is several lines tall, so the form scrolls above the
+ * keyboard as the unlock form does, and Go submits it.
  */
 @Composable
 fun RecoveryScreen(
@@ -146,10 +157,12 @@ fun RecoveryScreen(
     onBack: () -> Unit,
 ) {
     var phrase by remember { mutableStateOf("") }
+    val canRecover = !busy && phrase.isNotBlank()
     val colors = LocalChurColors.current
     Surface(color = colors.canvas, modifier = Modifier.fillMaxSize()) {
         Column(
-            modifier = Modifier.fillMaxSize().padding(ChurSpacing.gutterExpanded),
+            modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState())
+                .padding(ChurSpacing.gutter),
             verticalArrangement = Arrangement.spacedBy(ChurSpacing.three, Alignment.CenterVertically),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -171,7 +184,8 @@ fun RecoveryScreen(
                     enabled = !busy,
                     label = { Text("Recovery phrase") },
                     // PASSWORD_PROFILE.md §2: the phrase opens the vault as a password does.
-                    keyboardOptions = secretKeyboardOptions(),
+                    keyboardOptions = secretKeyboardOptions(imeAction = ImeAction.Go),
+                    keyboardActions = KeyboardActions(onGo = { if (canRecover) onRecover(phrase) }),
                     isError = failed,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -182,7 +196,7 @@ fun RecoveryScreen(
                 )
                 Button(
                     onClick = { onRecover(phrase) },
-                    enabled = !busy && phrase.isNotBlank(),
+                    enabled = canRecover,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(if (busy) "Opening" else "Recover")

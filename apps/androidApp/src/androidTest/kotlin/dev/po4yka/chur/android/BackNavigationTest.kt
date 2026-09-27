@@ -2,18 +2,25 @@ package dev.po4yka.chur.android
 
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Rect
+import android.os.Build
 import android.os.Bundle
 import android.view.Choreographer
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
+import androidx.annotation.RequiresApi
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.text.AnnotatedString
 import androidx.core.content.FileProvider
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.po4yka.chur.app.AppRoute
 import dev.po4yka.chur.app.ChurController
@@ -55,6 +62,10 @@ import org.junit.runner.RunWith
  * device whose vault refuses this test's password skips them rather than
  * touching that vault. The screens are driven through the accessibility tree,
  * which needs no test dependency.
+ *
+ * The gate's forms are checked here too, since they share the harness: each
+ * clears the status bar and the keyboard, `DESIGN.md` §25.5, and the keyboard's
+ * own action does what the form's button does.
  */
 @RunWith(AndroidJUnit4::class)
 class BackNavigationTest {
@@ -111,6 +122,49 @@ class BackNavigationTest {
         lockIfOpen()
         assertEquals(AppRoute.PublicShell, backFrom(AppRoute.CreateVault))
         assertEquals(AppRoute.PublicShell, backFrom(AppRoute.RestoreBackup))
+    }
+
+    // -----------------------------------------------------------------------
+    // The gate's forms
+    // -----------------------------------------------------------------------
+
+    @Test
+    @SdkSuppress(minSdkVersion = Build.VERSION_CODES.R)
+    fun theCreationFormClearsTheBarsAndNextMovesToTheRepeat() = onGateRoute(AppRoute.CreateVault) {
+        val title = boundsOf(label("Create a vault"))
+        val safeTop = onWindow { insets, _ ->
+            insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()).top
+        }
+        assertTrue("the title must clear the status bar", title.top >= safeTop)
+
+        val keyboardTop = showKeyboardFor(findAll { it.isEditable }.first())
+        assertTrue(findAll { it.isEditable }.first().pressImeAction())
+        assertTrue("Next moves to the repeat field", await { findAll { it.isEditable }.getOrNull(1)?.isFocused == true })
+        assertFormEndsAbove(keyboardTop, "Create vault")
+    }
+
+    @Test
+    @SdkSuppress(minSdkVersion = Build.VERSION_CODES.R)
+    fun theGoKeyUnlocksAsTheButtonDoes() = inTestVault {
+        lockQuietly()
+        instrumentation.runOnMainSync { controller.goTo(AppRoute.Unlock) }
+        assertTrue("the unlock form", await { find { it.isEditable } != null })
+        assertFormEndsAbove(showKeyboardFor(find { it.isEditable }!!), "Unlock")
+
+        // An empty field disables the button, and Go must not try either.
+        assertTrue(find { it.isEditable }!!.pressImeAction())
+        assertFalse(
+            "an empty field must not be tried",
+            await(1_000) { find(label("Unable to unlock.")) != null || controller.vaultState.value !is VaultState.Locked },
+        )
+        setText(find { it.isEditable }, PASSWORD)
+        assertTrue(find { it.isEditable }!!.pressImeAction())
+        assertTrue("Go opens the vault", await(60_000) { isOpen() })
+    }
+
+    @Test
+    fun theRecoveryFormScrollsAboveTheKeyboard() = onGateRoute(AppRoute.Recover) {
+        assertFormEndsAbove(showKeyboardFor(findAll { it.isEditable }.first()), "Recover")
     }
 
     // -----------------------------------------------------------------------
@@ -431,11 +485,90 @@ class BackNavigationTest {
         var field: AccessibilityNodeInfo? = null
         // The title comes first and the body last.
         assertTrue("the note field", await { findAll { it.isEditable }.lastOrNull()?.also { field = it } != null })
+        setText(field, text)
+    }
+
+    private fun setText(field: AccessibilityNodeInfo?, text: String) {
         val arguments = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         }
         assertTrue("the text must land", field?.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments) == true)
         awaitFrames()
+    }
+
+    /** Runs [body] on the gate form of [route], locked, and returns to Notes after. */
+    private fun onGateRoute(route: AppRoute, body: () -> Unit) {
+        lockIfOpen()
+        instrumentation.runOnMainSync { controller.goTo(route) }
+        try {
+            assertTrue("the form", await { find { it.isEditable } != null })
+            body()
+        } finally {
+            instrumentation.runOnMainSync { controller.goTo(AppRoute.PublicShell) }
+        }
+    }
+
+    /** Reads the window's insets and height on the main thread. */
+    private fun <T> onWindow(read: (insets: WindowInsetsCompat, height: Int) -> T): T {
+        var value: Result<T>? = null
+        instrumentation.runOnMainSync {
+            val decor = activity.window.decorView
+            value = runCatching { read(checkNotNull(ViewCompat.getRootWindowInsets(decor)), decor.height) }
+        }
+        return checkNotNull(value).getOrThrow()
+    }
+
+    /** The keyboard's action key, as the platform delivers it to accessibility services. */
+    @RequiresApi(Build.VERSION_CODES.R)
+    private fun AccessibilityNodeInfo.pressImeAction(): Boolean =
+        performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
+
+    /** Taps [field], as a user does, and returns the top of the keyboard it shows. */
+    private fun showKeyboardFor(field: AccessibilityNodeInfo): Int {
+        assertTrue(field.performAction(AccessibilityNodeInfo.ACTION_CLICK))
+        assertTrue(
+            "the keyboard must show",
+            await { onWindow { insets, _ -> insets.isVisible(WindowInsetsCompat.Type.ime()) } },
+        )
+        return onWindow { insets, height -> height - insets.getInsets(WindowInsetsCompat.Type.ime()).bottom }
+    }
+
+    /**
+     * `DESIGN.md` §25.5 on a gate form: the area it scrolls in ends at the
+     * keyboard, and [action], brought on screen, ends above it.
+     */
+    private fun assertFormEndsAbove(keyboardTop: Int, action: String) {
+        // The keyboard slides in, and the form follows it frame by frame.
+        assertTrue("the form must end above the keyboard", await { scrollAreaBottom() <= keyboardTop })
+        // A control scrolled out of view is not in the tree, so the form is
+        // scrolled until it is, as a user would.
+        assertTrue(
+            "$action must be reachable",
+            await {
+                find(label(action)) != null ||
+                    find { it.isScrollable }?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD).let { false }
+            },
+        )
+        find(label(action))?.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.id)
+        assertTrue("$action must be above the keyboard", await { boundsOf(label(action)).bottom <= keyboardTop })
+    }
+
+    /** The lowest edge of a vertically scrolling area on screen, in window pixels. */
+    private fun scrollAreaBottom(): Float {
+        var bottom = Float.MAX_VALUE
+        instrumentation.runOnMainSync {
+            bottom = activity.window.decorView.composeRoots()
+                .flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false) }
+                .filter { SemanticsProperties.VerticalScrollAxisRange in it.config }
+                .maxOfOrNull { it.boundsInWindow.bottom } ?: Float.MAX_VALUE
+        }
+        return bottom
+    }
+
+    private fun boundsOf(match: (AccessibilityNodeInfo) -> Boolean): Rect {
+        var node: AccessibilityNodeInfo? = null
+        assertTrue("nothing matches", await { find(match)?.also { node = it } != null })
+        return Rect().also { checkNotNull(node).getBoundsInScreen(it) }
     }
 
     /**

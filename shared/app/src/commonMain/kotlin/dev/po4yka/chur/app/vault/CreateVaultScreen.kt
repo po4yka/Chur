@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -24,6 +25,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.secretKeyboardOptions
@@ -49,6 +51,13 @@ import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
  * product to keep a restore away from another identity's descriptors, and §10
  * forbids a surface that differs by whether a second identity exists. With no
  * identity present there is none to overwrite and none to reveal.
+ *
+ * Next on the keyboard moves from the password to its repeat. The repeat
+ * field only closes the keyboard: the §4 offer below it is part of the
+ * decision, so the vault is created from the button and never from a key.
+ *
+ * This form and the two below sit inside the safe area and scroll in the
+ * space the keyboard leaves, `DESIGN.md` §25.5.
  */
 @Composable
 fun CreateVaultScreen(
@@ -67,8 +76,8 @@ fun CreateVaultScreen(
         (!usePin || isValidVaultPin(password))
     Surface(color = colors.canvas, modifier = Modifier.fillMaxSize()) {
         Column(
-            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-                .padding(ChurSpacing.gutterExpanded),
+            modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState())
+                .padding(ChurSpacing.gutter),
             verticalArrangement = Arrangement.spacedBy(ChurSpacing.three),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -115,7 +124,7 @@ fun CreateVaultScreen(
                     enabled = !busy,
                     label = { Text(if (usePin) "PIN" else "Password") },
                     visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = secretKeyboardOptions(pin = usePin),
+                    keyboardOptions = secretKeyboardOptions(pin = usePin, imeAction = ImeAction.Next),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
@@ -197,8 +206,8 @@ fun RecoveryPhraseScreen(phrase: String, onAcknowledged: () -> Unit) {
     val colors = LocalChurColors.current
     Surface(color = colors.canvas, modifier = Modifier.fillMaxSize()) {
         Column(
-            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-                .padding(ChurSpacing.gutterExpanded),
+            modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState())
+                .padding(ChurSpacing.gutter),
             verticalArrangement = Arrangement.spacedBy(ChurSpacing.three),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -291,8 +300,8 @@ fun RestoreBackupScreen(
     val colors = LocalChurColors.current
     Surface(color = colors.canvas, modifier = Modifier.fillMaxSize()) {
         Column(
-            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-                .padding(ChurSpacing.gutterExpanded),
+            modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState())
+                .padding(ChurSpacing.gutter),
             verticalArrangement = Arrangement.spacedBy(ChurSpacing.three),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {

@@ -1,15 +1,20 @@
 package dev.po4yka.chur.app
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.ChurTheme
 import dev.po4yka.chur.app.theme.LocalChurColors
@@ -27,20 +32,30 @@ import dev.po4yka.chur.app.theme.LocalChurColors
  * library that fails it is not called again in this process, and the shell says
  * so plainly instead of degrading: a vault that cannot be opened correctly must
  * not appear to open.
+ *
+ * Every route ends above the keyboard. `DESIGN.md` §25.5 says fields and
+ * primary actions never hide under the IME. The Android window draws edge to
+ * edge, so `adjustResize` no longer shrinks it, and the iOS host does not pan
+ * the view either (`ChurViewController`). [imePadding] here does that job
+ * once for both hosts and every form, and it consumes the IME inset, so a
+ * Scaffold or a safe-drawing padding below does not count it again. The
+ * media viewer never shows a keyboard, so it stays edge to edge.
  */
 @Composable
 public fun ChurApp(gate: GateResult, route: AppRoute, content: @Composable () -> Unit) {
     ChurTheme {
-        when (gate) {
-            is GateResult.Incompatible -> IncompatibleLibrary(gate)
-            is GateResult.Compatible -> {
-                // The route is the caller's. This composable refuses to render
-                // anything private when the gate refused the library. It also
-                // stops the keyboard from learning on every route except the
-                // public shell, whose Notes keep the keyboard of any notes app.
-                // A route added later is private until it is listed here.
-                val privateRoute = route != AppRoute.PublicShell && route != AppRoute.PublicSettings
-                PrivateTextInput(enabled = privateRoute, content = content)
+        Box(Modifier.fillMaxSize().imePadding()) {
+            when (gate) {
+                is GateResult.Incompatible -> IncompatibleLibrary(gate)
+                is GateResult.Compatible -> {
+                    // The route is the caller's. This composable refuses to render
+                    // anything private when the gate refused the library. It also
+                    // stops the keyboard from learning on every route except the
+                    // public shell, whose Notes keep the keyboard of any notes app.
+                    // A route added later is private until it is listed here.
+                    val privateRoute = route != AppRoute.PublicShell && route != AppRoute.PublicSettings
+                    PrivateTextInput(enabled = privateRoute, content = content)
+                }
             }
         }
     }
@@ -100,13 +115,16 @@ private fun IncompatibleLibrary(result: GateResult.Incompatible) {
     val colors = LocalChurColors.current
     Surface(color = colors.canvas, modifier = Modifier.fillMaxSize()) {
         Column(
-            modifier = Modifier.fillMaxSize().padding(ChurSpacing.gutterExpanded),
+            modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(ChurSpacing.gutter),
             verticalArrangement = Arrangement.spacedBy(ChurSpacing.two, Alignment.CenterVertically),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text("Chur cannot start", style = MaterialTheme.typography.headlineSmall)
             Text(
                 gateSummary(result),
+                // Capped like the gate forms, so the 16dp gutter holds at
+                // every width and the line stays readable (`DESIGN.md` §8.4).
+                modifier = Modifier.widthIn(max = 420.dp),
                 style = MaterialTheme.typography.bodyMedium,
                 color = colors.inkMuted,
             )

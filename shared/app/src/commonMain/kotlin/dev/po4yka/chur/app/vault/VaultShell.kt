@@ -49,6 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -942,7 +943,8 @@ private fun ChangePasswordDialog(
                     enabled = enabled,
                     label = { Text(if (usePin) "New PIN" else "New password") },
                     visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = secretKeyboardOptions(pin = usePin),
+                    // Next moves to the repeat field, as on the creation form.
+                    keyboardOptions = secretKeyboardOptions(pin = usePin, imeAction = ImeAction.Next),
                     colors = churOutlinedTextFieldColors(),
                 )
                 OutlinedTextField(
