@@ -850,7 +850,7 @@ class ChurController(
             val next = withContext(Dispatchers.Default) { repository.page(query.copy(cursor = cursor)) }
             if (revision != queryRevision) return@guarded
             val result = if (next.catalogGeneration != previous.catalogGeneration) {
-                withContext(Dispatchers.Default) { repository.page(query) }
+                pageThrough(query, previous.objects.size + next.objects.size)
             } else {
                 next.copy(objects = previous.objects + next.objects)
             }
@@ -1743,16 +1743,51 @@ class ChurController(
 
     private suspend fun drain(operation: Long, token: Long): Int = drainProgress(operation, token).status
 
+    /**
+     * Reads the current query again, as far as the grid had paged it.
+     *
+     * A reload that read only the first page cut the grid back to it. Past
+     * that page the grid lost its place, and the viewer lost the item on
+     * screen from its pages, so a swipe did nothing (`DESIGN.md` §13.1).
+     */
     private suspend fun reload() {
         if (repository.state.value is VaultState.Unlocked) {
             val query = currentQuery
             val revision = queryRevision
             val result = if (query.scope == QueryScope.SEARCH && query.terms.isNullOrBlank()) {
                 ObjectPage(emptyList(), 0, 0, null)
-            } else withContext(Dispatchers.Default) { repository.page(query) }
+            } else pageThrough(query, _page.value.objects.size)
             if (revision == queryRevision) _page.value = result
         }
     }
+
+    /**
+     * The first page of [query], and the pages after it until [rows] rows are
+     * loaded or the scope ends, `CATALOG_SCHEMA_V1.md` §16.2.
+     *
+     * A page read at another `catalog_generation` restarts the scope, as §16.2
+     * requires, because a row whose sort key changed can be skipped or come
+     * twice. That happens once; a second change keeps the rows read at one
+     * generation, and the grid pages on from there.
+     */
+    private suspend fun pageThrough(query: ObjectQuery, rows: Int): ObjectPage =
+        withContext(Dispatchers.Default) {
+            var result = repository.page(query)
+            var restarted = false
+            while (result.objects.size < rows) {
+                val cursor = result.nextCursor ?: break
+                val next = repository.page(query.copy(cursor = cursor))
+                if (next.catalogGeneration == result.catalogGeneration) {
+                    result = next.copy(objects = result.objects + next.objects)
+                } else if (!restarted) {
+                    restarted = true
+                    result = repository.page(query)
+                } else {
+                    break
+                }
+            }
+            result
+        }
 
     private suspend fun refreshAlbums() {
         _albums.value = withContext(Dispatchers.Default) { repository.albums() }

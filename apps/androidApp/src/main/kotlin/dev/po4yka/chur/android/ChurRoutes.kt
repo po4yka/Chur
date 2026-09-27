@@ -83,6 +83,7 @@ import dev.po4yka.chur.app.vault.VaultShell
 import dev.po4yka.chur.app.vault.VaultUiState
 import androidx.compose.ui.graphics.ImageBitmap
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
+import dev.po4yka.chur.app.vault.viewerPages
 import dev.po4yka.chur.app.vault.viewerStill
 import dev.po4yka.chur.app.vault.VaultPlayer
 import dev.po4yka.chur.app.vault.ViewerChrome
@@ -415,6 +416,7 @@ private fun VaultRoute(controller: ChurController) {
     LaunchedEffect(tags) {
         openTag = openTag?.let { current -> tags.firstOrNull { it.id == current.id } }
     }
+    // The item on screen in the viewer; a swipe moves it through the page.
     var viewing by remember { mutableStateOf<ObjectProjection?>(null) }
     var selection by remember { mutableStateOf(setOf<String>()) }
     var creatingAlbum by remember { mutableStateOf(false) }
@@ -907,6 +909,10 @@ private fun VaultRoute(controller: ChurController) {
             cache = cache,
             generation = generation,
             projection = projection,
+            pages = viewerPages(page.objects, projection),
+            thumbnails = thumbnails,
+            canLoadMore = page.nextCursor != null,
+            onSettled = { viewing = it },
             trashOpen = trashOpen,
             onBack = { viewing = null },
             // Delete, restore and permanent delete reload the current query
@@ -927,6 +933,11 @@ private fun Set<String>.toggle(id: String): Set<String> =
  * for a photograph that never needed one the decoded original, which §8 of
  * the media pipeline permits for detailed viewing and which is small enough
  * to be its own preview.
+ *
+ * A swipe moves through [pages], §13.1, and this route follows it:
+ * [projection] is the item on screen, and its detail, its still, its player
+ * and its dialogs are keyed to it, so they are made once, for that item, and
+ * not for each page a swipe passes.
  */
 @Composable
 private fun ViewerRoute(
@@ -936,6 +947,10 @@ private fun ViewerRoute(
     cache: ThumbnailCache,
     generation: Long,
     projection: ObjectProjection,
+    pages: List<ObjectProjection>,
+    thumbnails: Map<String, ImageBitmap>,
+    canLoadMore: Boolean,
+    onSettled: (ObjectProjection) -> Unit,
     trashOpen: Boolean,
     onBack: () -> Unit,
     onDeleted: () -> Unit,
@@ -1038,6 +1053,11 @@ private fun ViewerRoute(
 
     ViewerScreen(
         projection = projection.copy(favorite = favorite),
+        pages = pages,
+        thumbnails = thumbnails,
+        canLoadMore = canLoadMore,
+        onLoadMore = controller::loadNextPage,
+        onSettled = onSettled,
         detail = detail,
         preview = preview,
         showDetail = showDetail,

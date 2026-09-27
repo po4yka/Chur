@@ -45,6 +45,7 @@ import dev.po4yka.chur.app.vault.AlbumOrder
 import dev.po4yka.chur.app.vault.browseQuery
 import dev.po4yka.chur.app.vault.VaultShell
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
+import dev.po4yka.chur.app.vault.viewerPages
 import dev.po4yka.chur.app.vault.viewerStill
 import dev.po4yka.chur.app.vault.VaultPlayer
 import dev.po4yka.chur.app.vault.VaultUiState
@@ -232,6 +233,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         openTag = openTag?.let { current -> tags.firstOrNull { it.id == current.id } }
     }
     var selection by remember { mutableStateOf(setOf<String>()) }
+    // The item on screen in the viewer; a swipe moves it through the page.
     var viewing by remember { mutableStateOf<ObjectProjection?>(null) }
     var creatingAlbum by remember { mutableStateOf(false) }
     var choosingAlbum by remember { mutableStateOf(false) }
@@ -638,6 +640,10 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             cache = cache,
             generation = generation,
             projection = projection,
+            pages = viewerPages(page.objects, projection),
+            thumbnails = thumbnails,
+            canLoadMore = page.nextCursor != null,
+            onSettled = { viewing = it },
             trashOpen = trashOpen,
             onBack = { viewing = null },
             onDeleted = { viewing = null },
@@ -652,6 +658,11 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
  * decrypt more only for detailed viewing, which is why the preview is loaded
  * here rather than in the grid, and §9 has a video ask for ranges rather than
  * for a decoded file.
+ *
+ * A swipe moves through [pages], `DESIGN.md` §13.1, and this route follows
+ * it: [projection] is the item on screen, and its detail, its still, its
+ * player and its dialogs are keyed to it, so they are made once, for that
+ * item, and not for each page a swipe passes.
  */
 @Composable
 private fun IosViewerRoute(
@@ -661,6 +672,10 @@ private fun IosViewerRoute(
     cache: ThumbnailCache,
     generation: Long,
     projection: ObjectProjection,
+    pages: List<ObjectProjection>,
+    thumbnails: Map<String, ImageBitmap>,
+    canLoadMore: Boolean,
+    onSettled: (ObjectProjection) -> Unit,
     trashOpen: Boolean,
     onBack: () -> Unit,
     onDeleted: () -> Unit,
@@ -715,6 +730,11 @@ private fun IosViewerRoute(
 
     ViewerScreen(
         projection = projection.copy(favorite = favorite),
+        pages = pages,
+        thumbnails = thumbnails,
+        canLoadMore = canLoadMore,
+        onLoadMore = controller::loadNextPage,
+        onSettled = onSettled,
         detail = detail,
         preview = preview,
         showDetail = showDetail,

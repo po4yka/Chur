@@ -933,6 +933,7 @@ Try another word or remove a filter.
 - black canvas;
 - media centered at correct aspect ratio;
 - tap toggles chrome;
+- a swipe moves to the adjacent item of the scope the viewer was opened from;
 - zoom and pan follow platform expectations;
 - metadata appears in a sheet or side pane;
 - screenshots/capture policy remains explicit and platform-honest.

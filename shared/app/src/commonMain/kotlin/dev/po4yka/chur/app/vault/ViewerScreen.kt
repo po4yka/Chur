@@ -6,8 +6,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -75,10 +75,20 @@ import dev.po4yka.chur.ffi.ObjectProjection
  * [chromeVisible] belongs to the route, which keeps it in a [ViewerChrome]:
  * the Android route hides the system bars with the chrome, and the iOS route
  * hides the status bar with it.
+ *
+ * [projection] is the item on screen, one of [pages], and everything else
+ * here is its own: [preview], [player] and [detail] are the route's for that
+ * item alone. A swipe moves to the adjacent page, and [onSettled] tells the
+ * route which item it landed on, [ViewerPager].
  */
 @Composable
 fun ViewerScreen(
     projection: ObjectProjection,
+    pages: List<ObjectProjection>,
+    thumbnails: Map<String, ImageBitmap>,
+    canLoadMore: Boolean,
+    onLoadMore: () -> Unit,
+    onSettled: (ObjectProjection) -> Unit,
     detail: ObjectDetail?,
     preview: ImageBitmap?,
     showDetail: Boolean,
@@ -110,13 +120,16 @@ fun ViewerScreen(
     // §13.1: a tap toggles the chrome. The detectors are on the root, so a
     // tap or a drag anywhere on the viewer stays in the viewer: a root without
     // one lets the event through to the screen drawn under it. A chrome
-    // control takes its own tap first, and the drag detector takes a drag
-    // before the tap detector sees it, so a drag is not a tap.
+    // control takes its own tap first. The pager takes a horizontal drag and
+    // the drag detector a vertical one before the tap detector sees either,
+    // so a drag is not a tap. The detector is vertical only: one that took a
+    // drag in any direction would pass its slop first on a swipe that is not
+    // quite level and take it from the pager.
     val toggleChrome by rememberUpdatedState(onToggleChrome)
     Box(
         modifier = Modifier.fillMaxSize().background(ViewerColors.canvas)
             .pointerInput(Unit) { detectTapGestures(onTap = { toggleChrome() }) }
-            .pointerInput(Unit) { detectDragGestures { change, _ -> change.consume() } },
+            .pointerInput(Unit) { detectVerticalDragGestures { change, _ -> change.consume() } },
     ) {
         // The same toggle for TalkBack and VoiceOver, which activate the
         // focused element rather than tap where a finger is.
@@ -129,38 +142,22 @@ fun ViewerScreen(
                 }
             },
         ) {
-            if (player != null) {
-                // A video or a recording is played rather than shown. The player is
-                // a slot rather than a call, because it is the one part of this
-                // screen that reads a repository, and this file's rule is that a
-                // screen is a pure function of a state value.
-                player(Modifier.fillMaxSize())
-                // A recording has nothing to look at, so the waveform is what the
-                // screen shows: `MEDIA_PIPELINE.md` §6.1 makes it a peak envelope
-                // rather than a picture, which is why it can be drawn in the
-                // viewer's own palette rather than baked into a second derivative.
-                if (waveform != null) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        WaveformStrip(record = waveform, color = ViewerColors.content)
-                    }
-                }
-            } else if (preview != null) {
-                Image(
-                    bitmap = preview,
-                    contentDescription = null,
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        "Decrypting",
-                        color = ViewerColors.content,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
+            ViewerPager(
+                pages = pages,
+                viewing = projection,
+                canLoadMore = canLoadMore,
+                onLoadMore = onLoadMore,
+                onSettled = onSettled,
+                modifier = Modifier.fillMaxSize(),
+            ) { page, settled ->
+                // The page a swipe brings in shows the grid's thumbnail until
+                // it lands; only then does the route decrypt its full still or
+                // open its player. Without a thumbnail it shows the canvas, as
+                // nothing is being decrypted for it.
+                if (settled) {
+                    ViewerMedia(preview ?: thumbnails[page.id], player, waveform)
+                } else {
+                    thumbnails[page.id]?.let { ViewerMedia(it, player = null, waveform = null) }
                 }
             }
         }
@@ -254,6 +251,51 @@ fun ViewerScreen(
             NoticeHost(notice, onNoticeShown)
             if (operation != null) {
                 OperationProgressCard(operation = operation, onCancel = onCancelOperation)
+            }
+        }
+    }
+}
+
+/** One page's media: its player, its waveform over the player, or its still. */
+@Composable
+private fun ViewerMedia(
+    preview: ImageBitmap?,
+    player: (@Composable (Modifier) -> Unit)?,
+    waveform: ByteArray?,
+) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (player != null) {
+            // A video or a recording is played rather than shown. The player is
+            // a slot rather than a call, because it is the one part of this
+            // screen that reads a repository, and this file's rule is that a
+            // screen is a pure function of a state value.
+            player(Modifier.fillMaxSize())
+            // A recording has nothing to look at, so the waveform is what the
+            // screen shows: `MEDIA_PIPELINE.md` §6.1 makes it a peak envelope
+            // rather than a picture, which is why it can be drawn in the
+            // viewer's own palette rather than baked into a second derivative.
+            if (waveform != null) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    WaveformStrip(record = waveform, color = ViewerColors.content)
+                }
+            }
+        } else if (preview != null) {
+            Image(
+                bitmap = preview,
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    "Decrypting",
+                    color = ViewerColors.content,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
             }
         }
     }

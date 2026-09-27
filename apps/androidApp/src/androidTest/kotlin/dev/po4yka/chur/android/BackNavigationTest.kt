@@ -18,6 +18,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.AnnotatedString
 import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
@@ -101,7 +102,8 @@ import org.junit.runner.RunWith
  * closing it, or a delete from it, leaves the grid where it was, a screen
  * reader and the keyboard focus cannot reach the shell under it, and Back
  * closes it before the scope under it. A photo too small for a screen preview
- * is shown from its original, at full size and upright.
+ * is shown from its original, at full size and upright. The activity's saved
+ * state holds no object ID while the viewer shows a player, `ANDROID.md` §6.3.
  */
 @RunWith(AndroidJUnit4::class)
 class BackNavigationTest {
@@ -379,7 +381,8 @@ class BackNavigationTest {
             // `PLAINTEXT_LIFECYCLE.md` §4: the grid under the viewer is out of
             // a screen reader's reach, and its semantics are cleared, not only
             // left out as covered.
-            assertTrue("no grid behind the viewer", await { findAll { it.collectionInfo != null }.isEmpty() })
+            // The viewer's pager is a collection too, of one row: its pages.
+            assertTrue("no grid behind the viewer", await { findAll { it.collectionInfo.let { info -> info != null && info.rowCount != 1 } }.isEmpty() })
             assertTrue("no grid semantics behind the viewer", onGrids { it.isEmpty() })
             pressBack()
             assertTrue("the viewer closes", await { find(label("Info")) == null })
@@ -419,6 +422,40 @@ class BackNavigationTest {
                 settle { done -> controller.deleteAll(imported, done) }
                 settle { done -> controller.permanentlyDeleteAll(imported, done) }
             }
+        }
+    }
+
+    @Test
+    fun aSwipeInTheViewerMovesToTheAdjacentItem() = inTestVault {
+        // `DESIGN.md` §13.1. The newest photos lead the library, so these
+        // three are the first items of the scope.
+        val names = (1..3).map { "swipe-test-$it.jpg" }
+        val imported = names.mapIndexed { index, name ->
+            val bitmap = Bitmap.createBitmap(320, 240, Bitmap.Config.ARGB_8888)
+                .apply { eraseColor(0xFF000000.toInt() or (index + 1) * 0x304050) }
+            importFile(name) { bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+        }
+        try {
+            val tile = photoTile()
+            tap { it == tile }
+            assertTrue("the viewer opens", await { find(label("Info")) != null })
+            val first = nameInInfo(names)
+            val media = boundsOf { node ->
+                node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK && it.label?.toString() == "Hide controls" }
+            }
+            val (left, right, y) = Triple(media.left + media.width() / 6, media.right - media.width() / 6, media.centerY())
+
+            shell("input swipe $right $y $left $y 250")
+            assertFalse("a swipe is not a tap and keeps the chrome", await(1_000) { onScreen { nodes -> nodes.none { "Back" in it.labels } } })
+            val second = nameInInfo(names, previous = first)
+
+            shell("input swipe $left $y $right $y 250")
+            assertEquals("a swipe back returns to the first item", first, nameInInfo(names, previous = second))
+            pressBack()
+            assertTrue("the viewer closes", await { find(label("Info")) == null })
+        } finally {
+            settle { done -> controller.deleteAll(imported, done) }
+            settle { done -> controller.permanentlyDeleteAll(imported, done) }
         }
     }
 
@@ -728,6 +765,24 @@ class BackNavigationTest {
     }
 
     @Test
+    fun theViewerPutsNoObjectIdInTheSavedState() = inTestVault {
+        // The recording is imported on the first run only.
+        if (!await(3_000) { controller.page.value.objects.any { it.mediaKind == MEDIA_CLASS_AUDIO } }) importRecording()
+        tap(::isRecording)
+        // The player's view saves its own state, as any view does.
+        assertTrue("the viewer shows the player", await { find(label("Play")) != null })
+
+        // What the activity writes when it stops, for example when Export
+        // opens the system's file picker over the viewer. A Bundle that was
+        // never parcelled prints every value it holds.
+        val saved = Bundle()
+        instrumentation.runOnMainSync { instrumentation.callActivityOnSaveInstanceState(activity, saved) }
+        val written = saved.toString()
+
+        assertEquals(emptyList<String>(), controller.page.value.objects.map { it.id }.filter { it in written })
+    }
+
+    @Test
     fun aLongPressThatStaysPutSelectsAndATapAddsToTheSelection() = inTestVault {
         withMedia()
         // A finger that does not move: the release reaches the tile's click
@@ -959,6 +1014,50 @@ class BackNavigationTest {
 
     /** The label of the recording's tile: its kind and its length, `DESIGN.md` §23.2. */
     private fun isRecording(node: AccessibilityNodeInfo): Boolean = node.contentDescription?.startsWith("Audio, ") == true
+
+    /**
+     * The filename, one of [names], that the viewer's Info overlay shows once
+     * it names an item other than [previous]. The overlay is the item's own,
+     * so a swipe that lands closes it, and it is opened again until it names
+     * the item the swipe landed on. It is closed again before this returns.
+     *
+     * The semantics are read where they are current: the accessibility
+     * snapshot can keep a label a swipe changed for seconds.
+     */
+    private fun nameInInfo(names: List<String>, previous: String? = null): String {
+        val click = { nodes: List<SemanticsNode>, label: String ->
+            nodes.firstOrNull { label in it.labels }?.config?.getOrNull(SemanticsActions.OnClick)?.action?.invoke()
+        }
+        var name: String? = null
+        assertTrue(
+            "the Info overlay names ${if (previous == null) "the item" else "another item than $previous"}",
+            await {
+                name = onScreen { nodes ->
+                    nodes.flatMap { it.labels }.firstOrNull { it in names }
+                        .also { shown -> if (shown == null) click(nodes, "Info") }
+                }
+                name != null && name != previous
+            },
+        )
+        onScreen { click(it, "Hide info") }
+        awaitFrames()
+        return checkNotNull(name)
+    }
+
+    /** The merged semantics nodes on screen, read on the main thread. */
+    private fun <T> onScreen(read: (List<SemanticsNode>) -> T): T {
+        var value: Result<T>? = null
+        instrumentation.runOnMainSync {
+            value = runCatching {
+                read(activity.window.decorView.composeRoots().flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = true) })
+            }
+        }
+        return checkNotNull(value).getOrThrow()
+    }
+
+    private val SemanticsNode.labels: List<String>
+        get() = config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text } +
+            config.getOrNull(SemanticsProperties.ContentDescription).orEmpty()
 
     private fun AccessibilityNodeInfo.longClickLabel(): String? =
         actionList.firstOrNull { it.id == AccessibilityNodeInfo.ACTION_LONG_CLICK }?.label?.toString()
