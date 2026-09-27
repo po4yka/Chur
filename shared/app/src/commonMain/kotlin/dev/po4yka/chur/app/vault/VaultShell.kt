@@ -27,6 +27,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -365,31 +366,7 @@ fun VaultShell(
                                 }
                             }
                         }
-                        // `DISCREET_MODE.md` "The panic gesture": a press locks
-                        // and a long press performs the panic transition, on one
-                        // control so it is reachable from every private screen
-                        // without navigating first. The long press is exposed as
-                        // a custom accessibility action, which is the accessible
-                        // alternative that section requires.
-                        Box(
-                            modifier = Modifier
-                                .combinedClickable(
-                                    onClick = actions.onLock,
-                                    onLongClick = actions.onPanic,
-                                    onLongClickLabel = "Lock immediately",
-                                )
-                                .semantics {
-                                    customActions = listOf(
-                                        CustomAccessibilityAction("Lock immediately") {
-                                            actions.onPanic()
-                                            true
-                                        },
-                                    )
-                                }
-                                .padding(ChurSpacing.three),
-                        ) {
-                            Icon(LockGlyph, contentDescription = "Lock now")
-                        }
+                        LockControl(onLock = actions.onLock, onPanic = actions.onPanic)
                     },
                 )
             }
@@ -547,6 +524,48 @@ internal fun OperationProgressCard(
                 }
             }
         }
+    }
+}
+
+/**
+ * The lock control, `DISCREET_MODE.md` "The panic gesture".
+ *
+ * A press locks and a long press performs the panic transition, on one
+ * control, and every private screen draws it in its own chrome so the
+ * gesture is reachable without navigating first. That is why it is one
+ * composable rather than a part of the shell's top bar: the viewer draws
+ * its own chrome over the media, and a screen without the control is a
+ * screen the section's property does not hold on.
+ *
+ * The long press is exposed as a custom accessibility action, which is the
+ * accessible alternative that section requires. It is not wrapped in a
+ * tooltip, because a tooltip's long-press trigger would take the gesture
+ * the panic is bound to.
+ */
+@Composable
+internal fun LockControl(
+    onLock: () -> Unit,
+    onPanic: () -> Unit,
+    tint: Color = LocalContentColor.current,
+) {
+    Box(
+        modifier = Modifier
+            .combinedClickable(
+                onClick = onLock,
+                onLongClick = onPanic,
+                onLongClickLabel = "Lock immediately",
+            )
+            .semantics {
+                customActions = listOf(
+                    CustomAccessibilityAction("Lock immediately") {
+                        onPanic()
+                        true
+                    },
+                )
+            }
+            .padding(ChurSpacing.three),
+    ) {
+        Icon(LockGlyph, contentDescription = "Lock now", tint = tint)
     }
 }
 

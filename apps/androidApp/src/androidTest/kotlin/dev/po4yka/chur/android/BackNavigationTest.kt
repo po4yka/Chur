@@ -82,6 +82,9 @@ import org.junit.runner.RunWith
  * asks first, §26, and only the confirm forgets the server. Private playback
  * holds the audio focus, so another app's playback pauses it, and the lock
  * gives the focus up, `ANDROID.md` §17.3, with no media session published.
+ * The viewer carries the lock control of `DISCREET_MODE.md` "The panic
+ * gesture": a press locks and releases the player, and the panic is a screen
+ * reader's custom action on the same control.
  */
 @RunWith(AndroidJUnit4::class)
 class BackNavigationTest {
@@ -496,6 +499,47 @@ class BackNavigationTest {
         assertTrue("playing again takes the focus again", await { focusEntries().isNotEmpty() })
         lockQuietly()
         assertTrue("the lock gives the focus up", await { focusEntries().isEmpty() })
+    }
+
+    @Test
+    fun theViewerOffersThePanicToAScreenReader() = inTestVault {
+        // The photo is imported on the first run only.
+        if (!await(3_000) { controller.page.value.objects.any { it.mediaKind == MEDIA_CLASS_IMAGE } }) importPhoto()
+        var tile: AccessibilityNodeInfo? = null
+        assertTrue("a media tile", await { findTile()?.also { tile = it } != null })
+        tap { it == tile }
+        assertTrue("the viewer opens", await { find(label("Info")) != null })
+
+        // `DISCREET_MODE.md` "The panic gesture": the control is in the
+        // viewer's own chrome, where a press can reach it, §25.5.
+        val statusBar = onWindow { insets, _ -> insets.getInsets(WindowInsetsCompat.Type.statusBars()).top }
+        assertTrue("the lock sits below the status bar", boundsOf(label("Lock now")).top >= statusBar)
+        val control = generateSequence(find(label("Lock now"))) { it.parent }.first { it.isClickable }
+        val panic = control.actionList.firstOrNull {
+            it.label?.toString() == "Lock immediately" && it.id != AccessibilityNodeInfo.ACTION_LONG_CLICK
+        }
+        assertNotNull("the long press is a custom action too", panic)
+
+        assertTrue(control.performAction(checkNotNull(panic).id))
+
+        assertTrue("the panic locks", await { controller.vaultState.value is VaultState.Locked })
+        assertTrue("and leaves the vault", await { controller.route.value != AppRoute.Vault })
+    }
+
+    @Test
+    fun theLockInTheViewerStopsPlayback() = inTestVault {
+        // The recording is imported on the first run only.
+        if (!await(3_000) { controller.page.value.objects.any { it.mediaKind == MEDIA_CLASS_AUDIO } }) importRecording()
+        // A recording's tile shows its length and nothing else.
+        tap { it.text?.matches(Regex("\\d+:\\d{2}")) == true }
+        tap(label("Play"))
+        assertTrue("playback takes the media focus", await { focusEntries().isNotEmpty() })
+
+        tap(label("Lock now"))
+
+        assertTrue("the press locks", await { controller.vaultState.value is VaultState.Locked })
+        assertTrue("and leaves the vault", await { controller.route.value != AppRoute.Vault })
+        assertTrue("the lock releases the player", await { focusEntries().isEmpty() })
     }
 
     // -----------------------------------------------------------------------

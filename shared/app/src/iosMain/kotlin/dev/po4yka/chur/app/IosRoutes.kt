@@ -696,6 +696,8 @@ private fun IosViewerRoute(
         preview = preview,
         showDetail = showDetail,
         onBack = onBack,
+        onLock = { controller.lock() },
+        onPanic = { controller.panic() },
         onToggleFavorite = {
             val next = !favorite
             controller.setFavorite(projection.objectId, next) { favorite = next }

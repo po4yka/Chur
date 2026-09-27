@@ -51,6 +51,11 @@ import dev.po4yka.chur.ffi.ObjectProjection
  * `CATALOG_SCHEMA_V1.md` keeps a filename out of the grid so a page of two
  * hundred rows never carries two hundred filenames, and this screen fetches one
  * object's record.
+ *
+ * [onLock] and [onPanic] have no defaults. The viewer is a private screen
+ * that draws its own chrome over the shell's, so `DISCREET_MODE.md` "The
+ * panic gesture" holds here only if this screen carries the lock control,
+ * and a host that does not bind both does not compile.
  */
 @Composable
 fun ViewerScreen(
@@ -59,6 +64,8 @@ fun ViewerScreen(
     preview: ImageBitmap?,
     showDetail: Boolean,
     onBack: () -> Unit,
+    onLock: () -> Unit,
+    onPanic: () -> Unit,
     onToggleFavorite: () -> Unit,
     onEditTags: () -> Unit,
     onExport: () -> Unit,
@@ -130,6 +137,7 @@ fun ViewerScreen(
                 Icon(BackGlyph, contentDescription = "Back", tint = ViewerColors.content)
             }
             Box(modifier = Modifier.weight(1f))
+            LockControl(onLock = onLock, onPanic = onPanic, tint = ViewerColors.content)
             IconButton(onClick = onToggleDetail) {
                 Text(
                     if (showDetail) "Hide info" else "Info",
