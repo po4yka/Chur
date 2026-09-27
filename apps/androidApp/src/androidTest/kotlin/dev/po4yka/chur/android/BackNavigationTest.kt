@@ -15,6 +15,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import androidx.annotation.RequiresApi
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.text.AnnotatedString
@@ -41,6 +42,10 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -90,7 +95,10 @@ import org.junit.runner.RunWith
  * an album and in Trash, and a screen reader starts one through the tile's
  * long-click action; the selection bar then reaches the bulk actions. A long
  * press that moves still drops the item into an album. A tile is named by its
- * kind and its length in words, §23.2.
+ * kind and its length in words, §23.2. The viewer is drawn over the grid:
+ * closing it, or a delete from it, leaves the grid where it was, a screen
+ * reader and the keyboard focus cannot reach the shell under it, and Back
+ * closes it before the scope under it.
  */
 @RunWith(AndroidJUnit4::class)
 class BackNavigationTest {
@@ -344,6 +352,101 @@ class BackNavigationTest {
         assertTrue("the viewer closes", await { find(label("Info")) == null })
         assertFalse("back at the Library root", backIsHandled())
         assertTrue(controller.vaultState.value is VaultState.Unlocked)
+    }
+
+    @Test
+    fun theViewerLeavesTheGridWhereItWas() = inTestVault {
+        // A grid long enough to scroll; the photos go again at the end, so
+        // the tiles other cases look for stay on the first screen.
+        val imported = mutableListOf<ByteArray>()
+        try {
+            repeat(SCROLLING_LIBRARY) { index ->
+                val bitmap = Bitmap.createBitmap(320, 240, Bitmap.Config.ARGB_8888)
+                    .apply { eraseColor(0xFF000000.toInt() or index * 0x050A0F) }
+                imported += importFile("grid-test.jpg") { bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+            }
+            onGrids { it.single().config[SemanticsActions.ScrollToIndex].action?.invoke(SCROLLING_LIBRARY - 10) }
+            awaitFrames()
+            val place = onGrids { it.single().scroll }
+            assertTrue("the grid scrolls", place > 0f)
+
+            val tile = photoTile()
+            tap { it == tile }
+            assertTrue("the viewer opens", await { find(label("Info")) != null })
+            // `PLAINTEXT_LIFECYCLE.md` §4: the grid under the viewer is out of
+            // a screen reader's reach, and its semantics are cleared, not only
+            // left out as covered.
+            assertTrue("no grid behind the viewer", await { findAll { it.collectionInfo != null }.isEmpty() })
+            assertTrue("no grid semantics behind the viewer", onGrids { it.isEmpty() })
+            pressBack()
+            assertTrue("the viewer closes", await { find(label("Info")) == null })
+            assertEquals("the grid shows the same rows", place, onGrids { it.single().scroll }, 0f)
+
+            // The delete reloads the page once, and the grid never empties on
+            // the way, which would also drop its place.
+            val emptied = AtomicBoolean(false)
+            val watch = CoroutineScope(Dispatchers.Main).launch {
+                controller.page.collect { if (it.objects.isEmpty()) emptied.set(true) }
+            }
+            try {
+                val shown = photoTile()
+                tap { it == shown }
+                tap(label("Move to Trash"))
+                tap(label("Move to Trash"))
+                assertTrue("the move is confirmed", await { find(label("Moved 1 item to Trash.")) != null })
+            } finally {
+                watch.cancel()
+            }
+            assertFalse("the grid never empties", emptied.get())
+            assertTrue("the grid stays down", onGrids { it.single().scroll } > 0f)
+
+            // The shell's Back is live under the viewer; the viewer's answers
+            // first.
+            tap(label("Browse"))
+            tap(label("Trash"))
+            val trashed = photoTile()
+            tap { it == trashed }
+            assertTrue("the viewer opens in Trash", await { find(label("Restore")) != null })
+            pressBack()
+            assertTrue("the viewer closes", await { find(label("Restore")) == null })
+            assertTrue("Trash stays open", find(label("Trash")) != null && backIsHandled())
+        } finally {
+            settle { done -> controller.restoreTrash(done) }
+            if (imported.isNotEmpty()) {
+                settle { done -> controller.deleteAll(imported, done) }
+                settle { done -> controller.permanentlyDeleteAll(imported, done) }
+            }
+        }
+    }
+
+    @Test
+    fun theViewerTakesTheFocusFromTheShell() = inTestVault {
+        withMedia()
+        tap(label("Search"))
+        var field: AccessibilityNodeInfo? = null
+        assertTrue("the search field", await { find { it.isEditable }?.also { field = it } != null })
+        showKeyboardFor(checkNotNull(field))
+        setText(field, "jpg")
+        val result = photoTile()
+        tap { it == result }
+        assertTrue("the viewer opens", await { find(label("Info")) != null })
+        // `DESIGN.md` §23.3: the field under the viewer lets the focus go, so
+        // the keyboard closes, the viewer stays edge to edge, and typing does
+        // not reach the field. A hardware keyboard moves the focus to the
+        // viewer, not back under it, where it would be out of sight.
+        assertTrue(
+            "the keyboard closes",
+            await { !onWindow { insets, _ -> insets.isVisible(WindowInsetsCompat.Type.ime()) } },
+        )
+        shell("input text zz")
+        shell("input keyevent KEYCODE_TAB")
+        assertTrue("the focus moves to the viewer", await { focusedNodes() == 1 })
+        shell("input text zz")
+        pressBack()
+        assertTrue("the viewer closes", await { find(label("Info")) == null })
+        val after = find { it.isEditable }
+        assertEquals("the terms stay", "jpg", after?.text?.toString())
+        assertFalse("the field stays unfocused", checkNotNull(after).isFocused)
     }
 
     @Test
@@ -1164,7 +1267,44 @@ class BackNavigationTest {
         )
     }
 
-    private fun importFile(name: String, write: (java.io.OutputStream) -> Unit) {
+    /** Runs [call] on the main thread and waits for its success callback. */
+    private fun settle(call: (done: () -> Unit) -> Unit) {
+        val done = CountDownLatch(1)
+        instrumentation.runOnMainSync { call { done.countDown() } }
+        done.await(60, TimeUnit.SECONDS)
+    }
+
+    /**
+     * Reads the semantics nodes of the media grid on the main thread: one while
+     * it shows. The merged tree is the one a screen reader is given, and it
+     * leaves out what `clearAndSetSemantics` replaced.
+     */
+    private fun <T> onGrids(read: (List<SemanticsNode>) -> T): T {
+        var value: Result<T>? = null
+        instrumentation.runOnMainSync {
+            value = runCatching {
+                read(activity.window.decorView.composeRoots()
+                    .flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = true) }
+                    .filter { SemanticsProperties.CollectionInfo in it.config && SemanticsProperties.VerticalScrollAxisRange in it.config })
+            }
+        }
+        return checkNotNull(value).getOrThrow()
+    }
+
+    private val SemanticsNode.scroll: Float get() = config[SemanticsProperties.VerticalScrollAxisRange].value()
+
+    /** The focused nodes in the merged tree, which leaves out what `clearAndSetSemantics` replaced. */
+    private fun focusedNodes(): Int {
+        var count = 0
+        instrumentation.runOnMainSync {
+            count = activity.window.decorView.composeRoots()
+                .flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = true) }
+                .count { SemanticsProperties.Focused in it.config && it.config[SemanticsProperties.Focused] }
+        }
+        return count
+    }
+
+    private fun importFile(name: String, write: (java.io.OutputStream) -> Unit): ByteArray {
         val context = instrumentation.targetContext
         // The application's own provider serves this directory, so the file
         // arrives as a content URI with a name, a size and a type, as a picked
@@ -1177,6 +1317,7 @@ class BackNavigationTest {
         val outcome = runBlocking { controller.importMedia(MediaImporter(codec)) { codec.open(uri) } }
         assertTrue("$name must import: $outcome", outcome is MediaImporter.Outcome.Imported)
         instrumentation.runOnMainSync { controller.reportImport(null) }
+        return (outcome as MediaImporter.Outcome.Imported).objectId
     }
 
     private fun label(text: String): (AccessibilityNodeInfo) -> Boolean =
@@ -1228,6 +1369,7 @@ class BackNavigationTest {
     private companion object {
         const val PASSWORD = "BackNavigationTest-password"
         const val ALBUM = "Back test album"
+        const val SCROLLING_LIBRARY = 40
         const val NOTE_TEXT = "BackNavigationTest note"
     }
 }

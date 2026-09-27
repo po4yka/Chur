@@ -13,7 +13,9 @@ import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -35,10 +37,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
@@ -385,6 +389,7 @@ private fun VaultRoute(controller: ChurController) {
     val deviceSlotStrict by controller.deviceSlotStrict.collectAsState()
     val appLockEnabled by controller.appLockEnabled.collectAsState()
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
     val deviceControl = remember(context) { ChurHost.of(context).deviceControl }
     val devicePairing by deviceControl.pairing.collectAsState()
@@ -517,25 +522,6 @@ private fun VaultRoute(controller: ChurController) {
                 thumbnails = thumbnails + (projection.id to image)
             }
         }
-    }
-
-    viewing?.let { projection ->
-        ViewerRoute(
-            controller = controller,
-            operation = operation,
-            notice = notice,
-            cache = cache,
-            generation = generation,
-            projection = projection,
-            trashOpen = trashOpen,
-            onBack = { viewing = null },
-            onDeleted = {
-                viewing = null
-                browseQuery(destination, openAlbum, openTag, favoritesOnly, trashOpen,
-                    terms, mediaSort, albumSort, mediaKinds, quarantine = quarantineOpen)?.let(controller::load)
-            },
-        )
-        return
     }
 
     if (choosingImport) {
@@ -720,172 +706,214 @@ private fun VaultRoute(controller: ChurController) {
         )
     }
 
-    VaultShell(
-        state = VaultUiState(
-            destination = destination,
-            tiles = page.objects.map { projection ->
-                LibraryTile(
-                    projection = projection,
-                    thumbnail = thumbnails[projection.id],
-                    selected = projection.id in selection,
-                )
-            },
-            albums = albums,
-            searchTerms = terms,
-            slots = slots,
-            openAlbum = openAlbum,
-            libraryScopeTitle = if (trashOpen) "Trash" else if (quarantineOpen) "Quarantine" else openTag?.name ?: if (favoritesOnly) "Favorites" else null,
-            trashOpen = trashOpen,
-            mediaView = mediaView,
-            albumView = albumView,
-            sort = if (openAlbum != null) albumSort else mediaSort,
-            kinds = mediaKinds,
-            albumOrder = albumOrder,
-            albumFilter = albumFilter,
-            notice = notice,
-            operation = operation,
-            selectedCount = selection.size,
-            canLoadMore = page.nextCursor != null,
-            deviceSlotAvailable = true,
-            deviceSlotStrict = deviceSlotStrict,
-            appLockEnabled = appLockEnabled,
-            deviceControlAvailable = true,
-            sync = syncStatus,
-            sharingIdentity = sharingIdentity,
-            sharingOverview = sharingOverview,
-            sharingRecipient = sharingRecipient,
-        ),
-        actions = VaultActions(
-            onDestination = {
-                openAlbum = null
-                openTag = null
-                favoritesOnly = false
-                trashOpen = false
-                quarantineOpen = false
-                selection = emptySet()
-                destination = it
-            },
-            onOpen = { projection ->
-                // §11.4: a tap opens the viewer, unless a selection is running,
-                // in which case it extends the selection. Selection is a mode
-                // and an open would leave it silently.
-                if (selection.isEmpty()) {
-                    controller.report(null)
-                    viewing = projection
-                } else {
-                    selection = selection.toggle(projection.id)
-                }
-            },
-            onToggleSelection = { projection ->
-                selection = selection.toggle(projection.id)
-            },
-            onImport = { choosingImport = true },
-            onSearch = {
-                terms = it
-            },
-            onOpenAlbum = { openAlbum = it; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = false },
-            onCloseAlbum = { openAlbum = null },
-            onCreateAlbum = { creatingAlbum = true },
-            onMediaViewChange = { mediaView = it },
-            onAlbumViewChange = { albumView = it },
-            onSortChange = {
-                if (openAlbum != null) albumSort = it else mediaSort = it
-                selection = emptySet()
-            },
-            onKindsChange = { mediaKinds = it; selection = emptySet() },
-            onAlbumOrderChange = { albumOrder = it },
-            onAlbumFilterChange = { albumFilter = it },
-            onShowAllMedia = { openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = false; selection = emptySet() },
-            onShowFavorites = { openTag = null; favoritesOnly = true; trashOpen = false; quarantineOpen = false; selection = emptySet() },
-            onShowTags = { controller.loadTags(); managingTags = true },
-            onShowTrash = { openTag = null; favoritesOnly = false; trashOpen = true; quarantineOpen = false; selection = emptySet() },
-            onShowQuarantine = { openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = true; selection = emptySet() },
-            onEmptyTrash = { confirmingEmptyTrash = true },
-            onRestoreTrash = { controller.restoreTrash { selection = emptySet() } },
-            onRenameAlbum = { album, name -> controller.renameAlbum(album.albumId, name) },
-            onDeleteAlbum = { album ->
-                controller.deleteAlbum(album.albumId) {
-                    if (openAlbum?.id == album.id) openAlbum = null
-                }
-            },
-            onMoveAlbum = { album, parent, before ->
-                controller.moveAlbum(album.albumId, parent?.albumId, before?.albumId)
-            },
-            onMoveAlbumMember = { objectToMove, before ->
-                openAlbum?.let { album ->
-                    controller.moveAlbumMember(album.albumId, objectToMove.objectId, before?.objectId)
-                }
-            },
-            onDropMediaIntoAlbum = { objects, target ->
-                if (target != null) {
-                    controller.placeObjectsInAlbum(target.albumId, objects.map { it.objectId },
-                        openAlbum?.albumId, openAlbum != null) { selection = emptySet() }
-                } else {
-                    controller.loadAlbums()
-                    organizingIds = objects.map { it.objectId }
-                    movingSelection = openAlbum != null
-                    choosingAlbum = true
-                }
-            },
-            onLoadMore = controller::loadNextPage,
-            onLock = { controller.lock() },
-            onPanic = { controller.panic() },
-            onVerifyAll = { controller.verifyEverything() },
-            onAddRecoverySlot = controller::addRecoverySlot,
-            onChangePassword = controller::changePassword,
-            onToggleAppLock = controller::toggleAppLock,
-            onDeviceControl = { deviceControl.start() },
-            onCreateBackup = controller::createBackup,
-            onCreateSecondIdentity = controller::createSecondIdentity,
-            onSelectAll = { selection = page.objects.map { it.id }.toSet() },
-            onClearSelection = { selection = emptySet() },
-            onExportSelection = { choosingExport = true },
-            onAddSelectionToAlbum = {
-                controller.loadAlbums()
-                organizingIds = selection.sorted().map { it.fromHex() }
-                movingSelection = false
-                choosingAlbum = true
-            },
-            onMoveSelectionToAlbum = {
-                controller.loadAlbums()
-                organizingIds = selection.sorted().map { it.fromHex() }
-                movingSelection = true
-                choosingAlbum = true
-            },
-            onTagSelection = {
-                controller.loadTags()
-                taggingIds = selection.sorted().map { it.fromHex() }
-                choosingTag = true
-            },
-            onSetSelectionFavorite = { favorite ->
-                controller.setFavoritesForAll(selection.sorted().map { it.fromHex() }, favorite) {
+    // The viewer is drawn over the shell rather than in its place, as on
+    // iOS: `ChurApp` stacks a route's content, so the shell stays composed and
+    // its grid and list keep their scroll positions when the viewer closes.
+    // Covered, the shell is out of a screen reader's reach, §4 of
+    // `PLAINTEXT_LIFECYCLE.md`, and the viewer's pointer input keeps touches
+    // from it. It is out of keyboard focus too, §23.3 of `DESIGN.md`: opening
+    // the viewer takes the focus from it, and a hardware keyboard cannot move
+    // the focus back in. The viewer's Back handlers are registered after the
+    // shell's, so they answer first.
+    Box(
+        if (viewing != null) {
+            Modifier
+                .clearAndSetSemantics {}
+                .focusProperties { onEnter = { cancelFocusChange() } }
+                .focusGroup()
+        } else {
+            Modifier
+        },
+    ) {
+        VaultShell(
+            state = VaultUiState(
+                destination = destination,
+                tiles = page.objects.map { projection ->
+                    LibraryTile(
+                        projection = projection,
+                        thumbnail = thumbnails[projection.id],
+                        selected = projection.id in selection,
+                    )
+                },
+                albums = albums,
+                searchTerms = terms,
+                slots = slots,
+                openAlbum = openAlbum,
+                libraryScopeTitle = if (trashOpen) "Trash" else if (quarantineOpen) "Quarantine" else openTag?.name ?: if (favoritesOnly) "Favorites" else null,
+                trashOpen = trashOpen,
+                mediaView = mediaView,
+                albumView = albumView,
+                sort = if (openAlbum != null) albumSort else mediaSort,
+                kinds = mediaKinds,
+                albumOrder = albumOrder,
+                albumFilter = albumFilter,
+                // The viewer is drawn over the shell, so the shell leaves the
+                // notice to it while it is open rather than show it twice.
+                notice = notice.takeIf { viewing == null },
+                operation = operation,
+                selectedCount = selection.size,
+                canLoadMore = page.nextCursor != null,
+                deviceSlotAvailable = true,
+                deviceSlotStrict = deviceSlotStrict,
+                appLockEnabled = appLockEnabled,
+                deviceControlAvailable = true,
+                sync = syncStatus,
+                sharingIdentity = sharingIdentity,
+                sharingOverview = sharingOverview,
+                sharingRecipient = sharingRecipient,
+            ),
+            actions = VaultActions(
+                onDestination = {
+                    openAlbum = null
+                    openTag = null
+                    favoritesOnly = false
+                    trashOpen = false
+                    quarantineOpen = false
                     selection = emptySet()
-                }
-            },
-            onRemoveSelectionFromAlbum = {
-                openAlbum?.let { album ->
-                    controller.removeAllFromAlbum(album.albumId, selectedObjects(page, selection)) {
+                    destination = it
+                },
+                onOpen = { projection ->
+                    // §11.4: a tap opens the viewer, unless a selection is running,
+                    // in which case it extends the selection. Selection is a mode
+                    // and an open would leave it silently.
+                    if (selection.isEmpty()) {
+                        controller.report(null)
+                        // A text field of the shell left focused would keep
+                        // the keyboard open over the viewer, which is edge to
+                        // edge (`ChurApp`), and take what is typed under it.
+                        focusManager.clearFocus()
+                        viewing = projection
+                    } else {
+                        selection = selection.toggle(projection.id)
+                    }
+                },
+                onToggleSelection = { projection ->
+                    selection = selection.toggle(projection.id)
+                },
+                onImport = { choosingImport = true },
+                onSearch = {
+                    terms = it
+                },
+                onOpenAlbum = { openAlbum = it; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = false },
+                onCloseAlbum = { openAlbum = null },
+                onCreateAlbum = { creatingAlbum = true },
+                onMediaViewChange = { mediaView = it },
+                onAlbumViewChange = { albumView = it },
+                onSortChange = {
+                    if (openAlbum != null) albumSort = it else mediaSort = it
+                    selection = emptySet()
+                },
+                onKindsChange = { mediaKinds = it; selection = emptySet() },
+                onAlbumOrderChange = { albumOrder = it },
+                onAlbumFilterChange = { albumFilter = it },
+                onShowAllMedia = { openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = false; selection = emptySet() },
+                onShowFavorites = { openTag = null; favoritesOnly = true; trashOpen = false; quarantineOpen = false; selection = emptySet() },
+                onShowTags = { controller.loadTags(); managingTags = true },
+                onShowTrash = { openTag = null; favoritesOnly = false; trashOpen = true; quarantineOpen = false; selection = emptySet() },
+                onShowQuarantine = { openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = true; selection = emptySet() },
+                onEmptyTrash = { confirmingEmptyTrash = true },
+                onRestoreTrash = { controller.restoreTrash { selection = emptySet() } },
+                onRenameAlbum = { album, name -> controller.renameAlbum(album.albumId, name) },
+                onDeleteAlbum = { album ->
+                    controller.deleteAlbum(album.albumId) {
+                        if (openAlbum?.id == album.id) openAlbum = null
+                    }
+                },
+                onMoveAlbum = { album, parent, before ->
+                    controller.moveAlbum(album.albumId, parent?.albumId, before?.albumId)
+                },
+                onMoveAlbumMember = { objectToMove, before ->
+                    openAlbum?.let { album ->
+                        controller.moveAlbumMember(album.albumId, objectToMove.objectId, before?.objectId)
+                    }
+                },
+                onDropMediaIntoAlbum = { objects, target ->
+                    if (target != null) {
+                        controller.placeObjectsInAlbum(target.albumId, objects.map { it.objectId },
+                            openAlbum?.albumId, openAlbum != null) { selection = emptySet() }
+                    } else {
+                        controller.loadAlbums()
+                        organizingIds = objects.map { it.objectId }
+                        movingSelection = openAlbum != null
+                        choosingAlbum = true
+                    }
+                },
+                onLoadMore = controller::loadNextPage,
+                onLock = { controller.lock() },
+                onPanic = { controller.panic() },
+                onVerifyAll = { controller.verifyEverything() },
+                onAddRecoverySlot = controller::addRecoverySlot,
+                onChangePassword = controller::changePassword,
+                onToggleAppLock = controller::toggleAppLock,
+                onDeviceControl = { deviceControl.start() },
+                onCreateBackup = controller::createBackup,
+                onCreateSecondIdentity = controller::createSecondIdentity,
+                onSelectAll = { selection = page.objects.map { it.id }.toSet() },
+                onClearSelection = { selection = emptySet() },
+                onExportSelection = { choosingExport = true },
+                onAddSelectionToAlbum = {
+                    controller.loadAlbums()
+                    organizingIds = selection.sorted().map { it.fromHex() }
+                    movingSelection = false
+                    choosingAlbum = true
+                },
+                onMoveSelectionToAlbum = {
+                    controller.loadAlbums()
+                    organizingIds = selection.sorted().map { it.fromHex() }
+                    movingSelection = true
+                    choosingAlbum = true
+                },
+                onTagSelection = {
+                    controller.loadTags()
+                    taggingIds = selection.sorted().map { it.fromHex() }
+                    choosingTag = true
+                },
+                onSetSelectionFavorite = { favorite ->
+                    controller.setFavoritesForAll(selection.sorted().map { it.fromHex() }, favorite) {
                         selection = emptySet()
                     }
-                }
-            },
-            onDeleteSelection = { confirmingDelete = true },
-            onRestoreSelection = { controller.restoreAll(selectedObjects(page, selection)) {
-                selection = emptySet()
-            } },
-            onCancelOperation = controller::cancelActiveOperation,
-            onNoticeShown = controller::consume,
-            onAddDeviceSlot = controller::enrollDeviceSlot,
-            onToggleDeviceSlotPolicy = controller::toggleDeviceSlotPolicy,
-            onConfigureSync = controller::configureSync,
-            onSyncNow = controller::syncNow,
-            onDisconnectSync = controller::disconnectSync,
-            onInspectSharingRecipient = controller::inspectSharingRecipient,
-            onShareWithRecipient = controller::shareWithRecipient,
-            onRevokeSharingMember = controller::revokeSharingMember,
-        ),
-        systemBack = { enabled, onBack -> BackHandler(enabled = enabled, onBack = onBack) },
-    )
+                },
+                onRemoveSelectionFromAlbum = {
+                    openAlbum?.let { album ->
+                        controller.removeAllFromAlbum(album.albumId, selectedObjects(page, selection)) {
+                            selection = emptySet()
+                        }
+                    }
+                },
+                onDeleteSelection = { confirmingDelete = true },
+                onRestoreSelection = { controller.restoreAll(selectedObjects(page, selection)) {
+                    selection = emptySet()
+                } },
+                onCancelOperation = controller::cancelActiveOperation,
+                onNoticeShown = controller::consume,
+                onAddDeviceSlot = controller::enrollDeviceSlot,
+                onToggleDeviceSlotPolicy = controller::toggleDeviceSlotPolicy,
+                onConfigureSync = controller::configureSync,
+                onSyncNow = controller::syncNow,
+                onDisconnectSync = controller::disconnectSync,
+                onInspectSharingRecipient = controller::inspectSharingRecipient,
+                onShareWithRecipient = controller::shareWithRecipient,
+                onRevokeSharingMember = controller::revokeSharingMember,
+            ),
+            systemBack = { enabled, onBack -> BackHandler(enabled = enabled, onBack = onBack) },
+        )
+    }
+
+    viewing?.let { projection ->
+        ViewerRoute(
+            controller = controller,
+            operation = operation,
+            notice = notice,
+            cache = cache,
+            generation = generation,
+            projection = projection,
+            trashOpen = trashOpen,
+            onBack = { viewing = null },
+            // Delete, restore and permanent delete reload the current query
+            // themselves, and a second load would empty the page first.
+            onDeleted = { viewing = null },
+        )
+    }
 }
 
 private fun Set<String>.toggle(id: String): Set<String> =
@@ -921,9 +949,10 @@ private fun ViewerRoute(
     var waveform by remember(projection.id) { mutableStateOf<ByteArray?>(null) }
     var confirmingDelete by remember(projection.id) { mutableStateOf(false) }
     var choosingExport by remember(projection.id) { mutableStateOf(false) }
-    // The viewer is an early return over the shell, not a back-stack entry,
-    // so Back is routed to its own Back here; a press that reached the
-    // platform would go home and lock.
+    // The viewer is drawn over the shell, not a back-stack entry, so Back is
+    // routed to its own Back here; a press that reached the shell would act
+    // on the screen under it, and one that reached the platform would go
+    // home and lock.
     BackHandler(onBack = onBack)
     // Registered after the viewer's handler, so it answers first: Back closes
     // the Info overlay before it closes the viewer. The overlay is drawn only

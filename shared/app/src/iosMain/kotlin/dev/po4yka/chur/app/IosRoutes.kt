@@ -2,6 +2,8 @@
 
 package dev.po4yka.chur.app
 
+import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -11,7 +13,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.uikit.LocalUIViewController
 import dev.po4yka.chur.app.notes.NoteEditorScreen
 import dev.po4yka.chur.app.notes.NotesScreen
@@ -237,6 +243,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     var confirmingDelete by remember { mutableStateOf(false) }
     var confirmingEmptyTrash by remember { mutableStateOf(false) }
     var choosingExport by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
     val codec = remember { IosMediaCodec() }
     val importer = remember { MediaImporter(codec) }
@@ -392,216 +399,236 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         )
     }
 
-    VaultShell(
-        state = VaultUiState(
-            destination = destination,
-            tiles = page.objects.map { projection ->
-                LibraryTile(
-                    projection = projection,
-                    thumbnail = thumbnails[projection.id],
-                    selected = projection.id in selection,
-                )
-            },
-            albums = albums,
-            searchTerms = terms,
-            slots = slots,
-            openAlbum = openAlbum,
-            libraryScopeTitle = if (trashOpen) "Trash" else if (quarantineOpen) "Quarantine" else openTag?.name ?: if (favoritesOnly) "Favorites" else null,
-            trashOpen = trashOpen,
-            mediaView = mediaView,
-            albumView = albumView,
-            sort = if (openAlbum != null) albumSort else mediaSort,
-            kinds = mediaKinds,
-            albumOrder = albumOrder,
-            albumFilter = albumFilter,
-            // The viewer is drawn over the shell here, so the shell leaves
-            // the notice to it while it is open rather than show it twice.
-            notice = notice.takeIf { viewing == null },
-            operation = operation,
-            selectedCount = selection.size,
-            canLoadMore = page.nextCursor != null,
-            deviceSlotAvailable = controller.deviceUnlockAvailable,
-            deviceSlotStrict = deviceSlotStrict,
-            appLockEnabled = appLockEnabled,
-            sync = syncStatus,
-            sharingIdentity = sharingIdentity,
-            sharingOverview = sharingOverview,
-            sharingRecipient = sharingRecipient,
-        ),
-        actions = VaultActions(
-            onDestination = {
-                openAlbum = null
-                openTag = null
-                favoritesOnly = false
-                trashOpen = false
-                quarantineOpen = false
-                selection = emptySet()
-                destination = it
-            },
-            // Opening is opening. Before the viewer existed on this host it
-            // toggled selection, which made a video unreachable and a tap on a
-            // photograph mean two things.
-            onOpen = { projection ->
-                if (selection.isEmpty()) {
-                    controller.report(null)
-                    viewing = projection
-                } else {
+    // The viewer below is drawn over the shell, so the shell stays composed
+    // and keeps its scroll position. Covered, it is out of a screen reader's
+    // reach, §4 of `PLAINTEXT_LIFECYCLE.md`, and out of keyboard focus, §23.3
+    // of `DESIGN.md`: opening the viewer takes the focus from it, and a
+    // hardware keyboard cannot move the focus back in.
+    Box(
+        if (viewing != null) {
+            Modifier
+                .clearAndSetSemantics {}
+                .focusProperties { onEnter = { cancelFocusChange() } }
+                .focusGroup()
+        } else {
+            Modifier
+        },
+    ) {
+        VaultShell(
+            state = VaultUiState(
+                destination = destination,
+                tiles = page.objects.map { projection ->
+                    LibraryTile(
+                        projection = projection,
+                        thumbnail = thumbnails[projection.id],
+                        selected = projection.id in selection,
+                    )
+                },
+                albums = albums,
+                searchTerms = terms,
+                slots = slots,
+                openAlbum = openAlbum,
+                libraryScopeTitle = if (trashOpen) "Trash" else if (quarantineOpen) "Quarantine" else openTag?.name ?: if (favoritesOnly) "Favorites" else null,
+                trashOpen = trashOpen,
+                mediaView = mediaView,
+                albumView = albumView,
+                sort = if (openAlbum != null) albumSort else mediaSort,
+                kinds = mediaKinds,
+                albumOrder = albumOrder,
+                albumFilter = albumFilter,
+                // The viewer is drawn over the shell here, so the shell leaves
+                // the notice to it while it is open rather than show it twice.
+                notice = notice.takeIf { viewing == null },
+                operation = operation,
+                selectedCount = selection.size,
+                canLoadMore = page.nextCursor != null,
+                deviceSlotAvailable = controller.deviceUnlockAvailable,
+                deviceSlotStrict = deviceSlotStrict,
+                appLockEnabled = appLockEnabled,
+                sync = syncStatus,
+                sharingIdentity = sharingIdentity,
+                sharingOverview = sharingOverview,
+                sharingRecipient = sharingRecipient,
+            ),
+            actions = VaultActions(
+                onDestination = {
+                    openAlbum = null
+                    openTag = null
+                    favoritesOnly = false
+                    trashOpen = false
+                    quarantineOpen = false
+                    selection = emptySet()
+                    destination = it
+                },
+                // Opening is opening. Before the viewer existed on this host it
+                // toggled selection, which made a video unreachable and a tap on a
+                // photograph mean two things.
+                onOpen = { projection ->
+                    if (selection.isEmpty()) {
+                        controller.report(null)
+                        // A text field of the shell left focused would keep
+                        // the keyboard open over the viewer, which is edge to
+                        // edge (`ChurApp`), and take what is typed under it.
+                        focusManager.clearFocus()
+                        viewing = projection
+                    } else {
+                        selection = selection.toggle(projection.id)
+                    }
+                },
+                onToggleSelection = { projection ->
                     selection = selection.toggle(projection.id)
-                }
-            },
-            onToggleSelection = { projection ->
-                selection = selection.toggle(projection.id)
-            },
-            onImport = {
-                val present = IosMediaPicker.present
-                if (present == null) {
-                    controller.report("This build cannot open the photo picker.")
-                } else {
-                    val albumId = openAlbum?.albumId
-                    controller.beginHostActivity()
-                    present { path ->
-                        controller.endHostActivity()
-                        if (path != null) {
-                            scope.launch {
-                                try {
-                                    val outcome = controller.importMedia(importer) {
-                                        codec.open(NSURL.fileURLWithPath(path))
-                                    }
-                                    if (controller.vaultState.value !is VaultState.Unlocked) return@launch
-                                    when (outcome) {
-                                        is MediaImporter.Outcome.Imported -> {
-                                            controller.reportImport(when {
-                                                outcome.previewsSkipped -> "Imported original; remaining previews cancelled."
-                                                albumId == null -> "Imported into vault."
-                                                else -> null
-                                            })
-                                            if (albumId != null) {
-                                                controller.placeObjectsInAlbum(albumId, listOf(outcome.objectId)) {
-                                                    controller.report(if (outcome.previewsSkipped) {
-                                                        "Imported original into album; remaining previews cancelled."
-                                                    } else "Imported into album.")
+                },
+                onImport = {
+                    val present = IosMediaPicker.present
+                    if (present == null) {
+                        controller.report("This build cannot open the photo picker.")
+                    } else {
+                        val albumId = openAlbum?.albumId
+                        controller.beginHostActivity()
+                        present { path ->
+                            controller.endHostActivity()
+                            if (path != null) {
+                                scope.launch {
+                                    try {
+                                        val outcome = controller.importMedia(importer) {
+                                            codec.open(NSURL.fileURLWithPath(path))
+                                        }
+                                        if (controller.vaultState.value !is VaultState.Unlocked) return@launch
+                                        when (outcome) {
+                                            is MediaImporter.Outcome.Imported -> {
+                                                controller.reportImport(when {
+                                                    outcome.previewsSkipped -> "Imported original; remaining previews cancelled."
+                                                    albumId == null -> "Imported into vault."
+                                                    else -> null
+                                                })
+                                                if (albumId != null) {
+                                                    controller.placeObjectsInAlbum(albumId, listOf(outcome.objectId)) {
+                                                        controller.report(if (outcome.previewsSkipped) {
+                                                            "Imported original into album; remaining previews cancelled."
+                                                        } else "Imported into album.")
+                                                    }
                                                 }
                                             }
+                                            is MediaImporter.Outcome.TooLarge -> controller.reportImport(outcome.reason)
+                                            MediaImporter.Outcome.Unreadable -> controller.reportImport("That file could not be opened.")
+                                            is MediaImporter.Outcome.Refused -> controller.reportImport(userCopy(outcome.status))
+                                            null -> Unit
                                         }
-                                        is MediaImporter.Outcome.TooLarge -> controller.reportImport(outcome.reason)
-                                        MediaImporter.Outcome.Unreadable -> controller.reportImport("That file could not be opened.")
-                                        is MediaImporter.Outcome.Refused -> controller.reportImport(userCopy(outcome.status))
-                                        null -> Unit
+                                    } finally {
+                                        if (path.startsWith(NSTemporaryDirectory())) unlink(path)
                                     }
-                                } finally {
-                                    if (path.startsWith(NSTemporaryDirectory())) unlink(path)
                                 }
                             }
                         }
                     }
-                }
-            },
-            onSearch = {
-                terms = it
-            },
-            onOpenAlbum = { openAlbum = it; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = false },
-            onCloseAlbum = { openAlbum = null },
-            onCreateAlbum = { creatingAlbum = true },
-            onMediaViewChange = { mediaView = it },
-            onAlbumViewChange = { albumView = it },
-            onSortChange = {
-                if (openAlbum != null) albumSort = it else mediaSort = it
-                selection = emptySet()
-            },
-            onKindsChange = { mediaKinds = it; selection = emptySet() },
-            onAlbumOrderChange = { albumOrder = it },
-            onAlbumFilterChange = { albumFilter = it },
-            onShowAllMedia = { openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = false; selection = emptySet() },
-            onShowFavorites = { openTag = null; favoritesOnly = true; trashOpen = false; quarantineOpen = false; selection = emptySet() },
-            onShowTags = { controller.loadTags(); managingTags = true },
-            onShowTrash = { openTag = null; favoritesOnly = false; trashOpen = true; quarantineOpen = false; selection = emptySet() },
-            onShowQuarantine = { openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = true; selection = emptySet() },
-            onEmptyTrash = { confirmingEmptyTrash = true },
-            onRestoreTrash = { controller.restoreTrash { selection = emptySet() } },
-            onRenameAlbum = { album, name -> controller.renameAlbum(album.albumId, name) },
-            onDeleteAlbum = { album ->
-                controller.deleteAlbum(album.albumId) {
-                    if (openAlbum?.id == album.id) openAlbum = null
-                }
-            },
-            onMoveAlbum = { album, parent, before ->
-                controller.moveAlbum(album.albumId, parent?.albumId, before?.albumId)
-            },
-            onMoveAlbumMember = { objectToMove, before ->
-                openAlbum?.let { album ->
-                    controller.moveAlbumMember(album.albumId, objectToMove.objectId, before?.objectId)
-                }
-            },
-            onDropMediaIntoAlbum = { objects, target ->
-                if (target != null) {
-                    controller.placeObjectsInAlbum(target.albumId, objects.map { it.objectId },
-                        openAlbum?.albumId, openAlbum != null) { selection = emptySet() }
-                } else {
-                    controller.loadAlbums()
-                    organizingIds = objects.map { it.objectId }
-                    movingSelection = openAlbum != null
-                    choosingAlbum = true
-                }
-            },
-            onLoadMore = controller::loadNextPage,
-            onLock = { controller.lock() },
-            onPanic = { controller.panic() },
-            onVerifyAll = { controller.verifyEverything() },
-            onAddRecoverySlot = controller::addRecoverySlot,
-            onChangePassword = controller::changePassword,
-            onToggleAppLock = controller::toggleAppLock,
-            onAddDeviceSlot = controller::enrollAppleDeviceSlot,
-            onToggleDeviceSlotPolicy = controller::toggleDeviceSlotPolicy,
-            onCreateBackup = controller::createBackup,
-            onCreateSecondIdentity = controller::createSecondIdentity,
-            onSelectAll = { selection = page.objects.map { it.id }.toSet() },
-            onClearSelection = { selection = emptySet() },
-            onExportSelection = { choosingExport = true },
-            onAddSelectionToAlbum = {
-                controller.loadAlbums()
-                organizingIds = selection.sorted().map { it.fromHex() }
-                movingSelection = false
-                choosingAlbum = true
-            },
-            onMoveSelectionToAlbum = {
-                controller.loadAlbums()
-                organizingIds = selection.sorted().map { it.fromHex() }
-                movingSelection = true
-                choosingAlbum = true
-            },
-            onTagSelection = {
-                controller.loadTags()
-                taggingIds = selection.sorted().map { it.fromHex() }
-                choosingTag = true
-            },
-            onSetSelectionFavorite = { favorite ->
-                controller.setFavoritesForAll(selection.sorted().map { it.fromHex() }, favorite) {
+                },
+                onSearch = {
+                    terms = it
+                },
+                onOpenAlbum = { openAlbum = it; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = false },
+                onCloseAlbum = { openAlbum = null },
+                onCreateAlbum = { creatingAlbum = true },
+                onMediaViewChange = { mediaView = it },
+                onAlbumViewChange = { albumView = it },
+                onSortChange = {
+                    if (openAlbum != null) albumSort = it else mediaSort = it
                     selection = emptySet()
-                }
-            },
-            onRemoveSelectionFromAlbum = {
-                openAlbum?.let { album ->
-                    controller.removeAllFromAlbum(album.albumId, selectedObjects(page, selection)) {
+                },
+                onKindsChange = { mediaKinds = it; selection = emptySet() },
+                onAlbumOrderChange = { albumOrder = it },
+                onAlbumFilterChange = { albumFilter = it },
+                onShowAllMedia = { openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = false; selection = emptySet() },
+                onShowFavorites = { openTag = null; favoritesOnly = true; trashOpen = false; quarantineOpen = false; selection = emptySet() },
+                onShowTags = { controller.loadTags(); managingTags = true },
+                onShowTrash = { openTag = null; favoritesOnly = false; trashOpen = true; quarantineOpen = false; selection = emptySet() },
+                onShowQuarantine = { openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = true; selection = emptySet() },
+                onEmptyTrash = { confirmingEmptyTrash = true },
+                onRestoreTrash = { controller.restoreTrash { selection = emptySet() } },
+                onRenameAlbum = { album, name -> controller.renameAlbum(album.albumId, name) },
+                onDeleteAlbum = { album ->
+                    controller.deleteAlbum(album.albumId) {
+                        if (openAlbum?.id == album.id) openAlbum = null
+                    }
+                },
+                onMoveAlbum = { album, parent, before ->
+                    controller.moveAlbum(album.albumId, parent?.albumId, before?.albumId)
+                },
+                onMoveAlbumMember = { objectToMove, before ->
+                    openAlbum?.let { album ->
+                        controller.moveAlbumMember(album.albumId, objectToMove.objectId, before?.objectId)
+                    }
+                },
+                onDropMediaIntoAlbum = { objects, target ->
+                    if (target != null) {
+                        controller.placeObjectsInAlbum(target.albumId, objects.map { it.objectId },
+                            openAlbum?.albumId, openAlbum != null) { selection = emptySet() }
+                    } else {
+                        controller.loadAlbums()
+                        organizingIds = objects.map { it.objectId }
+                        movingSelection = openAlbum != null
+                        choosingAlbum = true
+                    }
+                },
+                onLoadMore = controller::loadNextPage,
+                onLock = { controller.lock() },
+                onPanic = { controller.panic() },
+                onVerifyAll = { controller.verifyEverything() },
+                onAddRecoverySlot = controller::addRecoverySlot,
+                onChangePassword = controller::changePassword,
+                onToggleAppLock = controller::toggleAppLock,
+                onAddDeviceSlot = controller::enrollAppleDeviceSlot,
+                onToggleDeviceSlotPolicy = controller::toggleDeviceSlotPolicy,
+                onCreateBackup = controller::createBackup,
+                onCreateSecondIdentity = controller::createSecondIdentity,
+                onSelectAll = { selection = page.objects.map { it.id }.toSet() },
+                onClearSelection = { selection = emptySet() },
+                onExportSelection = { choosingExport = true },
+                onAddSelectionToAlbum = {
+                    controller.loadAlbums()
+                    organizingIds = selection.sorted().map { it.fromHex() }
+                    movingSelection = false
+                    choosingAlbum = true
+                },
+                onMoveSelectionToAlbum = {
+                    controller.loadAlbums()
+                    organizingIds = selection.sorted().map { it.fromHex() }
+                    movingSelection = true
+                    choosingAlbum = true
+                },
+                onTagSelection = {
+                    controller.loadTags()
+                    taggingIds = selection.sorted().map { it.fromHex() }
+                    choosingTag = true
+                },
+                onSetSelectionFavorite = { favorite ->
+                    controller.setFavoritesForAll(selection.sorted().map { it.fromHex() }, favorite) {
                         selection = emptySet()
                     }
-                }
-            },
-            onDeleteSelection = { confirmingDelete = true },
-            onRestoreSelection = { controller.restoreAll(selectedObjects(page, selection)) {
-                selection = emptySet()
-            } },
-            onCancelOperation = controller::cancelActiveOperation,
-            onNoticeShown = controller::consume,
-            onConfigureSync = controller::configureSync,
-            onSyncNow = controller::syncNow,
-            onDisconnectSync = controller::disconnectSync,
-            onInspectSharingRecipient = controller::inspectSharingRecipient,
-            onShareWithRecipient = controller::shareWithRecipient,
-            onRevokeSharingMember = controller::revokeSharingMember,
-        ),
-        // iOS has no system Back to deliver, `DESIGN.md` §25.4.
-        systemBack = { _, _ -> },
-    )
+                },
+                onRemoveSelectionFromAlbum = {
+                    openAlbum?.let { album ->
+                        controller.removeAllFromAlbum(album.albumId, selectedObjects(page, selection)) {
+                            selection = emptySet()
+                        }
+                    }
+                },
+                onDeleteSelection = { confirmingDelete = true },
+                onRestoreSelection = { controller.restoreAll(selectedObjects(page, selection)) {
+                    selection = emptySet()
+                } },
+                onCancelOperation = controller::cancelActiveOperation,
+                onNoticeShown = controller::consume,
+                onConfigureSync = controller::configureSync,
+                onSyncNow = controller::syncNow,
+                onDisconnectSync = controller::disconnectSync,
+                onInspectSharingRecipient = controller::inspectSharingRecipient,
+                onShareWithRecipient = controller::shareWithRecipient,
+                onRevokeSharingMember = controller::revokeSharingMember,
+            ),
+            // iOS has no system Back to deliver, `DESIGN.md` §25.4.
+            systemBack = { _, _ -> },
+        )
+    }
 
     viewing?.let { projection ->
         IosViewerRoute(
