@@ -60,8 +60,13 @@ class IosMediaCodec : MediaCodec {
      * because the handle owns what it opened and closing it is its own
      * business; §13 of `docs/interop/FFI_CONTRACT.md` has the caller close the
      * descriptor on its own schedule, which is what [PickedMedia.close] does.
+     *
+     * [name] is the item's own name, which the picker gave, and it is what the
+     * catalog records and a search finds. The file at [url] is a scratch copy
+     * with a random name, because `IOS.md` §12 keeps a file name from telling
+     * the filename, so its last path component means nothing to the user.
      */
-    fun open(url: NSURL): PickedMedia? {
+    fun open(url: NSURL, name: String?): PickedMedia? {
         val path = url.path ?: return null
         val descriptor = platform.posix.open(path, platform.posix.O_RDONLY)
         if (descriptor < 0) return null
@@ -72,7 +77,7 @@ class IosMediaCodec : MediaCodec {
             seekable = true,
             knownLength = size,
             contentTypeHint = typeOf(path),
-            originalFilename = url.lastPathComponent,
+            originalFilename = name,
             // §8.1 of the catalog: a picker result carries no capture time on
             // this path, so it is absent and the row records the substitution
             // rather than carrying a guess.

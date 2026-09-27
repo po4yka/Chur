@@ -61,14 +61,21 @@ class MediaImporter(
         ) : Outcome
     }
 
-    /** Runs one import. */
+    /**
+     * Runs one import.
+     *
+     * A missing [source] after a cancel is the cancel: a host that was still
+     * fetching the item, as an iCloud original on iOS, stops the fetch when
+     * the user cancels and has no file to hand over, `IOS.md` §15.2.
+     */
     suspend fun import(
         repository: VaultRepository,
         source: PickedMedia?,
         onProgress: (OperationProgress) -> Unit = {},
         cancelRequested: () -> Boolean = { false },
     ): Outcome {
-        val media = source ?: return Outcome.Unreadable
+        val media = source
+            ?: return if (cancelRequested()) Outcome.Refused(ChurStatus.CANCELLED) else Outcome.Unreadable
         try {
             if (cancelRequested()) return Outcome.Refused(ChurStatus.CANCELLED)
             // §2 stage 3, before stage 4: an over-large source is refused

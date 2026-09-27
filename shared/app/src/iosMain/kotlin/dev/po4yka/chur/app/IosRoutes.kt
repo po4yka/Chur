@@ -68,6 +68,7 @@ import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.vault.VaultState
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import platform.Foundation.NSDate
 import platform.Foundation.NSTemporaryDirectory
@@ -487,18 +488,32 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                     } else {
                         val albumId = openAlbum?.albumId
                         controller.beginHostActivity()
-                        present { path ->
+                        present { count, load ->
                             controller.endHostActivity()
-                            if (path != null) {
+                            if (count > 0) {
                                 scope.launch {
-                                    try {
-                                        // The picker answers with one item, so
-                                        // this is a batch of one.
-                                        controller.importAll(importer, 1, albumId) {
-                                            codec.open(NSURL.fileURLWithPath(path))
+                                    controller.importAll(importer, count, albumId) { index, prepare ->
+                                        // One item is fetched and copied at a
+                                        // time, and its copy is deleted when
+                                        // its import closes it, so at most one
+                                        // plaintext copy exists, `IOS.md` §15.2.
+                                        val (path, name) = withContext(Dispatchers.Main) {
+                                            suspendCancellableCoroutine { continuation ->
+                                                load(index, prepare) { path, name ->
+                                                    continuation.resume(path to name) { _, _, _ ->
+                                                        path?.let(::discardPickedCopy)
+                                                    }
+                                                }
+                                            }
                                         }
-                                    } finally {
-                                        if (path.startsWith(NSTemporaryDirectory())) unlink(path)
+                                        path?.let { copy ->
+                                            val media = codec.open(NSURL.fileURLWithPath(copy), name)
+                                            if (media == null) discardPickedCopy(copy)
+                                            media?.copy(close = {
+                                                media.close()
+                                                discardPickedCopy(copy)
+                                            })
+                                        }
                                     }
                                 }
                             }
@@ -801,9 +816,36 @@ private fun selectedObjects(
 private fun Set<String>.toggle(id: String): Set<String> =
     if (id in this) this - id else this + id
 
-/** The Xcode host presents PHPicker and returns a readable copy in the app's temp directory. */
+/**
+ * The photo picker the Xcode host presents, `IOS.md` §15.1.
+ *
+ * The host answers once, with how many items the user picked, in the order
+ * picked, and a way to load each one. A load fetches the item, from iCloud
+ * when it is not on the device, and reports the fetch to `prepare`; when
+ * `prepare` answers false, the user has cancelled and the host stops the
+ * fetch. It then answers with the path of a protected copy in the app's
+ * temporary directory and the item's own name, or with no path when there is
+ * nothing to import. The copy has a random name, because §12 keeps a file
+ * name from telling the filename; the name travels here instead.
+ */
 public object IosMediaPicker {
-    public var present: ((answer: (String?) -> Unit) -> Unit)? = null
+    public var present: (
+        (
+            answer: (
+                count: Int,
+                load: (
+                    index: Int,
+                    prepare: (processed: Long, total: Long) -> Boolean,
+                    loaded: (path: String?, name: String?) -> Unit,
+                ) -> Unit,
+            ) -> Unit,
+        ) -> Unit
+    )? = null
+}
+
+/** Deletes a copy the photo picker made, and nothing outside the temporary directory. */
+private fun discardPickedCopy(path: String) {
+    if (path.startsWith(NSTemporaryDirectory())) unlink(path)
 }
 
 /**

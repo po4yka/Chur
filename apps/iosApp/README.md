@@ -42,7 +42,10 @@ runtime without opening a vault session; signed ciphertext is staged until
 unlock.
 
 The host presents PhotosUI and Files pickers. Each selected file is copied
-before the provider callback ends and answered once. Export uses a protected
+before the provider callback ends. A Files pick is answered once. A PhotosUI
+pick is loaded and answered one item at a time: the host reports the fetch of
+each item and stops it on a cancel, and Kotlin deletes the copy after its
+import, before it loads the next item. Export uses a protected
 temporary file for the Files picker, the share sheet, or Photos. Completion and
 the next launch remove abandoned plaintext copies. The host requests add-only
 Photos access when the user saves an export there; PhotosUI import needs no

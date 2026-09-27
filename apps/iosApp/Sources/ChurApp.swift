@@ -51,7 +51,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         }
         let mediaScratchReady = MediaPickerDelegate.prepareScratch()
         IosMediaPicker.shared.present = { [weak self] answer in
-            guard mediaScratchReady, let scene = self?.scene else { _ = answer(nil); return }
+            guard mediaScratchReady, let scene = self?.scene else { MediaPickerDelegate.answerNothing(answer); return }
             scene.presentMediaPicker(answer)
         }
         IosBackupPicker.shared.present = { [weak self] answer in
@@ -138,11 +138,16 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         if host.scene === self { host.scene = nil }
     }
 
-    func presentMediaPicker(_ answer: @escaping (String?) -> KotlinUnit) {
-        guard let presenter = window?.rootViewController else { _ = answer(nil); return }
+    func presentMediaPicker(_ answer: @escaping MediaAnswer) {
+        guard let presenter = window?.rootViewController else { MediaPickerDelegate.answerNothing(answer); return }
         var configuration = PHPickerConfiguration(photoLibrary: .shared())
         configuration.filter = .any(of: [.images, .videos])
-        configuration.selectionLimit = 1
+        // Any number of items, in the order picked, `IOS.md` §15.1. `.current`
+        // hands over each item as stored rather than transcoded, so a HEIC
+        // original stays HEIC (§15.3).
+        configuration.selectionLimit = 0
+        configuration.selection = .ordered
+        configuration.preferredAssetRepresentationMode = .current
         let picker = PHPickerViewController(configuration: configuration)
         let delegate = MediaPickerDelegate(answer: answer) { [weak self] in self?.mediaPicker = nil }
         mediaPicker = delegate
@@ -284,10 +289,22 @@ private final class ExportPickerDelegate: NSObject, UIDocumentPickerDelegate {
     }
 }
 
+/// Loads one picked item for Kotlin, `IosMediaPicker`: the item's index, a
+/// report of the fetch that answers false once the user cancels, and the
+/// answer with the copy's path and the item's own name.
+typealias MediaLoad = (
+    KotlinInt,
+    @escaping (KotlinLong, KotlinLong) -> KotlinBoolean,
+    @escaping (String?, String?) -> KotlinUnit
+) -> KotlinUnit
+
+/// The answer to a pick: how many items, and how to load each one.
+typealias MediaAnswer = (KotlinInt, @escaping MediaLoad) -> KotlinUnit
+
 private final class MediaPickerDelegate: NSObject, PHPickerViewControllerDelegate {
     private static let scratch = FileManager.default.temporaryDirectory
         .appendingPathComponent("chur-media-imports", isDirectory: true)
-    private var answer: ((String?) -> KotlinUnit)?
+    private var answer: MediaAnswer?
     private let done: () -> Void
 
     static func prepareScratch() -> Bool {
@@ -307,57 +324,112 @@ private final class MediaPickerDelegate: NSObject, PHPickerViewControllerDelegat
         }
     }
 
-    init(answer: @escaping (String?) -> KotlinUnit, done: @escaping () -> Void) {
+    /// Answers a picker that could not be shown as a pick of nothing.
+    static func answerNothing(_ answer: MediaAnswer) {
+        _ = answer(KotlinInt(int: 0)) { _, _, loaded in loaded(nil, nil) }
+    }
+
+    init(answer: @escaping MediaAnswer, done: @escaping () -> Void) {
         self.answer = answer
         self.done = done
     }
 
+    /// Answers with the pick and fetches nothing yet: Kotlin loads one item
+    /// at a time and deletes its copy before it loads the next, so at most
+    /// one plaintext copy exists, `IOS.md` §15.2. The providers stay with the
+    /// load closure, which Kotlin holds until the pick is imported.
     func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
         picker.dismiss(animated: true)
-        guard let provider = results.first?.itemProvider,
-              let identifier = provider.registeredTypeIdentifiers.first(where: {
-                  guard let type = UTType($0) else { return false }
-                  return type.conforms(to: .image) || type.conforms(to: .movie)
-              }) else {
-            finish(nil)
-            return
-        }
-        provider.loadFileRepresentation(forTypeIdentifier: identifier) { [self] source, _ in
-            let path: String?
-            if let source {
-                let ext = source.pathExtension.isEmpty ? (UTType(identifier)?.preferredFilenameExtension ?? "bin") : source.pathExtension
-                let target = Self.scratch.appendingPathComponent(UUID().uuidString).appendingPathExtension(ext)
-                do {
-                    guard FileManager.default.createFile(
-                        atPath: target.path,
-                        contents: nil,
-                        attributes: [.protectionKey: FileProtectionType.complete]
-                    ) else { throw CocoaError(.fileWriteUnknown) }
-                    let reader = try FileHandle(forReadingFrom: source)
-                    defer { try? reader.close() }
-                    let writer = try FileHandle(forWritingTo: target)
-                    defer { try? writer.close() }
-                    while let chunk = try reader.read(upToCount: 64 * 1024), !chunk.isEmpty {
-                        try writer.write(contentsOf: chunk)
-                    }
-                    try writer.close()
-                    path = target.path
-                } catch {
-                    try? FileManager.default.removeItem(at: target)
-                    path = nil
-                }
-            } else {
-                path = nil
-            }
-            DispatchQueue.main.async { self.finish(path) }
-        }
-    }
-
-    private func finish(_ path: String?) {
         guard let answer else { return }
         self.answer = nil
-        _ = answer(path)
+        let providers = results.map(\.itemProvider)
+        _ = answer(KotlinInt(int: Int32(providers.count))) { index, prepare, loaded in
+            Self.load(
+                providers[index.intValue],
+                prepare: { prepare(KotlinLong(longLong: $0), KotlinLong(longLong: $1)).boolValue },
+                loaded: { _ = loaded($0, $1) }
+            )
+            return KotlinUnit()
+        }
         done()
+    }
+
+    /// Fetches one item into a protected copy, `IOS.md` §15.1-15.2.
+    ///
+    /// An iCloud original may not be on the device yet. A timer on the main
+    /// run loop reports the fetch four times a second, and each report also
+    /// asks whether the user cancelled: a timer rather than a progress
+    /// observer keeps a fetch that stalls on the network cancellable. The
+    /// copy is made before the provider's callback returns, because the
+    /// provider deletes its file then. Kotlin calls this on the main thread.
+    private static func load(
+        _ provider: NSItemProvider,
+        prepare: @escaping (Int64, Int64) -> Bool,
+        loaded: @escaping (String?, String?) -> Void
+    ) {
+        guard let identifier = provider.registeredTypeIdentifiers.first(where: {
+            guard let type = UTType($0) else { return false }
+            return type.conforms(to: .image) || type.conforms(to: .movie)
+        }) else {
+            loaded(nil, nil)
+            return
+        }
+        let box = FetchBox()
+        let ticker = Timer(timeInterval: 0.25, repeats: true) { ticker in
+            guard let fetch = box.progress else { return }
+            // A fetch of unknown size reports no total, and the bar stays
+            // indeterminate.
+            let total: Int64 = fetch.isIndeterminate ? 0 : 1_000
+            if !prepare(Int64(fetch.fractionCompleted * 1_000), total) {
+                ticker.invalidate()
+                fetch.cancel()
+            }
+        }
+        box.progress = provider.loadFileRepresentation(forTypeIdentifier: identifier) { source, _ in
+            let copy = source.flatMap { copyToScratch($0, identifier: identifier) }
+            let name = copy.flatMap { copy in
+                provider.suggestedName.map {
+                    $0.lowercased().hasSuffix("." + copy.pathExtension.lowercased()) ? $0 : "\($0).\(copy.pathExtension)"
+                }
+            }
+            DispatchQueue.main.async {
+                ticker.invalidate()
+                loaded(copy?.path, name)
+            }
+        }
+        RunLoop.main.add(ticker, forMode: .common)
+    }
+
+    /// Holds the fetch for the timer, which is made before the fetch starts.
+    /// The timer and the assignment both run on the main thread.
+    private final class FetchBox {
+        var progress: Progress?
+    }
+
+    /// Copies a provider's file under a random name, which `IOS.md` §12 asks
+    /// for: a file name must not tell the filename.
+    private static func copyToScratch(_ source: URL, identifier: String) -> URL? {
+        let ext = source.pathExtension.isEmpty ? (UTType(identifier)?.preferredFilenameExtension ?? "bin") : source.pathExtension
+        let target = scratch.appendingPathComponent(UUID().uuidString).appendingPathExtension(ext)
+        do {
+            guard FileManager.default.createFile(
+                atPath: target.path,
+                contents: nil,
+                attributes: [.protectionKey: FileProtectionType.complete]
+            ) else { throw CocoaError(.fileWriteUnknown) }
+            let reader = try FileHandle(forReadingFrom: source)
+            defer { try? reader.close() }
+            let writer = try FileHandle(forWritingTo: target)
+            defer { try? writer.close() }
+            while let chunk = try reader.read(upToCount: 64 * 1024), !chunk.isEmpty {
+                try writer.write(contentsOf: chunk)
+            }
+            try writer.close()
+            return target
+        } catch {
+            try? FileManager.default.removeItem(at: target)
+            return nil
+        }
     }
 }
 

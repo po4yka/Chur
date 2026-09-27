@@ -469,7 +469,7 @@ private fun VaultRoute(controller: ChurController) {
         // The grants live in this list for the one batch and never reach
         // saved state, `ANDROID.md` §14.2.
         if (uris.isNotEmpty()) {
-            scope.launch { controller.importAll(importer, uris.size, albumId) { codec.open(uris[it]) } }
+            scope.launch { controller.importAll(importer, uris.size, albumId) { index, _ -> codec.open(uris[index]) } }
         }
     }
     // Both pickers take many items in one session. The photo picker keeps

@@ -174,7 +174,7 @@ class MediaImporterHostTest {
         val seen = mutableListOf<ActiveOperation?>()
 
         // The second item cannot be opened, and the batch goes on past it.
-        val outcomes = controller.importAll(MediaImporter(Previewless), 3, album.albumId) { index ->
+        val outcomes = controller.importAll(MediaImporter(Previewless), 3, album.albumId) { index, _ ->
             seen += controller.activeOperation.value
             if (index == 1) null else picked(root, index)
         }
@@ -204,7 +204,7 @@ class MediaImporterHostTest {
                 if (media.originalFilename == "IMG_0001.jpg") null else Previewless.probe(media)
         }
 
-        val outcomes = controller.importAll(MediaImporter(codec), 3, null) { index -> picked(root, index) }
+        val outcomes = controller.importAll(MediaImporter(codec), 3, null) { index, _ -> picked(root, index) }
 
         assertEquals(MediaImporter.Outcome.Refused(ChurStatus.UNSUPPORTED_VERSION), outcomes[1])
         assertEquals(listOf(true, false, true), outcomes.map { it is MediaImporter.Outcome.Imported })
@@ -226,7 +226,7 @@ class MediaImporterHostTest {
                 }
         }
 
-        val outcomes = controller.importAll(MediaImporter(codec), 4, null) { index ->
+        val outcomes = controller.importAll(MediaImporter(codec), 4, null) { index, _ ->
             opened += index
             picked(root, index)
         }
@@ -255,7 +255,7 @@ class MediaImporterHostTest {
                 }
         }
 
-        val outcomes = controller.importAll(MediaImporter(codec), 3, null) { index ->
+        val outcomes = controller.importAll(MediaImporter(codec), 3, null) { index, _ ->
             opened += index
             picked(root, index)
         }
@@ -289,7 +289,7 @@ class MediaImporterHostTest {
     fun a_cancel_keeps_the_items_already_imported_and_opens_no_more() = withVault { controller, root ->
         val opened = mutableListOf<Int>()
 
-        val outcomes = controller.importAll(MediaImporter(Previewless), 3, null) { index ->
+        val outcomes = controller.importAll(MediaImporter(Previewless), 3, null) { index, _ ->
             opened += index
             if (index == 1) controller.cancelActiveOperation()
             picked(root, index)
@@ -306,10 +306,48 @@ class MediaImporterHostTest {
     }
 
     @Test
+    fun a_cancel_while_an_item_is_fetched_stops_before_its_import() = withVault { controller, root ->
+        // iOS fetches an iCloud original before it can open it, and the card
+        // shows the fetch as "Preparing" with a bar, `IOS.md` §15.2. A cancel
+        // reaches the host through the fetch report, and the host stops the
+        // fetch and opens nothing, so no native import of that item begins.
+        val closed = mutableListOf<Int>()
+        var fetching: ActiveOperation? = null
+
+        val outcomes = controller.importAll(MediaImporter(Previewless), 3, null) { index, prepare ->
+            assertTrue(prepare(40, 100))
+            if (index == 1) {
+                fetching = controller.activeOperation.value
+                controller.cancelActiveOperation()
+            }
+            if (!prepare(100, 100)) return@importAll null
+            val media = picked(root, index)
+            media.copy(close = {
+                media.close()
+                closed += index
+            })
+        }
+
+        assertEquals("Importing item 2 of 3 · Preparing", fetching?.description)
+        assertEquals(0.4f, fetching?.fraction)
+        assertIs<MediaImporter.Outcome.Imported>(outcomes[0])
+        assertEquals(listOf(outcomes[0], MediaImporter.Outcome.Refused(ChurStatus.CANCELLED)), outcomes)
+        // The first item's copy was released, and the second was never opened.
+        assertEquals(listOf(0), closed)
+        assertEquals(
+            "1 imported, 2 cancelled.",
+            withTimeout(10_000) { controller.notice.filterNotNull().first { "imported" in it.text } }.text,
+        )
+        assertEquals(1, controller.vault.page(ObjectQuery()).objects.size)
+        // The name the host gave the item is what a search finds.
+        assertEquals(1, controller.vault.page(ObjectQuery(QueryScope.SEARCH, terms = "IMG_0000")).objects.size)
+    }
+
+    @Test
     fun a_lock_in_the_middle_stops_the_pick_without_a_summary() = withVault { controller, root ->
         val opened = mutableListOf<Int>()
 
-        val outcomes = controller.importAll(MediaImporter(Previewless), 3, null) { index ->
+        val outcomes = controller.importAll(MediaImporter(Previewless), 3, null) { index, _ ->
             opened += index
             if (index == 1) controller.lock()
             picked(root, index)

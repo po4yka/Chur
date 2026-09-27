@@ -1640,16 +1640,28 @@ class ChurController(
      * a lock, whose route change drops it anyway.
      *
      * [open] opens the item at an index. The picked items stay with the host,
-     * which never keeps them past this call, `ANDROID.md` §14.2.
+     * which never keeps them past this call, `ANDROID.md` §14.2. A host that
+     * must first fetch the item, as iOS does for an iCloud original, reports
+     * the fetch through the callback [open] is given, and the card shows it as
+     * the "Preparing" phase of `DESIGN.md` §15.2 with a bar. The callback
+     * answers false once the user cancels, and the host then stops the fetch
+     * and opens nothing, so the cancel lands before any native import begins,
+     * `IOS.md` §15.2.
      */
     suspend fun importAll(
         importer: MediaImporter,
         count: Int,
         albumId: ByteArray?,
-        open: suspend (Int) -> PickedMedia?,
+        open: suspend (index: Int, prepare: (processed: Long, total: Long) -> Boolean) -> PickedMedia?,
     ): List<MediaImporter.Outcome> {
         val outcomes = mutableListOf<MediaImporter.Outcome>()
         tracked("import") { token ->
+            val prepare = { processed: Long, total: Long ->
+                _activeOperation.update { current ->
+                    current?.takeIf { it.id == token }?.copy(processed = processed, total = total) ?: current
+                }
+                !cancellationRequested(token)
+            }
             for (index in 0 until count) {
                 if (cancellationRequested(token) || repository.state.value !is VaultState.Unlocked) break
                 _activeOperation.update { current ->
@@ -1662,7 +1674,7 @@ class ChurController(
                         items = count,
                     ) ?: current
                 }
-                val outcome = importItem(importer, token) { open(index) }
+                val outcome = importItem(importer, token) { open(index, prepare) }
                 outcomes += outcome
                 if (outcome is MediaImporter.Outcome.Refused && outcome.status in PICK_STOPPING_STATUSES) break
             }
