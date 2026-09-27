@@ -46,6 +46,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Assume.assumeTrue
@@ -84,7 +85,11 @@ import org.junit.runner.RunWith
  * gives the focus up, `ANDROID.md` §17.3, with no media session published.
  * The viewer carries the lock control of `DISCREET_MODE.md` "The panic
  * gesture": a press locks and releases the player, and the panic is a screen
- * reader's custom action on the same control.
+ * reader's custom action on the same control. A long press on a media tile
+ * that does not move starts a selection, `DESIGN.md` §11.4, in the Library, in
+ * an album and in Trash, and a screen reader starts one through the tile's
+ * long-click action; the selection bar then reaches the bulk actions. A long
+ * press that moves still drops the item into an album.
  */
 @RunWith(AndroidJUnit4::class)
 class BackNavigationTest {
@@ -542,9 +547,199 @@ class BackNavigationTest {
         assertTrue("the lock releases the player", await { focusEntries().isEmpty() })
     }
 
+    @Test
+    fun aLongPressThatStaysPutSelectsAndATapAddsToTheSelection() = inTestVault {
+        withMedia()
+        // A finger that does not move: the release reaches the tile's click
+        // alone, and that click must select rather than open.
+        longPress(photoTile())
+        assertTrue("the long press starts a selection", await { find(label("1 selected")) != null })
+        assertNull("and does not open the viewer", find(label("Info")))
+        tap(::isDuration)
+        assertTrue("a tap adds to the selection", await { find(label("2 selected")) != null })
+
+        pressBack()
+
+        assertTrue("Back ends the selection", await { find(label("Clear selection")) == null })
+        // A finger that drifts under the touch slop: the drag takes the move
+        // and cancels the click, and the end of the drag selects.
+        longPress(photoTile(), drift = 6)
+        assertTrue("a small drift still selects", await { find(label("1 selected")) != null })
+        assertNull("and does not open the viewer", find(label("Info")))
+    }
+
+    @Test
+    fun aScreenReaderSelectsWithTheLongClickActionOfATile() = inTestVault {
+        withMedia()
+        val tile = photoTile()
+        // Compose reports `selected` outside a tab as a checked state, which
+        // a screen reader speaks as selected or not selected, §23.5.
+        assertFalse("nothing is selected yet", tile.isChecked)
+        assertEquals("Select", tile.longClickLabel())
+
+        assertTrue(tile.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK))
+
+        assertTrue("the action starts a selection", await { find(label("1 selected")) != null })
+        assertNull("and does not open the viewer", find(label("Info")))
+        assertTrue("the tile says it is selected", await { tile.refresh() && tile.isChecked })
+        assertEquals("Deselect", tile.longClickLabel())
+        assertTrue(tile.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK))
+        assertTrue("the same action ends it", await { find(label("1 selected")) == null })
+    }
+
+    @Test
+    fun aSelectionLeavesAnAlbumInOneAction() = inTestVault {
+        withMedia()
+        val members = listOf(MEDIA_CLASS_IMAGE, MEDIA_CLASS_AUDIO).map { kind ->
+            controller.page.value.objects.first { it.mediaKind == kind }.objectId
+        }
+        tap(label("Albums"))
+        // The tab loads the albums; the album is created on the first run only.
+        if (!await(3_000) { find(label(ALBUM)) != null }) {
+            instrumentation.runOnMainSync { controller.createAlbum(ALBUM) }
+        }
+        assertTrue("the album", await { controller.albums.value.any { it.name == ALBUM } })
+        val placed = CountDownLatch(1)
+        instrumentation.runOnMainSync {
+            val album = controller.albums.value.first { it.name == ALBUM }
+            controller.placeObjectsInAlbum(album.albumId, members) { placed.countDown() }
+        }
+        assertTrue("the media land in the album", placed.await(30, TimeUnit.SECONDS))
+        val count = albumMembers()
+        tap(label(ALBUM))
+        // The album keeps a manual order, where a long press that moves
+        // reorders and one that stays put selects.
+        longPress(photoTile())
+        assertTrue("the long press starts a selection", await { find(label("1 selected")) != null })
+        tap(::isDuration)
+        assertTrue("a tap adds to the selection", await { find(label("2 selected")) != null })
+
+        tap(label("More"))
+        tap(label("Remove from album"))
+
+        assertTrue("both leave the album", await { albumMembers() == count - 2 })
+    }
+
+    @Test
+    fun aLongPressThatMovesStillDropsIntoAnAlbum() = inTestVault {
+        withMedia()
+        val photos = controller.page.value.objects.filter { it.mediaKind == MEDIA_CLASS_IMAGE }.map { it.objectId }
+        tap(label("Albums"))
+        if (!await(3_000) { find(label(ALBUM)) != null }) {
+            instrumentation.runOnMainSync { controller.createAlbum(ALBUM) }
+        }
+        assertTrue("the album", await { controller.albums.value.any { it.name == ALBUM } })
+        // The photos start outside the album, so the drop is what adds one.
+        val cleared = CountDownLatch(1)
+        instrumentation.runOnMainSync {
+            val album = controller.albums.value.first { it.name == ALBUM }
+            controller.removeAllFromAlbum(album.albumId, photos) { cleared.countDown() }
+        }
+        assertTrue("the photos leave the album", cleared.await(30, TimeUnit.SECONDS))
+        val count = albumMembers()
+        // Back leaves the Albums tab for the Library.
+        pressBack()
+        val tile = Rect().also { photoTile().getBoundsInScreen(it) }
+        val tray: (AccessibilityNodeInfo) -> Boolean = { it.text?.endsWith("Choose album…") == true }
+        var x = tile.centerX()
+        var y = tile.centerY()
+        shell("input motionevent DOWN $x $y")
+        var down = true
+        try {
+            Thread.sleep(800)
+            assertNull("a long press that has not moved shows no album tray", find(tray))
+            // Small steps, as a finger moves: the first stays under the touch
+            // slop, so the drag takes it before the grid can scroll.
+            repeat(4) {
+                y += 10
+                shell("input motionevent MOVE $x $y")
+            }
+            assertTrue("the move shows the tray", await { find(tray) != null })
+            val target = boundsOf(label(ALBUM))
+            x = target.centerX()
+            y = target.centerY()
+            shell("input motionevent MOVE $x $y")
+            awaitFrames()
+            shell("input motionevent UP $x $y")
+            down = false
+            assertTrue("the drop adds the photo", await { albumMembers() == count + 1 })
+        } finally {
+            if (down) shell("input motionevent UP $x $y")
+        }
+    }
+
+    @Test
+    fun aLongPressSelectsInTrashAndTheSelectionRestores() = inTestVault {
+        withMedia()
+        val before = controller.page.value.objects.map { it.id }.toSet()
+        longPress(photoTile())
+        assertTrue("the long press starts a selection", await { find(label("1 selected")) != null })
+        tap(label("More"))
+        tap(label("Move to Trash"))
+        // The confirmation names the same action.
+        tap(label("Move to Trash"))
+        var trashed = emptySet<String>()
+        assertTrue(
+            "one item moves to Trash",
+            await { (before - controller.page.value.objects.map { it.id }.toSet()).also { trashed = it }.size == 1 },
+        )
+        try {
+            tap(label("Browse"))
+            tap(label("Trash"))
+            assertTrue("Trash shows it", await { controller.page.value.objects.any { it.id in trashed } })
+            // Trash has no album tray and no order, and a long press selects
+            // there too.
+            longPress(photoTile())
+            assertTrue("a long press selects in Trash", await { find(label("1 selected")) != null })
+
+            tap(label("More"))
+            tap(label("Restore"))
+
+            assertTrue("the item leaves Trash", await { controller.page.value.objects.none { it.id in trashed } })
+        } finally {
+            // A failure above must not leave the test's media in Trash.
+            val restored = CountDownLatch(1)
+            instrumentation.runOnMainSync { controller.restoreTrash { restored.countDown() } }
+            restored.await(30, TimeUnit.SECONDS)
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
+
+    /** Imports a photo and a recording on the first run only. */
+    private fun withMedia() {
+        if (!await(3_000) { controller.page.value.objects.any { it.mediaKind == MEDIA_CLASS_IMAGE } }) importPhoto()
+        if (controller.page.value.objects.none { it.mediaKind == MEDIA_CLASS_AUDIO }) importRecording()
+    }
+
+    private fun photoTile(): AccessibilityNodeInfo {
+        var tile: AccessibilityNodeInfo? = null
+        assertTrue("a photo tile", await { findTile()?.also { tile = it } != null })
+        return checkNotNull(tile)
+    }
+
+    /** A recording's tile shows its length and nothing else. */
+    private fun isDuration(node: AccessibilityNodeInfo): Boolean = node.text?.matches(Regex("\\d+:\\d{2}")) == true
+
+    private fun AccessibilityNodeInfo.longClickLabel(): String? =
+        actionList.firstOrNull { it.id == AccessibilityNodeInfo.ACTION_LONG_CLICK }?.label?.toString()
+
+    private fun albumMembers(): Long = controller.albums.value.first { it.name == ALBUM }.memberCount
+
+    /**
+     * Holds a finger on [node] past the long-press timeout and lifts it, as
+     * `adb shell input swipe x y x y 800` does. The finger moves [drift]
+     * pixels on the way, which stays under the touch slop.
+     */
+    private fun longPress(node: AccessibilityNodeInfo, drift: Int = 0) {
+        val bounds = Rect().also { node.getBoundsInScreen(it) }
+        val x = bounds.centerX()
+        val y = bounds.centerY()
+        shell("input swipe $x $y ${x + drift} $y 800")
+        awaitFrames()
+    }
 
     private fun shell(command: String): String =
         ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command))

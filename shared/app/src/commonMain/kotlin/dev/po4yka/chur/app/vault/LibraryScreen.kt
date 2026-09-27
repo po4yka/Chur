@@ -46,13 +46,16 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -193,7 +196,20 @@ fun ContentViewToggle(view: ContentView, onChange: (ContentView) -> Unit) {
     }
 }
 
-/** Media browser shared by Library, albums, search, favorites, tags, and Trash. */
+/**
+ * Media browser shared by Library, albums, search, favorites, tags, and Trash.
+ *
+ * The browser owns the long press on every tile, in every scope, `DESIGN.md`
+ * §11.4. A long press that does not move past the touch slop selects the
+ * tile, and a long press that moves drags it to the album tray or, in a
+ * manually sorted album, to a new place. The tile's own click sees the release
+ * before the browser does, so while a long press is running the click selects
+ * rather than opens: when the finger did not move at all, that click is the
+ * only callback the release reaches, and when it moved a little, the drag
+ * consumed the move, the click is cancelled, and the end of the drag selects.
+ * Each tile offers the same choice to a screen reader or a switch as its
+ * long-click action, §23.
+ */
 @Composable
 fun MediaBrowser(
     tiles: List<LibraryTile>,
@@ -211,6 +227,9 @@ fun MediaBrowser(
     val albumTargetBounds = remember { mutableStateMapOf<String, Rect>() }
     var dragged by remember { mutableStateOf<String?>(null) }
     var dropPoint by remember { mutableStateOf(Offset.Zero) }
+    // Whether the running long press has moved past the touch slop, which
+    // makes it a drag rather than a selection.
+    var travelled by remember { mutableStateOf(false) }
     var viewport by remember { mutableStateOf(Rect.Zero) }
     var albumDropBounds by remember { mutableStateOf(Rect.Zero) }
     var albumTrayViewport by remember { mutableStateOf(Rect.Zero) }
@@ -223,6 +242,9 @@ fun MediaBrowser(
     val currentDropIntoAlbum by rememberUpdatedState(onDropIntoAlbum)
     val currentHasMore by rememberUpdatedState(onLoadMore != null)
     val currentView by rememberUpdatedState(view)
+    val currentToggle by rememberUpdatedState(onToggleSelection)
+    val haptics = LocalHapticFeedback.current
+    val selecting = tiles.any { it.selected }
     val draggedTile = tiles.firstOrNull { it.projection.id == dragged }
     val draggedItems = if (draggedTile?.selected == true) tiles.filter { it.selected }
     else listOfNotNull(draggedTile)
@@ -233,14 +255,26 @@ fun MediaBrowser(
         val rect = bounds[target.projection.id]!!
         if (view == ContentView.GRID) dropPoint.x >= rect.center.x else dropPoint.y >= rect.center.y
     } ?: false
-    val placement = if (onMove != null && dragged != null && hovered != null)
+    val placement = if (onMove != null && dragged != null && travelled && hovered != null)
         memberDrop(tiles.map { it.projection.id }, dragged!!, hovered.projection.id,
             after, onLoadMore != null) else null
-    DragEdgeScroll(dragged != null, dropPoint, viewport,
+    DragEdgeScroll(dragged != null && travelled, dropPoint, viewport,
         if (view == ContentView.GRID) gridState else listState,
         if (dragged != null) albumDropBounds else null)
-    DragEdgeScroll(dragged != null && onDropIntoAlbum != null, dropPoint,
+    DragEdgeScroll(dragged != null && travelled && onDropIntoAlbum != null, dropPoint,
         albumTrayViewport, albumTrayState)
+    // §22.4: entering selection mode is one of the few moments with a haptic.
+    // It follows the gesture alone, so a decoy vault feels like a real one.
+    fun toggleSelection(projection: ObjectProjection) {
+        if (currentTiles.none { it.selected }) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        currentToggle(projection)
+    }
+    // While a long press runs on this tile, its click is the release of that
+    // press, which selects; see the KDoc above.
+    fun click(tile: LibraryTile) {
+        if (dragged == null) onOpen(tile.projection)
+        else if (dragged == tile.projection.id) toggleSelection(tile.projection)
+    }
     fun reorderActions(tile: LibraryTile): Modifier {
         if (onMove == null) return Modifier
         val index = tiles.indexOfFirst { it.projection.id == tile.projection.id }
@@ -260,10 +294,11 @@ fun MediaBrowser(
             }
         }
     }
-    fun dragModifier(tile: LibraryTile): Modifier = if (onMove == null && onDropIntoAlbum == null)
-        Modifier else Modifier.onGloballyPositioned { bounds[tile.projection.id] = it.boundsInWindow() }
-    val dragGestureModifier = if (onMove == null && onDropIntoAlbum == null) Modifier else Modifier
+    fun dragModifier(tile: LibraryTile): Modifier =
+        Modifier.onGloballyPositioned { bounds[tile.projection.id] = it.boundsInWindow() }
+    val dragGestureModifier = Modifier
         .pointerInput(onMove != null, onDropIntoAlbum != null, view) {
+            var start = Offset.Zero
             detectDragGesturesAfterLongPress(
                 onDragStart = { offset ->
                     val point = viewport.topLeft + offset
@@ -273,13 +308,17 @@ fun MediaBrowser(
                     if (source != null) {
                         dragged = source.projection.id
                         dropPoint = point
+                        start = point
+                        travelled = false
                         albumDropBounds = Rect.Zero
                     }
                 },
                 onDragEnd = {
                     val visibleTiles = currentTiles
                     val source = visibleTiles.firstOrNull { it.projection.id == dragged }
-                    if (source != null && currentDropIntoAlbum != null &&
+                    if (source != null && !travelled) {
+                        toggleSelection(source.projection)
+                    } else if (source != null && currentDropIntoAlbum != null &&
                         albumDropBounds.contains(dropPoint)) {
                         val moved = if (source.selected) visibleTiles.filter { it.selected } else listOf(source)
                         val target = currentAlbumTargets.firstOrNull {
@@ -304,7 +343,11 @@ fun MediaBrowser(
                 },
                 onDragCancel = { dragged = null; albumDropBounds = Rect.Zero },
                 onDrag = { change, amount ->
-                    if (dragged != null) { change.consume(); dropPoint += amount }
+                    if (dragged != null) {
+                        change.consume()
+                        dropPoint += amount
+                        if ((dropPoint - start).getDistance() > viewConfiguration.touchSlop) travelled = true
+                    }
                 },
             )
         }
@@ -323,7 +366,7 @@ fun MediaBrowser(
             ) {
                 items(tiles, key = { it.projection.id }) { tile ->
                     DisposableEffect(tile.projection.id) { onDispose { bounds.remove(tile.projection.id) } }
-                    MediaTile(tile, { onOpen(tile.projection) }, { onToggleSelection(tile.projection) },
+                    MediaTile(tile, selecting, { click(tile) }, { toggleSelection(tile.projection) },
                         dragModifier(tile).then(reorderActions(tile)).graphicsLayer {
                             if (dragged == tile.projection.id) { scaleX = 1.04f; scaleY = 1.04f; alpha = 0.8f }
                         }, if (hovered?.projection?.id == tile.projection.id && placement != null)
@@ -345,7 +388,7 @@ fun MediaBrowser(
         ) {
             listItems(tiles, key = { it.projection.id }) { tile ->
                 DisposableEffect(tile.projection.id) { onDispose { bounds.remove(tile.projection.id) } }
-                MediaRow(tile, { onOpen(tile.projection) }, { onToggleSelection(tile.projection) },
+                MediaRow(tile, selecting, { click(tile) }, { toggleSelection(tile.projection) },
                     dragModifier(tile).then(reorderActions(tile)).graphicsLayer {
                         if (dragged == tile.projection.id) { scaleX = 1.02f; scaleY = 1.02f; alpha = 0.8f }
                     }, if (hovered?.projection?.id == tile.projection.id && placement != null)
@@ -359,7 +402,7 @@ fun MediaBrowser(
             }
         }
         }
-        if (dragged != null && onDropIntoAlbum != null) {
+        if (dragged != null && travelled && onDropIntoAlbum != null) {
             Box(
                 modifier = Modifier.align(Alignment.BottomEnd).fillMaxWidth(0.55f)
                     .padding(end = ChurSpacing.gutter, bottom = ChurSpacing.one)
@@ -399,7 +442,7 @@ fun MediaBrowser(
 
 /** A compact row exposes useful metadata without requiring the viewer. */
 @Composable
-private fun MediaRow(tile: LibraryTile, onOpen: () -> Unit, onToggleSelection: () -> Unit,
+private fun MediaRow(tile: LibraryTile, selecting: Boolean, onOpen: () -> Unit, onToggleSelection: () -> Unit,
     modifier: Modifier = Modifier, dropHint: String? = null) {
     val colors = LocalChurColors.current
     val projection = tile.projection
@@ -416,7 +459,8 @@ private fun MediaRow(tile: LibraryTile, onOpen: () -> Unit, onToggleSelection: (
             .background(if (tile.selected) colors.accentSoft else colors.surfaceSunken)
             .border(if (dropHint != null) 2.dp else if (tile.selected) ChurSpacing.hairline else 0.dp, colors.accent,
                 RoundedCornerShape(ChurSpacing.one))
-            .clickable(onClick = onOpen)
+            .then(selectionSemantics(tile, onToggleSelection))
+            .clickable(onClickLabel = clickLabel(tile, selecting), onClick = onOpen)
             .padding(ChurSpacing.two),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(ChurSpacing.two),
@@ -470,6 +514,7 @@ private fun durationLabel(durationMs: Long): String {
 @Composable
 private fun MediaTile(
     tile: LibraryTile,
+    selecting: Boolean,
     onOpen: () -> Unit,
     onToggleSelection: () -> Unit,
     modifier: Modifier = Modifier,
@@ -486,7 +531,8 @@ private fun MediaTile(
             .clip(RoundedCornerShape(ChurSpacing.one))
             .background(colors.surfaceSunken)
             .border(selectionBorder, colors.accent, RoundedCornerShape(ChurSpacing.one))
-            .clickable(onClick = onOpen),
+            .then(selectionSemantics(tile, onToggleSelection))
+            .clickable(onClickLabel = clickLabel(tile, selecting), onClick = onOpen),
     ) {
         val bitmap = tile.thumbnail
         if (bitmap != null) {
@@ -530,6 +576,26 @@ private fun MediaTile(
                 style = MaterialTheme.typography.labelSmall)
         }
     }
+}
+
+/**
+ * The selected state and the long press of a tile as semantics, `DESIGN.md`
+ * §23.5 and §11.4: a screen reader hears the state that the outline and the
+ * checkmark show, and a screen reader or a switch selects through the
+ * long-click action. The action is not a custom action, so the reorder actions
+ * of an album stay beside it.
+ */
+private fun selectionSemantics(tile: LibraryTile, onToggleSelection: () -> Unit): Modifier =
+    Modifier.semantics {
+        selected = tile.selected
+        onLongClick(label = if (tile.selected) "Deselect" else "Select") { onToggleSelection(); true }
+    }
+
+/** What a tap does, named for a screen reader: it opens, or it changes a running selection. */
+private fun clickLabel(tile: LibraryTile, selecting: Boolean): String = when {
+    !selecting -> "Open"
+    tile.selected -> "Deselect"
+    else -> "Select"
 }
 
 @Composable
