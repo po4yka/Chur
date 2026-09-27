@@ -1,8 +1,11 @@
 package dev.po4yka.chur.app.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.text.selection.TextSelectionColors
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.TextFieldColors
@@ -14,7 +17,10 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -190,6 +196,32 @@ fun churOutlinedTextFieldColors(): TextFieldColors {
         focusedBorderColor = colors.focus,
         focusedLabelColor = colors.focus,
         cursorColor = colors.focus,
+    )
+}
+
+/**
+ * The confirm button of an irreversible action, the `button-destructive` token
+ * of `DESIGN.md` §26: an error fill, reserved for what cannot be taken back. A
+ * move to Trash can be, so it keeps an ordinary button. The press is the moment
+ * §22.4 names for a haptic, "destructive action confirmed", so every such
+ * confirm gives it here rather than each caller remembering to.
+ */
+@Composable
+fun DestructiveButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable RowScope.() -> Unit,
+) {
+    val colors = LocalChurColors.current
+    val haptics = LocalHapticFeedback.current
+    Button(
+        onClick = {
+            haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+            onClick()
+        },
+        modifier = modifier,
+        colors = ButtonDefaults.buttonColors(containerColor = colors.error, contentColor = colors.onInk),
+        content = content,
     )
 }
 

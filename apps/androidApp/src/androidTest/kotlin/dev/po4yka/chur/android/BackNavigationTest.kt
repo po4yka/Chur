@@ -53,7 +53,8 @@ import org.junit.runner.RunWith
  * what the screen held. Each case presses Back once and checks that the
  * application stayed in front and landed where the screen's own control goes.
  * The note editor's cases also pin what leaving it writes, since that write,
- * not the press, is what keeps the draft; they remove the notes they make.
+ * not the press, is what keeps the draft, and that Delete asks before it
+ * removes a note; they remove the notes they make.
  * The order of the vault's ladder is a pure function, pinned by
  * `VaultBackTest`; the vault cases here pin that the host delivers it, and the
  * viewer's own handlers.
@@ -217,9 +218,24 @@ class BackNavigationTest {
         assertTrue("the autosave writes the draft", await { madeNotes().any { it.body == NOTE_TEXT } })
 
         tap(label("Delete"))
+        tap(label("Delete note"))
 
         assertTrue("the note is removed", await { madeNotes().isEmpty() })
         assertFalse("the save on leaving must not write it back", await(1_000) { madeNotes().isNotEmpty() })
+    }
+
+    @Test
+    fun cancellingDeleteKeepsTheNoteAndTheEditor() = inNewNote {
+        typeNote(NOTE_TEXT)
+        assertTrue("the autosave writes the draft", await { madeNotes().any { it.body == NOTE_TEXT } })
+
+        tap(label("Delete"))
+        assertTrue("Delete asks first", await { find(label("Delete note")) != null })
+        assertTrue("the note is kept while it asks", madeNotes().any { it.body == NOTE_TEXT })
+        tap(label("Cancel"))
+
+        assertTrue("the editor stays open", await { find(label("Delete")) != null })
+        assertFalse("Cancel must not remove the note", await(1_000) { madeNotes().none { it.body == NOTE_TEXT } })
     }
 
     @Test
@@ -542,13 +558,20 @@ class BackNavigationTest {
             body()
         } finally {
             // The editor writes its draft as it leaves, so a case that failed
-            // with it open leaves through Delete, which writes nothing, before
-            // the rest is removed. Nothing here asserts, so a cleanup cannot
-            // hide the failure it follows.
-            find(label("Delete"))?.let { delete ->
-                generateSequence(delete) { it.parent }.firstOrNull { it.isClickable }
+            // with it open leaves through Delete and its confirmation, which
+            // write nothing, before the rest is removed. Nothing here asserts,
+            // so a cleanup cannot hide the failure it follows.
+            fun click(node: AccessibilityNodeInfo) {
+                generateSequence(node) { it.parent }.firstOrNull { it.isClickable }
                     ?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                await { find(label("Delete")) == null }
+            }
+            find(label("Delete"))?.let { delete ->
+                click(delete)
+                await { find(label("Delete note")) != null }
+            }
+            find(label("Delete note"))?.let { confirm ->
+                click(confirm)
+                await { find(label("Delete note")) == null && find(label("Delete")) == null }
             }
             instrumentation.runOnMainSync { madeNotes().forEach { controller.removeNote(it.id) } }
         }

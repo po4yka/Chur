@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -36,6 +37,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.theme.BackGlyph
 import dev.po4yka.chur.app.theme.ChurSpacing
+import dev.po4yka.chur.app.theme.DestructiveButton
 import dev.po4yka.chur.app.theme.PlusGlyph
 import dev.po4yka.chur.app.theme.SettingsGlyph
 import dev.po4yka.chur.app.theme.LocalChurColors
@@ -245,8 +247,11 @@ private fun EmptyNotes(hasQuery: Boolean, onCreate: (() -> Unit)? = null) {
  * note the store held when the editor opened, so opening a note the user
  * emptied earlier leaves it where it is.
  *
- * Delete clears the draft, so the save on leaving has nothing to write back
- * into the note it has just removed.
+ * Delete asks first, because a public note has no Trash to come back from:
+ * `DESIGN.md` §26 puts a short, high-consequence decision in a dialog, and §27
+ * has its copy name the consequence. The question is saved state, so a
+ * rotation keeps it open. Confirming clears the draft, so the save on leaving
+ * has nothing to write back into the note it has just removed.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -255,6 +260,24 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
     val (title, body) = draft ?: run {
         LaunchedEffect(Unit) { onBack() }
         return
+    }
+
+    var confirmingDelete by rememberSaveable { mutableStateOf(false) }
+    if (confirmingDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmingDelete = false },
+            title = { Text("Delete this note?") },
+            text = { Text("It is removed from this device. You cannot undo this.") },
+            confirmButton = {
+                DestructiveButton(onClick = {
+                    confirmingDelete = false
+                    draft = null
+                    onRemove(open.note.id)
+                    onBack()
+                }) { Text("Delete note") }
+            },
+            dismissButton = { TextButton(onClick = { confirmingDelete = false }) { Text("Cancel") } },
+        )
     }
 
     val colors = LocalChurColors.current
@@ -270,11 +293,7 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
                     }
                 },
                 actions = {
-                    TextButton(onClick = {
-                        draft = null
-                        onRemove(open.note.id)
-                        onBack()
-                    }) { Text("Delete") }
+                    TextButton(onClick = { confirmingDelete = true }) { Text("Delete") }
                 },
             )
         },
