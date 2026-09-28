@@ -1021,13 +1021,21 @@ After 5 minutes
 Each choice counts idle time while Chur is in the foreground. Leaving the
 application still locks at once, whatever the choice
 (`docs/security/PLAINTEXT_LIFECYCLE.md` §7, `docs/ANDROID.md` §19.3), so no
-choice gives a grace period after the user leaves. v1 has no "Immediately"
-choice: leaving already locks at once, and a zero foreground limit would lock
-the vault on the next idle check, before the user could use it, change the
-choice back, or finish an import or export. v1 has no "When device locks"
-choice either: with the immediate background lock it would add nothing. The
-choice is one device-wide public setting, the same in every identity
-(`docs/security/DECOY_VAULT.md` §10).
+choice gives a grace period after the user leaves. That holds while a system
+prompt Chur asked for is up: a permission or Photos access request, a delete
+confirmation, the device check before a recovery phrase, or the local network
+alert. Such a prompt keeps the lock off only while the user answers it with
+Chur in front, and leaving during it locks at once (`docs/ANDROID.md` §19.3,
+`docs/IOS.md` §21.2). A picker, the share sheet, or a system screen that can
+take the whole screen, such as the device credential screen, cannot be told
+apart from leaving, so it keeps the lock off until it returns, and the
+chosen limit is the backstop for a user who walks away from one. v1 has no
+"Immediately" choice: leaving already locks at once, and a zero foreground
+limit would lock the vault on the next idle check, before the user could use
+it, change the choice back, or finish an import or export. v1 has no "When
+device locks" choice either: with the immediate background lock it would add
+nothing. The choice is one device-wide public setting, the same in every
+identity (`docs/security/DECOY_VAULT.md` §10).
 
 Explain the interaction with background playback, imports, exports, and platform limitations.
 

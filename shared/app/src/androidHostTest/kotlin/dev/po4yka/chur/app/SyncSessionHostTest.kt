@@ -251,9 +251,8 @@ class SyncSessionHostTest {
             controller.create(OWNER, offerRecovery = false)
             withTimeout(10_000) { controller.route.first { it == AppRoute.Vault } }
 
-            // The alert takes the scene out of the foreground, and the user
-            // answers it: the bracket keeps the vault open, and nothing locks
-            // after it.
+            // The alert makes the scene resign active, and the user answers
+            // it: the prompt keeps the vault open, and nothing locks after it.
             var setup = store.hold()
             controller.configureSync(LOCAL_SERVER, SECRET, localNetworkAlert = true)
             withTimeout(10_000) { setup.reached.await() }

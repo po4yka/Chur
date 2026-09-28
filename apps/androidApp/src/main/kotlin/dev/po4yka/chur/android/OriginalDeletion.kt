@@ -41,12 +41,14 @@ private const val PLACE = "your Photos or Files app"
  * user with the place to delete it. API 29 has no delete request, so there
  * the review asks for nothing and says where to delete.
  *
- * Both requests are activities of the platform, so each runs between
- * [ChurController.beginHostActivity] and [ChurController.endHostActivity], as
- * the picker does; otherwise the background lock of `MainActivity.onPause`
- * would close the vault under them. A lock disposes of the route, and with it
- * of these launchers and the picked items, so no outcome outlives the
- * session. The items live in plain state and never reach saved state, §14.2.
+ * Both requests are dialogs that only pause the activity, so each runs
+ * inside a [ChurController.beginPrompt] bracket: the background lock of
+ * `MainActivity.onPause` does not close the vault under them, and a user who
+ * leaves the app meanwhile is locked out at once when the activity stops,
+ * `ANDROID.md` §19.3. An answer to a prompt that ended so reports nothing. A
+ * lock disposes of the route, and with it of these launchers and the picked
+ * items, so no outcome outlives the session. The items live in plain state
+ * and never reach saved state, §14.2.
  */
 @Composable
 internal fun rememberOriginalDeletion(controller: ChurController): (List<Uri>) -> Unit {
@@ -54,17 +56,22 @@ internal fun rememberOriginalDeletion(controller: ChurController): (List<Uri>) -
     val scope = rememberCoroutineScope()
     var picked by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var found by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var prompt by remember { mutableStateOf<Long?>(null) }
+    val answered = {
+        val current = prompt?.let(controller::endPrompt) == true
+        prompt = null
+        current
+    }
     val finish = { deleted: Int ->
         controller.report(SourceDeletionCopy.outcome(picked.size, found.size, deleted, PLACE))
         picked = emptyList()
         found = emptyList()
     }
     val confirm = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
-        controller.endHostActivity()
-        finish(if (result.resultCode == Activity.RESULT_OK) found.size else 0)
+        if (answered()) finish(if (result.resultCode == Activity.RESULT_OK) found.size else 0)
     }
     val access = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-        controller.endHostActivity()
+        if (!answered()) return@rememberLauncherForActivityResult
         scope.launch {
             found = withContext(Dispatchers.IO) { picked.mapNotNull { originalRow(resolver, it) } }
             val request = if (found.isNotEmpty() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -76,7 +83,7 @@ internal fun rememberOriginalDeletion(controller: ChurController): (List<Uri>) -
                 found = emptyList()
                 finish(0)
             } else {
-                controller.beginHostActivity()
+                prompt = controller.beginPrompt()
                 confirm.launch(IntentSenderRequest.Builder(request.intentSender).build())
             }
         }
@@ -86,7 +93,7 @@ internal fun rememberOriginalDeletion(controller: ChurController): (List<Uri>) -
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             finish(0)
         } else {
-            controller.beginHostActivity()
+            prompt = controller.beginPrompt()
             access.launch(readPermissions(resolver, uris))
         }
     }

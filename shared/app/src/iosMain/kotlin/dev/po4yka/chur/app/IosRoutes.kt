@@ -316,15 +316,15 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             onKeep = { originals = null },
             onReview = {
                 originals = null
-                // Photos asks for access and then to confirm, and each alert
-                // takes the scene out of the foreground, as the picker does.
+                // Photos asks for access and then to confirm. Each alert only
+                // makes the scene resign active, so the two run in one prompt,
+                // which leaving the app ends with a lock, `IOS.md` §21.2.
                 val session = controller.vaultState.value
-                controller.beginHostActivity()
+                val prompt = controller.beginPrompt()
                 picked.delete { found, deleted ->
-                    // A lock ended the count with the session, and the outcome
-                    // belongs to no screen of a later one.
-                    if (controller.vaultState.value == session) {
-                        controller.endHostActivity()
+                    // Leaving or a lock ended the prompt with the session, and
+                    // the outcome belongs to no screen of a later one.
+                    if (controller.endPrompt(prompt) && controller.vaultState.value == session) {
                         controller.report(SourceDeletionCopy.outcome(picked.count, found, deleted, "the Photos app"))
                     }
                 }

@@ -134,6 +134,17 @@ class MainActivity : FragmentActivity() {
         host.controller.background()
     }
 
+    override fun onStop() {
+        super.onStop()
+        // A permission dialog or a delete confirmation holds the lock above
+        // off, but it only pauses this activity. Stopping while one is up
+        // means the user left, so every such prompt ends and the vault locks
+        // at once, `ANDROID.md` §19.3; a picker, which stops this activity
+        // itself, keeps the lock off.
+        if (isChangingConfigurations) return
+        host.controller.enteredBackground()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         // The window goes; the runtime, the repository and the engine stay,

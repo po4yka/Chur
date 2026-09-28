@@ -207,12 +207,12 @@ class ChurController(
     private var hostActivities = 0
 
     /**
-     * How many of the [hostActivities] are [configureSync] brackets, which
-     * [enteredBackground] ends early; the epoch tells a setup that its bracket
-     * was ended for it.
+     * How many of the [hostActivities] are [beginPrompt] brackets, which
+     * [enteredBackground] and the end of the session end early; the epoch
+     * tells a prompt that its bracket was ended for it.
      */
-    private var syncBrackets = 0
-    private var syncBracketEpoch = 0L
+    private var prompts = 0
+    private var promptEpoch = 0L
     private var lockEpoch = 0L
 
     /**
@@ -807,21 +807,55 @@ class ChurController(
     }
 
     /**
-     * The scene entered the background, which iOS reports after it resigned
-     * active and [background] ran.
+     * Marks that a system prompt the application asked for is up, and returns
+     * the bracket that [endPrompt] takes.
+     *
+     * A prompt holds the background lock off as [beginHostActivity] does, but
+     * it never takes the application out of the foreground by itself: an iOS
+     * alert or Local Authentication sheet only makes the scene resign active,
+     * and an Android permission dialog or delete confirmation only pauses the
+     * activity. So [enteredBackground] during a prompt means the user left,
+     * and the bracket ends there and the vault locks at once, as leaving
+     * always does, `DESIGN.md` §14.4. A picker or a credential screen, which
+     * can take the whole screen, uses [beginHostActivity] instead.
+     */
+    fun beginPrompt(): Long {
+        prompts += 1
+        hostActivities += 1
+        return promptEpoch
+    }
+
+    /**
+     * Ends what [beginPrompt] began, on the answer or on a dismissal.
+     *
+     * It returns `false` when leaving the application or the end of the
+     * session already ended the bracket. The answer then belongs to no screen
+     * of the session now open, and the bracket must not end a newer one.
+     */
+    fun endPrompt(bracket: Long): Boolean {
+        if (bracket != promptEpoch || prompts == 0) return false
+        prompts -= 1
+        endHostActivity()
+        return true
+    }
+
+    /**
+     * The application entered the background: iOS reports it after the scene
+     * resigned active and [background] ran, and Android when the activity
+     * stops after its pause ran [background].
      *
      * A lock held off by [beginHostActivity] stays off, as the picker needs.
-     * The bracket of [configureSync] is the exception. The local network alert
-     * only makes the scene inactive, so entering the background means the
-     * user left, and the bracket ends and the vault locks at once, as leaving
-     * always does, `DESIGN.md` §14.4 and `PLAINTEXT_LIFECYCLE.md` §7. The
-     * bootstrap needs no session after it read the identity, so it goes on.
+     * The brackets of [beginPrompt] are the exception: a prompt does not take
+     * the application out of the foreground, so the user left, and every open
+     * prompt ends and the vault locks at once, `DESIGN.md` §14.4 and
+     * `PLAINTEXT_LIFECYCLE.md` §7. The work behind a prompt goes on; a sync
+     * bootstrap needs no session after it read the identity.
      */
     fun enteredBackground() {
-        if (syncBrackets == 0) return
-        repeat(syncBrackets) { endHostActivity() }
-        syncBrackets = 0
-        syncBracketEpoch += 1
+        if (prompts == 0) return
+        repeat(prompts) { endHostActivity() }
+        prompts = 0
+        promptEpoch += 1
         background()
     }
 
@@ -1217,16 +1251,15 @@ class ChurController(
      *
      * [localNetworkAlert] is for a platform that asks for local network access
      * as the first connection to a local address goes out, which iOS does,
-     * `IOS.md` §27. Its alert takes the scene out of the foreground as a device
-     * prompt does, so the bootstrap to a local server is bracketed as
-     * [addRecoverySlot] is; otherwise the background lock would close the vault
-     * under the setup. The bracket lasts as long as the bootstrap, since the
-     * alert gives no signal of its own, and a user who leaves the app
-     * meanwhile ends it and is locked out at once, [enteredBackground]. Android
-     * asks before this call, `ANDROID.md` §24, and shows nothing during it, so
-     * there leaving the app locks as always. iOS gives the app no answer to
-     * read, so a local server that does not answer may be a refusal, and the
-     * notice then says where to allow access.
+     * `IOS.md` §27. Its alert makes the scene resign active, so the bootstrap
+     * to a local server runs inside a [beginPrompt] bracket; otherwise the
+     * background lock would close the vault under the setup. The bracket lasts
+     * as long as the bootstrap, since the alert gives no signal of its own,
+     * and a user who leaves the app meanwhile ends it and is locked out at
+     * once, [enteredBackground]. Android asks before this call, `ANDROID.md`
+     * §24, and shows nothing during it. iOS gives the app no answer to read,
+     * so a local server that does not answer may be a refusal, and the notice
+     * then says where to allow access.
      */
     fun configureSync(
         serverUrl: String,
@@ -1234,24 +1267,14 @@ class ChurController(
         localNetworkAlert: Boolean = false,
     ) = guarded {
         val local = localNetworkAlert && isLocalSyncEndpoint(serverUrl)
-        val bracket =
-            if (local) {
-                syncBrackets += 1
-                beginHostActivity()
-                syncBracketEpoch
-            } else {
-                null
-            }
+        val prompt = if (local) beginPrompt() else null
         try {
             sync?.configure(serverUrl, bootstrapSecret)
         } catch (failure: SyncTransportFailure) {
             if (!local || failure.status != ChurStatus.NETWORK_FAILURE) throw failure
             say(LOCAL_NETWORK_REFUSED)
         } finally {
-            if (bracket == syncBracketEpoch) {
-                syncBrackets -= 1
-                endHostActivity()
-            }
+            prompt?.let(::endPrompt)
         }
     }
 
@@ -1364,9 +1387,13 @@ class ChurController(
      * first, under the device-slot policy in force: with "Biometrics only" on,
      * the device unlock code does not pass it. A cancel returns quietly, and
      * a device with no factor to ask for gets no phrase until it has one. The
-     * prompt can put a system screen in front of this one, so it is bracketed
-     * as [enrollDeviceSlot] is. [create] asks nothing: the vault credential
-     * was entered a moment before.
+     * Android prompt can hand over to the device credential screen, which can
+     * take the whole screen as a picker does, so it is bracketed as
+     * [enrollDeviceSlot] is. The Local Authentication sheet only makes the
+     * scene resign active, so it is a [beginPrompt]: a user who leaves the app
+     * during it is locked out at once, and an answer that comes after that
+     * shows nothing. [create] asks nothing: the vault credential was entered a
+     * moment before.
      *
      * Nothing is committed yet, so the slot list stays as it is:
      * [acknowledgeRecoveryPhrase] commits it, and Settings reloads the slots
@@ -1374,9 +1401,16 @@ class ChurController(
      */
     fun addRecoverySlot() = requestPhrase {
         val strict = _deviceSlotStrict.value
-        beginHostActivity()
+        val android = deviceUnlock.available
+        val prompt = if (android) {
+            beginHostActivity()
+            null
+        } else {
+            beginPrompt()
+        }
+        var current = true
         val check = try {
-            if (deviceUnlock.available) {
+            if (android) {
                 deviceUnlock.confirmOwner(strict)
             } else {
                 appleDeviceUnlock.confirmOwner(strict)
@@ -1388,8 +1422,9 @@ class ChurController(
             say("This device could not confirm it's you. Try again.")
             return@requestPhrase
         } finally {
-            endHostActivity()
+            if (prompt == null) endHostActivity() else current = endPrompt(prompt)
         }
+        if (!current) return@requestPhrase
         when (check) {
             OwnerCheck.CONFIRMED -> Unit
             OwnerCheck.CANCELLED -> return@requestPhrase
@@ -2111,8 +2146,12 @@ class ChurController(
         sync?.endSession()
         // A launch whose result never arrived belonged to the session that just
         // ended. Carrying its count forward would suppress the background lock
-        // of the next session, so the count ends with the session.
+        // of the next session, so the count ends with the session. So do the
+        // prompts, and the new epoch keeps a prompt of this session that
+        // answers later from ending one of the next.
         hostActivities = 0
+        prompts = 0
+        promptEpoch += 1
     }
 
     private suspend fun completeUnlock(target: AppRoute, epoch: Long) {

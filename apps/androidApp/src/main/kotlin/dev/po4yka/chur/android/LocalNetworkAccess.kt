@@ -90,12 +90,14 @@ internal fun onLink(routes: List<RouteInfo>, address: InetAddress): Boolean =
  * nothing and says how to allow access, with a way to the app's system
  * settings.
  *
- * The system request is an activity of the platform, so it runs between
- * [ChurController.beginHostActivity] and [ChurController.endHostActivity], as
- * the media picker does; otherwise the background lock of
- * `MainActivity.onPause` would close the vault under it. `then` can hold the
- * bootstrap secret, so it lives in plain state until the answer and never
- * reaches saved state. A lock disposes of the route, and of `then` with it.
+ * The system request is a dialog that only pauses the activity, so it runs
+ * inside a [ChurController.beginPrompt] bracket: the background lock of
+ * `MainActivity.onPause` does not close the vault under it, and a user who
+ * leaves the app meanwhile is locked out at once when the activity stops,
+ * `ANDROID.md` §19.3. An answer to a prompt that ended so runs nothing.
+ * `then` can hold the bootstrap secret, so it lives in plain state until the
+ * answer and never reaches saved state. A lock disposes of the route, and of
+ * `then` with it.
  */
 @Composable
 internal fun rememberLocalNetworkAccess(controller: ChurController): (serverUrl: String, then: () -> Unit) -> Unit {
@@ -105,10 +107,13 @@ internal fun rememberLocalNetworkAccess(controller: ChurController): (serverUrl:
     val application = context.applicationContext
     val scope = rememberCoroutineScope()
     var pending by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var prompt by remember { mutableStateOf<Long?>(null) }
     val request = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        controller.endHostActivity()
+        val current = prompt?.let(controller::endPrompt) == true
+        prompt = null
         val then = pending
         pending = null
+        if (!current) return@rememberLauncherForActivityResult
         if (granted) {
             then?.invoke()
         } else {
@@ -121,7 +126,7 @@ internal fun rememberLocalNetworkAccess(controller: ChurController): (serverUrl:
             // see through the call.
             if (Build.VERSION.SDK_INT >= LOCAL_NETWORK_PROTECTION && localNetworkBlocked(context, serverUrl)) {
                 pending = then
-                controller.beginHostActivity()
+                prompt = controller.beginPrompt()
                 request.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
             } else {
                 then()
