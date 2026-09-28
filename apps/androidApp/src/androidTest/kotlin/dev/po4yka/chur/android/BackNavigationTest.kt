@@ -1568,6 +1568,27 @@ class BackNavigationTest {
     }
 
     @Test
+    fun theSelectionBarKeepsThePanic() = inTestVault {
+        withMedia()
+        longPress(photoTile())
+        assertTrue("the long press starts a selection", await { find(label("1 selected")) != null })
+
+        // `DISCREET_MODE.md` "The panic gesture": the selection bar replaces
+        // the top bar, so it draws the lock control itself, and the panic
+        // needs no "Clear selection" first.
+        val control = generateSequence(find(label("Lock now"))) { it.parent }.first { it.isClickable }
+        val panic = control.actionList.firstOrNull {
+            it.label?.toString() == "Lock immediately" && it.id != AccessibilityNodeInfo.ACTION_LONG_CLICK
+        }
+        assertNotNull("the long press is a custom action too", panic)
+
+        assertTrue(control.performAction(checkNotNull(panic).id))
+
+        assertTrue("the panic locks", await { controller.vaultState.value is VaultState.Locked })
+        assertTrue("and leaves the vault", await { controller.route.value != AppRoute.Vault })
+    }
+
+    @Test
     fun aScreenReaderSelectsWithTheLongClickActionOfATile() = inTestVault {
         withMedia()
         val tile = photoTile()

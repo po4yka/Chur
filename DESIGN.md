@@ -872,6 +872,8 @@ Selection replaces ordinary top actions with:
 - delete;
 - more.
 
+The lock control stays in the selection bar: [`docs/product/DISCREET_MODE.md`](docs/product/DISCREET_MODE.md#the-panic-gesture), "The panic gesture", makes the panic reachable from every private screen without a step first, and "Clear selection" would be that step.
+
 A long press on an item that does not move starts selection mode with that item selected, with the haptic of §22.4. While a selection runs, a tap adds or removes an item. A long press that moves drags the item, or the selection that contains it, to the album tray, or reorders a manually sorted album. Each item gives a screen reader or a switch the same choice as its long-click action, named `Select` or `Deselect`.
 
 Destructive actions require precise scope:

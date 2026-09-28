@@ -341,7 +341,7 @@ fun VaultShell(
         containerColor = colors.canvas,
         topBar = {
             // §11.4: selection replaces the ordinary top actions rather than
-            // adding to them, so nothing here is reachable in both modes.
+            // adding to them, so only the lock control is in both modes.
             if (state.selectedCount > 0) {
                 SelectionBar(state, actions)
             } else {
@@ -609,6 +609,11 @@ internal fun LockControl(
  * action appears only where it has a scope to act in.
  *
  * The menu keeps the destructive actions reachable on narrow screens.
+ *
+ * The bar replaces the shell's top bar, so it draws [LockControl] itself:
+ * `DISCREET_MODE.md` "The panic gesture" holds on every private screen, and
+ * a selection that asked for "Clear selection" before the panic would put a
+ * step in front of it.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -667,6 +672,7 @@ private fun SelectionBar(state: VaultUiState, actions: VaultActions) {
                     )
                 }
             }
+            LockControl(onLock = actions.onLock, onPanic = actions.onPanic)
         },
     )
 }
