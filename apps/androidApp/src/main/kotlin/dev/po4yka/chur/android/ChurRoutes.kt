@@ -203,7 +203,7 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
             BackHandler { controller.goTo(AppRoute.PublicSettings) }
             UnlockScreen(
                 busy = unlocking,
-                failed = (vaultState as? VaultState.Locked)?.lastFailure != null || formError != null,
+                error = formError,
                 onUnlock = controller::unlock,
                 onUseRecovery = { controller.goTo(AppRoute.Recover) },
                 deviceUnlockOffered = controller.deviceUnlockOffered.collectAsState().value,
@@ -212,7 +212,7 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
         }
         AppRoute.AppUnlock -> UnlockScreen(
             busy = unlocking,
-            failed = (vaultState as? VaultState.Locked)?.lastFailure != null || formError != null,
+            error = formError,
             onUnlock = controller::unlock,
             onUseRecovery = { controller.goTo(AppRoute.AppRecover) },
             deviceUnlockOffered = controller.deviceUnlockOffered.collectAsState().value,

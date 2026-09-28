@@ -1534,6 +1534,8 @@ Use sheet for contextual actions and progressive detail. Use dialog for short, h
 
 Security-relevant actionable errors remain visible until dismissed or acted upon. Routine confirmations may time out. Snackbar text never includes private filenames unless already visible and necessary.
 
+A security notice follows the user into the viewer and back. Opening an item, closing the viewer, or starting another action does not remove it. Only a newer notice replaces it, and a lock removes it with the rest of the session. A notice that only sends the user to a Settings banner, such as the unlock-time line about a sync stop, goes away when Settings opens, because the banner there says the same and stays.
+
 ---
 
 ## 27. Content and voice

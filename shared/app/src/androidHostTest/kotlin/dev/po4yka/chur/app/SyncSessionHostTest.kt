@@ -426,6 +426,54 @@ class SyncSessionHostTest {
         }
     }
 
+    /**
+     * `DESIGN.md` §26 keeps a security notice until the user dismisses it or
+     * takes its action. Every guarded action and every opened tile cleared
+     * the notice first, so the unlock's fork notice of
+     * `ROLLBACK_PROTECTION.md` §4 was gone after the first tap on a photo.
+     */
+    @Test
+    fun the_fork_notice_outlives_a_clear_and_gives_way_to_a_newer_notice(): Unit = runBlocking {
+        val sync = SyncCoordinator(store)
+        // The server is out of reach, so the unlock pulls nothing.
+        val controller = controller(sync) { false }
+        try {
+            controller.start()
+            controller.create(OWNER, offerRecovery = false)
+            withTimeout(10_000) { controller.route.first { it == AppRoute.Vault } }
+            val identity = checkNotNull(controller.vault.syncIdentity())
+            store.saved = SyncState(SERVER, identity.vaultId, identity.deviceId, ByteArray(32), emptyList())
+            // The catalog reads as one that found a fork in an earlier process.
+            sync.bind(
+                object : SyncVaultBoundary by RepositorySyncBoundary(controller.vault) {
+                    override suspend fun forkState(): SyncForkState = SyncForkState(detected = 1, acknowledged = 0)
+                },
+            )
+            controller.lock()
+            withTimeout(10_000) { controller.route.first { it == AppRoute.PublicShell } }
+            controller.goTo(AppRoute.Unlock)
+            controller.unlock(OWNER)
+            val fork = checkNotNull(withTimeout(10_000) { controller.notice.first { it?.text == FORK_NOTICE } })
+            assertTrue(fork.security)
+            assertTrue(fork.pointsToSettings, "Settings shows the banner it points to, and drops it")
+
+            // A host clears as it opens a tile, and a guarded action clears
+            // before it runs.
+            controller.report(null)
+            controller.loadTags()
+            delay(200)
+            assertEquals(fork, controller.notice.value)
+
+            // A newer notice takes its place, and a clear drops that one.
+            controller.report("Routine.")
+            assertEquals("Routine.", controller.notice.value?.text)
+            controller.report(null)
+            assertNull(controller.notice.value)
+        } finally {
+            controller.vault.shutdown()
+        }
+    }
+
     /** Creates the owner, which configured [server], and another identity. */
     private suspend fun seedOwnerAndOther(server: String = SERVER) {
         val first = controller(SyncCoordinator(store))

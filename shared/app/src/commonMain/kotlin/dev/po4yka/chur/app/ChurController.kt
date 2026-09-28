@@ -284,7 +284,7 @@ class ChurController(
 
     /**
      * The outcome of the last action on the vault, shown once as the snackbar
-     * of `DESIGN.md` §26.
+     * of `DESIGN.md` §26, or a security notice until the user dismisses it.
      *
      * Its text is [userCopy], [syncCopy], a count, or a fixed line, so it
      * carries no private value, `ERROR_MODEL.md` "Safe metadata". Only the
@@ -1847,7 +1847,7 @@ class ChurController(
      * Sets the message a host flow produced, or clears it with `null`.
      *
      * A credential form shows it as its [formError], and every other route as
-     * its [notice].
+     * its [notice]. A clear leaves a security notice, see [post].
      */
     fun report(message: String?) {
         post(message)
@@ -2269,9 +2269,14 @@ class ChurController(
                     // acknowledges it in Settings. It is a security notice,
                     // which `DESIGN.md` §26 keeps until it is dismissed, and it
                     // comes before the pull, which may wait on the network.
+                    // Settings drops it: its banner says the same and stays.
                     val status = engine.status.value
                     if (status.integrityStop != null && !status.integrityAcknowledged) {
-                        say("Sync stopped for one device. Open Settings to see why.", security = true)
+                        say(
+                            "Sync stopped for one device. Open Settings to see why.",
+                            security = true,
+                            pointsToSettings = true,
+                        )
                     }
                     // A server this device cannot reach now would only hold
                     // "Sync now" through a backoff, [syncReachable]. On iOS
@@ -2383,19 +2388,28 @@ class ChurController(
      * to a screen it was not started from; an export that fails after the
      * lock would otherwise show its outcome on the unlock form as a refused
      * credential. A credential form gets [formError]; every other route gets
-     * a [notice], and `null` clears whichever the route shows.
+     * a [notice].
+     *
+     * `null` clears the form's refusal and a routine notice, but not a
+     * [Notice.security] one: `DESIGN.md` §26 keeps that until the user
+     * dismisses it or takes its action, and every [guarded] action and every
+     * opened tile clears first. Only a newer notice or a route change, such as
+     * a lock, replaces it.
      */
     private fun post(
         text: String?,
         visit: Long = routeVisit,
         security: Boolean = false,
         action: Pair<String, () -> Unit>? = null,
+        pointsToSettings: Boolean = false,
     ) {
         if (visit != routeVisit) return
         if (_route.value in FORM_ROUTES) {
             _formError.value = text
+        } else if (text != null) {
+            _notice.value = Notice(++noticeCount, text, security, action, pointsToSettings)
         } else {
-            _notice.value = text?.let { Notice(++noticeCount, it, security, action) }
+            _notice.update { current -> current?.takeIf { it.security } }
         }
     }
 
@@ -2404,8 +2418,9 @@ class ChurController(
         text: String?,
         security: Boolean = false,
         action: Pair<String, () -> Unit>? = null,
+        pointsToSettings: Boolean = false,
     ) {
-        post(text, currentCoroutineContext()[RouteVisit]?.number ?: routeVisit, security, action)
+        post(text, currentCoroutineContext()[RouteVisit]?.number ?: routeVisit, security, action, pointsToSettings)
     }
 
     /** The [routeVisit] a piece of guarded work started in. */
@@ -2530,10 +2545,10 @@ class ChurController(
         /**
          * How often the idle timer looks.
          *
-         * The shortest choice of §14.4 is "immediately", so the tick has to be
-         * short enough that the shortest choice still reads as immediate; a
-         * second is that, and it is one wakeup a second only while a session is
-         * unlocked.
+         * The shortest choice of §14.4 is 30 seconds, and a vault locks at most
+         * one tick after its limit, so a second keeps every choice within about
+         * 3 percent of what it says. It is one wakeup a second, and only while
+         * a session is unlocked or a creation waits for its phrase.
          */
         const val IDLE_TICK_MS = 1_000L
     }
@@ -2584,7 +2599,8 @@ enum class ExportTarget { DEFAULT, FILES, MEDIA_LIBRARY, SHARE }
  *
  * [id] tells two equal texts apart, so the same outcome twice is shown twice.
  * A [security] notice stays until the user dismisses it or takes its
- * [action]; any other one times out.
+ * [action]: a clear, an opened item and the viewer's close leave it, and only
+ * a newer notice or a route change replaces it. Any other one times out.
  */
 data class Notice(
     val id: Long,
@@ -2592,4 +2608,10 @@ data class Notice(
     val security: Boolean = false,
     /** A label and what it does, such as an undo. */
     val action: Pair<String, () -> Unit>? = null,
+    /**
+     * Whether it only sends the user to a Settings banner that says the same
+     * and stays, so Settings drops it once it is on screen rather than show
+     * both.
+     */
+    val pointsToSettings: Boolean = false,
 )

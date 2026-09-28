@@ -228,7 +228,7 @@ class BackNavigationTest {
         assertTrue(find { it.isEditable }!!.pressImeAction())
         assertFalse(
             "an empty field must not be tried",
-            await(1_000) { find(label("Unable to unlock.")) != null || controller.vaultState.value !is VaultState.Locked },
+            await(1_000) { find(label(REFUSAL)) != null || controller.vaultState.value !is VaultState.Locked },
         )
         setText(find { it.isEditable }, PASSWORD)
         assertTrue(find { it.isEditable }!!.pressImeAction())
@@ -245,7 +245,8 @@ class BackNavigationTest {
         lockQuietly()
         instrumentation.runOnMainSync { controller.goTo(AppRoute.Unlock) }
         assertTrue("the unlock form", await { find { it.isEditable } != null })
-        val refusal = "Unable to unlock."
+        // §27: the controller's sentence, not a fixed one without its next step.
+        val refusal = REFUSAL
         repeat(2) { attempt ->
             instrumentation.runOnMainSync { controller.unlock("not the password") }
             // The refusal of the last attempt leaves the same locked state, so
@@ -978,6 +979,9 @@ class BackNavigationTest {
             assertTrue("the vault reopens", await(60_000) { isOpen() })
         }
         try {
+            // An item to open, imported first so its own notice does not take
+            // the place of the one under test.
+            if (!await(3_000) { controller.page.value.objects.any { it.mediaKind == MEDIA_CLASS_IMAGE } }) importPhoto()
             runBlocking { store.save(savedServer("https://sync.invalid")) }
             // No pass of this process reported the fork; the unlock reads it.
             reopen()
@@ -985,10 +989,19 @@ class BackNavigationTest {
             // The pull the unlock started backs off against an address that
             // never answers; the list is searched once it stops changing.
             assertTrue("the pull ends", await(120_000) { !sync.status.value.busy })
-            // The notice stays until dismissed, and the rows under it are out
-            // of the accessibility tree while it does.
-            tap(label("Dismiss"))
+            // `DESIGN.md` §26: the notice stays until dismissed. Opening an
+            // item cleared it, and so did the viewer's close.
+            var tile: AccessibilityNodeInfo? = null
+            assertTrue("a media tile", await { findTile()?.also { tile = it } != null })
+            tap { it == tile }
+            assertTrue("the viewer shows it", await { find(label("Info")) != null && find(label(notice)) != null })
+            pressBack()
+            assertTrue("the viewer closes", await { find(label("Info")) == null })
+            assertTrue("the shell shows it again", await { find(label(notice)) != null })
+            // Settings shows the banner the notice points to, so it drops the
+            // notice rather than show both.
             tap(label("Settings"))
+            assertTrue("Settings drops it", await { controller.notice.value == null && find(label(notice)) == null })
             assertTrue("the banner offers the acknowledgement", scrollUntil(label("Acknowledge")))
             assertTrue("the banner is there", find(label("Sync stopped for one device")) != null)
 
@@ -2415,6 +2428,9 @@ class BackNavigationTest {
         const val ALBUM = "Back test album"
         const val SCROLLING_LIBRARY = 40
         const val NOTE_TEXT = "BackNavigationTest note"
+
+        /** What the unlock form says for every refused credential, `DESIGN.md` §27. */
+        const val REFUSAL = "Unable to unlock. Try again or use recovery."
 
         /** An EXIF segment that holds only orientation 6, a quarter turn clockwise. */
         val EXIF_ORIENTATION_6: ByteArray = "ffe100224578696600004d4d002a00000008000101120003000000010006000000000000"

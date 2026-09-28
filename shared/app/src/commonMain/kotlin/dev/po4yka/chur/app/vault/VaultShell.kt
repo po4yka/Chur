@@ -147,7 +147,7 @@ data class VaultUiState(
     val kinds: Int = 0,
     val albumOrder: AlbumOrder = AlbumOrder.MANUAL,
     val albumFilter: String = "",
-    /** The outcome of the last action, shown once as a snackbar. */
+    /** The outcome of the last action, shown once as a snackbar, or a security notice until dismissed. */
     val notice: Notice? = null,
     val operation: ActiveOperation? = null,
     /** Whether this platform can hold a device slot at all. */
@@ -267,7 +267,10 @@ data class VaultActions(
     val onAlbumFilterChange: (String) -> Unit = {},
     /** Stop the native operation at its next cooperative cancellation point. */
     val onCancelOperation: () -> Unit = {},
-    /** The snackbar showed [VaultUiState.notice] with this id, or left it. */
+    /**
+     * The snackbar showed [VaultUiState.notice] with this id, or left a
+     * routine one, or Settings showed what the notice pointed to.
+     */
     val onNoticeShown: (Long) -> Unit = {},
     /** Connect the vault to the server the user named, `SYNC_PROTOCOL_V1.md` §6. */
     val onConfigureSync: (serverUrl: String, bootstrapSecret: String) -> Unit = { _, _ -> },
@@ -327,6 +330,13 @@ fun VaultShell(
     val colors = LocalChurColors.current
     val back = state.backStep(actions)
     systemBack(back != null) { back?.invoke() }
+    // §26: a notice that only sends the user to Settings has said its part
+    // once Settings is on screen, where the banner says the same and stays.
+    val notice = state.notice
+    val settingsShown = state.openAlbum == null && state.destination == VaultDestination.SETTINGS
+    LaunchedEffect(notice?.id, settingsShown) {
+        if (settingsShown && notice?.pointsToSettings == true) actions.onNoticeShown(notice.id)
+    }
     Scaffold(
         containerColor = colors.canvas,
         topBar = {
@@ -408,7 +418,7 @@ fun VaultShell(
         },
         // §26: the outcome of an action is a snackbar, which the scaffold
         // places above the floating action and the navigation bar.
-        snackbarHost = { NoticeHost(state.notice, actions.onNoticeShown) },
+        snackbarHost = { NoticeHost(notice, actions.onNoticeShown) },
         floatingActionButton = {
             // §10.1: import is the primary floating action on Library and a
             // contextual action inside an open album, and a destination
@@ -469,14 +479,18 @@ fun VaultShell(
  * `surface-inverse` of the `DESIGN.md` `components.snackbar` token, and the
  * shape is that token's `md` radius of 10dp.
  *
- * [onShown] runs when the snackbar ends and when this host leaves the
- * screen, so a notice shows on one screen once and never comes back.
+ * [onShown] runs when the snackbar ends, so a notice shows once. A routine
+ * notice is also marked shown when this host leaves the screen or is handed
+ * no notice, so it never comes back. A security notice is not: it ends only
+ * with a dismiss or its action, so it moves from the shell to the viewer and
+ * back while the user looks at an item, where it used to be dropped.
  */
 @Composable
 internal fun NoticeHost(notice: Notice?, onShown: (Long) -> Unit, modifier: Modifier = Modifier) {
     val host = remember { SnackbarHostState() }
     LaunchedEffect(notice?.id) {
         val shown = notice ?: return@LaunchedEffect
+        var ended = false
         try {
             val result = host.showSnackbar(
                 message = shown.text,
@@ -484,9 +498,10 @@ internal fun NoticeHost(notice: Notice?, onShown: (Long) -> Unit, modifier: Modi
                 withDismissAction = shown.security,
                 duration = if (shown.security) SnackbarDuration.Indefinite else SnackbarDuration.Short,
             )
+            ended = true
             if (result == SnackbarResult.ActionPerformed) shown.action?.second?.invoke()
         } finally {
-            onShown(shown.id)
+            if (ended || !shown.security) onShown(shown.id)
         }
     }
     SnackbarHost(host, modifier) { Snackbar(it, shape = RoundedCornerShape(10.dp)) }

@@ -47,21 +47,30 @@ import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
  * a credential, which is also what `KEY_SLOTS.md` §8 requires of the boundary
  * underneath it.
  *
+ * [error] is the controller's sentence for the refusal on this screen, the
+ * `userCopy` line of its status. Every credential failure, of any identity or
+ * of none, reads "Unable to unlock. Try again or use recovery.", the §27
+ * wording, so the region still tells no identity apart (`DECOY_VAULT.md` §11).
+ * What the user can act on reads as its own line, and it is the same for
+ * every identity: not enough free memory for the key derivation, a device
+ * that must be unlocked first, or a device prompt the user cancelled. The
+ * screen used to show "Unable to unlock." for all of them, so the user was
+ * told the credential failed when it had not been tried.
+ *
  * The locked state is neutral rather than red, §6.3.
  *
  * The form sits inside the safe area and scrolls in the space the keyboard
  * leaves, `DESIGN.md` §25.5, so Unlock can always be reached. The keyboard's
  * Go key submits as the button does and under the same condition, §23.4.
  *
- * [failed] can stay true across attempts, because a second refusal leaves the
- * same locked state. The error is therefore blank while [busy], so each
- * refusal puts the sentence back and the live region of [FormMessage] speaks
- * it again, §23.2.
+ * A second refusal can leave the same sentence. The error is therefore blank
+ * while [busy], so each refusal puts the sentence back and the live region of
+ * [FormMessage] speaks it again, §23.2.
  */
 @Composable
 fun UnlockScreen(
     busy: Boolean,
-    failed: Boolean,
+    error: String?,
     onUnlock: (String) -> Unit,
     onUseRecovery: () -> Unit,
     deviceUnlockOffered: Boolean = false,
@@ -73,7 +82,7 @@ fun UnlockScreen(
     val canUnlock = !busy && password.isNotEmpty() && (!usePin || isValidVaultPin(password))
     // §14.1: one message for every credential failure. It names no slot, no
     // identity, and no count.
-    val message = if (failed && !busy) "Unable to unlock." else null
+    val message = error.takeUnless { busy }
     val colors = LocalChurColors.current
     Surface(color = colors.canvas, modifier = Modifier.fillMaxSize()) {
         Column(
