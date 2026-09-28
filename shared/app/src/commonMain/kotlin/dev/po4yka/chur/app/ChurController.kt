@@ -937,10 +937,17 @@ class ChurController(
      * clearing: the route stayed in the vault, and a recovery phrase whose
      * slot the lock had discarded stayed on screen with the display awake,
      * against the clearing policy of `DESIGN.md` §17.2.
+     *
+     * An operation the user has not cancelled counts as use until it ends.
+     * Its polls refresh the idle clock only while Rust works, and an import
+     * also works on the host: the iOS fetch of an iCloud original, the
+     * opening of each picked item, and its previews. Under the 30-second
+     * choice such a phase locked the vault and dropped the rest of the pick.
      */
     suspend fun checkIdle() {
         withContext(NonCancellable) {
             if (withContext(Dispatchers.Default) {
+                if (_activeOperation.value?.cancelling == false) repository.noteActivity()
                 repository.lockIfIdle {
                     withContext(NonCancellable + Dispatchers.Main) {
                         lockEpoch += 1

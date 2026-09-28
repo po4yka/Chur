@@ -698,6 +698,19 @@ class VaultRepository(
         return progress
     }
 
+    /**
+     * Counts running work as use, as [poll] does for the part of it in Rust.
+     *
+     * An operation also has phases on the host that call nothing here: the
+     * iOS fetch of an iCloud original, the opening of a picked item, and the
+     * making of its previews. The controller calls this while such work runs,
+     * so the auto-lock choice of `DESIGN.md` §14.4 does not lock the vault in
+     * the middle of it.
+     */
+    suspend fun noteActivity() = mutex.withLock {
+        if (session != 0L) touch()
+    }
+
     /** Asks an operation to stop, §9. Callable at any time, like poll. */
     fun cancel(operation: Long) = ChurVault.cancel(operation)
 

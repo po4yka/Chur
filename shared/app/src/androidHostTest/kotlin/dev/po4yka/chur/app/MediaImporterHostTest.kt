@@ -16,6 +16,7 @@ import dev.po4yka.chur.vault.VaultState
 import java.io.File
 import java.io.RandomAccessFile
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -31,6 +32,10 @@ import kotlin.test.assertTrue
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class MediaImporterHostTest {
+    /** The clock of the controller [withVault] makes, which a case may move. */
+    @Volatile
+    private var now = 1_700_000_000_000L
+
     @Test
     fun imported_original_survives_a_codec_failure_and_closes_the_picker_source() = runBlocking {
         val root = File(System.getProperty("java.io.tmpdir"), "chur-media-${System.nanoTime()}")
@@ -360,6 +365,45 @@ class MediaImporterHostTest {
         assertNull(controller.notice.value)
     }
 
+    @Test
+    fun work_on_the_host_holds_the_auto_lock_off_until_the_pick_ends() = withVault { controller, root ->
+        // Nothing in the iOS fetch of an iCloud original, or in the opening of
+        // a picked item, calls the vault. Each fetch here outlasts the
+        // two-minute limit, and it used to lock the vault in the middle of the
+        // pick and drop the rest, `DESIGN.md` §14.4.
+        val outcomes = controller.importAll(MediaImporter(Previewless), 2, null) { index, prepare ->
+            now += 3 * 60_000
+            assertTrue(prepare(50, 100))
+            controller.checkIdle()
+            assertIs<VaultState.Unlocked>(controller.vaultState.value, "the fetch of item ${index + 1} locked")
+            picked(root, index)
+        }
+
+        assertEquals(listOf(true, true), outcomes.map { it is MediaImporter.Outcome.Imported })
+        withTimeout(10_000) { controller.notice.filterNotNull().first { "imported" in it.text } }
+        // The loads the summary starts refresh the clock too; let them end.
+        delay(500)
+        // The limit counts from the end of the work.
+        now += 3 * 60_000
+        controller.checkIdle()
+        assertIs<VaultState.Locked>(controller.vaultState.value)
+    }
+
+    @Test
+    fun a_cancelled_pick_no_longer_holds_the_auto_lock_off() = withVault { controller, root ->
+        // A cancel is the user giving the work up, so a fetch that has not
+        // stopped yet does not keep the vault open past the limit. The loads
+        // the open started refresh the clock too; let them end first.
+        delay(500)
+        controller.importAll(MediaImporter(Previewless), 2, null) { index, prepare ->
+            controller.cancelActiveOperation()
+            now += 3 * 60_000
+            controller.checkIdle()
+            assertIs<VaultState.Locked>(controller.vaultState.value)
+            if (prepare(50, 100)) picked(root, index) else null
+        }
+    }
+
     /** Runs [test] against a controller whose new vault is open. */
     private fun withVault(test: suspend (ChurController, File) -> Unit): Unit = runBlocking {
         Dispatchers.setMain(Dispatchers.Unconfined)
@@ -369,7 +413,7 @@ class MediaImporterHostTest {
             storageRoot = root.absolutePath,
             privacy = NoPrivacyCover,
             exports = NoExports,
-            clock = { 1_700_000_000_000L },
+            clock = { now },
             notes = InMemoryNoteStore(),
         )
         try {

@@ -1038,10 +1038,17 @@ vault open. Leaving Chur still locks at once, and the chosen limit is the
 backstop. A picker, the share sheet, or a system screen that can
 take the whole screen, such as the device credential screen, cannot be told
 apart from leaving, so it keeps the lock off until it returns, and the
-chosen limit is the backstop for a user who walks away from one. v1 has no
-"Immediately" choice: leaving already locks at once, and a zero foreground
-limit would lock the vault on the next idle check, before the user could use
-it, change the choice back, or finish an import or export. v1 has no "When
+chosen limit is the backstop for a user who walks away from one. So the time
+spent in a picker is idle time: a pick that takes longer than the chosen limit
+returns to a locked vault and imports nothing, and the user unlocks and picks
+again. Work with a progress card counts as use until it ends or the user
+cancels it. For an import, that includes the phases on the device: the iOS
+fetch of an iCloud original, and the opening and previews of each item. So a
+short choice does not stop a batch in the middle, and the limit counts from
+the end of the work. v1 has no "Immediately" choice: leaving already locks
+at once, and a zero foreground limit would lock the vault on the next idle
+check, before the user could use it, change the choice back, or come back
+from a picker with a pick. v1 has no "When
 device locks" choice either: with the immediate background lock it would add
 nothing. The choice is one device-wide public setting, the same in every
 identity (`docs/security/DECOY_VAULT.md` §10).

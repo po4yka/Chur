@@ -19,6 +19,8 @@ import platform.AVFoundation.AVAssetReaderTrackOutput
 import platform.AVFoundation.AVAssetTrack
 import platform.AVFoundation.AVMediaTypeAudio
 import platform.AVFoundation.AVURLAsset
+import platform.AVFoundation.creationDate
+import platform.AVFoundation.dateValue
 import platform.AVFoundation.duration
 import platform.AVFoundation.tracksWithMediaType
 import platform.CoreAudioTypes.kAudioFormatLinearPCM
@@ -28,13 +30,19 @@ import platform.CoreMedia.CMBlockBufferGetDataLength
 import platform.CoreMedia.CMSampleBufferGetDataBuffer
 import platform.CoreGraphics.CGRectMake
 import platform.CoreGraphics.CGSizeMake
+import platform.CoreImage.CIImage
 import platform.CoreMedia.CMTimeGetSeconds
 import platform.CoreMedia.CMTimeMake
 import platform.Foundation.NSData
+import platform.Foundation.NSDateFormatter
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSFileSize
+import platform.Foundation.NSLocale
 import platform.Foundation.NSNumber
+import platform.Foundation.NSTimeZone
 import platform.Foundation.NSURL
+import platform.Foundation.localTimeZone
+import platform.Foundation.timeIntervalSince1970
 import platform.UIKit.UIGraphicsBeginImageContextWithOptions
 import platform.UIKit.UIGraphicsEndImageContext
 import platform.UIKit.UIGraphicsGetImageFromCurrentImageContext
@@ -72,19 +80,45 @@ class IosMediaCodec : MediaCodec {
         if (descriptor < 0) return null
         val attributes = NSFileManager.defaultManager.attributesOfItemAtPath(path, null)
         val size = (attributes?.get(NSFileSize) as? NSNumber)?.longLongValue
+        val type = typeOf(path)
         return PickedMedia(
             descriptor = descriptor,
             seekable = true,
             knownLength = size,
-            contentTypeHint = typeOf(path),
+            contentTypeHint = type,
             originalFilename = name,
-            // §8.1 of the catalog: a picker result carries no capture time on
-            // this path, so it is absent and the row records the substitution
-            // rather than carrying a guess.
-            captureTimeMs = null,
+            captureTimeMs = embeddedCaptureTime(url, type),
             platformHandle = url,
             close = { platform.posix.close(descriptor) },
         )
+    }
+
+    /**
+     * The capture time the file records, `MEDIA_PIPELINE.md` §4.
+     *
+     * The picker hands over a copy of the file and no date: the asset's own
+     * date needs photo library access, which an import does not ask for,
+     * `IOS.md` §15.1. So the copy is read, as Android reads a file whose
+     * provider publishes no date: a photo's EXIF original time, and a video
+     * container's creation date. The value is a hint, §3, and Rust stores a
+     * substituted time for an absent one, §8.1 of the catalog.
+     */
+    private fun embeddedCaptureTime(url: NSURL, type: String): Long? = when {
+        // The ImageIO names are kCGImagePropertyExifDictionary and its
+        // DateTimeOriginal and OffsetTimeOriginal keys.
+        type.startsWith("image/") ->
+            (CIImage.imageWithContentsOfURL(url)?.properties?.get("{Exif}") as? Map<*, *>)?.let { exif ->
+                exifCaptureTimeMs(
+                    exif["DateTimeOriginal"] as? String,
+                    exif["OffsetTimeOriginal"] as? String,
+                    NSTimeZone.localTimeZone,
+                )
+            }
+        // A container with no date stores zero seconds since 1904.
+        type.startsWith("video/") -> AVURLAsset(url, options = null).creationDate?.dateValue
+            ?.let { (it.timeIntervalSince1970 * 1_000).toLong() }
+            ?.takeIf { it >= 0 }
+        else -> null
     }
 
     override fun probe(media: PickedMedia): ProbedMedia? {
@@ -294,6 +328,34 @@ class IosMediaCodec : MediaCodec {
         "wav" -> "audio/wav"
         else -> "application/octet-stream"
     }
+}
+
+/**
+ * An EXIF `DateTimeOriginal`, "2019:05:01 12:00:00", in milliseconds since
+ * the epoch, as the Android codec reads it.
+ *
+ * EXIF records the time on the camera's clock. `OffsetTimeOriginal`,
+ * "+02:00", says which zone that clock was in; a time with no offset, or with
+ * one that does not parse, is read in [zone], the device's zone at import,
+ * `MEDIA_PIPELINE.md` §4. A value that does not parse, as the
+ * "0000:00:00 00:00:00" of a camera whose clock was never set, is no capture
+ * time.
+ */
+internal fun exifCaptureTimeMs(dateTime: String?, offset: String?, zone: NSTimeZone): Long? {
+    val local = dateTime?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val formatter = NSDateFormatter().apply {
+        locale = NSLocale(localeIdentifier = "en_US_POSIX")
+        timeZone = zone
+        lenient = false
+    }
+    val date = offset?.trim()?.takeIf { it.isNotEmpty() }?.let {
+        formatter.dateFormat = "yyyy:MM:dd HH:mm:ssZZZZZ"
+        formatter.dateFromString(local + it)
+    } ?: formatter.run {
+        dateFormat = "yyyy:MM:dd HH:mm:ss"
+        dateFromString(local)
+    }
+    return date?.let { (it.timeIntervalSince1970 * 1_000).toLong() }?.takeIf { it >= 0 }
 }
 
 /** Copies an `NSData` into a Kotlin array. */

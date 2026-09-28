@@ -588,6 +588,7 @@ Requirements:
 - account for iCloud download latency;
 - surface progress and cancellation;
 - treat picker identifiers as transient source references, not vault IDs;
+- read the capture time from the copy's own metadata, because the picker gives no date without library access ([`interop/MEDIA_PIPELINE.md`](interop/MEDIA_PIPELINE.md) §4);
 - close and release representations after Rust import completes or cancels.
 
 ### 15.2 iCloud-backed assets
