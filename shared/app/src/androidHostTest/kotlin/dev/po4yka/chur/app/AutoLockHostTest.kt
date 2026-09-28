@@ -1,10 +1,10 @@
 package dev.po4yka.chur.app
 
 import dev.po4yka.chur.notes.InMemoryNoteStore
+import dev.po4yka.chur.vault.VaultRepository
 import dev.po4yka.chur.vault.VaultState
 import java.io.File
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.resetMain
@@ -116,11 +116,7 @@ class AutoLockHostTest {
         // A relaunch applies the stored choice before anything is unlocked.
         val relaunched = controller()
         assertEquals(AutoLock.AFTER_30_SECONDS, relaunched.autoLock.value)
-        relaunched.start()
-        relaunched.openVaultEntry()
-        relaunched.unlock(PASSWORD)
-        withTimeout(10_000) { relaunched.route.first { it == AppRoute.Vault } }
-        settle()
+        unlocked(relaunched, PASSWORD)
         now += 31_000
         relaunched.checkIdle()
         assertIs<VaultState.Locked>(relaunched.vaultState.value)
@@ -141,23 +137,42 @@ class AutoLockHostTest {
         assertIs<VaultState.Locked>(controller.vaultState.value)
     }
 
-    /** A controller over a new vault, open on the Library. */
+    /**
+     * A controller over a new vault, open on the Library.
+     *
+     * A repository of its own makes the vault, because a creation through the
+     * controller tells nothing when its last load ends, and the controller
+     * then opens it with [unlocked], which can wait for that.
+     */
     private suspend fun open(password: String): ChurController {
-        val controller = controller()
-        controller.start()
-        controller.openVaultEntry()
-        controller.create(password, offerRecovery = false)
-        withTimeout(10_000) { controller.route.first { it == AppRoute.Vault } }
-        settle()
-        return controller
+        val setup = VaultRepository(root.absolutePath, { now })
+        try {
+            setup.start()
+            setup.create(password.encodeToByteArray(), offerRecovery = false)
+        } finally {
+            setup.shutdown()
+        }
+        return unlocked(controller(), password)
     }
 
     /**
-     * Lets the loads an open starts finish. Each one is a vault call that
-     * refreshes the idle clock, and one that ran after the clock moved would
-     * restart the idle time the case measures.
+     * Starts [controller] and unlocks it with [password], and returns when the
+     * unlock has ended.
+     *
+     * Each load an unlock starts is a vault call that refreshes the idle
+     * clock, and one that ran after the case moved the clock would restart
+     * the idle time the case measures. [ChurController.unlocking] clears only
+     * after the unlock opened the Library and loaded its first page, the last
+     * of those calls, so no wall-clock wait is needed.
      */
-    private suspend fun settle() = delay(500)
+    private suspend fun unlocked(controller: ChurController, password: String): ChurController {
+        controller.start()
+        controller.openVaultEntry()
+        controller.unlock(password)
+        withTimeout(10_000) { controller.unlocking.first { !it } }
+        assertEquals(AppRoute.Vault, controller.route.value)
+        return controller
+    }
 
     private object NoExports : ExportSink {
         override fun cancelPending() = Unit

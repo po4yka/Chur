@@ -295,8 +295,10 @@ jobs:
       # cross-build, the per-ABI staging, and the `jniLibs` layout — which a
       # library-module build never reaches. Lint runs beside it, because an
       # Android host defect is more often a manifest or a resource than a type
-      # error.
-      - run: ./gradlew --no-daemon :apps:androidApp:assembleDebug :apps:androidApp:lintDebug
+      # error. The instrumented tests are assembled too: no job runs them on a
+      # device, and compiling them is the least that keeps them from rotting
+      # behind a green run.
+      - run: ./gradlew --no-daemon :apps:androidApp:assembleDebug :apps:androidApp:lintDebug :apps:androidApp:assembleDebugAndroidTest
       # DEFAULT locking honors the committed lockfile but does not fail on a
       # drift, so the pin is enforced here: a full re-resolution with
       # --write-locks must reproduce the committed files byte for byte, and a
@@ -304,7 +306,7 @@ jobs:
       # resolve the configurations a bare `dependencies` report never reaches.
       - name: the Gradle lockfiles pin the resolution
         run: |
-          ./gradlew --no-daemon :apps:androidApp:assembleDebug :apps:androidApp:lintDebug --write-locks --quiet
+          ./gradlew --no-daemon :apps:androidApp:assembleDebug :apps:androidApp:lintDebug :apps:androidApp:assembleDebugAndroidTest --write-locks --quiet
           git diff --exit-code -- '**/gradle.lockfile'
 
       - name: prepare Android release signing

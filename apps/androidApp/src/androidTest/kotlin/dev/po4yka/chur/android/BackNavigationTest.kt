@@ -2063,11 +2063,20 @@ class BackNavigationTest {
      *
      * The lock also discards a recovery slot or a creation whose phrase is
      * still on screen, so nothing the test did not confirm is committed.
+     *
+     * It waits for the route the lock ends on, not only for the vault state.
+     * The repository locks off the main thread, and the controller moves to
+     * the public shell after it, on the main thread. A route a case set in
+     * between, the unlock form of its next step, was replaced by the shell,
+     * and the case timed out waiting for the form.
      */
     private fun lockQuietly() {
         if (controller.vaultState.value !is VaultState.Unlocked && controller.recoveryPhrase.value == null) return
         instrumentation.runOnMainSync { controller.lock() }
-        await { controller.vaultState.value !is VaultState.Unlocked }
+        await {
+            controller.vaultState.value !is VaultState.Unlocked &&
+                controller.route.value.let { it == AppRoute.PublicShell || it == AppRoute.AppUnlock }
+        }
     }
 
     private fun isOpen(): Boolean =
