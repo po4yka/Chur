@@ -42,6 +42,8 @@ import dev.po4yka.chur.app.vault.MEDIA_CLASS_IMAGE
 import dev.po4yka.chur.app.vault.ThumbnailCache
 import dev.po4yka.chur.app.vault.viewerStill
 import dev.po4yka.chur.core.model.ChurStatus
+import dev.po4yka.chur.core.platformkeys.DeviceSlotPolicy
+import dev.po4yka.chur.core.platformkeys.ownerFactorEnrolled
 import dev.po4yka.chur.ffi.StreamKind
 import dev.po4yka.chur.ffi.SyncProcessReport
 import dev.po4yka.chur.imports.AndroidMediaCodec
@@ -73,6 +75,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.Assume.assumeFalse
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
@@ -125,6 +128,9 @@ import org.junit.runner.RunWith
  * closes it before the scope under it. A photo too small for a screen preview
  * is shown from its original, at full size and upright. The activity's saved
  * state holds no object ID while the viewer shows a player, `ANDROID.md` §6.3.
+ * A recovery phrase from Settings waits for the device authentication of
+ * `DESIGN.md` §17.1 step 2; the cases that pass it need the screen-lock PIN as
+ * the `devicePin` runner argument and are skipped without it.
  */
 @RunWith(AndroidJUnit4::class)
 class BackNavigationTest {
@@ -561,8 +567,10 @@ class BackNavigationTest {
 
     @Test
     fun backDoesNotSpendTheOneShowingOfTheRecoveryPhrase() = inTestVault {
+        val pin = devicePin()
         val before = runBlocking { controller.vault.slots() }.map { it.id }.toSet()
         instrumentation.runOnMainSync { controller.addRecoverySlot() }
+        passOwnerCheck(pin)
         assertTrue("the vault shows a new phrase", await(60_000) { controller.recoveryPhrase.value != null })
 
         pressBack()
@@ -594,8 +602,10 @@ class BackNavigationTest {
      */
     @Test
     fun theRecoveryPhraseShowsOnRequestAndCommitsOnceThreeWordsAreTypedBack() = inTestVault {
+        val pin = devicePin()
         val before = runBlocking { controller.vault.slots() }.map { it.id }.toSet()
         instrumentation.runOnMainSync { controller.addRecoverySlot() }
+        passOwnerCheck(pin)
         assertTrue("the vault shows a new phrase", await(60_000) { controller.recoveryPhrase.value != null })
         val words = checkNotNull(controller.recoveryPhrase.value).split(" ")
         val cell = Regex("""^ ?\d{1,2}\. \S+$""")
@@ -647,9 +657,12 @@ class BackNavigationTest {
      * `RECOVERY.md` §8 from Settings: once a phrase exists the row offers to
      * replace it and asks first, Cancel stages nothing, and the confirmed
      * phrase is the only one left: the old phrase no longer opens the vault.
+     * Each phrase waits for the device authentication of `DESIGN.md` §17.1
+     * step 2, and a cancelled prompt shows and stages nothing.
      */
     @Test
     fun replacingTheRecoveryPhraseAsksFirstAndRetiresTheOldOne() = inTestVault {
+        val pin = devicePin()
         fun recovery() = runBlocking { controller.vault.slots() }.filter { it.familyName == "Recovery" }
         fun confirmShownPhrase(): String {
             assertTrue("the vault shows a new phrase", await(60_000) { controller.recoveryPhrase.value != null })
@@ -663,6 +676,7 @@ class BackNavigationTest {
         try {
             tap(label("Settings"))
             tap(label("Set up a recovery phrase"))
+            passOwnerCheck(pin)
             val old = confirmShownPhrase()
             val first = recovery().single()
 
@@ -676,6 +690,17 @@ class BackNavigationTest {
 
             tap(label("Replace recovery phrase"))
             tap(label("Replace"))
+            assertTrue("the device asks who it is", await { ownerPromptShown() })
+            shell("input keyevent KEYCODE_BACK")
+            assertTrue("Back cancels the prompt", await { !ownerPromptShown() })
+            awaitFrames()
+            assertNull("a cancelled prompt shows no phrase", controller.recoveryPhrase.value)
+            assertNull("and says nothing", controller.notice.value)
+            assertEquals(listOf(first), recovery())
+
+            tap(label("Replace recovery phrase"))
+            tap(label("Replace"))
+            passOwnerCheck(pin)
             val new = confirmShownPhrase()
             val replaced = recovery()
             assertEquals(1, replaced.size)
@@ -698,6 +723,39 @@ class BackNavigationTest {
             // phrase of this run. The password slot stays, so the removal is
             // allowed.
             if (isOpen()) runCatching { runBlocking { recovery().forEach { controller.vault.removeSlot(it.slotId) } } }
+        }
+    }
+
+    /**
+     * `DESIGN.md` §17.1 step 2 under `Biometrics only`: the screen lock does
+     * not pass, so a device with no strong biometric enrolled is told to set
+     * one up and shows no phrase. The switch is restored after.
+     */
+    @Test
+    fun biometricsOnlyKeepsTheScreenLockFromSettingUpARecoveryPhrase() = inTestVault {
+        assumeFalse("a device with a strong biometric enrolled", ownerFactorEnrolled(activity, DeviceSlotPolicy.STRICT))
+        // With a device slot the switch would re-enroll it behind a biometric.
+        assumeTrue("a test vault with a device slot", runBlocking { controller.vault.slots() }.none { it.slotType == 2 })
+        val before = controller.deviceSlotStrict.value
+        try {
+            tap(label("Settings"))
+            if (!before) {
+                tap(label("Biometrics only"))
+                assertTrue("the switch turns on", await { controller.deviceSlotStrict.value })
+            }
+            tap { label("Set up a recovery phrase")(it) || label("Replace recovery phrase")(it) }
+            find(label("Replace"))?.let { tap(label("Replace")) }
+            assertTrue(
+                "the device is told what to set up",
+                await { controller.notice.value?.text?.startsWith("Set up a fingerprint or face unlock first.") == true },
+            )
+            assertFalse("and asks nothing", ownerPromptShown())
+            assertNull("no phrase is shown", controller.recoveryPhrase.value)
+        } finally {
+            if (controller.deviceSlotStrict.value != before) {
+                instrumentation.runOnMainSync { controller.toggleDeviceSlotPolicy() }
+                await { controller.deviceSlotStrict.value == before }
+            }
         }
     }
 
@@ -1727,6 +1785,38 @@ class BackNavigationTest {
             Thread.sleep(100)
         }
         return condition()
+    }
+
+    /**
+     * The screen-lock PIN of the device, which a run passes as the `devicePin`
+     * runner argument. A recovery phrase from Settings asks for the device
+     * authentication of `DESIGN.md` §17.1 step 2 first, and this test cannot
+     * know the PIN, so a run without it skips the case.
+     */
+    private fun devicePin(): String {
+        val pin = InstrumentationRegistry.getArguments().getString("devicePin")
+        assumeTrue("pass the screen-lock PIN as the devicePin runner argument", pin != null)
+        return checkNotNull(pin)
+    }
+
+    /** Whether a system window, the device authentication prompt, is in front of the application. */
+    private fun ownerPromptShown(): Boolean =
+        instrumentation.uiAutomation.rootInActiveWindow?.packageName?.let { it != activity.packageName } == true
+
+    /**
+     * Waits for the device authentication prompt and enters [pin] in it.
+     *
+     * The system draws the PIN entry as a pad of its own, which takes no typed
+     * keys, so the digits are pressed through the accessibility tree. A PIN
+     * entered while the dialog still animates in is verified and then never
+     * answered, so the wait lets the animation end, as a person's would.
+     */
+    private fun passOwnerCheck(pin: String) {
+        assertTrue("the device asks who it is", await { ownerPromptShown() })
+        SystemClock.sleep(1_000)
+        pin.forEach { digit -> tap(label(digit.toString())) }
+        tap(label("Enter"))
+        assertTrue("the prompt closes", await { !ownerPromptShown() })
     }
 
     private fun lockIfOpen() {

@@ -16,4 +16,6 @@
     <string name="device_slot_title">Vault</string>
     <string name="device_slot_subtitle">Confirm it\'s you to use this device\'s screen lock for the vault.</string>
     <string name="device_slot_cancel">Cancel</string>
+    <!-- The device authentication of DESIGN.md section 17.1 step 2. -->
+    <string name="owner_check_subtitle">Confirm it\'s you to see a new recovery phrase.</string>
 </resources>

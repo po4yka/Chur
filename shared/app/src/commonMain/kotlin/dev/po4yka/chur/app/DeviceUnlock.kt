@@ -43,6 +43,36 @@ interface DeviceUnlock {
         gcmNonce: ByteArray,
         wrappedRootSecret: ByteArray,
     ): ByteArray?
+
+    /**
+     * Asks the device owner to authenticate, the device authentication of
+     * `DESIGN.md` §17.1 step 2, with the platform prompt [wrap] uses.
+     *
+     * [strict] is the device-slot policy of `KEY_SLOTS.md` §1 in force: under
+     * it only biometry passes, so the device unlock code that
+     * `THREAT_MODEL.md` A2 assumes an adversary knows does not. A binding with
+     * no way to ask answers [OwnerCheck.NOT_SET_UP], so the setup it guards
+     * stays blocked rather than open.
+     *
+     * @throws dev.po4yka.chur.ffi.ChurFailure when the prompt ends in any way
+     * other than a pass or a cancel.
+     */
+    suspend fun confirmOwner(strict: Boolean): OwnerCheck = OwnerCheck.NOT_SET_UP
+}
+
+/** How the device authentication of [DeviceUnlock.confirmOwner] ended. */
+enum class OwnerCheck {
+    /** The owner authenticated. */
+    CONFIRMED,
+
+    /** The owner dismissed the prompt. */
+    CANCELLED,
+
+    /**
+     * The device has no factor the policy admits: no screen lock, or under
+     * the strict policy no enrolled biometric. Nothing was asked.
+     */
+    NOT_SET_UP,
 }
 
 /** The binding for a platform with no device slot, which is the default. */

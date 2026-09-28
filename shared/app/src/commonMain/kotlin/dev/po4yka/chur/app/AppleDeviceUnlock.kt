@@ -12,6 +12,9 @@ interface AppleDeviceUnlock {
     /** Reuse one platform authorization only within this unlock attempt. */
     fun beginUnlock()
     fun endUnlock()
+
+    /** [DeviceUnlock.confirmOwner], through Local Authentication. */
+    suspend fun confirmOwner(strict: Boolean): OwnerCheck = OwnerCheck.NOT_SET_UP
 }
 
 object NoAppleDeviceUnlock : AppleDeviceUnlock {

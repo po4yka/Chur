@@ -2,6 +2,7 @@ package dev.po4yka.chur.android
 
 import androidx.fragment.app.FragmentActivity
 import dev.po4yka.chur.app.DeviceUnlock
+import dev.po4yka.chur.app.OwnerCheck
 import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.core.platformkeys.DeviceSlot
 import dev.po4yka.chur.core.platformkeys.DeviceSlotException
@@ -9,6 +10,8 @@ import dev.po4yka.chur.core.platformkeys.DeviceSlotPolicy
 import dev.po4yka.chur.core.platformkeys.DeviceSlotPrompt
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.core.platformkeys.KeystoreWrapped
+import dev.po4yka.chur.core.platformkeys.confirmDeviceOwner
+import dev.po4yka.chur.core.platformkeys.ownerFactorEnrolled
 
 /**
  * The Android Keystore half of the device slot, `KEY_SLOTS.md` §4.
@@ -87,6 +90,29 @@ class AndroidDeviceUnlock(
             // A slot that belongs to another identity fails the tag, which is
             // not an error here: the caller walks every enrolled slot.
             if (cause.status == ChurStatus.AUTHENTICATION_FAILED) null else throw cause
+        }
+    }
+
+    /**
+     * The slot's own prompt with no key behind it, under the policy the caller
+     * says is in force rather than the setting [policy] reads, and with its
+     * own subtitle: this prompt opens no vault.
+     */
+    override suspend fun confirmOwner(strict: Boolean): OwnerCheck = normalized {
+        val activity = activity()
+        val ownerPolicy = if (strict) DeviceSlotPolicy.STRICT else DeviceSlotPolicy.CONVENIENT
+        when {
+            !ownerFactorEnrolled(activity, ownerPolicy) -> OwnerCheck.NOT_SET_UP
+            confirmDeviceOwner(
+                activity,
+                ownerPolicy,
+                DeviceSlotPrompt(
+                    title = activity.getString(R.string.device_slot_title),
+                    subtitle = activity.getString(R.string.owner_check_subtitle),
+                    cancel = activity.getString(R.string.device_slot_cancel),
+                ),
+            ) -> OwnerCheck.CONFIRMED
+            else -> OwnerCheck.CANCELLED
         }
     }
 

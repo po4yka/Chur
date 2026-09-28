@@ -1122,7 +1122,7 @@ Recovery screens use more space and more explicit explanation than routine setti
 Flow:
 
 1. explain what recovery can and cannot restore;
-2. require device authentication;
+2. require device authentication: the platform prompt (screen lock or biometrics) under the device-slot policy in force, so with `Biometrics only` on only biometrics pass; a device with no factor that policy admits gets no phrase and is told to set one up first; setup inside vault creation asks nothing more, because the user has just entered the vault credential;
 3. reveal mnemonic/QR only on explicit action;
 4. prevent accidental screenshots only where platform support is honest;
 5. ask the user to verify saved material;

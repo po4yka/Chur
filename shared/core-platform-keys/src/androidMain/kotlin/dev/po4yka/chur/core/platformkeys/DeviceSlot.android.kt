@@ -1,5 +1,6 @@
 package dev.po4yka.chur.core.platformkeys
 
+import android.content.Context
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyInfo
@@ -237,107 +238,6 @@ public actual class DeviceSlot public actual constructor(identifier: ByteArray) 
         throw classify(cause, "the Keystore refused to start a slot operation")
     }
 
-    /** Shows the prompt and suspends until the platform decides. */
-    private suspend fun authenticate(
-        activity: FragmentActivity,
-        policy: DeviceSlotPolicy,
-        prompt: DeviceSlotPrompt,
-        crypto: BiometricPrompt.CryptoObject?,
-    ): BiometricPrompt.CryptoObject? {
-        // The library validates the authenticator combination in `build` and
-        // answers an unsupported one with `IllegalArgumentException`. Raw, that
-        // walks past the `DeviceSlotException` catch of the host, and that is
-        // the catch which destroys the key an abandoned enrolment left behind:
-        // the slot would then answer `CONFLICT` for good.
-        val info = try {
-            promptInfo(policy, prompt)
-        } catch (cause: Exception) {
-            throw classify(cause, "the device refused the authorization prompt")
-        }
-        return withContext(Dispatchers.Main) {
-        // `BiometricPrompt.authenticate` commits a fragment, so it starts
-        // nothing once the host has saved its state: androidx logs a line and
-        // returns, with no callback and no exception. The continuation below
-        // would then never resume, and nothing would ever resume it - there is
-        // no timeout, and the scope that waits belongs to the process rather
-        // than to the window. A caller left there holds every lock it took, so
-        // the idle lock of `DESIGN.md` §14 never fires again and the vault
-        // stays open. The test runs on the main thread with the call, so
-        // nothing can save the state between them.
-        if (activity.supportFragmentManager.isStateSaved) {
-            throw DeviceSlotException(
-                ChurStatus.PLATFORM_KEY_UNAVAILABLE,
-                "the window cannot show an authorization prompt",
-            )
-        }
-        suspendCancellableCoroutine { continuation ->
-            val dialog = BiometricPrompt(
-                activity,
-                ContextCompat.getMainExecutor(activity),
-                object : BiometricPrompt.AuthenticationCallback() {
-                    override fun onAuthenticationSucceeded(
-                        result: BiometricPrompt.AuthenticationResult,
-                    ) {
-                        if (continuation.isActive) continuation.resume(result.cryptoObject)
-                    }
-
-                    override fun onAuthenticationError(code: Int, message: CharSequence) {
-                        // The message is the platform's and may name the user's
-                        // enrolled factor, so it is dropped: `ERROR_MODEL.md`
-                        // keeps a private value out of a failure, and the code
-                        // carries everything a caller may branch on.
-                        if (continuation.isActive) {
-                            continuation.resumeWithException(
-                                DeviceSlotException(
-                                    statusOf(code),
-                                    "the device authorization did not complete",
-                                ),
-                            )
-                        }
-                    }
-
-                    // One mismatch does not end the prompt: the platform keeps
-                    // it up and the user tries again, and only an error above
-                    // is terminal.
-                    override fun onAuthenticationFailed() = Unit
-                },
-            )
-            continuation.invokeOnCancellation { dialog.cancelAuthentication() }
-            if (crypto == null) dialog.authenticate(info) else dialog.authenticate(info, crypto)
-        }
-        }
-    }
-
-    private fun promptInfo(
-        policy: DeviceSlotPolicy,
-        prompt: DeviceSlotPrompt,
-    ): BiometricPrompt.PromptInfo {
-        val builder = BiometricPrompt.PromptInfo.Builder()
-            .setTitle(prompt.title)
-            .setSubtitle(prompt.subtitle)
-        builder.setAllowedAuthenticators(allowedAuthenticators(policy, Build.VERSION.SDK_INT))
-        if (policy == DeviceSlotPolicy.STRICT) {
-            // A prompt that admits no device credential must carry its own way
-            // out, and the platform rejects one that sets neither.
-            builder.setNegativeButtonText(prompt.cancel)
-        }
-        return builder.build()
-    }
-
-    /** The stable code behind a `BiometricPrompt` error. */
-    private fun statusOf(code: Int): ChurStatus = when (code) {
-        BiometricPrompt.ERROR_NEGATIVE_BUTTON,
-        BiometricPrompt.ERROR_USER_CANCELED,
-        BiometricPrompt.ERROR_CANCELED,
-        -> ChurStatus.CANCELLED
-        // The factor is spent for now, which is a refusal rather than an
-        // absence: the slot still exists and a later attempt can open it.
-        BiometricPrompt.ERROR_LOCKOUT,
-        BiometricPrompt.ERROR_LOCKOUT_PERMANENT,
-        -> ChurStatus.AUTHENTICATION_FAILED
-        else -> ChurStatus.PLATFORM_KEY_UNAVAILABLE
-    }
-
     private fun key(): javax.crypto.SecretKey {
         val entry = keyStore().getEntry(alias, null) as? KeyStore.SecretKeyEntry
             ?: throw DeviceSlotException(
@@ -377,22 +277,6 @@ public actual class DeviceSlot public actual constructor(identifier: ByteArray) 
             )
         }
 
-    private fun classify(cause: Exception, detail: String): DeviceSlotException =
-        when (cause) {
-            is DeviceSlotException -> cause
-            // The user removed or replaced the factor. Recovery is a portable
-            // slot, never a silent vault deletion.
-            is KeyPermanentlyInvalidatedException ->
-                DeviceSlotException(ChurStatus.PLATFORM_KEY_INVALIDATED, detail, cause)
-            // The prompt has not run, or its authorization expired.
-            is UserNotAuthenticatedException ->
-                DeviceSlotException(ChurStatus.PLATFORM_KEY_UNAVAILABLE, detail, cause)
-            // A wrong key, a changed AAD, and damaged ciphertext are one result.
-            is AEADBadTagException ->
-                DeviceSlotException(ChurStatus.AUTHENTICATION_FAILED, detail, cause)
-            else -> DeviceSlotException(ChurStatus.PLATFORM_KEY_UNAVAILABLE, detail, cause)
-        }
-
     private companion object {
         const val PROVIDER = "AndroidKeyStore"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
@@ -405,6 +289,164 @@ public actual class DeviceSlot public actual constructor(identifier: ByteArray) 
         // the user walked away.
         const val LEGACY_CREDENTIAL_WINDOW_SECONDS = 10
     }
+}
+
+/** Shows the prompt and suspends until the platform decides. */
+private suspend fun authenticate(
+    activity: FragmentActivity,
+    policy: DeviceSlotPolicy,
+    prompt: DeviceSlotPrompt,
+    crypto: BiometricPrompt.CryptoObject?,
+): BiometricPrompt.CryptoObject? {
+    // The library validates the authenticator combination in `build` and
+    // answers an unsupported one with `IllegalArgumentException`. Raw, that
+    // walks past the `DeviceSlotException` catch of the host, and that is
+    // the catch which destroys the key an abandoned enrolment left behind:
+    // the slot would then answer `CONFLICT` for good.
+    val info = try {
+        promptInfo(policy, prompt)
+    } catch (cause: Exception) {
+        throw classify(cause, "the device refused the authorization prompt")
+    }
+    return withContext(Dispatchers.Main) {
+    // `BiometricPrompt.authenticate` commits a fragment, so it starts
+    // nothing once the host has saved its state: androidx logs a line and
+    // returns, with no callback and no exception. The continuation below
+    // would then never resume, and nothing would ever resume it - there is
+    // no timeout, and the scope that waits belongs to the process rather
+    // than to the window. A caller left there holds every lock it took, so
+    // the idle lock of `DESIGN.md` §14 never fires again and the vault
+    // stays open. The test runs on the main thread with the call, so
+    // nothing can save the state between them.
+    if (activity.supportFragmentManager.isStateSaved) {
+        throw DeviceSlotException(
+            ChurStatus.PLATFORM_KEY_UNAVAILABLE,
+            "the window cannot show an authorization prompt",
+        )
+    }
+    suspendCancellableCoroutine { continuation ->
+        val dialog = BiometricPrompt(
+            activity,
+            ContextCompat.getMainExecutor(activity),
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(
+                    result: BiometricPrompt.AuthenticationResult,
+                ) {
+                    if (continuation.isActive) continuation.resume(result.cryptoObject)
+                }
+
+                override fun onAuthenticationError(code: Int, message: CharSequence) {
+                    // The message is the platform's and may name the user's
+                    // enrolled factor, so it is dropped: `ERROR_MODEL.md`
+                    // keeps a private value out of a failure, and the code
+                    // carries everything a caller may branch on.
+                    if (continuation.isActive) {
+                        continuation.resumeWithException(
+                            DeviceSlotException(
+                                statusOf(code),
+                                "the device authorization did not complete",
+                            ),
+                        )
+                    }
+                }
+
+                // One mismatch does not end the prompt: the platform keeps
+                // it up and the user tries again, and only an error above
+                // is terminal.
+                override fun onAuthenticationFailed() = Unit
+            },
+        )
+        continuation.invokeOnCancellation { dialog.cancelAuthentication() }
+        if (crypto == null) dialog.authenticate(info) else dialog.authenticate(info, crypto)
+    }
+    }
+}
+
+private fun promptInfo(
+    policy: DeviceSlotPolicy,
+    prompt: DeviceSlotPrompt,
+): BiometricPrompt.PromptInfo {
+    val builder = BiometricPrompt.PromptInfo.Builder()
+        .setTitle(prompt.title)
+        .setSubtitle(prompt.subtitle)
+    builder.setAllowedAuthenticators(allowedAuthenticators(policy, Build.VERSION.SDK_INT))
+    if (policy == DeviceSlotPolicy.STRICT) {
+        // A prompt that admits no device credential must carry its own way
+        // out, and the platform rejects one that sets neither.
+        builder.setNegativeButtonText(prompt.cancel)
+    }
+    return builder.build()
+}
+
+/** The stable code behind a `BiometricPrompt` error. */
+private fun statusOf(code: Int): ChurStatus = when (code) {
+    BiometricPrompt.ERROR_NEGATIVE_BUTTON,
+    BiometricPrompt.ERROR_USER_CANCELED,
+    BiometricPrompt.ERROR_CANCELED,
+    -> ChurStatus.CANCELLED
+    // The factor is spent for now, which is a refusal rather than an
+    // absence: the slot still exists and a later attempt can open it.
+    BiometricPrompt.ERROR_LOCKOUT,
+    BiometricPrompt.ERROR_LOCKOUT_PERMANENT,
+    -> ChurStatus.AUTHENTICATION_FAILED
+    else -> ChurStatus.PLATFORM_KEY_UNAVAILABLE
+}
+
+private fun classify(cause: Exception, detail: String): DeviceSlotException =
+    when (cause) {
+        is DeviceSlotException -> cause
+        // The user removed or replaced the factor. Recovery is a portable
+        // slot, never a silent vault deletion.
+        is KeyPermanentlyInvalidatedException ->
+            DeviceSlotException(ChurStatus.PLATFORM_KEY_INVALIDATED, detail, cause)
+        // The prompt has not run, or its authorization expired.
+        is UserNotAuthenticatedException ->
+            DeviceSlotException(ChurStatus.PLATFORM_KEY_UNAVAILABLE, detail, cause)
+        // A wrong key, a changed AAD, and damaged ciphertext are one result.
+        is AEADBadTagException ->
+            DeviceSlotException(ChurStatus.AUTHENTICATION_FAILED, detail, cause)
+        else -> DeviceSlotException(ChurStatus.PLATFORM_KEY_UNAVAILABLE, detail, cause)
+    }
+
+/**
+ * Whether the device holds a factor [policy] admits, which the owner check
+ * of `DESIGN.md` §17.1 step 2 needs before it can ask.
+ *
+ * `canAuthenticate` answers for the combination the prompt itself uses.
+ * "None enrolled" is a device with no screen lock under `CONVENIENT`, or with
+ * no strong biometric enrolled under `STRICT`; "no hardware" is `STRICT` on a
+ * device without a strong sensor. Any other answer, a sensor that is busy for
+ * now included, leaves the outcome to the prompt.
+ */
+public fun ownerFactorEnrolled(context: Context, policy: DeviceSlotPolicy): Boolean =
+    when (BiometricManager.from(context).canAuthenticate(allowedAuthenticators(policy, Build.VERSION.SDK_INT))) {
+        BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED,
+        BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE,
+        -> false
+        else -> true
+    }
+
+/**
+ * Asks the device owner to authenticate, with no key behind the prompt: the
+ * device authentication of `DESIGN.md` §17.1 step 2.
+ *
+ * It is the prompt a slot key is authorized with, so [policy] decides the
+ * factor the same way: `STRICT` admits a strong biometric alone, and the
+ * device unlock code, which `THREAT_MODEL.md` A2 assumes an adversary knows,
+ * opens nothing there either.
+ *
+ * @return `true` when the owner authenticated, `false` when they cancelled.
+ * @throws DeviceSlotException for any other end of the prompt.
+ */
+public suspend fun confirmDeviceOwner(
+    activity: FragmentActivity,
+    policy: DeviceSlotPolicy,
+    prompt: DeviceSlotPrompt,
+): Boolean = try {
+    authenticate(activity, policy, prompt, crypto = null)
+    true
+} catch (cause: DeviceSlotException) {
+    if (cause.status == ChurStatus.CANCELLED) false else throw cause
 }
 
 /**

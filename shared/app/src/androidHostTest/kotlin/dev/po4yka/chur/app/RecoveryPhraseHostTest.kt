@@ -16,8 +16,10 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 /**
  * The recovery phrase of a creation, against a real controller and vault.
@@ -35,6 +37,35 @@ class RecoveryPhraseHostTest {
     private var now = 1_700_000_000_000L
     private lateinit var controller: ChurController
 
+    /** What the device answers the owner check of `DESIGN.md` §17.1 step 2. */
+    private var ownerAnswer = OwnerCheck.CONFIRMED
+
+    /** The policy of every owner check asked, `true` for biometrics only. */
+    private val ownerAsked = mutableListOf<Boolean>()
+
+    /** A device that answers the owner check as [ownerAnswer] says and holds no slot. */
+    private val owner = object : DeviceUnlock {
+        override val available = true
+
+        override suspend fun wrap(
+            alias: ByteArray,
+            aad: ByteArray,
+            rootSecret: ByteArray,
+        ): Pair<ByteArray, ByteArray> = throw UnsupportedOperationException("no device slot here")
+
+        override suspend fun unwrap(
+            alias: ByteArray,
+            aad: ByteArray,
+            gcmNonce: ByteArray,
+            wrappedRootSecret: ByteArray,
+        ): ByteArray? = null
+
+        override suspend fun confirmOwner(strict: Boolean): OwnerCheck {
+            ownerAsked += strict
+            return ownerAnswer
+        }
+    }
+
     @BeforeTest
     fun open(): Unit = runBlocking {
         Dispatchers.setMain(Dispatchers.Unconfined)
@@ -43,6 +74,7 @@ class RecoveryPhraseHostTest {
             storageRoot = root.absolutePath,
             privacy = NoPrivacyCover,
             exports = NoExports,
+            deviceUnlock = owner,
             clock = { now },
             notes = InMemoryNoteStore(),
         )
@@ -120,6 +152,41 @@ class RecoveryPhraseHostTest {
         assertEquals(AppRoute.Vault, controller.route.value)
     }
 
+    /**
+     * `DESIGN.md` §17.1 step 2: an open vault is not proof of who holds the
+     * device, so Settings shows a phrase only after the platform prompt, under
+     * the device-slot policy in force.
+     */
+    @Test
+    fun a_phrase_from_settings_waits_for_the_device_authentication(): Unit = runBlocking {
+        controller.create(PASSWORD, offerRecovery = false)
+        withTimeout(10_000) { controller.route.first { it == AppRoute.Vault } }
+        val before = controller.vault.slots()
+
+        // A cancel is quiet, shows no phrase and stages nothing.
+        ownerAnswer = OwnerCheck.CANCELLED
+        askOwner()
+        assertEquals(null, controller.recoveryPhrase.value)
+        assertEquals(null, controller.notice.value)
+        assertFalse(controller.vault.confirmRecoveryPhrase())
+        assertEquals(before, controller.vault.slots())
+
+        // "Biometrics only" reaches the prompt, and a device without the
+        // factor is told what to set up rather than shown a phrase.
+        controller.toggleDeviceSlotPolicy()
+        withTimeout(10_000) { controller.deviceSlotStrict.first { it } }
+        ownerAnswer = OwnerCheck.NOT_SET_UP
+        askOwner()
+        assertEquals(listOf(false, true), ownerAsked)
+        assertEquals(null, controller.recoveryPhrase.value)
+        val notice = assertNotNull(withTimeout(10_000) { controller.notice.first { it != null } })
+        assertTrue(notice.text.startsWith("Set up a fingerprint or face unlock first."), notice.text)
+
+        ownerAnswer = OwnerCheck.CONFIRMED
+        askOwner()
+        withTimeout(10_000) { controller.recoveryPhrase.first { it != null } }
+    }
+
     @Test
     fun a_phrase_a_lock_discarded_is_reported_as_not_saved(): Unit = runBlocking {
         controller.create(PASSWORD, offerRecovery = true)
@@ -135,6 +202,20 @@ class RecoveryPhraseHostTest {
             withTimeout(10_000) { controller.formError.first { it != null } },
         )
         assertIs<VaultState.NoVault>(controller.vaultState.value)
+    }
+
+    /**
+     * Asks for a phrase until the owner check runs once more. A request made
+     * while the creation's own request still ends is ignored.
+     */
+    private suspend fun askOwner() {
+        val asked = ownerAsked.size
+        withTimeout(10_000) {
+            while (ownerAsked.size == asked) {
+                controller.addRecoverySlot()
+                delay(10)
+            }
+        }
     }
 
     private object NoExports : ExportSink {

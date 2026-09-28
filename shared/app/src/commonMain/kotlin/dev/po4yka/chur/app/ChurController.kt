@@ -1239,13 +1239,56 @@ class ChurController(
     }
 
     /**
-     * Stages a recovery slot and shows the phrase once.
+     * Stages a recovery slot and shows the phrase once, after the device
+     * authentication of `DESIGN.md` §17.1 step 2.
+     *
+     * An open vault alone does not prove who holds the device, and a phrase
+     * set up here opens the vault from anywhere. So the platform prompt runs
+     * first, under the device-slot policy in force: with "Biometrics only" on,
+     * the device unlock code does not pass it. A cancel returns quietly, and
+     * a device with no factor to ask for gets no phrase until it has one. The
+     * prompt can put a system screen in front of this one, so it is bracketed
+     * as [enrollDeviceSlot] is. [create] asks nothing: the vault credential
+     * was entered a moment before.
      *
      * Nothing is committed yet, so the slot list stays as it is:
      * [acknowledgeRecoveryPhrase] commits it, and Settings reloads the slots
      * when it is entered again.
      */
     fun addRecoverySlot() = requestPhrase {
+        val strict = _deviceSlotStrict.value
+        beginHostActivity()
+        val check = try {
+            if (deviceUnlock.available) {
+                deviceUnlock.confirmOwner(strict)
+            } else {
+                appleDeviceUnlock.confirmOwner(strict)
+            }
+        } catch (_: ChurFailure) {
+            // A lockout, or a prompt the platform could not show. The unlock
+            // line of [userCopy] would send the user to recovery, which is
+            // what they are setting up.
+            say("This device could not confirm it's you. Try again.")
+            return@requestPhrase
+        } finally {
+            endHostActivity()
+        }
+        when (check) {
+            OwnerCheck.CONFIRMED -> Unit
+            OwnerCheck.CANCELLED -> return@requestPhrase
+            OwnerCheck.NOT_SET_UP -> {
+                say(
+                    if (strict) {
+                        "Set up a fingerprint or face unlock first. With Biometrics only on, " +
+                            "Chur asks for it before it shows a recovery phrase."
+                    } else {
+                        "Set a screen lock on this device first. Chur asks for it before it " +
+                            "shows a recovery phrase."
+                    },
+                )
+                return@requestPhrase
+            }
+        }
         _recoveryPhrase.value = withContext(Dispatchers.Default) { repository.beginRecoverySlot() }
     }
 
