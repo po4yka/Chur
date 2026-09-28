@@ -298,8 +298,13 @@ typealias MediaLoad = (
     @escaping (String?, String?) -> KotlinUnit
 ) -> KotlinUnit
 
-/// The answer to a pick: how many items, and how to load each one.
-typealias MediaAnswer = (KotlinInt, @escaping MediaLoad) -> KotlinUnit
+/// Deletes the originals of the picked items at the given indices, and
+/// answers how many it found and how many were deleted.
+typealias MediaReview = ([KotlinInt], @escaping (KotlinInt, KotlinInt) -> KotlinUnit) -> KotlinUnit
+
+/// The answer to a pick: how many items, how to load each one, and how to
+/// delete their originals after the import.
+typealias MediaAnswer = (KotlinInt, @escaping MediaLoad, @escaping MediaReview) -> KotlinUnit
 
 private final class MediaPickerDelegate: NSObject, PHPickerViewControllerDelegate {
     private static let scratch = FileManager.default.temporaryDirectory
@@ -326,7 +331,11 @@ private final class MediaPickerDelegate: NSObject, PHPickerViewControllerDelegat
 
     /// Answers a picker that could not be shown as a pick of nothing.
     static func answerNothing(_ answer: MediaAnswer) {
-        _ = answer(KotlinInt(int: 0)) { _, _, loaded in loaded(nil, nil) }
+        _ = answer(
+            KotlinInt(int: 0),
+            { _, _, loaded in loaded(nil, nil) },
+            { _, done in done(KotlinInt(int: 0), KotlinInt(int: 0)) }
+        )
     }
 
     init(answer: @escaping MediaAnswer, done: @escaping () -> Void) {
@@ -337,21 +346,60 @@ private final class MediaPickerDelegate: NSObject, PHPickerViewControllerDelegat
     /// Answers with the pick and fetches nothing yet: Kotlin loads one item
     /// at a time and deletes its copy before it loads the next, so at most
     /// one plaintext copy exists, `IOS.md` §15.2. The providers stay with the
-    /// load closure, which Kotlin holds until the pick is imported.
+    /// load closure, which Kotlin holds until the pick is imported, and the
+    /// Photos identifiers with the review closure, which Kotlin holds until
+    /// the user answers the step after the import, §15.4.
     func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
         picker.dismiss(animated: true)
         guard let answer else { return }
         self.answer = nil
         let providers = results.map(\.itemProvider)
-        _ = answer(KotlinInt(int: Int32(providers.count))) { index, prepare, loaded in
-            Self.load(
-                providers[index.intValue],
-                prepare: { prepare(KotlinLong(longLong: $0), KotlinLong(longLong: $1)).boolValue },
-                loaded: { _ = loaded($0, $1) }
-            )
-            return KotlinUnit()
-        }
+        let assets = results.map(\.assetIdentifier)
+        _ = answer(
+            KotlinInt(int: Int32(providers.count)),
+            { index, prepare, loaded in
+                Self.load(
+                    providers[index.intValue],
+                    prepare: { prepare(KotlinLong(longLong: $0), KotlinLong(longLong: $1)).boolValue },
+                    loaded: { _ = loaded($0, $1) }
+                )
+                return KotlinUnit()
+            },
+            { indices, done in
+                Self.deleteOriginals(indices.compactMap { assets[$0.intValue] }) { found, deleted in
+                    _ = done(KotlinInt(int: found), KotlinInt(int: deleted))
+                }
+                return KotlinUnit()
+            }
+        )
         done()
+    }
+
+    /// Deletes originals from the photo library, `DESIGN.md` §15.3 and
+    /// `IOS.md` §15.4.
+    ///
+    /// Read-write access is asked for here, when the user chose to review the
+    /// deletion, and not at import, which the picker serves without it. Photos
+    /// shows the items and asks before it deletes them, and a refusal of
+    /// either deletes nothing. An item outside the access the user granted is
+    /// not found. The answer comes on the main thread.
+    private static func deleteOriginals(_ identifiers: [String], done: @escaping (Int32, Int32) -> Void) {
+        PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
+            let granted = status == .authorized || status == .limited
+            let assets = granted && !identifiers.isEmpty
+                ? PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
+                : nil
+            guard let assets, assets.count > 0 else {
+                DispatchQueue.main.async { done(0, 0) }
+                return
+            }
+            let found = Int32(assets.count)
+            PHPhotoLibrary.shared().performChanges({
+                PHAssetChangeRequest.deleteAssets(assets)
+            }) { deleted, _ in
+                DispatchQueue.main.async { done(found, deleted ? found : 0) }
+            }
+        }
     }
 
     /// Fetches one item into a protected copy, `IOS.md` §15.1-15.2.

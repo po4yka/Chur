@@ -50,6 +50,8 @@ temporary file for the Files picker, the share sheet, or Photos. Completion and
 the next launch remove abandoned plaintext copies. The host requests add-only
 Photos access when the user saves an export there; PhotosUI import needs no
 photo-library permission because it grants access only to selected items.
+After an import, the host requests read-write Photos access only if the user
+chooses to review the deletion of the originals, `IOS.md` §15.4.
 
 `Info.plist` contains the background task identifier, `fetch` mode, scene
 configuration, and Compose's required frame-duration setting. Keep these in

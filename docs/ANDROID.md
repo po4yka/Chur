@@ -585,7 +585,7 @@ The Android layer acquires access. Rust owns object identity, encryption, chunki
 
 The system Photo Picker is the default for photos and videos because it grants access only to user-selected items.
 
-Chur SHOULD avoid broad `READ_MEDIA_IMAGES` or `READ_MEDIA_VIDEO` permissions when picker-based flows meet the requirement.
+Chur SHOULD avoid broad `READ_MEDIA_IMAGES` or `READ_MEDIA_VIDEO` permissions when picker-based flows meet the requirement. Import meets it and requests none. Source deletion does not, because it must find the original in the library, and requests them at that step only (§14.5).
 
 Picker results are import sources, not durable vault identifiers. Chur copies the content into its own encrypted object store.
 
@@ -637,6 +637,15 @@ Chur does not consider an import successful until Rust has committed the encrypt
 ### 14.5 Source deletion
 
 Deleting the original is a separate explicit user operation after successful commit. Chur MUST NOT claim secure physical erasure of the source from shared storage.
+
+After an import commits, Chur offers `DESIGN.md` §15.3's choice once for the batch, and only for the items whose import committed. Keep original is the default and requests nothing. Review source deletion:
+
+1. requests read access to the media library of the items' kinds: `READ_MEDIA_IMAGES`, `READ_MEDIA_VIDEO`, or `READ_MEDIA_AUDIO` on API 33 and later, with `READ_MEDIA_VISUAL_USER_SELECTED` for photos and videos on API 34 and later so that the user can grant chosen items only, and `READ_EXTERNAL_STORAGE` on API 30 to 32;
+2. finds each original as a MediaStore row: an on-device photo picker item by the row ID it carries, since the picker replaces the file's name with that ID, and any other item by the one visible row that matches the name and size its grant reads; a size both sides know must agree, and an original with no such row, such as a cloud-only item, is not found;
+3. passes the rows it found to `MediaStore.createDeleteRequest`, and the system shows them and asks before it deletes;
+4. reports how many originals were deleted and names the Photos or Files app for the rest.
+
+A refusal of either request deletes nothing. API 29 has no delete request, so there the review requests nothing and names where to delete; `READ_EXTERNAL_STORAGE` is declared on API 29 too, because a permission entry cannot set a lowest API level, but it is never requested there. The picked URIs stay in memory until the user answers and never reach saved state (§14.2), and a lock drops them with the vault screen. The owner chose this over an explanation alone, which the permissionless design offered; §24 records the permissions.
 
 ### 14.6 Desktop control of an open vault
 
@@ -997,6 +1006,8 @@ Expected permissions depend on enabled features, but the baseline SHOULD avoid:
 - install/unknown-source privileges.
 
 Likely platform declarations include only capabilities actually used, such as biometric authorization, network access for encrypted synchronization, and notification permission when notifications are enabled.
+
+The media read permissions are declared for source deletion alone (§14.5): the use case is finding an imported original so that the system can delete it, the request is made when the user chooses Review source deletion, a denial leaves the import as it was and names where to delete, and import never requests them.
 
 Every permission must have:
 
@@ -1428,7 +1439,7 @@ The Data safety form MUST match the shared store answers in [`product/DISCREET_M
 
 ### 37.3 Permissions justification
 
-Every declared permission MUST have a documented product need in §24 and MUST be requested at point of use. Broad media-library permissions are not declared while the Photo Picker suffices. No accessibility service, device-admin, overlay, `QUERY_ALL_PACKAGES`, or usage-stats permission is declared.
+Every declared permission MUST have a documented product need in §24 and MUST be requested at point of use. The media read permissions are declared for source deletion (§14.5) and requested only when the user asks to delete an imported original; import uses the Photo Picker and requests none. No accessibility service, device-admin, overlay, `QUERY_ALL_PACKAGES`, or usage-stats permission is declared.
 
 ### 37.4 Encryption export compliance
 

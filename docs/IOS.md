@@ -617,6 +617,12 @@ Until that model is specified, v1 SHOULD either:
 
 It MUST NOT silently drop paired resources while claiming lossless archival.
 
+### 15.4 Source deletion
+
+After an import commits, Chur offers the choice of `DESIGN.md` §15.3 once for the batch, and only for the items whose import committed. Keep original is the default and asks for nothing. Review source deletion asks for read-write Photos access (`NSPhotoLibraryUsageDescription`) at that moment, fetches the picked assets by the identifiers the picker returned, and deletes them through `PHPhotoLibrary.performChanges`, where Photos shows the items and asks before it deletes them. Deleted items go to Recently Deleted. An asset outside the access the user granted, including a limited selection without it, is not found, and the outcome names the Photos app for the rest. A refusal of either request deletes nothing.
+
+Import stays selection-only (§15.1). The owner chose in-app deletion over an explanation alone. The Photos identifiers stay in memory until the user answers and are never logged (§28).
+
 ---
 
 ## 16. Files import and security-scoped URLs
@@ -1394,7 +1400,7 @@ Store privacy answers must reflect:
 - whether sync/account features exist;
 - whether diagnostics leave the device;
 - whether any analytics are collected;
-- whether Photos access is selection-only;
+- whether Photos access is selection-only, and that read-write access is requested only for source deletion (§15.4);
 - whether user content is linked to an account;
 - retention and deletion behavior.
 

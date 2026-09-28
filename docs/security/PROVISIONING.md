@@ -76,7 +76,7 @@ A decoy vault is never provisioned at first run. It is created from an authentic
 - import media before the descriptor is `ACTIVE`;
 - write anything into public storage beyond the non-secret fact that onboarding completed;
 - state a claim that [`../product/DISCREET_MODE.md`](../product/DISCREET_MODE.md) forbids;
-- request a permission the flow does not use.
+- request a permission the flow does not use; the media read access of source deletion ([`../ANDROID.md`](../ANDROID.md) §14.5, [`../IOS.md`](../IOS.md) §15.4) is requested at that step only.
 
 ## 9. Required tests
 

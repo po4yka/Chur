@@ -78,6 +78,8 @@ import dev.po4yka.chur.app.vault.TagBrowserDialog
 import dev.po4yka.chur.app.vault.RecoveryPhraseScreen
 import dev.po4yka.chur.app.vault.RecoveryScreen
 import dev.po4yka.chur.app.vault.RestoreBackupScreen
+import dev.po4yka.chur.app.vault.SourceDeletionDialog
+import dev.po4yka.chur.app.vault.importedOriginals
 import dev.po4yka.chur.app.vault.ThumbnailCache
 import dev.po4yka.chur.app.vault.UnlockScreen
 import dev.po4yka.chur.app.vault.VaultActions
@@ -443,6 +445,10 @@ private fun VaultRoute(controller: ChurController) {
     var choosingExport by remember { mutableStateOf(false) }
     var choosingImport by remember { mutableStateOf(false) }
     var importAlbumId by remember { mutableStateOf<ByteArray?>(null) }
+    // The picked items whose import committed, until the user answers the
+    // step of `DESIGN.md` §15.3. A lock disposes of the route and of them.
+    var originals by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    val deleteOriginals = rememberOriginalDeletion(controller)
 
     DisposableEffect(deviceControl) {
         onDispose { deviceControl.stop() }
@@ -471,10 +477,13 @@ private fun VaultRoute(controller: ChurController) {
         controller.endHostActivity()
         val albumId = importAlbumId
         importAlbumId = null
-        // The grants live in this list for the one batch and never reach
-        // saved state, `ANDROID.md` §14.2.
+        // The grants live in this list for the one batch and its §15.3 step,
+        // and never reach saved state, `ANDROID.md` §14.2.
         if (uris.isNotEmpty()) {
-            scope.launch { controller.importAll(importer, uris.size, albumId) { index, _ -> codec.open(uris[index]) } }
+            scope.launch {
+                val outcomes = controller.importAll(importer, uris.size, albumId) { index, _ -> codec.open(uris[index]) }
+                if (controller.vaultState.value is VaultState.Unlocked) originals = importedOriginals(uris, outcomes)
+            }
         }
     }
     // Both pickers take many items in one session. The photo picker keeps
@@ -550,6 +559,17 @@ private fun VaultRoute(controller: ChurController) {
                 },
             )
         }
+    }
+
+    if (originals.isNotEmpty()) {
+        SourceDeletionDialog(
+            count = originals.size,
+            onKeep = { originals = emptyList() },
+            onReview = {
+                deleteOriginals(originals)
+                originals = emptyList()
+            },
+        )
     }
 
     devicePairing?.let { pairing ->

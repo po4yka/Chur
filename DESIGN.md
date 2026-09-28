@@ -1062,6 +1062,8 @@ Review source deletion
 
 Do not imply secure physical erase. Explain that deletion is handled by the operating system and may remain in recently deleted, backups, or other copies.
 
+Keep original is the default and asks for nothing. Review source deletion asks for photo-library access at that moment, not at import, and the operating system shows the items and confirms before it deletes them. Where an original cannot be found, say where the user can delete it.
+
 ### 15.4 Derived assets
 
 Thumbnail, preview, poster frame, waveform, OCR, or index generation may continue after the original commits. UI distinguishes:

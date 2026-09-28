@@ -36,6 +36,9 @@ import dev.po4yka.chur.app.vault.TagBrowserDialog
 import dev.po4yka.chur.app.vault.RecoveryPhraseScreen
 import dev.po4yka.chur.app.vault.RecoveryScreen
 import dev.po4yka.chur.app.vault.RestoreBackupScreen
+import dev.po4yka.chur.app.vault.SourceDeletionCopy
+import dev.po4yka.chur.app.vault.SourceDeletionDialog
+import dev.po4yka.chur.app.vault.importedOriginals
 import dev.po4yka.chur.app.vault.ThumbnailCache
 import dev.po4yka.chur.app.vault.UnlockScreen
 import dev.po4yka.chur.app.vault.VaultActions
@@ -251,6 +254,9 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     var confirmingDelete by remember { mutableStateOf(false) }
     var confirmingEmptyTrash by remember { mutableStateOf(false) }
     var choosingExport by remember { mutableStateOf(false) }
+    // The originals of the last import, until the user answers the step of
+    // `DESIGN.md` §15.3. A lock disposes of the route and of them.
+    var originals by remember { mutableStateOf<PickedOriginals?>(null) }
     val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
     val codec = remember { IosMediaCodec() }
@@ -301,6 +307,28 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 thumbnails = thumbnails + (projection.id to image)
             }
         }
+    }
+
+    originals?.let { picked ->
+        SourceDeletionDialog(
+            count = picked.count,
+            onKeep = { originals = null },
+            onReview = {
+                originals = null
+                // Photos asks for access and then to confirm, and each alert
+                // takes the scene out of the foreground, as the picker does.
+                val session = controller.vaultState.value
+                controller.beginHostActivity()
+                picked.delete { found, deleted ->
+                    // A lock ended the count with the session, and the outcome
+                    // belongs to no screen of a later one.
+                    if (controller.vaultState.value == session) {
+                        controller.endHostActivity()
+                        controller.report(SourceDeletionCopy.outcome(picked.count, found, deleted, "the Photos app"))
+                    }
+                }
+            },
+        )
     }
 
     if (creatingAlbum) {
@@ -493,11 +521,11 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                     } else {
                         val albumId = openAlbum?.albumId
                         controller.beginHostActivity()
-                        present { count, load ->
+                        present { count, load, review ->
                             controller.endHostActivity()
                             if (count > 0) {
                                 scope.launch {
-                                    controller.importAll(importer, count, albumId) { index, prepare ->
+                                    val outcomes = controller.importAll(importer, count, albumId) { index, prepare ->
                                         // One item is fetched and copied at a
                                         // time, and its copy is deleted when
                                         // its import closes it, so at most one
@@ -519,6 +547,10 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                                                 discardPickedCopy(copy)
                                             })
                                         }
+                                    }
+                                    val imported = importedOriginals(List(count) { it }, outcomes)
+                                    if (imported.isNotEmpty() && controller.vaultState.value is VaultState.Unlocked) {
+                                        originals = PickedOriginals(imported.size) { done -> review(imported, done) }
                                     }
                                 }
                             }
@@ -832,6 +864,13 @@ private fun Set<String>.toggle(id: String): Set<String> =
  * temporary directory and the item's own name, or with no path when there is
  * nothing to import. The copy has a random name, because §12 keeps a file
  * name from telling the filename; the name travels here instead.
+ *
+ * `review` deletes the originals of the items at the given indices from the
+ * photo library, `DESIGN.md` §15.3 and `IOS.md` §15.4: the host asks for
+ * read-write access then and not before, and Photos asks the user before it
+ * deletes. It answers on the main thread with how many originals it found
+ * and how many were deleted. The host keeps the items' Photos identifiers,
+ * which §28 keeps out of every log, only as long as Kotlin keeps `review`.
  */
 public object IosMediaPicker {
     public var present: (
@@ -843,10 +882,14 @@ public object IosMediaPicker {
                     prepare: (processed: Long, total: Long) -> Boolean,
                     loaded: (path: String?, name: String?) -> Unit,
                 ) -> Unit,
+                review: (indices: List<Int>, done: (found: Int, deleted: Int) -> Unit) -> Unit,
             ) -> Unit,
         ) -> Unit
     )? = null
 }
+
+/** The originals an import committed, and the host's way to delete them. */
+private class PickedOriginals(val count: Int, val delete: (done: (found: Int, deleted: Int) -> Unit) -> Unit)
 
 /** Deletes a copy the photo picker made, and nothing outside the temporary directory. */
 private fun discardPickedCopy(path: String) {
