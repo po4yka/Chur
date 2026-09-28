@@ -303,11 +303,44 @@ class VaultRepositoryHostTest {
         assertEquals(2, repository.slots().size, "the lock discarded the unconfirmed slot")
         repository.beginRecoverySlot()
         assertTrue(repository.confirmRecoveryPhrase())
-        assertEquals(3, repository.slots().size)
+        assertEquals(2, repository.slots().size, "the confirmed phrase replaced the creation's")
 
         repository.lock(LockReason.USER)
         val refused = assertFailsWith<ChurFailure> { repository.unlockWithRecovery(lost) }
         assertEquals(ChurStatus.AUTHENTICATION_FAILED, refused.status)
+        repository.shutdown()
+    }
+
+    @Test
+    fun a_confirmed_phrase_replaces_the_old_one() = runBlocking {
+        val repository = repository()
+        repository.start()
+        val old = repository.create(PASSWORD.encodeToByteArray(), offerRecovery = true)
+        assertNotNull(old)
+        assertTrue(repository.confirmRecoveryPhrase())
+        val first = repository.slots().single { it.slotType == RECOVERY }
+
+        // A lock before confirmation keeps the old phrase and adds nothing.
+        repository.beginRecoverySlot()
+        repository.lock(LockReason.USER)
+        repository.unlock(PASSWORD.encodeToByteArray())
+        assertEquals(listOf(first), repository.slots().filter { it.slotType == RECOVERY })
+
+        // `RECOVERY.md` §8: each confirmed phrase replaces the one before it,
+        // so the Access list never grows a second Recovery row.
+        repository.beginRecoverySlot()
+        assertTrue(repository.confirmRecoveryPhrase())
+        val new = repository.beginRecoverySlot()
+        assertTrue(repository.confirmRecoveryPhrase())
+        val recovery = repository.slots().filter { it.slotType == RECOVERY }
+        assertEquals(1, recovery.size)
+        assertFalse(first in recovery)
+
+        repository.lock(LockReason.USER)
+        val refused = assertFailsWith<ChurFailure> { repository.unlockWithRecovery(old) }
+        assertEquals(ChurStatus.AUTHENTICATION_FAILED, refused.status)
+        repository.unlockWithRecovery(new)
+        assertIs<VaultState.Unlocked>(repository.state.value)
         repository.shutdown()
     }
 
@@ -487,5 +520,8 @@ class VaultRepositoryHostTest {
     private companion object {
         const val PASSWORD = "correct horse battery staple"
         const val SECOND_PASSWORD = "a second identity's own passphrase"
+
+        /** The Recovery family, `KEY_SLOTS.md` §1. */
+        const val RECOVERY = 4
     }
 }

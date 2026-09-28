@@ -575,9 +575,10 @@ chur_status_t chur_vault_add_recovery_slot(chur_handle_t session,
 /* ABI 2.19, FFI_CONTRACT.md section 6.23. RECOVERY.md section 8 commits a
  * recovery slot only after the user confirmed its phrase. Begin writes the
  * phrase as chur_vault_add_recovery_slot does and holds the sealed slot in the
- * session; commit writes it as one descriptor generation. A slot never
- * committed before the session closes is never written. A commit with nothing
- * staged returns CONFLICT, and on a locked session VAULT_LOCKED. */
+ * session; commit writes it as one descriptor generation, which also removes
+ * every earlier recovery slot. A slot never committed before the session
+ * closes is never written. A commit with nothing staged returns CONFLICT, and
+ * on a locked session VAULT_LOCKED. */
 chur_status_t chur_vault_recovery_begin(chur_handle_t session,
                                         uint8_t *destination, size_t capacity,
                                         size_t *bytes_written);

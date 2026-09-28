@@ -179,7 +179,8 @@ class VaultRepository(
      * Commits what the recovery phrase on screen belongs to, `RECOVERY.md` §8.
      *
      * A creation waiting at step 5 of `PROVISIONING.md` §3 reaches `ACTIVE`,
-     * and a slot [beginRecoverySlot] staged is written. It returns `false`
+     * and a slot [beginRecoverySlot] staged is written in place of every
+     * earlier recovery slot, so the old phrase stops working. It returns `false`
      * when nothing waits, because a lock already discarded what the phrase
      * belonged to and the phrase opens nothing.
      */

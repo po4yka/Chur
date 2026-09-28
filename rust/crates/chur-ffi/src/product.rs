@@ -336,6 +336,9 @@ pub unsafe extern "C" fn chur_vault_recovery_begin(
 }
 
 /// Commits the recovery slot [`chur_vault_recovery_begin`] staged, §6.23.
+///
+/// The same descriptor generation removes every earlier recovery slot, so the
+/// phrase it replaces stops opening the vault (`RECOVERY.md` §8).
 #[unsafe(no_mangle)]
 #[expect(
     unsafe_code,

@@ -1072,6 +1072,14 @@ impl Session {
     /// Commits the staged recovery slot as one descriptor generation,
     /// `KEY_SLOTS.md` §9.
     ///
+    /// The same generation retires every earlier recovery slot, which is the
+    /// rotation of `RECOVERY.md` §8: a user who confirms a new phrase has
+    /// replaced the old one, and a lost phrase stops opening the vault. It is
+    /// one generation for the reason [`Session::replace_password`] gives, so
+    /// no descriptor ever carries neither phrase. A host calls this only once
+    /// the user confirmed the new phrase, so the old slot goes only after
+    /// that success, as §8 orders.
+    ///
     /// # Errors
     ///
     /// Returns [`ChurStatus::VaultLocked`] once the session is locked, whether
@@ -1085,7 +1093,10 @@ impl Session {
                 "no recovery slot is waiting for confirmation",
             )
         })?;
-        self.commit_slots(|slots| slots.push(slot))
+        self.commit_slots(|slots| {
+            slots.retain(|entry| entry.slot_type != SlotType::Recovery);
+            slots.push(slot);
+        })
     }
 
     fn seal_new_recovery_slot(&self) -> Result<(Key, KeySlotDescriptor)> {
@@ -2294,6 +2305,33 @@ mod tests {
                 .vault_id(),
             vault_id
         );
+    }
+
+    /// `RECOVERY.md` §8: a confirmed new phrase replaces the old one, in the
+    /// one descriptor generation that commits it.
+    #[test]
+    fn a_confirmed_recovery_slot_retires_the_old_phrase() {
+        let root_dir = scratch();
+        let mut session = make(&root_dir);
+        let old = recovery::to_phrase(&session.add_recovery_slot().expect("recovery"));
+        let before = session.descriptor.descriptor_generation;
+        let new = recovery::to_phrase(&session.begin_recovery_slot().expect("begin"));
+        session.finish_recovery_slot().expect("commit");
+        assert_eq!(session.descriptor.descriptor_generation, before + 1);
+        let recovery: Vec<u64> = session
+            .slots()
+            .into_iter()
+            .filter(|(_, family, _)| *family == SlotType::Recovery)
+            .map(|(_, _, generation)| generation)
+            .collect();
+        assert_eq!(recovery, vec![2]);
+        drop(session);
+
+        assert_eq!(
+            rejection(unlock_with_recovery(&root_dir, &old, 1)),
+            ChurStatus::AuthenticationFailed
+        );
+        unlock_with_recovery(&root_dir, &new, 1).expect("the new phrase opens the vault");
     }
 
     #[test]

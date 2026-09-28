@@ -643,6 +643,64 @@ class BackNavigationTest {
         runBlocking { added.forEach { controller.vault.removeSlot(it.slotId) } }
     }
 
+    /**
+     * `RECOVERY.md` §8 from Settings: once a phrase exists the row offers to
+     * replace it and asks first, Cancel stages nothing, and the confirmed
+     * phrase is the only one left: the old phrase no longer opens the vault.
+     */
+    @Test
+    fun replacingTheRecoveryPhraseAsksFirstAndRetiresTheOldOne() = inTestVault {
+        fun recovery() = runBlocking { controller.vault.slots() }.filter { it.familyName == "Recovery" }
+        fun confirmShownPhrase(): String {
+            assertTrue("the vault shows a new phrase", await(60_000) { controller.recoveryPhrase.value != null })
+            val phrase = checkNotNull(controller.recoveryPhrase.value)
+            instrumentation.runOnMainSync { controller.acknowledgeRecoveryPhrase() }
+            assertTrue("back in the vault", await(60_000) { isOpen() })
+            awaitFrames()
+            return phrase
+        }
+        assertEquals("the test vault keeps no phrase", emptyList<Any>(), recovery())
+        try {
+            tap(label("Settings"))
+            tap(label("Set up a recovery phrase"))
+            val old = confirmShownPhrase()
+            val first = recovery().single()
+
+            tap(label("Settings"))
+            tap(label("Replace recovery phrase"))
+            assertTrue("it asks first", await { find(label("Replace recovery phrase?")) != null })
+            tap(label("Cancel"))
+            assertTrue("Cancel closes the question", await { find(label("Replace recovery phrase?")) == null })
+            assertNull("Cancel stages no phrase", controller.recoveryPhrase.value)
+            assertEquals(listOf(first), recovery())
+
+            tap(label("Replace recovery phrase"))
+            tap(label("Replace"))
+            val new = confirmShownPhrase()
+            val replaced = recovery()
+            assertEquals(1, replaced.size)
+            assertFalse("the old slot is gone", first in replaced)
+            tap(label("Settings"))
+            assertTrue("the row still offers a replace", await { find(label("Replace recovery phrase")) != null })
+            assertEquals("the Access list shows one Recovery row", 1, findAll(label("Recovery")).size)
+
+            lockIfOpen()
+            instrumentation.runOnMainSync {
+                controller.goTo(AppRoute.Recover)
+                controller.recover(old)
+            }
+            assertTrue("the old phrase is refused", await(60_000) { controller.formError.value != null && !controller.unlocking.value })
+            assertFalse(isOpen())
+            instrumentation.runOnMainSync { controller.recover(new) }
+            assertTrue("the new phrase opens the vault", await(60_000) { isOpen() })
+        } finally {
+            // A descriptor holds at most 16 slots, so the test vault keeps no
+            // phrase of this run. The password slot stays, so the removal is
+            // allowed.
+            if (isOpen()) runCatching { runBlocking { recovery().forEach { controller.vault.removeSlot(it.slotId) } } }
+        }
+    }
+
     @Test
     fun anImportOutcomeIsAnnouncedOnceAndStaysOnItsScreen() = inTestVault {
         val outcome = "Imported into vault."

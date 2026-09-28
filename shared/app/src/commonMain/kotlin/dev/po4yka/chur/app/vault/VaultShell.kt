@@ -746,6 +746,7 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
     val colors = LocalChurColors.current
     var changingPassword by remember { mutableStateOf(false) }
     var confirmingDisconnect by remember { mutableStateOf(false) }
+    var replacingRecovery by remember { mutableStateOf(false) }
     LazyColumn(
         contentPadding = PaddingValues(ChurSpacing.gutter),
         verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
@@ -780,7 +781,13 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
             )
         }
         item {
-            SettingsAction("Add a recovery phrase", actions.onAddRecoverySlot)
+            // `RECOVERY.md` §8: a confirmed phrase replaces the one before it,
+            // so once a Recovery slot exists the row says so and asks first.
+            val hasRecovery = state.slots.any { it.slotType == 4 }
+            SettingsAction(
+                if (hasRecovery) "Replace recovery phrase" else "Set up a recovery phrase",
+                { if (hasRecovery) replacingRecovery = true else actions.onAddRecoverySlot() },
+            )
         }
         // §4 of KEY_SLOTS makes the device unlock code a vault credential in
         // the convenient mode, so the label says which factor it enrolls
@@ -963,6 +970,29 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
                 }) { Text("Stop syncing") }
             },
             dismissButton = { TextButton(onClick = { confirmingDisconnect = false }) { Text("Cancel") } },
+        )
+    }
+    if (replacingRecovery) {
+        // `RECOVERY.md` §8, last step: backups keep the phrase they were
+        // written under, so the copy says the old phrase still opens them.
+        // Nothing changes until the new words are typed back, so the confirm
+        // is not destructive.
+        AlertDialog(
+            onDismissRequest = { replacingRecovery = false },
+            title = { Text("Replace recovery phrase?") },
+            text = {
+                Text(
+                    "After you confirm the new words, the current phrase stops opening this vault. " +
+                        "Backup files you wrote earlier still open with the current phrase.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    replacingRecovery = false
+                    actions.onAddRecoverySlot()
+                }) { Text("Replace") }
+            },
+            dismissButton = { TextButton(onClick = { replacingRecovery = false }) { Text("Cancel") } },
         )
     }
     if (changingPassword) {
