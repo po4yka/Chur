@@ -19,7 +19,7 @@ targets:
         NSPhotoLibraryAddUsageDescription: "Save selected vault media to your photo library."
         NSPhotoLibraryUsageDescription: "Delete originals you imported into the vault, when you ask to."
         NSLocalNetworkUsageDescription: "Sync this vault with a server on your local network, when you connect to one."
-        NSFaceIDUsageDescription: "Use Face ID to open your Chur vault."
+        NSFaceIDUsageDescription: "Use Face ID to open your Chur vault and to confirm it's you before showing a recovery phrase."
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false

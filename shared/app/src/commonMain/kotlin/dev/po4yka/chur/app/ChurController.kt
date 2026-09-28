@@ -482,8 +482,12 @@ class ChurController(
      * discarded what the phrase belonged to, and the user is told that the
      * phrase they wrote down was not saved.
      *
-     * A committed slot is confirmed on the Library it opens, `DESIGN.md`
-     * §17.1 step 6.
+     * A committed slot is confirmed with a notice, `DESIGN.md` §17.1 step 6.
+     * A creation opens the Library of its new session with it. A phrase from
+     * Settings belongs to a session that is already open, so its confirmation
+     * is not an unlock: [enterVault] would pull again and repeat the unlock's
+     * fork notice, which would take the place of this one. So the notice goes
+     * to the vault as it stands, and a lock after the commit drops it.
      *
      * An activation that fails reaches the user as a message, as a failed
      * [create] does, and leaves nothing to clear: the repository abandons the
@@ -493,9 +497,11 @@ class ChurController(
     fun acknowledgeRecoveryPhrase() {
         if (_recoveryPhrase.value == null) return
         _recoveryPhrase.value = null
+        // A creation waits in `Creating` until the phrase is confirmed.
+        val creating = vaultState.value is VaultState.Creating
         guarded {
             if (withContext(Dispatchers.Default) { repository.confirmRecoveryPhrase() }) {
-                enterVault(notice = "Recovery phrase saved.")
+                if (creating) enterVault(notice = PHRASE_SAVED) else say(PHRASE_SAVED)
             } else {
                 say("This recovery phrase was not saved.")
             }
@@ -1428,7 +1434,8 @@ class ChurController(
 
     /**
      * Stages a recovery slot and shows the phrase once, after the device
-     * authentication of `DESIGN.md` §17.1 step 2.
+     * authentication of `DESIGN.md` §17.1 step 2. Settings calls it from the
+     * confirm of the step 1 explanation, so the explanation comes first.
      *
      * An open vault alone does not prove who holds the device, and a phrase
      * set up here opens the vault from anywhere. So the platform prompt runs
@@ -2407,6 +2414,9 @@ class ChurController(
     }
 
     private companion object {
+        /** The confirmation of `DESIGN.md` §17.1 step 6. */
+        const val PHRASE_SAVED = "Recovery phrase saved."
+
         /** The routes whose screen is a credential form, which reads [formError]. */
         val FORM_ROUTES: Set<AppRoute> = setOf(
             AppRoute.CreateVault,

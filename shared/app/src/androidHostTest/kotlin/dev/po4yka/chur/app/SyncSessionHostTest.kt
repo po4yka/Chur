@@ -1,12 +1,14 @@
 package dev.po4yka.chur.app
 
 import dev.po4yka.chur.core.model.ChurStatus
+import dev.po4yka.chur.ffi.SyncForkState
 import dev.po4yka.chur.notes.InMemoryNoteStore
 import dev.po4yka.chur.sync.SyncClient
 import dev.po4yka.chur.sync.SyncCoordinator
 import dev.po4yka.chur.sync.SyncState
 import dev.po4yka.chur.sync.SyncStateStore
 import dev.po4yka.chur.sync.SyncStatus
+import dev.po4yka.chur.sync.SyncVaultBoundary
 import dev.po4yka.chur.vault.VaultState
 import java.io.File
 import java.net.ServerSocket
@@ -372,6 +374,58 @@ class SyncSessionHostTest {
         }
     }
 
+    /**
+     * `DESIGN.md` §17.1 step 6 from Settings. The vault is open already, so
+     * confirming a phrase is not an unlock: it does not load the sync state
+     * again, and it does not repeat the fork notice of
+     * `ROLLBACK_PROTECTION.md` §4 that the unlock showed, which would take
+     * the place of its own.
+     */
+    @Test
+    fun a_phrase_confirmed_from_settings_keeps_its_notice_under_a_fork(): Unit = runBlocking {
+        val sync = SyncCoordinator(store)
+        // The server is out of reach, so the unlock pulls nothing, and every
+        // load of the sync state is a refresh.
+        val controller = controller(sync, owner = ConfirmingOwner) { false }
+        try {
+            controller.start()
+            controller.create(OWNER, offerRecovery = false)
+            withTimeout(10_000) { controller.route.first { it == AppRoute.Vault } }
+            val identity = checkNotNull(controller.vault.syncIdentity())
+            store.saved = SyncState(SERVER, identity.vaultId, identity.deviceId, ByteArray(32), emptyList())
+            // The catalog reads as one that found a fork in an earlier process.
+            sync.bind(
+                object : SyncVaultBoundary by RepositorySyncBoundary(controller.vault) {
+                    override suspend fun forkState(): SyncForkState = SyncForkState(detected = 1, acknowledged = 0)
+                },
+            )
+            controller.lock()
+            withTimeout(10_000) { controller.route.first { it == AppRoute.PublicShell } }
+            controller.goTo(AppRoute.Unlock)
+            controller.unlock(OWNER)
+            withTimeout(10_000) { controller.notice.first { it?.text == FORK_NOTICE } }
+            val loads = store.loads.value
+
+            // A request made while an earlier one still ends is ignored, so
+            // this asks until the phrase shows.
+            withTimeout(10_000) {
+                while (controller.recoveryPhrase.value == null) {
+                    controller.addRecoverySlot()
+                    delay(10)
+                }
+            }
+            controller.acknowledgeRecoveryPhrase()
+            withTimeout(10_000) { controller.notice.first { it?.text == PHRASE_SAVED } }
+            // A confirmation that ran as an unlock loaded the state and
+            // posted the fork notice at once after its own.
+            delay(500)
+            assertEquals(PHRASE_SAVED, controller.notice.value?.text)
+            assertEquals(loads, store.loads.value, "the confirmation loaded the sync state as an unlock does")
+        } finally {
+            controller.vault.shutdown()
+        }
+    }
+
     /** Creates the owner, which configured [server], and another identity. */
     private suspend fun seedOwnerAndOther(server: String = SERVER) {
         val first = controller(SyncCoordinator(store))
@@ -396,12 +450,14 @@ class SyncSessionHostTest {
     private fun controller(
         sync: SyncCoordinator,
         localNetworkAlert: Boolean = false,
+        owner: DeviceUnlock = NoDeviceUnlock,
         reachable: suspend (String) -> Boolean = { true },
     ): ChurController =
         ChurController(
             storageRoot = root.absolutePath,
             privacy = NoPrivacyCover,
             exports = NoExports,
+            deviceUnlock = owner,
             clock = { 1_700_000_000_000L },
             notes = InMemoryNoteStore(),
             sync = sync,
@@ -444,6 +500,13 @@ class SyncSessionHostTest {
         }
     }
 
+    /** A device that confirms its owner at once and holds no slot. */
+    private object ConfirmingOwner : DeviceUnlock by NoDeviceUnlock {
+        override val available = true
+
+        override suspend fun confirmOwner(strict: Boolean): OwnerCheck = OwnerCheck.CONFIRMED
+    }
+
     private object NoExports : ExportSink {
         override fun cancelPending() = Unit
         override fun create(displayName: String, contentType: String): ExportSink.Destination? = null
@@ -461,6 +524,8 @@ class SyncSessionHostTest {
         const val SERVER = "https://sync.invalid"
         const val LOCAL_SERVER = "https://nas.local:8443"
         const val PUBLIC_SERVER = "https://203.0.113.7"
+        const val FORK_NOTICE = "Sync stopped for one device. Open Settings to see why."
+        const val PHRASE_SAVED = "Recovery phrase saved."
         val SECRET = "ab".repeat(32)
     }
 }

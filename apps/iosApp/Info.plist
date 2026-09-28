@@ -33,7 +33,7 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Sync this vault with a server on your local network, when you connect to one.</string>
 	<key>NSFaceIDUsageDescription</key>
-	<string>Use Face ID to open your Chur vault.</string>
+	<string>Use Face ID to open your Chur vault and to confirm it's you before showing a recovery phrase.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

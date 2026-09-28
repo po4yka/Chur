@@ -758,7 +758,8 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
     val colors = LocalChurColors.current
     var changingPassword by remember { mutableStateOf(false) }
     var confirmingDisconnect by remember { mutableStateOf(false) }
-    var replacingRecovery by remember { mutableStateOf(false) }
+    var askingRecovery by remember { mutableStateOf(false) }
+    val hasRecovery = state.slots.any { it.slotType == 4 }
     var choosingAutoLock by remember { mutableStateOf(false) }
     LazyColumn(
         contentPadding = PaddingValues(ChurSpacing.gutter),
@@ -795,11 +796,16 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
         }
         item {
             // `RECOVERY.md` §8: a confirmed phrase replaces the one before it,
-            // so once a Recovery slot exists the row says so and asks first.
-            val hasRecovery = state.slots.any { it.slotType == 4 }
+            // so once a Recovery slot exists the row says so. Either way the
+            // row opens the explanation of `DESIGN.md` §17.1 step 1, and the
+            // device authentication of step 2 follows its confirm. The phrase
+            // screen takes the place of the vault route, and a running import
+            // ends with that route, so the row waits for the operation as the
+            // other actions do.
             SettingsAction(
                 if (hasRecovery) "Replace recovery phrase" else "Set up a recovery phrase",
-                { if (hasRecovery) replacingRecovery = true else actions.onAddRecoverySlot() },
+                { askingRecovery = true },
+                enabled = state.operation == null,
             )
         }
         // §4 of KEY_SLOTS makes the device unlock code a vault credential in
@@ -953,7 +959,14 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
             Text("Another vault", style = MaterialTheme.typography.titleMedium)
         }
         item {
-            SettingsAction("Set up a second vault", actions.onCreateSecondIdentity)
+            // The creation form takes the place of the vault route, and a
+            // running import ends with that route, so the row waits for the
+            // operation as the other actions do.
+            SettingsAction(
+                "Set up a second vault",
+                actions.onCreateSecondIdentity,
+                enabled = state.operation == null,
+            )
         }
         item {
             // `DECOY_VAULT.md` §3 requires the §10 limitation to be stated
@@ -999,27 +1012,44 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
             dismissButton = { TextButton(onClick = { confirmingDisconnect = false }) { Text("Cancel") } },
         )
     }
-    if (replacingRecovery) {
-        // `RECOVERY.md` §8, last step: backups keep the phrase they were
-        // written under, so the copy says the old phrase still opens them.
-        // Nothing changes until the new words are typed back, so the confirm
-        // is not destructive.
+    if (askingRecovery) {
+        // `DESIGN.md` §17.1 step 1, before the prompt of step 2, for a first
+        // phrase and a replacement alike: what the phrase opens, and what no
+        // phrase brings back, `RECOVERY.md` §4. Media does not sync, so a
+        // lost device without a backup file is the loss to name. §8 there,
+        // last step: backups keep the phrase they were written under, so a
+        // replacement says the old phrase still opens them. Nothing changes
+        // until the new words are typed back, so the confirm is not
+        // destructive.
         AlertDialog(
-            onDismissRequest = { replacingRecovery = false },
-            title = { Text("Replace recovery phrase?") },
+            onDismissRequest = { askingRecovery = false },
+            title = { Text(if (hasRecovery) "Replace recovery phrase?" else "Set up a recovery phrase?") },
             text = {
                 Text(
-                    "After you confirm the new words, the current phrase stops opening this vault. " +
-                        "Backup files you wrote earlier still open with the current phrase.",
+                    "A recovery phrase is 24 words that open this vault if you forget your password or " +
+                        "PIN. It can't bring back items: if this device is lost and you have no backup " +
+                        "file, they are gone. " +
+                        (
+                            if (hasRecovery) {
+                                "After you confirm the new words, the current phrase stops opening this " +
+                                    "vault. Backup files you wrote earlier still open with the current phrase. "
+                            } else {
+                                ""
+                            }
+                        ) +
+                        "Next, this device asks you to confirm it's you.",
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
-                    replacingRecovery = false
-                    actions.onAddRecoverySlot()
-                }) { Text("Replace") }
+                TextButton(
+                    onClick = {
+                        askingRecovery = false
+                        actions.onAddRecoverySlot()
+                    },
+                    enabled = state.operation == null,
+                ) { Text(if (hasRecovery) "Replace" else "Continue") }
             },
-            dismissButton = { TextButton(onClick = { replacingRecovery = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { askingRecovery = false }) { Text("Cancel") } },
         )
     }
     if (choosingAutoLock) {

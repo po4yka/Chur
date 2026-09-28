@@ -174,7 +174,8 @@ fun CreateVaultScreen(
                             "You will see 24 words once. Write them down and keep them offline."
                         } else {
                             "Without a recovery phrase, a forgotten ${if (usePin) "PIN" else "password"} cannot be " +
-                                "recovered. You can add one later in settings."
+                                "recovered. You can set one up later in Settings. Chur asks for your " +
+                                "screen lock first."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = colors.inkMuted,

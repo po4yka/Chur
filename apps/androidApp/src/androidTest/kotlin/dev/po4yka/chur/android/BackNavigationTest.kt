@@ -662,7 +662,8 @@ class BackNavigationTest {
      * replace it and asks first, Cancel stages nothing, and the confirmed
      * phrase is the only one left: the old phrase no longer opens the vault.
      * Each phrase waits for the device authentication of `DESIGN.md` §17.1
-     * step 2, and a cancelled prompt shows and stages nothing.
+     * step 2, which follows the explanation of step 1, and a cancelled prompt
+     * shows and stages nothing.
      */
     @Test
     fun replacingTheRecoveryPhraseAsksFirstAndRetiresTheOldOne() = inTestVault {
@@ -680,6 +681,9 @@ class BackNavigationTest {
         try {
             tap(label("Settings"))
             tap(label("Set up a recovery phrase"))
+            assertTrue("it explains first", await { find(label("Set up a recovery phrase?")) != null })
+            assertFalse("before the device asks", ownerPromptShown())
+            tap(label("Continue"))
             passOwnerCheck(pin)
             val old = confirmShownPhrase()
             val first = recovery().single()
@@ -748,7 +752,7 @@ class BackNavigationTest {
                 assertTrue("the switch turns on", await { controller.deviceSlotStrict.value })
             }
             tap { label("Set up a recovery phrase")(it) || label("Replace recovery phrase")(it) }
-            find(label("Replace"))?.let { tap(label("Replace")) }
+            tap { label("Continue")(it) || label("Replace")(it) }
             assertTrue(
                 "the device is told what to set up",
                 await { controller.notice.value?.text?.startsWith("Set up a fingerprint or face unlock first.") == true },
