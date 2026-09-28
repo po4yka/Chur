@@ -866,7 +866,7 @@ Before the app can be represented in recents:
 `MainActivity.onPause` runs this transition, and leaving the app locks at once (`DESIGN.md` §14.4). A configuration change is not the user leaving and does not lock. A request that the app made itself also holds the lock off while it is up, because the lifecycle cannot tell it from the user leaving; the cover still goes on:
 
 - the photo picker, the document picker, the share sheet, and the device authentication prompt, which can hand over to the full-screen credential screen, can stop the activity by themselves. The lock stays off until they return, and the inactivity timeout of `DESIGN.md` §14.4 is the backstop for a user who walks away from one;
-- a runtime permission dialog (the media read permissions of §14.5 and `ACCESS_LOCAL_NETWORK` of §24) and the `createDeleteRequest` confirmation of §14.5 only pause the activity. If the activity stops while one of these prompts is up, the user left: `onStop` ends every such prompt and the vault locks at once. An answer that arrives after that belongs to no session, and the app drops it.
+- a runtime permission dialog (the media read permissions of §14.5 and `ACCESS_LOCAL_NETWORK` of §24) and the `createDeleteRequest` confirmation of §14.5 only pause the activity. If the activity stops while one of these prompts is up, or after one that was up when the activity paused has ended, the user left: `onStop` ends every such prompt and the vault locks at once. An answer that arrives after that belongs to no session, and the app drops it.
 
 ---
 

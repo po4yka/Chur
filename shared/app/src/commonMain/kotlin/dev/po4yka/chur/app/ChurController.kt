@@ -104,6 +104,17 @@ class ChurController(
      * `ANDROID.md` §24. A host with no such check keeps the default.
      */
     private val syncReachable: suspend (serverUrl: String) -> Boolean = { true },
+    /**
+     * Whether the platform asks for local network access by itself as a
+     * connection to a local address goes out, which iOS does, `IOS.md` §27.
+     *
+     * The app can neither ask first nor tell which connection is the first,
+     * so every run to a local server that this controller starts with the
+     * vault open, the setup's bootstrap, "Sync now" and the pull after an
+     * unlock, runs under [underLocalNetworkAlert]. Android asks before the
+     * action, `ANDROID.md` §24, and keeps the default.
+     */
+    private val localNetworkAlert: Boolean = false,
 ) {
     /**
      * The last net under every coroutine this controller starts.
@@ -214,6 +225,17 @@ class ChurController(
     private var prompts = 0
     private var promptEpoch = 0L
     private var lockEpoch = 0L
+
+    /**
+     * Whether a [beginPrompt] bracket was open, and so held the lock off,
+     * when [onBackground] last ran.
+     *
+     * A bracket can end before the application enters the background: a
+     * local sync run to a server that is away ends while the user looks at
+     * the app switcher. A user who then leaves still left, so
+     * [enteredBackground] locks for that bracket too, `DESIGN.md` §14.4.
+     */
+    private var promptHeldLock = false
 
     /**
      * Whether [start] has already run.
@@ -848,11 +870,15 @@ class ChurController(
      * The brackets of [beginPrompt] are the exception: a prompt does not take
      * the application out of the foreground, so the user left, and every open
      * prompt ends and the vault locks at once, `DESIGN.md` §14.4 and
-     * `PLAINTEXT_LIFECYCLE.md` §7. The work behind a prompt goes on; a sync
-     * bootstrap needs no session after it read the identity.
+     * `PLAINTEXT_LIFECYCLE.md` §7. So does a prompt that held the lock off
+     * when the application left the foreground and ended before this call,
+     * [promptHeldLock]; a picker still open keeps the lock off, as always. A
+     * setup's sync bootstrap behind a prompt goes on, since it needs no
+     * session after it read the identity; a Sync now or unlock pull behind
+     * one ends with the session, `IOS.md` §27.
      */
     fun enteredBackground() {
-        if (prompts == 0) return
+        if (prompts == 0 && !promptHeldLock) return
         repeat(prompts) { endHostActivity() }
         prompts = 0
         promptEpoch += 1
@@ -862,6 +888,7 @@ class ChurController(
     /** The application left the foreground. */
     suspend fun onBackground() {
         privacy.setEnabled(true)
+        promptHeldLock = prompts > 0
         if (hostActivities > 0) return
         lockEpoch += 1
         if (_appLockEnabled.value || policy.lockOnBackground) {
@@ -1249,38 +1276,59 @@ class ChurController(
      * does, and an engine that was already configured keeps the status it
      * showed before.
      *
-     * [localNetworkAlert] is for a platform that asks for local network access
-     * as the first connection to a local address goes out, which iOS does,
-     * `IOS.md` §27. Its alert makes the scene resign active, so the bootstrap
-     * to a local server runs inside a [beginPrompt] bracket; otherwise the
-     * background lock would close the vault under the setup. The bracket lasts
-     * as long as the bootstrap, since the alert gives no signal of its own,
-     * and a user who leaves the app meanwhile ends it and is locked out at
-     * once, [enteredBackground]. Android asks before this call, `ANDROID.md`
-     * §24, and shows nothing during it. iOS gives the app no answer to read,
-     * so a local server that does not answer may be a refusal, and the notice
-     * then says where to allow access.
+     * A bootstrap to a local server on iOS runs under the local network alert,
+     * [underLocalNetworkAlert], and when it gets no answer the notice says
+     * where to allow access. Android asks before this call, `ANDROID.md` §24,
+     * and shows nothing during it.
      */
-    fun configureSync(
-        serverUrl: String,
-        bootstrapSecret: String,
-        localNetworkAlert: Boolean = false,
-    ) = guarded {
-        val local = localNetworkAlert && isLocalSyncEndpoint(serverUrl)
-        val prompt = if (local) beginPrompt() else null
-        try {
-            sync?.configure(serverUrl, bootstrapSecret)
-        } catch (failure: SyncTransportFailure) {
-            if (!local || failure.status != ChurStatus.NETWORK_FAILURE) throw failure
-            say(LOCAL_NETWORK_REFUSED)
-        } finally {
-            prompt?.let(::endPrompt)
+    fun configureSync(serverUrl: String, bootstrapSecret: String) = guarded {
+        underLocalNetworkAlert(serverUrl) { local ->
+            try {
+                sync?.configure(serverUrl, bootstrapSecret)
+            } catch (failure: SyncTransportFailure) {
+                if (!local || failure.status != ChurStatus.NETWORK_FAILURE) throw failure
+                say(LOCAL_NETWORK_REFUSED)
+            }
         }
     }
 
-    /** Runs one sync cycle now, which the settings entry offers. */
+    /**
+     * Runs one sync cycle now, which the settings entry offers.
+     *
+     * A run to a local server on iOS runs under the local network alert, as
+     * the setup does, and when it gets no answer the notice says where to
+     * allow access, `IOS.md` §27. Android asks before this call.
+     */
     fun syncNow() = guarded(context = sessionSync) {
-        sync?.syncNow()
+        val engine = sync ?: return@guarded
+        underLocalNetworkAlert(engine.status.value.serverUrl) { local ->
+            if (!engine.syncNow() && local && engine.status.value.failure == ChurStatus.NETWORK_FAILURE) {
+                say(LOCAL_NETWORK_REFUSED)
+            }
+        }
+    }
+
+    /**
+     * Runs [run], a connection to [serverUrl], inside a [beginPrompt] bracket
+     * when the platform may show its local network alert for that server,
+     * [localNetworkAlert].
+     *
+     * The alert makes the scene resign active, and without the bracket the
+     * background lock would close the vault under the run, just after an
+     * unlock or a tap. The bracket lasts as long as [run], since the alert
+     * gives no signal of its own, and a user who leaves the app meanwhile ends
+     * it and is locked out at once, [enteredBackground]. [run] learns whether
+     * the bracket is up: iOS gives the app no answer to read, so a local server
+     * that does not answer may be a refusal.
+     */
+    private suspend fun underLocalNetworkAlert(serverUrl: String?, run: suspend (local: Boolean) -> Unit) {
+        val local = localNetworkAlert && serverUrl != null && isLocalSyncEndpoint(serverUrl)
+        val prompt = if (local) beginPrompt() else null
+        try {
+            run(local)
+        } finally {
+            prompt?.let(::endPrompt)
+        }
     }
 
     /** Forgets the server, which the settings entry offers beside the run. */
@@ -2219,8 +2267,16 @@ class ChurController(
                         say("Sync stopped for one device. Open Settings to see why.", security = true)
                     }
                     // A server this device cannot reach now would only hold
-                    // "Sync now" through a backoff, [syncReachable].
-                    if (engine.status.value.serverUrl?.let { syncReachable(it) } != false) engine.syncNow()
+                    // "Sync now" through a backoff, [syncReachable]. On iOS
+                    // this pull can be the first connection to a local
+                    // server, whose alert must not lock the vault just after
+                    // the unlock. It says nothing when it gets no answer: away
+                    // from that network it never does, and Settings shows the
+                    // run's line.
+                    val serverUrl = engine.status.value.serverUrl
+                    if (serverUrl?.let { syncReachable(it) } != false) {
+                        underLocalNetworkAlert(serverUrl) { engine.syncNow() }
+                    }
                 }
             }
         }
@@ -2364,8 +2420,10 @@ class ChurController(
         /**
          * The failures `DESIGN.md` §26 keeps on screen until dismissed.
          *
-         * They are the security states of `ERROR_MODEL.md`: the sync verdicts
-         * that stop sync until the fork state clears, and the integrity
+         * They are the security states of `ERROR_MODEL.md`: the sync verdicts,
+         * after which Chur applies nothing more from the one device or shared
+         * history they name until the fork state clears while everything else
+         * keeps syncing, `ROLLBACK_PROTECTION.md` §4, and the integrity
          * verdicts whose copy tells the user to restore from a backup.
          */
         val SECURITY_STATUSES: Set<ChurStatus> = setOf(

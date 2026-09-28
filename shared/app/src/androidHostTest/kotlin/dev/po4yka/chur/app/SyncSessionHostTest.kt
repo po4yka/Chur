@@ -39,8 +39,9 @@ import kotlin.test.assertTrue
  * that configured it, so a decoy session must neither show that server nor
  * pull from it, `DECOY_VAULT.md` §7 and §10, nor see what the last session's
  * run showed, §6. And the bracket that keeps the
- * iOS local network alert from locking the vault must not delay the lock of a
- * user who left the app, `IOS.md` §27.
+ * iOS local network alert from locking the vault must cover every run to a
+ * local server with the vault open, not the setup alone, and must not delay
+ * the lock of a user who left the app, `IOS.md` §27.
  */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class SyncSessionHostTest {
@@ -197,15 +198,15 @@ class SyncSessionHostTest {
         // Every server refuses at once, as one does when iOS holds the
         // connection back.
         val sync = SyncCoordinator(store) { _, token -> SyncClient(unreachable, token) }
-        val controller = controller(sync)
+        val controller = controller(sync, localNetworkAlert = true)
         try {
             controller.start()
             controller.create(OWNER, offerRecovery = false)
             withTimeout(10_000) { controller.route.first { it == AppRoute.Vault } }
 
-            controller.configureSync(LOCAL_SERVER, SECRET, localNetworkAlert = true)
+            controller.configureSync(LOCAL_SERVER, SECRET)
             withTimeout(10_000) { controller.notice.first { it?.text == LOCAL_NETWORK_REFUSED } }
-            controller.configureSync(PUBLIC_SERVER, SECRET, localNetworkAlert = true)
+            controller.configureSync(PUBLIC_SERVER, SECRET)
             withTimeout(10_000) { controller.notice.first { it?.text == syncCopy(ChurStatus.NETWORK_FAILURE) } }
         } finally {
             controller.vault.shutdown()
@@ -245,7 +246,7 @@ class SyncSessionHostTest {
         // The setup waits on the saved state, inside the bracket, until the
         // test answers; then it ends without a server, which is enough here.
         val sync = SyncCoordinator(store) { _, _ -> throw IllegalArgumentException("no server in this test") }
-        val controller = controller(sync)
+        val controller = controller(sync, localNetworkAlert = true)
         try {
             controller.start()
             controller.create(OWNER, offerRecovery = false)
@@ -254,7 +255,7 @@ class SyncSessionHostTest {
             // The alert makes the scene resign active, and the user answers
             // it: the prompt keeps the vault open, and nothing locks after it.
             var setup = store.hold()
-            controller.configureSync(LOCAL_SERVER, SECRET, localNetworkAlert = true)
+            controller.configureSync(LOCAL_SERVER, SECRET)
             withTimeout(10_000) { setup.reached.await() }
             controller.background()
             assertIs<VaultState.Unlocked>(controller.vaultState.value)
@@ -266,7 +267,7 @@ class SyncSessionHostTest {
             // at once, as leaving always does, and the bracket is over, so
             // the next leave locks too while that setup still runs.
             setup = store.hold()
-            controller.configureSync(LOCAL_SERVER, SECRET, localNetworkAlert = true)
+            controller.configureSync(LOCAL_SERVER, SECRET)
             withTimeout(10_000) { setup.reached.await() }
             controller.background()
             controller.enteredBackground()
@@ -282,14 +283,103 @@ class SyncSessionHostTest {
         }
     }
 
-    /** Creates the owner, which configured [SERVER], and another identity. */
-    private suspend fun seedOwnerAndOther() {
+    @Test
+    fun leaving_after_a_local_run_ended_while_inactive_locks_at_once(): Unit = runBlocking {
+        val sync = SyncCoordinator(store) { _, _ -> throw IllegalArgumentException("no server in this test") }
+        val controller = controller(sync, localNetworkAlert = true)
+        try {
+            controller.start()
+            controller.create(OWNER, offerRecovery = false)
+            withTimeout(10_000) { controller.route.first { it == AppRoute.Vault } }
+
+            // The user opens the app switcher during a run to a local server:
+            // the scene only resigns active, and the prompt keeps the vault
+            // open. The run ends while the scene is still inactive, as one to
+            // a server that is away does, and its notice comes after its
+            // bracket ended.
+            val setup = store.hold()
+            controller.configureSync(LOCAL_SERVER, SECRET)
+            withTimeout(10_000) { setup.reached.await() }
+            controller.background()
+            setup.release.complete(Unit)
+            withTimeout(10_000) { controller.notice.first { it != null } }
+            assertIs<VaultState.Unlocked>(controller.vaultState.value)
+
+            // The user then leaves from the switcher. No prompt is up any
+            // more, but one held the lock off when the scene resigned active,
+            // so the vault locks at once.
+            controller.enteredBackground()
+            withTimeout(10_000) { controller.vaultState.first { it is VaultState.Locked } }
+        } finally {
+            controller.vault.shutdown()
+        }
+    }
+
+    @Test
+    fun a_run_to_a_local_server_keeps_the_vault_open_under_the_alert(): Unit = runBlocking {
+        seedOwnerAndOther(LOCAL_SERVER)
+        // The owner's server is local, and every connection is refused, as
+        // one is when iOS holds it back. Each run waits in its first backoff
+        // until the test releases the current hold.
+        var backoff = Hold()
+        val sync =
+            SyncCoordinator(
+                store,
+                sleep = {
+                    val hold = backoff
+                    hold.reached.complete(Unit)
+                    hold.release.await()
+                },
+            ) { _, token -> SyncClient(unreachable, token) }
+        val relaunched = controller(sync, localNetworkAlert = true)
+        try {
+            relaunched.start()
+            relaunched.goTo(AppRoute.Unlock)
+            relaunched.unlock(OWNER)
+            // The pull after the unlock can be the first local connection,
+            // whose alert makes the scene resign active: the vault stays open.
+            withTimeout(10_000) { backoff.reached.await() }
+            relaunched.background()
+            assertIs<VaultState.Unlocked>(relaunched.vaultState.value)
+            backoff.release.complete(Unit)
+            // A lock would have cancelled the pull before it could fail.
+            withTimeout(10_000) { sync.status.first { it.failure == ChurStatus.NETWORK_FAILURE } }
+            assertIs<VaultState.Unlocked>(relaunched.vaultState.value)
+
+            // Sync now can be the first local connection too: the vault
+            // stays open under it, and when it gets no answer it says where
+            // to allow access, as a setup does.
+            backoff = Hold()
+            relaunched.syncNow()
+            withTimeout(10_000) { backoff.reached.await() }
+            relaunched.background()
+            assertIs<VaultState.Unlocked>(relaunched.vaultState.value)
+            backoff.release.complete(Unit)
+            // A lock would have cancelled the run before its notice.
+            withTimeout(10_000) { relaunched.notice.first { it?.text == LOCAL_NETWORK_REFUSED } }
+            assertIs<VaultState.Unlocked>(relaunched.vaultState.value)
+
+            // Both brackets end with their runs, so the scene resigning
+            // active locks again.
+            withTimeout(10_000) {
+                while (relaunched.vaultState.value !is VaultState.Locked) {
+                    relaunched.background()
+                    delay(50)
+                }
+            }
+        } finally {
+            relaunched.vault.shutdown()
+        }
+    }
+
+    /** Creates the owner, which configured [server], and another identity. */
+    private suspend fun seedOwnerAndOther(server: String = SERVER) {
         val first = controller(SyncCoordinator(store))
         first.start()
         first.create(OWNER, offerRecovery = false)
         withTimeout(10_000) { first.route.first { it == AppRoute.Vault } }
         val owner = checkNotNull(first.vault.syncIdentity())
-        store.saved = SyncState(SERVER, owner.vaultId, owner.deviceId, ByteArray(32), emptyList())
+        store.saved = SyncState(server, owner.vaultId, owner.deviceId, ByteArray(32), emptyList())
         first.createSecondIdentity()
         // The owner's create still loads its Library after the route changed,
         // and a create before it ends is ignored, so this asks until one runs.
@@ -302,8 +392,10 @@ class SyncSessionHostTest {
         first.vault.shutdown()
     }
 
+    /** A controller as a host binds it; [localNetworkAlert] as iOS binds it. */
     private fun controller(
         sync: SyncCoordinator,
+        localNetworkAlert: Boolean = false,
         reachable: suspend (String) -> Boolean = { true },
     ): ChurController =
         ChurController(
@@ -314,6 +406,7 @@ class SyncSessionHostTest {
             notes = InMemoryNoteStore(),
             sync = sync,
             syncReachable = reachable,
+            localNetworkAlert = localNetworkAlert,
         ).also { sync.bind(RepositorySyncBoundary(it.vault)) }
 
     /** A server address with nothing listening, which refuses at once. */

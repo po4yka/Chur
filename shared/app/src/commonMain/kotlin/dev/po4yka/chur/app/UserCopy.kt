@@ -23,6 +23,11 @@ import dev.po4yka.chur.core.model.ChurStatus
  * same document), and the user can act on it. An unrecognized code already arrives as
  * [ChurStatus.INTERNAL_FAILURE], because `ChurStatus.fromValue` folds it there.
  *
+ * A fork or rollback verdict freezes only the device chain or shared history
+ * it names, and everything else keeps syncing, `ROLLBACK_PROTECTION.md` §4, so
+ * its line says what Chur does not apply, in the words of the Settings banner,
+ * and never that sync stopped.
+ *
  * [ChurStatus.MIGRATION_REQUIRED] asks for a newer Chur rather than a retry.
  * Opening or restoring a vault already runs every migration this build knows,
  * so the status reaches the app only for a format newer than the build, and
@@ -45,8 +50,11 @@ fun userCopy(status: ChurStatus): String = when (status) {
     ChurStatus.PERMISSION_DENIED -> "Chur does not have access. Allow access or choose another file."
     ChurStatus.NOT_FOUND -> "This item is no longer available. Refresh and try again."
     ChurStatus.CONFLICT -> "This changed on another device. Refresh and try again."
-    ChurStatus.SYNC_CHAIN_FORK -> "The sync server sent conflicting changes. Sync stopped."
-    ChurStatus.SYNC_HEAD_ROLLBACK -> "The sync server sent older data than this device has. Sync stopped."
+    ChurStatus.SYNC_CHAIN_FORK ->
+        "The sync server sent changes that do not match what this device already accepted, " +
+            "so Chur does not apply them."
+    ChurStatus.SYNC_HEAD_ROLLBACK ->
+        "The sync server sent older data than this device already accepted, so Chur does not apply it."
     ChurStatus.UNSUPPORTED_VERSION,
     ChurStatus.UNSUPPORTED_SUITE,
     -> "This version of Chur cannot open it. Update Chur or choose another file."
@@ -111,8 +119,8 @@ fun syncCopy(status: ChurStatus): String = when (status) {
 }
 
 /**
- * What a sync setup to a local server says on iOS when the server does not
- * answer, `IOS.md` §27.
+ * What a sync setup or "Sync now" to a local server says on iOS when the server
+ * does not answer, `IOS.md` §27.
  *
  * iOS lets no app read whether the user allowed local network access, so the
  * line cannot say that access is off, only where to allow it. It is the iOS

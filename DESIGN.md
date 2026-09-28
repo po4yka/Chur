@@ -1026,7 +1026,14 @@ prompt Chur asked for is up: a permission or Photos access request, a delete
 confirmation, the device check before a recovery phrase, or the local network
 alert. Such a prompt keeps the lock off only while the user answers it with
 Chur in front, and leaving during it locks at once (`docs/ANDROID.md` §19.3,
-`docs/IOS.md` §21.2). A picker, the share sheet, or a system screen that can
+`docs/IOS.md` §21.2). The iOS local network alert is the exception: the app
+cannot see it, so its prompt lasts for the whole connection run to a local
+sync server that can bring it, which is the setup, Sync now, or the pull after
+an unlock (`docs/IOS.md` §27). That run can last from seconds to minutes, and
+usually no alert shows at all, because iOS asks only once. For that time, a
+return from Control Center, Notification Center, or the app switcher finds the
+vault open. Leaving Chur still locks at once, and the chosen limit is the
+backstop. A picker, the share sheet, or a system screen that can
 take the whole screen, such as the device credential screen, cannot be told
 apart from leaving, so it keeps the lock off until it returns, and the
 chosen limit is the backstop for a user who walks away from one. v1 has no

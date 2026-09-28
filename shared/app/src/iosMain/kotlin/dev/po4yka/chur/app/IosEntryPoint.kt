@@ -139,6 +139,9 @@ fun churController(privacy: IosPrivacyCover, exports: ExportSink): ChurControlle
         clock = clock,
         notes = churNoteStore(),
         sync = sync,
+        // iOS shows its local network alert as a run's first connection to a
+        // local server goes out. It has no link check, `IOS.md` §27.
+        localNetworkAlert = true,
     )
     sync.bind(RepositorySyncBoundary(controller.vault))
     return controller
