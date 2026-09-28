@@ -1976,10 +1976,12 @@ class ChurController(
         // `SYNC_PROTOCOL_V1.md` §7: "Decrypted application occurs after
         // explicit unlock". Whatever the locked puller staged while the vault
         // was closed is validated and applied here, off the first frame, and
-        // then a configured engine pulls what arrived since the last run.
+        // then a configured engine pulls what arrived since the last run. The
+        // engine applies it, so a fork or rollback found in that pass reaches
+        // Settings as the run's own would, `ROLLBACK_PROTECTION.md` §4.
         sync?.takeIf { it.status.value.configured }?.let { engine ->
             guarded(clearMessage = false) {
-                withContext(Dispatchers.Default) { repository.processSync() }
+                withContext(Dispatchers.Default) { engine.applyStaged() }
                 engine.syncNow()
             }
         }

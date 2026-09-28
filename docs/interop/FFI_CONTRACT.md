@@ -462,7 +462,7 @@ chur_status_t chur_sync_process(chur_handle_t session, uint64_t now_ms,
 
 Record kind `1` is an encrypted signed operation. Kind `2` is a signed checkpoint. `chur_sync_stage` is idempotent for identical bytes. It rejects one record above the 16 MiB response bound. The whole per-vault inbox remains bounded to the limits in [`../sync/SYNC_PROTOCOL_V1.md`](../sync/SYNC_PROTOCOL_V1.md) §7.
 
-`chur_sync_process` authenticates and decrypts operations under the unlocked session. It removes an applied record, an exact replay, and a record that full validation rejects. It retains an operation with a missing device sequence, causal predecessor, or collection key. The report contains applied, duplicate, pending, and rejected counts. `first_rejection` is zero or the first stable `chur_status_t`; it contains no private text.
+`chur_sync_process` authenticates and decrypts operations under the unlocked session. It removes an applied record, an exact replay, and a record that full validation rejects. It retains an operation with a missing device sequence, causal predecessor, or collection key. The report contains applied, duplicate, pending, and rejected counts. `first_rejection` is zero or the first stable `chur_status_t`, except that `SYNC_CHAIN_FORK` or `SYNC_HEAD_ROLLBACK` replaces an earlier status of another kind: a server can stage any bytes beside a forked record, and the engine drops that record after it freezes the chain, so a first-record rule would let the server hide the verdict ([`../ERROR_MODEL.md`](../ERROR_MODEL.md) "Wire and persistence compatibility"). It contains no private text.
 
 ### 6.9 Sharing identity, ABI 1.5
 

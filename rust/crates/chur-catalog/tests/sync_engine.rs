@@ -82,6 +82,113 @@ fn unlocked_processing_removes_validated_records_and_reports_rejections() {
     std::fs::remove_dir_all(path).expect("cleanup");
 }
 
+/// `ROLLBACK_PROTECTION.md` §4: junk staged ahead of a forked record cannot
+/// hide the verdict.
+///
+/// Records are processed by staging time, so the malformed record is rejected
+/// first. The engine then freezes the chain and drops the forked record, so the
+/// report of this pass is the only place the fork can surface.
+#[test]
+fn a_fork_verdict_outranks_an_earlier_rejection() {
+    let vault_id = id(1);
+    let root = Key::new([2; 32]);
+    let catalog_key = CatalogKey::derive(&root, &vault_id).expect("catalog key");
+    let mut db = CatalogDb::open(&CatalogLocation::Memory, &catalog_key).expect("catalog");
+    schema::open_at_current_version(&mut db, 1).expect("schema");
+    let signing_key = DeviceSigningKey::from_seed([3; 32]);
+    let enrollment =
+        EnrollmentRecord::initial(vault_id, id(4), signing_key.verifying_key(), [5; 32])
+            .expect("enrollment")
+            .sign(&signing_key);
+    let (_, _, accepted) =
+        sync_receive::provision_initial_membership(&mut db, &root, &signing_key, &enrollment)
+            .expect("provision");
+
+    let collection_id = id(30);
+    let collection_key = Key::new([31; 32]);
+    let envelope = chur_format::envelope::CollectionKeyEnvelope::seal(
+        &root,
+        vault_id,
+        collection_id,
+        1,
+        1,
+        Nonce::new([32; 24]),
+        &collection_key,
+    )
+    .expect("envelope");
+    store::put_collection_with_envelope(
+        &mut db,
+        &Collection {
+            collection_id,
+            current_epoch: 1,
+            policy_type: COLLECTION_POLICY_VAULT_DEFAULT,
+            created_revision: 1,
+            status: COLLECTION_STATUS_ACTIVE,
+        },
+        1,
+        &envelope.encode(),
+    )
+    .expect("collection");
+    let domain = KeyDomain::collection(&collection_key, &collection_id, 1).expect("domain");
+    let payload = OperationPayload::new(
+        collection_id,
+        1,
+        PayloadBody::CreateAlbum {
+            album_id: id(20),
+            name: "fork".to_owned(),
+        },
+    )
+    .expect("payload")
+    .encode();
+    // A second signed record at the sequence the device already used.
+    let fork = Operation::seal(
+        id(21),
+        vault_id,
+        id(4),
+        1,
+        [0; 32],
+        Vec::new(),
+        *domain.selector(),
+        domain.operation_key(),
+        Nonce::new([21; 24]),
+        &payload,
+    )
+    .expect("fork")
+    .sign(&signing_key);
+
+    let path = std::env::temp_dir().join(format!(
+        "chur-sync-engine-{}",
+        random::id().expect("random id").to_hex()
+    ));
+    let vault_root = VaultRoot::new(&path);
+    for (staged_at_ms, record) in [
+        (7, b"malformed".to_vec()),
+        (8, accepted.encode()),
+        (9, fork.encode()),
+    ] {
+        sync_engine::stage_inbound(
+            &vault_root,
+            vault_id,
+            StagedKind::Operation,
+            staged_at_ms,
+            &record,
+        )
+        .expect("stage");
+    }
+    let mut staging = LockedStaging::open(vault_root.sync_inbox(&vault_id)).expect("staging");
+
+    let report =
+        sync_engine::process_staged(&mut db, &root, vault_id, &mut staging, 10).expect("process");
+
+    assert_eq!(report.duplicates, 1);
+    assert_eq!(report.rejected, 2);
+    assert_eq!(
+        report.first_rejection,
+        Some(chur_core::ChurStatus::SyncChainFork)
+    );
+    std::fs::remove_dir_all(path).expect("cleanup");
+}
+
 /// `REVOCATION.md` §7: a lagging receiver still takes a revoked peer's tail.
 ///
 /// The receiver holds no operation of the peer, so nothing places the first

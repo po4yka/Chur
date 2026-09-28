@@ -36,11 +36,14 @@ import androidx.test.platform.app.InstrumentationRegistry
 import dev.po4yka.chur.app.AppRoute
 import dev.po4yka.chur.app.ChurController
 import dev.po4yka.chur.app.MediaImporter
+import dev.po4yka.chur.app.RepositorySyncBoundary
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_IMAGE
 import dev.po4yka.chur.app.vault.ThumbnailCache
 import dev.po4yka.chur.app.vault.viewerStill
+import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.StreamKind
+import dev.po4yka.chur.ffi.SyncProcessReport
 import dev.po4yka.chur.imports.AndroidMediaCodec
 import dev.po4yka.chur.imports.Derivative
 import dev.po4yka.chur.imports.MediaBounds
@@ -50,6 +53,7 @@ import dev.po4yka.chur.imports.ProbedMedia
 import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.sync.FileSyncStateStore
 import dev.po4yka.chur.sync.SyncState
+import dev.po4yka.chur.sync.SyncVaultBoundary
 import dev.po4yka.chur.vault.VaultState
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -743,6 +747,52 @@ class BackNavigationTest {
             )
             assertEquals("nothing in the vault changes", objects, controller.page.value.objects.size)
         } finally {
+            // The case began with no state, so it leaves none.
+            runBlocking { sync.disconnect() }
+        }
+    }
+
+    @Test
+    fun aForkVerdictIsABannerUntilTheServerIsForgotten() = inTestVault {
+        val sync = ChurHost.of(activity).sync
+        val store = FileSyncStateStore(File(activity.noBackupFilesDir, "chur-sync.json").path)
+        assumeTrue("a sync server this test did not configure", runBlocking { store.load() } == null)
+        // The vault as the engine sees it, except that its inbox pass reports
+        // what the native engine reports for two different signed records at
+        // one device sequence: one rejection, and the fork as its status.
+        val real = RepositorySyncBoundary(controller.vault)
+        sync.bind(
+            object : SyncVaultBoundary by real {
+                override suspend fun process(): SyncProcessReport =
+                    SyncProcessReport(0, 0, 0, 1, ChurStatus.SYNC_CHAIN_FORK.value)
+            },
+        )
+        try {
+            runBlocking {
+                store.save(
+                    SyncState(
+                        serverUrl = "https://sync.invalid",
+                        vaultId = ByteArray(16),
+                        deviceId = ByteArray(16),
+                        transportToken = ByteArray(32),
+                        cursors = emptyList(),
+                    ),
+                )
+                sync.refresh()
+                // What an unlock does with the records staged while locked.
+                sync.applyStaged()
+            }
+            tap(label("Settings"))
+            assertTrue("the verdict is a banner in the Sync section", scrollUntil(label("Sync stopped for one device")))
+            assertTrue("the banner's action must be on screen", scrollUntil(label("Stop using the server")))
+
+            tap(label("Stop using the server"))
+            assertTrue("it asks first", await { find(label("Stop syncing with this server?")) != null })
+            tap(label("Stop syncing"))
+            assertTrue("forgetting the server clears the verdict", await { sync.status.value.integrityStop == null })
+            assertTrue("and the banner with it", await { find(label("Sync stopped for one device")) == null })
+        } finally {
+            sync.bind(real)
             // The case began with no state, so it leaves none.
             runBlocking { sync.disconnect() }
         }
@@ -1967,6 +2017,22 @@ class BackNavigationTest {
 
     private fun find(match: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? =
         find(instrumentation.uiAutomation.rootInActiveWindow, match)
+
+    /**
+     * Scrolls the list on screen forward a page at a time until [match] finds
+     * a node.
+     *
+     * A page scroll animates, and the accessibility tree shows the new page
+     * only after the list settles. A search that scrolls again at once can
+     * skip the page that holds the node, as the Settings list's Sync section
+     * was skipped, so each page gets time to reach the tree first.
+     */
+    private fun scrollUntil(match: (AccessibilityNodeInfo) -> Boolean): Boolean =
+        (0 until 8).any {
+            await(1_500) { find(match) != null }.also { found ->
+                if (!found) find { it.isScrollable }?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+            }
+        }
 
     private fun find(from: AccessibilityNodeInfo?, match: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? {
         if (from == null) return null

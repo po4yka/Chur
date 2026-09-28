@@ -67,6 +67,8 @@ data class ChurColors(
     val warning: Color,
     /** Confirmed corruption, §6.3. */
     val error: Color,
+    /** The background of an error banner, the `integrity-banner` token. */
+    val errorSoft: Color,
     /** A hairline. */
     val outline: Color,
     /** True when the dark ladder is in use. */
@@ -93,6 +95,7 @@ val ChurLightColors = ChurColors(
     brandCord = Color(0xFFA01818),
     warning = Color(0xFF986600),
     error = Color(0xFFC93434),
+    errorSoft = Color(0xFFFCE7E7),
     outline = Color(0xFFDCDCD8),
     dark = false,
 )
@@ -114,6 +117,7 @@ val ChurDarkColors = ChurColors(
     brandCord = Color(0xFFD54A47),
     warning = Color(0xFFD5AA52),
     error = Color(0xFFF06C6C),
+    errorSoft = Color(0xFF451919),
     outline = Color(0xFF2A2A2A),
     dark = true,
 )

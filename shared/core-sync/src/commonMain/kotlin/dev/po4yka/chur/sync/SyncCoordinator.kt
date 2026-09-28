@@ -96,7 +96,7 @@ public data class SyncStatus(
     public val configured: Boolean,
     /** The configured server address, which the user typed and may see. */
     public val serverUrl: String?,
-    /** One bounded line about the last run, carrying counts and no status name. */
+    /** One bounded line about the last run, such as "Up to date.", with no status name. */
     public val message: String?,
     /** Whether a run is in progress. */
     public val busy: Boolean,
@@ -109,6 +109,21 @@ public data class SyncStatus(
      * [ChurStatus.SYNC_CHAIN_FORK] asks the user to do.
      */
     public val failure: ChurStatus? = null,
+    /**
+     * The fork or rollback verdict this device reached on one device's chain,
+     * or `null` while there is none.
+     *
+     * `ROLLBACK_PROTECTION.md` §4 freezes that chain and has the user told,
+     * while every other chain keeps applying, so a run that follows still
+     * completes and this stays set: it clears only on
+     * [SyncCoordinator.disconnect]. The verdict is local, `ERROR_MODEL.md`, so
+     * it comes from the native process report and never from a server code.
+     * That report puts a verdict ahead of any other rejection in the same pass,
+     * so junk the server stages beside the forked record cannot hide it.
+     * The catalog keeps the fork state itself; this copy lasts for the process
+     * and, like the rest of this status, is not scoped to one vault identity.
+     */
+    public val integrityStop: ChurStatus? = null,
 )
 
 /**
@@ -142,9 +157,17 @@ public class SyncCoordinator(
     private val mutex = Mutex()
     private val _status = MutableStateFlow(NOT_CONFIGURED)
     private var boundary: SyncVaultBoundary? = null
+    private var integrityStop: ChurStatus? = null
 
     /** What a sync surface shows. */
     public val status: StateFlow<SyncStatus> = _status.asStateFlow()
+
+    /** Sets [status], carrying the standing [SyncStatus.integrityStop] into every line. */
+    private var shown: SyncStatus
+        get() = _status.value
+        set(value) {
+            _status.value = value.copy(integrityStop = integrityStop)
+        }
 
     /**
      * Binds the vault the engine stages into and applies on.
@@ -160,7 +183,7 @@ public class SyncCoordinator(
     public suspend fun refresh(): Unit =
         mutex.withLock {
             val state = store.load()
-            _status.value =
+            shown =
                 if (state == null) {
                     NOT_CONFIGURED
                 } else {
@@ -216,7 +239,7 @@ public class SyncCoordinator(
                 // A refused bootstrap leaves whatever was configured before intact:
                 // a user fixing a typo must not lose a working server over it.
                 if (!_status.value.configured) {
-                    _status.value = SyncStatus(false, null, null, false, failure.status)
+                    shown = SyncStatus(false, null, null, false, failure.status)
                 }
                 throw failure
             } finally {
@@ -232,7 +255,7 @@ public class SyncCoordinator(
                     cursors = listOf(DeviceCursor(identity.deviceId, 0uL)),
                 )
             store.save(state)
-            _status.value = SyncStatus(true, state.serverUrl, "Connected.", false)
+            shown = SyncStatus(true, state.serverUrl, "Connected.", false)
         }
 
     /**
@@ -245,21 +268,21 @@ public class SyncCoordinator(
         mutex.withLock {
             var state =
                 store.load() ?: run {
-                    _status.value = NOT_CONFIGURED
+                    shown = NOT_CONFIGURED
                     return false
                 }
             val vault =
                 boundary ?: run {
-                    _status.value = SyncStatus(true, state.serverUrl, "The vault is not open.", false)
+                    shown = SyncStatus(true, state.serverUrl, "The vault is not open.", false)
                     return false
                 }
             vault.identity()?.let { identity ->
                 if (!matches(state, identity)) {
-                    _status.value = SyncStatus(true, state.serverUrl, "Configured sync belongs to another vault.", false)
+                    shown = SyncStatus(true, state.serverUrl, "Configured sync belongs to another vault.", false)
                     return false
                 }
             }
-            _status.value = SyncStatus(true, state.serverUrl, "Syncing…", true)
+            shown = SyncStatus(true, state.serverUrl, "Syncing…", true)
             val client = clientFactory(state.serverUrl) { state.transportToken }
             try {
                 var backoff = INITIAL_BACKOFF_MS
@@ -274,7 +297,7 @@ public class SyncCoordinator(
                                 vault.stage(vaultId, kind, stagedAtMs, record)
                             }
                         val report = puller.pullOnce(state.vaultId, state.cursors, clock())
-                        vault.process()
+                        fold(vault.process())
                         val shares =
                             if (vault.identity()?.let { matches(state, it) } == true) {
                                 SharingPuller(client, vault).pullOnce(state.vaultId, clock())
@@ -284,14 +307,17 @@ public class SyncCoordinator(
                         // §5: the cursor advances only once the records are in
                         // native storage, so a dropped page is fetched again.
                         store.save(state.copy(cursors = report.cursors.ifEmpty { state.cursors }))
-                        _status.value =
+                        // A standing verdict means one chain is frozen, so the
+                        // run does not call the vault up to date.
+                        shown =
                             SyncStatus(
                                 configured = true,
                                 serverUrl = state.serverUrl,
                                 message =
-                                    "Synced ${report.operations} operation(s) " +
-                                        "and ${report.checkpoints} checkpoint(s)." +
-                                        (if (shares == 0) "" else " Received $shares share(s)."),
+                                    listOfNotNull(
+                                        "Up to date.".takeIf { integrityStop == null },
+                                        "Received $shares share(s).".takeIf { shares > 0 },
+                                    ).joinToString(" ").ifEmpty { null },
                                 busy = false,
                             )
                         return true
@@ -299,14 +325,14 @@ public class SyncCoordinator(
                         // §10: corruption and refusals stop the run; only the
                         // network backs off, and only up to the cap.
                         if (failure.status != ChurStatus.NETWORK_FAILURE) {
-                            _status.value = SyncStatus(true, state.serverUrl, null, false, failure.status)
+                            shown = SyncStatus(true, state.serverUrl, null, false, failure.status)
                             return false
                         }
                         if (attempt == MAX_ATTEMPTS - 1) {
-                            _status.value = SyncStatus(true, state.serverUrl, null, false, failure.status)
+                            shown = SyncStatus(true, state.serverUrl, null, false, failure.status)
                             return false
                         }
-                        _status.value = SyncStatus(true, state.serverUrl, "The server is unreachable; retrying.", true)
+                        shown = SyncStatus(true, state.serverUrl, "The server is unreachable; retrying.", true)
                         sleep(backoff)
                         backoff = (backoff * 2).coerceAtMost(MAX_BACKOFF_MS)
                     }
@@ -314,7 +340,7 @@ public class SyncCoordinator(
                 false
             } finally {
                 client.close()
-                if (_status.value.busy) _status.value = _status.value.copy(busy = false)
+                if (shown.busy) shown = shown.copy(busy = false)
             }
         }
 
@@ -332,14 +358,14 @@ public class SyncCoordinator(
                     },
             )
             store.save(state)
-            _status.value = SyncStatus(true, state.serverUrl, "Publishing access…", true)
+            shown = SyncStatus(true, state.serverUrl, "Publishing access…", true)
             val client = clientFactory(state.serverUrl) { state.transportToken }
             try {
                 flushPending(client, state)
                 publishSourceObjects(client, state, requireNotNull(boundary))
-                _status.value = SyncStatus(true, state.serverUrl, "Access published.", false)
+                shown = SyncStatus(true, state.serverUrl, "Access published.", false)
             } catch (failure: Exception) {
-                _status.value = SyncStatus(true, state.serverUrl, "Sharing changes need upload.", false)
+                shown = SyncStatus(true, state.serverUrl, "Sharing changes need upload.", false)
                 throw failure
             } finally {
                 client.close()
@@ -390,13 +416,13 @@ public class SyncCoordinator(
                     },
             )
             store.save(state)
-            _status.value = SyncStatus(true, state.serverUrl, "Publishing revocation…", true)
+            shown = SyncStatus(true, state.serverUrl, "Publishing revocation…", true)
             val client = clientFactory(state.serverUrl) { state.transportToken }
             try {
                 flushPending(client, state)
-                _status.value = SyncStatus(true, state.serverUrl, "Revocation published.", false)
+                shown = SyncStatus(true, state.serverUrl, "Revocation published.", false)
             } catch (failure: Exception) {
-                _status.value = SyncStatus(true, state.serverUrl, "Sharing changes need upload.", false)
+                shown = SyncStatus(true, state.serverUrl, "Sharing changes need upload.", false)
                 throw failure
             } finally {
                 client.close()
@@ -457,8 +483,35 @@ public class SyncCoordinator(
         mutex.withLock {
             require(store.load()?.pendingSharing.isNullOrEmpty()) { "publish pending sharing changes before disconnecting" }
             store.clear()
-            _status.value = NOT_CONFIGURED
+            integrityStop = null
+            shown = NOT_CONFIGURED
         }
+
+    /**
+     * Applies what the locked puller staged, which an unlock does, §7.
+     *
+     * Records staged while the vault was locked are the usual case, so the
+     * pass goes through the engine rather than straight to the vault: a fork
+     * or rollback among them is kept as the verdict a run would keep.
+     */
+    public suspend fun applyStaged(): Unit =
+        mutex.withLock {
+            fold(boundary?.process())
+        }
+
+    /**
+     * Keeps a fork or rollback verdict from one pass over the inbox.
+     *
+     * The native engine already froze that chain and dropped the record, and
+     * the report is the only place the verdict reaches this layer, so a pass
+     * whose report is ignored would read as a clean one. `ERROR_MODEL.md`
+     * forbids retrying either status, and nothing here does.
+     */
+    private fun fold(report: SyncProcessReport?) {
+        val verdict = report?.let { ChurStatus.fromValue(it.firstRejection) }?.takeIf { it in LOCAL_VERDICTS } ?: return
+        integrityStop = verdict
+        _status.value = _status.value.copy(integrityStop = verdict)
+    }
 
     internal companion object {
         /** §10: bounded means both a growth cap and an attempt cap. */
@@ -470,3 +523,6 @@ public class SyncCoordinator(
 
 /** The status before any server is configured, shared so it reads as one state. */
 private val NOT_CONFIGURED = SyncStatus(configured = false, serverUrl = null, message = null, busy = false)
+
+/** The two security verdicts of `ROLLBACK_PROTECTION.md` §4, which only this device reaches. */
+internal val LOCAL_VERDICTS: Set<ChurStatus> = setOf(ChurStatus.SYNC_CHAIN_FORK, ChurStatus.SYNC_HEAD_ROLLBACK)

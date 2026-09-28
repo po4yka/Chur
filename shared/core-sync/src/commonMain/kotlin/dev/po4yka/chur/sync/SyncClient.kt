@@ -315,7 +315,12 @@ public class SyncClient(
         require(bytes.size <= RESPONSE_BYTES_MAX) { "sync response exceeds the byte limit" }
         if (response.status.value !in 200..299) {
             val value = if (bytes.size == Int.SIZE_BYTES) Reader(bytes).i32() else ChurStatus.INTERNAL_FAILURE.value
-            throw SyncTransportFailure(ChurStatus.fromValue(value), "sync server rejected $path")
+            // `ERROR_MODEL.md` "Wire and persistence compatibility": a fork or
+            // a rollback is a local verdict and is never adopted from a remote
+            // code, so a server that sends one gets the generic failure and
+            // cannot raise the security state itself.
+            val status = ChurStatus.fromValue(value).takeUnless { it in LOCAL_VERDICTS } ?: ChurStatus.INTERNAL_FAILURE
+            throw SyncTransportFailure(status, "sync server rejected $path")
         }
         return bytes
     }

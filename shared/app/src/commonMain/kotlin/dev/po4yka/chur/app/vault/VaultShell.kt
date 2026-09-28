@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -17,7 +18,9 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -73,6 +76,7 @@ import dev.po4yka.chur.app.syncCopy
 import dev.po4yka.chur.app.theme.AlbumsGlyph
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.DestructiveButton
+import dev.po4yka.chur.app.theme.IntegrityGlyph
 import dev.po4yka.chur.app.theme.LibraryGlyph
 import dev.po4yka.chur.app.theme.LocalChurColors
 import dev.po4yka.chur.app.theme.LockGlyph
@@ -864,8 +868,15 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
                     SyncSetupCard(onConfigure = actions.onConfigureSync)
                 }
             } else {
+                if (sync.integrityStop != null) {
+                    item {
+                        SyncStoppedBanner(onStop = { confirmingDisconnect = true })
+                    }
+                }
                 item {
-                    SettingsAction("Sync now", actions.onSyncNow)
+                    // A second run while one is in progress would only queue
+                    // behind the engine's lock, so the row waits for it.
+                    SettingsAction("Sync now", actions.onSyncNow, enabled = !sync.busy)
                 }
                 item {
                     SharingCard(state, actions)
@@ -1042,6 +1053,45 @@ private fun ChangePasswordDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/**
+ * The `DESIGN.md` §20.2 banner for a fork or rollback verdict on one device.
+ *
+ * `ROLLBACK_PROTECTION.md` §4 has the user told, and its exits, reconciliation
+ * and revoking the device, have no surface here yet. What the user can do is
+ * stop using the server that delivered that history, so the action is the
+ * disconnect, behind its own confirmation. The copy names no status and no
+ * cryptography, §20.2, and the banner stays for as long as the engine reports
+ * the verdict, as §26 keeps a security failure on screen. It is a polite live
+ * region, so a reader hears it when a run on this screen finds the verdict.
+ */
+@Composable
+private fun SyncStoppedBanner(onStop: () -> Unit) {
+    val colors = LocalChurColors.current
+    Card(
+        colors = CardDefaults.cardColors(containerColor = colors.errorSoft, contentColor = colors.ink),
+        modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
+    ) {
+        Column(
+            modifier = Modifier.padding(ChurSpacing.three),
+            verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(ChurSpacing.two),
+            ) {
+                Icon(IntegrityGlyph, contentDescription = null, tint = colors.error)
+                Text("Sync stopped for one device", style = MaterialTheme.typography.titleSmall)
+            }
+            Text(
+                "Changes from that device do not match what this device already accepted, " +
+                    "so Chur does not apply them.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Button(onClick = onStop) { Text("Stop using the server") }
+        }
+    }
 }
 
 @Composable

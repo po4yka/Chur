@@ -33,7 +33,15 @@ pub struct ProcessReport {
     pub pending: usize,
     /// Invalid records removed after full unlocked validation.
     pub rejected: usize,
-    /// Stable status of the first rejected record.
+    /// Stable status of the first rejected record, or of the first fork or
+    /// rollback verdict when the pass reached one.
+    ///
+    /// A verdict replaces an earlier status of another kind. Staging accepts
+    /// any bytes, so a server could otherwise place junk ahead of the forked
+    /// record and hide the verdict behind its rejection. The engine freezes the
+    /// chain and drops the record, so no later pass reports the fork again,
+    /// and `ERROR_MODEL.md` "Wire and persistence compatibility" says a server
+    /// can neither induce nor suppress it (`ROLLBACK_PROTECTION.md` §4).
     pub first_rejection: Option<ChurStatus>,
 }
 
@@ -118,7 +126,13 @@ pub fn process_staged(
                 Err(error) if is_rejection(error.status()) => {
                     staging.remove(record.id())?;
                     report.rejected += 1;
-                    report.first_rejection.get_or_insert(error.status());
+                    let status = error.status();
+                    if report
+                        .first_rejection
+                        .is_none_or(|first| !is_verdict(first) && is_verdict(status))
+                    {
+                        report.first_rejection = Some(status);
+                    }
                     removed = true;
                 }
                 Err(error) => return Err(error),
@@ -192,6 +206,13 @@ fn process_one(
             "staged sync record kind is invalid",
         )),
     }
+}
+
+fn is_verdict(status: ChurStatus) -> bool {
+    matches!(
+        status,
+        ChurStatus::SyncChainFork | ChurStatus::SyncHeadRollback
+    )
 }
 
 fn is_rejection(status: ChurStatus) -> bool {

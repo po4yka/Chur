@@ -58,6 +58,7 @@ class SyncCoordinatorTest {
         var identity: SharingIdentity? = null
         val staged = mutableListOf<Pair<SyncRecordKind, ByteArray>>()
         var processed = 0
+        var firstRejection = 0
         val accepted = mutableListOf<ByteArray>()
 
         override suspend fun identity(): SharingIdentity? = identity
@@ -73,7 +74,8 @@ class SyncCoordinatorTest {
 
         override suspend fun process(): SyncProcessReport? {
             processed++
-            return SyncProcessReport(staged.size.toLong(), 0, 0, 0, 0)
+            val rejected = if (firstRejection == 0) 0L else 1L
+            return SyncProcessReport(staged.size.toLong() - rejected, 0, 0, rejected, firstRejection)
         }
 
         override suspend fun acceptSharePackage(packageBytes: ByteArray): Boolean {
@@ -260,10 +262,79 @@ class SyncCoordinatorTest {
                     ?.single()
                     ?.after,
             )
-            assertTrue(
-                coordinator.status.value.message!!
-                    .contains("2"),
-            )
+            // The copy is the user's: no operation or checkpoint counts.
+            assertEquals("Up to date.", coordinator.status.value.message)
+            assertNull(coordinator.status.value.integrityStop)
+        }
+
+    @Test
+    fun a_fork_found_by_a_run_stops_saying_synced_until_disconnect() =
+        runTest {
+            val engine =
+                okEngine { path ->
+                    when {
+                        path.contains("/operations/") -> MockAnswer.Body(frame(byteArrayOf(1)))
+                        path.endsWith("/checkpoints") || path.endsWith("/sharing/packages") ->
+                            MockAnswer.Body(byteArrayOf(0, 0, 0, 0))
+                        else -> error(path)
+                    }
+                }
+            val store =
+                FakeStore().apply {
+                    saved = SyncState("https://sync.example", vaultId, deviceId, ByteArray(32), listOf(DeviceCursor(deviceId, 0u)))
+                }
+            val boundary = FakeBoundary().apply { firstRejection = ChurStatus.SYNC_CHAIN_FORK.value }
+            val coordinator = coordinator(store, boundary, engine)
+
+            // `ROLLBACK_PROTECTION.md` §4: every other chain keeps applying,
+            // so the run completes, and it still must not read as a success.
+            assertTrue(coordinator.syncNow())
+            assertEquals(ChurStatus.SYNC_CHAIN_FORK, coordinator.status.value.integrityStop)
+            assertNull(coordinator.status.value.message)
+
+            // A clean pass after it does not clear the verdict.
+            boundary.firstRejection = 0
+            assertTrue(coordinator.syncNow())
+            assertEquals(ChurStatus.SYNC_CHAIN_FORK, coordinator.status.value.integrityStop)
+            assertFalse(coordinator.status.value.message.orEmpty().startsWith("Up to date"))
+
+            coordinator.disconnect()
+            assertNull(coordinator.status.value.integrityStop)
+        }
+
+    @Test
+    fun a_rollback_in_what_was_staged_while_locked_is_kept_at_unlock() =
+        runTest {
+            val store =
+                FakeStore().apply {
+                    saved = SyncState("https://sync.example", vaultId, deviceId, ByteArray(32), emptyList())
+                }
+            val boundary = FakeBoundary().apply { firstRejection = ChurStatus.SYNC_HEAD_ROLLBACK.value }
+            val engine = okEngine { error(it) }
+            val coordinator = coordinator(store, boundary, engine)
+            coordinator.refresh()
+
+            coordinator.applyStaged()
+
+            assertEquals(1, boundary.processed)
+            assertEquals(0, engine.requests)
+            assertEquals(ChurStatus.SYNC_HEAD_ROLLBACK, coordinator.status.value.integrityStop)
+            assertTrue(coordinator.status.value.configured)
+        }
+
+    @Test
+    fun other_rejections_are_not_a_fork_verdict() =
+        runTest {
+            val store =
+                FakeStore().apply {
+                    saved = SyncState("https://sync.example", vaultId, deviceId, ByteArray(32), emptyList())
+                }
+            val boundary = FakeBoundary().apply { firstRejection = ChurStatus.NON_CANONICAL_ENCODING.value }
+            val coordinator = coordinator(store, boundary, okEngine { error(it) })
+
+            coordinator.applyStaged()
+
+            assertNull(coordinator.status.value.integrityStop)
         }
 
     @Test

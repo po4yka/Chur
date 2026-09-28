@@ -50,6 +50,24 @@ class SyncClientTest {
     }
 
     @Test
+    fun a_server_cannot_send_a_fork_or_rollback_verdict() = runTest {
+        // `ERROR_MODEL.md`: both are local verdicts, never adopted from a
+        // remote code, so a server sending one gets the generic failure.
+        for (code in listOf(206, 207)) {
+            val engine = MockEngine {
+                respond(content = byteArrayOf(0, 0, 0, code.toByte()), status = HttpStatusCode.Conflict)
+            }
+            val client = SyncClient("https://sync.example", { ByteArray(32) }, HttpClient(engine))
+
+            val failure = assertFailsWith<SyncTransportFailure> {
+                client.memberships(ByteArray(16), 0u)
+            }
+
+            assertEquals(dev.po4yka.chur.core.model.ChurStatus.INTERNAL_FAILURE, failure.status)
+        }
+    }
+
+    @Test
     fun oversized_page_counts_are_rejected() = runTest {
         val engine = MockEngine { respond(byteArrayOf(0, 0, 1, 1)) }
         val client = SyncClient("http://127.0.0.1:8080", { ByteArray(32) }, HttpClient(engine))

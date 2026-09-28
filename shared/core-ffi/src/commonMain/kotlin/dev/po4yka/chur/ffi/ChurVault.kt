@@ -1178,7 +1178,13 @@ enum class SyncRecordKind(
     CHECKPOINT(2),
 }
 
-/** Counts from one unlocked inbox pass. */
+/**
+ * Counts from one unlocked inbox pass.
+ *
+ * [firstRejection] is zero or the status of the first rejected record, except
+ * that a fork or rollback verdict replaces an earlier status of another kind
+ * (`FFI_CONTRACT.md` §6.8).
+ */
 data class SyncProcessReport(
     val applied: Long,
     val duplicates: Long,

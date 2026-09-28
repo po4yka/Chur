@@ -22,7 +22,8 @@ pub struct ChurSyncReportV1 {
     pub pending: u64,
     /// Invalid records rejected after unlocked validation.
     pub rejected: u64,
-    /// First stable rejection status, or zero.
+    /// First stable rejection status, or zero. A fork or rollback verdict
+    /// replaces an earlier status of another kind.
     pub first_rejection: i32,
     /// Reserved and zero in ABI 1.4.
     pub reserved: [u8; 4],
