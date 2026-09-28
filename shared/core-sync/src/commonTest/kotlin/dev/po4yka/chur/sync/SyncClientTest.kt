@@ -12,6 +12,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class SyncClientTest {
@@ -147,7 +148,64 @@ class SyncClientTest {
             client.downloadSharedObject(recipient, source, collection, store, 0u, 16_777_217u)
         }
     }
+
+    @Test
+    fun local_endpoints_are_private_link_local_unique_local_or_mdns() {
+        val local = mapOf(
+            "10.0.0.5" to v4(10, 0, 0, 5),
+            "172.16.1.1" to v4(172, 16, 1, 1),
+            "172.31.255.1" to v4(172, 31, 255, 1),
+            "192.168.1.2" to v4(192, 168, 1, 2),
+            "169.254.1.1" to v4(169, 254, 1, 1),
+            "100.64.0.1" to v4(100, 64, 0, 1),
+            "100.127.255.1" to v4(100, 127, 255, 1),
+            "fd12::1" to v6(0xfd, 0x12),
+            "fc00::1" to v6(0xfc, 0x00),
+            "fe80::1" to v6(0xfe, 0x80),
+            "nas.home" to v4(192, 168, 1, 2),
+        )
+        local.forEach { (host, address) -> assertTrue(isLocalEndpoint(host, listOf(address)), host) }
+        assertTrue(isLocalEndpoint("nas.local", emptyList()))
+        assertTrue(isLocalEndpoint("NAS.Local.", emptyList()))
+
+        val public = mapOf(
+            "8.8.8.8" to v4(8, 8, 8, 8),
+            "172.32.0.1" to v4(172, 32, 0, 1),
+            "100.63.255.1" to v4(100, 63, 255, 1),
+            "100.128.0.1" to v4(100, 128, 0, 1),
+            "127.0.0.1" to v4(127, 0, 0, 1),
+            "2001:4860::8888" to v6(0x20, 0x01, 0x48, 0x60),
+            "::1" to ByteArray(16).also { it[15] = 1 },
+            "example.com" to v4(93, 184, 215, 14),
+        )
+        public.forEach { (host, address) -> assertFalse(isLocalEndpoint(host, listOf(address)), host) }
+        assertFalse(isLocalEndpoint("example.com", emptyList()))
+        assertFalse(isLocalEndpoint("local.example.com", emptyList()))
+    }
+
+    @Test
+    fun sync_endpoints_are_classified_by_their_resolved_address() = runTest {
+        assertTrue(isLocalSyncEndpoint("https://10.0.2.2:8443"))
+        assertTrue(isLocalSyncEndpoint(" https://[fd12::1]:8443/ "))
+        assertTrue(isLocalSyncEndpoint("https://nas.local"))
+        assertFalse(isLocalSyncEndpoint("https://8.8.8.8"))
+        assertFalse(isLocalSyncEndpoint("http://127.0.0.1:7780"))
+    }
+
+    @Test
+    fun a_host_adds_the_addresses_on_its_own_link() = runTest {
+        // A global IPv6 address is local to Android on a directly connected
+        // route, which only the host's network knows.
+        val onLink: (ByteArray) -> Boolean = { it.size == 16 && it[0] == 0x20.toByte() && it[1] == 0x01.toByte() }
+        assertFalse(isLocalSyncEndpoint("https://[2001:db8::5]:8443"))
+        assertTrue(isLocalSyncEndpoint("https://[2001:db8::5]:8443", onLink))
+        assertFalse(isLocalSyncEndpoint("https://[2a00:1450::5]:8443", onLink))
+    }
 }
+
+private fun v4(vararg octets: Int): ByteArray = ByteArray(4) { octets[it].toByte() }
+
+private fun v6(vararg leading: Int): ByteArray = ByteArray(16) { if (it < leading.size) leading[it].toByte() else 0 }.also { it[15] = 1 }
 
 private fun frame(record: ByteArray): ByteArray =
     byteArrayOf(0, 0, 0, 1, 0, 0, 0, record.size.toByte()) + record

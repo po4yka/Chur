@@ -143,6 +143,7 @@ internal class ChurHost private constructor(context: Context) {
         appLockSetting = appLockSetting,
         autoLockSetting = autoLockSetting,
         sync = sync,
+        syncReachable = { serverUrl -> !localNetworkBlocked(context, serverUrl) },
     )
 
     /** Explicit, foreground-only desktop control of the open session. */

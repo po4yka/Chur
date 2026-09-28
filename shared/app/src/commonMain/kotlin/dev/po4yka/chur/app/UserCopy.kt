@@ -109,3 +109,15 @@ fun syncCopy(status: ChurStatus): String = when (status) {
     -> "The sync server did not accept this device. Check the bootstrap secret and set up sync again."
     else -> userCopy(status)
 }
+
+/**
+ * What a sync setup to a local server says on iOS when the server does not
+ * answer, `IOS.md` §27.
+ *
+ * iOS lets no app read whether the user allowed local network access, so the
+ * line cannot say that access is off, only where to allow it. It is the iOS
+ * form of Android's `LOCAL_NETWORK_OFF` line.
+ */
+internal const val LOCAL_NETWORK_REFUSED: String =
+    "Cannot reach the server. If local network access is off, allow it for this app " +
+        "in Settings > Privacy & Security > Local Network."

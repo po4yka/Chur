@@ -85,10 +85,14 @@ internal fun SyncSetupCard(onConfigure: (serverUrl: String, bootstrapSecret: Str
             ) {
                 Text("Connect")
             }
+            // The one-line reason for the local network request that
+            // connecting can bring, before it comes: Android asks before it
+            // connects and iOS as it does, `ANDROID.md` §24 and `IOS.md` §27.
             Text(
                 "The address is the https address of your server. The secret " +
                     "comes from whoever runs it, and it is used once to enroll " +
-                    "this device.",
+                    "this device. If the server is on your local network, allow " +
+                    "local network access when you are asked.",
                 style = MaterialTheme.typography.bodySmall,
                 color = colors.inkMuted,
             )

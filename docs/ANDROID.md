@@ -1009,6 +1009,16 @@ Likely platform declarations include only capabilities actually used, such as bi
 
 The media read permissions are declared for source deletion alone (§14.5): the use case is finding an imported original so that the system can delete it, the request is made when the user chooses Review source deletion, a denial leaves the import as it was and names where to delete, and import never requests them.
 
+`ACCESS_LOCAL_NETWORK` is declared for sync with a server on the user's own network. From Android 17, the API level Chur targets, a connection over the local link (Wi-Fi or Ethernet; never through a VPN) to a private (RFC 1918), shared (100.64.0.0/10), link-local, or unique local IPv6 address, to an IPv6 address on a directly connected route, or to a `.local` name needs it, and a blocked connection usually just times out. The owner chose to support such servers, including a split-DNS name that resolves to a local address, rather than refuse them:
+
+- use case: reaching the sync server the user runs at home or at work, `SYNC_PROTOCOL_V1.md` §6;
+- request: when the user taps Connect or Sync now in the vault's Settings and the server's address resolves to a local address, after the setup card said why; never at launch, never for a public address, never while the active network is a VPN, which reaches such a server with no access, and never from the background worker, which has no screen to ask on;
+- denial: sync stays as it was, the snackbar says that local network access is off and where to allow it, with a way to the app's system settings, and while the grant is missing Settings shows the same line in place of the last run's status; an unlock starts no pull to that server, because the pull could only time out and its retries would keep Sync now, which asks, disabled;
+- privacy review: it is a runtime permission of the Nearby devices group, so the system's app info, which shows the public shell's name, lists it; it is requested only inside an unlocked vault, never touches vault content, and is not needed for a public server;
+- a grant revoked later is seen at the next check: the worker still does not ask, and Settings names the cause.
+
+`ACCESS_NETWORK_STATE`, a normal permission that WorkManager declares as well, serves the same step: it reads whether the active network is a VPN and which IPv6 routes are directly connected. It has no prompt, and it reads nothing about the vault.
+
 Every permission must have:
 
 - an explicit use case;
@@ -1439,7 +1449,7 @@ The Data safety form MUST match the shared store answers in [`product/DISCREET_M
 
 ### 37.3 Permissions justification
 
-Every declared permission MUST have a documented product need in §24 and MUST be requested at point of use. The media read permissions are declared for source deletion (§14.5) and requested only when the user asks to delete an imported original; import uses the Photo Picker and requests none. No accessibility service, device-admin, overlay, `QUERY_ALL_PACKAGES`, or usage-stats permission is declared.
+Every declared permission MUST have a documented product need in §24 and MUST be requested at point of use. The media read permissions are declared for source deletion (§14.5) and requested only when the user asks to delete an imported original; import uses the Photo Picker and requests none. `ACCESS_LOCAL_NETWORK` is declared for sync with a server on the user's local network (§24) and requested only when the user connects to or syncs with such a server; `ACCESS_NETWORK_STATE`, a normal permission, tells that step whether the server is reached through a VPN. No accessibility service, device-admin, overlay, `QUERY_ALL_PACKAGES`, or usage-stats permission is declared.
 
 ### 37.4 Encryption export compliance
 

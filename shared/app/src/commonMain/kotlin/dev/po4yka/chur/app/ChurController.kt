@@ -22,6 +22,7 @@ import dev.po4yka.chur.ffi.QuerySort
 import dev.po4yka.chur.sync.SyncCoordinator
 import dev.po4yka.chur.sync.SyncStatus
 import dev.po4yka.chur.sync.SyncTransportFailure
+import dev.po4yka.chur.sync.isLocalSyncEndpoint
 import dev.po4yka.chur.ffi.SlotSummary
 import dev.po4yka.chur.ffi.StreamKind
 import dev.po4yka.chur.ffi.TagSummary
@@ -36,8 +37,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -49,6 +52,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 
 /**
  * The application state machine, shared by both hosts.
@@ -91,6 +95,15 @@ class ChurController(
      * controller is unchanged rather than half-configured.
      */
     private val sync: SyncCoordinator? = null,
+    /**
+     * Whether this device may connect to [serverUrl] now.
+     *
+     * An unlock skips its pull when it may not. On Android 17 a local server
+     * without the grant only times out, and a pull through its backoff kept
+     * "Sync now", whose tap asks for the grant, disabled for about 90 s,
+     * `ANDROID.md` §24. A host with no such check keeps the default.
+     */
+    private val syncReachable: suspend (serverUrl: String) -> Boolean = { true },
 ) {
     /**
      * The last net under every coroutine this controller starts.
@@ -107,6 +120,17 @@ class ChurController(
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main + uncaught)
+
+    /**
+     * The parent of the sync runs the open session started: the unlock pull
+     * and "Sync now".
+     *
+     * A run holds the engine through its backoff, about 90 s against a server
+     * that does not answer, and shows this session's server on every retry.
+     * [clearPrivateProjections] cancels it, so the next identity's unlock does
+     * not wait behind it or see what it showed, `DECOY_VAULT.md` §6.
+     */
+    private val sessionSync = SupervisorJob(scope.coroutineContext[Job])
     private val _autoLock = MutableStateFlow(
         runCatching { autoLockSetting.read() }.getOrDefault(AutoLock.DEFAULT),
     )
@@ -181,6 +205,14 @@ class ChurController(
      * callbacks and the lifecycle callbacks run, so it needs no synchronization.
      */
     private var hostActivities = 0
+
+    /**
+     * How many of the [hostActivities] are [configureSync] brackets, which
+     * [enteredBackground] ends early; the epoch tells a setup that its bracket
+     * was ended for it.
+     */
+    private var syncBrackets = 0
+    private var syncBracketEpoch = 0L
     private var lockEpoch = 0L
 
     /**
@@ -774,6 +806,25 @@ class ChurController(
         if (hostActivities > 0) hostActivities -= 1
     }
 
+    /**
+     * The scene entered the background, which iOS reports after it resigned
+     * active and [background] ran.
+     *
+     * A lock held off by [beginHostActivity] stays off, as the picker needs.
+     * The bracket of [configureSync] is the exception. The local network alert
+     * only makes the scene inactive, so entering the background means the
+     * user left, and the bracket ends and the vault locks at once, as leaving
+     * always does, `DESIGN.md` §14.4 and `PLAINTEXT_LIFECYCLE.md` §7. The
+     * bootstrap needs no session after it read the identity, so it goes on.
+     */
+    fun enteredBackground() {
+        if (syncBrackets == 0) return
+        repeat(syncBrackets) { endHostActivity() }
+        syncBrackets = 0
+        syncBracketEpoch += 1
+        background()
+    }
+
     /** The application left the foreground. */
     suspend fun onBackground() {
         privacy.setEnabled(true)
@@ -1163,13 +1214,49 @@ class ChurController(
      * call. A refusal lands in [notice] the way every other boundary failure
      * does, and an engine that was already configured keeps the status it
      * showed before.
+     *
+     * [localNetworkAlert] is for a platform that asks for local network access
+     * as the first connection to a local address goes out, which iOS does,
+     * `IOS.md` §27. Its alert takes the scene out of the foreground as a device
+     * prompt does, so the bootstrap to a local server is bracketed as
+     * [addRecoverySlot] is; otherwise the background lock would close the vault
+     * under the setup. The bracket lasts as long as the bootstrap, since the
+     * alert gives no signal of its own, and a user who leaves the app
+     * meanwhile ends it and is locked out at once, [enteredBackground]. Android
+     * asks before this call, `ANDROID.md` §24, and shows nothing during it, so
+     * there leaving the app locks as always. iOS gives the app no answer to
+     * read, so a local server that does not answer may be a refusal, and the
+     * notice then says where to allow access.
      */
-    fun configureSync(serverUrl: String, bootstrapSecret: String) = guarded {
-        sync?.configure(serverUrl, bootstrapSecret)
+    fun configureSync(
+        serverUrl: String,
+        bootstrapSecret: String,
+        localNetworkAlert: Boolean = false,
+    ) = guarded {
+        val local = localNetworkAlert && isLocalSyncEndpoint(serverUrl)
+        val bracket =
+            if (local) {
+                syncBrackets += 1
+                beginHostActivity()
+                syncBracketEpoch
+            } else {
+                null
+            }
+        try {
+            sync?.configure(serverUrl, bootstrapSecret)
+        } catch (failure: SyncTransportFailure) {
+            if (!local || failure.status != ChurStatus.NETWORK_FAILURE) throw failure
+            say(LOCAL_NETWORK_REFUSED)
+        } finally {
+            if (bracket == syncBracketEpoch) {
+                syncBrackets -= 1
+                endHostActivity()
+            }
+        }
     }
 
     /** Runs one sync cycle now, which the settings entry offers. */
-    fun syncNow() = guarded {
+    fun syncNow() = guarded(context = sessionSync) {
         sync?.syncNow()
     }
 
@@ -1671,6 +1758,11 @@ class ChurController(
         post(message)
     }
 
+    /** [report], with an [action] beside the text, such as a way to the system settings. */
+    fun report(message: String, action: Pair<String, () -> Unit>) {
+        post(message, action = action)
+    }
+
     /** Requests cancellation; the worker sends it to Rust before its next poll. */
     fun cancelActiveOperation() {
         _activeOperation.update { current ->
@@ -2004,6 +2096,14 @@ class ChurController(
         // `RECOVERY.md` §2 shows the phrase exactly once, and §8 there is how
         // a user gets another one.
         _recoveryPhrase.value = null
+        // The session's sync run ends with it, and so does what it showed: the
+        // next identity's refresh then neither waits behind the run's backoff
+        // nor follows its server, `DECOY_VAULT.md` §6. A setup is not
+        // cancelled: its bootstrap still finishes. Until the next unlock finds
+        // the vault that owns the saved state, the engine shows nothing that
+        // a run or a setup reports, so neither can show the server late.
+        sessionSync.cancelChildren()
+        sync?.endSession()
         // A launch whose result never arrived belonged to the session that just
         // ended. Carrying its count forward would suppress the background lock
         // of the next session, so the count ends with the session.
@@ -2047,10 +2147,28 @@ class ChurController(
         // then a configured engine pulls what arrived since the last run. The
         // engine applies it, so a fork or rollback found in that pass reaches
         // Settings as the run's own would, `ROLLBACK_PROTECTION.md` §4.
-        sync?.takeIf { it.status.value.configured }?.let { engine ->
-            guarded(clearMessage = false) {
-                withContext(Dispatchers.Default) { engine.applyStaged() }
-                engine.syncNow()
+        //
+        // The engine first loads the saved server for this identity alone, so
+        // Settings shows it after a restart, and a decoy session neither sees
+        // the other vault's server nor pulls from it, `DECOY_VAULT.md` §10. A
+        // state file that cannot be read is the next run's to report, not
+        // this unlock's.
+        sync?.let { engine ->
+            guarded(clearMessage = false, context = sessionSync) {
+                val configured =
+                    try {
+                        withContext(Dispatchers.Default) { engine.refresh() }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        false
+                    }
+                if (configured) {
+                    withContext(Dispatchers.Default) { engine.applyStaged() }
+                    // A server this device cannot reach now would only hold
+                    // "Sync now" through a backoff, [syncReachable].
+                    if (engine.status.value.serverUrl?.let { syncReachable(it) } != false) engine.syncNow()
+                }
             }
         }
     }
@@ -2080,14 +2198,16 @@ class ChurController(
      * of the scope itself.
      *
      * The work carries the [routeVisit] it started in, so what it reports
-     * reaches the screen it was started from or nothing: see [post].
+     * reaches the screen it was started from or nothing: see [post]. A
+     * [context] with a job, [sessionSync], makes the work that job's child.
      */
     private fun guarded(
         clearMessage: Boolean = true,
         copy: (ChurStatus) -> String = ::userCopy,
+        context: CoroutineContext = EmptyCoroutineContext,
         body: suspend () -> Unit,
     ) {
-        scope.launch(RouteVisit(routeVisit)) {
+        scope.launch(context + RouteVisit(routeVisit)) {
             try {
                 if (clearMessage) say(null)
                 body()

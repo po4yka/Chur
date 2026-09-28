@@ -242,8 +242,9 @@ class SyncCoordinatorTest {
                 FakeStore().apply {
                     saved = SyncState("https://sync.example", vaultId, deviceId, ByteArray(32), listOf(DeviceCursor(deviceId, 7u)))
                 }
-            val boundary = FakeBoundary()
+            val boundary = FakeBoundary().apply { identity = this@SyncCoordinatorTest.identity }
             val coordinator = coordinator(store, boundary, engine)
+            coordinator.refresh()
 
             val completed = coordinator.syncNow()
 
@@ -283,8 +284,13 @@ class SyncCoordinatorTest {
                 FakeStore().apply {
                     saved = SyncState("https://sync.example", vaultId, deviceId, ByteArray(32), listOf(DeviceCursor(deviceId, 0u)))
                 }
-            val boundary = FakeBoundary().apply { firstRejection = ChurStatus.SYNC_CHAIN_FORK.value }
+            val boundary =
+                FakeBoundary().apply {
+                    identity = this@SyncCoordinatorTest.identity
+                    firstRejection = ChurStatus.SYNC_CHAIN_FORK.value
+                }
             val coordinator = coordinator(store, boundary, engine)
+            coordinator.refresh()
 
             // `ROLLBACK_PROTECTION.md` §4: every other chain keeps applying,
             // so the run completes, and it still must not read as a success.
@@ -309,7 +315,11 @@ class SyncCoordinatorTest {
                 FakeStore().apply {
                     saved = SyncState("https://sync.example", vaultId, deviceId, ByteArray(32), emptyList())
                 }
-            val boundary = FakeBoundary().apply { firstRejection = ChurStatus.SYNC_HEAD_ROLLBACK.value }
+            val boundary =
+                FakeBoundary().apply {
+                    identity = this@SyncCoordinatorTest.identity
+                    firstRejection = ChurStatus.SYNC_HEAD_ROLLBACK.value
+                }
             val engine = okEngine { error(it) }
             val coordinator = coordinator(store, boundary, engine)
             coordinator.refresh()
@@ -320,6 +330,79 @@ class SyncCoordinatorTest {
             assertEquals(0, engine.requests)
             assertEquals(ChurStatus.SYNC_HEAD_ROLLBACK, coordinator.status.value.integrityStop)
             assertTrue(coordinator.status.value.configured)
+        }
+
+    @Test
+    fun the_saved_server_shows_only_to_the_vault_that_configured_it() =
+        runTest {
+            val store =
+                FakeStore().apply {
+                    saved = SyncState("https://sync.example", vaultId, deviceId, ByteArray(32), emptyList())
+                }
+            val boundary = FakeBoundary()
+            val coordinator = coordinator(store, boundary, okEngine { error(it) })
+            val otherVault =
+                SharingIdentity(
+                    vaultId = ByteArray(16) { 9 },
+                    deviceId = deviceId,
+                    signingPublicKey = identity.signingPublicKey,
+                    hpkePublicKey = identity.hpkePublicKey,
+                    fingerprint = "other",
+                    enrollment = identity.enrollment,
+                    initialOperation = identity.initialOperation,
+                )
+
+            // Locked: no identity to own it.
+            coordinator.refresh()
+            assertFalse(coordinator.status.value.configured)
+
+            // Another identity, such as a decoy, sees no server at all.
+            boundary.identity = otherVault
+            coordinator.refresh()
+            assertFalse(coordinator.status.value.configured)
+            assertNull(coordinator.status.value.serverUrl)
+
+            boundary.identity = identity
+            coordinator.refresh()
+            assertTrue(coordinator.status.value.configured)
+            assertEquals("https://sync.example", coordinator.status.value.serverUrl)
+
+            // And a lock followed by the other identity takes it away again.
+            boundary.identity = otherVault
+            coordinator.refresh()
+            assertNull(coordinator.status.value.serverUrl)
+
+            // The periodic run reaches that session too, and shows it no server.
+            assertFalse(coordinator.syncNow())
+            assertFalse(coordinator.status.value.configured)
+            assertNull(coordinator.status.value.serverUrl)
+            assertEquals(0, store.clears)
+        }
+
+    @Test
+    fun nothing_after_the_end_of_a_session_shows_until_its_owner_unlocks() =
+        runTest {
+            // Each request comes after a lock, and the setup and the run still finish.
+            lateinit var coordinator: SyncCoordinator
+            val engine =
+                okEngine { path ->
+                    coordinator.endSession()
+                    MockAnswer.Body(if (path.endsWith("/bootstrap")) ByteArray(0) else byteArrayOf(0, 0, 0, 0))
+                }
+            val store = FakeStore()
+            coordinator = coordinator(store, FakeBoundary().apply { identity = this@SyncCoordinatorTest.identity }, engine)
+
+            coordinator.configure("https://sync.example", SECRET_HEX)
+            assertEquals("https://sync.example", store.saved?.serverUrl)
+            assertFalse(coordinator.status.value.configured)
+            assertNull(coordinator.status.value.serverUrl)
+
+            assertTrue(coordinator.refresh())
+            assertEquals("https://sync.example", coordinator.status.value.serverUrl)
+
+            assertTrue(coordinator.syncNow())
+            assertNull(coordinator.status.value.serverUrl)
+            assertNull(coordinator.status.value.message)
         }
 
     @Test
@@ -346,7 +429,8 @@ class SyncCoordinatorTest {
                     saved = SyncState("https://sync.example", vaultId, deviceId, ByteArray(32), listOf(DeviceCursor(deviceId, 0u)))
                 }
             val sleeps = mutableListOf<Long>()
-            val coordinator = coordinator(store, FakeBoundary(), engine, sleeps)
+            val coordinator = coordinator(store, FakeBoundary().apply { identity = this@SyncCoordinatorTest.identity }, engine, sleeps)
+            coordinator.refresh()
 
             val completed = coordinator.syncNow()
 
@@ -413,7 +497,8 @@ class SyncCoordinatorTest {
                     saved = SyncState("https://sync.example", vaultId, deviceId, ByteArray(32), listOf(DeviceCursor(deviceId, 0u)))
                 }
             val sleeps = mutableListOf<Long>()
-            val coordinator = coordinator(store, FakeBoundary(), engine, sleeps)
+            val coordinator = coordinator(store, FakeBoundary().apply { identity = this@SyncCoordinatorTest.identity }, engine, sleeps)
+            coordinator.refresh()
 
             val completed = coordinator.syncNow()
 
@@ -471,6 +556,7 @@ class SyncCoordinatorTest {
         }
         val boundary = FakeBoundary().apply { identity = this@SyncCoordinatorTest.identity }
         val coordinator = coordinator(store, boundary, engine)
+        coordinator.refresh()
 
         assertTrue(coordinator.syncNow())
         assertContentEquals(packageBytes, boundary.accepted.single())
@@ -521,6 +607,7 @@ class SyncCoordinatorTest {
         }
         val boundary = FakeBoundary().apply { identity = this@SyncCoordinatorTest.identity }
         val coordinator = coordinator(store, boundary, engine)
+        coordinator.refresh()
         val share = PreparedShare(byteArrayOf(1), byteArrayOf(2), byteArrayOf(3), byteArrayOf(4))
 
         assertFailsWith<SyncTransportFailure> { coordinator.publishShare(share) }

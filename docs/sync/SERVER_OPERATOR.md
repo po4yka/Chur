@@ -77,6 +77,8 @@ A bearer route answers every failure of its token check with `AUTHENTICATION_FAI
 
 Keep the process on a loopback or private address. Put a reverse proxy with TLS 1.3 in front of it. Do not expose the default cleartext listener to an untrusted network. Back up the complete data directory as one unit because SQLite and object files share one logical store.
 
+A proxy that devices reach on the local network, by a private, shared (100.64.0.0/10), link-local, or unique local IPv6 address, an IPv6 address on the same link, a `.local` name, or a split-DNS name that resolves to one of those, is supported. Android 17 and iOS ask each user for local network access before the app can connect to it: Android when the user connects or syncs, iOS at the first connection. Without it the connection fails, and on Android it usually just times out. A public name needs no such access, and on Android neither does any address the device reaches through a VPN. See [`../ANDROID.md`](../ANDROID.md) §24 and [`../IOS.md`](../IOS.md) §27.
+
 ## Retention and observed data
 
 The process writes no request log and sends no telemetry. A reverse proxy can observe client IP addresses, request times, opaque vault and device identifiers, object counts, and transfer sizes. Disable its access log unless abuse control requires it. If enabled, delete request logs within 30 days and do not send them to a third party.

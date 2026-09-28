@@ -1055,6 +1055,8 @@ It MUST NOT:
 
 The server remains untrusted for confidentiality and content integrity.
 
+A sync server on the user's local network is supported, as on Android (`ANDROID.md` §24). iOS asks for local network access by itself, once, when the first connection to a local address goes out, and shows `NSLocalNetworkUsageDescription` as the reason; there is no call to ask earlier or to read the answer. That first connection is sync setup's bootstrap, after the setup card said why. The alert takes the scene out of the foreground, so a bootstrap to a server whose address resolves to a private, shared (100.64.0.0/10), link-local, or unique local address, or to a `.local` name, runs between `beginHostActivity` and `endHostActivity`, and the background lock does not close the vault under it. That bracket lasts for the whole bootstrap, because the alert gives no signal of its own. The alert only makes the scene inactive, so if the scene enters the background during the bracket, the user left: the bracket ends and the vault locks at once, as leaving the app does (§21), and the bootstrap still finishes. A refusal fails the connection, and the user can allow access in Settings > Privacy & Security > Local Network. The app cannot read the answer, so when a setup to such a server gets no answer, its notice names that place, as Android's line does (`ANDROID.md` §24). The iOS host does not check which addresses are on the device's own link, as Android does, so a server on a public address that iOS still counts as local, such as a global IPv6 address on the same network, can bring the alert outside the bracket. The vault then locks under the setup as for any other interruption, the bootstrap still finishes, and the user unlocks again to see the server.
+
 ---
 
 ## 28. Logging, analytics, and crash reporting
@@ -1401,6 +1403,7 @@ Store privacy answers must reflect:
 - whether diagnostics leave the device;
 - whether any analytics are collected;
 - whether Photos access is selection-only, and that read-write access is requested only for source deletion (§15.4);
+- that local network access is asked for only when sync connects to a server on the local network (§27);
 - whether user content is linked to an account;
 - retention and deletion behavior.
 

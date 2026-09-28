@@ -22,6 +22,23 @@
   on API 30 to 32. API 29 has no system delete request, so there the step asks
   for nothing; READ_EXTERNAL_STORAGE is declared on API 29 too, because a
   permission entry cannot set a lowest API level, but nothing requests it there.
+
+  ACCESS_LOCAL_NETWORK belongs to sync with a server on the user's own
+  network, ANDROID.md section 24. From Android 17, the API level this app
+  targets, a connection on the local link (Wi-Fi or Ethernet, never a VPN)
+  to a private, shared (100.64.0.0/10), link-local, or unique local address,
+  to an IPv6 address on a directly connected route, or to a `.local` name
+  needs it, and without it the connection usually just times out. The owner
+  chose to support such servers rather than refuse them. It is requested when
+  the user connects to or syncs with a server whose address is local, and
+  never at launch or by the background worker; a refusal leaves sync as it
+  was, and Settings says how to allow it. It is a runtime permission of the
+  Nearby devices group, unknown to API 36 and lower.
+
+  ACCESS_NETWORK_STATE serves the same step, and WorkManager declares it as
+  well. It is a normal permission, with no prompt. It tells whether the active
+  network is a VPN, which Android does not guard, so a server the user reaches
+  through their VPN brings no request, and which IPv6 routes are on the link.
   Nothing else Chur does touches a permission-guarded API.
 
   Backup is on and governed by rule files, per ANDROID.md section 13.4 and the
@@ -44,6 +61,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />

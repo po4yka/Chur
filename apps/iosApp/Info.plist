@@ -30,6 +30,8 @@
 	<string>Save selected vault media to your photo library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Delete originals you imported into the vault, when you ask to.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Sync this vault with a server on your local network, when you connect to one.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Use Face ID to open your Chur vault.</string>
 	<key>UIApplicationSceneManifest</key>

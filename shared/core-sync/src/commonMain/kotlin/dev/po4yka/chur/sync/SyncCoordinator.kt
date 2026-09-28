@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.concurrent.Volatile
 
 /**
  * What the vault offers the sync engine, at whichever lock state it is in.
@@ -159,15 +160,38 @@ public class SyncCoordinator(
     private var boundary: SyncVaultBoundary? = null
     private var integrityStop: ChurStatus? = null
 
+    /** The open session, which [endSession] replaces. */
+    @Volatile private var session = Any()
+
+    /** The [session] in which [refresh] or [configure] found that the open vault owns the saved state. */
+    @Volatile private var owner: Any? = null
+
     /** What a sync surface shows. */
     public val status: StateFlow<SyncStatus> = _status.asStateFlow()
 
-    /** Sets [status], carrying the standing [SyncStatus.integrityStop] into every line. */
+    /**
+     * Sets [status], carrying the standing [SyncStatus.integrityStop] into
+     * every line, only while the open vault owns the saved state.
+     *
+     * A run that no session owns shows nothing: the periodic one while the
+     * vault is locked, and one that goes on after the lock of the session
+     * that started it. A decoy that unlocks during such a run would otherwise
+     * see the other vault's server and its retries, `DECOY_VAULT.md` §6 and
+     * §10.
+     */
     private var shown: SyncStatus
         get() = _status.value
         set(value) {
-            _status.value = value.copy(integrityStop = integrityStop)
+            val at = session
+            if (owner === at) publish(at, value)
         }
+
+    /** Sets [status] for session [at], unless [endSession] ended it before or during the write. */
+    private fun publish(at: Any, value: SyncStatus) {
+        if (session !== at) return
+        _status.value = value.copy(integrityStop = integrityStop)
+        if (session !== at) _status.value = NOT_CONFIGURED
+    }
 
     /**
      * Binds the vault the engine stages into and applies on.
@@ -179,12 +203,28 @@ public class SyncCoordinator(
         boundary = vault
     }
 
-    /** Loads the saved state into the visible status, which a host start does. */
-    public suspend fun refresh(): Unit =
+    /**
+     * Loads the saved state into the visible status, which an unlock does.
+     *
+     * The state is one file per device, and the server in it belongs to the
+     * vault that configured it. Only that vault sees it: a locked vault and
+     * any other identity, such as a decoy, see no server here. [syncNow] shows
+     * another identity none either and starts no run for it, so its sync
+     * status does not differ by whether a sibling syncs, `DECOY_VAULT.md` §7
+     * and §10. [configure] in another identity is still refused while a
+     * server is saved, because the file is one per device. It returns whether
+     * the open vault has a server, which is what decides the unlock's pull.
+     */
+    public suspend fun refresh(): Boolean =
         mutex.withLock {
+            val at = session
             val state = store.load()
-            shown =
-                if (state == null) {
+            val identity = boundary?.identity()
+            val own = state != null && identity != null && matches(state, identity)
+            owner = if (own) at else null
+            publish(
+                at,
+                if (state == null || !own) {
                     NOT_CONFIGURED
                 } else {
                     SyncStatus(
@@ -193,8 +233,26 @@ public class SyncCoordinator(
                         message = if (state.pendingSharing.isEmpty()) null else "Sharing changes need upload.",
                         busy = false,
                     )
-                }
+                },
+            )
+            own
         }
+
+    /**
+     * Shows no server, and lets no run show one, until the next [refresh],
+     * which an unlock does, finds the vault that owns the saved state.
+     *
+     * The status is the open session's: a run shows its server on every
+     * retry, so without this the next identity saw the last one's server and
+     * run until its own [refresh], `DECOY_VAULT.md` §6. A run, or a setup that
+     * still finishes, shows nothing after this. It takes no lock, because a
+     * run can hold one through its backoff. The verdicts stay, for the vault
+     * that owns them to see at its next [refresh].
+     */
+    public fun endSession() {
+        session = Any()
+        _status.value = NOT_CONFIGURED
+    }
 
     /**
      * Connects this unlocked vault to the user's server, §6.
@@ -209,6 +267,7 @@ public class SyncCoordinator(
         bootstrapSecret: String,
     ): Unit =
         mutex.withLock {
+            val at = session
             require(store.load()?.pendingSharing.isNullOrEmpty()) { "publish pending sharing changes before changing the server" }
             val vault = requireNotNull(boundary) { "no vault is bound to sync" }
             val identity =
@@ -255,6 +314,7 @@ public class SyncCoordinator(
                     cursors = listOf(DeviceCursor(identity.deviceId, 0uL)),
                 )
             store.save(state)
+            owner = at
             shown = SyncStatus(true, state.serverUrl, "Connected.", false)
         }
 
@@ -278,7 +338,9 @@ public class SyncCoordinator(
                 }
             vault.identity()?.let { identity ->
                 if (!matches(state, identity)) {
-                    shown = SyncStatus(true, state.serverUrl, "Configured sync belongs to another vault.", false)
+                    // The periodic run reaches a decoy session too, which sees
+                    // no sibling's server, as in [refresh].
+                    shown = NOT_CONFIGURED
                     return false
                 }
             }

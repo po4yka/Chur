@@ -37,6 +37,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -450,6 +451,13 @@ private fun VaultRoute(controller: ChurController) {
     // step of `DESIGN.md` §15.3. A lock disposes of the route and of them.
     var originals by remember { mutableStateOf<List<Uri>>(emptyList()) }
     val deleteOriginals = rememberOriginalDeletion(controller)
+    val localNetwork = rememberLocalNetworkAccess(controller)
+    // A local server without the grant only times out, in the worker as in
+    // the app, so Settings names the cause, `ANDROID.md` §24. Each new status,
+    // and each unlock, checks again.
+    val localNetworkOff by produceState(false, syncStatus) {
+        value = syncStatus?.serverUrl?.let { localNetworkBlocked(context, it) } == true
+    }
 
     DisposableEffect(deviceControl) {
         onDispose { deviceControl.stop() }
@@ -783,7 +791,7 @@ private fun VaultRoute(controller: ChurController) {
                 appLockEnabled = appLockEnabled,
                 autoLock = autoLock,
                 deviceControlAvailable = true,
-                sync = syncStatus,
+                sync = if (localNetworkOff) syncStatus?.copy(message = LOCAL_NETWORK_OFF, failure = null) else syncStatus,
                 sharingIdentity = sharingIdentity,
                 sharingOverview = sharingOverview,
                 sharingRecipient = sharingRecipient,
@@ -915,8 +923,12 @@ private fun VaultRoute(controller: ChurController) {
                 onNoticeShown = controller::consume,
                 onAddDeviceSlot = controller::enrollDeviceSlot,
                 onToggleDeviceSlotPolicy = controller::toggleDeviceSlotPolicy,
-                onConfigureSync = controller::configureSync,
-                onSyncNow = controller::syncNow,
+                onConfigureSync = { serverUrl, secret ->
+                    localNetwork(serverUrl) { controller.configureSync(serverUrl, secret) }
+                },
+                onSyncNow = {
+                    syncStatus?.serverUrl?.let { localNetwork(it, controller::syncNow) } ?: controller.syncNow()
+                },
                 onDisconnectSync = controller::disconnectSync,
                 onInspectSharingRecipient = controller::inspectSharingRecipient,
                 onShareWithRecipient = controller::shareWithRecipient,

@@ -656,7 +656,12 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 } },
                 onCancelOperation = controller::cancelActiveOperation,
                 onNoticeShown = controller::consume,
-                onConfigureSync = controller::configureSync,
+                // iOS asks for local network access by itself, as the setup's
+                // first connection to a local server goes out. There is no
+                // link check here, as `IOS.md` §27 says.
+                onConfigureSync = { serverUrl, secret ->
+                    controller.configureSync(serverUrl, secret, localNetworkAlert = true)
+                },
                 onSyncNow = controller::syncNow,
                 onDisconnectSync = controller::disconnectSync,
                 onInspectSharingRecipient = controller::inspectSharingRecipient,

@@ -128,6 +128,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         // finishes its key derivation without the lock epoch check an unlock
         // has. `attach` does nothing when the cover is already up.
         if host.controller.privacyCoverNeeded { host.privacy.attach() }
+        // A sync setup holds the lock off for the local network alert, which
+        // only makes the scene inactive; leaving the app ends that and locks
+        // at once, `IOS.md` §27.
+        if host.storageReady, host.gate is GateResultCompatible { host.controller.enteredBackground() }
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {

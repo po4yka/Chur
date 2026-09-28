@@ -1,7 +1,9 @@
 package dev.po4yka.chur.android
 
+import android.Manifest
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.media.ExifInterface
@@ -870,15 +872,7 @@ class BackNavigationTest {
         val objects = controller.page.value.objects.size
         try {
             runBlocking {
-                store.save(
-                    SyncState(
-                        serverUrl = "https://sync.invalid",
-                        vaultId = ByteArray(16),
-                        deviceId = ByteArray(16),
-                        transportToken = ByteArray(32),
-                        cursors = emptyList(),
-                    ),
-                )
+                store.save(savedServer("https://sync.invalid"))
                 sync.refresh()
             }
             tap(label("Settings"))
@@ -928,15 +922,7 @@ class BackNavigationTest {
         )
         try {
             runBlocking {
-                store.save(
-                    SyncState(
-                        serverUrl = "https://sync.invalid",
-                        vaultId = ByteArray(16),
-                        deviceId = ByteArray(16),
-                        transportToken = ByteArray(32),
-                        cursors = emptyList(),
-                    ),
-                )
+                store.save(savedServer("https://sync.invalid"))
                 sync.refresh()
                 // What an unlock does with the records staged while locked.
                 sync.applyStaged()
@@ -956,6 +942,84 @@ class BackNavigationTest {
             runBlocking { sync.disconnect() }
         }
     }
+
+    @Test
+    @SdkSuppress(minSdkVersion = 37)
+    fun aLocalServerAsksForLocalNetworkAccessWithTheVaultOpen() = inTestVault {
+        val sync = ChurHost.of(activity).sync
+        assumeFalse("a sync server this test did not configure", sync.status.value.configured)
+        assumeFalse("local network access this test did not grant", localNetworkGranted())
+        try {
+            tap(label("Settings"))
+            assertTrue(
+                "the setup form must be on screen",
+                await {
+                    find(label("Connect")) != null ||
+                        find { it.isScrollable }?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD).let { false }
+                },
+            )
+            val fields = findAll { it.isEditable }
+            assertEquals("the address and the secret", 2, fields.size)
+            // The emulator's host is a private address, and a loopback
+            // forward cannot stand in for it: loopback needs no access.
+            setText(fields[0], "https://10.0.2.2:9")
+            setText(fields[1], "ab".repeat(32))
+            tap(label("Connect"))
+
+            assertTrue("the system asks for local network access", await { ownerPromptShown() })
+            assertTrue("the vault stays open under the request", controller.vaultState.value is VaultState.Unlocked)
+            tap { it.viewIdResourceName?.endsWith(":id/permission_deny_button") == true }
+            assertTrue("a refusal says how to allow it", await { find(label(LOCAL_NETWORK_OFF)) != null })
+            assertTrue("the vault is still open", controller.vaultState.value is VaultState.Unlocked)
+            assertFalse("nothing is configured", sync.status.value.configured)
+        } finally {
+            // A second refusal would stop the system from asking at all, so
+            // the case leaves the permission as it found it.
+            shell("pm clear-permission-flags ${activity.packageName} ${Manifest.permission.ACCESS_LOCAL_NETWORK} user-set user-fixed")
+        }
+    }
+
+    @Test
+    @SdkSuppress(minSdkVersion = 37)
+    fun settingsNamesMissingLocalNetworkAccessWithoutAsking() = inTestVault {
+        val sync = ChurHost.of(activity).sync
+        val store = FileSyncStateStore(File(activity.noBackupFilesDir, "chur-sync.json").path)
+        assumeTrue("a sync server this test did not configure", runBlocking { store.load() } == null)
+        assumeFalse("local network access this test did not grant", localNetworkGranted())
+        try {
+            // What a revoked grant leaves: a configured local server, which
+            // the worker and every run only time out on.
+            runBlocking {
+                store.save(savedServer("https://10.0.2.2:9"))
+                sync.refresh()
+            }
+            tap(label("Settings"))
+            assertTrue(
+                "Settings names the cause",
+                await {
+                    find(label(LOCAL_NETWORK_OFF)) != null ||
+                        find { it.isScrollable }?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD).let { false }
+                },
+            )
+            assertFalse("nothing asks until the user syncs", ownerPromptShown())
+        } finally {
+            // The case began with no state, so it leaves none.
+            runBlocking { sync.disconnect() }
+        }
+    }
+
+    /**
+     * A saved server that belongs to the open vault. The engine shows a saved
+     * server only to the vault that configured it, so a state for any other
+     * identity would read as no server at all.
+     */
+    private suspend fun savedServer(serverUrl: String): SyncState {
+        val identity = checkNotNull(controller.vault.syncIdentity()) { "the test vault is open" }
+        return SyncState(serverUrl, identity.vaultId, identity.deviceId, ByteArray(32), emptyList())
+    }
+
+    private fun localNetworkGranted(): Boolean =
+        activity.checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) == PackageManager.PERMISSION_GRANTED
 
     @Test
     fun privatePlaybackYieldsTheAudioFocusAndTheLockGivesItUp() = inTestVault {

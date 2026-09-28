@@ -191,6 +191,7 @@ Both stores receive the same facts. These answers are owned here; `ANDROID.md` ย
 - no analytics or diagnostics leave the device by default;
 - private media, metadata, and vault identity are never used for tracking or advertising, and are not linked to an account in v1;
 - photo access for import is selection-only; library access is requested only when the user asks Chur to delete an imported original, and declining it leaves the import as it was;
+- local network access is requested only when the user connects sync to a server on their own network, and declining it affects only that server;
 - the vault, decoy vault, discreet presentation, alternate icon, and recovery flows are documented to review and reachable by a reviewer;
 - the app uses standard cryptography as listed in `CRYPTOGRAPHY.md` ยง6, and answers export-compliance questions on that basis;
 - deletion removes the encrypted object and its catalog rows, and no server copy exists in v1.

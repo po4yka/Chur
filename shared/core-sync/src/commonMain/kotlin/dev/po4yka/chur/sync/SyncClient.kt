@@ -354,6 +354,70 @@ public class SyncTransportFailure(
 
 internal expect fun platformSyncHttpClient(): HttpClient
 
+/**
+ * Whether a sync endpoint is on the user's local network.
+ *
+ * Android 17 holds a connection to such an address behind the local network
+ * permission, and iOS behind its local network alert, `ANDROID.md` §24 and
+ * `IOS.md` §27. A blocked connection usually just times out, so a host asks
+ * before it connects instead of reading the failure afterwards. Local is a
+ * `.local` name, which multicast DNS resolves, or any of [addresses] in the
+ * ranges Android lists: private (RFC 1918), shared carrier-grade NAT space
+ * (100.64.0.0/10), link-local (169.254.0.0/16, fe80::/10), or a unique local
+ * IPv6 address (fc00::/7). Loopback is not local: neither platform guards
+ * it, and it is the one host the transport lets use plain HTTP.
+ *
+ * Android also counts an IPv6 address on a directly connected route, and it
+ * guards no traffic through a VPN. The address alone can say neither, so the
+ * Android host adds the first through [isLocalSyncEndpoint] and checks the
+ * second itself.
+ *
+ * [addresses] are what [host] resolved to, 4 or 16 bytes each.
+ */
+public fun isLocalEndpoint(host: String, addresses: List<ByteArray>): Boolean =
+    host.trimEnd('.').endsWith(".local", ignoreCase = true) ||
+        addresses.any { address ->
+            when (address.size) {
+                4 -> address.octet(0) == 10 ||
+                    (address.octet(0) == 172 && address.octet(1) in 16..31) ||
+                    (address.octet(0) == 192 && address.octet(1) == 168) ||
+                    (address.octet(0) == 100 && address.octet(1) in 64..127) ||
+                    (address.octet(0) == 169 && address.octet(1) == 254)
+                16 -> (address.octet(0) and 0xfe) == 0xfc ||
+                    (address.octet(0) == 0xfe && (address.octet(1) and 0xc0) == 0x80)
+                else -> false
+            }
+        }
+
+/**
+ * Whether [serverUrl] names a local endpoint, [isLocalEndpoint], or one that
+ * resolves to an address [onLink] accepts.
+ *
+ * [onLink] is the host's knowledge of the network it is on, such as the
+ * directly connected routes of Android's active network. It resolves the
+ * host, so it can wait on DNS. A `.local` name is decided by its name alone,
+ * because resolving it is already local network access. An address that does
+ * not parse or resolve is not local: the connection that follows reports it.
+ */
+public suspend fun isLocalSyncEndpoint(
+    serverUrl: String,
+    onLink: (address: ByteArray) -> Boolean = { false },
+): Boolean {
+    val host = try {
+        Url(serverUrl.trim()).host.removeSurrounding("[", "]")
+    } catch (_: Exception) {
+        return false
+    }
+    if (isLocalEndpoint(host, emptyList())) return true
+    val addresses = resolveHost(host)
+    return isLocalEndpoint(host, addresses) || addresses.any(onLink)
+}
+
+/** The addresses [host] resolves to, looked up off the calling thread, or none. */
+internal expect suspend fun resolveHost(host: String): List<ByteArray>
+
+private fun ByteArray.octet(index: Int): Int = this[index].toInt() and 0xff
+
 private class Reader(private val bytes: ByteArray) {
     private var offset = 0
     val size: Int get() = bytes.size
