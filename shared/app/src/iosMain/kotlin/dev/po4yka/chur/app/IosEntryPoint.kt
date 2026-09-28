@@ -132,6 +132,10 @@ fun churController(privacy: IosPrivacyCover, exports: ExportSink): ChurControlle
             reader = { NSUserDefaults.standardUserDefaults.boolForKey("lockWholeApp") },
             writer = { NSUserDefaults.standardUserDefaults.setBool(it, forKey = "lockWholeApp") },
         ),
+        autoLockSetting = AutoLockSetting(
+            reader = { NSUserDefaults.standardUserDefaults.stringForKey("autoLock") },
+            writer = { NSUserDefaults.standardUserDefaults.setObject(it, forKey = "autoLock") },
+        ),
         clock = clock,
         notes = churNoteStore(),
         sync = sync,

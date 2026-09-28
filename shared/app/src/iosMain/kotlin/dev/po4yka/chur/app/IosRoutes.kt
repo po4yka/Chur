@@ -215,6 +215,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     val slots by controller.slots.collectAsState()
     val deviceSlotStrict by controller.deviceSlotStrict.collectAsState()
     val appLockEnabled by controller.appLockEnabled.collectAsState()
+    val autoLock by controller.autoLock.collectAsState()
     val notice by controller.notice.collectAsState()
     val operation by controller.activeOperation.collectAsState()
     val syncStatus by controller.syncStatus.collectAsState()
@@ -481,6 +482,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 deviceSlotAvailable = controller.deviceUnlockAvailable,
                 deviceSlotStrict = deviceSlotStrict,
                 appLockEnabled = appLockEnabled,
+                autoLock = autoLock,
                 sync = syncStatus,
                 sharingIdentity = sharingIdentity,
                 sharingOverview = sharingOverview,
@@ -611,6 +613,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 onAddRecoverySlot = controller::addRecoverySlot,
                 onChangePassword = controller::changePassword,
                 onToggleAppLock = controller::toggleAppLock,
+                onSetAutoLock = controller::setAutoLock,
                 onAddDeviceSlot = controller::enrollAppleDeviceSlot,
                 onToggleDeviceSlotPolicy = controller::toggleDeviceSlotPolicy,
                 onCreateBackup = controller::createBackup,

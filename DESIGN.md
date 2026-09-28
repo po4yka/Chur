@@ -1012,12 +1012,22 @@ Panic lock:
 Use explicit choices:
 
 ```text
-Immediately
 After 30 seconds
 After 1 minute
+After 2 minutes (default)
 After 5 minutes
-When device locks
 ```
+
+Each choice counts idle time while Chur is in the foreground. Leaving the
+application still locks at once, whatever the choice
+(`docs/security/PLAINTEXT_LIFECYCLE.md` §7, `docs/ANDROID.md` §19.3), so no
+choice gives a grace period after the user leaves. v1 has no "Immediately"
+choice: leaving already locks at once, and a zero foreground limit would lock
+the vault on the next idle check, before the user could use it, change the
+choice back, or finish an import or export. v1 has no "When device locks"
+choice either: with the immediate background lock it would add nothing. The
+choice is one device-wide public setting, the same in every identity
+(`docs/security/DECOY_VAULT.md` §10).
 
 Explain the interaction with background playback, imports, exports, and platform limitations.
 

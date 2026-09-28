@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.fragment.app.FragmentActivity
 import dev.po4yka.chur.app.AndroidPrivacyCover
 import dev.po4yka.chur.app.AppLockSetting
+import dev.po4yka.chur.app.AutoLockSetting
 import dev.po4yka.chur.app.ChurController
 import dev.po4yka.chur.app.DeviceSlotPolicySetting
 import dev.po4yka.chur.app.RepositorySyncBoundary
@@ -91,6 +92,19 @@ internal class ChurHost private constructor(context: Context) {
         },
     )
 
+    /**
+     * The auto-lock choice of `DESIGN.md` §14.4, one number of seconds in
+     * the public directory beside the app-lock choice, so every identity
+     * reads the same one, `DECOY_VAULT.md` §10.
+     */
+    private val autoLockSetting = AutoLockSetting(
+        reader = {
+            val file = File(context.publicShellFile("auto-lock.txt"))
+            if (file.exists()) file.readText() else null
+        },
+        writer = { File(context.publicShellFile("auto-lock.txt")).writeText(it) },
+    )
+
     private var shareHostActivity = false
 
     private fun beginShareActivity() {
@@ -127,6 +141,7 @@ internal class ChurHost private constructor(context: Context) {
             ),
         deviceSlotPolicy = deviceSlotPolicy,
         appLockSetting = appLockSetting,
+        autoLockSetting = autoLockSetting,
         sync = sync,
     )
 

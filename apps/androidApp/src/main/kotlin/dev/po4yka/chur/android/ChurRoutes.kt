@@ -403,6 +403,7 @@ private fun VaultRoute(controller: ChurController) {
     val sharingRecipient by controller.sharingRecipient.collectAsState()
     val deviceSlotStrict by controller.deviceSlotStrict.collectAsState()
     val appLockEnabled by controller.appLockEnabled.collectAsState()
+    val autoLock by controller.autoLock.collectAsState()
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
@@ -780,6 +781,7 @@ private fun VaultRoute(controller: ChurController) {
                 deviceSlotAvailable = true,
                 deviceSlotStrict = deviceSlotStrict,
                 appLockEnabled = appLockEnabled,
+                autoLock = autoLock,
                 deviceControlAvailable = true,
                 sync = syncStatus,
                 sharingIdentity = sharingIdentity,
@@ -869,6 +871,7 @@ private fun VaultRoute(controller: ChurController) {
                 onAddRecoverySlot = controller::addRecoverySlot,
                 onChangePassword = controller::changePassword,
                 onToggleAppLock = controller::toggleAppLock,
+                onSetAutoLock = controller::setAutoLock,
                 onDeviceControl = { deviceControl.start() },
                 onCreateBackup = controller::createBackup,
                 onCreateSecondIdentity = controller::createSecondIdentity,

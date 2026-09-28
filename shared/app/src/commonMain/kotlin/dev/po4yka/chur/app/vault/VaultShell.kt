@@ -1,6 +1,7 @@
 package dev.po4yka.chur.app.vault
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,6 +15,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -36,6 +39,8 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
@@ -69,6 +74,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.ActiveOperation
+import dev.po4yka.chur.app.AutoLock
 import dev.po4yka.chur.app.Notice
 import dev.po4yka.chur.app.privateKeyboardOptions
 import dev.po4yka.chur.app.secretKeyboardOptions
@@ -153,6 +159,8 @@ data class VaultUiState(
     val deviceSlotStrict: Boolean? = null,
     /** Whether the lock screen also covers the public shell. */
     val appLockEnabled: Boolean = false,
+    /** How long an idle vault stays open, `DESIGN.md` §14.4. */
+    val autoLock: AutoLock = AutoLock.DEFAULT,
     /** The Android host offers an explicit, foreground desktop session. */
     val deviceControlAvailable: Boolean = false,
     /** How many tiles the selection holds, §11.4. */
@@ -229,6 +237,8 @@ data class VaultActions(
     val onToggleDeviceSlotPolicy: () -> Unit = {},
     /** Switch between locking the vault and locking the whole app. */
     val onToggleAppLock: () -> Unit = {},
+    /** Choose the auto-lock delay of `DESIGN.md` §14.4. */
+    val onSetAutoLock: (AutoLock) -> Unit = {},
     /** Open the Android-only, user-approved desktop control dialog. */
     val onDeviceControl: () -> Unit = {},
     /** Select every tile the current scope shows. */
@@ -747,6 +757,7 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
     var changingPassword by remember { mutableStateOf(false) }
     var confirmingDisconnect by remember { mutableStateOf(false) }
     var replacingRecovery by remember { mutableStateOf(false) }
+    var choosingAutoLock by remember { mutableStateOf(false) }
     LazyColumn(
         contentPadding = PaddingValues(ChurSpacing.gutter),
         verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
@@ -830,6 +841,16 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
                     )
                 }
             }
+        }
+        item {
+            // `DESIGN.md` §14.4: the row shows the choice in force, and the
+            // dialog it opens explains what the timer counts.
+            ListItem(
+                headlineContent = { Text("Auto-lock") },
+                supportingContent = { Text(state.autoLock.label) },
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                modifier = Modifier.clickable(role = Role.Button) { choosingAutoLock = true },
+            )
         }
         item {
             SettingsSwitch(
@@ -995,6 +1016,16 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
             dismissButton = { TextButton(onClick = { replacingRecovery = false }) { Text("Cancel") } },
         )
     }
+    if (choosingAutoLock) {
+        AutoLockDialog(
+            current = state.autoLock,
+            onChoose = {
+                choosingAutoLock = false
+                actions.onSetAutoLock(it)
+            },
+            onDismiss = { choosingAutoLock = false },
+        )
+    }
     if (changingPassword) {
         ChangePasswordDialog(
             enabled = state.operation == null,
@@ -1005,6 +1036,66 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
             onDismiss = { changingPassword = false },
         )
     }
+}
+
+/**
+ * The single choice of `DESIGN.md` §14.4, with the explanation it asks for.
+ *
+ * The idle clock counts vault reads and writes while Chur is open, not
+ * attention. A leased read, which a photo on screen or a playing video makes,
+ * does not refresh it; a running import or export does until it ends. Leaving
+ * the application locks at once whatever the choice, `PLAINTEXT_LIFECYCLE.md`
+ * §7, and that lock stops playback. A tap applies the choice, so the dialog
+ * has no confirm button. The selected radio is the accent, not Material
+ * primary, §25.2, and the unselected one `inkMuted`, as [SettingsSwitch]
+ * explains.
+ */
+@Composable
+private fun AutoLockDialog(current: AutoLock, onChoose: (AutoLock) -> Unit, onDismiss: () -> Unit) {
+    val colors = LocalChurColors.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Auto-lock") },
+        text = {
+            Column(
+                modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
+            ) {
+                Text(
+                    "The vault locks after this long without activity while Chur is open. " +
+                        "Looking at one photo or playing a video is not activity, so the vault " +
+                        "can lock during either. An import or export keeps it open until it ends. " +
+                        "Leaving Chur always locks the vault at once and stops playback.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Column(modifier = Modifier.selectableGroup()) {
+                    AutoLock.entries.forEach { choice ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(ChurSpacing.two),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .selectable(selected = choice == current, role = Role.RadioButton) {
+                                    onChoose(choice)
+                                },
+                        ) {
+                            RadioButton(
+                                selected = choice == current,
+                                onClick = null,
+                                colors = RadioButtonDefaults.colors(
+                                    selectedColor = colors.accent,
+                                    unselectedColor = colors.inkMuted,
+                                ),
+                            )
+                            Text(choice.label)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable

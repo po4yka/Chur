@@ -54,7 +54,7 @@ import kotlinx.coroutines.sync.withLock
 class VaultRepository(
     private val rootPath: String,
     private val clock: () -> Long,
-    private val policy: LockPolicy = LockPolicy(),
+    private var policy: LockPolicy = LockPolicy(),
     private val destroyPlatformSlot: (ByteArray) -> Unit = { DeviceSlot(it).destroy() },
 ) {
     private val mutex = Mutex()
@@ -282,6 +282,18 @@ class VaultRepository(
         } finally {
             mutex.unlock()
         }
+    }
+
+    /**
+     * Replaces the idle limit with the auto-lock choice of `DESIGN.md` §14.4.
+     *
+     * The choice counts as use, so a shorter limit counts from the choice and
+     * does not lock at once a session that sat on the settings screen longer
+     * than the new limit.
+     */
+    suspend fun setIdleTimeout(idleTimeoutMs: Long) = mutex.withLock {
+        policy = policy.copy(idleTimeoutMs = idleTimeoutMs)
+        if (session != 0L) touch()
     }
 
     /** Locks when the application leaves the foreground, if the policy says so. */

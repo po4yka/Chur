@@ -34,6 +34,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.po4yka.chur.app.AppRoute
+import dev.po4yka.chur.app.AutoLock
 import dev.po4yka.chur.app.ChurController
 import dev.po4yka.chur.app.MediaImporter
 import dev.po4yka.chur.app.RepositorySyncBoundary
@@ -812,6 +813,48 @@ class BackNavigationTest {
             if (controller.appLockEnabled.value != before) {
                 instrumentation.runOnMainSync { controller.toggleAppLock() }
                 await { controller.appLockEnabled.value == before }
+            }
+        }
+    }
+
+    @Test
+    fun theAutoLockRowShowsItsChoiceAndTheChoiceLocksAnIdleVault() = inTestVault {
+        val before = controller.autoLock.value
+        val chosen = AutoLock.AFTER_30_SECONDS
+        try {
+            tap(label("Settings"))
+            // `DESIGN.md` §14.4: the row states the choice in force.
+            assertNotNull("the row shows ${before.label}", find(autoLockRow(), label(before.label)))
+            tap(label("Auto-lock"))
+            // A reader hears each choice as a radio button and its state.
+            AutoLock.entries.forEach { choice ->
+                assertEquals("${choice.label} is checked", choice == before, radio(choice.label).isChecked)
+            }
+            tap(label(chosen.label))
+            assertTrue("the choice applies", await { controller.autoLock.value == chosen })
+            val appliedAt = SystemClock.elapsedRealtime()
+            assertTrue("the row shows it", await { find(autoLockRow(), label(chosen.label)) != null })
+
+            // Nothing on Settings reads the vault, so it is idle from here.
+            assertTrue(
+                "the vault locks after about 30 idle seconds",
+                await(45_000) { controller.vaultState.value !is VaultState.Unlocked },
+            )
+            val waited = SystemClock.elapsedRealtime() - appliedAt
+            assertTrue("not before the limit: $waited ms", waited >= 29_000)
+        } finally {
+            // Other cases need the default back, and it changes only in an
+            // open vault.
+            if (controller.autoLock.value != before) {
+                if (controller.vaultState.value !is VaultState.Unlocked) {
+                    instrumentation.runOnMainSync {
+                        controller.goTo(AppRoute.Unlock)
+                        controller.unlock(PASSWORD)
+                    }
+                    await(60_000) { isOpen() }
+                }
+                instrumentation.runOnMainSync { controller.setAutoLock(before) }
+                await { controller.autoLock.value == before }
             }
         }
     }
@@ -1731,6 +1774,31 @@ class BackNavigationTest {
             "$title must be a switch",
             find(row) { AccessibilityNodeInfoCompat.wrap(it).roleDescription?.toString() == "Switch" },
         )
+        return checkNotNull(row)
+    }
+
+    /** The Auto-lock row of Settings, scrolled into view. */
+    private fun autoLockRow(): AccessibilityNodeInfo {
+        var row: AccessibilityNodeInfo? = null
+        assertTrue(
+            "Auto-lock must be on screen",
+            await {
+                row = find(label("Auto-lock"))?.let { node -> generateSequence(node) { it.parent }.firstOrNull { it.isClickable } }
+                row != null ||
+                    find { it.isScrollable }?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD).let { false }
+            },
+        )
+        return checkNotNull(row)
+    }
+
+    /** The dialog choice named [text]: a radio button, which a reader announces with its state. */
+    private fun radio(text: String): AccessibilityNodeInfo {
+        var row: AccessibilityNodeInfo? = null
+        assertTrue(
+            "$text must be on screen",
+            await { find(label(text))?.let { node -> generateSequence(node) { it.parent }.firstOrNull { it.isCheckable } }?.also { row = it } != null },
+        )
+        assertNotNull("$text must be a radio button", find(row) { it.className?.toString() == "android.widget.RadioButton" })
         return checkNotNull(row)
     }
 

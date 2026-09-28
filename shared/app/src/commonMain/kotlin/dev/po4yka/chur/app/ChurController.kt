@@ -77,8 +77,11 @@ class ChurController(
      */
     private val deviceSlotPolicy: DeviceSlotPolicySetting = DeviceSlotPolicySetting.unset(),
     private val appLockSetting: AppLockSetting = AppLockSetting.unset(),
+    /** The auto-lock choice of `DESIGN.md` §14.4, which sets the idle limit. */
+    private val autoLockSetting: AutoLockSetting = AutoLockSetting.unset(),
     private val clock: () -> Long,
     private val notes: NoteStore = InMemoryNoteStore(),
+    /** The lock policy; [autoLockSetting] replaces its idle limit. */
     private val policy: LockPolicy = LockPolicy(),
     /**
      * The sync engine, when the host binds one.
@@ -104,7 +107,11 @@ class ChurController(
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main + uncaught)
-    private val repository = VaultRepository(storageRoot, clock, policy)
+    private val _autoLock = MutableStateFlow(
+        runCatching { autoLockSetting.read() }.getOrDefault(AutoLock.DEFAULT),
+    )
+    private val repository =
+        VaultRepository(storageRoot, clock, policy.copy(idleTimeoutMs = _autoLock.value.idleTimeoutMs))
 
     private val initiallyLockWholeApp = runCatching { appLockSetting.read() }.getOrDefault(false)
     private val _route = MutableStateFlow<AppRoute>(
@@ -157,6 +164,9 @@ class ChurController(
 
     /** Whether the entire app is gated on start and return from background. */
     val appLockEnabled: StateFlow<Boolean> = _appLockEnabled.asStateFlow()
+
+    /** How long an idle vault stays open in the foreground, `DESIGN.md` §14.4. */
+    val autoLock: StateFlow<AutoLock> = _autoLock.asStateFlow()
 
     /** Whether the device slot requires biometry only, `KEY_SLOTS.md` §1. */
     val deviceSlotStrict: StateFlow<Boolean> = _deviceSlotStrict.asStateFlow()
@@ -686,6 +696,21 @@ class ChurController(
         val next = !_appLockEnabled.value
         withContext(Dispatchers.Default) { appLockSetting.write(next) }
         _appLockEnabled.value = next
+    }
+
+    /**
+     * Selects how long an idle vault stays open in the foreground, `DESIGN.md`
+     * §14.4. Leaving the application still locks at once, whatever the choice.
+     */
+    fun setAutoLock(choice: AutoLock) = guarded {
+        if (repository.state.value !is VaultState.Unlocked) {
+            throw ChurFailure(ChurStatus.VAULT_LOCKED, "the vault is locked")
+        }
+        withContext(Dispatchers.Default) {
+            autoLockSetting.write(choice)
+            repository.setIdleTimeout(choice.idleTimeoutMs)
+        }
+        _autoLock.value = choice
     }
 
     /** Whether the public-shell disclosure is owed to the user right now. */
