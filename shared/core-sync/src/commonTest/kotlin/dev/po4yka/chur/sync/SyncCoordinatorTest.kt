@@ -77,8 +77,12 @@ class SyncCoordinatorTest {
             staged += kind to record
         }
 
+        /** Runs as the pass returns, as a lock queued behind it does. */
+        var afterProcess: () -> Unit = {}
+
         override suspend fun process(): SyncProcessReport? {
             processed++
+            afterProcess()
             val rejected = if (firstRejection == 0) 0L else 1L
             return SyncProcessReport(staged.size.toLong() - rejected, 0, 0, rejected, firstRejection)
         }
@@ -346,6 +350,46 @@ class SyncCoordinatorTest {
         }
 
     @Test
+    fun a_rollback_is_kept_when_the_vault_locks_as_the_pass_returns() =
+        runTest {
+            val engine =
+                okEngine { path ->
+                    when {
+                        path.contains("/operations/") -> MockAnswer.Body(frame(byteArrayOf(1)))
+                        path.endsWith("/checkpoints") || path.endsWith("/sharing/packages") ->
+                            MockAnswer.Body(byteArrayOf(0, 0, 0, 0))
+                        else -> error(path)
+                    }
+                }
+            val passes: List<suspend (SyncCoordinator) -> Unit> = listOf({ it.syncNow() }, { it.applyStaged() })
+            for (pass in passes) {
+                val store =
+                    FakeStore().apply {
+                        saved = SyncState("https://sync.example", vaultId, deviceId, ByteArray(32), listOf(DeviceCursor(deviceId, 0u)))
+                    }
+                // A lock queued behind the pass takes the vault before the
+                // pass hands back the report, and the catalog keeps no
+                // rollback, so the report is the only place it reaches.
+                val boundary =
+                    FakeBoundary().apply {
+                        identity = this@SyncCoordinatorTest.identity
+                        firstRejection = ChurStatus.SYNC_HEAD_ROLLBACK.value
+                        afterProcess = { identity = null }
+                    }
+                val coordinator = coordinator(store, boundary, engine)
+                coordinator.refresh()
+
+                pass(coordinator)
+                boundary.identity = identity
+                coordinator.endSession()
+                assertTrue(coordinator.refresh())
+
+                // `ROLLBACK_PROTECTION.md` §4: the user is told at the next unlock.
+                assertEquals(ChurStatus.SYNC_HEAD_ROLLBACK, coordinator.status.value.integrityStop)
+            }
+        }
+
+    @Test
     fun a_fork_the_catalog_keeps_is_raised_at_unlock_and_stays_once_acknowledged() =
         runTest {
             val store =
@@ -438,6 +482,63 @@ class SyncCoordinatorTest {
             assertFalse(coordinator.status.value.configured)
             assertNull(coordinator.status.value.serverUrl)
             assertEquals(0, store.clears)
+        }
+
+    @Test
+    fun a_verdict_shows_only_to_the_vault_whose_pass_reported_it() =
+        runTest {
+            val store =
+                FakeStore().apply {
+                    saved = SyncState("https://sync.example", vaultId, deviceId, ByteArray(32), emptyList())
+                }
+            val boundary =
+                FakeBoundary().apply {
+                    identity = this@SyncCoordinatorTest.identity
+                    firstRejection = ChurStatus.SYNC_HEAD_ROLLBACK.value
+                }
+            val engine = okEngine { if (it.endsWith("/bootstrap")) MockAnswer.Body(ByteArray(0)) else error(it) }
+            val coordinator = coordinator(store, boundary, engine)
+            val otherVault =
+                SharingIdentity(
+                    vaultId = ByteArray(16) { 9 },
+                    deviceId = deviceId,
+                    signingPublicKey = identity.signingPublicKey,
+                    hpkePublicKey = identity.hpkePublicKey,
+                    fingerprint = "other",
+                    enrollment = identity.enrollment,
+                    initialOperation = identity.initialOperation,
+                )
+            coordinator.refresh()
+            coordinator.applyStaged()
+            assertEquals(ChurStatus.SYNC_HEAD_ROLLBACK, coordinator.status.value.integrityStop)
+
+            // `DECOY_VAULT.md` §10: another identity's status carries no
+            // verdict, and it cannot acknowledge the owner's.
+            coordinator.endSession()
+            boundary.identity = otherVault
+            boundary.firstRejection = 0
+            assertFalse(coordinator.refresh())
+            assertNull(coordinator.status.value.integrityStop)
+            assertFalse(coordinator.status.value.integrityAcknowledged)
+            coordinator.acknowledgeIntegrityStop()
+            assertEquals(0, boundary.acknowledgements)
+
+            // The owner's verdict waits for the owner.
+            coordinator.endSession()
+            boundary.identity = identity
+            assertTrue(coordinator.refresh())
+            assertEquals(ChurStatus.SYNC_HEAD_ROLLBACK, coordinator.status.value.integrityStop)
+
+            // The saved state goes away without a disconnect, and the other
+            // identity configures its own server: it inherits no verdict.
+            coordinator.endSession()
+            store.saved = null
+            boundary.identity = otherVault
+            assertFalse(coordinator.refresh())
+            coordinator.configure("https://sync.example", SECRET_HEX)
+            assertTrue(coordinator.status.value.configured)
+            assertNull(coordinator.status.value.integrityStop)
+            assertFalse(coordinator.status.value.integrityAcknowledged)
         }
 
     @Test

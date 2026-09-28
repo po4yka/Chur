@@ -131,15 +131,19 @@ public data class SyncStatus(
      *
      * `ROLLBACK_PROTECTION.md` §4 freezes that chain and has the user told,
      * while every other chain keeps applying, so a run that follows still
-     * completes and this stays set: it clears only on
+     * completes and this stays set: for its own vault it clears only on
      * [SyncCoordinator.disconnect]. The verdict is local, `ERROR_MODEL.md`, so
      * it comes from the native process report and never from a server code.
      * That report puts a verdict ahead of any other rejection in the same pass,
      * so junk the server stages beside the forked record cannot hide it.
      * The catalog keeps the fork state itself, and [SyncCoordinator.refresh]
      * raises this from it at each unlock, so a fork outlives a restart. A
-     * rollback leaves no state there, so it lasts for the process and is not
-     * scoped to one vault identity.
+     * rollback leaves no state there, so it lasts for the process.
+     *
+     * Either verdict belongs to the vault whose pass reported it. Only that
+     * vault's status carries it, and a vault that takes over the saved state
+     * starts without it, so no other identity, such as a decoy, can read one
+     * from here, `DECOY_VAULT.md` §10.
      */
     public val integrityStop: ChurStatus? = null,
     /**
@@ -186,6 +190,9 @@ public class SyncCoordinator(
     private var integrityStop: ChurStatus? = null
     private var integrityAcknowledged = false
 
+    /** The vault whose pass reported [integrityStop], which [scopeVerdict] keeps it to. */
+    private var integrityVault: ByteArray? = null
+
     /** The open session, which [endSession] replaces. */
     @Volatile private var session = Any()
 
@@ -212,10 +219,22 @@ public class SyncCoordinator(
             if (owner === at) publish(at, value)
         }
 
-    /** Sets [status] for session [at], unless [endSession] ended it before or during the write. */
+    /**
+     * Sets [status] for session [at], unless [endSession] ended it before or
+     * during the write.
+     *
+     * The standing verdict goes only into the status of the session that owns
+     * the saved state, and [scopeVerdict] keeps it to that vault, so another
+     * identity's status never carries it, `DECOY_VAULT.md` §10.
+     */
     private fun publish(at: Any, value: SyncStatus) {
         if (session !== at) return
-        _status.value = value.copy(integrityStop = integrityStop, integrityAcknowledged = integrityAcknowledged)
+        _status.value =
+            if (owner === at) {
+                value.copy(integrityStop = integrityStop, integrityAcknowledged = integrityAcknowledged)
+            } else {
+                value
+            }
         if (session !== at) _status.value = NOT_CONFIGURED
     }
 
@@ -243,7 +262,8 @@ public class SyncCoordinator(
      *
      * The open vault's own fork state comes with it, `ROLLBACK_PROTECTION.md`
      * §4: the pass that found a fork reported it once, and the catalog is what
-     * still knows after a restart.
+     * still knows after a restart. Another identity's status carries no
+     * verdict, and the owner's verdict stays for its next refresh.
      */
     public suspend fun refresh(): Boolean =
         mutex.withLock {
@@ -251,7 +271,10 @@ public class SyncCoordinator(
             val state = store.load()
             val identity = boundary?.identity()
             val own = state != null && identity != null && matches(state, identity)
-            if (own) raise(boundary?.forkState())
+            if (own) {
+                scopeVerdict(identity.vaultId)
+                raise(boundary?.forkState())
+            }
             owner = if (own) at else null
             publish(
                 at,
@@ -345,6 +368,7 @@ public class SyncCoordinator(
                     cursors = listOf(DeviceCursor(identity.deviceId, 0uL)),
                 )
             store.save(state)
+            scopeVerdict(identity.vaultId)
             owner = at
             shown = SyncStatus(true, state.serverUrl, "Connected.", false)
         }
@@ -390,7 +414,7 @@ public class SyncCoordinator(
                                 vault.stage(vaultId, kind, stagedAtMs, record)
                             }
                         val report = puller.pullOnce(state.vaultId, state.cursors, clock())
-                        fold(vault.process())
+                        fold(vault.identity()?.vaultId, vault.process())
                         val shares =
                             if (vault.identity()?.let { matches(state, it) } == true) {
                                 SharingPuller(client, vault).pullOnce(state.vaultId, clock())
@@ -578,6 +602,7 @@ public class SyncCoordinator(
             store.clear()
             integrityStop = null
             integrityAcknowledged = false
+            integrityVault = null
             shown = NOT_CONFIGURED
         }
 
@@ -590,7 +615,7 @@ public class SyncCoordinator(
      */
     public suspend fun applyStaged(): Unit =
         mutex.withLock {
-            fold(boundary?.process())
+            fold(boundary?.identity()?.vaultId, boundary?.process())
         }
 
     /**
@@ -598,11 +623,14 @@ public class SyncCoordinator(
      *
      * `ROLLBACK_PROTECTION.md` §4 moves each detected fork to `acknowledged`
      * in the catalog, so the next unlock does not announce it again, and keeps
-     * every chain frozen: the verdict and the banner stay.
+     * every chain frozen: the verdict and the banner stay. Only the vault the
+     * verdict belongs to can acknowledge it.
      */
     public suspend fun acknowledgeIntegrityStop(): Unit =
         mutex.withLock {
-            if (integrityStop == null || boundary?.acknowledgeForks() != true) return@withLock
+            val open = boundary?.identity()?.vaultId
+            if (integrityStop == null || !(open contentEquals integrityVault)) return@withLock
+            if (boundary?.acknowledgeForks() != true) return@withLock
             integrityAcknowledged = true
             shown = _status.value
         }
@@ -620,9 +648,22 @@ public class SyncCoordinator(
      * only refused one more record of a chain the user already acknowledged.
      * The catalog decides which, so a frozen chain the server keeps serving
      * does not bring back a report the user dismissed.
+     *
+     * The verdict belongs to vault [open], whose inbox the pass processed. The
+     * caller reads [open] before the pass, not after it: a lock queued behind
+     * the pass takes the vault first, and a rollback leaves nothing in the
+     * catalog, so a verdict dropped here is one the user is never told,
+     * `ROLLBACK_PROTECTION.md` §4. Nothing suspends between the pass and
+     * keeping a rollback. Only when no vault was open before the pass does
+     * this read the one open after it, and with none open then either the
+     * verdict has no vault to be kept for.
      */
-    private suspend fun fold(report: SyncProcessReport?) {
+    private suspend fun fold(
+        open: ByteArray?,
+        report: SyncProcessReport?,
+    ) {
         val verdict = report?.let { ChurStatus.fromValue(it.firstRejection) }?.takeIf { it in LOCAL_VERDICTS } ?: return
+        scopeVerdict(open ?: boundary?.identity()?.vaultId ?: return)
         val forks = if (verdict == ChurStatus.SYNC_CHAIN_FORK) boundary?.forkState() else null
         if (!raise(forks)) {
             integrityStop = verdict
@@ -638,7 +679,7 @@ public class SyncCoordinator(
      * A fork the user has not acknowledged makes the verdict unacknowledged;
      * one they have acknowledged starts no new report. It never lowers a
      * verdict: a rollback leaves nothing in the catalog, and only [disconnect]
-     * clears one.
+     * clears one, or [scopeVerdict] when another vault takes over the state.
      */
     private fun raise(forks: SyncForkState?): Boolean {
         if (forks == null || forks.detected + forks.acknowledged == 0L) return false
@@ -649,6 +690,23 @@ public class SyncCoordinator(
         }
         integrityStop = integrityStop ?: ChurStatus.SYNC_CHAIN_FORK
         return true
+    }
+
+    /**
+     * Keeps the verdict to vault [vaultId], dropping one another vault's pass
+     * reported.
+     *
+     * The saved state is one per device, so a vault can take it over without
+     * a [disconnect], for example after the state file went away. A verdict
+     * is about the chains of the vault that reported it, and a status that
+     * carried another vault's verdict would tell this one that a sibling
+     * syncs, `DECOY_VAULT.md` §10.
+     */
+    private fun scopeVerdict(vaultId: ByteArray) {
+        if (integrityVault contentEquals vaultId) return
+        integrityStop = null
+        integrityAcknowledged = false
+        integrityVault = vaultId
     }
 
     internal companion object {
