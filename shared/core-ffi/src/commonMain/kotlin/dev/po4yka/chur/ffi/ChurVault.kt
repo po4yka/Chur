@@ -435,6 +435,25 @@ object ChurVault {
         return SyncProcessReport(counts[0], counts[1], counts[2], counts[3], status[0])
     }
 
+    /**
+     * Counts the device chains the open vault holds a fork for, by state.
+     *
+     * `ROLLBACK_PROTECTION.md` §4 keeps the state in the catalog until it
+     * clears, while [processSync] reports a fork only in the pass that found
+     * it, so this is what tells the user again after a restart, §6.24 of
+     * `docs/interop/FFI_CONTRACT.md`.
+     */
+    fun syncForkState(session: Long): SyncForkState {
+        val counts = LongArray(2)
+        ChurFailure.check(ChurNative.syncForkState(session, counts), "sync fork state")
+        return SyncForkState(detected = counts[0], acknowledged = counts[1])
+    }
+
+    /** Marks every detected fork as seen; each chain stays frozen, §6.24. */
+    fun acknowledgeSyncForks(session: Long) {
+        ChurFailure.check(ChurNative.syncForkAcknowledge(session), "sync fork acknowledge")
+    }
+
     // -----------------------------------------------------------------------
     // Key slots
     // -----------------------------------------------------------------------
@@ -1191,6 +1210,16 @@ data class SyncProcessReport(
     val pending: Long,
     val rejected: Long,
     val firstRejection: Int,
+)
+
+/**
+ * How many device chains the catalog holds a fork for, by the state of
+ * `ROLLBACK_PROTECTION.md` §4: [detected] ones the user has not seen yet, and
+ * [acknowledged] ones they have. Both stay frozen until the state clears.
+ */
+data class SyncForkState(
+    val detected: Long,
+    val acknowledged: Long,
 )
 
 /** The handshake facts of §2. */

@@ -219,6 +219,13 @@ internal expect object ChurNative {
         outStatus: IntArray,
     ): Int
 
+    fun syncForkState(
+        session: Long,
+        outCounts: LongArray,
+    ): Int
+
+    fun syncForkAcknowledge(session: Long): Int
+
     fun catalogQuery(
         session: Long,
         scope: Int,

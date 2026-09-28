@@ -1,6 +1,7 @@
 //! Phase 3 locked staging and unlocked validation C ABI.
 
 use chur_catalog::sync_engine::{self, ProcessReport, StagedKind};
+use chur_catalog::sync_log;
 use chur_catalog::sync_staging::LockedStaging;
 use chur_core::limits::sync as bounds;
 use chur_core::{ChurStatus, Error, Id, Result, ensure};
@@ -114,6 +115,68 @@ pub unsafe extern "C" fn chur_sync_process(
             sync_engine::process_staged(session.catalog()?, &root, vault_id, &mut staging, now_ms)?;
         // SAFETY: the caller guarantees the writable out-parameter above.
         unsafe { write_out(out_report, ffi_report(&report)) }
+    })
+}
+
+/// Counts the chains the open vault holds a fork for, by state, §6.24.
+///
+/// `ROLLBACK_PROTECTION.md` §4 persists the fork state until it clears, and
+/// the pass that found the fork reports it once, so this is how a host that
+/// restarted still tells the user.
+///
+/// # Safety
+///
+/// `out_detected` and `out_acknowledged` each point to one writable, aligned
+/// `uint64_t`.
+#[unsafe(no_mangle)]
+#[expect(
+    unsafe_code,
+    reason = "FFI_CONTRACT.md section 6.24 fixes this exported symbol"
+)]
+pub unsafe extern "C" fn chur_sync_fork_state(
+    session: Handle,
+    out_detected: *mut u64,
+    out_acknowledged: *mut u64,
+) -> Status {
+    guard_status_for(session, || {
+        // SAFETY: the caller guarantees both writable out-parameters above.
+        unsafe {
+            write_out(out_detected, 0)?;
+            write_out(out_acknowledged, 0)?;
+        }
+        let entry = registry::get(session, Kind::Session)?;
+        let Entry::Session { session, .. } = entry.as_ref() else {
+            return Err(Error::new(
+                ChurStatus::InvalidInput,
+                "the handle is of another type",
+            ));
+        };
+        let counts = sync_log::fork_counts(registry::lock(session).catalog()?)?;
+        // SAFETY: the caller guarantees both writable out-parameters above.
+        unsafe {
+            write_out(out_detected, counts.detected)?;
+            write_out(out_acknowledged, counts.acknowledged)
+        }
+    })
+}
+
+/// Marks every detected fork as seen, §6.24. Every chain stays frozen.
+#[unsafe(no_mangle)]
+#[expect(
+    unsafe_code,
+    reason = "FFI_CONTRACT.md section 6.24 fixes this exported symbol"
+)]
+pub extern "C" fn chur_sync_fork_acknowledge(session: Handle) -> Status {
+    guard_status_for(session, || {
+        let entry = registry::get(session, Kind::Session)?;
+        let Entry::Session { session, .. } = entry.as_ref() else {
+            return Err(Error::new(
+                ChurStatus::InvalidInput,
+                "the handle is of another type",
+            ));
+        };
+        let mut session = registry::lock(session);
+        sync_log::acknowledge_forks(session.catalog()?)
     })
 }
 

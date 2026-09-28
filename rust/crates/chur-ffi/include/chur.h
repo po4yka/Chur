@@ -18,7 +18,7 @@
  * recipient-device surface of section 6.13, and the sharing discovery surface
  * of section 6.14, and the private tag list of section 6.15. Adding an export raises the minor
  * ABI version; changing or removing one raises the major. The library reports
- * 2.19.
+ * 2.20.
  */
 
 #ifndef CHUR_H
@@ -354,6 +354,14 @@ chur_status_t chur_sync_stage(chur_handle_t runtime, const uint8_t vault_id[16],
                               const uint8_t *record, uint32_t record_length);
 chur_status_t chur_sync_process(chur_handle_t session, uint64_t now_ms,
                                 ChurSyncReportV1 *out_report);
+
+/* ABI 2.20, FFI_CONTRACT.md section 6.24. ROLLBACK_PROTECTION.md section 4
+ * keeps a fork state per device chain until it clears. State counts the chains
+ * in each state; acknowledge moves every detected chain to acknowledged and
+ * unfreezes none. Both return VAULT_LOCKED on a locked session. */
+chur_status_t chur_sync_fork_state(chur_handle_t session, uint64_t *out_detected,
+                                   uint64_t *out_acknowledged);
+chur_status_t chur_sync_fork_acknowledge(chur_handle_t session);
 
 /* Idempotent local identity provisioning, FFI_CONTRACT.md section 6.9. */
 chur_status_t chur_sharing_identity(chur_handle_t session,

@@ -226,10 +226,27 @@ class ChurVaultHostTest {
     }
 
     @Test
+    fun the_sync_fork_state_crosses_the_jni_boundary() {
+        // §6.24 through the real library: a vault with no fork reads zero in
+        // each state, an acknowledgement with nothing detected changes
+        // nothing, and a locked session reads nothing at all.
+        val runtime = openRuntime()
+        val session = createVault(runtime)
+
+        assertEquals(SyncForkState(detected = 0, acknowledged = 0), ChurVault.syncForkState(session))
+        ChurVault.acknowledgeSyncForks(session)
+        assertEquals(SyncForkState(detected = 0, acknowledged = 0), ChurVault.syncForkState(session))
+        ChurVault.lock(session, LockReason.USER)
+        val failure = assertFailsWith<ChurFailure> { ChurVault.syncForkState(session) }
+        assertEquals(ChurStatus.VAULT_LOCKED, failure.status)
+        ChurVault.closeSession(session)
+    }
+
+    @Test
     fun the_handshake_matches_the_frozen_abi() {
         val handshake = ChurVault.handshake()
         assertEquals(2, handshake.major)
-        assertEquals(19, handshake.minor, "§6.23 staged the recovery slot")
+        assertEquals(20, handshake.minor, "§6.24 reads and acknowledges the sync fork state")
         assertEquals(1, handshake.objectFormatMin)
         assertEquals(1, handshake.objectFormatMax)
         assertTrue(handshake.capabilities and 0b0000_0010L != 0L, "the reader is declared")

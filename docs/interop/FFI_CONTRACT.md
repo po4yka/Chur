@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. The current library reports 2.19: §6.19 changes the album-list record, §6.20 adds atomic album placement, §6.21 adds tag and favourite selection controls, §6.22 adds recoverable trash, and §6.23 stages the recovery slot until its phrase is confirmed. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
+- native API version is the (major, minor) pair. The current library reports 2.20: §6.19 changes the album-list record, §6.20 adds atomic album placement, §6.21 adds tag and favourite selection controls, §6.22 adds recoverable trash, §6.23 stages the recovery slot until its phrase is confirmed, and §6.24 reads and acknowledges the sync fork state. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -634,6 +634,16 @@ When the caller's tag-list buffer is too small, `chur_tag_list` reports the requ
 ### 6.23 Staged recovery slot, ABI 2.19
 
 [`../security/RECOVERY.md`](../security/RECOVERY.md) §8 commits a new recovery slot only after the user confirmed that the phrase was stored, and [`../security/PROVISIONING.md`](../security/PROVISIONING.md) §4 runs the presentation and confirmation "before the slot commits". `chur_vault_add_recovery_slot` commits before the host has shown anything, so a phrase lost on screen left a working slot that no one could use. `chur_vault_recovery_begin` seals a recovery slot, writes its phrase under the §6.5 rules, and holds the slot in the session without writing the descriptor; a second begin replaces the staged slot. `chur_vault_recovery_commit` writes the staged slot as one descriptor generation ([`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §9). The commit replaces every earlier recovery slot in the same descriptor generation. This is the RECOVERY.md §8 rotation: the replaced phrase stops opening the vault, and no descriptor generation carries neither phrase. A commit with nothing staged returns `CONFLICT`, and on a session that `chur_vault_lock` has locked it returns `VAULT_LOCKED`. Closing the session discards a staged slot, so a slot never committed is never written. `chur_vault_add_recovery_slot` is unchanged and serves callers with no presentation step. A creation needs neither call: its slot already waits in the creation handle, and the host calls `chur_vault_creation_activate` only after the phrase is confirmed.
+
+### 6.24 Sync fork state, ABI 2.20
+
+```c
+chur_status_t chur_sync_fork_state(chur_handle_t session, uint64_t *out_detected,
+                                   uint64_t *out_acknowledged);
+chur_status_t chur_sync_fork_acknowledge(chur_handle_t session);
+```
+
+[`../sync/ROLLBACK_PROTECTION.md`](../sync/ROLLBACK_PROTECTION.md) §4 keeps a fork state per (vault, device) in the encrypted catalog until reconciliation or an accepted revocation clears it, and has the user told. `chur_sync_process` reports a fork only in the pass that found it (§6.8), so a host that restarted could not read the state again. `chur_sync_fork_state` writes how many device chains are `detected` and how many are `acknowledged`. `chur_sync_fork_acknowledge` moves every `detected` chain to `acknowledged` in one transaction, and changes nothing when none is detected. Neither call unfreezes a chain, returns evidence, or names a device, and both return `VAULT_LOCKED` on a locked session. A later record of a frozen chain is still refused as `SYNC_CHAIN_FORK` and leaves the state as it is, so a host tells a new fork from an acknowledged one by reading the state. A head rollback leaves no state here: the engine refuses the checkpoint and freezes no chain.
 
 ## 7. Buffer ownership
 

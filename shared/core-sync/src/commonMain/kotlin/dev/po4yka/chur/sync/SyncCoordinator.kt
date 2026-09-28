@@ -8,6 +8,7 @@ import dev.po4yka.chur.ffi.SharingIdentity
 import dev.po4yka.chur.ffi.SharedReceivePlan
 import dev.po4yka.chur.ffi.SharedSourceObject
 import dev.po4yka.chur.ffi.SharedSourceRange
+import dev.po4yka.chur.ffi.SyncForkState
 import dev.po4yka.chur.ffi.SyncProcessReport
 import dev.po4yka.chur.ffi.SyncRecordKind
 import kotlinx.coroutines.delay
@@ -50,6 +51,20 @@ public interface SyncVaultBoundary {
      * while locked, in which case the next unlock drains it.
      */
     public suspend fun process(): SyncProcessReport?
+
+    /**
+     * The fork state the catalog keeps, or `null` while locked.
+     *
+     * `ROLLBACK_PROTECTION.md` §4 keeps it until it clears, so it outlives the
+     * [process] pass that found the fork, and a restart.
+     */
+    public suspend fun forkState(): SyncForkState?
+
+    /**
+     * Records that the user saw every detected fork, or `false` while locked.
+     * Each chain stays frozen, §4.
+     */
+    public suspend fun acknowledgeForks(): Boolean
 
     /** Verifies and installs an addressed share, or `false` if the vault locked. */
     public suspend fun acceptSharePackage(packageBytes: ByteArray): Boolean
@@ -121,10 +136,20 @@ public data class SyncStatus(
      * it comes from the native process report and never from a server code.
      * That report puts a verdict ahead of any other rejection in the same pass,
      * so junk the server stages beside the forked record cannot hide it.
-     * The catalog keeps the fork state itself; this copy lasts for the process
-     * and, like the rest of this status, is not scoped to one vault identity.
+     * The catalog keeps the fork state itself, and [SyncCoordinator.refresh]
+     * raises this from it at each unlock, so a fork outlives a restart. A
+     * rollback leaves no state there, so it lasts for the process and is not
+     * scoped to one vault identity.
      */
     public val integrityStop: ChurStatus? = null,
+    /**
+     * Whether the user acknowledged [integrityStop], §4's `acknowledged`.
+     *
+     * The chain stays frozen and the verdict stays; what changes is that an
+     * unlock no longer announces it. A fork this device has not reported yet
+     * makes it `false` again.
+     */
+    public val integrityAcknowledged: Boolean = false,
 )
 
 /**
@@ -159,6 +184,7 @@ public class SyncCoordinator(
     private val _status = MutableStateFlow(NOT_CONFIGURED)
     private var boundary: SyncVaultBoundary? = null
     private var integrityStop: ChurStatus? = null
+    private var integrityAcknowledged = false
 
     /** The open session, which [endSession] replaces. */
     @Volatile private var session = Any()
@@ -189,7 +215,7 @@ public class SyncCoordinator(
     /** Sets [status] for session [at], unless [endSession] ended it before or during the write. */
     private fun publish(at: Any, value: SyncStatus) {
         if (session !== at) return
-        _status.value = value.copy(integrityStop = integrityStop)
+        _status.value = value.copy(integrityStop = integrityStop, integrityAcknowledged = integrityAcknowledged)
         if (session !== at) _status.value = NOT_CONFIGURED
     }
 
@@ -214,6 +240,10 @@ public class SyncCoordinator(
      * and §10. [configure] in another identity is still refused while a
      * server is saved, because the file is one per device. It returns whether
      * the open vault has a server, which is what decides the unlock's pull.
+     *
+     * The open vault's own fork state comes with it, `ROLLBACK_PROTECTION.md`
+     * §4: the pass that found a fork reported it once, and the catalog is what
+     * still knows after a restart.
      */
     public suspend fun refresh(): Boolean =
         mutex.withLock {
@@ -221,6 +251,7 @@ public class SyncCoordinator(
             val state = store.load()
             val identity = boundary?.identity()
             val own = state != null && identity != null && matches(state, identity)
+            if (own) raise(boundary?.forkState())
             owner = if (own) at else null
             publish(
                 at,
@@ -546,6 +577,7 @@ public class SyncCoordinator(
             require(store.load()?.pendingSharing.isNullOrEmpty()) { "publish pending sharing changes before disconnecting" }
             store.clear()
             integrityStop = null
+            integrityAcknowledged = false
             shown = NOT_CONFIGURED
         }
 
@@ -562,17 +594,61 @@ public class SyncCoordinator(
         }
 
     /**
+     * Records that the user saw the verdict, which the banner's action does.
+     *
+     * `ROLLBACK_PROTECTION.md` §4 moves each detected fork to `acknowledged`
+     * in the catalog, so the next unlock does not announce it again, and keeps
+     * every chain frozen: the verdict and the banner stay.
+     */
+    public suspend fun acknowledgeIntegrityStop(): Unit =
+        mutex.withLock {
+            if (integrityStop == null || boundary?.acknowledgeForks() != true) return@withLock
+            integrityAcknowledged = true
+            shown = _status.value
+        }
+
+    /**
      * Keeps a fork or rollback verdict from one pass over the inbox.
      *
      * The native engine already froze that chain and dropped the record, and
      * the report is the only place the verdict reaches this layer, so a pass
      * whose report is ignored would read as a clean one. `ERROR_MODEL.md`
      * forbids retrying either status, and nothing here does.
+     *
+     * A fork verdict always leaves its chain in the catalog's fork state:
+     * `detected` when this pass found the fork, `acknowledged` when the pass
+     * only refused one more record of a chain the user already acknowledged.
+     * The catalog decides which, so a frozen chain the server keeps serving
+     * does not bring back a report the user dismissed.
      */
-    private fun fold(report: SyncProcessReport?) {
+    private suspend fun fold(report: SyncProcessReport?) {
         val verdict = report?.let { ChurStatus.fromValue(it.firstRejection) }?.takeIf { it in LOCAL_VERDICTS } ?: return
-        integrityStop = verdict
-        _status.value = _status.value.copy(integrityStop = verdict)
+        val forks = if (verdict == ChurStatus.SYNC_CHAIN_FORK) boundary?.forkState() else null
+        if (!raise(forks)) {
+            integrityStop = verdict
+            integrityAcknowledged = false
+        }
+        shown = _status.value
+    }
+
+    /**
+     * Raises the verdict from the catalog's fork state, returning whether that
+     * state holds a fork at all.
+     *
+     * A fork the user has not acknowledged makes the verdict unacknowledged;
+     * one they have acknowledged starts no new report. It never lowers a
+     * verdict: a rollback leaves nothing in the catalog, and only [disconnect]
+     * clears one.
+     */
+    private fun raise(forks: SyncForkState?): Boolean {
+        if (forks == null || forks.detected + forks.acknowledged == 0L) return false
+        if (forks.detected > 0) {
+            integrityAcknowledged = false
+        } else if (integrityStop == null) {
+            integrityAcknowledged = true
+        }
+        integrityStop = integrityStop ?: ChurStatus.SYNC_CHAIN_FORK
+        return true
     }
 
     internal companion object {

@@ -222,6 +222,13 @@ internal object ChurJni {
         outStatus: IntArray,
     ): Int
 
+    external fun syncForkState(
+        session: Long,
+        outCounts: LongArray,
+    ): Int
+
+    external fun syncForkAcknowledge(session: Long): Int
+
     external fun catalogQuery(
         session: Long,
         scope: Int,

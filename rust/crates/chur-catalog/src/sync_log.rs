@@ -493,6 +493,53 @@ impl DurableOperationLog {
     }
 }
 
+/// How many device chains hold durable fork evidence, by fork state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ForkCounts {
+    /// Chains in the `detected` state: the user has not seen the report yet.
+    pub detected: u64,
+    /// Chains in the `acknowledged` state: seen, and still frozen.
+    pub acknowledged: u64,
+}
+
+/// Counts the fork state `ROLLBACK_PROTECTION.md` §4 persists per device.
+///
+/// The state outlives the pass that found the fork, so a host reads it at
+/// unlock and keeps telling the user until it clears. It reads the table
+/// alone: [`load`] verifies the evidence and replays every accepted operation,
+/// which a status read does not need.
+pub fn fork_counts(db: &CatalogDb) -> Result<ForkCounts> {
+    let (detected, acknowledged): (i64, i64) = db
+        .connection()
+        .query_row(
+            "SELECT coalesce(sum(state = 1), 0), coalesce(sum(state = 2), 0) FROM sync_forks",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|error| map_sqlite(error, "fork state could not be counted"))?;
+    Ok(ForkCounts {
+        detected: from_sqlite_integer(detected, "the detected fork count is negative")?,
+        acknowledged: from_sqlite_integer(acknowledged, "the acknowledged fork count is negative")?,
+    })
+}
+
+/// Moves every `detected` fork to `acknowledged`, §4, and unfreezes nothing.
+///
+/// A chain leaves the fork state only through
+/// [`DurableOperationLog::resolve_by_revocation`] or reconciliation, so this
+/// changes what the user is told and never what the engine applies.
+pub fn acknowledge_forks(db: &mut CatalogDb) -> Result<()> {
+    db.transaction(|transaction| {
+        let changed = transaction
+            .execute("UPDATE sync_forks SET state = 2 WHERE state = 1", [])
+            .map_err(|error| map_sqlite(error, "fork evidence could not be acknowledged"))?;
+        if changed == 0 {
+            return Ok(());
+        }
+        bump_generation(transaction)
+    })
+}
+
 /// Rebuilds and verifies the accepted log, heads, floors, and fork evidence.
 pub fn load(db: &CatalogDb, membership: &MembershipState) -> Result<DurableOperationLog> {
     let devices = device_ids(db)?;
@@ -1340,6 +1387,48 @@ mod tests {
             .query_row("SELECT state FROM sync_forks", [], |row| row.get(0))
             .expect("fork state");
         assert_eq!(state, 2);
+    }
+
+    #[test]
+    fn acknowledging_every_fork_keeps_each_chain_frozen() {
+        // `ROLLBACK_PROTECTION.md` §4: `acknowledged` records that the user
+        // saw the report; the chain stays frozen until the state clears.
+        let (mut db, membership, key) = setup();
+        assert_eq!(fork_counts(&db).expect("none"), ForkCounts::default());
+        let mut log = load(&db, &membership).expect("empty log");
+        let first = operation(&key, 1, [0; 32], 5);
+        log.accept_with(&mut db, &first, &membership, |_| Ok(()))
+            .expect("first");
+        let conflict = operation(&key, 1, [0; 32], 6);
+        assert!(
+            log.accept_with(&mut db, &conflict, &membership, |_| Ok(()))
+                .is_err()
+        );
+        assert_eq!(
+            fork_counts(&db).expect("detected"),
+            ForkCounts {
+                detected: 1,
+                acknowledged: 0
+            }
+        );
+
+        acknowledge_forks(&mut db).expect("acknowledge");
+        acknowledge_forks(&mut db).expect("nothing left to acknowledge");
+        assert_eq!(
+            fork_counts(&db).expect("acknowledged"),
+            ForkCounts {
+                detected: 0,
+                acknowledged: 1
+            }
+        );
+        let mut restored = load(&db, &membership).expect("restore");
+        assert_eq!(
+            restored
+                .accept_with(&mut db, &first, &membership, |_| Ok(()))
+                .expect_err("still frozen")
+                .status(),
+            ChurStatus::SyncChainFork
+        );
     }
 
     #[test]

@@ -4,6 +4,7 @@ import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.SharingIdentity
 import dev.po4yka.chur.ffi.PreparedShare
 import dev.po4yka.chur.ffi.PreparedShareRevocation
+import dev.po4yka.chur.ffi.SyncForkState
 import dev.po4yka.chur.ffi.SyncProcessReport
 import dev.po4yka.chur.ffi.SyncRecordKind
 import dev.po4yka.chur.ffi.SharedReceivePlan
@@ -61,6 +62,10 @@ class SyncCoordinatorTest {
         var firstRejection = 0
         val accepted = mutableListOf<ByteArray>()
 
+        /** The fork state the catalog keeps, which outlives the process. */
+        var forks: SyncForkState? = null
+        var acknowledgements = 0
+
         override suspend fun identity(): SharingIdentity? = identity
 
         override suspend fun stage(
@@ -76,6 +81,14 @@ class SyncCoordinatorTest {
             processed++
             val rejected = if (firstRejection == 0) 0L else 1L
             return SyncProcessReport(staged.size.toLong() - rejected, 0, 0, rejected, firstRejection)
+        }
+
+        override suspend fun forkState(): SyncForkState? = forks
+
+        override suspend fun acknowledgeForks(): Boolean {
+            acknowledgements++
+            forks = forks?.let { SyncForkState(detected = 0, acknowledged = it.detected + it.acknowledged) }
+            return true
         }
 
         override suspend fun acceptSharePackage(packageBytes: ByteArray): Boolean {
@@ -330,6 +343,54 @@ class SyncCoordinatorTest {
             assertEquals(0, engine.requests)
             assertEquals(ChurStatus.SYNC_HEAD_ROLLBACK, coordinator.status.value.integrityStop)
             assertTrue(coordinator.status.value.configured)
+        }
+
+    @Test
+    fun a_fork_the_catalog_keeps_is_raised_at_unlock_and_stays_once_acknowledged() =
+        runTest {
+            val store =
+                FakeStore().apply {
+                    saved = SyncState("https://sync.example", vaultId, deviceId, ByteArray(32), emptyList())
+                }
+            // What a restart finds: the pass that reported the fork belonged
+            // to the process before, and only the catalog still knows.
+            val boundary =
+                FakeBoundary().apply {
+                    identity = this@SyncCoordinatorTest.identity
+                    forks = SyncForkState(detected = 1, acknowledged = 0)
+                }
+            val coordinator = coordinator(store, boundary, okEngine { error(it) })
+
+            assertTrue(coordinator.refresh())
+            assertEquals(ChurStatus.SYNC_CHAIN_FORK, coordinator.status.value.integrityStop)
+            assertFalse(coordinator.status.value.integrityAcknowledged)
+
+            // `ROLLBACK_PROTECTION.md` §4: acknowledged, and still frozen.
+            coordinator.acknowledgeIntegrityStop()
+            assertEquals(1, boundary.acknowledgements)
+            assertEquals(ChurStatus.SYNC_CHAIN_FORK, coordinator.status.value.integrityStop)
+            assertTrue(coordinator.status.value.integrityAcknowledged)
+
+            // The frozen chain refuses one more record the server serves; the
+            // catalog still holds only the acknowledged fork, so no new report.
+            boundary.firstRejection = ChurStatus.SYNC_CHAIN_FORK.value
+            coordinator.applyStaged()
+            assertTrue(coordinator.status.value.integrityAcknowledged)
+
+            // The next restart reads the acknowledged state.
+            val restarted = coordinator(store, boundary, okEngine { error(it) })
+            restarted.refresh()
+            assertEquals(ChurStatus.SYNC_CHAIN_FORK, restarted.status.value.integrityStop)
+            assertTrue(restarted.status.value.integrityAcknowledged)
+
+            // A fork on another device's chain is new, so it is reported again.
+            boundary.forks = SyncForkState(detected = 1, acknowledged = 1)
+            restarted.applyStaged()
+            assertFalse(restarted.status.value.integrityAcknowledged)
+
+            restarted.disconnect()
+            assertNull(restarted.status.value.integrityStop)
+            assertFalse(restarted.status.value.integrityAcknowledged)
         }
 
     @Test

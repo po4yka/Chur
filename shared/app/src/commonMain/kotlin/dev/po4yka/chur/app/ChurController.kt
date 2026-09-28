@@ -1265,6 +1265,11 @@ class ChurController(
         sync?.disconnect()
     }
 
+    /** Records that the user saw the sync stop; the chain stays frozen. */
+    fun acknowledgeSyncStop() = guarded {
+        sync?.acknowledgeIntegrityStop()
+    }
+
     /** Loads public sharing identity and current active recipients for Settings. */
     fun loadSharing() = guarded(clearMessage = false) {
         _sharingIdentity.value = withContext(Dispatchers.Default) { repository.syncIdentity() }
@@ -2165,6 +2170,15 @@ class ChurController(
                     }
                 if (configured) {
                     withContext(Dispatchers.Default) { engine.applyStaged() }
+                    // §4 has the user told, and the catalog keeps the fork
+                    // across restarts, so each unlock says so until the user
+                    // acknowledges it in Settings. It is a security notice,
+                    // which `DESIGN.md` §26 keeps until it is dismissed, and it
+                    // comes before the pull, which may wait on the network.
+                    val status = engine.status.value
+                    if (status.integrityStop != null && !status.integrityAcknowledged) {
+                        say("Sync stopped for one device. Open Settings to see why.", security = true)
+                    }
                     // A server this device cannot reach now would only hold
                     // "Sync now" through a backoff, [syncReachable].
                     if (engine.status.value.serverUrl?.let { syncReachable(it) } != false) engine.syncNow()

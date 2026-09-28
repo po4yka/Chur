@@ -370,6 +370,9 @@ fn every_declared_function_is_exported() {
         // §6.8, the Phase-3 sync inbox surface added at ABI 1.4.
         "chur_sync_stage",
         "chur_sync_process",
+        // §6.24, added at ABI 2.20.
+        "chur_sync_fork_state",
+        "chur_sync_fork_acknowledge",
         // §6.9, the collection-sharing identity surface added at ABI 1.5.
         "chur_sharing_identity",
         // §6.14, user-facing recipient discovery added at ABI 1.10.
@@ -405,7 +408,7 @@ fn every_declared_function_is_exported() {
 
     // Calling each one proves the list above is not a stale copy.
     assert_eq!(chur_ffi::chur_abi_version_major(), 2);
-    assert_eq!(chur_ffi::chur_abi_version_minor(), 19);
+    assert_eq!(chur_ffi::chur_abi_version_minor(), 20);
     assert_eq!(
         chur_ffi::chur_capabilities(),
         chur_ffi::CHUR_CAP_DECOY_VAULT

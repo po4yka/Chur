@@ -75,6 +75,8 @@ import dev.po4yka.chur.native.chur_sharing_prepare
 import dev.po4yka.chur.native.chur_sharing_prepare_device
 import dev.po4yka.chur.native.chur_sharing_revoke
 import dev.po4yka.chur.native.chur_status_is_known
+import dev.po4yka.chur.native.chur_sync_fork_acknowledge
+import dev.po4yka.chur.native.chur_sync_fork_state
 import dev.po4yka.chur.native.chur_sync_process
 import dev.po4yka.chur.native.chur_sync_stage
 import dev.po4yka.chur.native.chur_tag_create
@@ -208,6 +210,23 @@ internal actual object ChurNative {
             }
             status
         }
+
+    actual fun syncForkState(
+        session: Long,
+        outCounts: LongArray,
+    ): Int =
+        memScoped {
+            val detected = alloc<ULongVar>()
+            val acknowledged = alloc<ULongVar>()
+            val status = chur_sync_fork_state(session.toULong(), detected.ptr, acknowledged.ptr)
+            if (status == 0) {
+                outCounts[0] = detected.value.toLong()
+                outCounts[1] = acknowledged.value.toLong()
+            }
+            status
+        }
+
+    actual fun syncForkAcknowledge(session: Long): Int = chur_sync_fork_acknowledge(session.toULong())
 
     actual fun vaultPresent(
         runtime: Long,

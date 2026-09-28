@@ -930,6 +930,7 @@ private fun VaultRoute(controller: ChurController) {
                     syncStatus?.serverUrl?.let { localNetwork(it, controller::syncNow) } ?: controller.syncNow()
                 },
                 onDisconnectSync = controller::disconnectSync,
+                onAcknowledgeSyncStop = controller::acknowledgeSyncStop,
                 onInspectSharingRecipient = controller::inspectSharingRecipient,
                 onShareWithRecipient = controller::shareWithRecipient,
                 onRevokeSharingMember = controller::revokeSharingMember,

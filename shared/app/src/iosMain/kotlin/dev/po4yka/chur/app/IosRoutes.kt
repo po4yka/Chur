@@ -664,6 +664,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 },
                 onSyncNow = controller::syncNow,
                 onDisconnectSync = controller::disconnectSync,
+                onAcknowledgeSyncStop = controller::acknowledgeSyncStop,
                 onInspectSharingRecipient = controller::inspectSharingRecipient,
                 onShareWithRecipient = controller::shareWithRecipient,
                 onRevokeSharingMember = controller::revokeSharingMember,

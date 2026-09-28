@@ -1,6 +1,7 @@
 package dev.po4yka.chur.app
 
 import dev.po4yka.chur.ffi.SharingIdentity
+import dev.po4yka.chur.ffi.SyncForkState
 import dev.po4yka.chur.ffi.SyncProcessReport
 import dev.po4yka.chur.ffi.SyncRecordKind
 import dev.po4yka.chur.ffi.SharedReceivePlan
@@ -30,6 +31,10 @@ class RepositorySyncBoundary(
     ) = repository.stageSyncRecord(vaultId, kind, stagedAtMs, record)
 
     override suspend fun process(): SyncProcessReport? = repository.processSync()
+
+    override suspend fun forkState(): SyncForkState? = repository.syncForkState()
+
+    override suspend fun acknowledgeForks(): Boolean = repository.acknowledgeSyncForks()
 
     override suspend fun acceptSharePackage(packageBytes: ByteArray): Boolean =
         repository.acceptSharePackage(packageBytes)

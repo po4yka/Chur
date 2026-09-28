@@ -275,6 +275,8 @@ data class VaultActions(
     val onSyncNow: () -> Unit = {},
     /** Forget the configured server. */
     val onDisconnectSync: () -> Unit = {},
+    /** Record that the user saw the sync stop, `ROLLBACK_PROTECTION.md` §4. */
+    val onAcknowledgeSyncStop: () -> Unit = {},
     val onInspectSharingRecipient: (String) -> Unit = {},
     val onShareWithRecipient: (SharingPermission) -> Unit = {},
     val onRevokeSharingMember: (SharingMember) -> Unit = {},
@@ -898,7 +900,11 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
             } else {
                 if (sync.integrityStop != null) {
                     item {
-                        SyncStoppedBanner(onStop = { confirmingDisconnect = true })
+                        SyncStoppedBanner(
+                            acknowledged = sync.integrityAcknowledged,
+                            onStop = { confirmingDisconnect = true },
+                            onAcknowledge = actions.onAcknowledgeSyncStop,
+                        )
                     }
                 }
                 item {
@@ -1186,9 +1192,13 @@ private fun ChangePasswordDialog(
  * cryptography, §20.2, and the banner stays for as long as the engine reports
  * the verdict, as §26 keeps a security failure on screen. It is a polite live
  * region, so a reader hears it when a run on this screen finds the verdict.
+ *
+ * §4's `acknowledged` state is the secondary action: the chain stays frozen,
+ * so the banner stays too and only its sentence changes, and an unlock stops
+ * announcing it.
  */
 @Composable
-private fun SyncStoppedBanner(onStop: () -> Unit) {
+private fun SyncStoppedBanner(acknowledged: Boolean, onStop: () -> Unit, onAcknowledge: () -> Unit) {
     val colors = LocalChurColors.current
     Card(
         colors = CardDefaults.cardColors(containerColor = colors.errorSoft, contentColor = colors.ink),
@@ -1206,11 +1216,18 @@ private fun SyncStoppedBanner(onStop: () -> Unit) {
                 Text("Sync stopped for one device", style = MaterialTheme.typography.titleSmall)
             }
             Text(
-                "Changes from that device do not match what this device already accepted, " +
-                    "so Chur does not apply them.",
+                if (acknowledged) {
+                    "You acknowledged this. Chur still does not apply changes from that device."
+                } else {
+                    "Changes from that device do not match what this device already accepted, " +
+                        "so Chur does not apply them."
+                },
                 style = MaterialTheme.typography.bodyMedium,
             )
             Button(onClick = onStop) { Text("Stop using the server") }
+            if (!acknowledged) {
+                TextButton(onClick = onAcknowledge) { Text("Acknowledge") }
+            }
         }
     }
 }

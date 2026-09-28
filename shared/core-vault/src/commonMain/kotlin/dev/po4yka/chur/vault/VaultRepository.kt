@@ -27,6 +27,7 @@ import dev.po4yka.chur.ffi.PreparedShareRevocation
 import dev.po4yka.chur.ffi.SlotSummary
 import dev.po4yka.chur.ffi.StreamKind
 import dev.po4yka.chur.ffi.TagSummary
+import dev.po4yka.chur.ffi.SyncForkState
 import dev.po4yka.chur.ffi.SyncProcessReport
 import dev.po4yka.chur.ffi.SyncRecordKind
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -734,6 +735,30 @@ class VaultRepository(
      */
     suspend fun processSync(): SyncProcessReport? = mutex.withLock {
         if (session == 0L) null else ChurVault.processSync(session, clock())
+    }
+
+    /**
+     * The fork state the open vault's catalog keeps, or `null` while locked.
+     *
+     * `ROLLBACK_PROTECTION.md` §4 keeps it until it clears, so it outlives the
+     * [processSync] pass that found the fork and the process that ran it.
+     */
+    suspend fun syncForkState(): SyncForkState? = mutex.withLock {
+        if (session == 0L) null else ChurVault.syncForkState(session)
+    }
+
+    /**
+     * Records that the user saw every detected fork, or returns `false` while
+     * locked. §4 keeps each chain frozen: this changes what the user is told,
+     * not what sync applies.
+     */
+    suspend fun acknowledgeSyncForks(): Boolean = mutex.withLock {
+        if (session == 0L) {
+            false
+        } else {
+            ChurVault.acknowledgeSyncForks(session)
+            true
+        }
     }
 
     /**

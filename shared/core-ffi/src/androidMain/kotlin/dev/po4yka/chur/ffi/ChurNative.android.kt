@@ -230,6 +230,13 @@ internal actual object ChurNative {
         outStatus: IntArray,
     ): Int = ChurJni.syncProcess(session, nowMs, outCounts, outStatus)
 
+    actual fun syncForkState(
+        session: Long,
+        outCounts: LongArray,
+    ): Int = ChurJni.syncForkState(session, outCounts)
+
+    actual fun syncForkAcknowledge(session: Long): Int = ChurJni.syncForkAcknowledge(session)
+
     actual fun catalogQuery(
         session: Long,
         scope: Int,

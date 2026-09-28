@@ -7,6 +7,7 @@ import dev.po4yka.chur.ffi.SharedReceivePlan
 import dev.po4yka.chur.ffi.SharedSourceObject
 import dev.po4yka.chur.ffi.SharedSourceRange
 import dev.po4yka.chur.ffi.SharingIdentity
+import dev.po4yka.chur.ffi.SyncForkState
 import dev.po4yka.chur.ffi.SyncProcessReport
 import dev.po4yka.chur.ffi.SyncRecordKind
 import io.ktor.client.HttpClient
@@ -94,6 +95,8 @@ class SharingPullerTest {
             override suspend fun identity(): SharingIdentity? = null
             override suspend fun stage(vaultId: ByteArray, kind: SyncRecordKind, stagedAtMs: Long, record: ByteArray) = Unit
             override suspend fun process(): SyncProcessReport? = null
+            override suspend fun forkState(): SyncForkState? = null
+            override suspend fun acknowledgeForks(): Boolean = false
             override suspend fun acceptSharePackage(packageBytes: ByteArray): Boolean = true
             override suspend fun receiveSharedOperations(packageBytes: ByteArray, operations: List<ByteArray>): SharedReceivePlan {
                 val record = operations.singleOrNull()
@@ -160,6 +163,8 @@ class SharingPullerTest {
             override suspend fun identity(): SharingIdentity? = null
             override suspend fun stage(vaultId: ByteArray, kind: SyncRecordKind, stagedAtMs: Long, record: ByteArray) = Unit
             override suspend fun process(): SyncProcessReport? = null
+            override suspend fun forkState(): SyncForkState? = null
+            override suspend fun acknowledgeForks(): Boolean = false
             override suspend fun acceptSharePackage(packageBytes: ByteArray): Boolean = true
             override suspend fun receiveSharedOperations(packageBytes: ByteArray, operations: List<ByteArray>): SharedReceivePlan =
                 SharedReceivePlan(source, collection, ByteArray(16), 0, listOf(SharedDownload(objectId, storeId, length)))

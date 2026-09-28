@@ -52,8 +52,8 @@ int main(void) {
           "neither format range is the empty panic fallback");
 
     check(chur_abi_version_major() == 2, "major ABI version is 2");
-    check(chur_abi_version_minor() == 19,
-          "minor ABI version is 19, including staged recovery slots");
+    check(chur_abi_version_minor() == 20,
+          "minor ABI version is 20, including the sync fork state");
 
     check(chur_object_format_min() <= chur_object_format_max(),
           "object format range is ordered");

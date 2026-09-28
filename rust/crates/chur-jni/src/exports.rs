@@ -261,6 +261,51 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_syncProcess<'local>(
     })
 }
 
+/// Counts the open vault's forked device chains, detected and acknowledged.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_syncForkState<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    out_counts: JLongArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let (mut detected, mut acknowledged) = (0u64, 0u64);
+        // SAFETY: both out-parameters are live writable locals.
+        let status = unsafe {
+            chur_ffi::sync::chur_sync_fork_state(
+                handle_of(session),
+                &mut detected,
+                &mut acknowledged,
+            )
+        };
+        if status != 0 {
+            return status;
+        }
+        if !write_longs(
+            env,
+            &out_counts,
+            &[detected as jlong, acknowledged as jlong],
+            0,
+        ) {
+            return INVALID_INPUT;
+        }
+        0
+    })
+}
+
+/// Marks every detected fork as seen; each chain stays frozen.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_syncForkAcknowledge<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |_env| {
+        chur_ffi::sync::chur_sync_fork_acknowledge(handle_of(session))
+    })
+}
+
 /// Whether the storage root holds a vault.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_vaultPresent<'local>(

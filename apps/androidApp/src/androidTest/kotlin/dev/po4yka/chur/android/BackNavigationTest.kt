@@ -48,6 +48,7 @@ import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.core.platformkeys.DeviceSlotPolicy
 import dev.po4yka.chur.core.platformkeys.ownerFactorEnrolled
 import dev.po4yka.chur.ffi.StreamKind
+import dev.po4yka.chur.ffi.SyncForkState
 import dev.po4yka.chur.ffi.SyncProcessReport
 import dev.po4yka.chur.imports.AndroidMediaCodec
 import dev.po4yka.chur.imports.Derivative
@@ -936,6 +937,69 @@ class BackNavigationTest {
             tap(label("Stop syncing"))
             assertTrue("forgetting the server clears the verdict", await { sync.status.value.integrityStop == null })
             assertTrue("and the banner with it", await { find(label("Sync stopped for one device")) == null })
+        } finally {
+            sync.bind(real)
+            // The case began with no state, so it leaves none.
+            runBlocking { sync.disconnect() }
+        }
+    }
+
+    @Test
+    fun aForkTheCatalogKeepsIsAnnouncedAtEachUnlockUntilAcknowledged() = inTestVault {
+        val sync = ChurHost.of(activity).sync
+        val store = FileSyncStateStore(File(activity.noBackupFilesDir, "chur-sync.json").path)
+        assumeTrue("a sync server this test did not configure", runBlocking { store.load() } == null)
+        val real = RepositorySyncBoundary(controller.vault)
+        // §6.24 through JNI on the device: a vault that never synced has no fork.
+        assertEquals(SyncForkState(detected = 0, acknowledged = 0), runBlocking { real.forkState() })
+        // The vault as the engine sees it, except that its catalog reads as one
+        // that found a fork in an earlier process. The acknowledgement still
+        // goes to the real catalog.
+        var acknowledged = false
+        sync.bind(
+            object : SyncVaultBoundary by real {
+                override suspend fun forkState(): SyncForkState =
+                    if (acknowledged) SyncForkState(detected = 0, acknowledged = 1) else SyncForkState(detected = 1, acknowledged = 0)
+
+                override suspend fun acknowledgeForks(): Boolean = real.acknowledgeForks().also { acknowledged = it }
+            },
+        )
+        val notice = "Sync stopped for one device. Open Settings to see why."
+        val reopen = {
+            lockQuietly()
+            instrumentation.runOnMainSync {
+                controller.goTo(AppRoute.Unlock)
+                controller.unlock(PASSWORD)
+            }
+            assertTrue("the vault reopens", await(60_000) { isOpen() })
+        }
+        try {
+            runBlocking { store.save(savedServer("https://sync.invalid")) }
+            // No pass of this process reported the fork; the unlock reads it.
+            reopen()
+            assertTrue("the unlock announces the stop", await { find(label(notice)) != null })
+            // The pull the unlock started backs off against an address that
+            // never answers; the list is searched once it stops changing.
+            assertTrue("the pull ends", await(120_000) { !sync.status.value.busy })
+            // The notice stays until dismissed, and the rows under it are out
+            // of the accessibility tree while it does.
+            tap(label("Dismiss"))
+            tap(label("Settings"))
+            assertTrue("the banner offers the acknowledgement", scrollUntil(label("Acknowledge")))
+            assertTrue("the banner is there", find(label("Sync stopped for one device")) != null)
+
+            tap(label("Acknowledge"))
+            assertTrue("the catalog records it", await { acknowledged && sync.status.value.integrityAcknowledged })
+            assertEquals("the chain stays stopped", ChurStatus.SYNC_CHAIN_FORK, sync.status.value.integrityStop)
+            assertTrue(
+                "the banner stays and says so",
+                await { find { it.text?.toString()?.startsWith("You acknowledged this.") == true } != null },
+            )
+            assertTrue("nothing left to acknowledge", find(label("Acknowledge")) == null)
+
+            reopen()
+            assertFalse("the next unlock does not announce it", await(3_000) { find(label(notice)) != null })
+            assertTrue(sync.status.value.integrityAcknowledged)
         } finally {
             sync.bind(real)
             // The case began with no state, so it leaves none.
