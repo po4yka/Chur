@@ -257,8 +257,11 @@ public class SyncCoordinator(
      * another identity none either and starts no run for it, so its sync
      * status does not differ by whether a sibling syncs, `DECOY_VAULT.md` §7
      * and §10. [configure] in another identity is still refused while a
-     * server is saved, because the file is one per device. It returns whether
-     * the open vault has a server, which is what decides the unlock's pull.
+     * server is saved, because the file is one per device. That refusal reads
+     * as an ordinary failed setup, and `DECOY_VAULT.md` §5 accepts what still
+     * differs, such as its timing and, on iOS, the local network alert. It
+     * returns whether the open vault has a server, which is what decides the
+     * unlock's pull.
      *
      * The open vault's own fork state comes with it, `ROLLBACK_PROTECTION.md`
      * §4: the pass that found a fork reported it once, and the catalog is what
@@ -315,6 +318,16 @@ public class SyncCoordinator(
      * loopback rule of the transport holds no matter who calls this. On
      * success the state is durable and the engine begins from its own device's
      * chain, because at bootstrap this device holds the only head there is.
+     *
+     * The saved state is one file per device, so a setup is refused while it
+     * holds another identity's server or sharing changes that wait for
+     * upload. The refusal comes after the address and the secret are
+     * validated, and it is the [ChurStatus.AUTHENTICATION_FAILED] a server
+     * gives a bootstrap secret it does not accept, so another identity, such
+     * as a decoy, reads the copy of an ordinary failed setup. It sends no
+     * request, so it answers sooner than a real refusal and shows no iOS local
+     * network alert; `DECOY_VAULT.md` §5 accepts these and the other signals
+     * that remain.
      */
     public suspend fun configure(
         serverUrl: String,
@@ -322,17 +335,21 @@ public class SyncCoordinator(
     ): Unit =
         mutex.withLock {
             val at = session
-            require(store.load()?.pendingSharing.isNullOrEmpty()) { "publish pending sharing changes before changing the server" }
+            val existing = store.load()
             val vault = requireNotNull(boundary) { "no vault is bound to sync" }
             val identity =
                 vault.identity()
                     ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "sync setup needs an unlocked vault")
-            store.load()?.let { existing ->
-                require(matches(existing, identity)) { "disconnect the other vault before configuring sync" }
-            }
+            // The size is checked here and not only by the client, so a wrong
+            // entry gets this line before the refusal below, in every identity.
             val secret =
                 try {
-                    fromHex(bootstrapSecret.trim())
+                    fromHex(bootstrapSecret.trim()).also { bytes ->
+                        if (bytes.size != SECRET_BYTES) {
+                            bytes.fill(0)
+                            throw IllegalArgumentException()
+                        }
+                    }
                 } catch (_: IllegalArgumentException) {
                     throw ChurFailure(
                         ChurStatus.INVALID_INPUT,
@@ -347,6 +364,9 @@ public class SyncCoordinator(
                     throw ChurFailure(ChurStatus.INVALID_INPUT, "the server address is not a sync endpoint")
                 }
             try {
+                if (existing != null && (existing.pendingSharing.isNotEmpty() || !matches(existing, identity))) {
+                    throw SyncTransportFailure(ChurStatus.AUTHENTICATION_FAILED, "the saved sync state blocks this setup")
+                }
                 client.bootstrap(identity.vaultId, secret, token, identity.enrollment, identity.initialOperation)
             } catch (failure: SyncTransportFailure) {
                 // A refused bootstrap leaves whatever was configured before intact:
@@ -714,6 +734,9 @@ public class SyncCoordinator(
         const val INITIAL_BACKOFF_MS = 1_000L
         const val MAX_BACKOFF_MS = 60_000L
         const val MAX_ATTEMPTS = 6
+
+        /** The bootstrap secret is 32 bytes, `SERVER_OPERATOR.md`. */
+        const val SECRET_BYTES = 32
     }
 }
 

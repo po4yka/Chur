@@ -78,6 +78,10 @@ A third residual signal is structural and is accepted here rather than in §10, 
 
 What that costs is bounded. A coercer inside a decoy session who provokes the refusal learns that two identities exist, which is the fact §10 protects. They learn nothing about the second one: not its credential, not its size, not its content, and not whether it is the real one — §11's storage rule and §2's session routing still hold. And they must already know the feature exists to try, which the "Assumed adversary knowledge" section below states they may.
 
+A fourth residual signal comes from sync setup, and it is also accepted here rather than in §10. The saved sync state is one file per device (§7), so a setup is refused while that file holds another identity's server or sharing changes that wait for upload. The setup validates the address and the bootstrap secret first, so a wrong entry gets its own message in every identity. Then it refuses with the status that a server gives for a bootstrap secret it does not accept, so the user reads the copy of an ordinary failed setup: "The sync server did not accept this device. Check the bootstrap secret and set up sync again." The refusal sends no request, and the sync status stays as it was, as after a failed first setup.
+
+The response timing still differs. A real failed setup waits for a network round trip, and the refusal answers at once. On iOS, the first request to a local server can also show the system local network alert, and the refusal shows none. The copy also matches only a server that refuses the secret: a server that accepts it, or one that cannot be reached, gives another result on a device with no sibling. So a coercer inside a decoy session who tries a setup can learn that another identity syncs from this device. They learn nothing else about it: not its server, not its sync status, not its integrity verdicts, and not its content, because §7 keeps these to the identity that configured the server. Removing this residual needs a sync state per identity.
+
 ## 6. Public and decoy UI
 
 The public shell remains separate from the decoy vault. A decoy session should behave as a complete private vault:
@@ -98,6 +102,8 @@ Initial recommendation:
 - user explicitly chooses whether the decoy has independent backup/recovery.
 
 A future server cannot be assumed to hide storage volume or account relationships.
+
+The saved sync state is one file per device. Only the identity that configured it sees its server, its runs, and its integrity verdicts; every other identity sees no server and starts no run. A setup in another identity is refused while that state exists, with the copy of an ordinary failed setup; §5 records the timing and the other signals that remain as accepted residuals.
 
 ## 8. Recovery
 
@@ -133,7 +139,7 @@ The existence of this feature is public by design. [`../product/DISCREET_MODE.md
 
 What remains is indistinguishability, not concealment: the defence holds only where the coercer cannot tell an opened decoy from a vault that has no sibling. Therefore:
 
-- a decoy session must not prove or disprove the existence of a sibling identity from inside the application. No count, setting, notification, backup state, error, timing class, or management surface reachable from a decoy session may differ according to whether a real vault exists. The one exception is the provisioning refusal of §5, which the registry cap of two makes structural; it is stated there rather than hidden here;
+- a decoy session must not prove or disprove the existence of a sibling identity from inside the application. No count, setting, notification, backup state, error, timing class, or management surface reachable from a decoy session may differ according to whether a real vault exists. The two exceptions are the provisioning refusal of §5, which the registry cap of two makes structural, and the sync setup refusal of §5, which reads as an ordinary failed setup but still differs in its timing and the other signals that §5 records; both are stated there rather than hidden here;
 - the same must hold in a real session with no decoy provisioned, so that "no decoy exists" and "the decoy was not opened" are one observation rather than two;
 - §3 provisioning must state this limitation before the user creates a decoy.
 
@@ -151,4 +157,5 @@ This bounds the claim: Decoy Vault raises the cost of a demand to open the vault
 - storage/log/notification inspection finds no semantic real/decoy label;
 - lock invalidates readers from both identities;
 - migration can process one vault without opening the sibling;
-- a decoy session and a real session with no decoy provisioned are indistinguishable from inside the application across counts, settings, notifications, backup state, and error copy.
+- a decoy session and a real session with no decoy provisioned are indistinguishable from inside the application across counts, settings, notifications, backup state, and error copy;
+- a sync setup in an identity that does not own the saved sync state gives a wrong address or secret its own message first, then shows exactly the copy of an ordinary failed setup and sends no request; its timing and the other signals that §5 records still differ, as §5 accepts.

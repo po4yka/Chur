@@ -215,13 +215,18 @@ class SyncCoordinatorTest {
     fun a_wrong_address_or_secret_is_a_bounded_input_failure() =
         runTest {
             val engine = okEngine { error(it) }
-            val coordinator = coordinator(FakeStore(), FakeBoundary(), engine)
+            // Unlocked, so the input is what fails and not the lock.
+            val boundary = FakeBoundary().apply { identity = this@SyncCoordinatorTest.identity }
+            val coordinator = coordinator(FakeStore(), boundary, engine)
 
             assertFailsWith<dev.po4yka.chur.ffi.ChurFailure> {
                 coordinator.configure("http://sync.example", SECRET_HEX)
             }
             assertFailsWith<dev.po4yka.chur.ffi.ChurFailure> {
                 coordinator.configure("https://sync.example", "not hex")
+            }
+            assertFailsWith<dev.po4yka.chur.ffi.ChurFailure> {
+                coordinator.configure("https://sync.example", "00".repeat(31))
             }
             assertEquals(0, engine.requests)
         }

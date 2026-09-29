@@ -12,6 +12,7 @@ import dev.po4yka.chur.sync.SyncVaultBoundary
 import dev.po4yka.chur.vault.VaultState
 import java.io.File
 import java.net.ServerSocket
+import java.net.SocketTimeoutException
 import java.util.Collections
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -29,9 +30,11 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
@@ -212,6 +215,49 @@ class SyncSessionHostTest {
             withTimeout(10_000) { controller.notice.first { it?.text == syncCopy(ChurStatus.NETWORK_FAILURE) } }
         } finally {
             controller.vault.shutdown()
+        }
+    }
+
+    /**
+     * `DECOY_VAULT.md` §5 and §10. The saved state is one file per device, so
+     * a setup in the identity that does not own it is refused. A wrong
+     * address or secret still gets its own line first, and the refusal reads
+     * as a server that did not accept the secret, with no request sent.
+     */
+    @Test
+    fun a_setup_refused_for_a_sibling_reads_as_an_ordinary_failed_setup(): Unit = runBlocking {
+        seedOwnerAndOther()
+        val saved = store.saved
+        val sync = SyncCoordinator(store)
+        val relaunched = controller(sync)
+        try {
+            relaunched.start()
+            relaunched.goTo(AppRoute.Unlock)
+            relaunched.unlock(OTHER)
+            withTimeout(10_000) { relaunched.route.first { it == AppRoute.Vault } }
+
+            ServerSocket(0).use { listener ->
+                val server = "https://127.0.0.1:${listener.localPort}"
+
+                // Each step waits for a new notice, so a step that repeats the last copy cannot pass on the old one.
+                suspend fun setup(url: String, secret: String, copy: String) {
+                    val before = relaunched.notice.value
+                    relaunched.configureSync(url, secret)
+                    withTimeout(10_000) { relaunched.notice.first { it != before && it?.text == copy } }
+                }
+                setup(server, "x", userCopy(ChurStatus.INVALID_INPUT))
+                // Valid hexadecimal of the wrong size, which only the client used to check.
+                setup(server, "00".repeat(31), userCopy(ChurStatus.INVALID_INPUT))
+                setup(server, SECRET, syncCopy(ChurStatus.AUTHENTICATION_FAILED))
+                setup("http://sync.invalid", SECRET, userCopy(ChurStatus.INVALID_INPUT))
+                // A connection that a setup opened waits in the backlog.
+                listener.soTimeout = 200
+                assertFailsWith<SocketTimeoutException>("the refused setup sent a request") { listener.accept() }
+            }
+            assertSame(saved, store.saved, "the refused setup changed the owner's state")
+            assertFalse(sync.status.value.configured)
+        } finally {
+            relaunched.vault.shutdown()
         }
     }
 
