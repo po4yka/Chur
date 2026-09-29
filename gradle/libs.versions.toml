@@ -51,6 +51,8 @@ androidxFragment = "1.9.1"
 # MEDIA_PIPELINE.md section 1 puts codec work on the platform, and this is the
 # platform's player on Android.
 androidxMedia3 = "1.11.1"
+# The system security patch line of `ANDROID.md` §25.1 and ADR-0059.
+androidxSecurityState = "1.1.0"
 ktor = "3.6.0"
 
 [libraries]
@@ -68,6 +70,7 @@ androidx-fragment = { module = "androidx.fragment:fragment", version.ref = "andr
 androidx-media3-exoplayer = { module = "androidx.media3:media3-exoplayer", version.ref = "androidxMedia3" }
 androidx-media3-datasource = { module = "androidx.media3:media3-datasource", version.ref = "androidxMedia3" }
 androidx-media3-ui = { module = "androidx.media3:media3-ui", version.ref = "androidxMedia3" }
+androidx-security-state = { module = "androidx.security:security-state", version.ref = "androidxSecurityState" }
 ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
 ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
 ktor-client-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktor" }

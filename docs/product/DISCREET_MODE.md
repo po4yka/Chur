@@ -192,6 +192,7 @@ Both stores receive the same facts. These answers are owned here; `ANDROID.md` ย
 - private media, metadata, and vault identity are never used for tracking or advertising, and are not linked to an account in v1;
 - photo access for import is selection-only; library access is requested only when the user asks Chur to delete an imported original, and declining it leaves the import as it was;
 - local network access is requested only when Chur connects to or syncs with a sync server on the user's own network that the user set up, and declining it affects only that server;
+- on Android, when the user taps the system security row in the vault's Settings, Chur fetches the public Android vulnerability report from `android-api.osv.dev` to compare it with the device's patch level; the request sends no user data and no identifier, and it never runs without that tap ([`../adr/0059-permit-user-started-requests-for-public-platform-security-data.md`](../adr/0059-permit-user-started-requests-for-public-platform-security-data.md));
 - the vault, decoy vault, discreet presentation, alternate icon, and recovery flows are documented to review and reachable by a reviewer;
 - the app uses standard cryptography as listed in `CRYPTOGRAPHY.md` ยง6, and answers export-compliance questions on that basis;
 - deletion removes the encrypted object and its catalog rows, and no server copy exists in v1.

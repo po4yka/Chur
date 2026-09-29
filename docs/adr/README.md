@@ -110,6 +110,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0056](0056-add-collection-scoped-sharing-operation-streams.md) | Add collection-scoped cross-vault sharing operation streams | Accepted |
 | [0057](0057-add-collection-operation-streams-in-catalog-v4.md) | Add durable collection operation streams through catalog v4 | Accepted |
 | [0058](0058-record-the-grant-acceptance-freeze-in-catalog-v5.md) | Record the grant acceptance freeze through catalog v5 | Accepted |
+| [0059](0059-permit-user-started-requests-for-public-platform-security-data.md) | Permit user-started requests for public platform-security data | Accepted |
 
 Rows are ordered by ADR number. Number 0015 was not used; no ADR carries it and none will.
 

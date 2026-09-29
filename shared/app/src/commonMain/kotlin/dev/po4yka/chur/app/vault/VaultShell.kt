@@ -177,6 +177,11 @@ data class VaultUiState(
     val sharingIdentity: SharingIdentity? = null,
     val sharingOverview: SharingOverview? = null,
     val sharingRecipient: SharingRecipient? = null,
+    /**
+     * The system security patch line, `ANDROID.md` §25.1, or `null` where the
+     * host reads no patch level and the row is hidden.
+     */
+    val systemSecurity: String? = null,
 )
 
 /** What the shell can ask the application to do. */
@@ -223,6 +228,8 @@ data class VaultActions(
     val onPanic: () -> Unit = onLock,
     /** Run an integrity scan. */
     val onVerifyAll: () -> Unit,
+    /** Compare the system patch level with the published bulletin, ADR-0059. */
+    val onCheckSystemSecurity: () -> Unit = {},
     /** Add a recovery slot. */
     val onAddRecoverySlot: () -> Unit,
     /** Change the password slot of the open vault. */
@@ -915,6 +922,20 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
         }
         item {
             SettingsAction("Verify every object", actions.onVerifyAll, enabled = state.operation == null)
+        }
+        state.systemSecurity?.let { line ->
+            item {
+                // `ANDROID.md` §25.1: information only. The row never blocks an
+                // action, and it reads the same in every identity because it
+                // describes the device, not the vault. The tap is the only
+                // trigger for the request that ADR-0059 permits.
+                ListItem(
+                    headlineContent = { Text("System security update") },
+                    supportingContent = { Text(line) },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    modifier = Modifier.clickable(role = Role.Button, onClick = actions.onCheckSystemSecurity),
+                )
+            }
         }
         state.sync?.let { sync ->
             item {

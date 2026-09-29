@@ -162,6 +162,19 @@ A skill synchronisation updates both hashes and the commit, and the checker is w
 
 iOS adds nothing: `AVFoundation` is part of the platform, and the resource-loader delegate that feeds it is written in Kotlin/Native beside the Android data source.
 
+### `androidx.security:security-state` 1.1.0, Android only
+
+- **Capability:** the system security patch line of [`ANDROID.md`](ANDROID.md) §25.1. The library reads the installed patch level, asks the trusted on-device update clients over IPC for a staged level, and compares the device with a published vulnerability report, including the supplemental patches of the bulletin's risk-based releases.
+- **Alternatives:** `Build.VERSION.SECURITY_PATCH` gives only the declared system level. It gives no staged level, because the update-client IPC contract is defined by this library. It also has no bulletin comparison that counts supplemental patches. A local reimplementation would copy a Google-maintained contract that changes with the bulletin format.
+- **Owner and maintenance:** Google, as part of AndroidX. Version 1.1.0 is the stable release of September 2026.
+- **License:** Apache 2.0, with the notice obligation that the other AndroidX artifacts already carry.
+- **Native footprint:** none. The AAR holds Java bytecode only and declares `minSdkVersion` 24, below the floor of 29 in [ADR-0017](adr/0017-freeze-the-supported-device-set.md).
+- **Transitive dependencies:** `androidx.annotation`, `androidx.core`, `androidx.webkit`, `androidx.concurrent:concurrent-futures-ktx`, Guava `listenablefuture` 1.0 (the empty compatibility artifact), `kotlinx-serialization-json`, and `kotlinx-coroutines-core`. The Gradle lockfile pins the resolved versions.
+- **Build scripts and network:** the library performs no network request. The app fetches the report itself and hands it to the library, under [ADR-0059](adr/0059-permit-user-started-requests-for-public-platform-security-data.md).
+- **Reach:** it never sees a vault value. It reads system properties, binds to the update-client services, and parses the report JSON as untrusted input. The merged manifest gains the `<queries>` element that `ANDROID.md` §24 describes.
+- **Telemetry:** none. The library writes only `Log` lines about provider lookup, which carry no vault data.
+- **Removal plan:** the seam is `SystemSecurity.kt` in the Android host and one optional field of `VaultUiState`. Removing the library removes that file and hides the row.
+
 ## Cargo features
 
 Disable default features unless they are understood. Features that add platform key access, network clients, file-system traversal, dynamic loading, serialization formats, or native libraries require review.

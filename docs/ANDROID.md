@@ -1010,7 +1010,9 @@ Expected permissions depend on enabled features, but the baseline SHOULD avoid:
 - overlay permissions;
 - install/unknown-source privileges.
 
-Likely platform declarations include only capabilities actually used, such as biometric authorization, network access for encrypted synchronization, and notification permission when notifications are enabled.
+Likely platform declarations include only capabilities actually used, such as biometric authorization, network access for encrypted synchronization and for the public-data requests of [ADR-0059](adr/0059-permit-user-started-requests-for-public-platform-security-data.md) (§25.1), and notification permission when notifications are enabled.
+
+The AndroidX Security State library of §25.1 merges a `<queries>` element into the manifest. It names the `androidx.security.state.provider.UPDATE_INFO_SERVICE` intent and five Google Mainline metadata packages, so the library can find the trusted update clients and read module versions. It grants no visibility to other packages and is not `QUERY_ALL_PACKAGES`.
 
 The media read permissions are declared for source deletion alone (§14.5): the use case is finding an imported original so that the system can delete it, the request is made when the user chooses Review source deletion, a denial leaves the import as it was and names where to delete, and import never requests them.
 
@@ -1051,6 +1053,26 @@ Android-specific responsibilities may include:
 It MUST NOT deserialize private metadata or choose cryptographic algorithms.
 
 A server-provided Argon2 parameter, length, suite, or allocation request is untrusted and validated by Rust before use.
+
+### 25.1 System security patch line
+
+The vault's Settings shows one information row, "System security update", under Integrity. It uses AndroidX Security State (`androidx.security:security-state`, recorded in [`DEPENDENCY_POLICY.md`](DEPENDENCY_POLICY.md)). The row describes the device, not the vault. It never blocks, delays, or changes a vault operation. [`security/THREAT_MODEL.md`](security/THREAT_MODEL.md) A6 stays outside the primary guarantee whatever the row shows.
+
+The row has three sources:
+
+1. **Installed level.** The system security patch level that the device declares. The library reads it from system properties. There is no network request.
+2. **Staged level.** When Settings opens, the library asks the trusted update clients over IPC (Google Play system updates, and an OEM client that implements `UpdateInfoService`) whether a newer level is ready. There is no network request. When a newer level is staged, the row says that it is ready in system settings.
+3. **Published level.** When the user taps the row, the app fetches the vulnerability report of [ADR-0059](adr/0059-permit-user-started-requests-for-public-platform-security-data.md) from `android-api.osv.dev`. The library then compares it with the device, and supplemental patches of the bulletin's risk-based releases count. This is the only request to a party that the user did not choose, and it follows every condition of ADR-0059.
+
+The published check has these rules:
+
+- trigger: only a tap on the row. The row names `osv.dev` before the first tap. The check never runs at launch, at unlock, when Settings opens, from the background worker, or as an automatic retry;
+- transport: a GET with the platform `HttpsURLConnection` to the fixed HTTPS URL that the library builds. It sends no cookie, follows no redirect, times out after 10 s, and reads at most 1 MiB. The report for one API level was 72,858 bytes in September 2026;
+- result: the result stays in the vault route's memory. A lock disposes of it with the route. Nothing is written to disk, to a log, or to backup;
+- failure: the row says that `osv.dev` could not be reached and that a tap tries again. The installed and staged levels stay visible;
+- identities: the row, its copy, and its behavior are the same in every vault identity (SEC-036, SEC-037).
+
+A device whose installed level the library cannot read shows no row. iOS has no equivalent API and shows no row.
 
 ---
 

@@ -458,6 +458,14 @@ private fun VaultRoute(controller: ChurController) {
     val localNetworkOff by produceState(false, syncStatus) {
         value = syncStatus?.serverUrl?.let { localNetworkBlocked(context, it) } == true
     }
+    // `ANDROID.md` §25.1: the levels are read when Settings opens, over IPC
+    // only. The published check is the user's tap, and a lock disposes of its
+    // result with the route.
+    val inSettings = destination == VaultDestination.SETTINGS
+    val patchLevels by produceState<SystemPatchLevels?>(null, inSettings) {
+        if (inSettings) value = readSystemPatchLevels(context)
+    }
+    var publishedCheck by remember { mutableStateOf<PublishedCheck>(PublishedCheck.NotChecked) }
 
     DisposableEffect(deviceControl) {
         onDispose { deviceControl.stop() }
@@ -795,6 +803,7 @@ private fun VaultRoute(controller: ChurController) {
                 sharingIdentity = sharingIdentity,
                 sharingOverview = sharingOverview,
                 sharingRecipient = sharingRecipient,
+                systemSecurity = systemSecurityLine(patchLevels, publishedCheck),
             ),
             actions = VaultActions(
                 onDestination = {
@@ -876,6 +885,12 @@ private fun VaultRoute(controller: ChurController) {
                 onLock = { controller.lock() },
                 onPanic = { controller.panic() },
                 onVerifyAll = { controller.verifyEverything() },
+                onCheckSystemSecurity = {
+                    if (publishedCheck != PublishedCheck.Checking) {
+                        publishedCheck = PublishedCheck.Checking
+                        scope.launch { publishedCheck = checkPublishedSystemPatchLevel(context) }
+                    }
+                },
                 onAddRecoverySlot = controller::addRecoverySlot,
                 onChangePassword = controller::changePassword,
                 onToggleAppLock = controller::toggleAppLock,
