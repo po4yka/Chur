@@ -10,6 +10,8 @@ A gate item is enforced by continuous integration, by a named review procedure, 
 
 The workflow exists and runs those four jobs. It also runs the vector-set check, the C ABI harness, the fuzz smoke pass, and the Gradle and Kotlin/Native test jobs, which joined it as their subjects landed. Its file is still named `rust.yml` because ADR-0031 named it when Rust was the only build. A gate item that one of them covers is enforced from the first pull request they ran on; every other item is still enforced by a named review procedure or by nothing, and every gated release records which of its items had no enforcing job. A contributor may run the equivalent command locally and attach its output to a pull request; that attachment is evidence for that pull request and is never recorded as a passed gate.
 
+The Swift host build is a gate item with no enforcing job. The Kotlin/Native job links the shared framework, but no job compiles `apps/iosApp` (`ChurApp.swift`, `Info.plist`, and the checked-in `Chur.xcodeproj`), so a host change can break the iOS app while every job passes. Until an Xcode job joins the workflow, every gated release records this item, and the check is `xcodebuild -project apps/iosApp/Chur.xcodeproj -scheme Chur -configuration Debug -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build`, as [`../../apps/iosApp/README.md`](../../apps/iosApp/README.md) describes.
+
 ## Gate 0 — design prototype
 
 Permitted:
