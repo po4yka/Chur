@@ -58,6 +58,17 @@ interface DeviceUnlock {
      * other than a pass or a cancel.
      */
     suspend fun confirmOwner(strict: Boolean): OwnerCheck = OwnerCheck.NOT_SET_UP
+
+    /**
+     * Whether the prompt of [confirmOwner] under [strict] can hand over to a
+     * full-screen credential screen, which stops the application as leaving
+     * it does, `ANDROID.md` §19.3.
+     *
+     * The check then holds the background lock off as a picker does. A
+     * prompt that cannot stop the application answers `false`, so leaving
+     * during it locks at once, `DESIGN.md` §14.4.
+     */
+    fun ownerCheckTakesScreen(strict: Boolean): Boolean = false
 }
 
 /** How the device authentication of [DeviceUnlock.confirmOwner] ended. */

@@ -12,6 +12,7 @@ import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.core.platformkeys.KeystoreWrapped
 import dev.po4yka.chur.core.platformkeys.confirmDeviceOwner
 import dev.po4yka.chur.core.platformkeys.ownerFactorEnrolled
+import dev.po4yka.chur.core.platformkeys.promptTakesScreen
 
 /**
  * The Android Keystore half of the device slot, `KEY_SLOTS.md` §4.
@@ -100,7 +101,7 @@ class AndroidDeviceUnlock(
      */
     override suspend fun confirmOwner(strict: Boolean): OwnerCheck = normalized {
         val activity = activity()
-        val ownerPolicy = if (strict) DeviceSlotPolicy.STRICT else DeviceSlotPolicy.CONVENIENT
+        val ownerPolicy = ownerPolicy(strict)
         when {
             !ownerFactorEnrolled(activity, ownerPolicy) -> OwnerCheck.NOT_SET_UP
             confirmDeviceOwner(
@@ -115,6 +116,12 @@ class AndroidDeviceUnlock(
             else -> OwnerCheck.CANCELLED
         }
     }
+
+    /** Only the API 29 device credential is a full-screen activity. */
+    override fun ownerCheckTakesScreen(strict: Boolean): Boolean = promptTakesScreen(ownerPolicy(strict))
+
+    private fun ownerPolicy(strict: Boolean) =
+        if (strict) DeviceSlotPolicy.STRICT else DeviceSlotPolicy.CONVENIENT
 
     /**
      * The window `BiometricPrompt` needs, or a refusal when none is attached.

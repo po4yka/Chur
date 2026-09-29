@@ -136,11 +136,12 @@ class MainActivity : FragmentActivity() {
 
     override fun onStop() {
         super.onStop()
-        // A permission dialog or a delete confirmation holds the lock above
-        // off, but it only pauses this activity. Stopping while one is up
-        // means the user left, so every such prompt ends and the vault locks
-        // at once, `ANDROID.md` §19.3; a picker, which stops this activity
-        // itself, keeps the lock off.
+        // A permission dialog, a delete confirmation, or from API 30 the
+        // device authentication prompt holds the lock above off, but it at
+        // most pauses this activity. Stopping while one is up means the user
+        // left, so every such prompt ends and the vault locks at once,
+        // `ANDROID.md` §19.3; a picker or the API 29 credential screen, which
+        // stops this activity itself, keeps the lock off.
         if (isChangingConfigurations) return
         host.controller.enteredBackground()
     }

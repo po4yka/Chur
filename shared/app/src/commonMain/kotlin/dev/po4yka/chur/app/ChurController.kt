@@ -841,11 +841,12 @@ class ChurController(
      * A prompt holds the background lock off as [beginHostActivity] does, but
      * it never takes the application out of the foreground by itself: an iOS
      * alert or Local Authentication sheet only makes the scene resign active,
-     * and an Android permission dialog or delete confirmation only pauses the
-     * activity. So [enteredBackground] during a prompt means the user left,
-     * and the bracket ends there and the vault locks at once, as leaving
-     * always does, `DESIGN.md` §14.4. A picker or a credential screen, which
-     * can take the whole screen, uses [beginHostActivity] instead.
+     * and an Android permission dialog, delete confirmation, or, from API 30,
+     * device authentication prompt at most pauses the activity. So
+     * [enteredBackground] during a prompt means the user left, and the
+     * bracket ends there and the vault locks at once, as leaving always does,
+     * `DESIGN.md` §14.4. A picker or a credential screen, which can take the
+     * whole screen, uses [beginHostActivity] instead.
      */
     fun beginPrompt(): Long {
         prompts += 1
@@ -1449,13 +1450,15 @@ class ChurController(
      * first, under the device-slot policy in force: with "Biometrics only" on,
      * the device unlock code does not pass it. A cancel returns quietly, and
      * a device with no factor to ask for gets no phrase until it has one. The
-     * Android prompt can hand over to the device credential screen, which can
-     * take the whole screen as a picker does, so it is bracketed as
-     * [enrollDeviceSlot] is. The Local Authentication sheet only makes the
-     * scene resign active, so it is a [beginPrompt]: a user who leaves the app
+     * Local Authentication sheet only makes the scene resign active, and from
+     * API 30 the Android prompt and its device credential are SystemUI
+     * windows, so the check is a [beginPrompt]: a user who leaves the app
      * during it is locked out at once, and an answer that comes after that
-     * shows nothing. [create] asks nothing: the vault credential was entered a
-     * moment before.
+     * shows nothing. Only where [DeviceUnlock.ownerCheckTakesScreen] says the
+     * prompt can hand over to a full-screen credential activity, the API 29
+     * device credential, is it bracketed as a picker is. Either bracket ends
+     * once, in the `finally` below. [create] asks nothing: the vault
+     * credential was entered a moment before.
      *
      * Nothing is committed yet, so the slot list stays as it is:
      * [acknowledgeRecoveryPhrase] commits it, and Settings reloads the slots
@@ -1464,7 +1467,7 @@ class ChurController(
     fun addRecoverySlot() = requestPhrase {
         val strict = _deviceSlotStrict.value
         val android = deviceUnlock.available
-        val prompt = if (android) {
+        val prompt = if (deviceUnlock.ownerCheckTakesScreen(strict)) {
             beginHostActivity()
             null
         } else {

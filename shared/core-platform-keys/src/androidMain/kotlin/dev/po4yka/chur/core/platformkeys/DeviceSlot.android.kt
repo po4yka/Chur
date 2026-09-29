@@ -506,6 +506,21 @@ internal fun allowedAuthenticators(policy: DeviceSlotPolicy, sdkInt: Int): Int =
     }
 }
 
+/**
+ * Whether the prompt that [allowedAuthenticators] gives [policy] can hand
+ * over to a full-screen credential activity, which stops the host activity
+ * as leaving the application does.
+ *
+ * From API 30, SystemUI shows the device credential inside the prompt, so no
+ * prompt stops the activity. On API 29 the credential of a `CONVENIENT`
+ * prompt is a full-screen activity: the platform's biometric service opens
+ * its own confirm-credential activity for the device credential, whether the
+ * user picks it from the prompt or no biometric is enrolled.
+ * `STRICT` admits no credential, so its prompt stays a SystemUI dialog.
+ */
+public fun promptTakesScreen(policy: DeviceSlotPolicy, sdkInt: Int = Build.VERSION.SDK_INT): Boolean =
+    policy == DeviceSlotPolicy.CONVENIENT && sdkInt < Build.VERSION_CODES.R
+
 /** A key keeps its enrollment policy even when the setting changes later. */
 internal fun policyOfKey(sdkInt: Int, validitySeconds: Int, authenticationType: Int): DeviceSlotPolicy =
     if (sdkInt >= Build.VERSION_CODES.R) {

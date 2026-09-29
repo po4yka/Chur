@@ -1025,9 +1025,10 @@ application still locks at once, whatever the choice
 (`docs/security/PLAINTEXT_LIFECYCLE.md` §7, `docs/ANDROID.md` §19.3), so no
 choice gives a grace period after the user leaves. That holds while a system
 prompt Chur asked for is up: a permission or Photos access request, a delete
-confirmation, the device check before a recovery phrase, or the local network
-alert. Such a prompt keeps the lock off only while the user answers it with
-Chur in front, and leaving during it locks at once (`docs/ANDROID.md` §19.3,
+confirmation, the device check before a recovery phrase (on Android, from
+API 30 or under "Biometrics only"), or the local network alert. Such a prompt
+keeps the lock off only while the user answers it with Chur in front, and
+leaving during it locks at once (`docs/ANDROID.md` §19.3,
 `docs/IOS.md` §21.2). The iOS local network alert is the exception: the app
 cannot see it, so its prompt lasts for the whole connection run to a local
 sync server that can bring it, which is the setup, Sync now, or the pull after
@@ -1035,10 +1036,12 @@ an unlock (`docs/IOS.md` §27). That run can last from seconds to minutes, and
 usually no alert shows at all, because iOS asks only once. For that time, a
 return from Control Center, Notification Center, or the app switcher finds the
 vault open. Leaving Chur still locks at once, and the chosen limit is the
-backstop. A picker, the share sheet, or a system screen that can
-take the whole screen, such as the device credential screen, cannot be told
-apart from leaving, so it keeps the lock off until it returns, and the
-chosen limit is the backstop for a user who walks away from one. So the time
+backstop. A picker, the share sheet, or a system screen that can take the
+whole screen cannot be told apart from leaving, so it keeps the lock off until
+it returns. The Android device check on API 29, which can open the full-screen
+device credential screen, and the Android device slot enrollment prompt are in
+this group (`docs/ANDROID.md` §19.3). The chosen limit is the backstop for a
+user who walks away from one. So the time
 spent in a picker is idle time: a pick that takes longer than the chosen limit
 returns to a locked vault and imports nothing, and the user unlocks and picks
 again. Work with a progress card counts as use until it ends or the user

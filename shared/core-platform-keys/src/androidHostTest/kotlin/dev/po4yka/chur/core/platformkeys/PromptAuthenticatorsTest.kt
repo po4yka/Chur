@@ -4,6 +4,8 @@ import android.security.keystore.KeyProperties
 import androidx.biometric.BiometricManager.Authenticators
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
  * The authenticator combination the device-slot prompt may ask for.
@@ -50,6 +52,14 @@ class PromptAuthenticatorsTest {
             Authenticators.BIOMETRIC_STRONG or Authenticators.DEVICE_CREDENTIAL,
             allowedAuthenticators(DeviceSlotPolicy.CONVENIENT, 30),
         )
+    }
+
+    @Test
+    fun only_the_convenient_prompt_below_api_30_can_take_the_whole_screen() {
+        assertTrue(promptTakesScreen(DeviceSlotPolicy.CONVENIENT, 29))
+        assertFalse(promptTakesScreen(DeviceSlotPolicy.CONVENIENT, 30))
+        assertFalse(promptTakesScreen(DeviceSlotPolicy.STRICT, 29))
+        assertFalse(promptTakesScreen(DeviceSlotPolicy.STRICT, 30))
     }
 
     @Test
