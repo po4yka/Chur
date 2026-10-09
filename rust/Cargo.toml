@@ -81,7 +81,7 @@ clap = { version = "4", features = ["derive"] }
 # Phase 3 reference HTTP transport. Exact on first adoption; TLS remains at the
 # operator's reverse proxy and the service uses only HTTP/1 routing and Tokio IO.
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio"] }
-tokio = { version = "=1.53.1", default-features = false, features = ["macros", "net", "rt-multi-thread", "signal"] }
+tokio = { version = "=1.53.2", default-features = false, features = ["macros", "net", "rt-multi-thread", "signal"] }
 
 # Tooling only. These never appear in a dependency of chur-crypto or
 # chur-format: TEST_VECTORS.md section 2 makes manifest.json an index, not a
