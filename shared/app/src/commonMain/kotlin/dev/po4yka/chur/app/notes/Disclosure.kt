@@ -34,8 +34,8 @@ object Disclosure {
     /** Shown permanently in public-shell settings, beside the vault entry. */
     const val SETTINGS: String =
         "Notes are not encrypted by Chur and are copied by the system backup. Vault content " +
-            "is encrypted, is excluded from the system backup, and leaves this device only " +
-            "in a backup package you create yourself."
+            "is encrypted and is excluded from the system backup. You can transfer it through " +
+            "a backup, device sync, sharing, or export when you choose those actions."
 
     /** The empty-state line of the notes list. */
     const val EMPTY_STATE: String = "Write something down."

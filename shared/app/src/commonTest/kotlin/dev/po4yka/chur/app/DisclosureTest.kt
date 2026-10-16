@@ -46,6 +46,15 @@ class DisclosureTest {
         assertTrue("vault" in text)
     }
 
+    @Test
+    fun the_settings_statement_names_the_user_controlled_media_transfers() {
+        val text = Disclosure.SETTINGS.lowercase()
+        for (transfer in listOf("backup", "device sync", "sharing", "export")) {
+            assertTrue(transfer in text, "missing transfer disclosure: $transfer")
+        }
+        assertFalse("only in a backup" in text)
+    }
+
     /**
      * "The copy must not present the disclosure as a security feature and must
      * not imply that the public shell is private."
