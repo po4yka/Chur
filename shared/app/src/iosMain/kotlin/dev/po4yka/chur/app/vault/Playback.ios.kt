@@ -4,6 +4,14 @@ package dev.po4yka.chur.app.vault
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.background
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -13,6 +21,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.viewinterop.UIKitView
 import dev.po4yka.chur.ffi.ChurFailure
@@ -29,10 +40,18 @@ import platform.AVFoundation.AVAssetResourceLoaderDelegateProtocol
 import platform.AVFoundation.AVAssetResourceLoadingRequest
 import platform.AVFoundation.AVPlayer
 import platform.AVFoundation.AVPlayerItem
-import platform.AVFoundation.AVPlayerItemStatusFailed
+import platform.AVFoundation.AVPlayerTimeControlStatusPaused
 import platform.AVFoundation.AVPlayerLayer
 import platform.AVFoundation.AVURLAsset
 import platform.AVFoundation.currentItem
+import platform.AVFoundation.allowsExternalPlayback
+import platform.AVFoundation.currentTime
+import platform.AVFoundation.duration
+import platform.AVFoundation.rate
+import platform.AVFoundation.timeControlStatus
+import platform.AVFoundation.seekToTime
+import platform.CoreMedia.CMTimeGetSeconds
+import platform.CoreMedia.CMTimeMakeWithSeconds
 import platform.AVFoundation.resourceLoader
 import platform.AVFoundation.pause
 import platform.AVFoundation.play
@@ -64,8 +83,6 @@ actual fun VaultPlayer(
     source: PlaybackSource,
     modifier: Modifier,
     poster: ImageBitmap?,
-    // The layer draws no controls, so it has nothing to show, hide, hold,
-    // pad or time.
     controlsVisible: Boolean,
     controlsPinned: Boolean,
     onControlsVisibleChange: (Boolean) -> Unit,
@@ -83,24 +100,39 @@ actual fun VaultPlayer(
         // expects and is also what the reader needs: `FFI_CONTRACT.md` §8
         // serializes calls per reader handle in v1.
         asset.resourceLoader.setDelegate(loader, loaderQueue)
-        AVPlayer().apply { replaceCurrentItemWithPlayerItem(AVPlayerItem(asset as AVAsset)) }
+        privatePlayer(AVPlayerItem(asset as AVAsset))
     }
     val layer = remember(player) { AVPlayerLayer.playerLayerWithPlayer(player) }
-    // The poster covers the layer until the layer has a frame to show, or
-    // until the item fails and the layer never will. A recording has no
-    // poster, so nothing waits for it.
-    // ponytail: polled, because Kotlin/Native declares the key-value observing
-    // callback as an extension that an observer cannot override; a Swift or
-    // Objective-C observer replaces the loop if the latency ever shows.
+    var started by remember(player) { mutableStateOf(false) }
     var covered by remember(layer) { mutableStateOf(true) }
-    if (poster != null) {
-        LaunchedEffect(layer) {
-            while (!layer.readyForDisplay && player.currentItem?.status != AVPlayerItemStatusFailed) delay(READY_POLL_MS)
-            covered = false
+    var playing by remember(player) { mutableStateOf(false) }
+    var position by remember(player) { mutableStateOf(0f) }
+    var duration by remember(player) { mutableStateOf(0f) }
+    LaunchedEffect(player) {
+        while (true) {
+            playing = player.timeControlStatus != AVPlayerTimeControlStatusPaused
+            position = CMTimeGetSeconds(player.currentTime()).takeIf { it.isFinite() }?.toFloat() ?: 0f
+            duration = player.currentItem?.let { CMTimeGetSeconds(it.duration) }
+                ?.takeIf { it.isFinite() && it > 0 }?.toFloat() ?: 0f
+            covered = !started || !layer.readyForDisplay
+            if (playing) source.vault.noteActivity()
+            delay(250)
         }
     }
-    DisposableEffect(player) {
+    LaunchedEffect(playing, controlsPinned, touches) {
+        if (!playing || controlsPinned) onControlsVisibleChange(true)
+        else {
+            delay(3_000)
+            onControlsVisibleChange(false)
+        }
+    }
+    val play = {
+        started = true
+        if (duration > 0 && position >= duration) player.seekToTime(CMTimeMakeWithSeconds(0.0, 600))
         player.play()
+        onControlsVisibleChange(true)
+    }
+    DisposableEffect(player) {
         onDispose {
             // `PLAINTEXT_LIFECYCLE.md` §8 step 1: private playback stops before
             // anything else, and leaving the surface is that event here.
@@ -123,14 +155,41 @@ actual fun VaultPlayer(
                 (view.layer.sublayers?.firstOrNull() as? AVPlayerLayer)?.setFrame(view.bounds)
             },
         )
-        // Compose draws over the interop view, so the poster is on top. This
-        // player starts on open, so the poster has no play control.
-        if (covered && poster != null) PlayerPoster(poster, onPlay = null)
+        if (covered && poster != null) PlayerPoster(poster, onPlay = if (!started) play else null)
+        if (controlsVisible || controlsPinned || !started || !playing) {
+            Column(
+                Modifier.align(Alignment.BottomCenter).padding(controlsPadding)
+                    .fillMaxWidth().background(Color.Black.copy(alpha = 0.7f)).padding(horizontal = 16.dp),
+            ) {
+                Slider(
+                    value = position.coerceIn(0f, duration.coerceAtLeast(0f)),
+                    onValueChange = {
+                        position = it
+                        player.seekToTime(CMTimeMakeWithSeconds(it.toDouble(), 600))
+                    },
+                    valueRange = 0f..duration.coerceAtLeast(1f),
+                    enabled = started && duration > 0,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { if (playing) player.pause() else play() }) {
+                        Text(if (playing) "Pause" else "Play", color = Color.White)
+                    }
+                    TextButton(onClick = {
+                        player.seekToTime(CMTimeMakeWithSeconds(0.0, 600))
+                        play()
+                    }, enabled = started) { Text("Replay", color = Color.White) }
+                    Text("${position.toInt()} / ${duration.toInt()} seconds", color = Color.White)
+                }
+            }
+        }
     }
 }
 
-/** How often the poster asks whether the layer can show a frame. */
-private const val READY_POLL_MS = 50L
+/** Private playback starts paused and cannot use an external player. */
+internal fun privatePlayer(item: AVPlayerItem): AVPlayer = AVPlayer().apply {
+    allowsExternalPlayback = false
+    replaceCurrentItemWithPlayerItem(item)
+}
 
 /**
  * Serves one vault object's ranges to AVFoundation.
