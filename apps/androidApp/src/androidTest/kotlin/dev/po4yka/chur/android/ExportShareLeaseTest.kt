@@ -85,7 +85,7 @@ class ExportShareLeaseTest {
     private fun scratch(): List<File> = File(context.cacheDir, "export-scratch").listFiles().orEmpty().toList()
 
     private fun share(): Uri {
-        val destination = sink.create("original.bin", "application/octet-stream", ExportTarget.SHARE, null)
+        val destination = sink.create("original.bin", "application/octet-stream", ExportTarget.SHARE, null, bytes.size.toLong())
         assertNotNull(destination)
         ParcelFileDescriptor.AutoCloseOutputStream(ParcelFileDescriptor.fromFd(destination!!.descriptor)).use {
             it.write(bytes)

@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0B89FE5F310BFE65CBCA410E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BA457393957CC3760250CA00 /* Assets.xcassets */; };
+		5E2A781CF29AA242C39DCFFB /* ScratchCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3B19C20AB1C110C0E63735C /* ScratchCopy.swift */; };
 		F45227CA2321CC19791DBBA6 /* ChurApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31B0CA2861DF43D785A14AA2 /* ChurApp.swift */; };
 /* End PBXBuildFile section */
 
@@ -15,6 +16,7 @@
 		31B0CA2861DF43D785A14AA2 /* ChurApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChurApp.swift; sourceTree = "<group>"; };
 		8C652D17A053110BD2DA9F40 /* Chur.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Chur.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BA457393957CC3760250CA00 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		C3B19C20AB1C110C0E63735C /* ScratchCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchCopy.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -22,6 +24,7 @@
 			isa = PBXGroup;
 			children = (
 				31B0CA2861DF43D785A14AA2 /* ChurApp.swift */,
+				C3B19C20AB1C110C0E63735C /* ScratchCopy.swift */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -134,6 +137,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				F45227CA2321CC19791DBBA6 /* ChurApp.swift in Sources */,
+				5E2A781CF29AA242C39DCFFB /* ScratchCopy.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

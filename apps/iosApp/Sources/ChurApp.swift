@@ -451,7 +451,7 @@ private final class MediaPickerDelegate: NSObject, PHPickerViewControllerDelegat
             }
         }
         box.progress = provider.loadFileRepresentation(forTypeIdentifier: identifier) { source, _ in
-            let copy = source.flatMap { copyToScratch($0, identifier: identifier) }
+            let copy = source.flatMap { copyToScratch($0, identifier: identifier, prepare: prepare) }
             let name = copy.flatMap { copy in
                 provider.suggestedName.map {
                     $0.lowercased().hasSuffix("." + copy.pathExtension.lowercased()) ? $0 : "\($0).\(copy.pathExtension)"
@@ -473,23 +473,22 @@ private final class MediaPickerDelegate: NSObject, PHPickerViewControllerDelegat
 
     /// Copies a provider's file under a random name, which `IOS.md` §12 asks
     /// for: a file name must not tell the filename.
-    private static func copyToScratch(_ source: URL, identifier: String) -> URL? {
+    private static func copyToScratch(_ source: URL, identifier: String, prepare: @escaping (Int64, Int64) -> Bool) -> URL? {
         let ext = source.pathExtension.isEmpty ? (UTType(identifier)?.preferredFilenameExtension ?? "bin") : source.pathExtension
         let target = scratch.appendingPathComponent(UUID().uuidString).appendingPathExtension(ext)
         do {
-            guard FileManager.default.createFile(
-                atPath: target.path,
-                contents: nil,
-                attributes: [.protectionKey: FileProtectionType.complete]
-            ) else { throw CocoaError(.fileWriteUnknown) }
-            let reader = try FileHandle(forReadingFrom: source)
-            defer { try? reader.close() }
-            let writer = try FileHandle(forWritingTo: target)
-            defer { try? writer.close() }
-            while let chunk = try reader.read(upToCount: 64 * 1024), !chunk.isEmpty {
-                try writer.write(contentsOf: chunk)
+            let exports = FileManager.default.temporaryDirectory.appendingPathComponent("chur-exports", isDirectory: true)
+            let limit = try ScratchCopy.remainingBudget(in: [scratch, exports])
+            let continueCopy: (Int64, Int64) -> Bool = { processed, total in
+                if Thread.isMainThread { return prepare(processed, total) }
+                return DispatchQueue.main.sync { prepare(processed, total) }
             }
-            try writer.close()
+            try ScratchCopy.copy(
+                from: source, to: target, limit: limit,
+                attributes: [.protectionKey: FileProtectionType.complete],
+                progress: continueCopy,
+                shouldContinue: { continueCopy(0, 0) }
+            )
             return target
         } catch {
             try? FileManager.default.removeItem(at: target)
@@ -570,6 +569,13 @@ private final class ShareExportSink: NSObject, ExportSink {
 
     func create(displayName: String, contentType: String) -> ExportSinkDestination? {
         create(displayName: displayName, contentType: contentType, target: .default_, uri: nil)
+    }
+
+    func create(displayName: String, contentType: String, target: ExportTarget, uri: String?, plaintextSize: Int64) -> ExportSinkDestination? {
+        let imports = FileManager.default.temporaryDirectory.appendingPathComponent("chur-media-imports", isDirectory: true)
+        guard let budget = try? ScratchCopy.remainingBudget(in: [directory, imports]),
+              plaintextSize >= 0, plaintextSize <= budget else { return nil }
+        return create(displayName: displayName, contentType: contentType, target: target, uri: uri)
     }
 
     func create(displayName: String, contentType: String, target: ExportTarget, uri: String?) -> ExportSinkDestination? {

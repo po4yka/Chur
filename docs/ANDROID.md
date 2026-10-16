@@ -803,6 +803,8 @@ When sharing requires a file:
 
 On return from a share activity, Android keeps each pending file and its read grant for at most 60 seconds so that a recipient can open the URI asynchronously. It then revokes the grant and unlinks the file. A reader that already opened a descriptor can finish reading. Each file also has a 30-minute maximum lifetime from publication while Chur is away; locking or cancellation removes it immediately. A return cleanup captures only the shares that existed at that return and cannot remove a later share. Android does not report when an arbitrary recipient finishes reading.
 
+Before it opens a share scratch file, Android reserves the verified source plaintext length. Unpublished and published files together must fit the limits of `PLAINTEXT_LIFECYCLE.md` §5: at most four files, 4 GiB per file, and 8 GiB total. An unknown length or a reservation that exceeds a limit fails with `RESOURCE_LIMIT_EXCEEDED` before any plaintext is written. Discard, cancellation, and lease cleanup release the reservation. Direct Files and MediaStore exports and encrypted backup files do not use this scratch budget.
+
 The Android share sheet receives plaintext by user request. Chur cannot force a recipient application to protect or delete it.
 
 ### 18.3 Clipboard

@@ -1556,7 +1556,7 @@ class ChurController(
         try {
             val detail = withContext(Dispatchers.Default) { repository.detail(objectId) }
             val output = destination ?: exports.create(
-                detail.filename.ifBlank { "chur-export" }, detail.contentType, target, uri,
+                detail.filename.ifBlank { "chur-export" }, detail.contentType, target, uri, detail.plaintextSize,
             ) ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the export destination")
             destination = output
             val operation = withContext(Dispatchers.Default) {
@@ -2600,6 +2600,15 @@ interface ExportSink {
         target: ExportTarget,
         uri: String?,
     ): Destination?
+
+    /** Reserves the known plaintext size before the host opens a scratch file. */
+    fun create(
+        displayName: String,
+        contentType: String,
+        target: ExportTarget,
+        uri: String?,
+        plaintextSize: Long,
+    ): Destination? = create(displayName, contentType, target, uri)
 }
 
 enum class ExportTarget { DEFAULT, FILES, MEDIA_LIBRARY, SHARE }

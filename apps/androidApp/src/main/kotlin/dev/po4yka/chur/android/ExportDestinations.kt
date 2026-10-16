@@ -31,6 +31,7 @@ class ExportDestinations(
     private val resolver: ContentResolver = context.contentResolver
     private val scratch = File(context.cacheDir, "export-scratch")
     private val pendingShares = mutableMapOf<Uri, File>()
+    private val scratchReservations = mutableMapOf<File, Long>()
     private var generation = 0L
 
     init {
@@ -41,6 +42,7 @@ class ExportDestinations(
     override fun cancelPending() {
         generation += 1
         pendingShares.toMap().forEach { (uri, file) -> releaseShare(uri, file) }
+        scratchReservations.clear()
         scratch.deleteRecursively()
         scratch.mkdirs()
         onShareEnd()
@@ -58,6 +60,11 @@ class ExportDestinations(
         if (pendingShares[uri] !== file) return
         pendingShares.remove(uri)
         runCatching { context.revokeUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        releaseScratch(file)
+    }
+
+    private fun releaseScratch(file: File) {
+        scratchReservations.remove(file)
         file.delete()
     }
 
@@ -89,27 +96,43 @@ class ExportDestinations(
         contentType: String,
         target: ExportTarget,
         uri: String?,
+    ): ExportSink.Destination? = create(displayName, contentType, target, uri, -1)
+
+    override fun create(
+        displayName: String,
+        contentType: String,
+        target: ExportTarget,
+        uri: String?,
+        plaintextSize: Long,
     ): ExportSink.Destination? = when (target) {
         ExportTarget.FILES -> {
             val document = uri?.let(Uri::parse) ?: return null
             open(document, publish = {}, discard = { resolver.delete(document, null, null) })
         }
         ExportTarget.SHARE -> {
+            val singleLimit = 4L * 1024 * 1024 * 1024
+            val totalLimit = 2 * singleLimit
+            if (plaintextSize < 0 || plaintextSize > singleLimit || scratchReservations.size >= 4 ||
+                scratchReservations.values.sum() > totalLimit - plaintextSize
+            ) {
+                throw ChurFailure(ChurStatus.RESOURCE_LIMIT_EXCEEDED, "the share scratch budget")
+            }
             val createdGeneration = generation
             val extension = MimeTypeMap.getSingleton().getExtensionFromMimeType(contentType)
                 ?: displayName.substringAfterLast('.', "bin")
             val safeExtension = extension.takeIf { it.matches(Regex("[A-Za-z0-9]{1,10}")) } ?: "bin"
             val file = File(scratch, "${UUID.randomUUID()}.$safeExtension")
             check(file.createNewFile()) { "the share file already exists" }
+            scratchReservations[file] = plaintextSize
             val handle = try {
                 ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_WRITE_ONLY)
             } catch (failure: Exception) {
-                file.delete()
+                releaseScratch(file)
                 throw failure
             }
             Destination(handle, publishAction = {
                 if (createdGeneration != generation) {
-                    file.delete()
+                    releaseScratch(file)
                     throw ChurFailure(ChurStatus.CANCELLED, "the share was cancelled")
                 }
                 val contentUri = FileProvider.getUriForFile(
@@ -136,7 +159,7 @@ class ExportDestinations(
                 scheduleCleanup(30 * 60 * 1000L) {
                     releaseShare(contentUri, file)
                 }
-            }, discardAction = { file.delete() })
+            }, discardAction = { releaseScratch(file) })
         }
         else -> {
             val collection = when (target) {
