@@ -444,6 +444,8 @@ internal actual object ChurNative {
     actual fun trashSet(session: Long, objectIds: ByteArray, restore: Boolean): Int =
         ChurJni.trashSet(session, objectIds, restore)
 
+    actual fun corruptEmpty(session: Long): Int = ChurJni.corruptEmpty(session)
+
     actual fun trashEmpty(session: Long): Int = ChurJni.trashEmpty(session)
 
     actual fun trashRestoreAll(session: Long): Int = ChurJni.trashRestoreAll(session)

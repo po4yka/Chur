@@ -347,6 +347,7 @@ fn every_declared_function_is_exported() {
         "chur_object_delete",
         "chur_trash_set",
         "chur_trash_empty",
+        "chur_corrupt_empty",
         "chur_trash_restore_all",
         "chur_object_metadata",
         "chur_album_create",

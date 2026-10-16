@@ -1973,6 +1973,18 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_trashSet<'local>(
     })
 }
 
+/// Permanently deletes verified corrupt objects.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_corruptEmpty<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |_env| {
+        chur_ffi::product::chur_corrupt_empty(handle_of(session))
+    })
+}
+
 /// Permanently deletes all objects in trash.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_trashEmpty<'local>(

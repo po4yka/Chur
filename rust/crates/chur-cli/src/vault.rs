@@ -373,8 +373,14 @@ pub fn restore_all(session: &mut Session) -> Result<()> {
 
 /// Permanently erases one object and rolls its garbage collection forward.
 pub fn purge(session: &mut Session, object_id: &Id) -> Result<()> {
-    if store::object(session.catalog_ref()?, object_id)?.state != ObjectState::Trashed {
-        bail!(InvalidInput, "only a trashed object can be purged");
+    if !matches!(
+        store::object(session.catalog_ref()?, object_id)?.state,
+        ObjectState::Trashed | ObjectState::Corrupt
+    ) {
+        bail!(
+            InvalidInput,
+            "only a trashed or corrupt object can be purged"
+        );
     }
     deletion::begin(session.catalog()?, object_id)?;
     collect_deletions(session).map(|_| ())

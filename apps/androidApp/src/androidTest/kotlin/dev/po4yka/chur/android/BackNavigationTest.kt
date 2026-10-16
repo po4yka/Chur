@@ -167,6 +167,23 @@ class BackNavigationTest {
     // -----------------------------------------------------------------------
 
     @Test
+    fun damagedFileCleanupRequiresConfirmationAndKeepsHealthyMedia() = inTestVault {
+        val count = controller.page.value.objects.size
+        tap(label("Settings"))
+        assertTrue("the cleanup action must be reachable", scrollUntil(label("Delete damaged files")))
+        tap(label("Delete damaged files"))
+        assertTrue("permanent cleanup asks first", await { find(label("Delete damaged files permanently?")) != null })
+        tap(label("Cancel"))
+        assertTrue("Cancel dismisses the question", await { find(label("Delete damaged files permanently?")) == null })
+        assertEquals(count, controller.page.value.objects.size)
+        tap(label("Delete damaged files"))
+        tap(label("Delete permanently"))
+        assertTrue("native cleanup completes", await { find(label("Damaged files deleted permanently.")) != null })
+        assertEquals("healthy media must remain", count, controller.page.value.objects.size)
+    }
+
+
+    @Test
     fun theNotesRootLetsBackThrough() {
         lockIfOpen()
         instrumentation.runOnMainSync { controller.goTo(AppRoute.PublicShell) }

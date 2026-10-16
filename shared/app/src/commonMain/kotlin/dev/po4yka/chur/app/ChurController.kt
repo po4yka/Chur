@@ -1101,6 +1101,17 @@ class ChurController(
         onSuccess()
     }
 
+    fun deleteDamagedFiles() = guarded {
+        try {
+            withContext(Dispatchers.Default) { repository.deleteDamagedFiles() }
+        } finally {
+            thumbnails.clear()
+            reload()
+            refreshAlbums()
+        }
+        say("Damaged files deleted permanently.")
+    }
+
     fun emptyTrash(onSuccess: () -> Unit = {}) = guarded {
         try {
             withContext(Dispatchers.Default) { repository.emptyTrash() }

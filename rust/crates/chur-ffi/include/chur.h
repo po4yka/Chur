@@ -661,6 +661,9 @@ chur_status_t chur_object_delete(chur_handle_t session,
 chur_status_t chur_trash_set(chur_handle_t session, const uint8_t *object_ids,
                              uint32_t object_count, uint8_t restore);
 chur_status_t chur_trash_empty(chur_handle_t session);
+
+/* Permanently deletes verified corrupt objects. */
+chur_status_t chur_corrupt_empty(chur_handle_t session);
 chur_status_t chur_trash_restore_all(chur_handle_t session);
 chur_status_t chur_object_metadata(chur_handle_t session,
                                    const ChurObjectRefV1 *object,

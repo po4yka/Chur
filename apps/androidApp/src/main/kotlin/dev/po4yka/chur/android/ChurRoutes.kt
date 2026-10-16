@@ -962,6 +962,7 @@ private fun VaultRoute(controller: ChurController) {
                 onVisibleMediaChanged = { visibleMediaIds = it },
                 onLock = { controller.lock() },
                 onPanic = { controller.panic() },
+                onDeleteDamagedFiles = { controller.deleteDamagedFiles() },
                 onVerifyAll = { controller.verifyEverything() },
                 onCheckSystemSecurity = {
                     if (publishedCheck != PublishedCheck.Checking) {

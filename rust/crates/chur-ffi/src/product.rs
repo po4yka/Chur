@@ -752,6 +752,27 @@ pub extern "C" fn chur_trash_empty(session: Handle) -> Status {
     })
 }
 
+/// Permanently erases damaged objects after the host confirms the cleanup action.
+#[unsafe(no_mangle)]
+#[expect(unsafe_code, reason = "the C ABI requires an exported symbol")]
+pub extern "C" fn chur_corrupt_empty(session: Handle) -> Status {
+    guard_status_for(session, || {
+        let entry = registry::get(session, Kind::Session)?;
+        let Entry::Session {
+            session: guarded, ..
+        } = entry.as_ref()
+        else {
+            return Err(wrong_type());
+        };
+        let mut session = registry::lock(guarded);
+        let ids = deletion::corrupt_objects(session.catalog_ref()?)?;
+        for id in ids {
+            run_deletion(&mut session, &id, crate::api::now_ms())?;
+        }
+        Ok(())
+    })
+}
+
 /// Restores all unexpired objects in trash as one catalog transaction.
 #[unsafe(no_mangle)]
 #[expect(

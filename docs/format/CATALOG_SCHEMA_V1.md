@@ -415,4 +415,6 @@ Catalog policy bounds, enforced on insert and re-checked on restore, the search-
 
 A value above any bound is `RESOURCE_LIMIT_EXCEEDED`. These are catalog policy, not encoded field widths, so raising one is a `catalog_format_version` change only when it changes a stored width.
 
+Verified corrupt objects can enter permanent deletion. The UI requires confirmation; recoverable Trash does not accept corrupt objects.
+
 Pending media uses durable dispatch tickets in `object_receive_dispatch`. A native plan holds at most 256 downloads. The ticket is the primary queue order, and the next visit rotates the first attempted item. This order survives restart and backup. A missing key or unavailable container cannot permanently hide later objects behind the 4096-row projection scan. Private prekeys remain until their grant is accepted or their exact object is permanently deleted; an unavailable neighbor never evicts them.

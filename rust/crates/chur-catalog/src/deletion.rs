@@ -73,12 +73,13 @@ pub fn begin(db: &mut CatalogDb, object_id: &Id) -> Result<()> {
     db.transaction(|transaction| {
         let changed = transaction
             .execute(
-                "UPDATE objects SET state = ?2 WHERE object_id = ?1 AND state IN (?3, ?4)",
+                "UPDATE objects SET state = ?2 WHERE object_id = ?1 AND state IN (?3, ?4, ?5)",
                 params![
                     object_id.as_bytes().as_slice(),
                     i64::from(ObjectState::Deleting.value()),
                     i64::from(ObjectState::Active.value()),
                     i64::from(ObjectState::Trashed.value()),
+                    i64::from(ObjectState::Corrupt.value()),
                 ],
             )
             .map_err(|error| map_sqlite(error, "the object could not enter deletion"))?;
@@ -224,6 +225,26 @@ pub fn finish(db: &mut CatalogDb, object_id: &Id) -> Result<()> {
         unindex_search(transaction, &object_id)?;
         bump_generation(transaction)
     })
+}
+
+/// Lists damaged objects for the explicit irreversible cleanup action.
+pub fn corrupt_objects(db: &CatalogDb) -> Result<Vec<Id>> {
+    let mut statement = db
+        .connection()
+        .prepare("SELECT object_id FROM objects WHERE state = ?1 ORDER BY object_id")
+        .map_err(|error| map_sqlite(error, "corrupt objects could not be prepared"))?;
+    let rows = statement
+        .query_map([i64::from(ObjectState::Corrupt.value())], |row| {
+            row.get::<_, Vec<u8>>(0)
+        })
+        .map_err(|error| map_sqlite(error, "corrupt objects could not be listed"))?;
+    rows.map(|row| {
+        crate::row::id(
+            &row.map_err(|error| map_sqlite(error, "corrupt object ID could not be read"))?,
+            "corrupt object ID is malformed",
+        )
+    })
+    .collect()
 }
 
 /// Discards a tombstone under the peerless retention rule of §14.
@@ -837,6 +858,35 @@ mod tests {
         assert_eq!(
             sweep(&vault.db).expect("sweep")[0].rollforward(),
             Rollforward::Collect
+        );
+    }
+
+    #[test]
+    fn corrupt_objects_can_be_erased_without_returning_to_active() {
+        let mut vault = vault();
+        let (object_id, container) = import(&mut vault);
+        let (neighbor, _) = import(&mut vault);
+        let neighbor_key = store::active_envelope(&vault.db, &neighbor).expect("neighbor key");
+        store::mark_corrupt(&mut vault.db, &object_id).expect("verified corruption");
+        assert_eq!(listed(&vault.db), 1);
+        begin(&mut vault.db, &object_id).expect("corrupt media can be permanently deleted");
+        erase(&mut vault.db, &object_id, 10).expect("destroy corrupt object key");
+        assert_eq!(
+            sweep(&vault.db).expect("garbage collection")[0].containers,
+            vec![container]
+        );
+        finish(&mut vault.db, &object_id).expect("collect corrupt object");
+        assert_eq!(
+            rejection(store::active_envelope(&vault.db, &object_id)),
+            ChurStatus::NotFound
+        );
+        assert_eq!(
+            rejection(store::object(&vault.db, &object_id)),
+            ChurStatus::NotFound
+        );
+        assert_eq!(
+            store::active_envelope(&vault.db, &neighbor).expect("neighbor key"),
+            neighbor_key
         );
     }
 

@@ -349,6 +349,8 @@ class VaultRepository(
     suspend fun permanentlyDelete(objectId: ByteArray) =
         withSession { ChurVault.permanentlyDeleteObject(it, objectId) }
 
+    suspend fun deleteDamagedFiles() = withSession { ChurVault.deleteDamagedFiles(it) }
+
     suspend fun emptyTrash() = withSession { ChurVault.emptyTrash(it) }
 
     suspend fun restoreTrash() = withSession { ChurVault.restoreTrash(it) }

@@ -210,6 +210,7 @@ data class VaultActions(
     val onShowTrash: () -> Unit = {},
     val onShowQuarantine: () -> Unit = {},
     val onEmptyTrash: () -> Unit = {},
+    val onDeleteDamagedFiles: () -> Unit = {},
     val onRestoreTrash: () -> Unit = {},
     val onRenameAlbum: (AlbumSummary, String) -> Unit = { _, _ -> },
     val onDeleteAlbum: (AlbumSummary) -> Unit = {},
@@ -811,6 +812,7 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
     val colors = LocalChurColors.current
     var changingPassword by remember { mutableStateOf(false) }
     var confirmingDisconnect by remember { mutableStateOf(false) }
+    var confirmingDamagedDeletion by remember { mutableStateOf(false) }
     var askingRecovery by remember { mutableStateOf(false) }
     val hasRecovery = state.slots.any { it.slotType == 4 }
     var choosingAutoLock by remember { mutableStateOf(false) }
@@ -948,6 +950,9 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
         item {
             SettingsAction("Verify every object", actions.onVerifyAll, enabled = state.operation == null)
         }
+        item {
+            SettingsAction("Delete damaged files", { confirmingDamagedDeletion = true }, enabled = state.operation == null)
+        }
         state.systemSecurity?.let { line ->
             item {
                 // `ANDROID.md` §25.1: information only. The row never blocks an
@@ -1059,6 +1064,20 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
                 SettingsAction("Control from computer", actions.onDeviceControl, enabled = state.operation == null)
             }
         }
+    }
+    if (confirmingDamagedDeletion) {
+        AlertDialog(
+            onDismissRequest = { confirmingDamagedDeletion = false },
+            title = { Text("Delete damaged files permanently?") },
+            text = { Text("This deletes every file that verification found damaged. These files cannot be restored from Trash.") },
+            confirmButton = {
+                DestructiveButton(onClick = {
+                    confirmingDamagedDeletion = false
+                    actions.onDeleteDamagedFiles()
+                }) { Text("Delete permanently") }
+            },
+            dismissButton = { TextButton(onClick = { confirmingDamagedDeletion = false }) { Text("Cancel") } },
+        )
     }
     if (confirmingDisconnect) {
         // `DESIGN.md` §26: a dialog for a short, high-consequence decision.

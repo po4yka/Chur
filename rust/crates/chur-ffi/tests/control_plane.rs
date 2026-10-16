@@ -714,7 +714,7 @@ fn a_scan_that_proves_corruption_checks_every_object_and_ends_object_corrupt() {
     let runtime = open_runtime(&root);
     let (_, session) = unlock(runtime, PASSWORD, 1);
     let damaged: Vec<u8> = (0..70_000u32).map(|value| (value % 199) as u8).collect();
-    import_at(session, &damaged, 1_700_000_000_001);
+    let damaged_id = import_at(session, &damaged, 1_700_000_000_001);
 
     // The same flipped ciphertext bit as chur-media's
     // `a_flipped_ciphertext_bit_is_proven_corruption`.
@@ -724,7 +724,7 @@ fn a_scan_that_proves_corruption_checks_every_object_and_ends_object_corrupt() {
     bytes[at] ^= 0x01;
     std::fs::write(&path, &bytes).unwrap();
     // Imported only now, so the container above was the only one.
-    import(session, &[2u8; 4_096]);
+    let healthy_id = import(session, &[2u8; 4_096]);
 
     let (status, processed) = scan_every_object(session);
     assert_eq!(status, ChurStatus::ObjectCorrupt.as_i32());
@@ -736,7 +736,42 @@ fn a_scan_that_proves_corruption_checks_every_object_and_ends_object_corrupt() {
         timeline_summaries(session),
         [chur_format::constants::IntegritySummary::CompleteVerified.value()]
     );
+    assert_eq!(chur_ffi::product::chur_corrupt_empty(session), OK);
+    assert!(
+        !path.exists(),
+        "confirmed corrupt cleanup collects its ciphertext"
+    );
+    assert_eq!(
+        chur_ffi::product::chur_corrupt_empty(session),
+        OK,
+        "cleanup is idempotent"
+    );
     assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+    let directory = chur_catalog::paths::VaultRoot::new(&root);
+    let mut reopened =
+        chur_catalog::vault::unlock_with_password(&directory, PASSWORD, 1_700_000_000_010).unwrap();
+    let damaged_id = chur_core::Id::new(damaged_id).unwrap();
+    let healthy_id = chur_core::Id::new(healthy_id).unwrap();
+    assert!(chur_media::keys::object_key(&reopened, &damaged_id).is_err());
+    let mut healthy = chur_media::reader::open(
+        &reopened,
+        &healthy_id,
+        chur_format::constants::StreamKind::Original,
+    )
+    .unwrap();
+    assert_eq!(
+        healthy.read_range(0, 4096).unwrap().as_slice(),
+        &[2u8; 4096]
+    );
+    drop(healthy);
+    let mut backup = std::io::Cursor::new(Vec::new());
+    chur_media::backup::create(
+        &mut reopened,
+        &mut backup,
+        1_700_000_000_011,
+        &mut chur_media::progress::Uninterrupted,
+    )
+    .expect("backup succeeds after damaged media is explicitly erased");
 }
 
 /// `docs/interop/FFI_CONTRACT.md` §6.2: an outcome other than proven corruption

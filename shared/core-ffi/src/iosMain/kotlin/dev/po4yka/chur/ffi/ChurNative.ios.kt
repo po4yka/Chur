@@ -1039,6 +1039,8 @@ internal actual object ChurNative {
                 if (restore) 1u else 0u)
         }
 
+    actual fun corruptEmpty(session: Long): Int = dev.po4yka.chur.native.chur_corrupt_empty(session.toULong())
+
     actual fun trashEmpty(session: Long): Int = chur_trash_empty(session.toULong())
 
     actual fun trashRestoreAll(session: Long): Int = chur_trash_restore_all(session.toULong())

@@ -410,6 +410,8 @@ internal object ChurJni {
 
     external fun trashSet(session: Long, objectIds: ByteArray, restore: Boolean): Int
 
+    external fun corruptEmpty(session: Long): Int
+
     external fun trashEmpty(session: Long): Int
 
     external fun trashRestoreAll(session: Long): Int

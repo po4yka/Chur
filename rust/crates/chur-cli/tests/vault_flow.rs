@@ -173,6 +173,19 @@ fn the_whole_vault_flow_runs_from_the_command_line() {
         "list after corruption",
     );
     assert!(listed.starts_with("0 object(s)"), "{listed}");
+    expect_ok(
+        &run(&root, "a replacement password", &["purge", &object]),
+        "purge corrupt object",
+    );
+    assert!(
+        !container.exists(),
+        "purge must collect the corrupt ciphertext"
+    );
+    assert!(
+        !run(&root, "a replacement password", &["show", &object])
+            .status
+            .success()
+    );
 }
 
 #[test]

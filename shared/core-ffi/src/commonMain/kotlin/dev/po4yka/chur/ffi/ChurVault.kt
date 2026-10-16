@@ -704,6 +704,10 @@ object ChurVault {
         ChurFailure.check(ChurNative.objectDelete(session, objectId), "delete permanently")
     }
 
+    fun deleteDamagedFiles(session: Long) {
+        ChurFailure.check(ChurNative.corruptEmpty(session), "delete damaged files")
+    }
+
     fun emptyTrash(session: Long) {
         ChurFailure.check(ChurNative.trashEmpty(session), "empty trash")
     }

@@ -722,6 +722,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 onVisibleMediaChanged = { visibleMediaIds = it },
                 onLock = { controller.lock() },
                 onPanic = { controller.panic() },
+                onDeleteDamagedFiles = { controller.deleteDamagedFiles() },
                 onVerifyAll = { controller.verifyEverything() },
                 onAddRecoverySlot = controller::addRecoverySlot,
                 onChangePassword = controller::changePassword,
