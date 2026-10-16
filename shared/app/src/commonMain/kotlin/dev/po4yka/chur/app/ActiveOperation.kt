@@ -59,6 +59,8 @@ data class ActiveOperation(
         "import" -> if (items > 1) "Importing item $item of $items" else "Importing"
         "export" -> "Exporting"
         "album-export" -> if (items > 0) "Exporting item $item of $items" else "Preparing album export"
+        "archive-export" -> "Creating encrypted archive"
+        "archive-import" -> "Importing encrypted archive"
         "backup" -> "Writing backup"
         "restore" -> "Restoring"
         "verification" -> "Checking items"
@@ -78,6 +80,7 @@ data class ActiveOperation(
         stage == 1 -> "Preparing"
         total <= 0 -> null
         name == "verification" -> "$processed of $total"
+        name == "archive-export" || name == "archive-import" -> "$processed of $total items"
         else -> "${humanSize(processed)} of ${humanSize(total)}"
     }
 

@@ -62,6 +62,8 @@ class AlbumExportPresentationTest {
         harness.main { harness.state.value = harness.state.value.copy(operation = null) }
         assertTrue(await { harness.button("Export album")?.config?.contains(SemanticsProperties.Disabled) == false })
         harness.click("Export album")
+        assertTrue(await { harness.textContaining("Encrypted archive…") != null })
+        harness.click("Unencrypted folder")
         assertTrue("the warning must explain the plaintext boundary", await {
             harness.textContaining("remain unencrypted outside the vault") != null
         })
@@ -70,6 +72,8 @@ class AlbumExportPresentationTest {
         assertTrue(await { harness.button("Choose folder") == null })
         assertEquals(0, harness.chosen)
         harness.click("Export album")
+        assertTrue(await { harness.textContaining("Encrypted archive…") != null })
+        harness.click("Unencrypted folder")
         harness.click("Choose folder")
         assertTrue(await { harness.chosen == 1 && harness.button("Choose folder") == null })
         assertEquals(harness.album.id, harness.requestedAlbum?.id)
@@ -87,6 +91,8 @@ class AlbumExportPresentationTest {
             harness.assertFontScale("Export album", 2f)
             harness.assertTextFits(harness.album.name, allowEllipsis = true)
             harness.click("Export album")
+        assertTrue(await { harness.textContaining("Encrypted archive…") != null })
+        harness.click("Unencrypted folder")
             assertTrue(await { harness.button("Choose folder") != null })
             harness.constrainDialog()
             harness.capture("album-export-warning-320-font2.png", dialog = true)

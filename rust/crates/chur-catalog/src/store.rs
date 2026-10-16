@@ -302,6 +302,26 @@ pub fn activate_object(db: &mut CatalogDb, activation: &ObjectActivation) -> Res
             "the vault holds the §21 maximum of objects"
         );
         insert_object_row(transaction, &activation.object)?;
+        if activation.object.favorite {
+            transaction
+                .execute(
+                    "INSERT INTO favorites(object_id,capture_time_ms,added_ms) VALUES(?1,?2,?3)",
+                    params![
+                        activation.object.object_id.as_bytes().as_slice(),
+                        as_sqlite_integer(
+                            activation.object.capture_time_ms,
+                            "the favorite time is out of range"
+                        )?,
+                        as_sqlite_integer(
+                            activation.object.import_time_ms,
+                            "the import time is out of range"
+                        )?
+                    ],
+                )
+                .map_err(|error| {
+                    map_sqlite(error, "the favorite projection could not be activated")
+                })?;
+        }
         insert_stream_row(transaction, &activation.stream)?;
         insert_envelope_row(
             transaction,

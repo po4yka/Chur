@@ -56,6 +56,8 @@ import dev.po4yka.chur.app.vault.VaultDestination
 import dev.po4yka.chur.app.vault.ContentView
 import dev.po4yka.chur.app.vault.AlbumOrder
 import dev.po4yka.chur.app.vault.browseQuery
+import dev.po4yka.chur.app.vault.SelectiveExportDialog
+import dev.po4yka.chur.app.vault.SelectiveImportDialog
 import dev.po4yka.chur.app.vault.PrivateNotesRoute
 import dev.po4yka.chur.app.vault.VaultShell
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
@@ -235,6 +237,10 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     val sharingOverview by controller.sharingOverview.collectAsState()
     val sharingRecipient by controller.sharingRecipient.collectAsState()
     val generation = (vaultState as? VaultState.Unlocked)?.generation ?: 0L
+    val archiveTransfers = remember(controller, generation) { ArchiveTransferOwner(controller, generation) }
+    DisposableEffect(archiveTransfers) { onDispose { archiveTransfers.close() } }
+    var choosingArchive by remember(generation) { mutableStateOf<SelectiveExportRequest?>(null) }
+    var choosingArchiveImport by remember(generation) { mutableStateOf(false) }
     var showingPrivateNotes by remember(generation) { mutableStateOf(false) }
     var choosingPrivateNoteExport by remember(generation) { mutableStateOf<PrivateNoteExportRequest?>(null) }
     var thumbnailsConcealed by remember(generation) { mutableStateOf(true) }
@@ -537,6 +543,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 Column {
                     TextButton(onClick = { choosingImportSource = false; importMedia() }, modifier = Modifier.fillMaxWidth()) { Text("Photos and videos") }
                     TextButton(onClick = { choosingImportSource = false; importFiles() }, modifier = Modifier.fillMaxWidth()) { Text("Documents and files") }
+                    TextButton(onClick = { choosingImportSource = false; choosingArchiveImport = true }, modifier = Modifier.fillMaxWidth()) { Text("Encrypted archive") }
                 }
             },
             confirmButton = { TextButton(onClick = { choosingImportSource = false }) { Text("Cancel") } },
@@ -588,6 +595,38 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         )
     }
 
+    choosingArchive?.let { request ->
+        SelectiveExportDialog(summary = request.summary, enabled = operation == null,
+            onChoose = { password, target ->
+                choosingArchive = null
+                archiveTransfers.export(request, ArchiveCredential(password), target)
+            }, onDismiss = { choosingArchive = null })
+    }
+    if (choosingArchiveImport) {
+        SelectiveImportDialog(enabled = operation == null,
+            onChoose = { password ->
+                choosingArchiveImport = false
+                archiveTransfers.import(ArchiveCredential(password)) {
+                    val present = IosBackupPicker.present ?: error("the file picker is unavailable")
+                    present { path ->
+                        val descriptor = path?.let { open(it, O_RDONLY) } ?: -1
+                        if (descriptor < 0) {
+                            path?.let { unlink(it) }
+                            if (path != null && (controller.vaultState.value as? VaultState.Unlocked)?.generation == generation) {
+                                controller.report("That file could not be opened.")
+                            }
+                            archiveTransfers.importedFile(null)
+                        } else {
+                            archiveTransfers.importedFile(ArchiveSource(descriptor) {
+                                close(descriptor)
+                                path?.let { unlink(it) }
+                            })
+                        }
+                    }
+                }
+            }, onDismiss = { choosingArchiveImport = false })
+    }
+
     if (showingPrivateNotes) {
         PrivateNotesRoute(
             vault = controller.vault, generation = generation,
@@ -598,6 +637,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             systemBack = { _, _ -> }, operation = operation,
             onCancelOperation = controller::cancelActiveOperation,
             notice = notice, onNoticeShown = controller::consume,
+            onEncryptedExport = { choosingArchive = SelectiveExportRequest(generation, notes = it) },
         )
         choosingPrivateNoteExport?.let { request ->
             ExportOptionsDialog(media = false, files = true, share = true,
@@ -699,6 +739,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                     terms = it
                 },
                 onExportAlbum = { exportingAlbum = it },
+                onEncryptedExportAlbum = { choosingArchive = SelectiveExportRequest(generation, albumIds = listOf(it.albumId)) },
                 onOpenAlbum = { openAlbum = it; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = false },
                 onCloseAlbum = { openAlbum = null },
                 onCreateAlbum = { creatingAlbum = true },
@@ -756,10 +797,16 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 onAddDeviceSlot = controller::enrollAppleDeviceSlot,
                 onToggleDeviceSlotPolicy = controller::toggleDeviceSlotPolicy,
                 onCreateBackup = controller::createBackup,
+                onImportArchive = { choosingArchiveImport = true },
+                onRestoreArchive = controller::restoreArchiveAsSeparateVault,
                 onCreateSecondIdentity = controller::createSecondIdentity,
                 onSelectAll = { selection = page.objects.map { it.id }.toSet() },
                 onClearSelection = { selection = emptySet() },
                 onExportSelection = { choosingExport = true },
+                onEncryptedExportSelection = {
+                    if (selection.size > 1000) controller.report("Select at most 1000 items for one encrypted archive.")
+                    else choosingArchive = SelectiveExportRequest(generation, objectIds = selection.sorted().map { it.fromHex() })
+                },
                 onAddSelectionToAlbum = {
                     controller.loadAlbums()
                     organizingIds = selection.sorted().map { it.fromHex() }
@@ -1064,45 +1111,57 @@ private fun IosRestoreRoute(controller: ChurController) {
     val operation by controller.activeOperation.collectAsState()
     var running by remember { mutableStateOf(false) }
     var cancelled by remember { mutableStateOf(false) }
-
+    var pending by remember { mutableStateOf<ArchiveCredential?>(null) }
+    var pickerOpen by remember { mutableStateOf(false) }
+    DisposableEffect(controller) {
+        onDispose {
+            pending?.clear(); pending = null
+            if (pickerOpen) { pickerOpen = false; controller.endHostActivity() }
+        }
+    }
     RestoreBackupScreen(
-        busy = running,
-        error = formError,
-        cancelled = cancelled,
-        operation = operation,
+        busy = running, error = formError, cancelled = cancelled, operation = operation,
         onChoose = { password ->
-            // The flag and the message it styles clear together, as on the
-            // other host: a dismissed picker reports nothing.
             cancelled = false
             controller.report(null)
             val present = IosBackupPicker.present
             if (present == null) {
                 controller.report("This build cannot open the file picker.")
             } else {
+                pending?.clear()
+                pending = ArchiveCredential(password)
                 running = true
-                // A file provider can take the foreground while its picker is
-                // up, and the background transition would close the route this
-                // result returns to, as it does on the other host.
                 controller.beginHostActivity()
-                present { path ->
-                    controller.endHostActivity()
-                    val descriptor = path?.let { open(it, O_RDONLY) } ?: -1
-                    if (descriptor < 0) {
-                        if (path != null) controller.report("That file could not be opened.")
-                        path?.let { unlink(it) }
-                        running = false
-                    } else {
-                        controller.restoreBackup(descriptor, password) { wasCancelled ->
-                            close(descriptor)
+                pickerOpen = true
+                try {
+                    present { path ->
+                        val credential = pending
+                        pending = null
+                        if (pickerOpen) { pickerOpen = false; controller.endHostActivity() }
+                        val descriptor = if (credential != null) path?.let { open(it, O_RDONLY) } ?: -1 else -1
+                        if (descriptor < 0) {
+                            credential?.clear()
+                            if (path != null && credential != null) controller.report("That file could not be opened.")
                             path?.let { unlink(it) }
                             running = false
-                            cancelled = wasCancelled
+                        } else {
+                            controller.restoreBackup(descriptor, requireNotNull(credential)) { wasCancelled ->
+                                close(descriptor)
+                                path?.let { unlink(it) }
+                                running = false
+                                cancelled = wasCancelled
+                            }
                         }
                     }
+                } catch (_: Exception) {
+                    pending?.clear(); pending = null
+                    pickerOpen = false; controller.endHostActivity()
+                    running = false
+                    controller.report("The file picker could not be opened.")
                 }
             }
         },
-        onBack = { controller.goTo(AppRoute.PublicShell) },
+        onBack = { if (!running) controller.goTo(AppRoute.PublicShell) },
         onCancel = controller::cancelActiveOperation,
     )
 }

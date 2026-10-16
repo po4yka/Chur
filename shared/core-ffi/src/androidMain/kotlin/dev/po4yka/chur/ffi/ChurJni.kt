@@ -504,4 +504,7 @@ internal object ChurJni {
     external fun privateNoteChange(session: Long, request: ByteArray, destination: java.nio.ByteBuffer, outWritten: IntArray): Int
     external fun privateNoteExportBegin(session: Long, noteId: ByteArray, expectedRevision: Long, destinationFd: Int, outOperation: LongArray): Int
 
+    external fun selectiveExportBegin(session: Long, request: ByteArray, descriptor: Int, outOperation: LongArray): Int
+    external fun selectiveImportBegin(session: Long, request: ByteArray, descriptor: Int, outOperation: LongArray): Int
+
 }

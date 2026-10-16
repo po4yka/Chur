@@ -766,6 +766,18 @@ chur_status_t chur_private_note_save(chur_handle_t session, const uint8_t *reque
 chur_status_t chur_private_note_change(chur_handle_t session, const uint8_t *request, size_t request_len, uint8_t *destination, size_t capacity, size_t *written);
 chur_status_t chur_private_note_export_begin(chur_handle_t session, const uint8_t *note_id, uint64_t expected_revision, int32_t destination_fd, chur_handle_t *out_operation);
 
+/* ABI 2.22 encrypted selective archives. Request v1 is BE: version:u8=1,
+ * password:u32+bytes (1..1024), then export-only objectCount:u32+id16*,
+ * albumCount:u32+id16*, noteCount:u32+(id16,revision:u64)*, maxOutputBytes:u64 (1..INT64_MAX). Each count<=1000;
+ * expanded originals<=10000; selected albums<=1000; request<=65536.
+ * Password and ids are copied during begin and never retained after the operation.
+ * Owner session revokes the operation on lock. Progress is completed objects+notes,
+ * never byte counts, including terminal cancellation/failure. Import verifies all
+ * containers before any target write; completed imported items remain on failure.
+ */
+chur_status_t chur_selective_export_begin(chur_handle_t session, const uint8_t *request, uint32_t length, int32_t descriptor, chur_handle_t *out_operation);
+chur_status_t chur_selective_import_begin(chur_handle_t session, const uint8_t *request, uint32_t length, int32_t descriptor, chur_handle_t *out_operation);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

@@ -4,6 +4,7 @@ import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.core.platformkeys.DeviceSlot
 import dev.po4yka.chur.core.platformkeys.DeviceSlotException
 import dev.po4yka.chur.ffi.PrivateNote
+import dev.po4yka.chur.ffi.PrivateNoteSelection
 import dev.po4yka.chur.ffi.PrivateNotePage
 import dev.po4yka.chur.ffi.PrivateNoteAction
 import dev.po4yka.chur.ffi.AlbumSummary
@@ -357,6 +358,9 @@ class VaultRepository(
     suspend fun emptyTrash() = withSession { ChurVault.emptyTrash(it) }
 
     suspend fun restoreTrash() = withSession { ChurVault.restoreTrash(it) }
+
+    suspend fun beginSelectiveExport(generation: Long, objectIds: List<ByteArray>, albumIds: List<ByteArray>, notes: List<PrivateNoteSelection>, password: ByteArray, destinationFd: Int, maxOutputBytes: Long = Long.MAX_VALUE): Long = withNoteSession(generation) { ChurVault.beginSelectiveExport(it, objectIds, albumIds, notes, password, destinationFd, maxOutputBytes) }
+    suspend fun beginSelectiveImport(generation: Long, sourceFd: Int, password: ByteArray): Long = withNoteSession(generation) { ChurVault.beginSelectiveImport(it, sourceFd, password) }
 
     /** A stale editor must not access a later unlocked identity. */
     suspend fun privateNotes(generation: Long, terms: String = "", trashed: Boolean = false, limit: Int = 50, cursor: ByteArray? = null): PrivateNotePage = withNoteSession(generation) { ChurVault.privateNotes(it, terms, trashed, limit, cursor) }

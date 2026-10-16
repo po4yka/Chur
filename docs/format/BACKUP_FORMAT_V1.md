@@ -141,6 +141,10 @@ This is the only manifest-key source in v1. A password slot and a recovery slot 
 
 A full backup includes every active object/container/envelope required to reconstruct the chosen vault identity and its catalog state. Completeness verification checks every inventory entry and final commit before activation.
 
+### 5.1 Independent selective archives
+
+A [selective archive](../product/SELECTIVE_ENCRYPTED_EXPORT.md) is a full package of a newly created, independent vault that contains only the selected content. Its root, credentials, identifiers, and catalog are new. It does not reuse the source vault descriptor or a filtered source catalog. The package framing and authentication remain CHURBAK1. Normal restore installs it as a separate vault; the selective import operation authenticates it in isolated staging, then copies content under new destination identifiers and keys.
+
 ## 6. Incremental backup
 
 Incremental support is future/proposed. It must define:

@@ -218,6 +218,7 @@ data class VaultActions(
     val onDeleteAlbum: (AlbumSummary) -> Unit = {},
     /** Export this album and every descendant to a chosen folder. */
     val onExportAlbum: (AlbumSummary) -> Unit = {},
+    val onEncryptedExportAlbum: (AlbumSummary) -> Unit = {},
     val onMoveAlbum: (AlbumSummary, AlbumSummary?, AlbumSummary?) -> Unit = { _, _, _ -> },
     val onMoveAlbumMember: (ObjectProjection, ObjectProjection?) -> Unit = { _, _ -> },
     val onDropMediaIntoAlbum: (List<ObjectProjection>, AlbumSummary?) -> Unit = { _, _ -> },
@@ -244,6 +245,8 @@ data class VaultActions(
     val onChangePassword: (String) -> Unit,
     /** Write a backup package, `BACKUP_FORMAT_V1.md` §7. */
     val onCreateBackup: () -> Unit = {},
+    val onImportArchive: () -> Unit = {},
+    val onRestoreArchive: () -> Unit = {},
     /** Provision a second vault identity, `DECOY_VAULT.md` §3. */
     val onCreateSecondIdentity: () -> Unit = {},
     /** Enroll this device's platform key slot. */
@@ -262,6 +265,7 @@ data class VaultActions(
     val onClearSelection: () -> Unit = {},
     /** Export every selected object. */
     val onExportSelection: () -> Unit = {},
+    val onEncryptedExportSelection: () -> Unit = {},
     /** Add the selection while retaining existing memberships. */
     val onAddSelectionToAlbum: () -> Unit = {},
     /** Move the selection out of the open album. */
@@ -415,8 +419,19 @@ fun VaultShell(
                             }
                         }
                         state.openAlbum?.let { album ->
-                            TextButton(enabled = state.operation == null, onClick = { actions.onExportAlbum(album) }) {
-                                Text("Export album")
+                            var albumExportExpanded by remember { mutableStateOf(false) }
+                            Box {
+                                TextButton(enabled = state.operation == null, onClick = { albumExportExpanded = true }) {
+                                    Text("Export album")
+                                }
+                                DropdownMenu(expanded = albumExportExpanded, onDismissRequest = { albumExportExpanded = false }) {
+                                    DropdownMenuItem(text = { Text("Unencrypted folder") }, onClick = {
+                                        albumExportExpanded = false; actions.onExportAlbum(album)
+                                    })
+                                    DropdownMenuItem(text = { Text("Encrypted archive…") }, onClick = {
+                                        albumExportExpanded = false; actions.onEncryptedExportAlbum(album)
+                                    })
+                                }
                             }
                         }
                         LockControl(onLock = actions.onLock, onPanic = actions.onPanic)
@@ -662,6 +677,11 @@ private fun SelectionBar(state: VaultUiState, actions: VaultActions) {
                     DropdownMenuItem(
                         text = { Text("Select all") },
                         onClick = { expanded = false; actions.onSelectAll() },
+                    )
+                    if (!state.trashOpen) DropdownMenuItem(
+                        text = { Text("Encrypted archive…") },
+                        enabled = state.operation == null,
+                        onClick = { expanded = false; actions.onEncryptedExportSelection() },
                     )
                     if (!state.trashOpen) DropdownMenuItem(
                         text = { Text("Add to album") },
@@ -936,6 +956,12 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
         }
         item {
             SettingsAction("Write a backup file", actions.onCreateBackup, enabled = state.operation == null)
+        }
+        item {
+            SettingsAction("Import encrypted archive", actions.onImportArchive, enabled = state.operation == null)
+        }
+        item {
+            SettingsAction("Restore archive as a separate vault", actions.onRestoreArchive, enabled = state.operation == null)
         }
         item {
             // `BACKUP_FORMAT_V1.md` §12: rotating a password does not revoke an

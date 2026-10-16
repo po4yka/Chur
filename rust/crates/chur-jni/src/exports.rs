@@ -2970,3 +2970,83 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_privateNoteExportBegin<'
         }
     })
 }
+
+/// Starts a bounded encrypted archive operation. The copied password is zeroed.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_selectiveExportBegin<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    request: JByteArray<'local>,
+    descriptor: jint,
+    out: JLongArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(bytes) = byte_array(env, &request) else {
+            return INVALID_INPUT;
+        };
+        let bytes = zeroize::Zeroizing::new(bytes);
+        let Ok(length) = u32::try_from(bytes.len()) else {
+            return INVALID_INPUT;
+        };
+        let mut operation = 0;
+        // SAFETY: copied request and local operation outlive this synchronous call; fd is duplicated.
+        let status = unsafe {
+            chur_ffi::selective::chur_selective_export_begin(
+                handle_of(session),
+                bytes.as_ptr(),
+                length,
+                descriptor,
+                &mut operation,
+            )
+        };
+        if status != 0 {
+            return status;
+        }
+        if write_long(env, &out, 0, operation as jlong) {
+            0
+        } else {
+            INVALID_INPUT
+        }
+    })
+}
+
+/// Starts a bounded encrypted archive operation. The copied password is zeroed.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_selectiveImportBegin<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    request: JByteArray<'local>,
+    descriptor: jint,
+    out: JLongArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(bytes) = byte_array(env, &request) else {
+            return INVALID_INPUT;
+        };
+        let bytes = zeroize::Zeroizing::new(bytes);
+        let Ok(length) = u32::try_from(bytes.len()) else {
+            return INVALID_INPUT;
+        };
+        let mut operation = 0;
+        // SAFETY: copied request and local operation outlive this synchronous call; fd is duplicated.
+        let status = unsafe {
+            chur_ffi::selective::chur_selective_import_begin(
+                handle_of(session),
+                bytes.as_ptr(),
+                length,
+                descriptor,
+                &mut operation,
+            )
+        };
+        if status != 0 {
+            return status;
+        }
+        if write_long(env, &out, 0, operation as jlong) {
+            0
+        } else {
+            INVALID_INPUT
+        }
+    })
+}

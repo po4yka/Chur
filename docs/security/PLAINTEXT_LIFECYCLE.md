@@ -193,3 +193,11 @@ Tests should inspect:
 - process-death restoration;
 - background tasks while locked;
 - platform snapshots and notifications.
+
+## Selective archive transfer
+
+Selective encrypted export and import keep plaintext in bounded native buffers and write only encrypted vault state to app-private staging. Export uses a new root and re-encrypts selected content. Import authenticates the complete source package before it mutates the destination. Source readers retain their existing revocation barriers. Staging is removed on completion or failure, with native orphan cleanup after an interrupted process.
+
+Archive password fields have no saved-state registry. Transient picker ownership holds erasable credential bytes and a generation-bound selection, not a saved password string. A disposed owner clears credentials and rejects late results. Android archive launcher keys are scoped to the owner and do not use saved-state restoration, so a result from an earlier session cannot consume new credentials. Kotlin strings and platform input copies still have no physical-erasure guarantee.
+
+The host reserves a bounded scratch capacity and supplies the same hard output limit to native code. Only successful output under the original session can be published. Provider cleanup is best effort; process death can leave an empty or incomplete external document. Published encrypted archives remain independent copies and cannot be revoked by changing or deleting the source. See [the product contract](../product/SELECTIVE_ENCRYPTED_EXPORT.md).

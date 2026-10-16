@@ -313,6 +313,16 @@ pub fn begin(
     })
 }
 
+/// Display fields carried by a logical copy; no source identity or sealed record is reused.
+pub struct CopiedDisplay {
+    /// Selected caption.
+    pub caption: Option<String>,
+    /// Selected favorite state.
+    pub favorite: bool,
+    /// Actual capture time and whether it was substituted in the source.
+    pub capture_time: Option<(u64, bool)>,
+}
+
 impl Import {
     /// The object this import will activate.
     #[must_use]
@@ -366,6 +376,45 @@ impl Import {
     /// writer's own accounting, which is what catches a storage layer that
     /// acknowledged a write it did not perform.
     pub fn commit(self, session: &mut Session, content_type: &str, now_ms: u64) -> Result<Id> {
+        self.commit_with_display(session, content_type, now_ms, None, false)
+    }
+
+    /// Commits the original and its selected caption and favorite atomically.
+    pub fn commit_with_display(
+        self,
+        session: &mut Session,
+        content_type: &str,
+        now_ms: u64,
+        caption: Option<String>,
+        favorite: bool,
+    ) -> Result<Id> {
+        self.commit_with_display_checked(
+            session,
+            content_type,
+            now_ms,
+            CopiedDisplay {
+                caption,
+                favorite,
+                capture_time: None,
+            },
+            &|| false,
+        )
+    }
+
+    /// Commits a copied original while observing cancellation during complete verification.
+    pub fn commit_with_display_checked(
+        self,
+        session: &mut Session,
+        content_type: &str,
+        now_ms: u64,
+        display: CopiedDisplay,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Id> {
+        let CopiedDisplay {
+            caption,
+            favorite,
+            capture_time,
+        } = display;
         ensure!(
             self.writer.chunk_count() > 0 || self.media.media_class == MediaClass::Opaque,
             InvalidInput,
@@ -387,7 +436,7 @@ impl Import {
             container,
         };
         let mut reader = StreamReader::open(&mut view, &self.object_key, &self.identity)?;
-        let verified = reader.verify_complete()?;
+        let verified = reader.verify_complete_with(cancelled)?;
         ensure!(
             verified == total_plaintext,
             ObjectCorrupt,
@@ -396,6 +445,7 @@ impl Import {
         let final_commit = reader.read_final_commit()?;
         drop(reader);
 
+        ensure!(!cancelled(), Cancelled, "the copied original was cancelled");
         let store_id = session.object_store_id();
         view.container
             .commit(session.root_dir(), &store_id, &self.container_path_id)?;
@@ -410,14 +460,18 @@ impl Import {
                     collection_id: self.collection_id,
                     primary_stream_id: self.stream_id,
                     media_kind: self.media.media_class,
-                    capture_time_ms: capture.unwrap_or(now_ms),
+                    capture_time_ms: capture_time
+                        .map(|v| v.0)
+                        .unwrap_or(capture.unwrap_or(now_ms)),
                     import_time_ms: now_ms,
-                    capture_time_substituted: capture.is_none(),
+                    capture_time_substituted: capture_time
+                        .map(|v| v.1)
+                        .unwrap_or(capture.is_none()),
                     plaintext_size: total_plaintext,
                     width: self.media.width,
                     height: self.media.height,
                     duration_ms: self.media.duration_ms,
-                    favorite: false,
+                    favorite,
                     state: ObjectState::Active,
                     // The container was just authenticated end to end, which is
                     // exactly what COMPLETE_VERIFIED means in §5.1. Recording
@@ -450,7 +504,7 @@ impl Import {
                     active: true,
                     record: Vec::new(),
                     original_filename: self.source.original_filename,
-                    caption: None,
+                    caption,
                     content_type: content_type.to_owned(),
                     capture_time_ms: capture,
                     width: self.media.width,
@@ -523,6 +577,25 @@ pub fn reconcile(session: &mut Session, now_ms: u64) -> Result<usize> {
         killed += 1;
     }
     Ok(killed)
+}
+
+/// Reconciles only one failed copy transaction; returns true if its original already committed.
+pub fn reconcile_one(session: &mut Session, id: &Id) -> Result<bool> {
+    let record = journal::read(session.catalog_ref()?, id)?;
+    if store::streams(session.catalog_ref()?, &record.object_id)?
+        .iter()
+        .any(|stream| {
+            stream.stream_id == record.stream_id && stream.container_path_id == record.temp_path_id
+        })
+    {
+        journal::close(session.catalog()?, id)?;
+        return Ok(true);
+    }
+    journal::mark_dead(session.catalog()?, id)?;
+    let root = session.root_dir().clone();
+    let store = session.object_store_id();
+    finish_abandonment(session, &root, &store, &record)?;
+    Ok(false)
 }
 
 fn finish_abandonment(

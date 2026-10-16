@@ -1,6 +1,7 @@
 package dev.po4yka.chur.app.vault
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.FlowRow
@@ -34,7 +35,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -86,17 +89,21 @@ private fun PrivateNotesContent(
 ) {
     val colors = LocalChurColors.current
     val editor = state.editor
+    val selecting = editor == null && state.selection.isNotEmpty()
     val busy = state.busy || operation != null
     Scaffold(
         containerColor = colors.canvas,
         topBar = {
             TopAppBar(
-                title = { Text(if (editor == null) "Private notes" else if (editor.trashed) "Trashed note" else "Private note",
+                title = { Text(if (selecting) "${state.selection.size} selected" else if (editor == null) "Private notes"
+                    else if (editor.trashed) "Trashed note" else "Private note",
                     maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = { IconButton(enabled = !state.busy, onClick = actions::back) {
-                    Icon(BackGlyph, contentDescription = "Back")
+                    Icon(BackGlyph, contentDescription = if (selecting) "Clear selection" else "Back")
                 } },
                 actions = {
+                    if (selecting) TextButton(onClick = actions::exportEncryptedSelection, enabled = !busy,
+                        modifier = Modifier.semantics { contentDescription = "Create encrypted archive" }) { Text("Archive") }
                     if (editor != null && !editor.trashed) TextButton(onClick = actions::save,
                         enabled = editor.canSave && !busy, modifier = Modifier.testTag("private-note-save")) { Text("Save") }
                     LockControl(onLock, onPanic)
@@ -105,7 +112,7 @@ private fun PrivateNotesContent(
         },
         snackbarHost = { NoticeHost(notice, onNoticeShown) },
         floatingActionButton = {
-            if (editor == null && !state.trash && !busy) FloatingActionButton(onClick = actions::create) {
+            if (editor == null && !state.trash && !busy && !selecting) FloatingActionButton(onClick = actions::create) {
                 Icon(PlusGlyph, contentDescription = "New private note")
             }
         },
@@ -128,14 +135,14 @@ private fun PrivateNotesContent(
     }
     state.confirmation?.let { confirmation ->
         val leave = confirmation == PrivateNoteConfirmation.LEAVE
-        val export = confirmation == PrivateNoteConfirmation.EXPORT
+        val export = confirmation == PrivateNoteConfirmation.EXPORT || confirmation == PrivateNoteConfirmation.ENCRYPTED_EXPORT
         AlertDialog(
             onDismissRequest = actions::dismissConfirmation,
             title = { Text(when (confirmation) {
                 PrivateNoteConfirmation.LEAVE -> "Save changes before leaving?"
                 PrivateNoteConfirmation.TRASH -> "Move note to Trash?"
                 PrivateNoteConfirmation.PURGE -> "Delete this note permanently?"
-                PrivateNoteConfirmation.EXPORT -> "Save changes before exporting?"
+                PrivateNoteConfirmation.EXPORT, PrivateNoteConfirmation.ENCRYPTED_EXPORT -> "Save changes before exporting?"
             }) },
             text = { Text(when (confirmation) {
                 PrivateNoteConfirmation.LEAVE -> "Keep editing, save your changes, or discard this unsaved text."
@@ -143,6 +150,7 @@ private fun PrivateNotesContent(
                     else "You can restore this note from Trash."
                 PrivateNoteConfirmation.PURGE -> "This removes the note from this vault. You cannot undo this."
                 PrivateNoteConfirmation.EXPORT -> "Export uses the saved note. Save these changes first, then choose a destination."
+                PrivateNoteConfirmation.ENCRYPTED_EXPORT -> "The encrypted archive uses the saved note. Save these changes first, then set an archive password."
             }) },
             confirmButton = {
                 when {
@@ -164,15 +172,19 @@ private fun PrivateNotesContent(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PrivateNotesList(state: PrivateNotesUiState, actions: PrivateNotesActions, busy: Boolean, modifier: Modifier) {
     val colors = LocalChurColors.current
+    val selecting = state.selection.isNotEmpty()
     Column(modifier.padding(horizontal = ChurSpacing.gutter), verticalArrangement = Arrangement.spacedBy(ChurSpacing.one)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            TextButton(enabled = !busy, onClick = { actions.showTrash(!state.trash) }) {
+        FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            if (!selecting) TextButton(enabled = !busy, onClick = { actions.showTrash(!state.trash) }) {
                 Text(if (state.trash) "Active notes" else "Trash")
             }
-            TextButton(enabled = !busy && !state.loading, onClick = actions::refresh) { Text("Refresh") }
+            if (!selecting) TextButton(enabled = !busy && !state.loading, onClick = actions::refresh) { Text("Refresh") }
+            if (!state.trash) TextButton(enabled = !busy && !state.loading && state.notes.isNotEmpty(),
+                onClick = actions::selectPage) { Text("Select page") }
         }
         OutlinedTextField(value = state.terms, onValueChange = actions::search, enabled = !busy, singleLine = true,
             label = { Text(if (state.trash) "Search Trash" else "Search private notes") },
@@ -187,9 +199,17 @@ private fun PrivateNotesList(state: PrivateNotesUiState, actions: PrivateNotesAc
         }
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(ChurSpacing.one)) {
             items(state.notes, key = { it.id }) { note ->
-                Surface(color = colors.surfaceSunken, modifier = Modifier.fillMaxWidth()
-                    .clickable(enabled = !busy, onClickLabel = "Open private note") { actions.open(note) }) {
+                val selectedNote = note.id in state.selection
+                Surface(color = if (selectedNote) colors.accentSoft else colors.surfaceSunken, modifier = Modifier.fillMaxWidth()
+                    .semantics { selected = selectedNote }
+                    .combinedClickable(enabled = !busy, onClickLabel = if (selecting) "Select private note" else "Open private note",
+                        onClick = { if (selecting) actions.toggleSelection(note) else actions.open(note) },
+                        onLongClickLabel = if (state.trash) null else "Select private note",
+                        onLongClick = if (state.trash) null else ({ actions.toggleSelection(note) }))) {
                     Row(Modifier.padding(ChurSpacing.two), verticalAlignment = Alignment.CenterVertically) {
+                        if (selecting) Checkbox(checked = selectedNote,
+                            onCheckedChange = { actions.toggleSelection(note) }, enabled = !busy,
+                            modifier = Modifier.semantics { contentDescription = "Select private note" })
                         Column(Modifier.weight(1f)) {
                             Text(note.title.ifBlank { "Untitled note" }, maxLines = 2, overflow = TextOverflow.Ellipsis,
                                 color = colors.ink, style = MaterialTheme.typography.titleSmall)
@@ -197,7 +217,7 @@ private fun PrivateNotesList(state: PrivateNotesUiState, actions: PrivateNotesAc
                                 color = colors.inkMuted, style = MaterialTheme.typography.bodyMedium)
                             if (note.pinned) Text("Pinned", color = colors.inkMuted, style = MaterialTheme.typography.labelSmall)
                         }
-                        if (!state.trash) TextButton(enabled = !busy, onClick = { actions.pin(note) }) {
+                        if (!state.trash && !selecting) TextButton(enabled = !busy, onClick = { actions.pin(note) }) {
                             Text(if (note.pinned) "Unpin" else "Pin")
                         }
                     }
@@ -246,6 +266,8 @@ private fun PrivateNoteEditor(editor: PrivateNoteEditorState, actions: PrivateNo
                 TextButton(enabled = !busy, onClick = actions::requestTrash) { Text("Move to Trash") }
             }
             TextButton(enabled = !busy && (editor.saved != null || editor.canSave), onClick = actions::export) { Text("Export") }
+            if (!editor.trashed) TextButton(enabled = !busy && (editor.saved != null || editor.canSave),
+                onClick = actions::exportEncrypted) { Text("Encrypted archive") }
         }
     }
 }

@@ -5,6 +5,7 @@ import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.PrivateNote
 import dev.po4yka.chur.ffi.PrivateNoteAction
 import dev.po4yka.chur.ffi.PrivateNotePage
+import dev.po4yka.chur.ffi.PrivateNoteSelection
 import dev.po4yka.chur.ffi.PrivateNoteSummary
 import dev.po4yka.chur.vault.VaultState
 import kotlinx.coroutines.CompletableDeferred
@@ -18,6 +19,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertContentEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -265,26 +267,165 @@ class PrivateNotesControllerTest {
         controller.close()
     }
 
+    @Test
+    fun encrypted_selection_spans_pages_and_keeps_the_revision_selected_without_loading_bodies() = runTest {
+        val access = Access().apply {
+            paged = true
+            secondRecord = record.copy(noteId = byteArrayOf(2), revision = 7, title = "Second", body = "Second body")
+        }
+        val exports = mutableListOf<List<PrivateNoteSelection>>()
+        val controller = controller(access, onEncryptedExport = { exports += it })
+        advanceUntilIdle()
+        controller.selectPage()
+        controller.nextPage()
+        advanceUntilIdle()
+        controller.selectPage()
+        assertEquals(2, controller.state.value.selection.size)
+        // A later list refresh must not silently change the selected revision.
+        access.record = access.record.copy(revision = 9)
+        controller.exportEncryptedSelection()
+        assertEquals(listOf(1L, 7L), exports.single().map { it.revision })
+        assertContentEquals(byteArrayOf(1), exports.single().first().noteId)
+        assertContentEquals(byteArrayOf(2), exports.single().last().noteId)
+        assertEquals(0, access.loads)
+        assertEquals(0, access.saves)
+        // The host may retain a reference without sharing mutable IDs with the list.
+        exports.single().first().noteId[0] = 99
+        assertContentEquals(byteArrayOf(1), controller.state.value.selection.values.first().noteId)
+        controller.close()
+    }
+
+    @Test
+    fun selection_is_cleared_by_back_search_trash_create_and_lock_and_never_exports_after_lock() = runTest {
+        val state = MutableStateFlow<VaultState>(VaultState.Unlocked(1))
+        val access = Access()
+        var leaves = 0
+        var exports = 0
+        val controller = controller(access, state, onLeave = { leaves++ }, onEncryptedExport = { exports++ })
+        advanceUntilIdle()
+        controller.selectPage()
+        controller.back()
+        assertTrue(controller.state.value.selection.isEmpty())
+        assertEquals(0, leaves)
+        controller.back()
+        assertEquals(1, leaves)
+        controller.selectPage()
+        controller.search("Saved")
+        assertTrue(controller.state.value.selection.isEmpty())
+        advanceUntilIdle()
+        controller.selectPage()
+        controller.showTrash(true)
+        assertTrue(controller.state.value.selection.isEmpty())
+        advanceUntilIdle()
+        controller.selectPage()
+        assertTrue(controller.state.value.selection.isEmpty())
+        controller.showTrash(false)
+        advanceUntilIdle()
+        controller.selectPage()
+        controller.create()
+        assertTrue(controller.state.value.selection.isEmpty())
+        controller.back()
+        advanceUntilIdle()
+        controller.selectPage()
+        state.value = VaultState.Unlocked(2)
+        runCurrent()
+        assertTrue(controller.state.value.selection.isEmpty())
+        controller.exportEncryptedSelection()
+        assertEquals(0, exports)
+    }
+
+    @Test
+    fun an_encrypted_editor_export_saves_first_and_never_calls_the_plaintext_export_callback() = runTest {
+        val access = Access()
+        val encrypted = mutableListOf<List<PrivateNoteSelection>>()
+        var plaintext = 0
+        val controller = controller(access, onExport = { plaintext++ }, onEncryptedExport = { encrypted += it })
+        advanceUntilIdle()
+        controller.open(summary(access.record))
+        advanceUntilIdle()
+        controller.body("Updated private body")
+        controller.exportEncrypted()
+        assertEquals(PrivateNoteConfirmation.ENCRYPTED_EXPORT, controller.state.value.confirmation)
+        assertTrue(encrypted.isEmpty())
+        controller.saveAndExport()
+        advanceUntilIdle()
+        assertEquals(1, access.saves)
+        assertEquals(2L, encrypted.single().single().revision)
+        assertContentEquals(access.record.noteId, encrypted.single().single().noteId)
+        assertEquals(0, plaintext)
+        assertFalse(controller.state.value.editor!!.dirty)
+        controller.close()
+    }
+
+    @Test
+    fun a_failed_encrypted_save_keeps_the_draft_and_late_completion_after_lock_cannot_export() = runTest {
+        val state = MutableStateFlow<VaultState>(VaultState.Unlocked(1))
+        val gate = CompletableDeferred<Unit>()
+        val access = Access().apply { saveFailure = ChurStatus.STORAGE_UNAVAILABLE }
+        var exports = 0
+        val controller = controller(access, state, onEncryptedExport = { exports++ })
+        controller.create()
+        controller.body("Keep private text")
+        controller.exportEncrypted()
+        controller.saveAndExport()
+        advanceUntilIdle()
+        assertEquals("Keep private text", controller.state.value.editor!!.body)
+        assertTrue(controller.state.value.editor!!.dirty)
+        assertEquals(0, exports)
+        access.saveFailure = null
+        access.saveGate = gate
+        controller.exportEncrypted()
+        controller.saveAndExport()
+        runCurrent()
+        state.value = VaultState.Unlocked(2)
+        runCurrent()
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertNull(controller.state.value.editor)
+        assertEquals(0, exports)
+    }
+
+    @Test
+    fun encrypted_note_selection_has_a_bound_and_trashed_notes_cannot_be_added() = runTest {
+        val access = Access()
+        val controller = controller(access)
+        advanceUntilIdle()
+        repeat(1_001) { value ->
+            val id = ByteArray(16).apply { this[0] = (value ushr 8).toByte(); this[1] = value.toByte(); this[15] = 1 }
+            controller.toggleSelection(summary(access.record.copy(noteId = id)))
+        }
+        assertEquals(1_000, controller.state.value.selection.size)
+        assertNotNull(controller.state.value.error)
+        controller.clearSelection()
+        controller.toggleSelection(summary(access.record.copy(trashedAtMs = 10)))
+        assertTrue(controller.state.value.selection.isEmpty())
+        controller.close()
+    }
+
     private fun kotlinx.coroutines.test.TestScope.controller(access: Access,
         state: MutableStateFlow<VaultState> = MutableStateFlow(VaultState.Unlocked(1)),
-        onExport: (PrivateNote) -> Unit = {}, onActivity: () -> Unit = {}): PrivateNotesController =
-        PrivateNotesController(1, state, access, this, {}, onExport, StandardTestDispatcher(testScheduler), onActivity)
+        onExport: (PrivateNote) -> Unit = {}, onActivity: () -> Unit = {}, onLeave: () -> Unit = {},
+        onEncryptedExport: (List<PrivateNoteSelection>) -> Unit = {}): PrivateNotesController =
+        PrivateNotesController(1, state, access, this, onLeave, onExport, StandardTestDispatcher(testScheduler), onActivity, onEncryptedExport)
 
     private class Access : PrivateNotesAccess {
         var record = note()
         var saves = 0
+        var loads = 0
         var saveFailure: ChurStatus? = null
         var saveGate: CompletableDeferred<Unit>? = null
         var paged = false
+        var secondRecord: PrivateNote? = null
         val queries = mutableListOf<String>()
         val trashQueries = mutableListOf<Boolean>()
         val cursors = mutableListOf<ByteArray?>()
         val changes = mutableListOf<Pair<PrivateNoteAction, Long>>()
         override suspend fun page(generation: Long, terms: String, trash: Boolean, cursor: ByteArray?): PrivateNotePage {
             queries += terms; trashQueries += trash; cursors += cursor
-            return PrivateNotePage(listOf(summary(record)), if (paged && cursor == null) byteArrayOf(1) else null)
+            return PrivateNotePage(listOf(summary(if (cursor != null) secondRecord ?: record else record)),
+                if (paged && cursor == null) byteArrayOf(1) else null)
         }
-        override suspend fun load(generation: Long, id: ByteArray) = record
+        override suspend fun load(generation: Long, id: ByteArray): PrivateNote { loads++; return record }
         override suspend fun save(generation: Long, saved: PrivateNote?, title: String, body: String, pinned: Boolean): PrivateNote {
             saves++
             saveGate?.let { withContext(NonCancellable) { it.await() } }

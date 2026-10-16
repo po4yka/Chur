@@ -27,4 +27,9 @@ interface PrivateNotesActions {
     fun restore()
     fun purge()
     fun pin(note: PrivateNoteSummary)
+    fun toggleSelection(note: PrivateNoteSummary) {}
+    fun selectPage() {}
+    fun clearSelection() {}
+    fun exportEncryptedSelection() {}
+    fun exportEncrypted() {}
 }

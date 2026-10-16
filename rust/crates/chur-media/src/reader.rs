@@ -106,6 +106,12 @@ pub fn open(session: &Session, object_id: &Id, stream_kind: StreamKind) -> Resul
 }
 
 impl ObjectReader {
+    /// Authenticated dimensions from the stream manifest, including derived assets.
+    pub fn dimensions(&self) -> (u32, u32) {
+        let p = self.inner.manifest().media_properties();
+        (p.pixel_width(), p.pixel_height())
+    }
+
     /// The authenticated plaintext size.
     #[must_use]
     pub const fn size(&self) -> u64 {

@@ -735,6 +735,12 @@ private final class ShareExportSink: NSObject, ExportSink {
         }
     }
 
+    func archiveCapacity(target: ExportTarget) -> Int64 {
+        guard target == .files || target == .share else { return 0 }
+        let imports = FileManager.default.temporaryDirectory.appendingPathComponent("chur-media-imports", isDirectory: true)
+        return (try? ScratchCopy.remainingBudget(in: [directory, imports])) ?? 0
+    }
+
     func create(displayName: String, contentType: String) -> ExportSinkDestination? {
         create(displayName: displayName, contentType: contentType, target: .default_, uri: nil)
     }

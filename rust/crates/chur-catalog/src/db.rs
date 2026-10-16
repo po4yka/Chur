@@ -14,7 +14,7 @@
 
 use core::fmt;
 
-use chur_core::{ChurStatus, Error, Id, Result, err};
+use chur_core::{ChurStatus, Error, Id, Result, ensure, err};
 use chur_crypto::{
     Key,
     kdf::{Context, Label, derive},
@@ -185,6 +185,32 @@ impl CatalogDb {
             })
             .map(|_| ())
             .map_err(|_| err!(AuthenticationFailed, "the catalog did not decrypt"))
+    }
+
+    /// Authenticates every physical SQLCipher page, including unused pages.
+    /// This SQLCipher pragma performs a bounded-file scan inside prepare; callers
+    /// check cancellation before and after it and never hold a live target session.
+    pub fn verify_cipher_pages(&self) -> Result<()> {
+        let mut statement = self
+            .connection
+            .prepare("PRAGMA cipher_integrity_check")
+            .map_err(|_| err!(CatalogCorrupt, "the encrypted catalog page check failed"))?;
+        ensure!(
+            statement.column_count() == 1,
+            UnsupportedVersion,
+            "the encrypted catalog page check is unavailable"
+        );
+        let mut rows = statement
+            .query([])
+            .map_err(|_| err!(CatalogCorrupt, "the encrypted catalog page check failed"))?;
+        ensure!(
+            rows.next()
+                .map_err(|_| err!(CatalogCorrupt, "the encrypted catalog page check failed"))?
+                .is_none(),
+            CatalogCorrupt,
+            "the encrypted catalog contains an unauthenticated page"
+        );
+        Ok(())
     }
 
     /// The underlying connection, for the modules in this crate only.
@@ -476,5 +502,39 @@ mod tests {
         path.push(name);
         std::fs::create_dir_all(&path).expect("create the directory");
         path
+    }
+    #[test]
+    fn cipher_page_check_authenticates_unused_pages() {
+        use std::io::{Read, Seek, SeekFrom, Write};
+        let path = std::env::temp_dir().join(format!(
+            "chur-cipher-pages-{}",
+            chur_crypto::random::id().expect("id").to_hex()
+        ));
+        let root = chur_crypto::random::secret::<32>().expect("root");
+        let vault = chur_crypto::random::id().expect("vault");
+        let key = CatalogKey::derive(&root, &vault).expect("key");
+        let mut db = CatalogDb::open(&CatalogLocation::File(&path), &key).expect("catalog");
+        db.connection().execute_batch("CREATE TABLE unused(data BLOB); INSERT INTO unused VALUES(randomblob(65536)); DROP TABLE unused;").expect("unused pages");
+        db.checkpoint().expect("checkpoint");
+        db.verify_cipher_pages().expect("valid pages");
+        db.close().expect("close");
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("file");
+        file.seek(SeekFrom::End(-100)).expect("seek");
+        let mut byte = [0];
+        file.read_exact(&mut byte).expect("read");
+        byte[0] ^= 1;
+        file.seek(SeekFrom::End(-100)).expect("seek");
+        file.write_all(&byte).expect("flip");
+        file.sync_all().expect("sync");
+        drop(file);
+        let db = CatalogDb::open(&CatalogLocation::File(&path), &key)
+            .expect("unread page does not block open");
+        assert!(db.verify_cipher_pages().is_err());
+        drop(db);
+        std::fs::remove_file(&path).expect("cleanup");
     }
 }

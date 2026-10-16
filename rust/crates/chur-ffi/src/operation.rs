@@ -111,6 +111,14 @@ impl Shared {
         self.cancelled.load(Ordering::Relaxed)
     }
 
+    /// Sets a total after an archive has authenticated and its logical plan is known.
+    pub fn set_total(&self, total: u64) {
+        let mut progress = crate::registry::lock(&self.progress);
+        if !progress.terminal {
+            progress.total = total;
+        }
+    }
+
     /// Records progress, unless the terminal result is already set.
     ///
     /// §9: no progress snapshot advances after the terminal flag is set.

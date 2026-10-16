@@ -553,4 +553,7 @@ internal actual object ChurNative {
     actual fun privateNoteChange(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int = ChurJni.privateNoteChange(session, request, destination.buffer, outWritten)
     actual fun privateNoteExportBegin(session: Long, noteId: ByteArray, expectedRevision: Long, destinationFd: Int, outOperation: LongArray): Int = ChurJni.privateNoteExportBegin(session, noteId, expectedRevision, destinationFd, outOperation)
 
+    actual fun selectiveExportBegin(session: Long, request: ByteArray, descriptor: Int, outOperation: LongArray): Int = ChurJni.selectiveExportBegin(session, request, descriptor, outOperation)
+    actual fun selectiveImportBegin(session: Long, request: ByteArray, descriptor: Int, outOperation: LongArray): Int = ChurJni.selectiveImportBegin(session, request, descriptor, outOperation)
+
 }

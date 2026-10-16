@@ -567,6 +567,28 @@ pub fn restore(
     credential: &[u8],
     progress: &mut impl Progress,
 ) -> Result<RestoreSummary> {
+    restore_inner(root_dir, source, credential, progress, None)
+}
+
+/// Restores an archive after authenticating all catalog pages before any migration.
+/// Logical import additionally verifies all container chunks before touching its target.
+pub fn restore_limited(
+    root_dir: &VaultRoot,
+    source: &mut (impl Read + Seek),
+    credential: &[u8],
+    progress: &mut impl Progress,
+    catalog_limit: u64,
+) -> Result<RestoreSummary> {
+    restore_inner(root_dir, source, credential, progress, Some(catalog_limit))
+}
+
+fn restore_inner(
+    root_dir: &VaultRoot,
+    source: &mut (impl Read + Seek),
+    credential: &[u8],
+    progress: &mut impl Progress,
+    catalog_limit: Option<u64>,
+) -> Result<RestoreSummary> {
     // §11 and `VAULT_DESCRIPTOR_V1.md` §11: the registry holds two identities.
     ensure!(
         root_dir.registry_names()?.len() < chur_catalog::paths::REGISTRY_MAX,
@@ -578,6 +600,13 @@ pub fn restore(
         .seek(SeekFrom::End(0))
         .map_err(|_| chur_core::err!(IoFailure, "the package length could not be read"))?;
     let slots = scan(source, package_length)?;
+    if let Some(limit) = catalog_limit {
+        ensure!(
+            find(&slots, RecordType::CatalogExport)?.payload_length <= limit,
+            ResourceLimitExceeded,
+            "the archive catalog exceeds its verification bound"
+        );
+    }
 
     // §8 steps 2 and 3. The root comes from a portable slot of the package's own
     // descriptor, so the manifest key exists only for a credential that opens
@@ -724,6 +753,17 @@ pub fn restore(
             &chur_catalog::db::CatalogLocation::File(&catalog_path),
             &catalog_key,
         )?;
+        if progress.cancelled() {
+            return Err(progress::cancelled(
+                "the archive verification was cancelled",
+            ));
+        }
+        catalog.verify_cipher_pages()?;
+        if progress.cancelled() {
+            return Err(progress::cancelled(
+                "the archive verification was cancelled",
+            ));
+        }
         if vault::prepare_restored_catalog(&mut catalog, &local)? {
             let target = chur_format::constants::CATALOG_FORMAT_VERSION_V9;
             let migration_steps = target - local.catalog.catalog_format_version;

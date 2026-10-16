@@ -111,6 +111,16 @@ class ExportDestinations(
         }
     }
 
+    override fun archiveCapacity(target: ExportTarget): Long = when (target) {
+        ExportTarget.FILES -> Long.MAX_VALUE
+        ExportTarget.SHARE -> {
+            val singleLimit = 4L * 1024 * 1024 * 1024
+            if (scratchReservations.size >= 4) 0L
+            else minOf(singleLimit, 2 * singleLimit - scratchReservations.values.sum()).coerceAtLeast(0)
+        }
+        else -> 0L
+    }
+
     override fun create(displayName: String, contentType: String): ExportSink.Destination? =
         create(displayName, contentType, ExportTarget.DEFAULT, null)
 

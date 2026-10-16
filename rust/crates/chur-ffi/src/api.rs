@@ -422,6 +422,7 @@ pub unsafe extern "C" fn chur_vault_unlock(
         // call observes an entry that is about to be deleted and a crash the
         // previous process died in leaves no readable plaintext behind it.
         export::clear_scratch(&session)?;
+        crate::selective::sweep_staging(&session)?;
         if let Err(error) = crate::product::sweep_expired_trash(&mut session, now) {
             let _ = session.lock();
             return Err(error);

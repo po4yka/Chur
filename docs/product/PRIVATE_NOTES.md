@@ -44,6 +44,10 @@ The normal native Export operation owns a duplicate destination descriptor, repo
 
 Portable backup includes the encrypted catalog and its note tables for the selected identity. Restore preserves notes, revisions, pin state, Trash, and search. It does not merge the sibling identity or copy notes into the public shell. Historical backups remain separate copies with their original credentials and retention.
 
+### Selective encrypted archives
+
+The list and saved-note editor also offer [selective encrypted archives](SELECTIVE_ENCRYPTED_EXPORT.md). Select page or a long press starts a note selection; selected saved revisions can span pages. The archive has independent keys and a new password. It opens through separate Restore or imports fresh copies into an existing vault. This action remains separate from the deliberate plaintext TXT export.
+
 ## Storage and compatibility
 
 See [`../format/CATALOG_SCHEMA_V9.md`](../format/CATALOG_SCHEMA_V9.md), [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md) §6.25, and [`../adr/0061-local-private-notes.md`](../adr/0061-local-private-notes.md). The normal authenticated schema migration upgrades v8 to v9. Older clients fail closed on the newer catalog; no media container or sync record changes.

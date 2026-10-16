@@ -6,6 +6,16 @@ import kotlin.test.assertFalse
 
 class ActiveOperationTest {
     @Test
+    fun archive_progress_counts_completed_items_without_using_byte_units() {
+        val exporting = ActiveOperation(1, "archive-export", processed = 2, total = 5, stage = 2)
+        assertEquals("Creating encrypted archive · 2 of 5 items", exporting.description)
+        assertEquals("Creating encrypted archive, 40 percent", exporting.spoken)
+        val importing = exporting.copy(name = "archive-import")
+        assertEquals("Importing encrypted archive · 2 of 5 items", importing.description)
+        assertEquals("Importing encrypted archive · Cancelling", importing.copy(cancelling = true).description)
+    }
+
+    @Test
     fun album_export_counts_items_and_does_not_use_import_phase_words() {
         val work = ActiveOperation(1, "album-export", item = 2, items = 9, processed = 44, total = 100, stage = 2)
         assertEquals("Exporting item 2 of 9 · Writing", work.description)

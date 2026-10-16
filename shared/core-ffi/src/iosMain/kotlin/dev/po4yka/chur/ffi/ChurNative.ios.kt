@@ -17,6 +17,8 @@ import dev.po4yka.chur.native.chur_private_note_get
 import dev.po4yka.chur.native.chur_private_note_save
 import dev.po4yka.chur.native.chur_private_note_change
 import dev.po4yka.chur.native.chur_private_note_export_begin
+import dev.po4yka.chur.native.chur_selective_export_begin
+import dev.po4yka.chur.native.chur_selective_import_begin
 import dev.po4yka.chur.native.chur_abi_version_major
 import dev.po4yka.chur.native.chur_abi_version_minor
 import dev.po4yka.chur.native.chur_album_create
@@ -1409,6 +1411,19 @@ internal actual object ChurNative {
         require(noteId.size == 16)
         val operation = alloc<chur_handle_tVar>()
         val status = noteId.usePinned { pin -> chur_private_note_export_begin(session.toULong(), pin.addressOf(0).reinterpret(), expectedRevision.toULong(), destinationFd, operation.ptr) }
+        if (status == 0) outOperation[0] = operation.value.toLong()
+        status
+    }
+
+    actual fun selectiveExportBegin(session: Long, request: ByteArray, descriptor: Int, outOperation: LongArray): Int = memScoped {
+        val operation = alloc<chur_handle_tVar>()
+        val status = request.usePinned { pin -> chur_selective_export_begin(session.toULong(), pin.addressOf(0).reinterpret(), request.size.toUInt(), descriptor, operation.ptr) }
+        if (status == 0) outOperation[0] = operation.value.toLong()
+        status
+    }
+    actual fun selectiveImportBegin(session: Long, request: ByteArray, descriptor: Int, outOperation: LongArray): Int = memScoped {
+        val operation = alloc<chur_handle_tVar>()
+        val status = request.usePinned { pin -> chur_selective_import_begin(session.toULong(), pin.addressOf(0).reinterpret(), request.size.toUInt(), descriptor, operation.ptr) }
         if (status == 0) outOperation[0] = operation.value.toLong()
         status
     }

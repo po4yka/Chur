@@ -20,6 +20,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import dev.po4yka.chur.app.ActiveOperation
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.saveable.LocalSaveableStateRegistry
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -437,7 +440,23 @@ fun RestoreBackupScreen(
     onBack: () -> Unit,
     onCancel: () -> Unit = {},
 ) {
+    CompositionLocalProvider(LocalSaveableStateRegistry provides null) {
+        RestoreArchiveContent(busy, error, cancelled, operation, onChoose, onBack, onCancel)
+    }
+}
+
+@Composable
+private fun RestoreArchiveContent(
+    busy: Boolean,
+    error: String?,
+    cancelled: Boolean,
+    operation: ActiveOperation?,
+    onChoose: (String) -> Unit,
+    onBack: () -> Unit,
+    onCancel: () -> Unit,
+) {
     var password by remember { mutableStateOf("") }
+    DisposableEffect(Unit) { onDispose { password = "" } }
     val colors = LocalChurColors.current
     Surface(color = colors.canvas, modifier = Modifier.fillMaxSize()) {
         Column(
@@ -450,11 +469,12 @@ fun RestoreBackupScreen(
                 modifier = Modifier.widthIn(max = 420.dp),
                 verticalArrangement = Arrangement.spacedBy(ChurSpacing.three),
             ) {
-                Text("Restore from a backup", style = MaterialTheme.typography.headlineSmall)
+                Text("Restore a backup or archive", style = MaterialTheme.typography.headlineSmall)
                 Text(
-                    "Enter the password or recovery phrase of the vault the backup came from. " +
-                        "Then choose the backup file. The file is read on this device. Chur keeps " +
-                        "no copy of the file or credential.",
+                    "Enter the password of the archive, or the password or recovery phrase of the backup. " +
+                        "Then choose the file. Restore creates a separate vault and does not replace existing data. " +
+                        "If this device cannot add another vault, use an empty installation. " +
+                        "To add items to your current vault instead, use Import encrypted archive.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = colors.inkMuted,
                 )
@@ -471,7 +491,7 @@ fun RestoreBackupScreen(
                 )
                 FormMessage(error, color = if (cancelled) colors.inkMuted else colors.error)
                 Button(
-                    onClick = { onChoose(password) },
+                    onClick = { val entered = password; password = ""; onChoose(entered) },
                     enabled = !busy && password.isNotEmpty(),
                     modifier = Modifier.fillMaxWidth(),
                 ) {

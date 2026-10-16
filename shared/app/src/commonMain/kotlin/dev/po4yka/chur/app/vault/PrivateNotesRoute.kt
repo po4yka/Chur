@@ -18,6 +18,7 @@ import dev.po4yka.chur.app.ActiveOperation
 import dev.po4yka.chur.app.Notice
 import dev.po4yka.chur.app.PrivateNotesController
 import dev.po4yka.chur.ffi.PrivateNote
+import dev.po4yka.chur.ffi.PrivateNoteSelection
 import dev.po4yka.chur.vault.VaultRepository
 import dev.po4yka.chur.vault.VaultState
 
@@ -36,13 +37,15 @@ fun PrivateNotesRoute(
     onCancelOperation: () -> Unit = {},
     notice: Notice? = null,
     onNoticeShown: (Long) -> Unit = {},
+    onEncryptedExport: (List<PrivateNoteSelection>) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val close by rememberUpdatedState(onClose)
     val export by rememberUpdatedState(onExport)
     val touch by rememberUpdatedState(onTouch)
+    val encryptedExport by rememberUpdatedState(onEncryptedExport)
     val controller = remember(vault, generation) {
-        PrivateNotesController(vault, generation, scope, { close() }, { export(it) }, { touch() })
+        PrivateNotesController(vault, generation, scope, { close() }, { export(it) }, { touch() }, { encryptedExport(it) })
     }
     DisposableEffect(controller) { onDispose { controller.close() } }
     val session by vault.state.collectAsState()

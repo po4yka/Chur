@@ -5,6 +5,7 @@ import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.PrivateNote
 import dev.po4yka.chur.ffi.PrivateNoteAction
 import dev.po4yka.chur.ffi.PrivateNotePage
+import dev.po4yka.chur.ffi.PrivateNoteSelection
 import dev.po4yka.chur.ffi.PrivateNoteSummary
 import dev.po4yka.chur.vault.VaultRepository
 import dev.po4yka.chur.vault.VaultState
@@ -39,7 +40,7 @@ data class PrivateNoteEditorState(
     override fun toString(): String = "PrivateNoteEditorState(<redacted>)"
 }
 
-enum class PrivateNoteConfirmation { LEAVE, TRASH, PURGE, EXPORT }
+enum class PrivateNoteConfirmation { LEAVE, TRASH, PURGE, EXPORT, ENCRYPTED_EXPORT }
 
 data class PrivateNotesUiState(
     val notes: List<PrivateNoteSummary> = emptyList(),
@@ -53,6 +54,7 @@ data class PrivateNotesUiState(
     val page: Int = 1,
     val hasPrevious: Boolean = false,
     val hasNext: Boolean = false,
+    val selection: Map<String, PrivateNoteSelection> = emptyMap(),
 ) {
     override fun toString(): String = "PrivateNotesUiState(<redacted>)"
 }
@@ -89,10 +91,12 @@ class PrivateNotesController internal constructor(
     private val onExport: (PrivateNote) -> Unit,
     private val dispatcher: CoroutineDispatcher,
     private val onActivity: () -> Unit = {},
+    private val onEncryptedExport: (List<PrivateNoteSelection>) -> Unit = {},
 ) : PrivateNotesActions {
     constructor(vault: VaultRepository, generation: Long, scope: CoroutineScope,
-        onLeave: () -> Unit, onExport: (PrivateNote) -> Unit, onActivity: () -> Unit = {}) :
-        this(generation, vault.state, VaultPrivateNotesAccess(vault), scope, onLeave, onExport, Dispatchers.Default, onActivity)
+        onLeave: () -> Unit, onExport: (PrivateNote) -> Unit, onActivity: () -> Unit = {},
+        onEncryptedExport: (List<PrivateNoteSelection>) -> Unit = {}) :
+        this(generation, vault.state, VaultPrivateNotesAccess(vault), scope, onLeave, onExport, Dispatchers.Default, onActivity, onEncryptedExport)
 
     private val job = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + job)
@@ -128,7 +132,10 @@ class PrivateNotesController internal constructor(
         job.cancel()
     }
 
-    override fun refresh() = loadPage(reset = true)
+    override fun refresh() {
+        update { it.copy(selection = emptyMap()) }
+        loadPage(reset = true)
+    }
     override fun search(terms: String) {
         if (!current() || state.value.editor != null || state.value.busy) return
         if (terms != state.value.terms) onActivity()
@@ -136,12 +143,12 @@ class PrivateNotesController internal constructor(
             update { it.copy(error = "Use at most 256 UTF-8 bytes and 32 words in the search.") }
             return
         }
-        update { it.copy(terms = terms, error = null) }
+        update { it.copy(terms = terms, error = null, selection = if (terms != it.terms) emptyMap() else it.selection) }
         loadPage(reset = true, debounce = true)
     }
     override fun showTrash(trash: Boolean) {
         if (!current() || state.value.editor != null || state.value.busy) return
-        update { it.copy(trash = trash, terms = "", error = null) }
+        update { it.copy(trash = trash, terms = "", error = null, selection = emptyMap()) }
         loadPage(reset = true)
     }
     override fun nextPage() {
@@ -183,10 +190,10 @@ class PrivateNotesController internal constructor(
         if (!current() || state.value.busy || state.value.editor != null) return
         listing?.cancel()
         request++
-        update { it.copy(editor = PrivateNoteEditorState(), confirmation = null, error = null, loading = false) }
+        update { it.copy(editor = PrivateNoteEditorState(), confirmation = null, error = null, loading = false, selection = emptyMap()) }
     }
     override fun open(note: PrivateNoteSummary) = runAction {
-        if (state.value.editor != null) return@runAction
+        if (state.value.editor != null || state.value.selection.isNotEmpty()) return@runAction
         listing?.cancel()
         request++
         val loaded = withContext(dispatcher) { access.load(generation, note.noteId) }
@@ -211,6 +218,7 @@ class PrivateNotesController internal constructor(
         if (!current() || state.value.busy) return
         val editor = state.value.editor
         when {
+            editor == null && state.value.selection.isNotEmpty() -> clearSelection()
             editor == null -> onLeave()
             editor.dirty -> update { it.copy(confirmation = PrivateNoteConfirmation.LEAVE) }
             else -> leaveEditor()
@@ -227,8 +235,9 @@ class PrivateNotesController internal constructor(
     }
     override fun save() = saveThen()
     override fun saveAndBack() = saveThen(leave = true)
-    override fun saveAndExport() = saveThen(export = true)
-    private fun saveThen(leave: Boolean = false, export: Boolean = false) {
+    override fun saveAndExport() = saveThen(export = true,
+        encrypted = state.value.confirmation == PrivateNoteConfirmation.ENCRYPTED_EXPORT)
+    private fun saveThen(leave: Boolean = false, export: Boolean = false, encrypted: Boolean = false) {
         val editor = state.value.editor ?: return
         if (!editor.canSave) return
         update { it.copy(confirmation = null) }
@@ -236,7 +245,7 @@ class PrivateNotesController internal constructor(
             val saved = withContext(dispatcher) { access.save(generation, editor.saved, editor.title, editor.body, editor.pinned) }
             update { it.copy(editor = PrivateNoteEditorState(saved)) }
             when {
-                export && current() -> onExport(saved)
+                export && current() -> if (encrypted) sendEncrypted(listOf(saved.selection())) else onExport(saved)
                 leave -> leaveEditor()
             }
         }
@@ -247,6 +256,42 @@ class PrivateNotesController internal constructor(
         if (editor.dirty) update { it.copy(confirmation = PrivateNoteConfirmation.EXPORT) }
         else editor.saved?.let(onExport)
     }
+    override fun exportEncrypted() {
+        if (!current() || state.value.busy) return
+        val editor = state.value.editor?.takeUnless { it.trashed } ?: return
+        if (editor.dirty) update { it.copy(confirmation = PrivateNoteConfirmation.ENCRYPTED_EXPORT) }
+        else editor.saved?.let { sendEncrypted(listOf(it.selection())) }
+    }
+    override fun toggleSelection(note: PrivateNoteSummary) {
+        if (!current() || state.value.busy || state.value.trash || state.value.editor != null || note.trashedAtMs != null) return
+        val selected = state.value.selection
+        if (note.id !in selected && selected.size >= 1_000) {
+            update { it.copy(error = "Select at most 1000 private notes for one archive.") }
+            return
+        }
+        update { it.copy(selection = if (note.id in selected) selected - note.id
+            else selected + (note.id to PrivateNoteSelection(note.noteId.copyOf(), note.revision)), error = null) }
+    }
+    override fun selectPage() {
+        if (!current() || state.value.busy || state.value.loading || state.value.trash || state.value.editor != null) return
+        val additions = state.value.notes.filter { it.trashedAtMs == null && it.id !in state.value.selection }
+        if (state.value.selection.size + additions.size > 1_000) {
+            update { it.copy(error = "Select at most 1000 private notes for one archive.") }
+            return
+        }
+        update { it.copy(selection = it.selection + additions.associate { note ->
+            note.id to PrivateNoteSelection(note.noteId.copyOf(), note.revision)
+        }, error = null) }
+    }
+    override fun clearSelection() = update { it.copy(selection = emptyMap()) }
+    override fun exportEncryptedSelection() {
+        if (!current() || state.value.busy || state.value.trash || state.value.editor != null) return
+        sendEncrypted(state.value.selection.values.toList())
+    }
+    private fun sendEncrypted(notes: List<PrivateNoteSelection>) {
+        if (current() && notes.isNotEmpty()) onEncryptedExport(notes.map { PrivateNoteSelection(it.noteId.copyOf(), it.revision) })
+    }
+    private fun PrivateNote.selection() = PrivateNoteSelection(noteId.copyOf(), revision)
     override fun requestTrash() {
         if (state.value.editor?.saved != null) update { it.copy(confirmation = PrivateNoteConfirmation.TRASH) }
     }
@@ -267,6 +312,7 @@ class PrivateNotesController internal constructor(
         }
     }
     override fun pin(note: PrivateNoteSummary) = runAction {
+        if (state.value.selection.isNotEmpty()) return@runAction
         withContext(dispatcher) { access.change(generation, note.noteId, note.revision,
             if (note.pinned) PrivateNoteAction.UNPIN else PrivateNoteAction.PIN) }
         loadPage(reset = true)

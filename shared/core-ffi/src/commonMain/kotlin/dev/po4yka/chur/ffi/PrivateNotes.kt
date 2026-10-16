@@ -43,6 +43,7 @@ internal class PrivateNoteWriter(size: Int) {
     fun byte(value: Int) { bytes[at++] = value.toByte() }
     fun number(value: Long) { for (shift in 56 downTo 0 step 8) byte((value ushr shift).toInt()) }
     fun raw(value: ByteArray) { value.copyInto(bytes, at); at += value.size }
+    fun count(value: Int) { for (shift in 24 downTo 0 step 8) byte(value ushr shift) }
     fun sized(value: ByteArray) { for (shift in 24 downTo 0 step 8) byte(value.size ushr shift); raw(value) }
 }
 internal class PrivateNoteReader(private val bytes: ByteArray) {

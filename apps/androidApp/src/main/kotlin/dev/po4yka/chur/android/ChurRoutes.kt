@@ -8,6 +8,10 @@ import android.content.Intent
 import android.content.res.Configuration
 import android.net.Uri
 import android.os.PersistableBundle
+import androidx.activity.compose.ManagedActivityResultLauncher
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.key
+import androidx.compose.runtime.saveable.LocalSaveableStateRegistry
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -93,6 +97,12 @@ import dev.po4yka.chur.app.vault.VaultDestination
 import dev.po4yka.chur.app.vault.ContentView
 import dev.po4yka.chur.app.vault.AlbumOrder
 import dev.po4yka.chur.app.vault.browseQuery
+import dev.po4yka.chur.app.ArchiveCredential
+import dev.po4yka.chur.app.ArchiveSource
+import dev.po4yka.chur.app.ArchiveTransferOwner
+import dev.po4yka.chur.app.SelectiveExportRequest
+import dev.po4yka.chur.app.vault.SelectiveExportDialog
+import dev.po4yka.chur.app.vault.SelectiveImportDialog
 import dev.po4yka.chur.app.PrivateNoteExportRequest
 import dev.po4yka.chur.app.vault.PrivateNotesRoute
 import dev.po4yka.chur.app.vault.VaultShell
@@ -331,68 +341,62 @@ private fun RestoreRoute(controller: ChurController) {
     val formError by controller.formError.collectAsState()
     val operation by controller.activeOperation.collectAsState()
     val context = LocalContext.current
-    var password by remember { mutableStateOf("") }
+    var pending by remember { mutableStateOf<ArchiveCredential?>(null) }
+    var pickerOpen by remember { mutableStateOf(false) }
     var running by remember { mutableStateOf(false) }
     var cancelled by remember { mutableStateOf(false) }
-
-    val picker = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument(),
-    ) { uri ->
-        controller.endHostActivity()
-        // §8 reads the package from both ends, so the descriptor must seek. A
-        // provider that streams gives one that cannot, and the boundary refuses
-        // with its own status rather than reading a package it cannot verify.
-        //
-        // `openFileDescriptor` throws when the provider cannot open the
-        // document, and throws again when a grant has gone - which a process
-        // death while the documents UI was up produces, because the result is
-        // then delivered into a new composition. This runs on the main thread
-        // outside the controller's guard, where a throw ends the process rather
-        // than the attempt: `PLAINTEXT_LIFECYCLE.md` §8 wants the orderly lock.
-        val handle = uri?.let {
-            runCatching { context.contentResolver.openFileDescriptor(it, "r") }.getOrNull()
+    DisposableEffect(controller) {
+        onDispose {
+            pending?.clear()
+            pending = null
+            if (pickerOpen) { pickerOpen = false; controller.endHostActivity() }
         }
-        if (handle == null) {
-            // A dismissal and an unreadable file end the attempt the same way.
-            // Only the second one has anything to say.
-            if (uri != null) controller.report("That file could not be opened.")
-            running = false
-            password = ""
-        } else {
-            controller.restoreBackup(handle.fd, password) { wasCancelled ->
-                handle.close()
-                running = false
-                cancelled = wasCancelled
-                password = ""
+    }
+    val restorePickerOwner = remember { Any() }
+    lateinit var picker: ManagedActivityResultLauncher<Array<String>, Uri?>
+    key(restorePickerOwner) {
+        CompositionLocalProvider(LocalSaveableStateRegistry provides null) {
+            picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                val credential = pending
+                pending = null
+                if (pickerOpen) { pickerOpen = false; controller.endHostActivity() }
+                if (credential != null) {
+                    val handle = uri?.let { runCatching { context.contentResolver.openFileDescriptor(it, "r") }.getOrNull() }
+                    if (handle == null) {
+                        credential.clear()
+                        if (uri != null) controller.report("That file could not be opened.")
+                        running = false
+                    } else {
+                        controller.restoreBackup(handle.fd, credential) { wasCancelled ->
+                            handle.close()
+                            running = false
+                            cancelled = wasCancelled
+                        }
+                    }
+                }
             }
         }
     }
-
-    // Back waits while a restore runs, as the screen's own Back does.
     val back = { controller.goTo(AppRoute.PublicShell) }
     BackHandler { if (!running) back() }
     RestoreBackupScreen(
-        busy = running,
-        error = formError,
-        cancelled = cancelled,
-        operation = operation,
+        busy = running, error = formError, cancelled = cancelled, operation = operation,
         onChoose = { entered ->
-            // The flag is what stops a second package being restored on top of
-            // the first: both would pass the registry check of §11 while the
-            // first was still running, and the root would end with two
-            // identities behind one credential.
-            password = entered
+            pending?.clear()
+            pending = ArchiveCredential(entered)
             running = true
-            // The flag and the message it styles clear together. A dismissed
-            // picker reports nothing, so a "Cancelled." left from the last
-            // attempt would otherwise stay on screen as an error.
             cancelled = false
             controller.report(null)
             controller.beginHostActivity()
-            picker.launch(arrayOf("*/*"))
+            pickerOpen = true
+            try { picker.launch(arrayOf("*/*")) } catch (_: Exception) {
+                pending?.clear(); pending = null
+                pickerOpen = false; controller.endHostActivity()
+                running = false
+                controller.report("The file picker could not be opened.")
+            }
         },
-        onBack = back,
-        onCancel = controller::cancelActiveOperation,
+        onBack = back, onCancel = controller::cancelActiveOperation,
     )
 }
 
@@ -421,6 +425,10 @@ private fun VaultRoute(controller: ChurController) {
     val deviceConnected by deviceControl.connected.collectAsState()
 
     val generation = (vaultState as? VaultState.Unlocked)?.generation ?: 0L
+    val archiveTransfers = remember(controller, generation) { ArchiveTransferOwner(controller, generation) }
+    DisposableEffect(archiveTransfers) { onDispose { archiveTransfers.close() } }
+    var choosingArchive by remember(generation) { mutableStateOf<SelectiveExportRequest?>(null) }
+    var choosingArchiveImport by remember(generation) { mutableStateOf(false) }
     var showingPrivateNotes by remember(generation) { mutableStateOf(false) }
     var choosingPrivateNoteExport by remember(generation) { mutableStateOf<PrivateNoteExportRequest?>(null) }
     var pendingPrivateNoteExport by remember(generation) { mutableStateOf<PrivateNoteExportRequest?>(null) }
@@ -556,6 +564,23 @@ private fun VaultRoute(controller: ChurController) {
             }
         }
     }
+    lateinit var archiveExportPicker: ManagedActivityResultLauncher<String, Uri?>
+    lateinit var archiveImportPicker: ManagedActivityResultLauncher<Array<String>, Uri?>
+    // A new session gets new launcher keys. A stale result cannot consume a new session's credential.
+    key(archiveTransfers) {
+        CompositionLocalProvider(LocalSaveableStateRegistry provides null) {
+            archiveExportPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+                archiveTransfers.exportedFile(uri?.toString())
+            }
+            archiveImportPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                val handle = uri?.let { runCatching { context.contentResolver.openFileDescriptor(it, "r") }.getOrNull() }
+                if (uri != null && handle == null && (controller.vaultState.value as? VaultState.Unlocked)?.generation == generation) {
+                    controller.report("That file could not be opened.")
+                }
+                archiveTransfers.importedFile(handle?.let { ArchiveSource(it.fd) { it.close() } })
+            }
+        }
+    }
     val privateNoteFilePicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
         val request = pendingPrivateNoteExport
         pendingPrivateNoteExport = null
@@ -629,6 +654,13 @@ private fun VaultRoute(controller: ChurController) {
                     importAlbumId = openAlbum?.albumId
                     controller.beginHostActivity()
                     audioPicker.launch(arrayOf("audio/*"))
+                },
+            )
+            ListItem(
+                headlineContent = { Text("Encrypted archive") },
+                modifier = Modifier.clickable(role = Role.Button) {
+                    choosingImport = false
+                    choosingArchiveImport = true
                 },
             )
             ListItem(
@@ -840,6 +872,21 @@ private fun VaultRoute(controller: ChurController) {
         )
     }
 
+    choosingArchive?.let { request ->
+        SelectiveExportDialog(summary = request.summary, enabled = operation == null,
+            onChoose = { password, target ->
+                choosingArchive = null
+                archiveTransfers.export(request, ArchiveCredential(password), target) { archiveExportPicker.launch(it) }
+            }, onDismiss = { choosingArchive = null })
+    }
+    if (choosingArchiveImport) {
+        SelectiveImportDialog(enabled = operation == null,
+            onChoose = { password ->
+                choosingArchiveImport = false
+                archiveTransfers.import(ArchiveCredential(password)) { archiveImportPicker.launch(arrayOf("*/*")) }
+            }, onDismiss = { choosingArchiveImport = false })
+    }
+
     if (showingPrivateNotes) {
         PrivateNotesRoute(
             vault = controller.vault, generation = generation,
@@ -850,6 +897,7 @@ private fun VaultRoute(controller: ChurController) {
             systemBack = { enabled, back -> BackHandler(enabled = enabled, onBack = back) },
             operation = operation, onCancelOperation = controller::cancelActiveOperation,
             notice = notice, onNoticeShown = controller::consume,
+            onEncryptedExport = { choosingArchive = SelectiveExportRequest(generation, notes = it) },
         )
         choosingPrivateNoteExport?.let { request ->
             ExportOptionsDialog(media = false, files = true, share = true, downloads = true,
@@ -985,6 +1033,7 @@ private fun VaultRoute(controller: ChurController) {
                 onRestoreTrash = { controller.restoreTrash { selection = emptySet() } },
                 onRenameAlbum = { album, name -> controller.renameAlbum(album.albumId, name) },
                 onExportAlbum = { exportingAlbum = it },
+                onEncryptedExportAlbum = { choosingArchive = SelectiveExportRequest(generation, albumIds = listOf(it.albumId)) },
                 onDeleteAlbum = { album ->
                     controller.deleteAlbum(album.albumId) {
                         if (openAlbum?.id == album.id) openAlbum = null
@@ -1027,10 +1076,16 @@ private fun VaultRoute(controller: ChurController) {
                 onSetAutoLock = controller::setAutoLock,
                 onDeviceControl = { deviceControl.start() },
                 onCreateBackup = controller::createBackup,
+                onImportArchive = { choosingArchiveImport = true },
+                onRestoreArchive = controller::restoreArchiveAsSeparateVault,
                 onCreateSecondIdentity = controller::createSecondIdentity,
                 onSelectAll = { selection = page.objects.map { it.id }.toSet() },
                 onClearSelection = { selection = emptySet() },
                 onExportSelection = { choosingExport = true },
+                onEncryptedExportSelection = {
+                    if (selection.size > 1000) controller.report("Select at most 1000 items for one encrypted archive.")
+                    else choosingArchive = SelectiveExportRequest(generation, objectIds = selection.sorted().map { it.fromHex() })
+                },
                 onAddSelectionToAlbum = {
                     controller.loadAlbums()
                     organizingIds = selection.sorted().map { it.fromHex() }

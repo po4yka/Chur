@@ -806,6 +806,31 @@ object ChurVault {
         }
     }
 
+    fun beginSelectiveExport(session: Long, objectIds: List<ByteArray>, albumIds: List<ByteArray>, notes: List<PrivateNoteSelection>, password: ByteArray, destinationFd: Int, maxOutputBytes: Long = Long.MAX_VALUE): Long {
+        require(password.size in 1..1024 && objectIds.size <= 1000 && albumIds.size <= 1000 && notes.size <= 1000)
+        require(objectIds.all { it.size == 16 } && albumIds.all { it.size == 16 } && notes.all { it.noteId.size == 16 && it.revision > 0 })
+        val w = PrivateNoteWriter(1 + 4 + password.size + 12 + objectIds.size * 16 + albumIds.size * 16 + notes.size * 24 + 8)
+        w.byte(1); w.sized(password)
+        w.count(objectIds.size); objectIds.forEach { w.raw(it) }
+        w.count(albumIds.size); albumIds.forEach { w.raw(it) }
+        w.count(notes.size); notes.forEach { w.raw(it.noteId); w.number(it.revision) }
+        require(maxOutputBytes > 0); w.number(maxOutputBytes)
+        val out = LongArray(1)
+        try { ChurFailure.check(ChurNative.selectiveExportBegin(session, w.bytes, destinationFd, out), "encrypted export") }
+        finally { w.bytes.fill(0) }
+        return out[0]
+    }
+
+    fun beginSelectiveImport(session: Long, sourceFd: Int, password: ByteArray): Long {
+        require(password.size in 1..1024)
+        val w = PrivateNoteWriter(1 + 4 + password.size)
+        w.byte(1); w.sized(password)
+        val out = LongArray(1)
+        try { ChurFailure.check(ChurNative.selectiveImportBegin(session, w.bytes, sourceFd, out), "encrypted archive import") }
+        finally { w.bytes.fill(0) }
+        return out[0]
+    }
+
     private fun noteControl(session: Long, request: ByteArray, call: (Long, ByteArray, ChurBuffer, IntArray) -> Int): ByteArray =
         try { withChurBuffer(1_048_576) { buffer ->
             val written = IntArray(1)
