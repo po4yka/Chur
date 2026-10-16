@@ -4,6 +4,11 @@ package dev.po4yka.chur.app
 
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -56,6 +61,7 @@ import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
 import dev.po4yka.chur.app.vault.viewerPages
 import dev.po4yka.chur.app.vault.viewerStill
 import dev.po4yka.chur.app.vault.VaultPlayer
+import dev.po4yka.chur.app.vault.VaultDocument
 import dev.po4yka.chur.app.vault.VaultUiState
 import dev.po4yka.chur.app.vault.ViewerChrome
 import dev.po4yka.chur.app.vault.ViewerScreen
@@ -241,8 +247,16 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     var openAlbum by remember { mutableStateOf<AlbumSummary?>(null) }
     var exportingAlbum by remember(generation) { mutableStateOf<AlbumSummary?>(null) }
     var albumPickerPending by remember(generation) { mutableStateOf(false) }
+    var documentPickerPending by remember(generation) { mutableStateOf(false) }
+    var choosingImportSource by remember(generation) { mutableStateOf(false) }
     DisposableEffect(controller, generation) {
         onDispose {
+            IosDocumentPicker.cancel?.invoke()
+            if (documentPickerPending) {
+                documentPickerPending = false
+                val current = controller.vaultState.value as? VaultState.Unlocked
+                if (current?.generation == generation) controller.endHostActivity()
+            }
             if (albumPickerPending) {
                 IosAlbumExportPicker.cancel?.invoke()
                 if (albumPickerPending) {
@@ -432,6 +446,99 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             onDelete = { confirmingEmptyTrash = false; controller.emptyTrash { selection = emptySet() } },
             onDismiss = { confirmingEmptyTrash = false })
     }
+    val importFiles: () -> Unit = {
+        val present = IosDocumentPicker.present
+        if (present == null) {
+            controller.report("This build cannot open the document picker.")
+        } else {
+            val albumId = openAlbum?.albumId
+            documentPickerPending = true
+            controller.beginHostActivity()
+            present { count, load, releaseSelection ->
+                val current = controller.vaultState.value as? VaultState.Unlocked
+                val currentSession = current?.generation == generation
+                val accepted = documentPickerPending && currentSession
+                if (documentPickerPending) {
+                    documentPickerPending = false
+                    if (currentSession) controller.endHostActivity()
+                }
+                if (!accepted || count <= 0) {
+                    releaseSelection()
+                } else {
+                    scope.launch {
+                        try {
+                            controller.importAll(importer, count, albumId) { index, prepare ->
+                                suspendCancellableCoroutine { continuation ->
+                                    load(index, prepare) { fd, name, type, size, release ->
+                                        val picked = codec.openDocument(fd, name, type, size, release)
+                                        continuation.resume(picked) { _, item, _ -> item?.close?.invoke() }
+                                    }
+                                }
+                            }
+                        } finally {
+                            releaseSelection()
+                        }
+                    }
+                }
+            }
+        }
+    }
+    val importMedia: () -> Unit = {
+        val present = IosMediaPicker.present
+        if (present == null) {
+            controller.report("This build cannot open the photo picker.")
+        } else {
+            val albumId = openAlbum?.albumId
+            controller.beginHostActivity()
+            present { count, load, review ->
+                controller.endHostActivity()
+                if (count > 0) {
+                    scope.launch {
+                        val outcomes = controller.importAll(importer, count, albumId) { index, prepare ->
+                            // One item is fetched and copied at a
+                            // time, and its copy is deleted when
+                            // its import closes it, so at most one
+                            // plaintext copy exists, `IOS.md` §15.2.
+                            val (path, name) = withContext(Dispatchers.Main) {
+                                suspendCancellableCoroutine { continuation ->
+                                    load(index, prepare) { path, name ->
+                                        continuation.resume(path to name) { _, _, _ ->
+                                            path?.let(::discardPickedCopy)
+                                        }
+                                    }
+                                }
+                            }
+                            path?.let { copy ->
+                                val media = codec.open(NSURL.fileURLWithPath(copy), name)
+                                if (media == null) discardPickedCopy(copy)
+                                media?.copy(close = {
+                                    media.close()
+                                    discardPickedCopy(copy)
+                                })
+                            }
+                        }
+                        val imported = importedOriginals(List(count) { it }, outcomes)
+                        if (imported.isNotEmpty() && controller.vaultState.value is VaultState.Unlocked) {
+                            originals = PickedOriginals(imported.size) { done -> review(imported, done) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (choosingImportSource) {
+        AlertDialog(
+            onDismissRequest = { choosingImportSource = false },
+            title = { Text("Import") },
+            text = {
+                Column {
+                    TextButton(onClick = { choosingImportSource = false; importMedia() }, modifier = Modifier.fillMaxWidth()) { Text("Photos and videos") }
+                    TextButton(onClick = { choosingImportSource = false; importFiles() }, modifier = Modifier.fillMaxWidth()) { Text("Documents and files") }
+                }
+            },
+            confirmButton = { TextButton(onClick = { choosingImportSource = false }) { Text("Cancel") } },
+        )
+    }
     exportingAlbum?.let { album ->
         AlbumExportDialog(
             album = album,
@@ -562,49 +669,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 onToggleSelection = { projection ->
                     selection = selection.toggle(projection.id)
                 },
-                onImport = {
-                    val present = IosMediaPicker.present
-                    if (present == null) {
-                        controller.report("This build cannot open the photo picker.")
-                    } else {
-                        val albumId = openAlbum?.albumId
-                        controller.beginHostActivity()
-                        present { count, load, review ->
-                            controller.endHostActivity()
-                            if (count > 0) {
-                                scope.launch {
-                                    val outcomes = controller.importAll(importer, count, albumId) { index, prepare ->
-                                        // One item is fetched and copied at a
-                                        // time, and its copy is deleted when
-                                        // its import closes it, so at most one
-                                        // plaintext copy exists, `IOS.md` §15.2.
-                                        val (path, name) = withContext(Dispatchers.Main) {
-                                            suspendCancellableCoroutine { continuation ->
-                                                load(index, prepare) { path, name ->
-                                                    continuation.resume(path to name) { _, _, _ ->
-                                                        path?.let(::discardPickedCopy)
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        path?.let { copy ->
-                                            val media = codec.open(NSURL.fileURLWithPath(copy), name)
-                                            if (media == null) discardPickedCopy(copy)
-                                            media?.copy(close = {
-                                                media.close()
-                                                discardPickedCopy(copy)
-                                            })
-                                        }
-                                    }
-                                    val imported = importedOriginals(List(count) { it }, outcomes)
-                                    if (imported.isNotEmpty() && controller.vaultState.value is VaultState.Unlocked) {
-                                        originals = PickedOriginals(imported.size) { done -> review(imported, done) }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                },
+                onImport = { choosingImportSource = true },
                 onSearch = {
                     terms = it
                 },
@@ -779,7 +844,7 @@ private fun IosViewerRoute(
     var confirmingDelete by remember(projection.id) { mutableStateOf(false) }
     var choosingExport by remember(projection.id) { mutableStateOf(false) }
     val chrome = remember { ViewerChrome() }
-    val chromePinned = showDetail || choosingTags || choosingExport || confirmingDelete || operation != null
+    val chromePinned = projection.mediaKind == 4 || showDetail || choosingTags || choosingExport || confirmingDelete || operation != null
     val chromeVisible = chrome.visible(chromePinned)
     // §6.2 and §13.1: the status bar is light over the black canvas and goes
     // with the chrome, and it gets the theme's style back when the viewer goes.
@@ -858,6 +923,11 @@ private fun IosViewerRoute(
                 )
             }
         },
+        document = if (projection.mediaKind == 4) {
+            { modifier, contentPadding ->
+                VaultDocument(controller.vault, generation, projection, detail, modifier, contentPadding)
+            }
+        } else null,
         waveform = waveform,
         operation = operation,
         onCancelOperation = controller::cancelActiveOperation,
@@ -1029,5 +1099,15 @@ public object IosBackupPicker {
 public object IosAlbumExportPicker {
     public var present: ((answer: (String?) -> Unit) -> Unit)? = null
     public var discard: ((token: String) -> Unit)? = null
+    public var cancel: (() -> Unit)? = null
+}
+
+/** The host retains source grants only until the sequential import closes them. */
+public object IosDocumentPicker {
+    public var present: ((answer: (
+        count: Int,
+        load: (index: Int, prepare: (processed: Long, total: Long) -> Boolean, loaded: (descriptor: Int, name: String?, contentType: String, size: Long, release: () -> Unit) -> Unit) -> Unit,
+        releaseSelection: () -> Unit,
+    ) -> Unit) -> Unit)? = null
     public var cancel: (() -> Unit)? = null
 }

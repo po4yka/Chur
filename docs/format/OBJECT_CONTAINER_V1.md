@@ -154,7 +154,9 @@ The manifest must not contain the wrapped `ObjectKey`, avoiding circular depende
 Initial benchmark candidates:
 
 - 256 KiB for small/photo/derived streams;
-- 1 MiB for video and large audio.
+- 1 MiB for video, audio, and opaque files.
+
+An opaque source can have an unknown or underreported length. This writer policy lets it reach the 1 TiB total bound without exceeding the chunk-count bound in §16. Empty opaque originals use the zero-chunk final commit in §11.
 
 Chunk size is recorded in the authenticated manifest and constrained by a supported range. It is not inferred from file type outside the encrypted manifest.
 

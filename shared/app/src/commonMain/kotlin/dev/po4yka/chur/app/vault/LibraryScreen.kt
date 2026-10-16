@@ -67,6 +67,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.IntegrityGlyph
+import dev.po4yka.chur.app.theme.FileGlyph
 import dev.po4yka.chur.app.theme.LocalChurColors
 import dev.po4yka.chur.app.theme.PrivateBoundaryMark
 import dev.po4yka.chur.app.theme.gridGeometry
@@ -482,7 +483,8 @@ private fun MediaRow(tile: LibraryTile, selecting: Boolean, onOpen: () -> Unit, 
                 androidx.compose.foundation.Image(bitmap = it, contentDescription = null,
                     contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
                     filterQuality = if (tile.thumbnailConcealed) FilterQuality.None else FilterQuality.Low)
-            } ?: Icon(IntegrityGlyph, contentDescription = null, tint = colors.inkMuted)
+            } ?: Icon(if (projection.mediaKind == MEDIA_CLASS_FILE) FileGlyph else IntegrityGlyph,
+                contentDescription = null, tint = colors.inkMuted)
         }
         // The label above says all of this in words, §23.2.
         Column(modifier = Modifier.weight(1f).clearAndSetSemantics {}) {
@@ -605,7 +607,7 @@ private fun MediaTile(
             // does not jump when a thumbnail arrives.
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Icon(
-                    IntegrityGlyph,
+                    if (tile.projection.mediaKind == MEDIA_CLASS_FILE) FileGlyph else IntegrityGlyph,
                     contentDescription = null,
                     tint = colors.inkMuted,
                 )
@@ -613,6 +615,12 @@ private fun MediaTile(
         }
         if (severity != StateSeverity.NONE) {
             StateBadge(severity = severity, modifier = Modifier.align(Alignment.TopStart))
+        }
+        if (tile.projection.mediaKind == MEDIA_CLASS_FILE) {
+            Text("File", modifier = Modifier.align(Alignment.BottomStart).padding(ChurSpacing.one)
+                .clip(RoundedCornerShape(ChurSpacing.one)).background(colors.surface)
+                .padding(horizontal = ChurSpacing.one), color = colors.ink,
+                style = MaterialTheme.typography.labelSmall)
         }
         if (tile.projection.durationMs > 0) {
             Text(

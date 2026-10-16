@@ -100,6 +100,7 @@ import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
 import dev.po4yka.chur.app.vault.viewerPages
 import dev.po4yka.chur.app.vault.viewerStill
 import dev.po4yka.chur.app.vault.VaultPlayer
+import dev.po4yka.chur.app.vault.VaultDocument
 import dev.po4yka.chur.app.vault.ViewerChrome
 import dev.po4yka.chur.app.vault.ViewerScreen
 import dev.po4yka.chur.app.vault.PresentedState
@@ -455,10 +456,17 @@ private fun VaultRoute(controller: ChurController) {
     var choosingExport by remember { mutableStateOf(false) }
     var exportingAlbum by remember(generation) { mutableStateOf<AlbumSummary?>(null) }
     var pendingAlbumExport by remember(generation) { mutableStateOf<ByteArray?>(null) }
+    var pendingDocumentImport by remember(generation) { mutableStateOf<Pair<Long, ByteArray?>?>(null) }
     DisposableEffect(controller, generation) {
         onDispose {
             if (pendingAlbumExport != null) {
                 pendingAlbumExport = null
+                if ((controller.vaultState.value as? VaultState.Unlocked)?.generation == generation) {
+                    controller.endHostActivity()
+                }
+            }
+            if (pendingDocumentImport != null) {
+                pendingDocumentImport = null
                 if ((controller.vaultState.value as? VaultState.Unlocked)?.generation == generation) {
                     controller.endHostActivity()
                 }
@@ -527,6 +535,16 @@ private fun VaultRoute(controller: ChurController) {
     // back to a document picker that allows multiple selection (§14.1).
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(), onPicked)
     val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments(), onPicked)
+    val documentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        val pending = pendingDocumentImport
+        pendingDocumentImport = null
+        if (pending != null && (controller.vaultState.value as? VaultState.Unlocked)?.generation == pending.first) {
+            controller.endHostActivity()
+            if (uris.isNotEmpty()) scope.launch {
+                controller.importAll(importer, uris.size, pending.second) { index, _ -> codec.open(uris[index], asFile = true) }
+            }
+        }
+    }
     val albumExportPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         val albumId = pendingAlbumExport
         pendingAlbumExport = null
@@ -570,7 +588,7 @@ private fun VaultRoute(controller: ChurController) {
         // button only closed it.
         ModalBottomSheet(onDismissRequest = { choosingImport = false }) {
             Text(
-                "Import media",
+                "Import",
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).semantics { heading() },
             )
@@ -590,6 +608,23 @@ private fun VaultRoute(controller: ChurController) {
                     importAlbumId = openAlbum?.albumId
                     controller.beginHostActivity()
                     audioPicker.launch(arrayOf("audio/*"))
+                },
+            )
+            ListItem(
+                headlineContent = { Text("Documents and files") },
+                modifier = Modifier.clickable(role = Role.Button) {
+                    choosingImport = false
+                    if ((controller.vaultState.value as? VaultState.Unlocked)?.generation == generation) {
+                        pendingDocumentImport = generation to openAlbum?.albumId?.copyOf()
+                        controller.beginHostActivity()
+                        try {
+                            documentPicker.launch(arrayOf("*/*"))
+                        } catch (_: Exception) {
+                            pendingDocumentImport = null
+                            controller.endHostActivity()
+                            controller.report("The file picker could not be opened.")
+                        }
+                    }
                 },
             )
         }
@@ -1093,7 +1128,7 @@ private fun ViewerRoute(
         }
     }
     val chrome = remember { ViewerChrome() }
-    val chromePinned = showDetail || choosingTags || choosingExport || confirmingDelete || operation != null
+    val chromePinned = projection.mediaKind == 4 || showDetail || choosingTags || choosingExport || confirmingDelete || operation != null
     val chromeVisible = chrome.visible(chromePinned)
     // §13.1: the system bars go with the chrome, so a tap leaves the media
     // alone on the screen. An edge swipe shows them for a moment without the
@@ -1189,6 +1224,11 @@ private fun ViewerRoute(
                 )
             }
         },
+        document = if (projection.mediaKind == 4) {
+            { modifier, contentPadding ->
+                VaultDocument(controller.vault, generation, projection, detail, modifier, contentPadding)
+            }
+        } else null,
         waveform = waveform,
         operation = operation,
         onCancelOperation = controller::cancelActiveOperation,

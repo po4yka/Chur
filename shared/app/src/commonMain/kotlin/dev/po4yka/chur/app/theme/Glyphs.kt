@@ -163,3 +163,13 @@ val IntegrityGlyph: ImageVector = glyph("Integrity") {
         close()
     }
 }
+
+/** A document sheet, for generic files without a media thumbnail. */
+val FileGlyph: ImageVector = glyph("File") {
+    stroke {
+        moveTo(6f, 3f); lineTo(14f, 3f); lineTo(19f, 8f); lineTo(19f, 21f); lineTo(6f, 21f); close()
+        moveTo(14f, 3f); lineTo(14f, 8f); lineTo(19f, 8f)
+        moveTo(9f, 12f); lineTo(16f, 12f)
+        moveTo(9f, 16f); lineTo(16f, 16f)
+    }
+}

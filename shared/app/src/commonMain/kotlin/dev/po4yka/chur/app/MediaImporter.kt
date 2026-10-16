@@ -8,6 +8,7 @@ import dev.po4yka.chur.imports.MediaCodec
 import dev.po4yka.chur.imports.PickedMedia
 import dev.po4yka.chur.imports.MediaBounds
 import dev.po4yka.chur.imports.requiredDerivatives
+import dev.po4yka.chur.imports.fileImportProbe
 import dev.po4yka.chur.vault.VaultRepository
 import kotlinx.coroutines.CancellationException
 
@@ -81,7 +82,7 @@ class MediaImporter(
             // §2 stage 3, before stage 4: an over-large source is refused
             // before an object key exists.
             val probe =
-                codec.probe(media)
+                if (media.importAsFile) fileImportProbe(media) else codec.probe(media)
                     ?: return Outcome.Refused(ChurStatus.UNSUPPORTED_VERSION)
             MediaBounds.check(probe)?.let { return Outcome.TooLarge(it) }
             if (cancelRequested()) return Outcome.Refused(ChurStatus.CANCELLED)

@@ -8,6 +8,28 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class MediaPipelineTest {
+    @Test
+    fun explicit_files_have_no_media_bounds_or_derivatives_even_with_misleading_hints() {
+        val file = PickedMedia(1, true, 1_099_511_627_776L, "image/jpeg", "video.mp4", null, null, {}, importAsFile = true)
+        val facts = fileImportProbe(file)
+        assertEquals(MediaBounds.CLASS_OPAQUE, facts.mediaClass)
+        assertEquals(0, facts.width)
+        assertEquals(0, facts.height)
+        assertEquals(0L, facts.durationMs)
+        assertEquals("image/jpeg", facts.contentType)
+        assertNull(MediaBounds.check(facts))
+        assertTrue(requiredDerivatives(facts).isEmpty())
+    }
+
+    @Test
+    fun unusable_file_type_hints_fall_back_to_the_canonical_opaque_type() {
+        assertEquals("application/pdf", normalizedFileContentType(" Application/PDF; charset=binary "))
+        assertEquals("application/vnd.custom+zip", normalizedFileContentType("application/vnd.custom+zip"))
+        for (hint in listOf("", "unknown", "image/*", "application/pdf\nheader", "text/pläin", "a/b/c", "text/" + "a".repeat(60))) {
+            assertEquals("application/octet-stream", normalizedFileContentType(hint))
+        }
+    }
+
     private fun probe(
         mediaClass: Int = MediaBounds.CLASS_IMAGE,
         width: Int = 4_000,

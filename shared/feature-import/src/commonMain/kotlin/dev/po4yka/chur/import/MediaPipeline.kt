@@ -46,6 +46,8 @@ data class PickedMedia(
     val platformHandle: Any?,
     /** Releases the platform resources behind the descriptor. */
     val close: () -> Unit,
+    /** Explicit file import bypasses media codecs, including misleading type/extension hints. */
+    val importAsFile: Boolean = false,
 )
 
 /** The canonical media facts a probe produced, §4. */
@@ -60,6 +62,26 @@ data class ProbedMedia(
     val durationMs: Long,
     /** The validated lowercase IANA media type. */
     val contentType: String,
+)
+
+/** A file remains storable even when a provider reports no usable media type. */
+fun normalizedFileContentType(hint: String): String {
+    val type = hint.substringBefore(';').trim().lowercase()
+    if (type.length !in 3..63) return "application/octet-stream"
+    val parts = type.split('/')
+    fun token(value: String) = value.isNotEmpty() && value.all {
+        it in 'a'..'z' || it in '0'..'9' || it in "!#$&^_.+-"
+    }
+    return if (parts.size == 2 && parts.all(::token)) type else "application/octet-stream"
+}
+
+/** No decoder is involved in storing a document or another arbitrary file. */
+fun fileImportProbe(source: PickedMedia): ProbedMedia = ProbedMedia(
+    mediaClass = MediaBounds.CLASS_OPAQUE,
+    width = 0,
+    height = 0,
+    durationMs = 0,
+    contentType = normalizedFileContentType(source.contentTypeHint),
 )
 
 /** One derivative the platform produced, §6. */

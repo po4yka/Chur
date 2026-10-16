@@ -65,6 +65,11 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             scene.presentAlbumExportPicker(answer)
         }
         IosAlbumExportPicker.shared.discard = { [weak self] token in self?.exports.discardDirectory(token) }
+        IosDocumentPicker.shared.present = { [weak self] answer in
+            guard let scene = self?.scene else { DocumentPickerDelegate.answerNothing(answer); return }
+            scene.presentDocumentPicker(answer)
+        }
+        IosDocumentPicker.shared.cancel = { [weak self] in self?.scene?.cancelDocumentImports() }
         IosAlbumExportPicker.shared.cancel = { [weak self] in self?.scene?.cancelAlbumExportPicker() }
         return true
     }
@@ -86,6 +91,9 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     private var backupPicker: BackupPickerDelegate?
     private var exportPicker: ExportPickerDelegate?
     private var albumExportPicker: AlbumExportPickerDelegate?
+    private var documentPicker: DocumentPickerDelegate?
+    private weak var documentPickerController: UIViewController?
+    private let documentSelections = NSHashTable<DocumentImportSelection>.weakObjects()
     private weak var albumExportController: UIViewController?
     private var pendingExports: [(URL, ExportTarget)] = []
     private var presentingExport = false
@@ -152,6 +160,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     func sceneDidDisconnect(_ scene: UIScene) {
         cancelAlbumExportPicker()
+        cancelDocumentImports()
         if host.scene === self { host.scene = nil }
     }
 
@@ -179,6 +188,50 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         backupPicker = delegate
         picker.delegate = delegate
         presenter.present(picker, animated: true)
+    }
+
+    func presentDocumentPicker(_ answer: @escaping DocumentAnswer) {
+        guard let presenter = window?.rootViewController, presenter.presentedViewController == nil else {
+            DocumentPickerDelegate.answerNothing(answer)
+            host.controller.report(message: "The document picker is unavailable. Please try again.")
+            return
+        }
+        let generation = exportGeneration
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: false)
+        picker.allowsMultipleSelection = true
+        let delegate = DocumentPickerDelegate { [weak self] urls in
+            guard let self else { DocumentPickerDelegate.answerNothing(answer); return }
+            self.documentPicker = nil
+            self.documentPickerController = nil
+            guard self.exportGeneration == generation, !urls.isEmpty else {
+                DocumentPickerDelegate.answerNothing(answer); return
+            }
+            let selected = DocumentImportSelection(urls: urls)
+            self.documentSelections.add(selected)
+            _ = answer(KotlinInt(int: Int32(selected.count)), { index, prepare, loaded in
+                selected.load(index: Int(truncating: index), shouldContinue: {
+                    prepare(KotlinLong(longLong: 0), KotlinLong(longLong: 0)).boolValue
+                }) { source in
+                    guard let source else { _ = loaded(KotlinInt(int: -1), nil, "application/octet-stream", KotlinLong(longLong: 0), { KotlinUnit() }); return }
+                    _ = loaded(KotlinInt(int: source.descriptor), source.name, source.contentType, KotlinLong(longLong: source.size), { source.close(); return KotlinUnit() })
+                }
+                return KotlinUnit()
+            }, { selected.close(); return KotlinUnit() })
+        }
+        documentPicker = delegate
+        documentPickerController = picker
+        picker.delegate = delegate
+        presenter.present(picker, animated: true)
+    }
+
+    func cancelDocumentImports() {
+        documentPickerController?.dismiss(animated: false)
+        documentPickerController = nil
+        let delegate = documentPicker
+        documentPicker = nil
+        delegate?.finish([])
+        documentSelections.allObjects.forEach { $0.close() }
+        documentSelections.removeAllObjects()
     }
 
     func presentAlbumExportPicker(_ answer: @escaping (String?) -> KotlinUnit) {
@@ -308,6 +361,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     func cancelPendingExports() {
         exportGeneration += 1
         cancelAlbumExportPicker()
+        cancelDocumentImports()
         if let prompt = exportPermissionPrompt {
             exportPermissionPrompt = nil
             _ = host.controller.endPrompt(bracket: prompt)
@@ -334,6 +388,28 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         activeExportController = nil
         presentNextExport()
         return true
+    }
+}
+
+typealias DocumentLoaded = (KotlinInt, String?, String, KotlinLong, @escaping () -> KotlinUnit) -> KotlinUnit
+typealias DocumentLoad = (KotlinInt, @escaping (KotlinLong, KotlinLong) -> KotlinBoolean, @escaping DocumentLoaded) -> KotlinUnit
+typealias DocumentAnswer = (KotlinInt, @escaping DocumentLoad, @escaping () -> KotlinUnit) -> KotlinUnit
+
+private final class DocumentPickerDelegate: NSObject, UIDocumentPickerDelegate {
+    private var answer: (([URL]) -> Void)?
+    init(answer: @escaping ([URL]) -> Void) { self.answer = answer }
+    func finish(_ urls: [URL]) { let callback = answer; answer = nil; callback?(urls) }
+    static func answerNothing(_ answer: DocumentAnswer) {
+        _ = answer(KotlinInt(int: 0), { _, _, loaded in
+            _ = loaded(KotlinInt(int: -1), nil, "application/octet-stream", KotlinLong(longLong: 0), { KotlinUnit() })
+            return KotlinUnit()
+        }, { KotlinUnit() })
+    }
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        controller.dismiss(animated: true) { self.finish(urls) }
+    }
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        controller.dismiss(animated: true) { self.finish([]) }
     }
 }
 

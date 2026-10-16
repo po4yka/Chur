@@ -44,6 +44,42 @@ class IosMediaCodecTest {
     }
 
     @Test
+    fun a_document_keeps_provider_metadata_and_bypasses_media_decoders() {
+        val path = NSTemporaryDirectory() + NSUUID().UUIDString + ".bin"
+        assertTrue(NSFileManager.defaultManager.createFileAtPath(path, null, null))
+        var releases = 0
+        val fd = platform.posix.open(path, platform.posix.O_RDONLY)
+        try {
+            val document = assertNotNull(IosMediaCodec().openDocument(
+                descriptor = fd,
+                name = "Original report.pdf",
+                contentType = "application/pdf",
+                knownLength = 5L * 1024 * 1024 * 1024,
+                release = { platform.posix.close(fd); releases += 1 },
+            ))
+            assertEquals("Original report.pdf", document.originalFilename)
+            assertEquals("application/pdf", document.contentTypeHint)
+            assertEquals(5L * 1024 * 1024 * 1024, document.knownLength)
+            assertTrue(document.importAsFile)
+            assertNull(document.platformHandle)
+            assertNull(document.captureTimeMs)
+            assertEquals(0, releases)
+            document.close()
+            assertEquals(1, releases)
+        } finally {
+            if (releases == 0) platform.posix.close(fd)
+            unlink(path)
+        }
+    }
+
+    @Test
+    fun a_refused_document_releases_its_host_lease() {
+        var releases = 0
+        assertNull(IosMediaCodec().openDocument(-1, "bad.txt", "text/plain", 1) { releases += 1 })
+        assertEquals(1, releases)
+    }
+
+    @Test
     @OptIn(BetaInteropApi::class)
     fun a_picked_photo_keeps_the_capture_time_its_exif_records() {
         val path = NSTemporaryDirectory() + NSUUID().UUIDString + ".jpg"

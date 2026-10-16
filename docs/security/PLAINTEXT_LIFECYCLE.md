@@ -13,7 +13,8 @@ Potential plaintext locations:
 | Rust secret buffers | Yes | unlocked operation/session only; zeroize |
 | Rust media buffers | Yes | bounded operation; overwrite/reuse |
 | JNI/direct buffers | Yes | bounded call; explicit ownership |
-| Kotlin `ByteArray` | Avoid | small control data only; clear best-effort |
+| Kotlin `ByteArray` | Bounded | control data, authenticated document prefixes, and Android PDF ranges only; clear best-effort |
+| decoded document text | Yes | at most a 1 MiB UTF-8 prefix; current viewer/session only; drop references on disposal or lock |
 | Swift `Data` | Avoid | small bounded interop only |
 | decoded image surfaces | Yes | session-scoped cache; clear on lock |
 | Media3/AVFoundation buffers | Yes | player lifetime; invalidate on lock |
@@ -67,6 +68,10 @@ Requirements:
 - stop players and invalidate readers on lock;
 - avoid exporting private file paths to UI state;
 - clear accessibility semantics when covered/locked.
+
+Document previews add no plaintext scratch file. Text preview decodes at most a 1 MiB authenticated UTF-8 prefix. It shows truncation and rejects malformed text. Clear the byte array after decoding and drop UI text references on disposal or lock. Managed strings, platform text layout, and graphics surfaces cannot provide a secure-erasure guarantee. Do not enable text selection, clipboard, active HTML, scripts, external links, or an external viewer by default.
+
+PDF preview is optional and limited to 32 MiB of encoded data and one raster page at a time, with at most 2048 pixels per edge and 4 million pixels. Android uses a read-only proxy descriptor over authenticated ranges. iOS holds an authenticated native buffer for the Core Graphics document lifetime. Release the reader, PDF parser, bytes, and raster on disposal or lock. Native platform PDF parsers run in the app process; a malformed file can still expose platform parser defects. An unavailable, protected, malformed, or oversized preview falls back to metadata and explicit export. Preview limits never limit original storage or streaming export.
 
 ## 5. Scratch files
 

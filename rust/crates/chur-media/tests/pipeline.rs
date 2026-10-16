@@ -869,6 +869,103 @@ fn an_empty_source_is_refused_and_leaves_nothing_behind() {
 }
 
 #[test]
+fn empty_opaque_files_authenticate_and_export_without_chunks() {
+    let (_root, mut session) = new_vault();
+    for streamed in [false, true] {
+        let capability = SourceCapability {
+            seekable: !streamed,
+            known_length: if streamed { None } else { Some(0) },
+            content_type_hint: String::from("application/octet-stream"),
+            original_filename: Some(String::from("empty.bin")),
+            capture_time_ms: None,
+        };
+        let object_id = if streamed {
+            let pending = import::begin(&mut session, capability, CanonicalMedia::opaque(), NOW)
+                .expect("begin empty file");
+            import::stream_into(
+                pending,
+                &mut session,
+                &mut std::io::empty(),
+                "application/octet-stream",
+                NOW,
+                &mut Uninterrupted,
+            )
+        } else {
+            import::import_bytes(
+                &mut session,
+                capability,
+                CanonicalMedia::opaque(),
+                "application/octet-stream",
+                &Zeroizing::new(Vec::new()),
+                NOW,
+            )
+        }
+        .expect("import empty file");
+        let mut handle = reader::open(&session, &object_id, StreamKind::Original).expect("open");
+        assert_eq!(handle.size(), 0);
+        assert!(handle.read_range(0, 0).expect("read empty file").is_empty());
+        let mut destination = Vec::new();
+        assert_eq!(
+            export::export_stream(
+                &session,
+                &object_id,
+                StreamKind::Original,
+                &mut destination,
+                &mut Uninterrupted,
+            )
+            .expect("export empty file"),
+            0
+        );
+        assert!(destination.is_empty());
+        assert!(
+            journal::live(session.catalog_ref().unwrap())
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn opaque_chunking_reaches_the_object_bound_with_unknown_or_large_sources() {
+    let (_root, mut session) = new_vault();
+    let small_max =
+        u64::from(import::DEFAULT_CHUNK_SIZE) * chur_core::limits::container::CHUNK_COUNT_MAX;
+    for (length, expected_chunk) in [
+        (Some(0), import::VIDEO_CHUNK_SIZE),
+        (Some(small_max), import::VIDEO_CHUNK_SIZE),
+        (Some(small_max + 1), import::VIDEO_CHUNK_SIZE),
+        (
+            Some(chur_core::limits::container::TOTAL_PLAINTEXT_MAX),
+            import::VIDEO_CHUNK_SIZE,
+        ),
+        (None, import::VIDEO_CHUNK_SIZE),
+    ] {
+        let mut capability = source("file.bin", 0);
+        capability.known_length = length;
+        let pending = import::begin(&mut session, capability, CanonicalMedia::opaque(), NOW)
+            .expect("begin file within the object bound");
+        assert_eq!(pending.chunk_size(), expected_chunk);
+        pending.abandon(&mut session).expect("abandon");
+    }
+    let mut capability = source("oversized.bin", 0);
+    capability.known_length = Some(chur_core::limits::container::TOTAL_PLAINTEXT_MAX + 1);
+    assert_eq!(
+        rejection(import::begin(
+            &mut session,
+            capability,
+            CanonicalMedia::opaque(),
+            NOW
+        )),
+        ChurStatus::ResourceLimitExceeded
+    );
+    assert!(
+        journal::live(session.catalog_ref().unwrap())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn a_source_above_the_object_bound_is_refused_before_any_work() {
     let (_root, mut session) = new_vault();
     let mut oversized = source("a.jpg", 0);

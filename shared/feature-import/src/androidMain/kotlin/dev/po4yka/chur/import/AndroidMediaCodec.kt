@@ -44,7 +44,7 @@ class AndroidMediaCodec(private val resolver: ContentResolver) : MediaCodec {
      * optional and Rust re-derives the authenticated size from the final commit
      * record.
      */
-    fun open(uri: Uri): PickedMedia? {
+    fun open(uri: Uri, asFile: Boolean = false): PickedMedia? {
         val descriptor: ParcelFileDescriptor = try {
             resolver.openFileDescriptor(uri, "r") ?: return null
         } catch (_: Exception) {
@@ -60,7 +60,8 @@ class AndroidMediaCodec(private val resolver: ContentResolver) : MediaCodec {
             var name: String? = null
             var size: Long? = null
             var taken: Long? = null
-            resolver.query(uri, null, null, null, null)?.use { cursor ->
+            // Metadata is optional. A provider can allow byte reads while refusing a query.
+            runCatching { resolver.query(uri, null, null, null, null)?.use { cursor ->
                 if (cursor.moveToFirst()) {
                     val nameColumn = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
                     if (nameColumn >= 0 && !cursor.isNull(nameColumn)) {
@@ -77,17 +78,18 @@ class AndroidMediaCodec(private val resolver: ContentResolver) : MediaCodec {
                         taken = cursor.getLong(takenColumn).takeIf { it > 0 }
                     }
                 }
-            }
-            val type = resolver.getType(uri) ?: "application/octet-stream"
+            } }
+            val type = runCatching { resolver.getType(uri) }.getOrNull() ?: "application/octet-stream"
             return PickedMedia(
                 descriptor = descriptor.fd,
                 seekable = seekable,
                 knownLength = size,
                 contentTypeHint = type,
                 originalFilename = name,
-                captureTimeMs = taken ?: embeddedCaptureTime(uri, normalizeType(type)),
+                captureTimeMs = taken ?: if (asFile) null else embeddedCaptureTime(uri, normalizeType(type)),
                 platformHandle = uri,
                 close = { descriptor.close() },
+                importAsFile = asFile,
             )
         } catch (_: Exception) {
             descriptor.close()

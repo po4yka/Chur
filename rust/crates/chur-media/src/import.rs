@@ -42,7 +42,7 @@ use crate::store::TemporaryContainer;
 /// choice while the measurement is outstanding.
 pub const DEFAULT_CHUNK_SIZE: u32 = 262_144;
 
-/// The chunk size a v1 writer uses for video and large audio, §6.
+/// The chunk size a v1 writer uses for video, audio, and opaque files, §6.
 ///
 /// It is not an optimization. `chur_core::limits::container` caps a container
 /// at `CHUNK_COUNT_MAX` records, and that count times this size is exactly
@@ -51,7 +51,7 @@ pub const DEFAULT_CHUNK_SIZE: u32 = 262_144;
 /// failing at chunk 1048576 after hours of writing rather than at `begin`.
 pub const VIDEO_CHUNK_SIZE: u32 = 1_048_576;
 
-/// The chunk size §6 assigns to one media class.
+/// The baseline chunk size §6 assigns to one media class.
 ///
 /// §6 also states that the size is recorded in the authenticated manifest and
 /// is never inferred from a file type outside it, so this chooses the value a
@@ -59,8 +59,8 @@ pub const VIDEO_CHUNK_SIZE: u32 = 1_048_576;
 #[must_use]
 pub const fn chunk_size_for(media_class: MediaClass) -> u32 {
     match media_class {
-        MediaClass::Video | MediaClass::Audio => VIDEO_CHUNK_SIZE,
-        MediaClass::Image | MediaClass::Opaque => DEFAULT_CHUNK_SIZE,
+        MediaClass::Video | MediaClass::Audio | MediaClass::Opaque => VIDEO_CHUNK_SIZE,
+        MediaClass::Image => DEFAULT_CHUNK_SIZE,
         // `MediaClass` is non-exhaustive. A class this build does not know is
         // one whose stream shape it does not know either, so it takes the
         // smaller candidate rather than the one sized for a long stream.
@@ -206,6 +206,8 @@ pub fn begin(
     now_ms: u64,
 ) -> Result<Import> {
     media.check()?;
+    // Provider length hints can underreport, so every opaque stream takes the
+    // chunk size that can reach the total object bound.
     let chunk_size = chunk_size_for(media.media_class);
     if let Some(length) = source.known_length {
         ensure!(
@@ -365,9 +367,9 @@ impl Import {
     /// acknowledged a write it did not perform.
     pub fn commit(self, session: &mut Session, content_type: &str, now_ms: u64) -> Result<Id> {
         ensure!(
-            self.writer.chunk_count() > 0,
+            self.writer.chunk_count() > 0 || self.media.media_class == MediaClass::Opaque,
             InvalidInput,
-            "an object carries at least one chunk"
+            "a media object carries at least one chunk"
         );
         journal::mark_committing(session.catalog()?, &self.transaction_id)?;
 
@@ -587,7 +589,7 @@ pub fn import_bytes(
     let mut import = begin(session, source, media, now_ms)?;
     let chunk = usize::try_from(import.chunk_size())
         .map_err(|_| chur_core::err!(InternalFailure, "the chunk size exceeds a usize"))?;
-    if plaintext.is_empty() {
+    if plaintext.is_empty() && media.media_class != MediaClass::Opaque {
         import.abandon(session)?;
         bail!(InvalidInput, "an object carries at least one byte");
     }
@@ -608,8 +610,8 @@ pub fn import_bytes(
 /// returns: the envelope is destroyed first, so the partial ciphertext already
 /// written is unrecoverable rather than merely orphaned.
 ///
-/// It returns the plaintext bytes written. A source that yields none is not an
-/// object, so the import is abandoned and the call fails.
+/// Empty opaque files have a final commit with zero chunks, per container §11.
+/// An empty media source is abandoned and the call fails.
 pub fn stream_into(
     mut import: Import,
     session: &mut Session,
@@ -647,7 +649,7 @@ pub fn stream_into(
             break;
         }
     }
-    if processed == 0 {
+    if processed == 0 && import.media.media_class != MediaClass::Opaque {
         import.abandon(session)?;
         bail!(InvalidInput, "an object carries at least one byte");
     }

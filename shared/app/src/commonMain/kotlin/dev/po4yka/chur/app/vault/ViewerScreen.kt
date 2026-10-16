@@ -130,6 +130,7 @@ fun ViewerScreen(
     onRestore: () -> Unit = {},
     onToggleDetail: () -> Unit,
     player: (@Composable (Modifier, PaddingValues) -> Unit)? = null,
+    document: (@Composable (Modifier, PaddingValues) -> Unit)? = null,
     waveform: ByteArray? = null,
     operation: ActiveOperation? = null,
     onCancelOperation: () -> Unit = {},
@@ -159,6 +160,8 @@ fun ViewerScreen(
     val zoom = remember(projection.id) { mutableStateOf(ViewerZoom()) }
     val zoomed by remember(zoom) { derivedStateOf { zoom.value.zoomed } }
     val photo = projection.mediaKind == MEDIA_CLASS_IMAGE
+    val documentMode = projection.mediaKind == MEDIA_CLASS_FILE
+    val visibleChrome = chromeVisible || documentMode
     val still by rememberUpdatedState(preview ?: thumbnails[projection.id])
     // §13.2 and §25.5: a player's controls sit between the chrome rows and
     // clear of the cutout, so its time and its settings are not under the
@@ -180,7 +183,7 @@ fun ViewerScreen(
                     touch()
                 }
             }
-            .pointerInput(zoom, photo) {
+            .then(if (documentMode) Modifier else Modifier.pointerInput(zoom, photo) {
                 // The pager's pages fill this box, so a tap here is where it
                 // lands on the photo. On a photo a tap waits out the double-tap
                 // timeout before it toggles the chrome, as a platform viewer's
@@ -190,18 +193,18 @@ fun ViewerScreen(
                 }
                 detectTapGestures(onTap = { toggleChrome() }, onDoubleTap = zoomAt.takeIf { photo })
             }
-            .pointerInput(Unit) { detectVerticalDragGestures { change, _ -> change.consume() } },
+            .pointerInput(Unit) { detectVerticalDragGestures { change, _ -> change.consume() } }),
     ) {
         // The same toggle for TalkBack and VoiceOver, which activate the
         // focused element rather than tap where a finger is.
         Box(
-            modifier = Modifier.fillMaxSize().semantics {
+            modifier = Modifier.fillMaxSize().then(if (documentMode) Modifier else Modifier.semantics {
                 contentDescription = tileLabel(projection)
                 onClick(label = if (chromeVisible) "Hide controls" else "Show controls") {
                     toggleChrome()
                     true
                 }
-            },
+            }),
         ) {
             ViewerPager(
                 pages = pages,
@@ -209,14 +212,17 @@ fun ViewerScreen(
                 canLoadMore = canLoadMore,
                 onLoadMore = onLoadMore,
                 onSettled = onSettled,
-                userScrollEnabled = !zoomed,
+                userScrollEnabled = !zoomed && !documentMode,
                 modifier = Modifier.fillMaxSize(),
             ) { page, settled ->
                 // The page a swipe brings in shows the grid's thumbnail until
                 // it lands; only then does the route decrypt its full still or
                 // open its player. Without a thumbnail it shows the canvas, as
                 // nothing is being decrypted for it.
-                if (settled) {
+                if (settled && documentMode) {
+                    if (document != null) document(Modifier.fillMaxSize(), controlsPadding)
+                    else DocumentFallback(page, detail, "This file has no internal preview.", Modifier.fillMaxSize(), controlsPadding)
+                } else if (settled) {
                     ViewerMedia(preview ?: thumbnails[page.id], player, controlsPadding, waveform, zoom.takeIf { photo })
                 } else {
                     thumbnails[page.id]?.let { ViewerMedia(it, player = null, controlsPadding = controlsPadding, waveform = null) }
@@ -229,7 +235,7 @@ fun ViewerScreen(
         // §22.2 gives a simple state change 120-180 ms, and a fade is also
         // what §22.3 keeps under reduced motion.
         AnimatedVisibility(
-            visible = chromeVisible,
+            visible = visibleChrome,
             modifier = Modifier.align(Alignment.TopStart),
             enter = fadeIn(tween(CHROME_FADE_MS)),
             exit = fadeOut(tween(CHROME_FADE_MS)),
@@ -248,7 +254,7 @@ fun ViewerScreen(
                 }
                 Box(modifier = Modifier.weight(1f))
                 LockControl(onLock = onLock, onPanic = onPanic, tint = ViewerColors.content)
-                IconButton(onClick = onToggleDetail) {
+                TextButton(onClick = onToggleDetail) {
                     Text(
                         if (showDetail) "Hide info" else "Info",
                         color = ViewerColors.content,
@@ -258,7 +264,7 @@ fun ViewerScreen(
             }
         }
         AnimatedVisibility(
-            visible = chromeVisible,
+            visible = visibleChrome,
             modifier = Modifier.align(Alignment.BottomStart),
             enter = fadeIn(tween(CHROME_FADE_MS)),
             exit = fadeOut(tween(CHROME_FADE_MS)),
@@ -280,7 +286,7 @@ fun ViewerScreen(
                         tint = ViewerColors.content,
                     )
                 }
-                if (!trashOpen) IconButton(onClick = onEditTags) {
+                if (!trashOpen) TextButton(onClick = onEditTags) {
                     Text("Tags", color = ViewerColors.content,
                         style = MaterialTheme.typography.labelLarge)
                 }

@@ -93,6 +93,28 @@ class IosMediaCodec : MediaCodec {
         )
     }
 
+    /** Uses a scoped, coordinated source owned by the document picker host. */
+    fun openDocument(
+        descriptor: Int,
+        name: String?,
+        contentType: String,
+        knownLength: Long,
+        release: () -> Unit,
+    ): PickedMedia? {
+        if (descriptor < 0 || knownLength < 0) { release(); return null }
+        return PickedMedia(
+            descriptor = descriptor,
+            seekable = true,
+            knownLength = knownLength,
+            contentTypeHint = contentType,
+            originalFilename = name,
+            captureTimeMs = null,
+            platformHandle = null,
+            close = release,
+            importAsFile = true,
+        )
+    }
+
     /**
      * The capture time the file records, `MEDIA_PIPELINE.md` §4.
      *

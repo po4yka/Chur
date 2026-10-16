@@ -167,7 +167,7 @@ fn video_takes_the_chunk_size_that_makes_the_object_bound_reachable() {
     assert_eq!(import::chunk_size_for(MediaClass::Video), 1_048_576);
     assert_eq!(import::chunk_size_for(MediaClass::Audio), 1_048_576);
     assert_eq!(import::chunk_size_for(MediaClass::Image), 262_144);
-    assert_eq!(import::chunk_size_for(MediaClass::Opaque), 262_144);
+    assert_eq!(import::chunk_size_for(MediaClass::Opaque), 1_048_576);
 
     let reachable = chur_core::limits::container::CHUNK_COUNT_MAX
         * u64::from(import::chunk_size_for(MediaClass::Video));

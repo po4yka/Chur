@@ -58,6 +58,16 @@ compound_asset_parts: bounded list
 
 Rust must not trust size/type hints as authenticated truth.
 
+### 3.1 Documents and arbitrary files
+
+The separate **Documents and files** action accepts all file types through the platform document picker. It marks the source for opaque import before any media probe or derivative generation. A filename extension or MIME hint never forces media decoding on this path. Unknown or invalid MIME hints become `application/octet-stream`; the normalized hint has at most 63 ASCII bytes. Original bytes, including a zero-byte file, are preserved. Unknown-length and non-seekable sources use bounded sequential reads. The container's 1 TiB total bound applies; a provider can impose a lower bound.
+
+The iOS adapter holds a coordinated, security-scoped file descriptor until native import releases its duplicate. Android uses the provider descriptor and optional name/length metadata. Neither path creates a plaintext copy to make the source seekable. Picker references are transient and bound to the unlocked session.
+
+Opaque originals use the existing `MediaClass.Opaque` value. They need no image derivative, dimensions, duration, new catalog schema, or format migration. The library's **Files** filter, albums, tags, favorites, trash, search by filename/metadata, and single or album export use the same object operations as media. Grid projections show a file glyph without private filenames. Names are read only for the open viewer/details and existing private search.
+
+The viewer renders PDF pages and literal UTF-8 text inside the vault. PDF navigation is explicit; text scrolls. Preview bounds and plaintext lifetimes are specified in [`../security/PLAINTEXT_LIFECYCLE.md`](../security/PLAINTEXT_LIFECYCLE.md) §4. Other types, such as Office documents, archives, and executables, show metadata and explicit export. Preview failure never changes or truncates the original. No archive extraction, embedded code execution, network fetch, or automatic external viewer is part of this path. See [`../adr/0060-bounded-document-previews.md`](../adr/0060-bounded-document-previews.md).
+
 ## 4. Canonical metadata
 
 Normalized model may include:
