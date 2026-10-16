@@ -80,6 +80,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     private var pendingExports: [(URL, ExportTarget)] = []
     private var presentingExport = false
     private var exportUsesHostActivity = false
+    private var exportPermissionPrompt: Int64?
     private var activeExportURL: URL?
     private var activeExportController: UIViewController?
     private var exportGeneration = 0
@@ -198,9 +199,16 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                 host.controller.report(message: "Only photos and videos can be saved to Photos.")
                 return
             }
+            let prompt = PHPhotoLibrary.authorizationStatus(for: .addOnly) == .notDetermined
+                ? host.controller.beginPrompt() : nil
+            exportPermissionPrompt = prompt
             PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] status in
                 DispatchQueue.main.async {
                     guard let self, self.exportGeneration == generation else { return }
+                    if let prompt {
+                        self.exportPermissionPrompt = nil
+                        guard self.host.controller.endPrompt(bracket: prompt) else { return }
+                    }
                     guard status == .authorized else {
                         if self.finishExport(url, generation: generation) {
                             self.host.controller.report(message: "Photos access was not granted.")
@@ -254,6 +262,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     func cancelPendingExports() {
         exportGeneration += 1
+        if let prompt = exportPermissionPrompt {
+            exportPermissionPrompt = nil
+            _ = host.controller.endPrompt(bracket: prompt)
+        }
         pendingExports.forEach { try? FileManager.default.removeItem(at: $0.0) }
         pendingExports.removeAll()
         if let activeExportURL { try? FileManager.default.removeItem(at: activeExportURL) }
