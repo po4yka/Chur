@@ -24,6 +24,9 @@ class ExportDestinations(
     private val context: Context,
     private val onShareLaunch: () -> Unit,
     private val onShareEnd: () -> Unit,
+    private val scheduleCleanup: (Long, () -> Unit) -> Unit = { delay, cleanup ->
+        Handler(Looper.getMainLooper()).postDelayed({ cleanup() }, delay)
+    },
 ) : ExportSink {
     private val resolver: ContentResolver = context.contentResolver
     private val scratch = File(context.cacheDir, "export-scratch")
@@ -43,7 +46,16 @@ class ExportDestinations(
         onShareEnd()
     }
 
+    /** Allow asynchronous recipient opens briefly after the share activity returns. */
+    internal fun completePendingShares() {
+        val completed = pendingShares.toMap()
+        if (completed.isNotEmpty()) scheduleCleanup(60_000L) {
+            completed.forEach { (uri, file) -> releaseShare(uri, file) }
+        }
+    }
+
     private fun releaseShare(uri: Uri, file: File) {
+        if (pendingShares[uri] !== file) return
         pendingShares.remove(uri)
         runCatching { context.revokeUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
         file.delete()
@@ -121,9 +133,9 @@ class ExportDestinations(
                     onShareEnd()
                     throw failure
                 }
-                Handler(Looper.getMainLooper()).postDelayed({
+                scheduleCleanup(30 * 60 * 1000L) {
                     releaseShare(contentUri, file)
-                }, 30 * 60 * 1000L)
+                }
             }, discardAction = { file.delete() })
         }
         else -> {
