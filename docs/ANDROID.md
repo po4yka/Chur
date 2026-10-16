@@ -641,7 +641,7 @@ Deleting the original is a separate explicit user operation after successful com
 After an import commits, Chur offers `DESIGN.md` §15.3's choice once for the batch, and only for the items whose import committed. Keep original is the default and requests nothing. Review source deletion:
 
 1. requests read access to the media library of the items' kinds: `READ_MEDIA_IMAGES`, `READ_MEDIA_VIDEO`, or `READ_MEDIA_AUDIO` on API 33 and later, with `READ_MEDIA_VISUAL_USER_SELECTED` for photos and videos on API 34 and later so that the user can grant chosen items only, and `READ_EXTERNAL_STORAGE` on API 30 to 32;
-2. finds each original as a MediaStore row: an on-device photo picker item by the row ID it carries, since the picker replaces the file's name with that ID, and any other item by the one visible row that matches the name and size its grant reads; a size both sides know must agree, and an original with no such row, such as a cloud-only item, is not found;
+2. finds each original only through its MediaStore identity: a direct MediaStore item URI keeps its volume and row ID, and an on-device photo picker URI must identify the local provider and current user profile; a size both sides know must agree. Names and sizes do not link external documents or cloud items to local rows. Items without a trusted local identity or a visible row must be deleted in the Photos or Files app;
 3. passes the rows it found to `MediaStore.createDeleteRequest`, and the system shows them and asks before it deletes;
 4. reports how many originals were deleted and names the Photos or Files app for the rest.
 

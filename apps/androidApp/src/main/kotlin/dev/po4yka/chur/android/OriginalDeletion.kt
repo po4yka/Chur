@@ -6,6 +6,7 @@ import android.content.ContentResolver
 import android.content.ContentUris
 import android.net.Uri
 import android.os.Build
+import android.os.Process
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -32,10 +33,9 @@ private const val PLACE = "your Photos or Files app"
  * §15.3 and `ANDROID.md` §14.5.
  *
  * A picked item is a grant to read that one item, and the photo picker even
- * replaces its file name, so the original's row in the media library is out
- * of sight. Reviewing therefore asks for read access to the library at that
- * moment and not before, §24: the originals are then found as MediaStore
- * rows, and `createDeleteRequest` has the system show them and ask before it
+ * replaces its file name. Reviewing asks for read access to the library at
+ * that moment and not before, §24: an original is found only by its trusted
+ * MediaStore identity, and `createDeleteRequest` has the system show it and ask before it
  * deletes them. A refusal of either
  * request deletes nothing, and an original that is not found is left to the
  * user with the place to delete it. API 29 has no delete request, so there
@@ -129,48 +129,57 @@ private const val LOCAL_PICKER = "com.android.providers.media.photopicker"
  * The MediaStore row of a picked original, or `null` when none can be told
  * apart.
  *
- * An on-device photo picker item carries its row's ID as its last segment,
- * and the picker gives it a name made of that ID rather than the file's, so
- * the row is looked up by the ID. Any other item is looked up by the name its
- * grant reads and must match exactly one row by name and size. Where both
- * sides know the size, it must agree. A row outside the read access the user
- * granted is not visible, and an original that is not on this device, such as
- * a cloud-only item, has none. Every provider call can fail, and a failure is
- * `null`.
+ * Only a MediaStore item URI or the local photo picker's URI in this user
+ * profile identifies a row. Names and sizes cannot link different providers:
+ * an unrelated local file can have the same metadata as an imported source.
+ * Direct item URIs retain their volume. Where both sides know the size, it
+ * must agree. A missing or inaccessible row is left for manual deletion.
+ * Every provider call can fail, and a failure is `null`.
  */
-private fun originalRow(resolver: ContentResolver, uri: Uri): Uri? = runCatching {
-    val collection = when (kindOf(resolver, uri)) {
-        "image" -> MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
-        "video" -> MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
-        "audio" -> MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+internal fun originalRow(resolver: ContentResolver, uri: Uri): Uri? = runCatching {
+    if (uri.scheme != ContentResolver.SCHEME_CONTENT || uri.authority != MediaStore.AUTHORITY) return null
+    val segments = uri.pathSegments
+    val picker = segments.firstOrNull() in setOf("picker", "picker_get_content")
+    val volume = if (picker) {
+        if (segments.size != 5 || segments[2] != LOCAL_PICKER || segments[3] != "media") return null
+        // Android assigns each user a range of 100,000 UIDs. A picker URI can
+        // name a different profile whose numeric media IDs are not ours.
+        if (segments[1].toIntOrNull() != Process.myUid() / 100_000) return null
+        MediaStore.VOLUME_EXTERNAL
+    } else {
+        if (segments.size != 4 || segments[2] != "media") return null
+        segments[0]
+    }
+    val id = segments.lastOrNull()?.toLongOrNull()?.takeIf { it > 0 } ?: return null
+    val kind = kindOf(resolver, uri)
+    if (!picker && segments[1] != when (kind) {
+            "image" -> "images"
+            "video" -> "video"
+            "audio" -> "audio"
+            else -> return null
+        }
+    ) return null
+    val collection = when (kind) {
+        "image" -> MediaStore.Images.Media.getContentUri(volume)
+        "video" -> MediaStore.Video.Media.getContentUri(volume)
+        "audio" -> MediaStore.Audio.Media.getContentUri(volume)
         else -> return null
     }
-    val (name, size) = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)
+    val size = resolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)
         ?.use { cursor ->
-            if (!cursor.moveToFirst()) null
-            else cursor.getString(0) to (if (cursor.isNull(1)) null else cursor.getLong(1))
+            if (!cursor.moveToFirst()) return null
+            if (cursor.isNull(0)) null else cursor.getLong(0)
         }
-        ?: return null
-    val local = uri.takeIf { it.authority == MediaStore.AUTHORITY }
-        ?.takeIf { it.pathSegments.firstOrNull()?.startsWith("picker") != true || LOCAL_PICKER in it.pathSegments }
-        ?.lastPathSegment
-        ?.toLongOrNull()
-    val (column, value) = if (local != null) {
-        MediaStore.MediaColumns._ID to local.toString()
-    } else {
-        MediaStore.MediaColumns.DISPLAY_NAME to (name ?: return null)
-    }
     val rows = resolver.query(
         collection,
         arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.SIZE),
-        "$column = ?",
-        arrayOf(value),
+        "${MediaStore.MediaColumns._ID} = ?",
+        arrayOf(id.toString()),
         null,
     )?.use { cursor ->
         buildList { while (cursor.moveToNext()) add(cursor.getLong(0) to (if (cursor.isNull(1)) null else cursor.getLong(1))) }
     }.orEmpty()
-    val id = rows.singleOrNull { (_, rowSize) ->
-        if (local != null) size == null || rowSize == null || rowSize == size else size != null && rowSize == size
-    }?.first ?: return null
+    val row = rows.singleOrNull() ?: return null
+    if (row.first != id || (size != null && row.second != null && row.second != size)) return null
     ContentUris.withAppendedId(collection, id)
 }.getOrNull()
