@@ -34,7 +34,7 @@ use chur_format::backup::{
     RECORD_HEADER_LEN, RecordHeader, RecordType, SlotInventoryEntry, StreamInventoryEntry,
     framing_of, manifest_key,
 };
-use chur_format::constants::{SlotType, VaultState};
+use chur_format::constants::{ObjectState, SlotType, VaultState};
 use chur_format::container::{PublicPreamble as ContainerPreamble, StreamIdentity, StreamReader};
 use chur_format::descriptor::VaultDescriptor;
 use chur_sync_protocol::identity::DeviceIdentityEnvelope;
@@ -163,8 +163,8 @@ fn slot_entries(descriptor: &VaultDescriptor) -> Vec<SlotInventoryEntry> {
 /// Writes a full backup package of the session's vault, §5 and §7.
 ///
 /// The walk runs twice. The first pass computes the ordered inventory
-/// commitment and the record count, which the manifest and the public preamble
-/// both need before any content is written; the second writes the records. Both
+/// commitment and the record count, and authenticates each complete container
+/// before any content is written; the second writes the records. Both
 /// read the same ordered query, so neither holds the inventory.
 ///
 /// # Errors
@@ -222,6 +222,26 @@ pub fn create(
         if progress.cancelled() {
             return Err(progress::cancelled("the backup was cancelled"));
         }
+        ensure!(
+            store::object(session.catalog_ref()?, object_id)?.state != ObjectState::Corrupt,
+            ObjectCorrupt,
+            "a backup cannot include an object marked corrupt"
+        );
+        let object_key = keys::object_key(session, object_id)?;
+        let file = ContainerFile::open(&root_dir, &store_id, &stream.container_path_id)?;
+        let identity = StreamIdentity {
+            object_id: *object_id,
+            stream_id: stream.stream_id,
+            stream_kind: stream.stream_kind,
+            stream_revision: stream.stream_revision,
+        };
+        let mut reader = StreamReader::open(file, &object_key, &identity)?;
+        reader.verify_complete_with(&|| progress.cancelled())?;
+        ensure!(
+            reader.read_final_commit()?.ordered_chunk_commitment() == &stream.final_commitment,
+            ObjectCorrupt,
+            "a container's final commit contradicts its catalog stream"
+        );
         let entry = inventory_entry(&root_dir, &store_id, object_id, stream)?;
         content_length = content_length.saturating_add(entry.ciphertext_length);
         committer.add_stream(&entry)

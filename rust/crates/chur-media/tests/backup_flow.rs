@@ -135,6 +135,61 @@ fn a_package_restores_a_vault_whose_objects_export_the_original_bytes() {
     assert_eq!(exported(&opened, &second), second_bytes);
 }
 
+#[test]
+fn backup_rejects_damaged_source_containers_before_writing_a_package() {
+    for damage_final_commit in [false, true] {
+        let (_root, mut session) = new_vault();
+        let (object_id, _) = import_one(&mut session, 2_097_152, "damaged.jpg", 0x9911);
+        let stream = chur_catalog::store::streams(session.catalog_ref().unwrap(), &object_id)
+            .expect("streams")
+            .remove(0);
+        let path = session
+            .root_dir()
+            .container(&session.object_store_id(), &stream.container_path_id);
+        let mut bytes = std::fs::read(&path).expect("container");
+        let offset = if damage_final_commit {
+            bytes.len() - 1
+        } else {
+            1_500
+        };
+        bytes[offset] ^= 1;
+        std::fs::write(&path, bytes).expect("damage");
+        let mut package = Cursor::new(Vec::new());
+        assert_eq!(
+            rejection(backup::create(
+                &mut session,
+                &mut package,
+                NOW,
+                &mut Uninterrupted
+            )),
+            ChurStatus::ObjectCorrupt
+        );
+        assert!(
+            package.into_inner().is_empty(),
+            "a rejected source must not produce a partial package"
+        );
+    }
+}
+
+#[test]
+fn backup_rejects_an_object_already_marked_corrupt() {
+    let (_root, mut session) = new_vault();
+    let (object_id, _) = import_one(&mut session, 8_192, "corrupt.jpg", 0x9922);
+    chur_catalog::store::mark_corrupt(session.catalog().unwrap(), &object_id)
+        .expect("mark corrupt");
+    let mut package = Cursor::new(Vec::new());
+    assert_eq!(
+        rejection(backup::create(
+            &mut session,
+            &mut package,
+            NOW,
+            &mut Uninterrupted
+        )),
+        ChurStatus::ObjectCorrupt
+    );
+    assert!(package.into_inner().is_empty());
+}
+
 /// An empty vault is the §14 minimal case: the package holds no container and
 /// its inventory commitment is over the slot entries alone.
 #[test]
