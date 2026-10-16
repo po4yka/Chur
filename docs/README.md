@@ -74,6 +74,7 @@ Document status describes a whole document. Individual statements inside a docum
 ## Product
 
 - [`product/DISCREET_MODE.md`](product/DISCREET_MODE.md) — public shell, launcher, notifications, recents, external surfaces, and product claims.
+- [`product/ALBUM_EXPORT.md`](product/ALBUM_EXPORT.md) — album trees, native folder selection, verified batch export, publication, and partial results.
 
 ## Security
 

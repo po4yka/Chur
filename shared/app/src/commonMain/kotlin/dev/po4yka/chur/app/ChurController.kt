@@ -1559,21 +1559,7 @@ class ChurController(
                 detail.filename.ifBlank { "chur-export" }, detail.contentType, target, uri, detail.plaintextSize,
             ) ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the export destination")
             destination = output
-            val operation = withContext(Dispatchers.Default) {
-                repository.beginExport(objectId, output.descriptor)
-            }
-            val terminal = try {
-                drain(operation, token)
-            } finally {
-                closeOperation(operation)
-            }
-            if (terminal != 0) {
-                throw ChurFailure(ChurStatus.fromValue(terminal), "the export")
-            }
-            if (_activeOperation.value?.id != token) {
-                throw ChurFailure(ChurStatus.CANCELLED, "the export")
-            }
-            output.publish()
+            writeVerifiedExport(objectId, output, token)
             published = true
             say("Export prepared. The destination may keep a plaintext copy.")
         } finally {
@@ -1581,6 +1567,102 @@ class ChurController(
                 if (!published) destination?.discard()
             } finally {
                 destination?.close()
+            }
+        }
+    }
+
+    /** Writes only a complete verified object; the caller owns destination cleanup. */
+    private suspend fun writeVerifiedExport(objectId: ByteArray, output: ExportSink.Destination, token: Long) {
+        if (cancellationRequested(token)) throw ChurFailure(ChurStatus.CANCELLED, "the export")
+        val operation = withContext(Dispatchers.Default) { repository.beginExport(objectId, output.descriptor) }
+        val terminal = try { drain(operation, token) } finally { closeOperation(operation) }
+        if (terminal != 0) throw ChurFailure(ChurStatus.fromValue(terminal), "the export")
+        if (cancellationRequested(token) || repository.state.value !is VaultState.Unlocked) {
+            throw ChurFailure(ChurStatus.CANCELLED, "the export")
+        }
+        // Single exports publish on their host caller context. Album export
+        // already runs on Default, where directory-provider I/O belongs.
+        if (!output.publishChecked()) throw ChurFailure(ChurStatus.IO_FAILURE, "the export destination")
+        // A lock or cancellation while a provider publishes still owns this file.
+        if (cancellationRequested(token) || repository.state.value !is VaultState.Unlocked) {
+            throw ChurFailure(ChurStatus.CANCELLED, "the export")
+        }
+    }
+
+    /** Exports the complete album tree, independently of the visible query and loaded page. */
+    fun exportAlbum(albumId: ByteArray, uri: String) {
+        val requestedGeneration = (repository.state.value as? VaultState.Unlocked)?.generation
+        val requestedAlbum = albumId.copyOf()
+        guarded {
+            // Consume a selected-folder token even if another operation wins
+            // the race, so its platform access never waits for the next lock.
+            var selectedRoot: ExportDirectory? = null
+            var outcome: AlbumExportOutcome? = null
+            var cleanupFailed = false
+            var rootClosed = false
+            suspend fun closeRoot() {
+                if (rootClosed) return
+                rootClosed = true
+                withContext(NonCancellable + Dispatchers.Default) {
+                    try { selectedRoot?.close() }
+                    catch (cancel: CancellationException) { throw cancel }
+                    catch (_: Exception) { cleanupFailed = true }
+                }
+            }
+            try {
+                // Assign before resuming the caller: cancellation during the
+                // dispatcher handoff must still leave a lease for finally.
+                withContext(Dispatchers.Default) {
+                    selectedRoot = exports.openDirectory(uri)
+                        ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the export directory")
+                }
+                val root = requireNotNull(selectedRoot)
+                outcome = tracked("album-export") { token ->
+                    try {
+                        withContext(Dispatchers.Default) {
+                            fun invalidated() = requestedGeneration == null ||
+                                (repository.state.value as? VaultState.Unlocked)?.generation != requestedGeneration
+                            if (invalidated()) throw ChurFailure(ChurStatus.CANCELLED, "the album export")
+                            // Snapshot before reading the tree as well as its
+                            // memberships, so a concurrent album move cannot
+                            // disappear between those two catalog reads.
+                            val catalogGeneration = repository.page(ObjectQuery(limit = 1)).catalogGeneration
+                            exportAlbumTree(
+                                albumId = requestedAlbum,
+                                albums = repository.albums(),
+                                root = root,
+                                page = repository::page,
+                                expectedGeneration = catalogGeneration,
+                                cancelled = { cancellationRequested(token) || invalidated() },
+                                onItem = { item, count ->
+                                    _activeOperation.update { current -> current?.takeIf { it.id == token }?.copy(
+                                        item = item, items = count, processed = 0, total = 0, stage = 1,
+                                        cancellable = true,
+                                    ) ?: current }
+                                },
+                                export = { directory, objectId ->
+                                    val detail = repository.detail(objectId)
+                                    if (invalidated()) throw ChurFailure(ChurStatus.CANCELLED, "the album export")
+                                    val destination = directory.createFile(
+                                        safeExportName(detail.filename, "chur-export"), detail.contentType, detail.plaintextSize,
+                                    ) ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the export destination")
+                                    var published = false
+                                    try {
+                                        writeVerifiedExport(objectId, destination, token)
+                                        if (invalidated()) throw ChurFailure(ChurStatus.CANCELLED, "the album export")
+                                        published = true
+                                    } finally {
+                                        try { if (!published) destination.discard() } finally { destination.close() }
+                                    }
+                                },
+                            )
+                        }
+                    } finally { closeRoot() }
+                }
+            } finally { closeRoot() }
+            outcome?.let {
+                val result = if (cleanupFailed) it.copy(status = it.status ?: ChurStatus.IO_FAILURE, cleanupFailed = true) else it
+                say(result.summary(), security = result.status in SECURITY_STATUSES)
             }
         }
     }
@@ -2087,7 +2169,7 @@ class ChurController(
             }
             val progress =
                 withContext(Dispatchers.Default) { repository.poll(operation) }
-            updateOperation(token, progress)
+            updateOperation(token, progress, keepCancellableOnSuccess = _activeOperation.value?.name == "album-export")
             if (progress.terminal) return progress
             delay(POLL_INTERVAL_MS)
         }
@@ -2584,12 +2666,18 @@ interface ExportSink {
         /** Makes the result visible once the whole object is written. */
         fun publish()
 
+        /** Returns false if a platform provider could not finish publication. */
+        fun publishChecked(): Boolean { publish(); return true }
+
         /** Removes a destination whose export failed. */
         fun discard()
 
         /** Closes the descriptor, which the caller owns. */
         fun close()
     }
+
+    /** Opens a transient selected-directory lease. It must never persist [uri]. */
+    fun openDirectory(uri: String): ExportDirectory? = null
 
     /** Creates a destination for one export. */
     fun create(displayName: String, contentType: String): Destination?

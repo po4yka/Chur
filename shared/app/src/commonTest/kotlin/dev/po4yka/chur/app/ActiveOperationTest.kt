@@ -6,6 +6,15 @@ import kotlin.test.assertFalse
 
 class ActiveOperationTest {
     @Test
+    fun album_export_counts_items_and_does_not_use_import_phase_words() {
+        val work = ActiveOperation(1, "album-export", item = 2, items = 9, processed = 44, total = 100, stage = 2)
+        assertEquals("Exporting item 2 of 9 · Writing", work.description)
+        assertEquals("Exporting item 2 of 9, 40 percent", work.spoken)
+        assertEquals("Exporting item 2 of 9 · Finishing", work.copy(stage = 3).description)
+        assertEquals("Exporting item 2 of 9 · Cancelling", work.copy(cancelling = true).description)
+    }
+
+    @Test
     fun a_screen_reader_hears_tens_of_percent_and_no_byte_count() {
         // `DESIGN.md` §23.2: "Importing item 3 of 12, 46 percent". The byte
         // count changes on every poll, so it is never what is spoken.

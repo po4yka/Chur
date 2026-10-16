@@ -213,6 +213,8 @@ data class VaultActions(
     val onRestoreTrash: () -> Unit = {},
     val onRenameAlbum: (AlbumSummary, String) -> Unit = { _, _ -> },
     val onDeleteAlbum: (AlbumSummary) -> Unit = {},
+    /** Export this album and every descendant to a chosen folder. */
+    val onExportAlbum: (AlbumSummary) -> Unit = {},
     val onMoveAlbum: (AlbumSummary, AlbumSummary?, AlbumSummary?) -> Unit = { _, _, _ -> },
     val onMoveAlbumMember: (ObjectProjection, ObjectProjection?) -> Unit = { _, _ -> },
     val onDropMediaIntoAlbum: (List<ObjectProjection>, AlbumSummary?) -> Unit = { _, _ -> },
@@ -357,7 +359,8 @@ fun VaultShell(
                 SelectionBar(state, actions)
             } else {
                 TopAppBar(
-                    title = { Text(state.openAlbum?.name ?: state.libraryScopeTitle ?: state.destination.label) },
+                    title = { Text(state.openAlbum?.name ?: state.libraryScopeTitle ?: state.destination.label,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     navigationIcon = {
                         if (state.openAlbum != null || state.libraryScopeTitle != null) {
                             IconButton(onClick = {
@@ -401,6 +404,11 @@ fun VaultShell(
                                         onClick = { scopesExpanded = false; actions.onEmptyTrash() },
                                     )
                                 }
+                            }
+                        }
+                        state.openAlbum?.let { album ->
+                            TextButton(enabled = state.operation == null, onClick = { actions.onExportAlbum(album) }) {
+                                Text("Export album")
                             }
                         }
                         LockControl(onLock = actions.onLock, onPanic = actions.onPanic)

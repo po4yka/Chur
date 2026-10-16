@@ -65,6 +65,7 @@ val iosHostSymbols =
         "FileSyncStateStore",
         // Step 7: the document picker the restore route asks the host for.
         "IosBackupPicker",
+        "IosAlbumExportPicker",
     )
 
 kotlin {

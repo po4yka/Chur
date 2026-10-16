@@ -26,6 +26,7 @@ import dev.po4yka.chur.app.notes.PublicSettingsScreen
 import dev.po4yka.chur.app.notes.rememberOpenNote
 import dev.po4yka.chur.app.vault.CreateVaultScreen
 import dev.po4yka.chur.app.vault.LibraryTile
+import dev.po4yka.chur.app.vault.AlbumExportDialog
 import dev.po4yka.chur.app.vault.AlbumPickerDialog
 import dev.po4yka.chur.app.vault.DeleteSelectionDialog
 import dev.po4yka.chur.app.vault.ExportOptionsDialog
@@ -237,6 +238,20 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     var albumFilter by remember { mutableStateOf("") }
     var terms by remember { mutableStateOf("") }
     var openAlbum by remember { mutableStateOf<AlbumSummary?>(null) }
+    var exportingAlbum by remember(generation) { mutableStateOf<AlbumSummary?>(null) }
+    var albumPickerPending by remember(generation) { mutableStateOf(false) }
+    DisposableEffect(controller, generation) {
+        onDispose {
+            if (albumPickerPending) {
+                IosAlbumExportPicker.cancel?.invoke()
+                if (albumPickerPending) {
+                    albumPickerPending = false
+                    val current = controller.vaultState.value as? VaultState.Unlocked
+                    if (current?.generation == generation) controller.endHostActivity()
+                }
+            }
+        }
+    }
     LaunchedEffect(albums) {
         openAlbum = openAlbum?.let { current -> albums.firstOrNull { it.id == current.id } }
     }
@@ -421,6 +436,38 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             onDelete = { confirmingEmptyTrash = false; controller.emptyTrash { selection = emptySet() } },
             onDismiss = { confirmingEmptyTrash = false })
     }
+    exportingAlbum?.let { album ->
+        AlbumExportDialog(
+            album = album,
+            onConfirm = {
+                exportingAlbum = null
+                val present = IosAlbumExportPicker.present
+                if (present == null) {
+                    controller.report("This build cannot open the folder picker.")
+                } else {
+                    controller.beginHostActivity()
+                    albumPickerPending = true
+                    present { token ->
+                        val current = controller.vaultState.value as? VaultState.Unlocked
+                        val currentSession = current?.generation == generation
+                        val accepted = albumPickerPending && currentSession
+                        if (albumPickerPending) {
+                            albumPickerPending = false
+                            if (currentSession) controller.endHostActivity()
+                        }
+                        if (token != null) {
+                            if (accepted && controller.activeOperation.value == null) {
+                                controller.exportAlbum(album.albumId, token)
+                            } else {
+                                IosAlbumExportPicker.discard?.invoke(token)
+                            }
+                        }
+                    }
+                }
+            },
+            onDismiss = { exportingAlbum = null },
+        )
+    }
     if (choosingExport) {
         val selected = page.objects.filter { it.id in selection }
         ExportOptionsDialog(
@@ -565,6 +612,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 onSearch = {
                     terms = it
                 },
+                onExportAlbum = { exportingAlbum = it },
                 onOpenAlbum = { openAlbum = it; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = false },
                 onCloseAlbum = { openAlbum = null },
                 onCreateAlbum = { creatingAlbum = true },
@@ -979,4 +1027,11 @@ private fun IosRestoreRoute(controller: ChurController) {
 public object IosBackupPicker {
     /** Presents the picker, and answers with a path or `null` on a dismissal. */
     public var present: ((answer: (String?) -> Unit) -> Unit)? = null
+}
+
+/** The host keeps a selected folder grant and returns one transient opaque token. */
+public object IosAlbumExportPicker {
+    public var present: ((answer: (String?) -> Unit) -> Unit)? = null
+    public var discard: ((token: String) -> Unit)? = null
+    public var cancel: (() -> Unit)? = null
 }

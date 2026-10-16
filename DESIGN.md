@@ -1135,6 +1135,8 @@ The exported copy is no longer protected by Chur. The destination app or service
 
 Use native share/save UI. Chur does not draw a fake destination picker.
 
+An open album offers **Export album**. The confirmation explains that the album and its subalbums are copied to a new folder and that the destination may retain plaintext. The native folder picker runs once for the batch. Export covers the complete album tree, independent of the visible filter or loaded page. Progress names the current item count; cancellation or failure reports completed copies without claiming a complete export. See [`docs/product/ALBUM_EXPORT.md`](docs/product/ALBUM_EXPORT.md).
+
 ### 16.3 Progress and failure
 
 - show verification before exposure where policy requires complete verification;

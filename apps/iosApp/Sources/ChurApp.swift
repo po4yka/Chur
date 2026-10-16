@@ -24,6 +24,8 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         cancel: { [weak self] in self?.scene?.cancelPendingExports() }
     )
 
+    func registerExportDirectory(_ url: URL) -> String? { exports.registerDirectory(url) }
+
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
@@ -58,6 +60,12 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             guard let scene = self?.scene else { _ = answer(nil); return }
             scene.presentBackupPicker(answer)
         }
+        IosAlbumExportPicker.shared.present = { [weak self] answer in
+            guard let scene = self?.scene else { _ = answer(nil); return }
+            scene.presentAlbumExportPicker(answer)
+        }
+        IosAlbumExportPicker.shared.discard = { [weak self] token in self?.exports.discardDirectory(token) }
+        IosAlbumExportPicker.shared.cancel = { [weak self] in self?.scene?.cancelAlbumExportPicker() }
         return true
     }
 
@@ -77,6 +85,8 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     private var mediaPicker: MediaPickerDelegate?
     private var backupPicker: BackupPickerDelegate?
     private var exportPicker: ExportPickerDelegate?
+    private var albumExportPicker: AlbumExportPickerDelegate?
+    private weak var albumExportController: UIViewController?
     private var pendingExports: [(URL, ExportTarget)] = []
     private var presentingExport = false
     private var exportUsesHostActivity = false
@@ -141,6 +151,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidDisconnect(_ scene: UIScene) {
+        cancelAlbumExportPicker()
         if host.scene === self { host.scene = nil }
     }
 
@@ -168,6 +179,40 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         backupPicker = delegate
         picker.delegate = delegate
         presenter.present(picker, animated: true)
+    }
+
+    func presentAlbumExportPicker(_ answer: @escaping (String?) -> KotlinUnit) {
+        guard let presenter = window?.rootViewController, presenter.presentedViewController == nil else {
+            _ = answer(nil)
+            host.controller.report(message: "The folder picker is unavailable. Please try again.")
+            return
+        }
+        let generation = exportGeneration
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
+        picker.allowsMultipleSelection = false
+        let delegate = AlbumExportPickerDelegate { [weak self] url in
+            guard let self else { _ = answer(nil); return }
+            self.albumExportPicker = nil
+            self.albumExportController = nil
+            guard self.exportGeneration == generation else { _ = answer(nil); return }
+            let token = url.flatMap { self.host.registerExportDirectory($0) }
+            if url != nil, token == nil {
+                self.host.controller.report(message: "That folder could not be opened for export.")
+            }
+            _ = answer(token)
+        }
+        albumExportPicker = delegate
+        albumExportController = picker
+        picker.delegate = delegate
+        presenter.present(picker, animated: true)
+    }
+
+    func cancelAlbumExportPicker() {
+        albumExportController?.dismiss(animated: false)
+        albumExportController = nil
+        let delegate = albumExportPicker
+        albumExportPicker = nil
+        delegate?.finish(nil)
     }
 
     func presentExport(_ url: URL, target: ExportTarget) {
@@ -262,6 +307,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     func cancelPendingExports() {
         exportGeneration += 1
+        cancelAlbumExportPicker()
         if let prompt = exportPermissionPrompt {
             exportPermissionPrompt = nil
             _ = host.controller.endPrompt(bracket: prompt)
@@ -288,6 +334,18 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         activeExportController = nil
         presentNextExport()
         return true
+    }
+}
+
+private final class AlbumExportPickerDelegate: NSObject, UIDocumentPickerDelegate {
+    private var answer: ((URL?) -> Void)?
+    init(answer: @escaping (URL?) -> Void) { self.answer = answer }
+    func finish(_ url: URL?) { let callback = answer; answer = nil; callback?(url) }
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        controller.dismiss(animated: true) { self.finish(urls.first) }
+    }
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        controller.dismiss(animated: true) { self.finish(nil) }
     }
 }
 
@@ -534,6 +592,9 @@ private final class ShareExportSink: NSObject, ExportSink {
     private let directory = FileManager.default.temporaryDirectory.appendingPathComponent("chur-exports", isDirectory: true)
     private var generation = 0
     private var ready = false
+    private let directoryLock = NSLock()
+    private var pickedDirectories: [String: DirectoryExportSession] = [:]
+    private let activeDirectories = NSHashTable<DirectoryExportSession>.weakObjects()
 
     init(present: @escaping (URL, ExportTarget) -> Void, cancel: @escaping () -> Void) {
         self.present = present
@@ -544,7 +605,38 @@ private final class ShareExportSink: NSObject, ExportSink {
         ready = resetDirectory()
     }
 
+    func registerDirectory(_ url: URL) -> String? {
+        guard let session = DirectoryExportSession(
+            url: url,
+            startAccess: { url.startAccessingSecurityScopedResource() },
+            stopAccess: { url.stopAccessingSecurityScopedResource() }
+        ) else { return nil }
+        let token = UUID().uuidString
+        directoryLock.lock(); pickedDirectories[token] = session; directoryLock.unlock()
+        return token
+    }
+
+    func discardDirectory(_ token: String) {
+        directoryLock.lock(); let session = pickedDirectories.removeValue(forKey: token); directoryLock.unlock()
+        session?.close()
+    }
+
+    func openDirectory(uri: String) -> ExportDirectory? {
+        directoryLock.lock()
+        let session = pickedDirectories.removeValue(forKey: uri)
+        if let session { activeDirectories.add(session) }
+        directoryLock.unlock()
+        guard let session, let directory = session.directory else { return nil }
+        return ScopedExportDirectory(directory: directory)
+    }
+
     func cancelPending() {
+        directoryLock.lock()
+        let sessions = Array(pickedDirectories.values) + activeDirectories.allObjects
+        pickedDirectories.removeAll()
+        activeDirectories.removeAllObjects()
+        directoryLock.unlock()
+        sessions.forEach { $0.close() }
         generation += 1
         cancel()
         ready = resetDirectory()
@@ -635,8 +727,31 @@ private final class ShareDestination: NSObject, ExportSinkDestination {
             }
         }
     }
+    func publishChecked() -> Bool { publish(); return true }
     func discard() { try? FileManager.default.removeItem(at: url) }
     func close() {
         if !closed { Darwin.close(descriptor); closed = true }
     }
+}
+
+private final class ScopedExportDirectory: NSObject, ExportDirectory {
+    private let directory: DirectoryExportNode
+    init(directory: DirectoryExportNode) { self.directory = directory }
+    func createDirectory(displayName: String) -> ExportDirectory? {
+        directory.createDirectory(displayName: displayName).map { ScopedExportDirectory(directory: $0) }
+    }
+    func createFile(displayName: String, contentType: String, plaintextSize: Int64) -> ExportSinkDestination? {
+        directory.createFile(displayName: displayName, plaintextSize: plaintextSize).map { ScopedDirectoryDestination(file: $0) }
+    }
+    func close() { directory.close() }
+}
+
+private final class ScopedDirectoryDestination: NSObject, ExportSinkDestination {
+    private let file: DirectoryExportFile
+    init(file: DirectoryExportFile) { self.file = file }
+    var descriptor: Int32 { file.descriptor }
+    func publish() { _ = file.publishChecked() }
+    func publishChecked() -> Bool { file.publishChecked() }
+    func discard() { file.discard() }
+    func close() { file.close() }
 }

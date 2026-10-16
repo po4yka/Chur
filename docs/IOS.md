@@ -782,6 +782,8 @@ commit or remove partial destination
 
 Integrity failure must not leave a successful-looking partial export.
 
+Album export selects a folder once, retains security-scoped access for the operation, and coordinates direct descriptor writes to the selected file provider. It creates a new album tree without overwriting existing files and publishes each final name only after verified export. It does not stage the album in app-private plaintext scratch. [`product/ALBUM_EXPORT.md`](product/ALBUM_EXPORT.md) owns the batch and partial-result contract.
+
 ### 20.2 Activity-view-controller scratch
 
 When a share provider requires a file URL:

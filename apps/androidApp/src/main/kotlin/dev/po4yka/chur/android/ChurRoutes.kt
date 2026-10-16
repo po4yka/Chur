@@ -70,6 +70,7 @@ import dev.po4yka.chur.app.notes.rememberOpenNote
 import dev.po4yka.chur.app.vault.CreateVaultScreen
 import dev.po4yka.chur.app.vault.LibraryTile
 import dev.po4yka.chur.app.vault.AlbumPickerDialog
+import dev.po4yka.chur.app.vault.AlbumExportDialog
 import dev.po4yka.chur.app.vault.DeleteSelectionDialog
 import dev.po4yka.chur.app.vault.ExportOptionsDialog
 import dev.po4yka.chur.app.vault.canSaveToPhotos
@@ -451,6 +452,18 @@ private fun VaultRoute(controller: ChurController) {
     var confirmingDelete by remember { mutableStateOf(false) }
     var confirmingEmptyTrash by remember { mutableStateOf(false) }
     var choosingExport by remember { mutableStateOf(false) }
+    var exportingAlbum by remember(generation) { mutableStateOf<AlbumSummary?>(null) }
+    var pendingAlbumExport by remember(generation) { mutableStateOf<ByteArray?>(null) }
+    DisposableEffect(controller, generation) {
+        onDispose {
+            if (pendingAlbumExport != null) {
+                pendingAlbumExport = null
+                if ((controller.vaultState.value as? VaultState.Unlocked)?.generation == generation) {
+                    controller.endHostActivity()
+                }
+            }
+        }
+    }
     var choosingImport by remember { mutableStateOf(false) }
     var importAlbumId by remember { mutableStateOf<ByteArray?>(null) }
     // The picked items whose import committed, until the user answers the
@@ -513,6 +526,15 @@ private fun VaultRoute(controller: ChurController) {
     // back to a document picker that allows multiple selection (§14.1).
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(), onPicked)
     val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments(), onPicked)
+    val albumExportPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        val albumId = pendingAlbumExport
+        pendingAlbumExport = null
+        val current = controller.vaultState.value as? VaultState.Unlocked
+        if (albumId != null && current?.generation == generation) {
+            controller.endHostActivity()
+            if (uri != null) controller.exportAlbum(albumId, uri.toString())
+        }
+    }
 
     LaunchedEffect(destination, openAlbum, openTag, favoritesOnly, trashOpen, quarantineOpen,
         terms, mediaSort, albumSort, mediaKinds) {
@@ -745,6 +767,26 @@ private fun VaultRoute(controller: ChurController) {
             onDismiss = { choosingExport = false },
         )
     }
+    exportingAlbum?.let { album ->
+        AlbumExportDialog(
+            album = album,
+            onConfirm = {
+                exportingAlbum = null
+                if ((controller.vaultState.value as? VaultState.Unlocked)?.generation == generation) {
+                    pendingAlbumExport = album.albumId.copyOf()
+                    controller.beginHostActivity()
+                    try {
+                        albumExportPicker.launch(null)
+                    } catch (_: Exception) {
+                        pendingAlbumExport = null
+                        controller.endHostActivity()
+                        controller.report("The folder picker could not be opened.")
+                    }
+                }
+            },
+            onDismiss = { exportingAlbum = null },
+        )
+    }
 
     // The viewer is drawn over the shell rather than in its place, as on
     // iOS: `ChurApp` stacks a route's content, so the shell stays composed and
@@ -860,6 +902,7 @@ private fun VaultRoute(controller: ChurController) {
                 onEmptyTrash = { confirmingEmptyTrash = true },
                 onRestoreTrash = { controller.restoreTrash { selection = emptySet() } },
                 onRenameAlbum = { album, name -> controller.renameAlbum(album.albumId, name) },
+                onExportAlbum = { exportingAlbum = it },
                 onDeleteAlbum = { album ->
                     controller.deleteAlbum(album.albumId) {
                         if (openAlbum?.id == album.id) openAlbum = null

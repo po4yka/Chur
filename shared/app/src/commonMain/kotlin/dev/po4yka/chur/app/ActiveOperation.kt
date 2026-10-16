@@ -7,7 +7,7 @@ data class ActiveOperation(
     val id: Long,
     /**
      * The kind of work: "import", "export", "backup", "restore" or
-     * "verification". It is a key, not copy: the card reads [title].
+     * "verification" or "album-export". It is a key, not copy: the card reads [title].
      */
     val name: String,
     val processed: Long = 0,
@@ -16,8 +16,8 @@ data class ActiveOperation(
     val cancelling: Boolean = false,
     val cancellable: Boolean = true,
     /**
-     * The picked item an import is on, from 1, and how many the picker
-     * returned; 0 for work that is not an import of picked items.
+     * The item a batch import or album export is on, from 1, and the
+     * batch count; 0 for work that does not count individual items.
      */
     val item: Int = 0,
     val items: Int = 0,
@@ -58,6 +58,7 @@ data class ActiveOperation(
     private val title: String get() = when (name) {
         "import" -> if (items > 1) "Importing item $item of $items" else "Importing"
         "export" -> "Exporting"
+        "album-export" -> if (items > 0) "Exporting item $item of $items" else "Preparing album export"
         "backup" -> "Writing backup"
         "restore" -> "Restoring"
         "verification" -> "Checking items"
@@ -67,7 +68,12 @@ data class ActiveOperation(
     /** Where the work is, or `null` while it runs with no count. */
     private val status: String? get() = when {
         cancelling -> "Cancelling"
-        items > 0 -> phase
+        items > 0 && name == "import" -> phase
+        items > 0 && name == "album-export" -> when {
+            stage >= 3 -> "Finishing"
+            stage == 2 -> "Writing"
+            else -> "Preparing"
+        }
         stage >= 3 -> "Finishing"
         stage == 1 -> "Preparing"
         total <= 0 -> null

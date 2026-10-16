@@ -13,6 +13,7 @@ import android.provider.MediaStore
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
 import dev.po4yka.chur.app.ExportSink
+import dev.po4yka.chur.app.ExportDirectory
 import dev.po4yka.chur.app.ExportTarget
 import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.ChurFailure
@@ -33,6 +34,7 @@ class ExportDestinations(
     private val pendingShares = mutableMapOf<Uri, File>()
     private val scratchReservations = mutableMapOf<File, Long>()
     private var generation = 0L
+    private val directoryExports = mutableSetOf<DocumentExportDirectory>()
 
     init {
         scratch.deleteRecursively() // A previous process cannot have a live share sheet.
@@ -40,12 +42,33 @@ class ExportDestinations(
     }
 
     override fun cancelPending() {
-        generation += 1
+        val directories = synchronized(directoryExports) {
+            generation += 1
+            directoryExports.toList()
+        }
+        // Native code may be acquiring a duplicate of an active descriptor. Invalidate
+        // now; the operation's finally closes and removes its output after native work ends.
+        directories.forEach { it.invalidate() }
         pendingShares.toMap().forEach { (uri, file) -> releaseShare(uri, file) }
         scratchReservations.clear()
         scratch.deleteRecursively()
         scratch.mkdirs()
         onShareEnd()
+    }
+
+    override fun openDirectory(uri: String): ExportDirectory {
+        val startedAt = synchronized(directoryExports) { generation }
+        val directory = DocumentExportDirectory.open(resolver, Uri.parse(uri)) { directory ->
+            synchronized(directoryExports) { directoryExports.remove(directory) }
+        }
+        synchronized(directoryExports) {
+            if (generation != startedAt) {
+                directory.close()
+                throw ChurFailure(ChurStatus.CANCELLED, "the folder export was cancelled")
+            }
+            directoryExports.add(directory)
+        }
+        return directory
     }
 
     /** Allow asynchronous recipient opens briefly after the share activity returns. */
