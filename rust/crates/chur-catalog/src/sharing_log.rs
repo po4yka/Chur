@@ -911,8 +911,8 @@ pub fn dirty_object_ids(db: &CatalogDb, selector: &Id, limit: usize) -> Result<V
              JOIN sharing_operation_streams s ON s.key_selector = p.key_selector
              LEFT JOIN object_receive_dispatch q ON q.collection_id = s.collection_id AND q.object_id = p.object_id
              LEFT JOIN objects o ON o.object_id = p.object_id
-             LEFT JOIN pending_object_keys k ON k.object_id = p.object_id
-             LEFT JOIN object_key_requests r ON r.object_id = p.object_id
+             LEFT JOIN pending_object_keys k ON k.object_id = p.object_id AND k.collection_id = s.collection_id
+             LEFT JOIN object_key_requests r ON r.object_id = p.object_id AND r.collection_id = s.collection_id
              WHERE p.key_selector = ?1 AND p.dirty = 1
              ORDER BY coalesce(q.ticket,0), CASE WHEN o.object_id IS NOT NULL THEN 0
                  WHEN k.object_id IS NOT NULL THEN 1 WHEN r.object_id IS NULL THEN 2 ELSE 3 END,

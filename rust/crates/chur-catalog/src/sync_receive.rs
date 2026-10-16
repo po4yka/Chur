@@ -1049,7 +1049,11 @@ pub fn accept_rotation_operation(
                         AuthenticationFailed,
                         "rewrap differs from the accepted object key commitment"
                     );
-                    match crate::object_grants::pending_envelope(db, object_id) {
+                    match crate::object_grants::pending_envelope(
+                        db,
+                        payload.collection_id(),
+                        object_id,
+                    ) {
                         Ok(envelope) => (envelope, true),
                         Err(error) if error.status() == ChurStatus::NotFound => {
                             return log.accept_with(db, &operation, membership, |_| Ok(()));
@@ -1100,10 +1104,11 @@ pub fn accept_rotation_operation(
                 if pending {
                     transaction
                         .execute(
-                            "UPDATE pending_object_keys SET envelope = ?2 WHERE object_id = ?1",
+                            "UPDATE pending_object_keys SET envelope = ?2 WHERE object_id = ?1 AND collection_id = ?3",
                             rusqlite::params![
                                 object_id.as_bytes().as_slice(),
-                                object_key_envelope.encode()
+                                object_key_envelope.encode(),
+                                payload.collection_id().as_bytes().as_slice()
                             ],
                         )
                         .map_err(|error| {

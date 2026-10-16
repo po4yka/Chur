@@ -270,8 +270,18 @@ fn verify_container(
 
 /// Verifies the signed object against its container and activates the local row.
 pub fn activate_shared(session: &mut Session, object: &SharedObject, now_ms: u64) -> Result<()> {
-    let object_key_envelope =
-        chur_catalog::object_grants::pending_envelope(session.catalog_ref()?, &object.object_id)?;
+    // The mutable session serializes activation through filesystem publication.
+    // A stale plan must not replace an active container before SQL rejects its ID.
+    ensure!(
+        !catalog_store::object_present(session.catalog_ref()?, &object.object_id)?,
+        Conflict,
+        "download target object is already activated"
+    );
+    let object_key_envelope = chur_catalog::object_grants::pending_envelope(
+        session.catalog_ref()?,
+        &object.collection_id,
+        &object.object_id,
+    )?;
     ensure!(
         object_key_envelope.vault_id() == &session.vault_id()
             && object_key_envelope.collection_id() == &object.collection_id

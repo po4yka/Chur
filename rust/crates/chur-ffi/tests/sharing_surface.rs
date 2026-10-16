@@ -772,6 +772,7 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
         chur_media::keys::collection_key(&interrupted, &collection_id, 1).expect("collection key");
     let received_object_key = chur_catalog::object_grants::pending_envelope(
         interrupted.catalog_ref().expect("catalog"),
+        &collection_id,
         &shared_object_id,
     )
     .expect("local pending key envelope")
@@ -1110,6 +1111,7 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
     assert!(
         chur_catalog::object_grants::pending_envelope(
             received.catalog_ref().expect("catalog"),
+            &collection_id,
             &shared_object_id
         )
         .is_err()
@@ -1132,6 +1134,7 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
     assert!(
         chur_catalog::object_grants::pending_envelope(
             received.catalog_ref().expect("catalog"),
+            &collection_id,
             &shared_object_id
         )
         .is_err()
@@ -1163,6 +1166,7 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
     assert!(
         chur_catalog::object_grants::pending_envelope(
             restored.catalog_ref().expect("catalog"),
+            &collection_id,
             &shared_object_id
         )
         .is_err()

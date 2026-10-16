@@ -129,11 +129,14 @@ pub fn erase(db: &mut CatalogDb, object_id: &Id, now_ms: u64) -> Result<()> {
             )
             .map_err(|error| map_sqlite(error, "the envelope epoch could not be destroyed"))?;
         for statement in [
-            "DELETE FROM object_key_requests WHERE object_id = ?1",
-            "DELETE FROM pending_object_keys WHERE object_id = ?1",
+            "DELETE FROM object_key_requests WHERE object_id = ?1 AND collection_id = ?2",
+            "DELETE FROM pending_object_keys WHERE object_id = ?1 AND collection_id = ?2",
         ] {
             transaction
-                .execute(statement, [object_id.as_bytes().as_slice()])
+                .execute(
+                    statement,
+                    params![object_id.as_bytes().as_slice(), collection.as_slice()],
+                )
                 .map_err(|error| {
                     map_sqlite(error, "temporary object keys could not be destroyed")
                 })?;

@@ -1559,7 +1559,7 @@ fn rotation_accepts_waiting_keys_pending_envelopes_and_permanent_tombstones() {
         .expect("missing local media cannot block key-free rewrap");
     }
     assert_eq!(log.head(&id(4)).expect("advanced head").0, 10);
-    let pending = chur_catalog::object_grants::pending_envelope(&fixture.db, &id(115))
+    let pending = chur_catalog::object_grants::pending_envelope(&fixture.db, &collection, &id(115))
         .expect("rewrapped pending key");
     assert_eq!(pending.collection_epoch(), 2);
     assert_eq!(
@@ -1567,5 +1567,7 @@ fn rotation_accepts_waiting_keys_pending_envelopes_and_permanent_tombstones() {
         Key::new([115; 32]).expose()
     );
     assert!(store::active_envelope(&fixture.db, &id(116)).is_err());
-    assert!(chur_catalog::object_grants::pending_envelope(&fixture.db, &id(117)).is_err());
+    assert!(
+        chur_catalog::object_grants::pending_envelope(&fixture.db, &collection, &id(117)).is_err()
+    );
 }

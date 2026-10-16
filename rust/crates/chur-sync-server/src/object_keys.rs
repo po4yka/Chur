@@ -1608,8 +1608,12 @@ mod tests {
             &replacement,
         )
         .unwrap();
-        let envelope =
-            object_grants::pending_envelope(recipient.catalog_ref().unwrap(), &object_id).unwrap();
+        let envelope = object_grants::pending_envelope(
+            recipient.catalog_ref().unwrap(),
+            &collection,
+            &object_id,
+        )
+        .unwrap();
         let collection_key = chur_format::envelope::CollectionKeyEnvelope::decode(
             &store::active_collection_envelope(
                 source.catalog_ref().unwrap(),

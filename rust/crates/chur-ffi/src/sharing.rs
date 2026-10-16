@@ -1001,7 +1001,7 @@ pub unsafe extern "C" fn chur_object_key_request(
                 reader.finish()?;
                 let request =
                     chur_catalog::object_grants::request(db, root, vault_id, collection, object)?;
-                match chur_catalog::object_grants::pending_envelope(db, &object) {
+                match chur_catalog::object_grants::pending_envelope(db, &collection, &object) {
                     Ok(_) => Ok(vec![0]),
                     Err(error) if error.status() == ChurStatus::NotFound => {
                         let mut bytes = vec![1];

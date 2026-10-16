@@ -914,7 +914,7 @@ mod tests {
         let grant = crate::object_grants::issue(&mut source, &root, vault, &request).unwrap();
         crate::object_grants::accept(&mut peer, &root, vault, &[], &grant).unwrap();
         assert_eq!(
-            crate::object_grants::pending_envelope(&peer, &object)
+            crate::object_grants::pending_envelope(&peer, &collection, &object)
                 .unwrap()
                 .open(&collection_key)
                 .unwrap()

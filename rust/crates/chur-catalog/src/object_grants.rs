@@ -50,9 +50,9 @@ pub fn request(
     let stored: Option<Vec<u8>> = db
         .connection()
         .query_row(
-            "SELECT record FROM object_key_requests WHERE object_id = ?1
-         UNION ALL SELECT request_record FROM pending_object_keys WHERE object_id = ?1 LIMIT 1",
-            [object_id.as_bytes().as_slice()],
+            "SELECT record FROM object_key_requests WHERE object_id = ?1 AND collection_id = ?2
+         UNION ALL SELECT request_record FROM pending_object_keys WHERE object_id = ?1 AND collection_id = ?2 LIMIT 1",
+            params![object_id.as_bytes().as_slice(), collection_id.as_bytes().as_slice()],
             |row| row.get(0),
         )
         .optional()
@@ -78,7 +78,7 @@ pub fn request(
         if prekey.recipient_device_id() == &device_id {
             return Ok(prekey);
         }
-        match pending_envelope(db, &object_id) {
+        match pending_envelope(db, &collection_id, &object_id) {
             Ok(_) => return Ok(prekey),
             Err(error) if error.status() == ChurStatus::NotFound => {}
             Err(error) => return Err(error),
@@ -88,8 +88,11 @@ pub fn request(
         // by the new ordinary identity may be sent. Keep ready envelopes.
         db.transaction(|tx| {
             tx.execute(
-                "DELETE FROM object_key_requests WHERE object_id = ?1",
-                [object_id.as_bytes().as_slice()],
+                "DELETE FROM object_key_requests WHERE object_id = ?1 AND collection_id = ?2",
+                params![
+                    object_id.as_bytes().as_slice(),
+                    collection_id.as_bytes().as_slice()
+                ],
             )
             .map_err(|error| {
                 map_sqlite(error, "the previous device prekey could not be retired")
@@ -403,8 +406,8 @@ pub fn accept(
     let previous: Option<Vec<u8>> = db
         .connection()
         .query_row(
-            "SELECT grant_record FROM pending_object_keys WHERE object_id = ?1",
-            [grant.object_id().as_bytes().as_slice()],
+            "SELECT grant_record FROM pending_object_keys WHERE object_id = ?1 AND collection_id = ?2",
+            params![grant.object_id().as_bytes().as_slice(), grant.collection_id().as_bytes().as_slice()],
             |row| row.get(0),
         )
         .optional()
@@ -421,8 +424,8 @@ pub fn accept(
         return db.checkpoint();
     }
     let (record, private): (Vec<u8>, Vec<u8>) = db.connection().query_row(
-        "SELECT record, private_key FROM object_key_requests WHERE object_id = ?1 AND prekey_id = ?2",
-        params![grant.object_id().as_bytes().as_slice(), grant.prekey_id().as_bytes().as_slice()],
+        "SELECT record, private_key FROM object_key_requests WHERE object_id = ?1 AND prekey_id = ?2 AND collection_id = ?3",
+        params![grant.object_id().as_bytes().as_slice(), grant.prekey_id().as_bytes().as_slice(), grant.collection_id().as_bytes().as_slice()],
         |row| Ok((row.get(0)?, row.get(1)?)),
     ).map_err(|error| map_sqlite(error, "object grant has no live key request"))?;
     let private = Zeroizing::new(private);
@@ -472,8 +475,11 @@ pub fn accept(
         )
         .map_err(|error| map_sqlite(error, "pending object key could not be stored"))?;
         tx.execute(
-            "DELETE FROM object_key_requests WHERE object_id = ?1",
-            [grant.object_id().as_bytes().as_slice()],
+            "DELETE FROM object_key_requests WHERE object_id = ?1 AND collection_id = ?2",
+            params![
+                grant.object_id().as_bytes().as_slice(),
+                grant.collection_id().as_bytes().as_slice()
+            ],
         )
         .map_err(|error| map_sqlite(error, "object prekey could not be destroyed"))?;
         Ok(())
@@ -482,25 +488,40 @@ pub fn accept(
 }
 
 /// Reads the local key custody row required by container activation.
-pub fn pending_envelope(db: &CatalogDb, object_id: &Id) -> Result<ObjectKeyEnvelope> {
+pub fn pending_envelope(
+    db: &CatalogDb,
+    collection_id: &Id,
+    object_id: &Id,
+) -> Result<ObjectKeyEnvelope> {
     let bytes: Vec<u8> = db
         .connection()
         .query_row(
-            "SELECT envelope FROM pending_object_keys WHERE object_id = ?1",
-            [object_id.as_bytes().as_slice()],
+            "SELECT envelope FROM pending_object_keys WHERE object_id = ?1 AND collection_id = ?2",
+            params![
+                object_id.as_bytes().as_slice(),
+                collection_id.as_bytes().as_slice()
+            ],
             |row| row.get(0),
         )
         .map_err(|error| map_sqlite(error, "object key grant has not arrived"))?;
     let envelope = ObjectKeyEnvelope::decode(&bytes)?;
-    ensure_not_deleted(db, envelope.collection_id(), object_id)?;
+    ensure!(
+        envelope.collection_id() == collection_id && envelope.object_id() == object_id,
+        CatalogCorrupt,
+        "pending object envelope has another custody binding"
+    );
+    ensure_not_deleted(db, collection_id, object_id)?;
     Ok(envelope)
 }
 
 /// Removes temporary local key custody after atomic object activation.
-pub fn remove_pending(tx: &Transaction<'_>, object_id: &Id) -> Result<()> {
+pub fn remove_pending(tx: &Transaction<'_>, collection_id: &Id, object_id: &Id) -> Result<()> {
     tx.execute(
-        "DELETE FROM pending_object_keys WHERE object_id = ?1",
-        [object_id.as_bytes().as_slice()],
+        "DELETE FROM pending_object_keys WHERE object_id = ?1 AND collection_id = ?2",
+        params![
+            object_id.as_bytes().as_slice(),
+            collection_id.as_bytes().as_slice()
+        ],
     )
     .map_err(|error| map_sqlite(error, "pending object key could not be removed"))?;
     Ok(())
@@ -549,17 +570,21 @@ mod tests {
     }
     #[test]
     fn unavailable_requests_do_not_starve_later_keys_or_evict_asynchronous_replies() {
-        recipient_key_fixture(false, false);
+        recipient_key_fixture(false, false, false);
     }
     #[test]
     fn active_object_rejects_wrong_signed_grant_before_idempotent_acknowledgment() {
-        recipient_key_fixture(true, false);
+        recipient_key_fixture(true, false, false);
     }
     #[test]
     fn a_foreign_collection_purge_cannot_erase_pending_keys_or_block_later_arrival() {
-        recipient_key_fixture(false, true);
+        recipient_key_fixture(false, true, false);
     }
-    fn recipient_key_fixture(check_active: bool, check_scope: bool) {
+    #[test]
+    fn a_foreign_request_created_first_cannot_block_another_collections_key_custody() {
+        recipient_key_fixture(false, true, true);
+    }
+    fn recipient_key_fixture(check_active: bool, check_scope: bool, foreign_first: bool) {
         let source_vault = id(21);
         let collection = id(22);
         let source_root = Key::new([23; 32]);
@@ -706,9 +731,13 @@ mod tests {
         )
         .expect("authenticated collection receive");
         assert_eq!(plan.objects.len(), 66);
-        let mut requests = Vec::new();
-        for (object, _) in &objects {
-            requests.push(
+        let mut requests = std::collections::BTreeMap::new();
+        for (index, (object, _)) in objects.iter().enumerate() {
+            if foreign_first && index == 2 {
+                continue;
+            }
+            requests.insert(
+                index,
                 request(
                     &mut recipient,
                     &recipient_root,
@@ -728,7 +757,7 @@ mod tests {
                 *object,
                 1,
                 [index as u8 + 1; 32],
-                &requests[index],
+                &requests[&index],
                 content,
                 identity.signing_key(),
             )
@@ -742,7 +771,7 @@ mod tests {
             )
             .expect("grant acceptance");
             assert_eq!(
-                pending_envelope(&recipient, object)
+                pending_envelope(&recipient, &collection, object)
                     .expect("accepted local key")
                     .open(&metadata_key)
                     .expect("local envelope")
@@ -760,7 +789,7 @@ mod tests {
             )
             .expect("unavailable neighbor retained")
             .encode(),
-            requests[1].encode()
+            requests[&1].encode()
         );
         let private_count: i64 = recipient
             .connection()
@@ -769,7 +798,8 @@ mod tests {
             })
             .expect("pending count");
         assert_eq!(
-            private_count, 64,
+            private_count,
+            if foreign_first { 63 } else { 64 },
             "only accepted replies consume their own private keys"
         );
         if check_scope {
@@ -929,10 +959,102 @@ mod tests {
                 &malicious,
             )
             .expect("foreign purge accepted only in its own scope");
-            assert!(matches!(
-                request(&mut recipient, &recipient_root, recipient_vault, foreign, objects[2].0),
-                Err(error) if error.status() == ChurStatus::AuthenticationFailed
-            ));
+            let foreign_request = request(
+                &mut recipient,
+                &recipient_root,
+                recipient_vault,
+                foreign,
+                objects[2].0,
+            )
+            .expect("foreign collection owns an independent disposable request");
+            let foreign_grant = ObjectKeyGrant::seal(
+                random::id().expect("foreign grant"),
+                source_vault,
+                *source_enrollment.device_id(),
+                objects[2].0,
+                1,
+                [3; 32],
+                &foreign_request,
+                &objects[2].1,
+                identity.signing_key(),
+            )
+            .expect("foreign signed key grant");
+            if !foreign_first {
+                accept(
+                    &mut recipient,
+                    &recipient_root,
+                    recipient_vault,
+                    &evidence,
+                    &foreign_grant,
+                )
+                .expect("foreign pending envelope has independent custody");
+            }
+            let legitimate_request = request(
+                &mut recipient,
+                &recipient_root,
+                recipient_vault,
+                collection,
+                objects[2].0,
+            )
+            .expect("foreign request created first cannot deny legitimate collection custody");
+            if foreign_first {
+                requests.insert(2, legitimate_request.clone());
+            }
+            assert_ne!(foreign_request.prekey_id(), legitimate_request.prekey_id());
+            assert_eq!(foreign_request.collection_id(), &foreign);
+            assert_eq!(legitimate_request.collection_id(), &collection);
+            let legitimate_grant = ObjectKeyGrant::seal(
+                random::id().expect("legitimate grant"),
+                source_vault,
+                *source_enrollment.device_id(),
+                objects[2].0,
+                1,
+                [3; 32],
+                &legitimate_request,
+                &objects[2].1,
+                identity.signing_key(),
+            )
+            .expect("legitimate signed key grant");
+            accept(
+                &mut recipient,
+                &recipient_root,
+                recipient_vault,
+                &evidence,
+                &legitimate_grant,
+            )
+            .expect("both collection custody rows can accept their own grants");
+            if foreign_first {
+                assert_eq!(
+                    request(
+                        &mut recipient,
+                        &recipient_root,
+                        recipient_vault,
+                        foreign,
+                        objects[2].0
+                    )
+                    .expect("legitimate grant preserves foreign private request")
+                    .encode(),
+                    foreign_request.encode()
+                );
+                accept(
+                    &mut recipient,
+                    &recipient_root,
+                    recipient_vault,
+                    &evidence,
+                    &foreign_grant,
+                )
+                .expect("the original foreign private prekey can still decrypt its reply");
+            }
+            for (scope, metadata) in [(foreign, &foreign_key), (collection, &metadata_key)] {
+                assert_eq!(
+                    pending_envelope(&recipient, &scope, &objects[2].0)
+                        .expect("scoped envelope")
+                        .open(metadata)
+                        .expect("independent key")
+                        .expose(),
+                    objects[2].1.expose()
+                );
+            }
             assert_eq!(
                 request(
                     &mut recipient,
@@ -943,7 +1065,14 @@ mod tests {
                 )
                 .expect("victim request unchanged")
                 .encode(),
-                requests[2].encode()
+                requests[&2].encode()
+            );
+            recipient
+                .transaction(|tx| remove_pending(tx, &collection, &objects[2].0))
+                .expect("remove only legitimate temporary key");
+            assert!(
+                pending_envelope(&recipient, &foreign, &objects[2].0).is_ok(),
+                "removing one collection must keep its neighbor key"
             );
             assert_eq!(
                 request(
@@ -955,10 +1084,10 @@ mod tests {
                 )
                 .expect("victim private key survives")
                 .encode(),
-                requests[1].encode()
+                requests[&1].encode()
             );
             assert_eq!(
-                pending_envelope(&recipient, &objects[0].0)
+                pending_envelope(&recipient, &collection, &objects[0].0)
                     .expect("victim accepted envelope survives")
                     .open(&metadata_key)
                     .expect("victim content key")
@@ -1028,7 +1157,8 @@ mod tests {
             use crate::model::{MetadataRevision, Object, Stream};
             use chur_format::constants::{IntegritySummary, MediaClass, ObjectState, StreamKind};
             let (object, content) = &objects[65];
-            let local = pending_envelope(&recipient, object).expect("accepted local key");
+            let local =
+                pending_envelope(&recipient, &collection, object).expect("accepted local key");
             store::activate_object(
                 &mut recipient,
                 &store::ObjectActivation {
@@ -1091,7 +1221,7 @@ mod tests {
                 *object,
                 1,
                 [66; 32],
-                &requests[65],
+                &requests[&65],
                 &Key::new([201; 32]),
                 identity.signing_key(),
             )
@@ -1163,7 +1293,7 @@ mod tests {
                 *object,
                 1,
                 [66; 32],
-                &requests[65],
+                &requests[&65],
                 content,
                 identity.signing_key(),
             )
@@ -1181,7 +1311,7 @@ mod tests {
                 local.encode()
             );
             assert!(
-                pending_envelope(&recipient, object).is_err(),
+                pending_envelope(&recipient, &collection, object).is_err(),
                 "active retry must not recreate a private request or pending key"
             );
         }

@@ -184,8 +184,12 @@ fn shared_pending_key_accepted_before_metadata_rotation_activates_under_current_
     assert_eq!(envelope.collection_epoch(), 2);
     assert_eq!(envelope.open(&next).unwrap().expose(), content.expose());
     assert!(
-        chur_catalog::object_grants::pending_envelope(target.catalog_ref().unwrap(), &object)
-            .is_err()
+        chur_catalog::object_grants::pending_envelope(
+            target.catalog_ref().unwrap(),
+            &collection,
+            &object
+        )
+        .is_err()
     );
     drop(target);
     let target = vault::unlock_with_password(&target_root, PASSWORD, 6).unwrap();

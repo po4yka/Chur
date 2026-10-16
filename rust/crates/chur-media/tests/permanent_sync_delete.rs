@@ -174,16 +174,17 @@ fn rotate(source: &mut Session, secret: &Key, collection: Id, objects: &[Id]) {
         .unwrap();
     }
 }
-fn foreign_purge_preserves_active_original(
+fn foreign_collection_event(
     target: &mut Session,
     secret: &Key,
     object: Id,
     target_device: Id,
     first_enrollment: &chur_sync_protocol::membership::EnrollmentRecord,
-) {
+    mut terminal: chur_sync_protocol::payload::PayloadBody,
+    content_key: Option<&Key>,
+) -> (Id, Option<chur_catalog::sharing_receive::SharedObject>) {
     use chur_catalog::{
-        query, sharing, sharing_log::DurableCollectionOperationLog, sharing_receive,
-        sharing_service,
+        sharing, sharing_log::DurableCollectionOperationLog, sharing_receive, sharing_service,
     };
     use chur_sync_protocol::{
         KeyDomain,
@@ -191,19 +192,6 @@ fn foreign_purge_preserves_active_original(
         operation::Operation,
         payload::{OperationPayload, PayloadBody},
     };
-    let query = query::ObjectQuery {
-        scope: query::Scope::Search("private".into()),
-        ..query::ObjectQuery::timeline()
-    };
-    assert!(
-        query::page(target.catalog_ref().unwrap(), &query)
-            .unwrap()
-            .objects
-            .iter()
-            .any(|row| row.object_id == object)
-    );
-    let original_key = keys::object_key(target, &object).unwrap();
-    let original = chur_catalog::store::object(target.catalog_ref().unwrap(), &object).unwrap();
     let target_vault = target.vault_id();
     let second =
         sync_membership::enrollment_for_device(target.catalog_ref().unwrap(), &target_device)
@@ -280,6 +268,17 @@ fn foreign_purge_preserves_active_original(
         *domain.selector(),
     )
     .unwrap();
+    if let (
+        Some(content),
+        PayloadBody::CommitObject {
+            object_key_commitment,
+            ..
+        },
+    ) = (content_key, &mut terminal)
+    {
+        *object_key_commitment =
+            chur_sync_protocol::object_grant::object_key_commitment(&collection, &object, content);
+    }
     let mut events = Vec::new();
     for body in [
         PayloadBody::CreateObject {
@@ -289,11 +288,7 @@ fn foreign_purge_preserves_active_original(
             stream_id: object,
             metadata_fields: vec![],
         },
-        PayloadBody::PurgeObject {
-            object_id: object,
-            object_generation: 1,
-            authored_at_ms: NOW,
-        },
+        terminal,
     ] {
         events.push(
             log.author_with_keys(
@@ -319,10 +314,11 @@ fn foreign_purge_preserves_active_original(
             .iter()
             .map(|bytes| Operation::decode(bytes).unwrap())
             .collect::<Vec<_>>();
+    let attacker_device = *enrollment.device_id();
     let records = [sharing_service::IssuerMembershipRecord::Enrollment(
         enrollment,
     )];
-    sharing_receive::receive(
+    let mut plan = sharing_receive::receive(
         target.catalog().unwrap(),
         secret,
         target_vault,
@@ -339,6 +335,75 @@ fn foreign_purge_preserves_active_original(
         &events,
     )
     .unwrap();
+    if let Some(content) = content_key {
+        let prekey = chur_catalog::object_grants::request(
+            target.catalog().unwrap(),
+            secret,
+            target_vault,
+            collection,
+            object,
+        )
+        .unwrap();
+        let grant = chur_sync_protocol::object_grant::ObjectKeyGrant::seal(
+            random::id().unwrap(),
+            attacker_vault,
+            attacker_device,
+            object,
+            1,
+            plan.objects[0].container_commitment,
+            &prekey,
+            content,
+            identity.signing_key(),
+        )
+        .unwrap();
+        chur_catalog::object_grants::accept(
+            target.catalog().unwrap(),
+            secret,
+            target_vault,
+            &[sharing_service::IssuerEvidence {
+                membership: &records,
+                operations: &proofs,
+            }],
+            &grant,
+        )
+        .unwrap();
+    }
+    (collection, plan.objects.pop())
+}
+fn foreign_purge_preserves_active_original(
+    target: &mut Session,
+    secret: &Key,
+    object: Id,
+    target_device: Id,
+    first_enrollment: &chur_sync_protocol::membership::EnrollmentRecord,
+) {
+    use chur_catalog::query;
+    let query = query::ObjectQuery {
+        scope: query::Scope::Search("private".into()),
+        ..query::ObjectQuery::timeline()
+    };
+    assert!(
+        query::page(target.catalog_ref().unwrap(), &query)
+            .unwrap()
+            .objects
+            .iter()
+            .any(|row| row.object_id == object)
+    );
+    let original_key = keys::object_key(target, &object).unwrap();
+    let original = chur_catalog::store::object(target.catalog_ref().unwrap(), &object).unwrap();
+    foreign_collection_event(
+        target,
+        secret,
+        object,
+        target_device,
+        first_enrollment,
+        chur_sync_protocol::payload::PayloadBody::PurgeObject {
+            object_id: object,
+            object_generation: 1,
+            authored_at_ms: NOW,
+        },
+        None,
+    );
     finish(target, secret);
     assert_eq!(
         chur_catalog::store::object(target.catalog_ref().unwrap(), &object).unwrap(),
@@ -402,7 +467,8 @@ fn source_purge_relay_erases_sibling_after_restart_and_backup_without_damaging_n
     )
     .unwrap();
     relay(&source, &mut target, &secret, source_enrollment.device_id());
-    device_pairing::finalize(target.catalog().unwrap(), &secret, vault, NOW + 4).unwrap();
+    let target_device =
+        device_pairing::finalize(target.catalog().unwrap(), &secret, vault, NOW + 4).unwrap();
     let removed = import(&mut source, b"removed private original");
     let neighbor = import(&mut source, b"neighbor remains readable");
     let pending_removed = import(&mut source, b"pending original never activated");
@@ -428,6 +494,76 @@ fn source_purge_relay_erases_sibling_after_restart_and_backup_without_damaging_n
         own_sync::pending_for_collection(target.catalog().unwrap(), &secret, vault, collection)
             .unwrap();
     assert_eq!(plan.objects.len(), 4);
+    // The untrusted collection receives its own valid pending object and
+    // disposable request before this device asks for the legitimate original.
+    let malicious_key = Key::new([88; 32]);
+    let malicious_identity = chur_format::container::StreamIdentity {
+        object_id: neighbor,
+        stream_id: neighbor,
+        stream_kind: StreamKind::Original,
+        stream_revision: 1,
+    };
+    let manifest = chur_format::container::CanonicalManifest::new(
+        malicious_identity,
+        None,
+        1_048_576,
+        [89; 16],
+        1,
+        chur_format::container::MediaProperties::opaque(),
+    )
+    .unwrap();
+    let mut writer = chur_format::container::ContainerWriter::start(
+        Vec::new(),
+        &malicious_key,
+        manifest,
+        chur_crypto::Nonce::new([90; 24]),
+    )
+    .unwrap();
+    writer
+        .write_chunk(b"attacker's separately authenticated original")
+        .unwrap();
+    let malicious_bytes = writer.finish(chur_crypto::Nonce::new([91; 24]), 1).unwrap();
+    let malicious_commit = *chur_format::container::ContainerReader::open(
+        &malicious_bytes,
+        &malicious_key,
+        &malicious_identity,
+    )
+    .unwrap()
+    .read_final_commit()
+    .unwrap()
+    .ordered_chunk_commitment();
+    let (foreign, stale) = foreign_collection_event(
+        &mut target,
+        &secret,
+        neighbor,
+        target_device,
+        &source_enrollment,
+        chur_sync_protocol::payload::PayloadBody::CommitObject {
+            object_id: neighbor,
+            object_generation: 1,
+            store_id: neighbor,
+            container_length: malicious_bytes.len() as u64,
+            container_commitment: malicious_commit,
+            object_key_commitment: [88; 32],
+        },
+        Some(&malicious_key),
+    );
+    let stale = stale.unwrap();
+    let foreign_request = chur_catalog::object_grants::request(
+        target.catalog().unwrap(),
+        &secret,
+        vault,
+        foreign,
+        neighbor,
+    )
+    .unwrap();
+    let foreign_envelope = chur_catalog::object_grants::pending_envelope(
+        target.catalog_ref().unwrap(),
+        &foreign,
+        &neighbor,
+    )
+    .unwrap()
+    .encode();
     let mut retained_grants = Vec::new();
     for object in plan.objects {
         let prekey = chur_catalog::object_grants::request(
@@ -474,6 +610,92 @@ fn source_purge_relay_erases_sibling_after_restart_and_backup_without_damaging_n
         .unwrap();
         sync_download::activate_shared(&mut target, &object, NOW + 11).unwrap();
     }
+    let active_before =
+        chur_catalog::store::object(target.catalog_ref().unwrap(), &neighbor).unwrap();
+    let committed_before =
+        store::read_container(target.root_dir(), &target.object_store_id(), &neighbor).unwrap();
+    let expected = sync_download::Expectation::new(
+        neighbor,
+        stale.stream_id,
+        stale.container_length,
+        stale.container_commitment,
+    )
+    .unwrap();
+    sync_download::append_range(
+        target.root_dir(),
+        &target.object_store_id(),
+        &neighbor,
+        0,
+        &malicious_bytes,
+        &expected,
+    )
+    .unwrap();
+    assert!(
+        sync_download::activate_shared(&mut target, &stale, NOW + 12).is_err(),
+        "stale foreign plan cannot rebind an active global object ID"
+    );
+    assert!(
+        store::read_container(target.root_dir(), &target.object_store_id(), &neighbor).unwrap()
+            == committed_before,
+        "failed foreign activation must preserve the already healthy original ciphertext"
+    );
+    assert_eq!(
+        chur_catalog::object_grants::pending_envelope(
+            target.catalog_ref().unwrap(),
+            &foreign,
+            &neighbor
+        )
+        .unwrap()
+        .encode(),
+        foreign_envelope,
+        "foreign pending key custody remains unchanged after the collision"
+    );
+    assert_eq!(
+        chur_catalog::store::object(target.catalog_ref().unwrap(), &neighbor).unwrap(),
+        active_before
+    );
+    assert_eq!(
+        active_before.state,
+        chur_format::constants::ObjectState::Active
+    );
+    // The existing global-ID policy rejects a foreign active collision explicitly.
+    for _ in 0..2 {
+        assert_eq!(
+            chur_catalog::sharing_receive::pending_for_collection(
+                target.catalog().unwrap(),
+                &secret,
+                vault,
+                foreign
+            )
+            .err()
+            .unwrap()
+            .status(),
+            ChurStatus::Conflict
+        );
+        assert_eq!(
+            chur_catalog::sharing_receive::pending_object_for_collection(
+                target.catalog().unwrap(),
+                &secret,
+                vault,
+                foreign,
+                neighbor
+            )
+            .err()
+            .unwrap()
+            .status(),
+            ChurStatus::NotFound
+        );
+    }
+    let mut received = Vec::new();
+    export::export_stream(
+        &target,
+        &neighbor,
+        StreamKind::Original,
+        &mut received,
+        &mut Uninterrupted,
+    )
+    .unwrap();
+    assert_eq!(received, b"neighbor remains readable");
     assert!(keys::object_key(&target, &removed).is_ok());
     foreign_purge_preserves_active_original(
         &mut target,
@@ -523,6 +745,7 @@ fn source_purge_relay_erases_sibling_after_restart_and_backup_without_damaging_n
     assert!(
         chur_catalog::object_grants::pending_envelope(
             target.catalog_ref().unwrap(),
+            &collection,
             &pending_removed
         )
         .is_err()
@@ -598,4 +821,34 @@ fn source_purge_relay_erases_sibling_after_restart_and_backup_without_damaging_n
     )
     .unwrap();
     assert_eq!(bytes, b"neighbor remains readable");
+    // Active object IDs stay globally unique. A second collection cannot
+    // rebind this active ID, but its pending private request must survive it.
+    assert_eq!(
+        chur_catalog::object_grants::request(
+            target.catalog().unwrap(),
+            &secret,
+            vault,
+            foreign,
+            neighbor
+        )
+        .err()
+        .unwrap()
+        .status(),
+        ChurStatus::NotFound
+    );
+    deletion::begin(target.catalog().unwrap(), &neighbor).unwrap();
+    finish(&mut target, &secret);
+    assert_eq!(
+        chur_catalog::object_grants::request(
+            target.catalog().unwrap(),
+            &secret,
+            vault,
+            foreign,
+            neighbor
+        )
+        .unwrap()
+        .encode(),
+        foreign_request.encode(),
+        "activation and erasure in one collection must preserve the other collection's original private request"
+    );
 }
