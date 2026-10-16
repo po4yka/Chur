@@ -1023,15 +1023,13 @@ impl ReferenceServer {
                     "recipient collection state is absent",
                 )
             })?;
-            ensure!(
-                state.is_authorized(
-                    &recipient_vault_id,
-                    &recipient_device_id,
-                    PermissionProfile::Read,
-                ),
-                AuthenticationFailed,
-                "requester is not a current collection recipient"
-            );
+            if !state.is_authorized(
+                &recipient_vault_id,
+                &recipient_device_id,
+                PermissionProfile::Read,
+            ) {
+                continue;
+            }
             let member = state
                 .member(&recipient_vault_id, &recipient_device_id)
                 .ok_or_else(|| {
@@ -2233,6 +2231,12 @@ mod tests {
             .expect("recipient revocation");
         assert!(
             server
+                .share_acceptance_packages(recipient_vault, recipient_device)
+                .expect("revoked collections do not fail the package inbox")
+                .is_empty()
+        );
+        assert!(
+            server
                 .issuer_memberships_for_recipient(
                     recipient_vault,
                     recipient_device,
@@ -2278,7 +2282,7 @@ mod tests {
             .expect("current grant");
         drop(server);
 
-        let server = ReferenceServer::open(&root.0, 1_024, 65_536).expect("reopen");
+        let mut server = ReferenceServer::open(&root.0, 1_024, 65_536).expect("reopen");
         assert_eq!(
             server
                 .collection_memberships_for_recipient(recipient_vault, recipient_device)
@@ -2329,6 +2333,78 @@ mod tests {
                 .collection_grants_for_recipient(id(15), id(16))
                 .expect("unrelated grants")
                 .is_empty()
+        );
+        // Losing one collection must not hide another valid collection.
+        let other_membership = CollectionMembershipRecord::new(
+            source_vault,
+            id(60),
+            1,
+            [0; 32],
+            CollectionMembershipAction::Upsert(PermissionProfile::Read),
+            recipient_vault,
+            recipient_device,
+            recipient.signing_public_key(),
+            recipient.hpke_public_key(),
+            1,
+            source_vault,
+            source_device,
+            1,
+            8,
+        )
+        .expect("other collection membership")
+        .sign(&source_key);
+        let other_membership_outer = operation(
+            source_vault,
+            source_device,
+            id(61),
+            8,
+            current_grant_outer.digest(),
+            &source_key,
+        );
+        server
+            .accept_collection_membership(&other_membership, &other_membership_outer)
+            .expect("other collection membership");
+        let other_grant = CollectionGrant::seal(
+            id(62),
+            source_vault,
+            id(60),
+            1,
+            1,
+            recipient_vault,
+            recipient_device,
+            &recipient.hpke_public_key(),
+            source_device,
+            PermissionProfile::Read,
+            1,
+            9,
+            &Key::new([63; 32]),
+            &source_key,
+        )
+        .expect("other collection grant");
+        let other_grant_outer = Operation::new(
+            id(62),
+            source_vault,
+            source_device,
+            9,
+            other_membership_outer.digest(),
+            Vec::new(),
+            id(64),
+            [vec![18; 24], vec![19; 16]].concat(),
+            [0; 64],
+        )
+        .expect("other grant outer")
+        .sign(&source_key);
+        server
+            .accept_collection_grant(&other_grant, &other_grant_outer)
+            .expect("other collection grant");
+        let packages = server
+            .share_acceptance_packages(recipient_vault, recipient_device)
+            .expect("one revoked collection must not stop another");
+        assert_eq!(packages.len(), 1);
+        assert!(
+            packages[0]
+                .windows(CollectionGrant::LEN)
+                .any(|bytes| bytes == other_grant.encode())
         );
     }
 
