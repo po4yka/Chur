@@ -109,6 +109,8 @@ impl TemporaryContainer {
         std::fs::rename(&self.path, &destination)
             .map_err(|_| err!(IoFailure, "the container could not be committed"))?;
         sync_directory(destination.parent())?;
+        // A newly created shard must also survive in the objects directory.
+        sync_directory(destination.parent().and_then(Path::parent))?;
         Ok(())
     }
 
@@ -226,8 +228,9 @@ fn sync_directory(path: Option<&Path>) -> Result<()> {
     };
     let directory = File::open(path)
         .map_err(|_| err!(IoFailure, "the object directory could not be opened"))?;
-    let _ = directory.sync_all();
-    Ok(())
+    directory
+        .sync_all()
+        .map_err(|_| err!(IoFailure, "the object directory could not be made durable"))
 }
 
 impl Write for TemporaryContainer {
@@ -237,5 +240,23 @@ impl Write for TemporaryContainer {
 
     fn flush(&mut self) -> std::io::Result<()> {
         self.file.flush()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sync_directory;
+    use chur_core::ChurStatus;
+    use std::path::Path;
+
+    #[test]
+    fn a_failed_directory_sync_is_not_a_successful_commit() {
+        // /dev/null opens successfully but cannot persist a directory rename.
+        assert_eq!(
+            sync_directory(Some(Path::new("/dev/null")))
+                .err()
+                .map(|error| error.status()),
+            Some(ChurStatus::IoFailure)
+        );
     }
 }
