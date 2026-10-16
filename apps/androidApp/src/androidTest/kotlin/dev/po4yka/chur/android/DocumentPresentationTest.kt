@@ -83,7 +83,11 @@ class DocumentPresentationTest {
         fixture.tap()
         assertTrue(fixture.await { !fixture.chrome.value })
         fixture.main { fixture.selected.value = fixture.document }
-        assertTrue(fixture.await { fixture.hasDescription("Export") })
+        // Export can still belong to the photo while its chrome fades out.
+        assertTrue("the document must replace the photo's gesture semantics", fixture.await {
+            fixture.hasText("<script>public fixture</script>") &&
+                fixture.hasDescription("Export") && !fixture.hasDescription("Show controls")
+        })
         assertFalse(fixture.hasDescription("Show controls"))
     }
 

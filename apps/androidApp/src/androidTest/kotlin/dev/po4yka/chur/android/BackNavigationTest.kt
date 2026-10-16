@@ -403,11 +403,21 @@ class BackNavigationTest {
             instrumentation.runOnMainSync { controller.createAlbum(ALBUM) }
         }
         tap(label(ALBUM))
-        assertTrue("the album opens", await { find(label("Back")) != null })
+        val album = controller.albums.value.first { it.name == ALBUM }
+        val currentAlbumTag = "album-breadcrumb-current-${album.id}"
+        // An empty album's Android accessibility tree can omit the Back node.
+        val opened = await { onScreen { nodes -> nodes.any {
+            it.config.getOrNull(SemanticsProperties.TestTag) == currentAlbumTag &&
+                it.config.getOrNull(SemanticsProperties.StateDescription) == "Current album" &&
+                it.config.getOrNull(SemanticsProperties.Selected) == true
+        } } }
+        assertTrue("the album opens" + if (opened) "" else albumNavigationDiagnostic(album.albumId), opened)
 
         pressBack()
 
-        assertTrue("the album closes", await { find(label("Back")) == null })
+        assertTrue("the album closes", await { onScreen { nodes -> nodes.none {
+            it.config.getOrNull(SemanticsProperties.TestTag) == currentAlbumTag
+        } } })
         assertTrue("still on the Albums tab", backIsHandled())
         pressBack()
         assertFalse("back at the Library root", backIsHandled())
@@ -2193,14 +2203,16 @@ class BackNavigationTest {
      */
     private fun switchRow(title: String): AccessibilityNodeInfo {
         var row: AccessibilityNodeInfo? = null
-        assertTrue("$title must be on screen", scrollUntil(label(title)))
-        assertTrue(
-            "$title must have a checkable row",
-            await {
-                row = find(label(title))?.let { node -> generateSequence(node) { it.parent }.firstOrNull { it.isCheckable } }
-                row != null
-            },
-        )
+        // A partially visible title can precede the switch's role in the tree.
+        assertTrue("$title must be on screen", scrollUntil(match = { node ->
+            if (!label(title)(node)) false else {
+                row = generateSequence(node) { it.parent }.firstOrNull { it.isCheckable }
+                row != null && find(row) {
+                    AccessibilityNodeInfoCompat.wrap(it).roleDescription?.toString() == "Switch"
+                } != null
+            }
+        }))
+        assertTrue("$title must have a checkable row", row?.isCheckable == true)
         // Compose gives a row with children its role on a child of its own,
         // as a role description, and the reader speaks it with the row.
         assertNotNull(

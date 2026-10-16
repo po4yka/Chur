@@ -28,6 +28,7 @@ import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.unit.Density
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -82,13 +83,25 @@ class PrivateNotesAndroidTest {
 
     @Test
     fun accessibility_and_hardware_cut_do_not_copy_or_delete_private_draft_and_explicit_paste_works() = present { fixture ->
-        fixture.create("Public clipboard fixture", "Synthetic editable fixture")
+        val body = "Synthetic editable fixture"
+        fixture.create("Public clipboard fixture", body)
+        assertTrue("the body text is applied before selecting it", fixture.await {
+            fixture.fieldText("private-note-body") == body
+        })
         val clipboard = fixture.activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         fixture.main { clipboard.setPrimaryClip(ClipData.newPlainText("public fixture", "PUBLIC_PASTE_FIXTURE")) }
         fixture.fieldAction("private-note-body") { node ->
             assertTrue(node.config.getOrNull(SemanticsActions.RequestFocus)?.action?.invoke() == true)
-            assertTrue(node.config.getOrNull(SemanticsActions.SetSelection)?.action?.invoke(0, 26, false) == true)
+            val select = node.config.getOrNull(SemanticsActions.SetSelection)?.action
+            assertNotNull("the editable body supports selection", select)
+            checkNotNull(select).invoke(0, body.length, false)
         }
+        assertTrue("the entire body is selected before testing clipboard actions", fixture.await {
+            fixture.nodes().any {
+                it.config.getOrNull(SemanticsProperties.TestTag) == "private-note-body" &&
+                    it.config.getOrNull(SemanticsProperties.TextSelectionRange) == TextRange(0, body.length)
+            }
+        })
         fixture.fieldAction("private-note-body") { node ->
             assertFalse(node.config.getOrNull(SemanticsActions.CopyText)?.action?.invoke() ?: false)
             assertFalse(node.config.getOrNull(SemanticsActions.CutText)?.action?.invoke() ?: false)
