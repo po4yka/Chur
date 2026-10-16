@@ -153,6 +153,22 @@ val PlayGlyph: ImageVector = glyph("Play") {
     }
 }
 
+/** A musical note, for audio without embedded artwork. */
+val AudioGlyph: ImageVector = glyph("Audio") {
+    stroke {
+        moveTo(10f, 17f); lineTo(10f, 5f); lineTo(19f, 3f); lineTo(19f, 15f)
+        moveTo(10f, 9f); lineTo(19f, 7f)
+        moveTo(10f, 17f)
+        curveTo(10f, 19f, 8f, 21f, 6f, 21f)
+        curveTo(4f, 21f, 3f, 20f, 3f, 19f)
+        curveTo(3f, 17f, 6f, 16f, 10f, 17f)
+        moveTo(19f, 15f)
+        curveTo(19f, 17f, 17f, 19f, 15f, 19f)
+        curveTo(13f, 19f, 12f, 18f, 12f, 17f)
+        curveTo(12f, 15f, 15f, 14f, 19f, 15f)
+    }
+}
+
 /** A shield outline, for the integrity states of §20. */
 val IntegrityGlyph: ImageVector = glyph("Integrity") {
     stroke {

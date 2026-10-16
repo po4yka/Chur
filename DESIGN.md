@@ -963,6 +963,7 @@ Audio viewer includes:
 
 - title or safe fallback label;
 - encrypted cover art or neutral artwork;
+- the cover remains visible during audio playback, with waveform and controls available;
 - waveform as an encrypted derived asset;
 - elapsed/remaining time;
 - play, seek, speed, and output controls;

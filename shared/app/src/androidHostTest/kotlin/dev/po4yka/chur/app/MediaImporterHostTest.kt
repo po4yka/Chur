@@ -10,11 +10,14 @@ import dev.po4yka.chur.imports.MediaBounds
 import dev.po4yka.chur.imports.MediaCodec
 import dev.po4yka.chur.imports.PickedMedia
 import dev.po4yka.chur.imports.ProbedMedia
+import dev.po4yka.chur.imports.Waveform
 import dev.po4yka.chur.notes.InMemoryNoteStore
 import dev.po4yka.chur.vault.VaultRepository
 import dev.po4yka.chur.vault.VaultState
 import java.io.File
 import java.io.RandomAccessFile
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterNotNull
@@ -28,6 +31,7 @@ import kotlin.test.assertContentEquals
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TestTimeSource
 import kotlin.test.assertEquals
+import kotlin.test.assertContentEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -38,6 +42,90 @@ class MediaImporterHostTest {
     /** The clock of the controller [withVault] makes, which a case may move. */
     @Volatile
     private var now = 1_700_000_000_000L
+
+    @Test
+    fun optional_audio_art_decoder_failures_keep_the_verified_original_and_waveform() = runBlocking {
+        val root = File(System.getProperty("java.io.tmpdir"), "chur-audio-art-${System.nanoTime()}").apply { mkdirs() }
+        val pcm = ByteArray(1_600)
+        val wav = ByteBuffer.allocate(44 + pcm.size).order(ByteOrder.LITTLE_ENDIAN)
+            .put("RIFF".encodeToByteArray()).putInt(36 + pcm.size).put("WAVEfmt ".encodeToByteArray())
+            .putInt(16).putShort(1).putShort(1).putInt(8_000).putInt(16_000).putShort(2).putShort(16)
+            .put("data".encodeToByteArray()).putInt(pcm.size).put(pcm).array()
+        val file = File(root, "public.wav").apply { writeBytes(wav) }
+        val vault = VaultRepository(File(root, "vault").absolutePath, { 1_700_000_000_000L })
+        try {
+            vault.start()
+            vault.create("public audio import fixture password".encodeToByteArray(), offerRecovery = false)
+            val waveform = Waveform.record(100, ByteArray(512))
+            val encodedWaveform = waveform.copyOf()
+            val attempted = mutableListOf<StreamKind>()
+            val codec = object : MediaCodec {
+                override fun probe(media: PickedMedia) = ProbedMedia(MediaBounds.CLASS_AUDIO, 0, 0, 100, "audio/wav")
+                override fun derive(media: PickedMedia, probe: ProbedMedia, kind: StreamKind, cancelRequested: () -> Boolean): Derivative {
+                    attempted += kind
+                    if (kind == StreamKind.AUDIO_WAVEFORM) return Derivative(kind, encodedWaveform, 0, 0)
+                    throw IllegalArgumentException("the optional embedded cover cannot be decoded")
+                }
+            }
+            var closed = false
+            RandomAccessFile(file, "r").use { input ->
+                val fd = input.fd.javaClass.getDeclaredField("fd").apply { isAccessible = true }.getInt(input.fd)
+                val outcome = MediaImporter(codec).import(vault, PickedMedia(fd, true, file.length(), "audio/wav",
+                    "public.wav", null, null, { closed = true }))
+                val imported = assertIs<MediaImporter.Outcome.Imported>(outcome)
+                assertEquals(1, imported.derivatives)
+                assertEquals(listOf(StreamKind.AUDIO_WAVEFORM, StreamKind.THUMBNAIL, StreamKind.GRID_PREVIEW,
+                    StreamKind.SCREEN_PREVIEW), attempted)
+                val projection = vault.page(ObjectQuery()).objects.single()
+                assertEquals(MediaBounds.CLASS_AUDIO, projection.mediaKind)
+                assertEquals(0, projection.width)
+                assertEquals(0, projection.height)
+                assertEquals(false, projection.thumbnailReady)
+                assertContentEquals(wav, vault.readRange(imported.objectId, 0, wav.size))
+                assertContentEquals(waveform, vault.readDerived(imported.objectId, StreamKind.AUDIO_WAVEFORM))
+                assertTrue(encodedWaveform.all { it == 0.toByte() }, "transferred derivative buffer is cleared")
+            }
+            assertTrue(closed)
+        } finally { vault.shutdown(); root.deleteRecursively() }
+    }
+
+    @Test
+    fun a_refused_audio_artwork_write_keeps_the_original_waveform_and_clears_the_output() = withVault { controller, root ->
+        val assets = generateSequence(File(System.getProperty("user.dir"))) { it.parentFile }.take(10)
+            .map { File(it, "apps/androidApp/src/androidTest/assets/audio-art") }.first { it.isDirectory }
+        val original = File(assets, "with-art.mp3").readBytes()
+        val expectedCover = File(assets, "cover.jpg").readBytes()
+        val coverOutput = expectedCover.copyOf()
+        val waveform = Waveform.record(150, ByteArray(512))
+        val file = File(root, "public.mp3").apply { writeBytes(original) }
+        val attempted = mutableListOf<StreamKind>()
+        val codec = object : MediaCodec {
+            override fun probe(media: PickedMedia) = ProbedMedia(MediaBounds.CLASS_AUDIO, 0, 0, 150, "audio/mpeg")
+            override fun derive(media: PickedMedia, probe: ProbedMedia, kind: StreamKind, cancelRequested: () -> Boolean): Derivative {
+                attempted += kind
+                return when (kind) {
+                    StreamKind.AUDIO_WAVEFORM -> Derivative(kind, waveform.copyOf(), 0, 0)
+                    // Exercise the real native size refusal after the original and waveform commit.
+                    else -> Derivative(kind, coverOutput, 321, 160)
+                }
+            }
+        }
+        RandomAccessFile(file, "r").use { input ->
+            val fd = input.fd.javaClass.getDeclaredField("fd").apply { isAccessible = true }.getInt(input.fd)
+            val outcome = MediaImporter(codec).import(controller.vault,
+                PickedMedia(fd, true, original.size.toLong(), "audio/mpeg", "public.mp3", null, null, {}))
+            val imported = assertIs<MediaImporter.Outcome.Imported>(outcome)
+            assertEquals(1, imported.derivatives)
+            assertEquals(MediaImporter.PreviewWarning.STORAGE_FAILED, imported.previewWarning)
+            assertEquals(false, imported.previewsSkipped)
+            assertEquals(listOf(StreamKind.AUDIO_WAVEFORM, StreamKind.THUMBNAIL), attempted)
+            assertEquals(1, controller.vault.page(ObjectQuery()).objects.size)
+            assertEquals(false, controller.vault.page(ObjectQuery()).objects.single().thumbnailReady)
+            assertContentEquals(original, controller.vault.readRange(imported.objectId, 0, original.size))
+            assertContentEquals(waveform, controller.vault.readDerived(imported.objectId, StreamKind.AUDIO_WAVEFORM))
+            assertTrue(coverOutput.all { it == 0.toByte() })
+        }
+    }
 
     @Test
     fun imported_original_survives_a_codec_failure_and_closes_the_picker_source() = runBlocking {

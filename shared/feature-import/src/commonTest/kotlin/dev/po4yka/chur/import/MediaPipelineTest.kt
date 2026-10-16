@@ -114,16 +114,37 @@ class MediaPipelineTest {
         assertTrue(requiredDerivatives(probe(mediaClass = MediaBounds.CLASS_OPAQUE)).isEmpty())
     }
 
-    /**
-     * Audio asked for nothing until Phase 2, because §6's waveform had no
-     * format to be produced in. `WaveformTest` covers the record; this is the
-     * one line that decides audio gets one at all.
-     */
     @Test
-    fun audio_asks_for_its_waveform() {
+    fun audio_keeps_its_waveform_and_attempts_optional_art_without_changing_canonical_dimensions() {
+        val audio = ProbedMedia(MediaBounds.CLASS_AUDIO, 0, 0, 1_000, "audio/mpeg")
         assertEquals(
-            listOf(StreamKind.AUDIO_WAVEFORM),
-            requiredDerivatives(probe(mediaClass = MediaBounds.CLASS_AUDIO)),
+            listOf(StreamKind.AUDIO_WAVEFORM, StreamKind.THUMBNAIL, StreamKind.GRID_PREVIEW, StreamKind.SCREEN_PREVIEW),
+            requiredDerivatives(audio),
         )
+        assertNull(MediaBounds.check(audio))
+        assertEquals(0, audio.width)
+        assertEquals(0, audio.height)
+    }
+
+    @Test
+    fun embedded_art_has_independent_bounds_and_never_enlarges_small_covers() {
+        assertEquals(320 to 240, MediaBounds.artworkTargetSize(StreamKind.THUMBNAIL, 4_000, 3_000, 1_024))
+        assertEquals(480 to 640, MediaBounds.artworkTargetSize(StreamKind.GRID_PREVIEW, 3_000, 4_000, 1_024))
+        assertEquals(2_048 to 1_536, MediaBounds.artworkTargetSize(StreamKind.SCREEN_PREVIEW, 4_000, 3_000, 1_024))
+        assertEquals(128 to 96, MediaBounds.artworkTargetSize(StreamKind.SCREEN_PREVIEW, 128, 96,
+            MediaBounds.AUDIO_ART_ENCODED_MAX_BYTES.toLong()))
+    }
+
+    @Test
+    fun unsafe_art_is_refused_before_decode_without_refusing_its_audio_recording() {
+        for ((width, height, size) in listOf(Triple(0, 10, 10L), Triple(10, -1, 10L), Triple(16_385, 1, 10L),
+            Triple(16_384, 16_384, 10L), Triple(Int.MAX_VALUE, Int.MAX_VALUE, 10L), Triple(100, 100, 0L),
+            Triple(100, 100, MediaBounds.AUDIO_ART_ENCODED_MAX_BYTES + 1L))) {
+            assertNull(MediaBounds.artworkTargetSize(StreamKind.THUMBNAIL, width, height, size))
+        }
+        for (kind in listOf(StreamKind.ORIGINAL, StreamKind.AUDIO_WAVEFORM, StreamKind.VIDEO_POSTER)) {
+            assertNull(MediaBounds.artworkTargetSize(kind, 320, 320, 1_024))
+        }
+        assertNull(MediaBounds.check(ProbedMedia(MediaBounds.CLASS_AUDIO, 0, 0, 1_000, "audio/mpeg")))
     }
 }

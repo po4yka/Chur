@@ -74,6 +74,7 @@ Document status describes a whole document. Individual statements inside a docum
 ## Product
 
 - [`product/DISCREET_MODE.md`](product/DISCREET_MODE.md) — public shell, launcher, notifications, recents, external surfaces, and product claims.
+- [`product/AUDIO_ARTWORK.md`](product/AUDIO_ARTWORK.md) — embedded audio covers, bounded derivation, encrypted storage, playback, and concealment.
 - [`product/ALBUM_NAVIGATION.md`](product/ALBUM_NAVIGATION.md) — album paths, ancestor and child links, Back, catalog changes, and session lifetime.
 - [`product/ALBUM_EXPORT.md`](product/ALBUM_EXPORT.md) — album trees, native folder selection, verified batch export, publication, and partial results.
 - [`product/PRIVATE_NOTES.md`](product/PRIVATE_NOTES.md) — local encrypted notes, explicit saving, private input, Trash, export, and backup.

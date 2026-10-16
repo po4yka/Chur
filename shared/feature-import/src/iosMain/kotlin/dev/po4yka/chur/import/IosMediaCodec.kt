@@ -4,9 +4,16 @@ package dev.po4yka.chur.imports
 
 import dev.po4yka.chur.ffi.StreamKind
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.LongVar
 import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.alloc
+import kotlinx.cinterop.autoreleasepool
+import kotlinx.cinterop.memScoped
+import kotlinx.cinterop.ptr
+import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.useContents
 import kotlinx.cinterop.usePinned
+import kotlinx.cinterop.value
 import platform.AVFAudio.AVFormatIDKey
 import platform.AVFAudio.AVLinearPCMBitDepthKey
 import platform.AVFAudio.AVLinearPCMIsBigEndianKey
@@ -18,18 +25,42 @@ import platform.AVFoundation.AVAssetReader
 import platform.AVFoundation.AVAssetReaderTrackOutput
 import platform.AVFoundation.AVAssetTrack
 import platform.AVFoundation.AVMediaTypeAudio
+import platform.AVFoundation.AVMetadataCommonKeyArtwork
+import platform.AVFoundation.AVMetadataItem
 import platform.AVFoundation.AVURLAsset
+import platform.AVFoundation.cancelLoading
+import platform.AVFoundation.commonKey
+import platform.AVFoundation.commonMetadata
 import platform.AVFoundation.creationDate
+import platform.AVFoundation.dataValue
 import platform.AVFoundation.dateValue
 import platform.AVFoundation.duration
 import platform.AVFoundation.tracksWithMediaType
 import platform.CoreAudioTypes.kAudioFormatLinearPCM
 import platform.CoreFoundation.CFRelease
+import platform.CoreFoundation.CFDataCreate
+import platform.CoreFoundation.CFDictionaryCreateMutable
+import platform.CoreFoundation.CFDictionaryGetValue
+import platform.CoreFoundation.CFDictionaryRef
+import platform.CoreFoundation.CFDictionarySetValue
+import platform.CoreFoundation.CFGetTypeID
+import platform.CoreFoundation.CFNumberCreate
+import platform.CoreFoundation.CFNumberGetTypeID
+import platform.CoreFoundation.CFNumberGetValue
+import platform.CoreFoundation.CFStringRef
+import platform.CoreFoundation.kCFBooleanFalse
+import platform.CoreFoundation.kCFBooleanTrue
+import platform.CoreFoundation.kCFNumberSInt64Type
+import platform.CoreFoundation.kCFTypeDictionaryKeyCallBacks
+import platform.CoreFoundation.kCFTypeDictionaryValueCallBacks
 import platform.CoreMedia.CMBlockBufferCopyDataBytes
 import platform.CoreMedia.CMBlockBufferGetDataLength
 import platform.CoreMedia.CMSampleBufferGetDataBuffer
 import platform.CoreGraphics.CGRectMake
 import platform.CoreGraphics.CGSizeMake
+import platform.CoreGraphics.CGImageGetHeight
+import platform.CoreGraphics.CGImageGetWidth
+import platform.CoreGraphics.CGImageRelease
 import platform.CoreImage.CIImage
 import platform.CoreMedia.CMTimeGetSeconds
 import platform.CoreMedia.CMTimeMake
@@ -43,6 +74,18 @@ import platform.Foundation.NSTimeZone
 import platform.Foundation.NSURL
 import platform.Foundation.localTimeZone
 import platform.Foundation.timeIntervalSince1970
+import platform.ImageIO.CGImageSourceCopyPropertiesAtIndex
+import platform.ImageIO.CGImageSourceCreateThumbnailAtIndex
+import platform.ImageIO.CGImageSourceCreateWithData
+import platform.ImageIO.CGImageSourceRef
+import platform.ImageIO.kCGImagePropertyOrientation
+import platform.ImageIO.kCGImagePropertyPixelHeight
+import platform.ImageIO.kCGImagePropertyPixelWidth
+import platform.ImageIO.kCGImageSourceCreateThumbnailFromImageAlways
+import platform.ImageIO.kCGImageSourceCreateThumbnailWithTransform
+import platform.ImageIO.kCGImageSourceShouldCache
+import platform.ImageIO.kCGImageSourceShouldCacheImmediately
+import platform.ImageIO.kCGImageSourceThumbnailMaxPixelSize
 import platform.UIKit.UIGraphicsBeginImageContextWithOptions
 import platform.UIKit.UIGraphicsEndImageContext
 import platform.UIKit.UIGraphicsGetImageFromCurrentImageContext
@@ -210,6 +253,7 @@ class IosMediaCodec : MediaCodec {
         if (cancelRequested()) return null
         val url = urlOf(media) ?: return null
         if (kind == StreamKind.AUDIO_WAVEFORM) return deriveWaveform(url, probe, cancelRequested)
+        if (probe.mediaClass == MediaBounds.CLASS_AUDIO) return deriveAudioArtwork(url, kind, cancelRequested)
         val target = MediaBounds.targetSize(kind, probe.width, probe.height) ?: return null
         val (width, height) = target
         val image = when (probe.mediaClass) {
@@ -233,6 +277,26 @@ class IosMediaCodec : MediaCodec {
         val data = scaled?.let { UIImageJPEGRepresentation(it, MediaBounds.quality(kind) / 100.0) }
             ?: return null
         return Derivative(kind, data.toByteArray(), width, height)
+    }
+
+    /** Native tags are optional: an absent, oversized, or invalid image adds no visual asset. */
+    private fun deriveAudioArtwork(url: NSURL, kind: StreamKind, cancelRequested: () -> Boolean): Derivative? = autoreleasepool {
+        if (MediaBounds.longEdge(kind) == null || kind == StreamKind.VIDEO_POSTER || cancelRequested()) return@autoreleasepool null
+        val asset = AVURLAsset(url, options = null)
+        try {
+            // commonMetadata normalizes supported ID3 APIC and iTunes covr tags.
+            // AVFoundation owns its initial NSData allocation; app checks happen before image decode.
+            for (value in asset.commonMetadata.take(256)) {
+                if (cancelRequested()) return@autoreleasepool null
+                val item = value as? AVMetadataItem ?: continue
+                if (item.commonKey != AVMetadataCommonKeyArtwork) continue
+                val data = item.dataValue ?: continue
+                if (cancelRequested()) return@autoreleasepool null
+                val result = audioArtworkDerivative(data, kind, cancelRequested)
+                if (result != null) return@autoreleasepool result
+            }
+            null
+        } finally { asset.cancelLoading() }
     }
 
     /**
@@ -347,9 +411,82 @@ class IosMediaCodec : MediaCodec {
         "mp4", "m4v" -> "video/mp4"
         "mov" -> "video/quicktime"
         "m4a" -> "audio/mp4"
+        "mp3" -> "audio/mpeg"
+        "aac" -> "audio/aac"
+        "flac" -> "audio/flac"
+        "aif", "aiff" -> "audio/aiff"
         "wav" -> "audio/wav"
         else -> "application/octet-stream"
     }
+}
+
+/** Decode only a bounded upright thumbnail, then write a new metadata-free JPEG. */
+internal fun audioArtworkDerivative(data: NSData, kind: StreamKind, cancelRequested: () -> Boolean): Derivative? {
+    if (cancelRequested() || data.length == 0uL || data.length > MediaBounds.AUDIO_ART_ENCODED_MAX_BYTES.toULong()) return null
+    // A retained CFData copy gives ImageIO deterministic ownership without a borrowed NSData pointer.
+    val encoded = CFDataCreate(null, data.bytes?.reinterpret(), data.length.toLong()) ?: return null
+    try {
+        val options = CFDictionaryCreateMutable(null, 1, kCFTypeDictionaryKeyCallBacks.ptr, kCFTypeDictionaryValueCallBacks.ptr)
+            ?: return null
+        val source = try {
+            CFDictionarySetValue(options, kCGImageSourceShouldCache, kCFBooleanFalse)
+            CGImageSourceCreateWithData(encoded, options)
+        } finally { CFRelease(options) } ?: return null
+        try {
+            if (cancelRequested()) return null
+            val target = artworkSize(source, kind, data.length.toLong()) ?: return null
+            if (cancelRequested()) return null
+            val frame = memScoped {
+                val edge = alloc<LongVar> { value = maxOf(target.first, target.second).toLong() }
+                val number = CFNumberCreate(null, kCFNumberSInt64Type, edge.ptr) ?: return@memScoped null
+                val thumbnailOptions = CFDictionaryCreateMutable(null, 4, kCFTypeDictionaryKeyCallBacks.ptr, kCFTypeDictionaryValueCallBacks.ptr)
+                if (thumbnailOptions == null) { CFRelease(number); return@memScoped null }
+                try {
+                    CFDictionarySetValue(thumbnailOptions, kCGImageSourceCreateThumbnailFromImageAlways, kCFBooleanTrue)
+                    CFDictionarySetValue(thumbnailOptions, kCGImageSourceCreateThumbnailWithTransform, kCFBooleanTrue)
+                    CFDictionarySetValue(thumbnailOptions, kCGImageSourceShouldCacheImmediately, kCFBooleanTrue)
+                    CFDictionarySetValue(thumbnailOptions, kCGImageSourceThumbnailMaxPixelSize, number)
+                    CGImageSourceCreateThumbnailAtIndex(source, 0u, thumbnailOptions)
+                } finally { CFRelease(thumbnailOptions); CFRelease(number) }
+            } ?: return null
+            try {
+                if (cancelRequested()) return null
+                val edge = maxOf(target.first, target.second).toULong()
+                if (CGImageGetWidth(frame) > edge || CGImageGetHeight(frame) > edge) return null
+                val image = UIImage.imageWithCGImage(frame)
+                UIGraphicsBeginImageContextWithOptions(CGSizeMake(target.first.toDouble(), target.second.toDouble()), true, 1.0)
+                val jpeg = try {
+                    image.drawInRect(CGRectMake(0.0, 0.0, target.first.toDouble(), target.second.toDouble()))
+                    if (cancelRequested()) return null
+                    UIGraphicsGetImageFromCurrentImageContext()?.let { UIImageJPEGRepresentation(it, MediaBounds.quality(kind) / 100.0) }
+                } finally { UIGraphicsEndImageContext() } ?: return null
+                if (cancelRequested() || jpeg.length == 0uL || jpeg.length > MediaBounds.AUDIO_ART_ENCODED_MAX_BYTES.toULong()) return null
+                val bytes = jpeg.toByteArray()
+                if (cancelRequested()) { bytes.fill(0); return null }
+                return Derivative(kind, bytes, target.first, target.second)
+            } finally { CGImageRelease(frame) }
+        } finally { CFRelease(source) }
+    } finally { CFRelease(encoded) }
+}
+
+private fun artworkSize(source: CGImageSourceRef, kind: StreamKind, encodedSize: Long): Pair<Int, Int>? {
+    val properties = CGImageSourceCopyPropertiesAtIndex(source, 0u, null) ?: return null
+    try {
+        val width = imageInteger(properties, kCGImagePropertyPixelWidth) ?: return null
+        val height = imageInteger(properties, kCGImagePropertyPixelHeight) ?: return null
+        if (width !in 1..Int.MAX_VALUE.toLong() || height !in 1..Int.MAX_VALUE.toLong()) return null
+        val orientation = imageInteger(properties, kCGImagePropertyOrientation) ?: 1L
+        if (orientation !in 1..8) return null
+        return if (orientation in 5..8) MediaBounds.artworkTargetSize(kind, height.toInt(), width.toInt(), encodedSize)
+        else MediaBounds.artworkTargetSize(kind, width.toInt(), height.toInt(), encodedSize)
+    } finally { CFRelease(properties) }
+}
+
+private fun imageInteger(properties: CFDictionaryRef, key: CFStringRef?): Long? = memScoped {
+    val number = CFDictionaryGetValue(properties, key) ?: return@memScoped null
+    if (CFGetTypeID(number) != CFNumberGetTypeID()) return@memScoped null
+    val value = alloc<LongVar>()
+    if (CFNumberGetValue(number.reinterpret(), kCFNumberSInt64Type, value.ptr)) value.value else null
 }
 
 /**

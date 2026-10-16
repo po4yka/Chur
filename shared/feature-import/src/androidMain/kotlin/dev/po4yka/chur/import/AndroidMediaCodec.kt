@@ -207,6 +207,7 @@ class AndroidMediaCodec private constructor(
         if (cancelRequested()) return null
         val uri = uriOf(media) ?: return null
         if (kind == StreamKind.AUDIO_WAVEFORM) return deriveWaveform(uri, probe, cancelRequested)
+        if (probe.mediaClass == MediaBounds.CLASS_AUDIO) return deriveArtwork(uri, kind, cancelRequested)
         val target = MediaBounds.targetSize(kind, probe.width, probe.height) ?: return null
         val (targetWidth, targetHeight) = target
         var bitmap: Bitmap? = null
@@ -237,6 +238,83 @@ class AndroidMediaCodec private constructor(
         } finally {
             if (scaled !== bitmap) scaled?.recycle()
             bitmap?.recycle()
+        }
+    }
+
+    /** Optional embedded artwork never changes the audio's dimensions or import outcome. */
+    private fun deriveArtwork(uri: Uri, kind: StreamKind, cancelRequested: () -> Boolean): Derivative? = try {
+        withRetriever(uri) { retriever ->
+            if (cancelRequested()) return@withRetriever null
+            // Android returns a complete byte array; its native allocation cannot
+            // be bounded through this API. Reject it before any pixel decode.
+            val bytes = retriever.embeddedPicture ?: return@withRetriever null
+            try {
+                if (cancelRequested() || bytes.size > MediaBounds.AUDIO_ART_ENCODED_MAX_BYTES) {
+                    return@withRetriever null
+                }
+                decodeArtwork(bytes, kind, cancelRequested)
+            } finally {
+                bytes.fill(0)
+            }
+        }
+    } catch (_: RuntimeException) {
+        null
+    } catch (_: OutOfMemoryError) {
+        // Artwork is optional, including when the platform cannot allocate it.
+        null
+    }
+
+    private fun decodeArtwork(bytes: ByteArray, kind: StreamKind, cancelRequested: () -> Boolean): Derivative? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        val orientation = runCatching {
+            bytes.inputStream().use { ExifInterface(it).getAttributeInt(
+                ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL,
+            ) }
+        }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+        val swapped = swapsDimensions(orientation)
+        val width = if (swapped) bounds.outHeight else bounds.outWidth
+        val height = if (swapped) bounds.outWidth else bounds.outHeight
+        val (targetWidth, targetHeight) = MediaBounds.artworkTargetSize(kind, width, height, bytes.size.toLong())
+            ?: return null
+        if (cancelRequested()) return null
+        val rawTargetWidth = if (swapped) targetHeight else targetWidth
+        val rawTargetHeight = if (swapped) targetWidth else targetHeight
+        var sample = 1
+        // Round up the sample so even a source just over a target never
+        // allocates a full source raster. The final resize restores exact size.
+        while ((bounds.outWidth + sample - 1) / sample > rawTargetWidth ||
+            (bounds.outHeight + sample - 1) / sample > rawTargetHeight
+        ) sample *= 2
+        var decoded: Bitmap? = null
+        var oriented: Bitmap? = null
+        var scaled: Bitmap? = null
+        try {
+            decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply {
+                inSampleSize = sample
+                inScaled = false
+                inMutable = true
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }) ?: return null
+            if (cancelRequested() || decoded.width > 2048 || decoded.height > 2048) return null
+            val matrix = orientationMatrix(orientation)
+            oriented = if (matrix == null) decoded else Bitmap.createBitmap(
+                decoded, 0, 0, decoded.width, decoded.height, matrix, true,
+            )
+            if (cancelRequested()) return null
+            scaled = if (oriented.width == targetWidth && oriented.height == targetHeight) oriented else
+                Bitmap.createScaledBitmap(oriented, targetWidth, targetHeight, true)
+            return ClearingByteArrayOutputStream().use { out ->
+                if (!scaled.compress(Bitmap.CompressFormat.JPEG, MediaBounds.quality(kind), out) || cancelRequested()) return null
+                val encoded = out.toByteArray()
+                if (cancelRequested()) { encoded.fill(0); return null }
+                Derivative(kind, encoded, targetWidth, targetHeight)
+            }
+        } finally {
+            listOfNotNull(scaled, oriented, decoded).distinct().forEach { bitmap ->
+                if (bitmap.isMutable) bitmap.eraseColor(android.graphics.Color.TRANSPARENT)
+                bitmap.recycle()
+            }
         }
     }
 

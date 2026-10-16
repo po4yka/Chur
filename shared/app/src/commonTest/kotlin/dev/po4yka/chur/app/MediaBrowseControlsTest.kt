@@ -20,14 +20,14 @@ import kotlin.test.assertTrue
 
 class MediaBrowseControlsTest {
     @Test
-    fun an_unlocked_session_hides_only_photos_and_video_posters_by_default() {
+    fun an_unlocked_session_hides_photos_video_posters_and_audio_covers_by_default() {
         val state = VaultUiState()
         assertTrue(state.thumbnailsConcealed)
-        listOf(1, 2).forEach { mediaKind ->
+        listOf(1, 2, 3).forEach { mediaKind ->
             assertEquals(ThumbnailRendition.Mosaic, thumbnailRendition(mediaKind, state.thumbnailsConcealed))
             assertEquals(ThumbnailRendition.Plain, thumbnailRendition(mediaKind, concealed = false))
         }
-        listOf(3, 4).forEach { mediaKind ->
+        listOf(4).forEach { mediaKind ->
             assertEquals(ThumbnailRendition.Plain, thumbnailRendition(mediaKind, state.thumbnailsConcealed))
         }
     }

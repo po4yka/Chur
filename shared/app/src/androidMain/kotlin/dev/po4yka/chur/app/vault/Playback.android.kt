@@ -1,6 +1,7 @@
 package dev.po4yka.chur.app.vault
 
 import android.net.Uri
+import android.view.LayoutInflater
 import android.view.View
 import android.view.accessibility.AccessibilityManager
 import androidx.compose.foundation.layout.Box
@@ -36,6 +37,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerControlView
 import androidx.media3.ui.PlayerView
+import dev.po4yka.chur.app.R
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.vault.VaultRepository
 import kotlinx.coroutines.runBlocking
@@ -62,6 +64,7 @@ actual fun VaultPlayer(
     touches: Int,
 ) {
     val context = LocalContext.current
+    val audio = source.contentType.startsWith("audio/")
     // `DESIGN.md` §13.4 and §23.3: the controls, and the chrome with them,
     // stay while a screen reader explores the screen.
     val accessibility = remember(context) { checkNotNull(context.getSystemService(AccessibilityManager::class.java)) }
@@ -129,7 +132,7 @@ actual fun VaultPlayer(
     // stream the device cannot decode then shows the player's own controls
     // and the chrome, not a poster that still looks playable.
     var covered by remember(player) { mutableStateOf(true) }
-    val posterShown = covered && poster != null
+    val posterShown = !audio && covered && poster != null
     // Whether this page's player was asked to play: by the poster's Play, the
     // controls, or a screen reader.
     var started by remember(player) { mutableStateOf(false) }
@@ -186,10 +189,20 @@ actual fun VaultPlayer(
     val density = LocalDensity.current
     val direction = LocalLayoutDirection.current
     Box(modifier = modifier) {
+        if (audio) AudioArtwork(poster, Modifier.fillMaxSize(), controlsPadding)
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = {
-                PlayerView(it).apply {
+                (if (audio) LayoutInflater.from(it).inflate(R.layout.chur_audio_player, null) as PlayerView
+                else PlayerView(it)).apply {
+                    if (audio) {
+                        // The bounded, authenticated derivative stays behind
+                        // Media3's controls throughout audio playback. Do not
+                        // let Media3 decode artwork from the original again.
+                        artworkDisplayMode = PlayerView.ARTWORK_DISPLAY_MODE_OFF
+                        setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+                        setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    }
                     // The viewer plays one object, so there is no previous or
                     // next item for these buttons to reach.
                     setShowPreviousButton(false)
@@ -280,7 +293,7 @@ actual fun VaultPlayer(
                 it.player = null
             },
         )
-        if (covered && poster != null) PlayerPoster(poster, onPlay = { player.play() })
+        if (posterShown && poster != null) PlayerPoster(poster, onPlay = { player.play() })
     }
 }
 

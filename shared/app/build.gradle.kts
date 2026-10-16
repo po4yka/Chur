@@ -78,6 +78,7 @@ kotlin {
 
     android {
         namespace = "dev.po4yka.chur.app"
+        androidResources { enable = true }
         compileSdk =
             libs.versions.androidCompileSdk
                 .get()

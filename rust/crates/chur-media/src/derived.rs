@@ -126,7 +126,8 @@ pub fn put(
         stream_revision,
     };
     // A derivative of an image is an image; of a video's poster frame, also an
-    // image. A waveform and the future record kinds carry no pixels.
+    // image, as is embedded audio artwork. Waveforms and future records carry
+    // no pixels.
     let properties = if width == 0 && height == 0 {
         MediaProperties::opaque()
     } else {
@@ -257,14 +258,21 @@ pub fn read(session: &Session, object_id: &Id, kind: StreamKind) -> Result<Zeroi
 /// needs a poster frame at every resolution: the poster is the still the
 /// viewer shows before playback starts, and a 1920 by 1080 video that is
 /// already inside the 2048 px target has no still at all until one is
-/// generated. Audio needs a waveform for the same reason and has no pixels to
-/// compare a target against.
+/// generated. Audio has no source pixel dimensions. Its waveform and optional
+/// artwork are therefore selected by class; a missing embedded image produces
+/// no picture asset.
 #[must_use]
 pub fn needs(kind: StreamKind, media_class: MediaClass, width: u32, height: u32) -> bool {
     match kind {
         StreamKind::VideoPoster => media_class == MediaClass::Video,
         StreamKind::AudioWaveform => media_class == MediaClass::Audio,
-        StreamKind::ThumbnailSmall => matches!(media_class, MediaClass::Image | MediaClass::Video),
+        StreamKind::ThumbnailSmall => matches!(
+            media_class,
+            MediaClass::Image | MediaClass::Video | MediaClass::Audio
+        ),
+        StreamKind::GridPreview | StreamKind::ScreenPreview if media_class == MediaClass::Audio => {
+            true
+        }
         _ => match long_edge(kind) {
             None => false,
             Some(edge) => media_class == MediaClass::Image && width.max(height) > edge,

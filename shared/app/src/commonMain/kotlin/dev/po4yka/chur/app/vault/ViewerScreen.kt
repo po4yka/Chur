@@ -223,9 +223,11 @@ fun ViewerScreen(
                     if (document != null) document(Modifier.fillMaxSize(), controlsPadding)
                     else DocumentFallback(page, detail, "This file has no internal preview.", Modifier.fillMaxSize(), controlsPadding)
                 } else if (settled) {
-                    ViewerMedia(preview ?: thumbnails[page.id], player, controlsPadding, waveform, zoom.takeIf { photo })
+                    ViewerMedia(preview ?: thumbnails[page.id], player, controlsPadding, waveform, zoom.takeIf { photo },
+                        audio = page.mediaKind == MEDIA_CLASS_AUDIO)
                 } else {
-                    thumbnails[page.id]?.let { ViewerMedia(it, player = null, controlsPadding = controlsPadding, waveform = null) }
+                    thumbnails[page.id]?.let { ViewerMedia(it, player = null, controlsPadding = controlsPadding, waveform = null,
+                        audio = page.mediaKind == MEDIA_CLASS_AUDIO) }
                 }
             }
         }
@@ -337,6 +339,7 @@ private fun ViewerMedia(
     controlsPadding: PaddingValues,
     waveform: ByteArray?,
     zoom: MutableState<ViewerZoom>? = null,
+    audio: Boolean = false,
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         if (player != null) {
@@ -345,18 +348,20 @@ private fun ViewerMedia(
             // screen that reads a repository, and this file's rule is that a
             // screen is a pure function of a state value.
             player(Modifier.fillMaxSize(), controlsPadding)
-            // A recording has nothing to look at, so the waveform is what the
-            // screen shows: `MEDIA_PIPELINE.md` §6.1 makes it a peak envelope
-            // rather than a picture, which is why it can be drawn in the
-            // viewer's own palette rather than baked into a second derivative.
-            if (waveform != null) {
+            // The platform keeps audio artwork beneath its transport controls.
+            // A waveform supplements the cover in the upper safe area, away
+            // from the player's central Play/Pause and lower seek controls.
+            if (audio && waveform != null) {
                 Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center,
+                    modifier = Modifier.fillMaxSize().padding(controlsPadding).padding(top = ChurSpacing.two),
+                    contentAlignment = Alignment.TopCenter,
                 ) {
-                    WaveformStrip(record = waveform, color = ViewerColors.content)
+                    WaveformStrip(record = waveform, color = ViewerColors.content,
+                        modifier = Modifier.background(ViewerColors.chromeScrim))
                 }
             }
+        } else if (audio) {
+            AudioArtwork(preview, Modifier.fillMaxSize(), controlsPadding)
         } else if (preview != null && zoom != null) {
             ZoomableStill(preview, zoom)
         } else if (preview != null) {

@@ -1188,6 +1188,101 @@ fn a_video_needs_a_poster_at_every_resolution_and_audio_needs_a_waveform() {
     ));
 }
 
+#[test]
+fn audio_artwork_uses_picture_assets_without_audio_pixel_dimensions() {
+    for kind in [
+        StreamKind::ThumbnailSmall,
+        StreamKind::GridPreview,
+        StreamKind::ScreenPreview,
+    ] {
+        assert!(derived::needs(kind, MediaClass::Audio, 0, 0));
+        assert!(!derived::needs(kind, MediaClass::Opaque, 0, 0));
+    }
+    assert!(!derived::needs(
+        StreamKind::Original,
+        MediaClass::Audio,
+        0,
+        0
+    ));
+    assert!(!derived::needs(
+        StreamKind::VideoPoster,
+        MediaClass::Audio,
+        0,
+        0
+    ));
+}
+
+#[test]
+fn audio_artwork_round_trips_encrypted_without_changing_the_audio_original() {
+    let (_root, mut session) = new_vault();
+    let original = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../apps/androidApp/src/androidTest/assets/audio-art/with-art.mp3"
+    ));
+    let cover = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../apps/androidApp/src/androidTest/assets/audio-art/cover.jpg"
+    ));
+    let object_id = import::import_bytes(
+        &mut session,
+        SourceCapability {
+            seekable: true,
+            known_length: Some(original.len() as u64),
+            content_type_hint: String::from("audio/mpeg"),
+            original_filename: Some(String::from("fixture.mp3")),
+            capture_time_ms: None,
+        },
+        CanonicalMedia {
+            media_class: MediaClass::Audio,
+            width: 0,
+            height: 0,
+            duration_ms: 150,
+        },
+        "audio/mpeg",
+        &Zeroizing::new(original.to_vec()),
+        NOW,
+    )
+    .expect("import audio");
+    for kind in [
+        StreamKind::ThumbnailSmall,
+        StreamKind::GridPreview,
+        StreamKind::ScreenPreview,
+    ] {
+        derived::put(
+            &mut session,
+            &object_id,
+            kind,
+            96,
+            48,
+            &Zeroizing::new(cover.to_vec()),
+            NOW,
+        )
+        .expect("encrypt audio artwork");
+        let read = derived::read(&session, &object_id, kind).expect("read artwork");
+        assert_eq!(read.as_slice(), cover);
+        assert_eq!(
+            reader::open(&session, &object_id, kind)
+                .unwrap()
+                .dimensions(),
+            (96, 48)
+        );
+    }
+    assert!(
+        store::object(session.catalog_ref().unwrap(), &object_id)
+            .unwrap()
+            .thumbnail_ready
+    );
+    let mut read_original = reader::open(&session, &object_id, StreamKind::Original).unwrap();
+    assert_eq!(read_original.dimensions(), (0, 0));
+    assert_eq!(
+        read_original
+            .read_range(0, original.len() as u64)
+            .unwrap()
+            .as_slice(),
+        original
+    );
+}
+
 /// A waveform is stored, read back, and parsed by the same record the shared
 /// renderer reads, so a container that holds one holds a waveform rather than
 /// arbitrary bytes.

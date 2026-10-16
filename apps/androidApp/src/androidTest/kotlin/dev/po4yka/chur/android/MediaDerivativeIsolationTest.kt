@@ -19,7 +19,7 @@ import dev.po4yka.chur.imports.MediaBounds
 import dev.po4yka.chur.imports.PickedMedia
 import dev.po4yka.chur.imports.ProbedMedia
 import java.io.File
-import java.io.FileNotFoundException
+import java.io.IOException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
@@ -132,8 +132,9 @@ class MediaDerivativeIsolationTest {
         // Check the kernel task instead. A zombie has exited and released all
         // file descriptors; it cannot retain or decode source bytes.
         val stat = try { File("/proc/$pid/stat").readText() }
-        catch (failure: FileNotFoundException) {
-            if (!exists()) return false
+        catch (failure: IOException) {
+            // A task can exit after /proc opens but before the first read.
+            if ((failure.cause as? ErrnoException)?.errno == OsConstants.ESRCH || !exists()) return false
             throw failure
         }
         val state = stat.substringAfterLast(')').trimStart().first()

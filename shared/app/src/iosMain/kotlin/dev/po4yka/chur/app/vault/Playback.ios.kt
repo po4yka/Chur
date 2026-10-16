@@ -89,6 +89,7 @@ actual fun VaultPlayer(
     controlsPadding: PaddingValues,
     touches: Int,
 ) {
+    val audio = source.contentType.startsWith("audio/")
     val loader = remember(source.objectId, source.plaintextSize) { ChurResourceLoader(source) }
     val player = remember(loader) {
         val asset = AVURLAsset(NSURL(string = "chur://vault/object"), options = null)
@@ -102,9 +103,9 @@ actual fun VaultPlayer(
         asset.resourceLoader.setDelegate(loader, loaderQueue)
         privatePlayer(AVPlayerItem(asset as AVAsset))
     }
-    val layer = remember(player) { AVPlayerLayer.playerLayerWithPlayer(player) }
+    val layer = remember(player, audio) { if (audio) null else AVPlayerLayer.playerLayerWithPlayer(player) }
     var started by remember(player) { mutableStateOf(false) }
-    var covered by remember(layer) { mutableStateOf(true) }
+    var covered by remember(layer) { mutableStateOf(!audio) }
     var playing by remember(player) { mutableStateOf(false) }
     var position by remember(player) { mutableStateOf(0f) }
     var duration by remember(player) { mutableStateOf(0f) }
@@ -114,7 +115,7 @@ actual fun VaultPlayer(
             position = CMTimeGetSeconds(player.currentTime()).takeIf { it.isFinite() }?.toFloat() ?: 0f
             duration = player.currentItem?.let { CMTimeGetSeconds(it.duration) }
                 ?.takeIf { it.isFinite() && it > 0 }?.toFloat() ?: 0f
-            covered = !started || !layer.readyForDisplay
+            covered = !audio && (!started || layer?.readyForDisplay != true)
             if (playing) source.vault.noteActivity()
             delay(250)
         }
@@ -142,11 +143,12 @@ actual fun VaultPlayer(
         }
     }
     Box(modifier = modifier) {
-        UIKitView(
+        if (audio) AudioArtwork(poster, Modifier.fillMaxSize(), controlsPadding)
+        else UIKitView(
             modifier = Modifier.fillMaxSize(),
             factory = {
                 val view = UIView(frame = CGRectMake(0.0, 0.0, 0.0, 0.0))
-                view.layer.addSublayer(layer)
+                layer?.let { view.layer.addSublayer(it) }
                 view
             },
             update = { view ->
@@ -155,7 +157,7 @@ actual fun VaultPlayer(
                 (view.layer.sublayers?.firstOrNull() as? AVPlayerLayer)?.setFrame(view.bounds)
             },
         )
-        if (covered && poster != null) PlayerPoster(poster, onPlay = if (!started) play else null)
+        if (!audio && covered && poster != null) PlayerPoster(poster, onPlay = if (!started) play else null)
         if (controlsVisible || controlsPinned || !started || !playing) {
             Column(
                 Modifier.align(Alignment.BottomCenter).padding(controlsPadding)

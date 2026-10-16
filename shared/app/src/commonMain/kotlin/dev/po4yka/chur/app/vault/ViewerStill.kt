@@ -31,6 +31,9 @@ import kotlinx.coroutines.withContext
  */
 internal fun stillSources(projection: ObjectProjection): List<StreamKind> = when (projection.mediaKind) {
     MEDIA_CLASS_VIDEO -> listOf(StreamKind.VIDEO_POSTER, StreamKind.THUMBNAIL)
+    // Never ask an image decoder to open an audio original. Existing recordings
+    // without stored artwork simply exhaust these optional derivatives.
+    MEDIA_CLASS_AUDIO -> listOf(StreamKind.SCREEN_PREVIEW, StreamKind.GRID_PREVIEW, StreamKind.THUMBNAIL)
     MEDIA_CLASS_IMAGE -> buildList {
         add(StreamKind.SCREEN_PREVIEW)
         val edge = maxOf(projection.width, projection.height)

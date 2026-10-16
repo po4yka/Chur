@@ -68,6 +68,7 @@ import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.IntegrityGlyph
 import dev.po4yka.chur.app.theme.FileGlyph
+import dev.po4yka.chur.app.theme.AudioGlyph
 import dev.po4yka.chur.app.theme.LocalChurColors
 import dev.po4yka.chur.app.theme.PrivateBoundaryMark
 import dev.po4yka.chur.app.theme.gridGeometry
@@ -483,7 +484,11 @@ private fun MediaRow(tile: LibraryTile, selecting: Boolean, onOpen: () -> Unit, 
                 androidx.compose.foundation.Image(bitmap = it, contentDescription = null,
                     contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
                     filterQuality = if (tile.thumbnailConcealed) FilterQuality.None else FilterQuality.Low)
-            } ?: Icon(if (projection.mediaKind == MEDIA_CLASS_FILE) FileGlyph else IntegrityGlyph,
+            } ?: Icon(when (projection.mediaKind) {
+                MEDIA_CLASS_FILE -> FileGlyph
+                MEDIA_CLASS_AUDIO -> AudioGlyph
+                else -> IntegrityGlyph
+            },
                 contentDescription = null, tint = colors.inkMuted)
         }
         // The label above says all of this in words, §23.2.
@@ -607,7 +612,11 @@ private fun MediaTile(
             // does not jump when a thumbnail arrives.
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Icon(
-                    if (tile.projection.mediaKind == MEDIA_CLASS_FILE) FileGlyph else IntegrityGlyph,
+                    when (tile.projection.mediaKind) {
+                        MEDIA_CLASS_FILE -> FileGlyph
+                        MEDIA_CLASS_AUDIO -> AudioGlyph
+                        else -> IntegrityGlyph
+                    },
                     contentDescription = null,
                     tint = colors.inkMuted,
                 )

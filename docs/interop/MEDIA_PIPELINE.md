@@ -162,6 +162,10 @@ used.
 values, and the declared generator profile is what makes that a known difference
 rather than a silent one. What may not differ is the record that carries them.
 
+### 6.2 Embedded audio artwork
+
+Audio keeps canonical source dimensions of zero. After its waveform, import attempts optional thumbnail, grid preview, and screen preview derivatives from embedded artwork. Each picture carries its own dimensions and the existing source revision binding. No picture stream is claimed when artwork is absent or refused. The platform checks an 8 MiB encoded artwork limit after native metadata extraction, validates image bounds before pixel decoding, downsamples, normalizes orientation, and encodes the existing JPEG profile. Native metadata extraction can allocate before the size check. See [`../product/AUDIO_ARTWORK.md`](../product/AUDIO_ARTWORK.md) for display, privacy, and existing-object behavior.
+
 ## 7. Compound media
 
 Live Photos, spatial media, RAW+JPEG pairs, sidecar metadata, and similar items are represented as one logical object with multiple immutable streams/relationships when supported. Missing parts produce an explicit incomplete/unsupported state, not silent flattening.

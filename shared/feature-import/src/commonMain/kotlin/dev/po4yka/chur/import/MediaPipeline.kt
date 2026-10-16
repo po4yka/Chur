@@ -94,6 +94,8 @@ data class Derivative(
      * For an image kind they are baseline JPEG at the §12 quality for that
      * kind. For [StreamKind.AUDIO_WAVEFORM] they are the §6.1 record, and
      * [width] and [height] are both zero because it carries no pixels.
+     * Ownership passes to the importer, which clears this buffer after
+     * persistence, failure, or cancellation. A codec must not retain it.
      */
     val bytes: ByteArray,
     /** The width of the encoded image. */
@@ -115,6 +117,9 @@ data class Derivative(
  * denial of service, not the pixel count afterwards.
  */
 object MediaBounds {
+    /** An optional embedded cover is bounded independently of the audio original. */
+    const val AUDIO_ART_ENCODED_MAX_BYTES = 8 * 1024 * 1024
+
     /** Largest accepted still-image edge. */
     const val IMAGE_EDGE_MAX = 16_384
 
@@ -201,6 +206,14 @@ object MediaBounds {
         val scaledHeight = (height * scale).toInt().coerceAtLeast(1)
         return scaledWidth to scaledHeight
     }
+
+    /** Reject unsafe embedded art before decoding; audio metadata stays dimensionless. */
+    fun artworkTargetSize(kind: StreamKind, width: Int, height: Int, encodedSize: Long): Pair<Int, Int>? {
+        if (kind != StreamKind.THUMBNAIL && kind != StreamKind.GRID_PREVIEW && kind != StreamKind.SCREEN_PREVIEW) return null
+        if (encodedSize !in 1L..AUDIO_ART_ENCODED_MAX_BYTES.toLong() || width <= 0 || height <= 0 ||
+            maxOf(width, height) > IMAGE_EDGE_MAX || width.toLong() * height.toLong() > IMAGE_AREA_MAX) return null
+        return targetSize(kind, width, height)
+    }
 }
 
 /**
@@ -253,11 +266,16 @@ interface MediaCodec {
 /**
  * The derivatives one probed source needs, §6 and §8.
  *
- * The thumbnail is always generated, because §8 has the timeline read
- * thumbnails and reading originals there would defeat the point. A preview is
- * generated only when the source is larger than the target: a photograph
+ * A photograph always gets a thumbnail, because §8 has the timeline read
+ * thumbnails and reading originals there would defeat the point. Its preview
+ * is generated only when the source is larger than the target: a photograph
  * already inside 2048px is its own screen preview, and a second container for a
  * copy of it spends a key and a file for nothing.
+ *
+ * Audio keeps its waveform and attempts all three image kinds for embedded
+ * artwork independently of its dimensionless canonical metadata. These image
+ * attempts are optional: missing, unsafe, or undecodable art returns null and
+ * does not prevent the original recording or its waveform from being stored.
  */
 fun requiredDerivatives(probe: ProbedMedia): List<StreamKind> = when (probe.mediaClass) {
     MediaBounds.CLASS_IMAGE -> buildList {
@@ -269,6 +287,9 @@ fun requiredDerivatives(probe: ProbedMedia): List<StreamKind> = when (probe.medi
     // viewer shows before playback starts, so a 1080p video that is already
     // inside the 2048 px target has no still at all until one is generated.
     MediaBounds.CLASS_VIDEO -> listOf(StreamKind.THUMBNAIL, StreamKind.VIDEO_POSTER)
-    MediaBounds.CLASS_AUDIO -> listOf(StreamKind.AUDIO_WAVEFORM)
+    // Audio remains 0x0. Optional embedded artwork has its own image bounds;
+    // no cover, an unsafe cover, or a failed image decoder returns null.
+    MediaBounds.CLASS_AUDIO -> listOf(StreamKind.AUDIO_WAVEFORM, StreamKind.THUMBNAIL,
+        StreamKind.GRID_PREVIEW, StreamKind.SCREEN_PREVIEW)
     else -> emptyList()
 }

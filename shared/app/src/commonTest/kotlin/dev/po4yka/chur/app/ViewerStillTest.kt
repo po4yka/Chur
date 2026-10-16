@@ -47,8 +47,10 @@ class ViewerStillTest {
     }
 
     @Test
-    fun a_video_starts_from_its_poster_and_audio_from_its_thumbnail() {
+    fun a_video_starts_from_its_poster_and_audio_uses_only_its_optional_artwork_derivatives() {
         assertEquals(listOf(VIDEO_POSTER, THUMBNAIL), stillSources(photo.copy(mediaKind = 2)))
-        assertEquals(listOf(THUMBNAIL), stillSources(photo.copy(mediaKind = 3)))
+        assertEquals(listOf(SCREEN_PREVIEW, GRID_PREVIEW, THUMBNAIL), stillSources(photo.copy(mediaKind = 3, width = 0, height = 0)))
+        // Even misleading image dimensions must not send an audio original to an image decoder.
+        assertEquals(listOf(SCREEN_PREVIEW, GRID_PREVIEW, THUMBNAIL), stillSources(photo.copy(mediaKind = 3)))
     }
 }

@@ -12,9 +12,9 @@ import dev.po4yka.chur.vault.VaultState
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 
-/** Only photos and video posters have image details to conceal. */
+/** Photos, video posters, and embedded audio covers can reveal private image details. */
 fun thumbnailRendition(mediaKind: Int, concealed: Boolean): ThumbnailRendition =
-    if (concealed && (mediaKind == MEDIA_CLASS_IMAGE || mediaKind == MEDIA_CLASS_VIDEO))
+    if (concealed && (mediaKind == MEDIA_CLASS_IMAGE || mediaKind == MEDIA_CLASS_VIDEO || mediaKind == MEDIA_CLASS_AUDIO))
         ThumbnailRendition.Mosaic else ThumbnailRendition.Plain
 
 /**

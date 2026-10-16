@@ -127,10 +127,10 @@ class WaveformTest {
      * asking the wrong question.
      */
     @Test
-    fun a_waveform_has_no_long_edge_and_audio_asks_for_one() {
+    fun a_waveform_has_no_long_edge_and_audio_attempts_it_before_optional_artwork() {
         assertNull(MediaBounds.longEdge(StreamKind.AUDIO_WAVEFORM))
         assertEquals(
-            listOf(StreamKind.AUDIO_WAVEFORM),
+            listOf(StreamKind.AUDIO_WAVEFORM, StreamKind.THUMBNAIL, StreamKind.GRID_PREVIEW, StreamKind.SCREEN_PREVIEW),
             requiredDerivatives(
                 ProbedMedia(MediaBounds.CLASS_AUDIO, 0, 0, 183_000, "audio/mp4"),
             ),
