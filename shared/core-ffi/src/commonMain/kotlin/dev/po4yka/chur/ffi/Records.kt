@@ -375,6 +375,19 @@ fun encodeSharingIssuerEvidence(evidence: SharingIssuerEvidence): ByteArray {
     return bytes
 }
 
+/** One device position that native signature and sequence checks accepted. */
+data class SyncDeviceHead(val deviceId: ByteArray, val sequence: ULong)
+
+fun decodeSyncHeads(bytes: ByteArray, length: Int): List<SyncDeviceHead> {
+    val reader = RecordReader(bytes, length)
+    if (reader.short() != 1) throw ChurFailure(ChurStatus.NON_CANONICAL_ENCODING, "the sync head version")
+    val count = reader.int()
+    if (count !in 0..32) throw ChurFailure(ChurStatus.RESOURCE_LIMIT_EXCEEDED, "the sync head count")
+    val heads = List(count) { SyncDeviceHead(reader.take(ID_LENGTH), reader.long().toULong()) }
+    reader.requireExhausted()
+    return heads
+}
+
 /** Decodes the collection-sharing identity record of §6.9. */
 fun decodeSharingIdentity(bytes: ByteArray, length: Int): SharingIdentity {
     val reader = RecordReader(bytes, length)

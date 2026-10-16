@@ -222,6 +222,8 @@ internal object ChurJni {
         outStatus: IntArray,
     ): Int
 
+    external fun syncHeads(session: Long, destination: java.nio.ByteBuffer, outWritten: IntArray): Int
+
     external fun syncForkState(
         session: Long,
         outCounts: LongArray,

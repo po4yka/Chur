@@ -458,9 +458,13 @@ chur_status_t chur_sync_stage(chur_handle_t runtime, const uint8_t vault_id[16],
                               const uint8_t *record, uint32_t record_length);
 chur_status_t chur_sync_process(chur_handle_t session, uint64_t now_ms,
                                 ChurSyncReportV1 *out_report);
+chur_status_t chur_sync_heads(chur_handle_t session, uint8_t *destination,
+                              size_t capacity, size_t *bytes_written);
 ```
 
 Record kind `1` is an encrypted signed operation. Kind `2` is a signed checkpoint. `chur_sync_stage` is idempotent for identical bytes. It rejects one record above the 16 MiB response bound. The whole per-vault inbox remains bounded to the limits in [`../sync/SYNC_PROTOCOL_V1.md`](../sync/SYNC_PROTOCOL_V1.md) §7.
+
+`chur_sync_heads` reads only authenticated active device membership and accepted operation heads from the unlocked catalog. It writes big-endian `version:u16=1`, `count:u32`, then at most 32 entries of `device_id:bytes[16]` and `accepted_sequence:u64`. A known device without an accepted operation has sequence zero. A locked session returns `VAULT_LOCKED`. The host saves these sequences as pull cursors after unlocked processing; download or staging counts never acknowledge a record.
 
 `chur_sync_process` authenticates and decrypts operations under the unlocked session. It removes an applied record, an exact replay, and a record that full validation rejects. It retains an operation with a missing device sequence, causal predecessor, or collection key. The report contains applied, duplicate, pending, and rejected counts. `first_rejection` is zero or the first stable `chur_status_t`, except that `SYNC_CHAIN_FORK` or `SYNC_HEAD_ROLLBACK` replaces an earlier status of another kind: a server can stage any bytes beside a forked record, and the engine drops that record after it freezes the chain, so a first-record rule would let the server hide the verdict ([`../ERROR_MODEL.md`](../ERROR_MODEL.md) "Wire and persistence compatibility"). It contains no private text.
 

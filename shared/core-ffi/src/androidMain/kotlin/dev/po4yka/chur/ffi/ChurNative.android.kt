@@ -230,6 +230,9 @@ internal actual object ChurNative {
         outStatus: IntArray,
     ): Int = ChurJni.syncProcess(session, nowMs, outCounts, outStatus)
 
+    actual fun syncHeads(session: Long, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.syncHeads(session, destination.buffer, outWritten)
+
     actual fun syncForkState(
         session: Long,
         outCounts: LongArray,

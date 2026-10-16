@@ -38,7 +38,7 @@ class LockedSyncPullerTest {
         assertEquals(1, report.operations)
         assertEquals(1, report.checkpoints)
         assertContentEquals(ByteArray(16) { 2 }, report.cursors.single().deviceId)
-        assertEquals(8uL, report.cursors.single().after)
+        assertEquals(7uL, report.cursors.single().after)
         assertEquals(listOf(SyncRecordKind.OPERATION, SyncRecordKind.CHECKPOINT), staged.map { it.first })
         assertContentEquals(operation, staged[0].second)
         assertContentEquals(checkpoint, staged[1].second)

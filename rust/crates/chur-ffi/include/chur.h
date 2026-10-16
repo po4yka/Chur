@@ -354,6 +354,10 @@ chur_status_t chur_sync_stage(chur_handle_t runtime, const uint8_t vault_id[16],
                               const uint8_t *record, uint32_t record_length);
 chur_status_t chur_sync_process(chur_handle_t session, uint64_t now_ms,
                                 ChurSyncReportV1 *out_report);
+/* Authenticated active device heads: big-endian version:u16=1, count:u32,
+ * then count*(device_id[16], accepted_sequence:u64), at most 32 entries. */
+chur_status_t chur_sync_heads(chur_handle_t session, uint8_t *destination,
+                              size_t capacity, size_t *bytes_written);
 
 /* ABI 2.20, FFI_CONTRACT.md section 6.24. ROLLBACK_PROTECTION.md section 4
  * keeps a fork state per device chain until it clears. State counts the chains

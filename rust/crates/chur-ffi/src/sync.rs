@@ -1,13 +1,14 @@
 //! Phase 3 locked staging and unlocked validation C ABI.
 
 use chur_catalog::sync_engine::{self, ProcessReport, StagedKind};
-use chur_catalog::sync_log;
 use chur_catalog::sync_staging::LockedStaging;
+use chur_catalog::{sync_log, sync_membership};
 use chur_core::limits::sync as bounds;
 use chur_core::{ChurStatus, Error, Id, Result, ensure};
 use chur_crypto::Key;
+use chur_format::codec::Writer;
 
-use crate::api::{Status, borrow_large, write_out};
+use crate::api::{Status, borrow_bytes_mut, borrow_large, write_out};
 use crate::panic::guard_status_for;
 use crate::registry::{self, Entry, Handle, Kind};
 
@@ -28,6 +29,73 @@ pub struct ChurSyncReportV1 {
     pub first_rejection: i32,
     /// Reserved and zero in ABI 1.4.
     pub reserved: [u8; 4],
+}
+
+/// Writes authenticated active device heads from the unlocked catalog.
+///
+/// The record is version:u16, count:u32, then count*(device_id:16, sequence:u64).
+/// All integers are big-endian. A known device with no accepted operation has sequence zero.
+///
+/// # Safety
+///
+/// `destination` covers `capacity` writable bytes and `bytes_written` is writable and aligned.
+#[unsafe(no_mangle)]
+#[expect(
+    unsafe_code,
+    reason = "the sync head C ABI uses caller-owned output pointers"
+)]
+pub unsafe extern "C" fn chur_sync_heads(
+    session: Handle,
+    destination: *mut u8,
+    capacity: usize,
+    bytes_written: *mut usize,
+) -> Status {
+    guard_status_for(session, || {
+        // SAFETY: the caller guarantees the writable out-parameter above.
+        unsafe { write_out(bytes_written, 0usize)? };
+        let entry = registry::get(session, Kind::Session)?;
+        let Entry::Session { session, .. } = entry.as_ref() else {
+            return Err(Error::new(
+                ChurStatus::InvalidInput,
+                "the handle is of another type",
+            ));
+        };
+        let encoded = {
+            let mut session = registry::lock(session);
+            let db = session.catalog()?;
+            let membership = sync_membership::load(db)?.ok_or_else(|| {
+                Error::new(
+                    ChurStatus::InvalidInput,
+                    "sync is not provisioned for this vault",
+                )
+            })?;
+            let log = sync_log::load(db, &membership)?;
+            let devices: Vec<_> = membership.active_device_ids().collect();
+            ensure!(
+                devices.len() <= bounds::CHECKPOINT_HEADS_MAX,
+                ResourceLimitExceeded,
+                "the accepted device list exceeds the sync bound"
+            );
+            let mut writer = Writer::new();
+            writer.u16(1).u32(devices.len() as u32);
+            for device in devices {
+                writer
+                    .id(device)
+                    .u64(log.head(device).map_or(0, |(sequence, _)| sequence));
+            }
+            writer.finish()
+        };
+        // SAFETY: the caller guarantees the writable destination range above.
+        let output = unsafe { borrow_bytes_mut(destination, capacity)? };
+        ensure!(
+            encoded.len() <= output.len(),
+            ResourceLimitExceeded,
+            "the destination is smaller than the accepted sync heads"
+        );
+        output[..encoded.len()].copy_from_slice(&encoded);
+        // SAFETY: the caller guarantees the writable out-parameter above.
+        unsafe { write_out(bytes_written, encoded.len()) }
+    })
 }
 
 /// Stages one opaque operation or checkpoint while its vault may be locked.

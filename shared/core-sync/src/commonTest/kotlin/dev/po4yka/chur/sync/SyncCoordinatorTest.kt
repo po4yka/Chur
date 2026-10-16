@@ -61,6 +61,8 @@ class SyncCoordinatorTest {
         val staged = mutableListOf<Pair<SyncRecordKind, ByteArray>>()
         var processed = 0
         var firstRejection = 0
+        var locked = false
+        var heads: List<DeviceCursor>? = null
         val accepted = mutableListOf<ByteArray>()
 
         /** The fork state the catalog keeps, which outlives the process. */
@@ -71,6 +73,8 @@ class SyncCoordinatorTest {
             identityCalls++
             return identity
         }
+
+        override suspend fun acceptedHeads(): List<DeviceCursor>? = if (locked) null else heads
 
         override suspend fun stage(
             vaultId: ByteArray,
@@ -86,6 +90,7 @@ class SyncCoordinatorTest {
 
         override suspend fun process(): SyncProcessReport? {
             processed++
+            if (locked) return null
             afterProcess()
             val rejected = if (firstRejection == 0) 0L else 1L
             return SyncProcessReport(staged.size.toLong() - rejected, 0, 0, rejected, firstRejection)
@@ -141,16 +146,22 @@ class SyncCoordinatorTest {
         handler: MockRequestHandler,
     ) {
         var requests = 0
+        var operationRequests = 0
         val engine =
             MockEngine { request ->
                 requests++
+                if (request.url.encodedPath.contains("/operations/")) operationRequests++
                 handler(request)
             }
     }
 
     private fun okEngine(response: (String) -> MockAnswer) =
         CountingEngine { request ->
-            response(request.url.encodedPath).let { answer ->
+            val path = request.url.encodedPath
+            val response = if (path.endsWith("/sharing/object-key-requests") || path.endsWith("/sharing/object-key-grants")) {
+                MockAnswer.Body(byteArrayOf(0, 0, 0, 0))
+            } else response(path)
+            response.let { answer ->
                 when (answer) {
                     is MockAnswer.Body -> {
                         respond(answer.bytes, HttpStatusCode.OK)
@@ -281,7 +292,10 @@ class SyncCoordinatorTest {
                 FakeStore().apply {
                     saved = SyncState("https://sync.example", vaultId, deviceId, ByteArray(32), listOf(DeviceCursor(deviceId, 7u)))
                 }
-            val boundary = FakeBoundary().apply { identity = this@SyncCoordinatorTest.identity }
+            val boundary = FakeBoundary().apply {
+                identity = this@SyncCoordinatorTest.identity
+                heads = listOf(DeviceCursor(deviceId, 9uL))
+            }
             val coordinator = coordinator(store, boundary, engine)
             coordinator.refresh()
 
@@ -306,6 +320,42 @@ class SyncCoordinatorTest {
             assertEquals("Up to date.", coordinator.status.value.message)
             assertNull(coordinator.status.value.integrityStop)
         }
+
+    @Test
+    fun locked_downloads_never_advance_an_accepted_cursor() = runTest {
+        cursorAcceptanceScenario(accepted = null, locked = true)
+    }
+
+    @Test
+    fun a_partially_applied_page_advances_only_to_the_native_verified_head() = runTest {
+        cursorAcceptanceScenario(accepted = 8uL)
+    }
+
+    @Test
+    fun a_rejected_page_remains_fetchable_after_its_inbox_record_is_removed() = runTest {
+        cursorAcceptanceScenario(accepted = 7uL)
+    }
+
+    private suspend fun cursorAcceptanceScenario(accepted: ULong?, locked: Boolean = false) {
+        val engine = okEngine { path -> when {
+            path.contains("/operations/") -> MockAnswer.Body(frame2(byteArrayOf(1), byteArrayOf(2)))
+            path.endsWith("/checkpoints") || path.endsWith("/sharing/packages") -> MockAnswer.Body(byteArrayOf(0, 0, 0, 0))
+            else -> error(path)
+        } }
+        val store = FakeStore().apply {
+            saved = SyncState("https://sync.example", vaultId, deviceId, ByteArray(32), listOf(DeviceCursor(deviceId, 7uL)))
+        }
+        val boundary = FakeBoundary().apply {
+            identity = if (locked) null else this@SyncCoordinatorTest.identity
+            this.locked = locked
+            heads = accepted?.let { listOf(DeviceCursor(deviceId, it)) }
+        }
+        val coordinator = coordinator(store, boundary, engine)
+
+        assertTrue(coordinator.syncNow())
+        assertEquals(accepted ?: 7uL, store.saved!!.cursors.single().after)
+        assertEquals(2, boundary.staged.size)
+    }
 
     @Test
     fun a_fork_found_by_a_run_stops_saying_synced_until_disconnect() =
@@ -620,7 +670,7 @@ class SyncCoordinatorTest {
 
             assertFalse(completed)
             assertEquals(listOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L), sleeps)
-            assertEquals(SyncCoordinator.MAX_ATTEMPTS, engine.requests)
+            assertEquals(SyncCoordinator.MAX_ATTEMPTS, engine.operationRequests)
             assertEquals(ChurStatus.NETWORK_FAILURE, coordinator.status.value.failure)
             // Nothing was applied and no cursor advanced, so the next run re-pulls.
             assertEquals(
@@ -687,7 +737,7 @@ class SyncCoordinatorTest {
             val completed = coordinator.syncNow()
 
             assertFalse(completed)
-            assertEquals(1, engine.requests)
+            assertEquals(1, engine.operationRequests)
             assertEquals(0, sleeps.size)
             // The engine owns no copy: the status goes up typed, and no line
             // carries its name, `ERROR_MODEL.md` "Layer mapping".

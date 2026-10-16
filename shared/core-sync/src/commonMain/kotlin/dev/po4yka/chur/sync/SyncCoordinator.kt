@@ -33,6 +33,9 @@ public interface SyncVaultBoundary {
     /** The identity to enroll with, or `null` while the vault is locked. */
     public suspend fun identity(): SharingIdentity?
 
+    /** Authenticated native device heads, or `null` while the vault is locked. */
+    public suspend fun acceptedHeads(): List<DeviceCursor>? = null
+
     /**
      * Stages one downloaded record into the native locked inbox.
      *
@@ -164,7 +167,7 @@ public data class SyncStatus(
  * One cycle is `SYNC_PROTOCOL_V1.md` §5 and §7 — pull the operation chains and
  * the checkpoints past the stored cursors, stage them in the locked inbox,
  * apply the inbox when the vault is unlocked, and advance the cursors only
- * after every record reached native storage.
+ * from authenticated native heads after unlocked validation.
  *
  * Failure follows §10: a network failure backs off on a bounded exponential
  * schedule and stops at the attempt cap, while any other status — an
@@ -426,6 +429,7 @@ public class SyncCoordinator(
                 repeat(MAX_ATTEMPTS) { attempt ->
                     try {
                         state = flushPending(client, state)
+                        acceptedCursors(state, vault)?.let { state = state.copy(cursors = it) }
                         if (vault.identity()?.let { matches(state, it) } == true) {
                             publishSourceObjects(client, state, vault)
                         }
@@ -433,17 +437,21 @@ public class SyncCoordinator(
                             LockedSyncPuller(client) { vaultId, kind, stagedAtMs, record ->
                                 vault.stage(vaultId, kind, stagedAtMs, record)
                             }
-                        val report = puller.pullOnce(state.vaultId, state.cursors, clock())
-                        fold(vault.identity()?.vaultId, vault.process())
+                        puller.pullOnce(state.vaultId, state.cursors, clock())
+                        val processingVault = vault.identity()?.vaultId
+                        val processReport = vault.process()
+                        fold(processingVault, processReport)
                         val shares =
                             if (vault.identity()?.let { matches(state, it) } == true) {
                                 SharingPuller(client, vault).pullOnce(state.vaultId, clock())
                             } else {
                                 0
                             }
-                        // §5: the cursor advances only once the records are in
-                        // native storage, so a dropped page is fetched again.
-                        store.save(state.copy(cursors = report.cursors.ifEmpty { state.cursors }))
+                        // Staging can evict and expire records. A locked or
+                        // rejected download must remain fetchable from the
+                        // last head that native validation accepted.
+                        acceptedCursors(state, vault)?.let { state = state.copy(cursors = it) }
+                        store.save(state)
                         // A standing verdict means one chain is frozen, so the
                         // run does not call the vault up to date.
                         shown =
@@ -452,7 +460,12 @@ public class SyncCoordinator(
                                 serverUrl = state.serverUrl,
                                 message =
                                     listOfNotNull(
-                                        "Up to date.".takeIf { integrityStop == null },
+                                        "Up to date.".takeIf {
+                                            integrityStop == null && processReport != null
+                                        },
+                                        "Downloaded encrypted records. Unlock to apply.".takeIf {
+                                            integrityStop == null && processReport == null
+                                        },
                                         "Received $shares share(s).".takeIf { shares > 0 },
                                     ).joinToString(" ").ifEmpty { null },
                                 busy = false,
@@ -635,8 +648,19 @@ public class SyncCoordinator(
      */
     public suspend fun applyStaged(): Unit =
         mutex.withLock {
-            fold(boundary?.identity()?.vaultId, boundary?.process())
+            val vault = boundary ?: return@withLock
+            fold(vault.identity()?.vaultId, vault.process())
+            val state = store.load() ?: return@withLock
+            acceptedCursors(state, vault)?.let { store.save(state.copy(cursors = it)) }
         }
+
+    private suspend fun acceptedCursors(state: SyncState, vault: SyncVaultBoundary): List<DeviceCursor>? {
+        if (vault.identity()?.let { matches(state, it) } != true) return null
+        val heads = vault.acceptedHeads() ?: return null
+        // A lock or identity change between native calls must not associate
+        // another vault's accepted heads with this server configuration.
+        return heads.takeIf { vault.identity()?.let { matches(state, it) } == true }
+    }
 
     /**
      * Records that the user saw the verdict, which the banner's action does.

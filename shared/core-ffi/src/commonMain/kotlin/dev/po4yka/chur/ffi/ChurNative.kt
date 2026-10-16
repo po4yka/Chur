@@ -219,6 +219,8 @@ internal expect object ChurNative {
         outStatus: IntArray,
     ): Int
 
+    fun syncHeads(session: Long, destination: ChurBuffer, outWritten: IntArray): Int
+
     fun syncForkState(
         session: Long,
         outCounts: LongArray,

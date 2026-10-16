@@ -211,6 +211,12 @@ internal actual object ChurNative {
             status
         }
 
+    actual fun syncHeads(session: Long, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        writtenCall(outWritten) { written ->
+            dev.po4yka.chur.native.chur_sync_heads(session.toULong(), destination.pointer, destination.size.toULong(), written)
+        }
+    }
+
     actual fun syncForkState(
         session: Long,
         outCounts: LongArray,

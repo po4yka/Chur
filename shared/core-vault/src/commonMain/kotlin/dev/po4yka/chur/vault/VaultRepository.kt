@@ -750,6 +750,10 @@ class VaultRepository(
         if (session == 0L) null else ChurVault.processSync(session, clock())
     }
 
+    suspend fun syncHeads(): List<dev.po4yka.chur.ffi.SyncDeviceHead>? = mutex.withLock {
+        if (session == 0L) null else ChurVault.syncHeads(session)
+    }
+
     /**
      * The fork state the open vault's catalog keeps, or `null` while locked.
      *

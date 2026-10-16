@@ -370,6 +370,7 @@ fn every_declared_function_is_exported() {
         // §6.8, the Phase-3 sync inbox surface added at ABI 1.4.
         "chur_sync_stage",
         "chur_sync_process",
+        "chur_sync_heads",
         // §6.24, added at ABI 2.20.
         "chur_sync_fork_state",
         "chur_sync_fork_acknowledge",

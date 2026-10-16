@@ -425,6 +425,13 @@ object ChurVault {
     }
 
     /** Validates and applies the retained inbox after unlock. */
+    fun syncHeads(session: Long): List<SyncDeviceHead> = withChurBuffer(6 + 32 * 24) { buffer ->
+        val written = IntArray(1)
+        ChurFailure.check(ChurNative.syncHeads(session, buffer, written), "sync heads")
+        decodeSyncHeads(buffer.copyOut(written[0]), written[0])
+    }
+
+    /** Validates and applies the retained inbox after unlock. */
     fun processSync(
         session: Long,
         nowMs: Long,

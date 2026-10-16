@@ -263,6 +263,28 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_syncProcess<'local>(
 
 /// Counts the open vault's forked device chains, detected and acknowledged.
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_syncHeads<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let mut written = 0usize;
+        // SAFETY: the direct buffer and writable local remain live for this call.
+        let status = unsafe {
+            chur_ffi::sync::chur_sync_heads(handle_of(session), address, capacity, &mut written)
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Counts the open vault's forked device chains, detected and acknowledged.
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_syncForkState<'local>(
     env: EnvUnowned<'local>,
     _class: JClass<'local>,

@@ -31,34 +31,30 @@ public class LockedSyncPuller internal constructor(
         }
 
         var operationCount = 0
-        val next = ArrayList<DeviceCursor>(cursors.size)
         for (cursor in cursors) {
-            var pulled = 0
             for (record in client.operations(vaultId, cursor.deviceId, cursor.after)) {
                 stage(vaultId, SyncRecordKind.OPERATION, stagedAtMs, record)
-                pulled++
                 operationCount++
             }
-            // §5: the caller's cursor for this chain advances by what this page
-            // held, and only once every record of the page reached the stage.
-            next += DeviceCursor(cursor.deviceId, cursor.after + pulled.toULong())
         }
         val checkpoints = client.checkpoints(vaultId)
         for (record in checkpoints) {
             stage(vaultId, SyncRecordKind.CHECKPOINT, stagedAtMs, record)
         }
-        return LockedPullReport(operationCount, checkpoints.size, next)
+        // Opaque staging can evict or expire records. Only unlocked native
+        // signature and sequence validation can advance an accepted cursor.
+        return LockedPullReport(operationCount, checkpoints.size, cursors)
     }
 }
 
 /** Last accepted sequence for one device, obtained while the vault was unlocked. */
 public data class DeviceCursor(public val deviceId: ByteArray, public val after: ULong)
 
-/** Opaque records handed to the bounded native inbox, with where they leave the cursors. */
+/** Opaque records handed to the bounded native inbox; accepted cursors stay unchanged. */
 public data class LockedPullReport(
     public val operations: Int,
     public val checkpoints: Int,
-    /** The cursors the next run pulls from, one per input cursor, in order. */
+    /** The unchanged accepted cursors, one per input cursor, in order. */
     public val cursors: List<DeviceCursor> = emptyList(),
 )
 

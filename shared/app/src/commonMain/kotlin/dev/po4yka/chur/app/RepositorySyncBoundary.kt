@@ -23,6 +23,9 @@ class RepositorySyncBoundary(
 ) : SyncVaultBoundary {
     override suspend fun identity(): SharingIdentity? = repository.syncIdentity()
 
+    override suspend fun acceptedHeads(): List<dev.po4yka.chur.sync.DeviceCursor>? =
+        repository.syncHeads()?.map { dev.po4yka.chur.sync.DeviceCursor(it.deviceId, it.sequence) }
+
     override suspend fun stage(
         vaultId: ByteArray,
         kind: SyncRecordKind,
