@@ -40,6 +40,9 @@ import dev.po4yka.chur.app.vault.SourceDeletionCopy
 import dev.po4yka.chur.app.vault.SourceDeletionDialog
 import dev.po4yka.chur.app.vault.importedOriginals
 import dev.po4yka.chur.app.vault.ThumbnailCache
+import dev.po4yka.chur.app.vault.ThumbnailRendition
+import dev.po4yka.chur.app.vault.rememberGalleryThumbnails
+import dev.po4yka.chur.app.vault.thumbnailRendition
 import dev.po4yka.chur.app.vault.UnlockScreen
 import dev.po4yka.chur.app.vault.VaultActions
 import dev.po4yka.chur.app.vault.VaultDestination
@@ -222,6 +225,8 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     val sharingIdentity by controller.sharingIdentity.collectAsState()
     val sharingOverview by controller.sharingOverview.collectAsState()
     val sharingRecipient by controller.sharingRecipient.collectAsState()
+    val generation = (vaultState as? VaultState.Unlocked)?.generation ?: 0L
+    var thumbnailsConcealed by remember(generation) { mutableStateOf(true) }
     var destination by remember { mutableStateOf(VaultDestination.LIBRARY) }
     var mediaView by remember { mutableStateOf(ContentView.GRID) }
     var albumView by remember { mutableStateOf(ContentView.LIST) }
@@ -242,9 +247,10 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     LaunchedEffect(tags) {
         openTag = openTag?.let { current -> tags.firstOrNull { it.id == current.id } }
     }
-    var selection by remember { mutableStateOf(setOf<String>()) }
+    var selection by remember(generation) { mutableStateOf(setOf<String>()) }
     // The item on screen in the viewer; a swipe moves it through the page.
-    var viewing by remember { mutableStateOf<ObjectProjection?>(null) }
+    var viewing by remember(generation) { mutableStateOf<ObjectProjection?>(null) }
+    var visibleMedia by remember(generation) { mutableStateOf(emptySet<String>()) }
     var creatingAlbum by remember { mutableStateOf(false) }
     var choosingAlbum by remember { mutableStateOf(false) }
     var movingSelection by remember { mutableStateOf(false) }
@@ -285,30 +291,23 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     // session generation in the key is what makes a stale entry unreachable
     // after a new session opens.
     val cache = controller.thumbnailCache
-    val generation = (vaultState as? VaultState.Unlocked)?.generation ?: 0L
     LaunchedEffect(generation) {
         if (vaultState is VaultState.Unlocked) controller.loadAlbums()
     }
 
-    // The tiles carry whatever the cache already holds, and a tile whose
-    // thumbnail is missing loads it. §11.1 keeps the geometry stable while it
-    // arrives, so nothing jumps.
-    var thumbnails by remember { mutableStateOf(mapOf<String, ImageBitmap>()) }
-    LaunchedEffect(page, generation) {
-        val visible = page.objects.map { it.id }.toSet()
-        thumbnails = thumbnails.filterKeys { it in visible }
-        page.objects.filter { it.thumbnailReady }.forEach { projection ->
-            val image = cache.load(
-                repository = controller.vault,
-                generation = generation,
-                objectId = projection.objectId,
-                id = projection.id,
-            )
-            if (image != null) {
-                thumbnails = thumbnails + (projection.id to image)
-            }
-        }
-    }
+    val thumbnails = rememberGalleryThumbnails(
+        controller.vault, cache, generation, page.objects.filter { it.id in visibleMedia }, thumbnailsConcealed,
+    )
+    // Plain pixels are loaded separately only while the viewer is open. They
+    // never enter the gallery map, including the viewer's adjacent pages.
+    val viewerIndex = page.objects.indexOfFirst { it.id == viewing?.id }
+    val viewerObjects = if (viewerIndex < 0) emptyList() else page.objects.subList(
+        (viewerIndex - 1).coerceAtLeast(0), (viewerIndex + 2).coerceAtMost(page.objects.size),
+    )
+    val viewerThumbnails = rememberGalleryThumbnails(
+        controller.vault, cache, generation, viewerObjects, concealed = false,
+        enabled = viewing != null,
+    )
 
     originals?.let { picked ->
         SourceDeletionDialog(
@@ -459,6 +458,8 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                         projection = projection,
                         thumbnail = thumbnails[projection.id],
                         selected = projection.id in selection,
+                        thumbnailConcealed = thumbnailRendition(projection.mediaKind, thumbnailsConcealed) ==
+                            ThumbnailRendition.Mosaic,
                     )
                 },
                 albums = albums,
@@ -468,6 +469,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 libraryScopeTitle = if (trashOpen) "Trash" else if (quarantineOpen) "Quarantine" else openTag?.name ?: if (favoritesOnly) "Favorites" else null,
                 trashOpen = trashOpen,
                 mediaView = mediaView,
+                thumbnailsConcealed = thumbnailsConcealed,
                 albumView = albumView,
                 sort = if (openAlbum != null) albumSort else mediaSort,
                 kinds = mediaKinds,
@@ -489,6 +491,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 sharingRecipient = sharingRecipient,
             ),
             actions = VaultActions(
+                onThumbnailsConcealedChange = { thumbnailsConcealed = it },
                 onDestination = {
                     openAlbum = null
                     openTag = null
@@ -607,6 +610,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                     }
                 },
                 onLoadMore = controller::loadNextPage,
+                onVisibleMediaChanged = { visibleMedia = it },
                 onLock = { controller.lock() },
                 onPanic = { controller.panic() },
                 onVerifyAll = { controller.verifyEverything() },
@@ -681,7 +685,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             generation = generation,
             projection = projection,
             pages = viewerPages(page.objects, projection),
-            thumbnails = thumbnails,
+            thumbnails = viewerThumbnails,
             canLoadMore = page.nextCursor != null,
             onSettled = { viewing = it },
             trashOpen = trashOpen,

@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -142,6 +143,7 @@ data class VaultUiState(
     val trashOpen: Boolean = false,
     /** Session-only presentation choices; never written outside the unlocked vault. */
     val mediaView: ContentView = ContentView.GRID,
+    val thumbnailsConcealed: Boolean = true,
     val albumView: ContentView = ContentView.LIST,
     val sort: QuerySort = QuerySort.CAPTURE_DESC,
     val kinds: Int = 0,
@@ -215,6 +217,7 @@ data class VaultActions(
     val onMoveAlbumMember: (ObjectProjection, ObjectProjection?) -> Unit = { _, _ -> },
     val onDropMediaIntoAlbum: (List<ObjectProjection>, AlbumSummary?) -> Unit = { _, _ -> },
     val onLoadMore: () -> Unit = {},
+    val onVisibleMediaChanged: (Set<String>) -> Unit = {},
     /** Lock the vault now. */
     val onLock: () -> Unit,
     /**
@@ -267,6 +270,7 @@ data class VaultActions(
     val onDeleteSelection: () -> Unit = {},
     val onRestoreSelection: () -> Unit = {},
     val onMediaViewChange: (ContentView) -> Unit = {},
+    val onThumbnailsConcealedChange: (Boolean) -> Unit = {},
     val onAlbumViewChange: (ContentView) -> Unit = {},
     val onSortChange: (QuerySort) -> Unit = {},
     val onKindsChange: (Int) -> Unit = {},
@@ -695,7 +699,8 @@ private fun glyphFor(destination: VaultDestination) = when (destination) {
 private fun LibraryBody(state: VaultUiState, actions: VaultActions,
     view: ContentView, onViewChange: (ContentView) -> Unit) {
     Column(modifier = Modifier.fillMaxSize()) {
-        ContentViewToggle(view, onViewChange)
+        MediaPresentationControls(view, onViewChange, state.thumbnailsConcealed,
+            actions.onThumbnailsConcealedChange)
         if (state.selectedCount == 0) MediaSortFilterControls(
             sort = state.sort, kinds = state.kinds,
             album = state.openAlbum != null, trash = state.trashOpen,
@@ -723,6 +728,7 @@ private fun LibraryBody(state: VaultUiState, actions: VaultActions,
                 albumTargets = state.albums.filterNot { it.id == state.openAlbum?.id },
                 onDropIntoAlbum = if (state.trashOpen) null else actions.onDropMediaIntoAlbum,
                 onLoadMore = if (state.canLoadMore) actions.onLoadMore else null,
+                onVisibleMediaChanged = actions.onVisibleMediaChanged,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -733,50 +739,61 @@ private fun LibraryBody(state: VaultUiState, actions: VaultActions,
 private fun SearchBody(state: VaultUiState, actions: VaultActions,
     view: ContentView, onViewChange: (ContentView) -> Unit) {
     val colors = LocalChurColors.current
-    Column(modifier = Modifier.fillMaxSize()) {
-        OutlinedTextField(
-            value = state.searchTerms,
-            onValueChange = actions.onSearch,
-            singleLine = true,
-            label = { Text("Search filenames, captions, and tags") },
-            keyboardOptions = privateKeyboardOptions(),
-            modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter),
-            colors = churOutlinedTextFieldColors(),
-        )
-        ContentViewToggle(view, onViewChange)
-        if (state.selectedCount == 0) MediaSortFilterControls(
-            sort = state.sort, kinds = state.kinds, album = false, trash = false,
-            onSort = actions.onSortChange, onKinds = actions.onKindsChange,
-        )
-        when {
-            state.searchTerms.isBlank() -> Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    // §16.4 of the catalog: the index covers exactly these
-                    // three, so the copy says so rather than implying more.
-                    "Search covers filenames, captions, and tag names.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = colors.inkMuted,
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        // The IME and large text can make the controls taller than the viewport.
+        // Keep them scrollable and reserve space for results in either view.
+        val headerHeight = maxHeight / 2
+        Column(modifier = Modifier.fillMaxSize()) {
+            Column(modifier = Modifier.heightIn(max = headerHeight)
+                .verticalScroll(rememberScrollState())) {
+                OutlinedTextField(
+                    value = state.searchTerms,
+                    onValueChange = actions.onSearch,
+                    singleLine = true,
+                    label = { Text("Search filenames, captions, and tags") },
+                    keyboardOptions = privateKeyboardOptions(),
+                    modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter),
+                    colors = churOutlinedTextFieldColors(),
+                )
+                MediaPresentationControls(view, onViewChange, state.thumbnailsConcealed,
+                    actions.onThumbnailsConcealedChange)
+                if (state.selectedCount == 0) MediaSortFilterControls(
+                    sort = state.sort, kinds = state.kinds, album = false, trash = false,
+                    onSort = actions.onSortChange, onKinds = actions.onKindsChange,
                 )
             }
-            state.tiles.isEmpty() -> Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("No matching items. Try another word or remove a filter.",
-                    style = MaterialTheme.typography.bodyMedium, color = colors.inkMuted)
+            when {
+                state.searchTerms.isBlank() -> Box(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        // §16.4 of the catalog: the index covers exactly these
+                        // three, so the copy says so rather than implying more.
+                        "Search covers filenames, captions, and tag names.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.inkMuted,
+                    )
+                }
+                state.tiles.isEmpty() -> Box(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("No matching items. Try another word or remove a filter.",
+                        style = MaterialTheme.typography.bodyMedium, color = colors.inkMuted)
+                }
+                else -> MediaBrowser(
+                    tiles = state.tiles,
+                    view = view,
+                    onOpen = actions.onOpen,
+                    onToggleSelection = actions.onToggleSelection,
+                    albumTargets = state.albums,
+                    onDropIntoAlbum = actions.onDropMediaIntoAlbum,
+                    onLoadMore = if (state.canLoadMore) actions.onLoadMore else null,
+                    onVisibleMediaChanged = actions.onVisibleMediaChanged,
+                    modifier = Modifier.weight(1f),
+                )
             }
-            else -> MediaBrowser(
-                tiles = state.tiles,
-                view = view,
-                onOpen = actions.onOpen,
-                onToggleSelection = actions.onToggleSelection,
-                albumTargets = state.albums,
-                onDropIntoAlbum = actions.onDropMediaIntoAlbum,
-                onLoadMore = if (state.canLoadMore) actions.onLoadMore else null,
-            )
         }
     }
 }

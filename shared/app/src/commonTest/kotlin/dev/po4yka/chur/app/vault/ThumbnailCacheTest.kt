@@ -1,0 +1,148 @@
+package dev.po4yka.chur.app.vault
+
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.ImageBitmapConfig
+import androidx.compose.ui.graphics.colorspace.ColorSpaces
+import dev.po4yka.chur.ffi.StreamKind
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
+import kotlin.test.assertSame
+import kotlin.test.assertTrue
+
+/** Cache logic only. Real raster checks run on iOS and Android devices. */
+@OptIn(ExperimentalCoroutinesApi::class)
+class ThumbnailCacheTest {
+    @Test
+    fun rendition_generation_and_stream_are_part_of_the_same_bounded_cache() = runTest {
+        var renders = 0
+        var reads = 0
+        val cache = ThumbnailCache(3, StandardTestDispatcher(testScheduler)) { _, _ ->
+            renders += 1
+            CacheImage()
+        }
+        suspend fun load(
+            generation: Long = 1,
+            kind: StreamKind = StreamKind.THUMBNAIL,
+            rendition: ThumbnailRendition = ThumbnailRendition.Plain,
+        ) = cache.load(generation, "photo", kind, rendition) {
+            reads += 1
+            byteArrayOf(1)
+        }
+        val plain = load()
+        assertSame(plain, load())
+        val mosaic = load(rendition = ThumbnailRendition.Mosaic)
+        assertSame(mosaic, load(rendition = ThumbnailRendition.Mosaic))
+        load(kind = StreamKind.VIDEO_POSTER)
+        assertEquals(3, renders)
+        load(generation = 2)
+        load()
+        assertEquals(5, renders, "both renditions share the capacity")
+        assertEquals(renders, reads, "a redraw performs no read or raster on a hit")
+    }
+
+    @Test
+    fun clear_during_read_discards_the_bytes_without_decoding_or_repopulating() = runTest {
+        var renders = 0
+        val cache = ThumbnailCache(256, StandardTestDispatcher(testScheduler)) { _, _ ->
+            renders += 1
+            CacheImage()
+        }
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val bytes = byteArrayOf(1, 2, 3)
+        val old = async {
+            cache.load(1, "photo") {
+                entered.complete(Unit)
+                release.await()
+                bytes
+            }
+        }
+        entered.await()
+        cache.clear()
+        release.complete(Unit)
+        assertNull(old.await())
+        assertEquals(0, renders)
+        assertTrue(bytes.all { it == 0.toByte() })
+        cache.load(1, "photo") { byteArrayOf(4) }
+        assertEquals(1, renders)
+    }
+
+    @Test
+    fun clear_during_render_discards_the_result_before_publication() = runTest {
+        var clearDuringRender = true
+        var renders = 0
+        lateinit var cache: ThumbnailCache
+        cache = ThumbnailCache(256, StandardTestDispatcher(testScheduler)) { _, _ ->
+            renders += 1
+            if (clearDuringRender) {
+                backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { cache.clear() }
+            }
+            CacheImage()
+        }
+        assertNull(cache.load(1, "photo") { byteArrayOf(1) })
+        clearDuringRender = false
+        cache.load(1, "photo") { byteArrayOf(2) }
+        assertEquals(2, renders)
+    }
+
+    @Test
+    fun cancellation_during_read_cannot_publish_and_a_new_request_can_retry() = runTest {
+        var renders = 0
+        val cache = ThumbnailCache(256, StandardTestDispatcher(testScheduler)) { _, _ ->
+            renders += 1
+            CacheImage()
+        }
+        val entered = CompletableDeferred<Unit>()
+        val waiting = async {
+            cache.load(1, "photo") {
+                entered.complete(Unit)
+                CompletableDeferred<ByteArray>().await()
+            }
+        }
+        entered.await()
+        waiting.cancel()
+        runCurrent()
+        assertTrue(waiting.isCancelled)
+        assertEquals(0, renders)
+        cache.load(1, "photo") { byteArrayOf(1) }
+        assertEquals(1, renders)
+    }
+
+    @Test
+    fun a_failed_mosaic_returns_no_plain_image_and_does_not_cache_the_failure() = runTest {
+        val bytes = byteArrayOf(1, 2)
+        val cache = ThumbnailCache(256, StandardTestDispatcher(testScheduler)) { _, _ ->
+            error("raster failed")
+        }
+        assertNull(cache.load(1, "photo", rendition = ThumbnailRendition.Mosaic) { bytes })
+        assertTrue(bytes.all { it == 0.toByte() })
+    }
+
+    /** No platform bitmap calls: this is a token for cache identity checks. */
+    private class CacheImage : ImageBitmap {
+        override val width = 1
+        override val height = 1
+        override val colorSpace get() = ColorSpaces.Srgb
+        override val hasAlpha = false
+        override val config get() = ImageBitmapConfig.Argb8888
+        override fun prepareToDraw() = Unit
+        override fun readPixels(
+            buffer: IntArray,
+            startX: Int,
+            startY: Int,
+            width: Int,
+            height: Int,
+            bufferOffset: Int,
+            stride: Int,
+        ) = error("This test checks cache identity, not pixels")
+    }
+}

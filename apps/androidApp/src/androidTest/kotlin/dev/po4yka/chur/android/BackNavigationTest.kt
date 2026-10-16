@@ -10,6 +10,7 @@ import android.media.ExifInterface
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
+import android.os.Debug
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
@@ -27,6 +28,8 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.state.ToggleableState
+import androidx.compose.ui.semantics.Role
 import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -43,6 +46,7 @@ import dev.po4yka.chur.app.RepositorySyncBoundary
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_IMAGE
 import dev.po4yka.chur.app.vault.ThumbnailCache
+import dev.po4yka.chur.app.vault.ThumbnailRendition
 import dev.po4yka.chur.app.vault.viewerStill
 import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.core.platformkeys.DeviceSlotPolicy
@@ -72,6 +76,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -253,11 +259,23 @@ class BackNavigationTest {
             // the error region goes blank while this one runs.
             assertTrue(
                 "attempt $attempt is busy",
-                await { find(label("Opening")) != null && find(label(refusal)) == null },
+                // Accessibility snapshots can keep the previous refusal
+                // while the next attempt runs. Read both labels from the
+                // same current composition to verify the blank interval.
+                await { onScreen { nodes ->
+                    val labels = nodes.flatMap { it.labels }
+                    "Opening" in labels && refusal !in labels
+                } },
             )
             assertTrue("attempt $attempt is refused", await(60_000) { find(label(refusal)) != null })
             // `DESIGN.md` §23.2: a polite live region speaks the refusal, and
             // the field carries it as its error rather than a generic one.
+            // The message and the field have separate accessibility nodes;
+            // seeing the message does not mean the field update arrived yet.
+            assertTrue("the refusal reaches the live region and the field", await {
+                find(label(refusal))?.liveRegion == View.ACCESSIBILITY_LIVE_REGION_POLITE &&
+                    find { it.isEditable }?.error?.toString() == refusal
+            })
             assertEquals(View.ACCESSIBILITY_LIVE_REGION_POLITE, find(label(refusal))?.liveRegion)
             assertEquals(refusal, find { it.isEditable }?.error?.toString())
         }
@@ -549,6 +567,10 @@ class BackNavigationTest {
         showKeyboardFor(checkNotNull(field))
         setText(field, "jpg")
         val result = photoTile()
+        assertTrue(
+            "the search result is reachable with the keyboard open",
+            onWindow { insets, _ -> insets.isVisible(WindowInsetsCompat.Type.ime()) },
+        )
         tap { it == result }
         assertTrue("the viewer opens", await { find(label("Info")) != null })
         // `DESIGN.md` §23.3: the field under the viewer lets the focus go, so
@@ -699,7 +721,7 @@ class BackNavigationTest {
 
             tap(label("Replace recovery phrase"))
             tap(label("Replace"))
-            assertTrue("the device asks who it is", await { ownerPromptShown() })
+            awaitOwnerPromptReady()
             shell("input keyevent KEYCODE_BACK")
             assertTrue("Back cancels the prompt", await { !ownerPromptShown() })
             awaitFrames()
@@ -797,6 +819,172 @@ class BackNavigationTest {
         assertTrue("with nothing left from the vault", find(label(outcome)) == null)
         tap(label("Not now"))
         assertTrue("back in the vault", await { isOpen() })
+    }
+
+    /** Records an identical warm-cache workload; timing is evidence, not a pass threshold. */
+    @Test
+    fun thumbnailRenditionsReportFrameAndMemoryMetrics() = inTestVault {
+        val imported = mutableListOf<ByteArray>()
+        val report = JSONObject()
+            .put("device", Build.MODEL)
+            .put("api", Build.VERSION.SDK_INT)
+            .put("photos", 48)
+            .put("workload", "32 scroll-to-index and redraw steps after warming both renditions")
+        val measurements = JSONArray()
+        try {
+            repeat(48) { index ->
+                val bitmap = Bitmap.createBitmap(320, 240, Bitmap.Config.ARGB_8888)
+                // Synthetic spatial detail exercises the mosaic and avoids private input.
+                val pixels = IntArray(320 * 240) { position ->
+                    val x = position % 320
+                    val y = position / 320
+                    0xFF000000.toInt() or (((x + index * 17) % 256) shl 16) or
+                        (((y + index * 29) % 256) shl 8) or ((x xor y xor index * 7) and 255)
+                }
+                bitmap.setPixels(pixels, 0, 320, 0, 0, 320, 240)
+                try {
+                    imported += importFile("thumbnail-performance-$index.jpg") {
+                        assertTrue(bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it))
+                    }
+                } finally {
+                    bitmap.recycle()
+                    File(instrumentation.targetContext.cacheDir,
+                        "export-scratch/thumbnail-performance-$index.jpg").delete()
+                }
+            }
+            assertTrue("all synthetic photos reach the current page", await(60_000) {
+                controller.page.value.objects.count { projection ->
+                    imported.any { it.contentEquals(projection.objectId) }
+                } == 48
+            })
+            val generation = (controller.vaultState.value as VaultState.Unlocked).generation
+            val photos = controller.page.value.objects.filter { projection ->
+                imported.any { it.contentEquals(projection.objectId) }
+            }
+            runBlocking {
+                for (rendition in ThumbnailRendition.entries) {
+                    for (photo in photos) {
+                        assertNotNull("a real derivative warms each rendition", controller.thumbnailCache.load(
+                            controller.vault, generation, photo.objectId, photo.id, rendition = rendition))
+                    }
+                }
+            }
+            fun workload() {
+                val targets = listOf(0, 8, 16, 24, 32, 40, 32, 24)
+                repeat(4) {
+                    for (target in targets) {
+                        onGrids { grids ->
+                            assertTrue("the scroll action runs", grids.single().config[SemanticsActions.ScrollToIndex]
+                                .action?.invoke(target) == true)
+                        }
+                        awaitFrames()
+                    }
+                }
+            }
+            // Both modes run once before measurement to warm composition and rendering.
+            repeat(2) {
+                tap(label("Hide thumbnails"))
+                workload()
+            }
+            for (mode in listOf("Plain", "Mosaic")) {
+                tap(label("Hide thumbnails"))
+                onGrids { it.single().config[SemanticsActions.ScrollToIndex].action?.invoke(0) }
+                awaitFrames()
+                shell("dumpsys gfxinfo ${activity.packageName} reset")
+                workload()
+                val frameDurations = frameDurationsNs(shell("dumpsys gfxinfo ${activity.packageName} framestats"))
+                assertTrue("gfxinfo must report completed frames for $mode", frameDurations.isNotEmpty())
+                val sorted = frameDurations.sorted()
+                val p95 = sorted[((sorted.size * 95 + 99) / 100 - 1).coerceAtLeast(0)] / 1_000_000.0
+                measurements.put(JSONObject().put("mode", mode).put("frames", sorted.size)
+                    .put("p95FrameMs", p95).put("processPssKb", Debug.getPss()))
+            }
+            report.put("modes", measurements).put("beforeLockPssKb", Debug.getPss())
+            lockQuietly()
+            awaitFrames()
+            report.put("afterLockPssKb", Debug.getPss())
+            val metrics = report.toString()
+            File(instrumentation.targetContext.getExternalFilesDir(null), "thumbnail-performance.json")
+                .writeText(metrics)
+            instrumentation.sendStatus(0, Bundle().apply { putString("thumbnail_performance", metrics) })
+            android.util.Log.i("ThumbnailPerformance", metrics)
+        } finally {
+            // Cleanup also works after the measurement locks the test vault.
+            if (!isOpen()) {
+                instrumentation.runOnMainSync {
+                    controller.goTo(AppRoute.Unlock)
+                    controller.unlock(PASSWORD)
+                }
+                assertTrue("the test vault reopens for cleanup", await(60_000) { isOpen() })
+            }
+            if (imported.isNotEmpty()) {
+                settle { done -> controller.deleteAll(imported, done) }
+                settle { done -> controller.permanentlyDeleteAll(imported, done) }
+            }
+        }
+    }
+
+    @Test
+    fun thumbnailConcealmentFollowsTheSessionAcrossViewerViewsSearchAndSelection() = inTestVault {
+        withMedia()
+        fun concealed(): Boolean = onScreen { nodes ->
+            val switches = nodes.filter { "Hide thumbnails" in it.labels }
+            assertEquals("one accessible control includes its label and state", 1, switches.size)
+            val control = switches.single()
+            assertEquals(Role.Switch, control.config.getOrNull(SemanticsProperties.Role))
+            control.config.getOrNull(SemanticsProperties.ToggleableState) == ToggleableState.On
+        }
+        fun hiddenPhoto(): Boolean = onScreen { nodes ->
+            nodes.any { it.labels.any { label -> label.startsWith("Photo") } &&
+                it.config.getOrNull(SemanticsProperties.StateDescription)?.contains("thumbnail hidden", ignoreCase = true) == true }
+        }
+        assertTrue("each unlock starts concealed", concealed())
+        assertTrue("a photo states that its thumbnail is hidden", await { hiddenPhoto() })
+        val initialPhoto = photoTile()
+        tap { it == initialPhoto }
+        assertTrue("the ordinary viewer opens", await { find(label("Info")) != null })
+        pressBack()
+        assertTrue("return keeps concealment", await { find(label("Hide thumbnails")) != null && concealed() })
+        tap(label("Hide thumbnails"))
+        assertTrue("the control reveals thumbnails for this session", await { !concealed() })
+        tap(label("List"))
+        assertFalse("the list keeps the session choice", concealed())
+        tap(label("Search"))
+        assertTrue("Search shares the same choice", await { find(label("Hide thumbnails")) != null && !concealed() })
+        // Search refreshes the query while this tab changes. Read and invoke
+        // its current action together; a cached accessibility node can have
+        // a retired virtual ID even when its label is still returned.
+        assertTrue("the Library tab receives the action", await {
+            onScreen { nodes ->
+                nodes.firstOrNull { "Library" in it.labels && SemanticsActions.OnClick in it.config }
+                    ?.config?.getOrNull(SemanticsActions.OnClick)?.action?.invoke() == true
+            }
+        })
+        awaitFrames()
+        // The destination reloads its query. Use its current semantics on
+        // the UI thread, rather than an accessibility node detached by that reload.
+        assertTrue("the grid choice receives the action", await {
+            onScreen { nodes ->
+                nodes.firstOrNull { "Grid" in it.labels }
+                    ?.config?.getOrNull(SemanticsActions.OnClick)?.action?.invoke() == true
+            }
+        })
+        awaitFrames()
+        longPress(photoTile())
+        assertTrue("selection starts", await { find(label("1 selected")) != null })
+        tap(label("Hide thumbnails"))
+        assertTrue("concealment stays available during selection", await { concealed() && hiddenPhoto() })
+        assertNotNull("switching keeps the selection", find(label("1 selected")))
+        pressBack()
+        tap(label("Hide thumbnails"))
+        assertTrue("the old session is revealed", await { !concealed() })
+        lockQuietly()
+        instrumentation.runOnMainSync {
+            controller.goTo(AppRoute.Unlock)
+            controller.unlock(PASSWORD)
+        }
+        assertTrue("a new unlock opens", await(60_000) { isOpen() })
+        assertTrue("the new session restores concealment", await { find(label("Hide thumbnails")) != null && concealed() })
     }
 
     @Test
@@ -902,7 +1090,13 @@ class BackNavigationTest {
             assertTrue("the confirm forgets the server", await { !sync.status.value.configured })
             assertTrue(
                 "the setup form returns and says what sync does not copy",
-                await { find { it.text?.contains("Sync is not a backup.") == true } != null },
+                // The setup card is taller than the connected section. The
+                // list keeps its position, so its introduction can be above
+                // the viewport after disconnecting.
+                scrollUntil(
+                    { it.text?.contains("Sync is not a backup.") == true },
+                    direction = AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD,
+                ),
             )
             assertEquals("nothing in the vault changes", objects, controller.page.value.objects.size)
         } finally {
@@ -1002,8 +1196,10 @@ class BackNavigationTest {
             // notice rather than show both.
             tap(label("Settings"))
             assertTrue("Settings drops it", await { controller.notice.value == null && find(label(notice)) == null })
+            assertTrue("the banner is there", scrollUntil(label("Sync stopped for one device")))
+            // A small viewport need not show the heading and the action at
+            // once. Verify each as the user scrolls through the banner.
             assertTrue("the banner offers the acknowledgement", scrollUntil(label("Acknowledge")))
-            assertTrue("the banner is there", find(label("Sync stopped for one device")) != null)
 
             tap(label("Acknowledge"))
             assertTrue("the catalog records it", await { acknowledged && sync.status.value.integrityAcknowledged })
@@ -1474,10 +1670,16 @@ class BackNavigationTest {
             assertFalse("the chrome stays hidden", await(3_000) {
                 onScreen { nodes -> nodes.any { "Back" in it.labels } } || find(playerControl("exo_progress")) != null
             })
-            val hidden = find { node ->
-                node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK && it.label?.toString() == "Show controls" }
-            }
-            assertTrue(checkNotNull(hidden).performAction(AccessibilityNodeInfo.ACTION_CLICK))
+            // A swipe replaces the page's semantics. UIAutomation can still
+            // hold the previous tree; invoke the current labelled action.
+            assertTrue("the hidden player's controls can be shown", await {
+                onScreen { nodes ->
+                    nodes.firstOrNull {
+                        it.config.getOrNull(SemanticsActions.OnClick)?.label == "Show controls"
+                    }?.config?.getOrNull(SemanticsActions.OnClick)?.action?.invoke() == true
+                }
+            })
+            awaitFrames()
             assertEquals("the swipe lands on the recording", names[1], nameInInfo(names, previous = names[0]))
             pressBack()
             assertTrue("the viewer closes", await { find(label("Info")) == null })
@@ -1912,6 +2114,29 @@ class BackNavigationTest {
             .bufferedReader()
             .use { it.readText() }
 
+    /** Completed application frames only; timestamps and other process data are not retained. */
+    private fun frameDurationsNs(framestats: String): List<Long> {
+        var flags = -1
+        var intended = -1
+        var completed = -1
+        return buildList {
+            for (line in framestats.lineSequence()) {
+                val columns = line.trim().split(',')
+                if (columns.firstOrNull() == "Flags") {
+                    flags = columns.indexOf("Flags")
+                    intended = columns.indexOf("IntendedVsync")
+                    completed = columns.indexOf("FrameCompleted")
+                    continue
+                }
+                if (flags < 0 || intended < 0 || completed < 0) continue
+                if (columns.getOrNull(flags)?.toLongOrNull() != 0L) continue
+                val start = columns.getOrNull(intended)?.toLongOrNull() ?: continue
+                val end = columns.getOrNull(completed)?.toLongOrNull() ?: continue
+                if (start > 0 && end > start && end < Long.MAX_VALUE) add(end - start)
+            }
+        }
+    }
+
     /** This application's entries in the audio focus stack of `dumpsys audio`. */
     private fun focusEntries(): List<String> =
         shell("dumpsys audio").lineSequence()
@@ -2038,16 +2263,21 @@ class BackNavigationTest {
         instrumentation.uiAutomation.rootInActiveWindow?.packageName?.let { it != activity.packageName } == true
 
     /**
-     * Waits for the device authentication prompt and enters [pin] in it.
+     * Waits for the device authentication prompt to finish its entrance.
      *
      * The system draws the PIN entry as a pad of its own, which takes no typed
      * keys, so the digits are pressed through the accessibility tree. A PIN
      * entered while the dialog still animates in is verified and then never
-     * answered, so the wait lets the animation end, as a person's would.
+     * answered, so both PIN input and Back wait for the animation to end.
      */
-    private fun passOwnerCheck(pin: String) {
+    private fun awaitOwnerPromptReady() {
         assertTrue("the device asks who it is", await { ownerPromptShown() })
         SystemClock.sleep(1_000)
+    }
+
+    /** Enters [pin] through the system prompt's accessible PIN pad. */
+    private fun passOwnerCheck(pin: String) {
+        awaitOwnerPromptReady()
         pin.forEach { digit -> tap(label(digit.toString())) }
         tap(label("Enter"))
         assertTrue("the prompt closes", await { !ownerPromptShown() })
@@ -2418,10 +2648,13 @@ class BackNavigationTest {
      * skip the page that holds the node, as the Settings list's Sync section
      * was skipped, so each page gets time to reach the tree first.
      */
-    private fun scrollUntil(match: (AccessibilityNodeInfo) -> Boolean): Boolean =
+    private fun scrollUntil(
+        match: (AccessibilityNodeInfo) -> Boolean,
+        direction: Int = AccessibilityNodeInfo.ACTION_SCROLL_FORWARD,
+    ): Boolean =
         (0 until 8).any {
             await(1_500) { find(match) != null }.also { found ->
-                if (!found) find { it.isScrollable }?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+                if (!found) find { it.isScrollable }?.performAction(direction)
             }
         }
 
@@ -2445,11 +2678,15 @@ class BackNavigationTest {
 
     /** Clicks the first node [match] finds, through its nearest clickable ancestor. */
     private fun tap(match: (AccessibilityNodeInfo) -> Boolean) {
-        var node: AccessibilityNodeInfo? = null
-        assertTrue("nothing to tap", await { find(match)?.also { node = it } != null })
-        var target = node
-        while (target != null && !target.isClickable) target = target.parent
-        assertTrue("the tap must land", target?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true)
+        assertTrue("nothing to tap", await { find(match) != null })
+        // Scrolling and recomposition can replace a node between the read
+        // and the action. Retry only a refused action, with a fresh tree;
+        // a delivered click must never be sent twice.
+        assertTrue("the tap must land", await {
+            val node = find(match)
+            val target = node?.let { generateSequence(it) { parent -> parent.parent }.firstOrNull { it.isClickable } }
+            target?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+        })
         awaitFrames()
     }
 

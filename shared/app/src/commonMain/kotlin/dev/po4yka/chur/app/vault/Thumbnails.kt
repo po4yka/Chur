@@ -5,10 +5,16 @@ import dev.po4yka.chur.ffi.ChurBuffer
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.StreamKind
 import dev.po4yka.chur.vault.VaultRepository
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+
+enum class ThumbnailRendition { Plain, Mosaic }
 
 /**
  * The decoded-image cache of `docs/security/PLAINTEXT_LIFECYCLE.md` §4.
@@ -26,11 +32,30 @@ import kotlinx.coroutines.withContext
  * eviction, the key, and the lock rule are the same on both and live here,
  * where one reading of them covers both hosts.
  */
-class ThumbnailCache(private val capacity: Int = DEFAULT_CAPACITY) {
-    private data class Key(val generation: Long, val id: String, val kind: StreamKind)
+class ThumbnailCache internal constructor(
+    private val capacity: Int,
+    private val dispatcher: CoroutineDispatcher,
+    private val maxBytes: Long = DEFAULT_BYTES,
+    private val render: (ByteArray, ThumbnailRendition) -> ImageBitmap?,
+) {
+    constructor(capacity: Int = DEFAULT_CAPACITY) : this(capacity, Dispatchers.Default, DEFAULT_BYTES, ::renderThumbnail)
+
+    init {
+        require(capacity > 0) { "Thumbnail cache capacity must be positive" }
+        require(maxBytes > 0) { "Thumbnail cache byte budget must be positive" }
+    }
+
+    private data class Key(
+        val generation: Long,
+        val id: String,
+        val kind: StreamKind,
+        val rendition: ThumbnailRendition,
+    )
 
     private val mutex = Mutex()
     private val entries = LinkedHashMap<Key, ImageBitmap>()
+    private var epoch = 0L
+    private var decodedBytes = 0L
 
     /**
      * The decoded derivative, loading it when the cache does not hold it.
@@ -45,23 +70,58 @@ class ThumbnailCache(private val capacity: Int = DEFAULT_CAPACITY) {
         objectId: ByteArray,
         id: String,
         kind: StreamKind = StreamKind.THUMBNAIL,
+        rendition: ThumbnailRendition = ThumbnailRendition.Plain,
+    ): ImageBitmap? = load(generation, id, kind, rendition) { repository.readDerived(objectId, kind) }
+
+    /** Internal source seam also permits deterministic checks of lock races. */
+    internal suspend fun load(
+        generation: Long,
+        id: String,
+        kind: StreamKind = StreamKind.THUMBNAIL,
+        rendition: ThumbnailRendition = ThumbnailRendition.Plain,
+        read: suspend () -> ByteArray,
     ): ImageBitmap? {
-        val key = Key(generation, id, kind)
-        mutex.withLock { entries[key] }?.let { return it }
-        val bytes = try {
-            withContext(Dispatchers.Default) { repository.readDerived(objectId, kind) }
-        } catch (_: ChurFailure) {
-            return null
+        currentCoroutineContext().ensureActive()
+        val key = Key(generation, id, kind, rendition)
+        val startedAt = mutex.withLock {
+            entries[key]?.let { return it }
+            epoch
         }
-        val image = withContext(Dispatchers.Default) { decodeThumbnail(bytes) } ?: return null
-        mutex.withLock {
-            entries[key] = image
-            while (entries.size > capacity) {
-                val oldest = entries.keys.firstOrNull() ?: break
-                entries.remove(oldest)
+        val image = try {
+            withContext(dispatcher) {
+                val bytes = read()
+                try {
+                    // A lock during the read needs no decode or raster allocation.
+                    if (mutex.withLock { epoch != startedAt }) return@withContext null
+                    currentCoroutineContext().ensureActive()
+                    render(bytes, rendition)
+                } finally {
+                    // Clear on this dispatcher, including cancellation at its return boundary.
+                    bytes.fill(0)
+                }
             }
+        } catch (_: ChurFailure) {
+            null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // A failed mosaic must never reveal the plain derivative.
+            null
+        } ?: return null
+        return mutex.withLock {
+            currentCoroutineContext().ensureActive()
+            if (epoch != startedAt) return null
+            val cost = decodedSize(image)
+            if (cost > maxBytes) return image
+            entries.remove(key)?.let { decodedBytes -= decodedSize(it) }
+            entries[key] = image
+            decodedBytes += cost
+            while (entries.size > capacity || decodedBytes > maxBytes) {
+                val oldest = entries.keys.firstOrNull() ?: break
+                entries.remove(oldest)?.let { decodedBytes -= decodedSize(it) }
+            }
+            image
         }
-        return image
     }
 
     /**
@@ -72,7 +132,11 @@ class ThumbnailCache(private val capacity: Int = DEFAULT_CAPACITY) {
      * still locked, which is the case §8 is about.
      */
     suspend fun clear() {
-        mutex.withLock { entries.clear() }
+        mutex.withLock {
+            epoch += 1
+            entries.clear()
+            decodedBytes = 0
+        }
     }
 
     private companion object {
@@ -84,6 +148,18 @@ class ThumbnailCache(private val capacity: Int = DEFAULT_CAPACITY) {
          * scrollback without holding a library.
          */
         const val DEFAULT_CAPACITY = 256
+        const val DEFAULT_BYTES = 32L * 1024 * 1024
+    }
+}
+
+private fun decodedSize(image: ImageBitmap): Long = image.width.toLong() * image.height *
+    if (image.config == androidx.compose.ui.graphics.ImageBitmapConfig.F16) 8 else 4
+
+private fun renderThumbnail(bytes: ByteArray, rendition: ThumbnailRendition): ImageBitmap? {
+    val decoded = decodeThumbnail(bytes) ?: return null
+    return when (rendition) {
+        ThumbnailRendition.Plain -> decoded
+        ThumbnailRendition.Mosaic -> thumbnailMosaic(decoded)
     }
 }
 

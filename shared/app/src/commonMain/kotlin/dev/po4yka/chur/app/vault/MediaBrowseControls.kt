@@ -1,9 +1,12 @@
 package dev.po4yka.chur.app.vault
 
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -14,12 +17,15 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.LocalChurColors
@@ -151,6 +157,32 @@ fun MediaSortFilterControls(
                     ),
                 )
             }
+        }
+    }
+}
+
+/** The state and label form one switch node, including during selection. */
+@Composable
+fun MediaPresentationControls(
+    view: ContentView,
+    onViewChange: (ContentView) -> Unit,
+    concealed: Boolean,
+    onConcealedChange: (Boolean) -> Unit,
+) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = ChurSpacing.gutter),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        ContentViewToggle(view, onViewChange, modifier = Modifier)
+        Row(
+            modifier = Modifier.heightIn(min = 48.dp)
+                .toggleable(value = concealed, role = Role.Switch, onValueChange = onConcealedChange)
+                .padding(horizontal = ChurSpacing.one),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(ChurSpacing.one),
+        ) {
+            Text("Hide thumbnails", style = androidx.compose.material3.MaterialTheme.typography.labelLarge)
+            Switch(checked = concealed, onCheckedChange = null)
         }
     }
 }

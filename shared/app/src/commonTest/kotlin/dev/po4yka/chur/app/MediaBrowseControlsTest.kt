@@ -1,6 +1,9 @@
 package dev.po4yka.chur.app
 
 import dev.po4yka.chur.app.vault.MediaKindFilter
+import dev.po4yka.chur.app.vault.ThumbnailRendition
+import dev.po4yka.chur.app.vault.VaultUiState
+import dev.po4yka.chur.app.vault.thumbnailRendition
 import dev.po4yka.chur.app.vault.VaultDestination
 import dev.po4yka.chur.app.vault.browseQuery
 import dev.po4yka.chur.app.vault.sortChoices
@@ -16,6 +19,19 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class MediaBrowseControlsTest {
+    @Test
+    fun an_unlocked_session_hides_only_photos_and_video_posters_by_default() {
+        val state = VaultUiState()
+        assertTrue(state.thumbnailsConcealed)
+        listOf(1, 2).forEach { mediaKind ->
+            assertEquals(ThumbnailRendition.Mosaic, thumbnailRendition(mediaKind, state.thumbnailsConcealed))
+            assertEquals(ThumbnailRendition.Plain, thumbnailRendition(mediaKind, concealed = false))
+        }
+        listOf(3, 4).forEach { mediaKind ->
+            assertEquals(ThumbnailRendition.Plain, thumbnailRendition(mediaKind, state.thumbnailsConcealed))
+        }
+    }
+
     @Test
     fun kind_chips_form_a_catalog_bitmask_and_all_resets_it() {
         val photos = toggleKindFilter(0, MediaKindFilter.PHOTOS)

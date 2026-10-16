@@ -825,6 +825,11 @@ Examples:
 ### 11.1 Grid behavior
 
 - media tiles are edge-efficient and visually quiet;
+- photo and video thumbnails start concealed by a mosaic in each unlocked session; the same `Hide thumbnails` switch controls the grid and list in every library and search scope;
+- the concealment switch remains available during selection; its label and checked state form one accessible control;
+- opening an item shows the normal viewer; returning keeps the current concealment choice, and the next unlock restores concealment;
+- while a concealed thumbnail loads or fails, show a neutral placeholder; never show the plain thumbnail between rendition changes;
+- the mosaic is a visual aid, not a security boundary: colour and shape can remain recognizable; session gates and privacy covers still use opaque neutral surfaces;
 - grid gaps use 2–4dp depending on density;
 - selection uses a 2dp outline plus checkmark;
 - duration, Live/RAW/spatial indicators use compact overlays only when necessary;

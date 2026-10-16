@@ -46,6 +46,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
@@ -53,6 +54,7 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -85,6 +87,8 @@ data class LibraryTile(
     val thumbnail: ImageBitmap?,
     /** Whether the tile is selected, §11.4. */
     val selected: Boolean = false,
+    /** This bitmap is a mosaic, or is still loading in concealed mode. */
+    val thumbnailConcealed: Boolean = false,
 )
 
 /**
@@ -185,9 +189,10 @@ enum class ContentView { GRID, LIST }
 
 /** Visible, accessible mode selector; both colour and a checkmark mark the active mode. */
 @Composable
-fun ContentViewToggle(view: ContentView, onChange: (ContentView) -> Unit) {
+fun ContentViewToggle(view: ContentView, onChange: (ContentView) -> Unit,
+    modifier: Modifier = Modifier.fillMaxWidth().padding(horizontal = ChurSpacing.gutter)) {
     val colors = LocalChurColors.current
-    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = ChurSpacing.gutter)) {
+    Row(modifier = modifier) {
         ContentView.entries.forEach { choice ->
             val active = view == choice
             TextButton(onClick = { onChange(choice) }, modifier = Modifier.semantics { selected = active },
@@ -223,6 +228,7 @@ fun MediaBrowser(
     albumTargets: List<AlbumSummary> = emptyList(),
     onDropIntoAlbum: ((List<ObjectProjection>, AlbumSummary?) -> Unit)? = null,
     onLoadMore: (() -> Unit)? = null,
+    onVisibleMediaChanged: (Set<String>) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalChurColors.current
@@ -245,6 +251,13 @@ fun MediaBrowser(
     val currentDropIntoAlbum by rememberUpdatedState(onDropIntoAlbum)
     val currentHasMore by rememberUpdatedState(onLoadMore != null)
     val currentView by rememberUpdatedState(view)
+    val visibleMediaChanged by rememberUpdatedState(onVisibleMediaChanged)
+    LaunchedEffect(view, gridState, listState) {
+        androidx.compose.runtime.snapshotFlow {
+            if (view == ContentView.GRID) gridState.layoutInfo.visibleItemsInfo.mapNotNull { it.key as? String }.toSet()
+            else listState.layoutInfo.visibleItemsInfo.mapNotNull { it.key as? String }.toSet()
+        }.collect { visibleMediaChanged(it) }
+    }
     val currentToggle by rememberUpdatedState(onToggleSelection)
     val haptics = LocalHapticFeedback.current
     val selecting = tiles.any { it.selected }
@@ -467,7 +480,8 @@ private fun MediaRow(tile: LibraryTile, selecting: Boolean, onOpen: () -> Unit, 
             .background(colors.surface), contentAlignment = Alignment.Center) {
             tile.thumbnail?.let {
                 androidx.compose.foundation.Image(bitmap = it, contentDescription = null,
-                    contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
+                    filterQuality = if (tile.thumbnailConcealed) FilterQuality.None else FilterQuality.Low)
             } ?: Icon(IntegrityGlyph, contentDescription = null, tint = colors.inkMuted)
         }
         // The label above says all of this in words, §23.2.
@@ -583,6 +597,7 @@ private fun MediaTile(
                 bitmap = bitmap,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
+                filterQuality = if (tile.thumbnailConcealed) FilterQuality.None else FilterQuality.Low,
                 modifier = Modifier.fillMaxSize(),
             )
         } else {
@@ -632,6 +647,8 @@ private fun MediaTile(
 private fun selectionSemantics(tile: LibraryTile, label: String, onToggleSelection: () -> Unit): Modifier =
     Modifier.semantics {
         contentDescription = label
+        if (tile.thumbnailConcealed) stateDescription =
+            if (tile.selected) "Selected, thumbnail hidden" else "Thumbnail hidden"
         selected = tile.selected
         onLongClick(label = if (tile.selected) "Deselect" else "Select") { onToggleSelection(); true }
     }
