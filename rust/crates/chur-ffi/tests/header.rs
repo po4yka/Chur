@@ -358,6 +358,11 @@ fn every_declared_function_is_exported() {
         "chur_album_set_membership",
         "chur_album_place_objects",
         "chur_album_list",
+        "chur_private_notes_query",
+        "chur_private_note_get",
+        "chur_private_note_save",
+        "chur_private_note_change",
+        "chur_private_note_export_begin",
         "chur_tag_create",
         "chur_tag_list",
         "chur_object_set_tag",
@@ -413,7 +418,7 @@ fn every_declared_function_is_exported() {
 
     // Calling each one proves the list above is not a stale copy.
     assert_eq!(chur_ffi::chur_abi_version_major(), 2);
-    assert_eq!(chur_ffi::chur_abi_version_minor(), 20);
+    assert_eq!(chur_ffi::chur_abi_version_minor(), 21);
     assert_eq!(
         chur_ffi::chur_capabilities(),
         chur_ffi::CHUR_CAP_DECOY_VAULT

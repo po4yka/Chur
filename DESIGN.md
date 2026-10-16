@@ -797,6 +797,8 @@ Search
 Settings
 ```
 
+Private notes are a contextual flow opened from Library → Browse → Private notes. Their list, search, and explicit-save editor are separate from the public Notes shell. See [`docs/product/PRIVATE_NOTES.md`](docs/product/PRIVATE_NOTES.md).
+
 Viewer, selection, import, export, recovery, and integrity are contextual flows. Import is not a destination: it is the primary floating action on Library and a contextual action inside an open album. These four destinations and this import placement are the decided compact set; a fifth destination is a change to this section, not a product option.
 
 ### 10.2 Public shell navigation

@@ -1,0 +1,219 @@
+package dev.po4yka.chur.android
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.os.SystemClock
+import android.os.Looper
+import android.view.ContextThemeWrapper
+import android.view.KeyEvent
+import android.view.View
+import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
+import android.widget.FrameLayout
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.saveable.LocalSaveableStateRegistry
+import androidx.compose.runtime.saveable.SaveableStateRegistry
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.ViewRootForTest
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getAllSemanticsNodes
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.unit.Density
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import dev.po4yka.chur.app.AppRoute
+import dev.po4yka.chur.app.ChurApp
+import dev.po4yka.chur.app.notes.NotesScreen
+import dev.po4yka.chur.app.vault.PrivateNotesRoute
+import dev.po4yka.chur.ffi.LockReason
+import dev.po4yka.chur.notes.FileNoteStore
+import dev.po4yka.chur.notes.Note
+import dev.po4yka.chur.vault.VaultRepository
+import dev.po4yka.chur.vault.VaultState
+import java.io.File
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+
+/** Actual private screen and JNI with public synthetic fixtures, never user notes. */
+@RunWith(AndroidJUnit4::class)
+class PrivateNotesAndroidTest {
+    private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
+
+    @Test
+    fun explicit_save_routes_to_native_notes_without_changing_public_notes_or_saved_state() = present { fixture ->
+        fixture.create("Public synthetic title", "Public synthetic body for native notes")
+        assertTrue(fixture.await { fixture.hasText("Unsaved changes are cleared") })
+        assertTrue(fixture.savedState().isEmpty())
+        fixture.clickTag("private-note-save")
+        assertTrue(fixture.await { fixture.hasText("Saved in this vault.") })
+        val notes = runBlocking { fixture.vault.privateNotes(fixture.generation).notes }
+        assertEquals(1, notes.size)
+        assertEquals("Public synthetic title", notes.single().title)
+        assertEquals("Public synthetic body for native notes", runBlocking {
+            fixture.vault.privateNote(fixture.generation, notes.single().noteId).body
+        })
+        fixture.clickDescription("Back")
+        assertTrue(fixture.await { fixture.hasText("Public synthetic title") })
+        assertEquals(listOf(PUBLIC_NOTE), runBlocking { fixture.publicStore.all() })
+        assertFalse(fixture.publicFile.readText().contains("Public synthetic title"))
+        assertTrue(fixture.savedState().isEmpty())
+        fixture.capture("private-notes-list-public-fixture.png")
+    }
+
+    @Test
+    fun accessibility_and_hardware_cut_do_not_copy_or_delete_private_draft_and_explicit_paste_works() = present { fixture ->
+        fixture.create("Public clipboard fixture", "Synthetic editable fixture")
+        val clipboard = fixture.activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        fixture.main { clipboard.setPrimaryClip(ClipData.newPlainText("public fixture", "PUBLIC_PASTE_FIXTURE")) }
+        fixture.fieldAction("private-note-body") { node ->
+            assertTrue(node.config.getOrNull(SemanticsActions.RequestFocus)?.action?.invoke() == true)
+            assertTrue(node.config.getOrNull(SemanticsActions.SetSelection)?.action?.invoke(0, 26, false) == true)
+        }
+        fixture.fieldAction("private-note-body") { node ->
+            assertFalse(node.config.getOrNull(SemanticsActions.CopyText)?.action?.invoke() ?: false)
+            assertFalse(node.config.getOrNull(SemanticsActions.CutText)?.action?.invoke() ?: false)
+        }
+        assertTrue(fixture.await { fixture.fieldText("private-note-body") == "Synthetic editable fixture" })
+        fixture.hardwareCut()
+        assertEquals("Synthetic editable fixture", fixture.fieldText("private-note-body"))
+        fixture.main { assertEquals("PUBLIC_PASTE_FIXTURE", clipboard.primaryClip?.getItemAt(0)?.text.toString()) }
+        fixture.fieldAction("private-note-body") { node ->
+            assertTrue(node.config.getOrNull(SemanticsActions.PasteText)?.action?.invoke() == true)
+        }
+        assertTrue(fixture.await { fixture.fieldText("private-note-body").contains("PUBLIC_PASTE_FIXTURE") })
+        fixture.assertNoLearningInput()
+    }
+
+    @Test
+    fun locking_drops_unsaved_draft_and_reunlock_opens_the_list_without_restoring_text() = present { fixture ->
+        fixture.create("Unsaved synthetic fixture", "UNSAVED_NOTE_FIXTURE_7e05c3")
+        assertTrue(fixture.savedState().isEmpty())
+        runBlocking { fixture.vault.lock(LockReason.PANIC) }
+        assertTrue(fixture.await { fixture.hasText("Public fixture note") })
+        assertFalse(fixture.nodes().any { "UNSAVED_NOTE_FIXTURE_7e05c3" in it.config.toString() })
+        runBlocking { fixture.vault.unlock(PASSWORD.encodeToByteArray()) }
+        assertTrue(fixture.await { fixture.hasText("No private notes yet") })
+        assertFalse(fixture.nodes().any { "UNSAVED_NOTE_FIXTURE_7e05c3" in it.config.toString() })
+        assertTrue(runBlocking { fixture.vault.privateNotes(fixture.generation).notes.isEmpty() })
+    }
+
+    private fun present(fontScale: Float = 1f, test: (Fixture) -> Unit) {
+        val root = File(instrumentation.targetContext.cacheDir, "private-notes-ui-${System.nanoTime()}").apply { mkdirs() }
+        val vault = VaultRepository(File(root, "vault").path, { System.currentTimeMillis() })
+        val publicFile = File(root, "public/notes.json")
+        val publicStore = FileNoteStore(publicFile.path)
+        runBlocking { publicStore.put(PUBLIC_NOTE); vault.start(); vault.create(PASSWORD.encodeToByteArray(), false) }
+        val activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        val fixture = Fixture(activity, vault, publicFile, publicStore)
+        try {
+            fixture.main {
+                val density = activity.resources.displayMetrics.density
+                val config = Configuration(activity.resources.configuration).apply { screenWidthDp = 320; screenHeightDp = 640; this.fontScale = fontScale }
+                val context = ContextThemeWrapper(activity, activity.theme).apply { applyOverrideConfiguration(config) }
+                fixture.view = ComposeView(context).apply {
+                    setContent {
+                        CompositionLocalProvider(LocalDensity provides Density(density, fontScale), LocalConfiguration provides config,
+                            LocalSaveableStateRegistry provides fixture.registry) {
+                            val state by vault.state.collectAsState()
+                            ChurApp(runGate(activity), if (state is VaultState.Unlocked) AppRoute.Vault else AppRoute.PublicShell) {
+                                if (state is VaultState.Unlocked) PrivateNotesRoute(vault, (state as VaultState.Unlocked).generation,
+                                    onClose = {}, onLock = { fixture.scope.launch { vault.lock(LockReason.USER) } },
+                                    onPanic = { fixture.scope.launch { vault.lock(LockReason.PANIC) } }, onTouch = {}, onExport = {}, systemBack = { _, _ -> })
+                                else NotesScreen(listOf(PUBLIC_NOTE), "", {}, {}, {}, {})
+                            }
+                        }
+                    }
+                }
+                activity.addContentView(fixture.view, FrameLayout.LayoutParams((320 * density).toInt(), (640 * density).toInt()))
+            }
+            test(fixture)
+        } finally {
+            fixture.main { (fixture.view.parent as? ViewGroup)?.removeView(fixture.view); fixture.view.disposeComposition(); activity.finish() }
+            fixture.scope.cancel()
+            runBlocking { vault.shutdown() }
+            root.deleteRecursively()
+        }
+    }
+
+    private inner class Fixture(val activity: MainActivity, val vault: VaultRepository, val publicFile: File, val publicStore: FileNoteStore) {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        val registry = SaveableStateRegistry(null) { true }
+        val generation get() = (vault.state.value as VaultState.Unlocked).generation
+        lateinit var view: ComposeView
+        fun main(action: () -> Unit) { if (Looper.myLooper() == Looper.getMainLooper()) action() else instrumentation.runOnMainSync(action) }
+        fun savedState(): Map<String, List<Any?>> { var saved = emptyMap<String, List<Any?>>() ; main { saved = registry.performSave() }; return saved }
+        fun await(condition: () -> Boolean): Boolean { val until = SystemClock.uptimeMillis() + 5_000; while (SystemClock.uptimeMillis() < until) { if (condition()) return true; SystemClock.sleep(50) }; return condition() }
+        fun nodes(merged: Boolean = false): List<SemanticsNode> { var result = emptyList<SemanticsNode>(); main { result = roots(view).flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = merged) } }; return result }
+        fun hasText(text: String) = nodes().any { it.config.getOrNull(SemanticsProperties.Text)?.any { label -> text in label.text } == true }
+        fun clickDescription(text: String) {
+            fun clickable() = nodes(merged = true).firstOrNull {
+                it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(text) == true &&
+                    SemanticsActions.OnClick in it.config && SemanticsProperties.Disabled !in it.config
+            }
+            assertTrue("enabled button with description: $text", await { clickable() != null })
+            main { assertTrue(requireNotNull(clickable()).config[SemanticsActions.OnClick].action?.invoke() == true) }
+        }
+        fun clickTag(tag: String) {
+            assertTrue(await { nodes().any { it.config.getOrNull(SemanticsProperties.TestTag) == tag && SemanticsProperties.Disabled !in it.config } })
+            fieldAction(tag) { assertTrue(it.config.getOrNull(SemanticsActions.OnClick)?.action?.invoke() == true) }
+        }
+        fun fieldAction(tag: String, action: (SemanticsNode) -> Unit) { assertTrue(await { nodes().any { it.config.getOrNull(SemanticsProperties.TestTag) == tag } }); main { action(nodes().first { it.config.getOrNull(SemanticsProperties.TestTag) == tag }) } }
+        fun fieldText(tag: String) = nodes().first { it.config.getOrNull(SemanticsProperties.TestTag) == tag }.config.getOrNull(SemanticsProperties.EditableText)?.text.orEmpty()
+        fun create(title: String, body: String) {
+            clickDescription("New private note")
+            fieldAction("private-note-title") { assertTrue(it.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(androidx.compose.ui.text.AnnotatedString(title)) == true) }
+            fieldAction("private-note-body") { assertTrue(it.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(androidx.compose.ui.text.AnnotatedString(body)) == true) }
+        }
+        fun hardwareCut() {
+            instrumentation.sendKeySync(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_CTRL_LEFT))
+            instrumentation.sendKeySync(KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_X, 0, KeyEvent.META_CTRL_ON))
+            instrumentation.sendKeySync(KeyEvent(0, 0, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_X, 0, KeyEvent.META_CTRL_ON))
+            instrumentation.sendKeySync(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_CTRL_LEFT))
+            instrumentation.waitForIdleSync()
+        }
+        fun assertNoLearningInput() {
+            main {
+                val info = EditorInfo()
+                val connection = flatten(view).asSequence().mapNotNull { it.onCreateInputConnection(info) }.firstOrNull()
+                assertNotNull("a focused private field must own a native input connection", connection)
+                assertTrue(info.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING != 0)
+            }
+        }
+        fun capture(name: String) {
+            instrumentation.waitForIdleSync()
+            val screen = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
+            val position = IntArray(2); main { view.getLocationOnScreen(position) }
+            val crop = Bitmap.createBitmap(screen, position[0], position[1], view.width.coerceAtMost(screen.width - position[0]), view.height.coerceAtMost(screen.height - position[1]))
+            val output = File(activity.getExternalFilesDir(null), name)
+            output.outputStream().use { crop.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            crop.recycle(); screen.recycle()
+        }
+    }
+    private fun roots(view: View): List<ViewRootForTest> = flatten(view).filterIsInstance<ViewRootForTest>()
+    private fun flatten(view: View): List<View> = listOf(view) + if (view is ViewGroup) (0 until view.childCount).flatMap { flatten(view.getChildAt(it)) } else emptyList()
+    private companion object {
+        const val PASSWORD = "Private-notes-android-fixture-password"
+        val PUBLIC_NOTE = Note("public-fixture", "Public fixture note", "Public JSON stays independent", 1L)
+    }
+}

@@ -1556,6 +1556,54 @@ class ChurController(
     fun export(objectId: ByteArray, target: ExportTarget = ExportTarget.DEFAULT, uri: String? = null) =
         guarded { tracked("export") { token -> exportOne(objectId, token, target, uri) } }
 
+    /** Records real editor activity without keeping an idle session alive by polling. */
+    fun recordPrivateNoteActivity(generation: Long) {
+        scope.launch(Dispatchers.Default) {
+            try { repository.privateNoteActivity(generation) } catch (_: ChurFailure) {
+                // A late input event from a removed private route is discarded.
+            }
+        }
+    }
+
+    /** Exports the selected saved revision after the host's plaintext warning. */
+    fun exportPrivateNote(request: PrivateNoteExportRequest, target: ExportTarget, uri: String? = null) = guarded {
+        // Own an already-created SAF document even if another operation won
+        // the race while the picker was open. A refusal still removes it.
+        var destination = if (target == ExportTarget.FILES && uri != null) {
+            exports.create("", "", target, uri)
+                ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the export destination")
+        } else null
+        var published = false
+        try {
+            tracked("export") { token ->
+                fun checkSession() {
+                    if ((repository.state.value as? VaultState.Unlocked)?.generation != request.generation) {
+                        throw ChurFailure(ChurStatus.SESSION_EXPIRED, "the private note export")
+                    }
+                    if (cancellationRequested(token)) throw ChurFailure(ChurStatus.CANCELLED, "the private note export")
+                }
+                checkSession()
+                val output = destination ?: exports.create(
+                    request.filename, "text/plain", target, uri, request.exportSize,
+                ) ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the export destination")
+                destination = output
+                checkSession()
+                val nativeOperation = withContext(Dispatchers.Default) {
+                    repository.beginPrivateNoteExport(request.generation, request.noteId, request.revision, output.descriptor)
+                }
+                val terminal = try { drain(nativeOperation, token) } finally { closeOperation(nativeOperation) }
+                if (terminal != 0) throw ChurFailure(ChurStatus.fromValue(terminal), "the private note export")
+                checkSession()
+                if (!output.publishChecked()) throw ChurFailure(ChurStatus.IO_FAILURE, "the export destination")
+                checkSession()
+                published = true
+                say("Note exported. The destination may keep an unencrypted copy.")
+            }
+        } finally {
+            try { if (!published) destination?.discard() } finally { destination?.close() }
+        }
+    }
+
     private suspend fun exportOne(objectId: ByteArray, token: Long, target: ExportTarget, uri: String?) {
         // A SAF document exists as soon as the picker returns. Own it before
         // reading catalog metadata so even an invalidated object deletes it.

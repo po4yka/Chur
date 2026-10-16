@@ -56,6 +56,7 @@ import dev.po4yka.chur.app.vault.VaultDestination
 import dev.po4yka.chur.app.vault.ContentView
 import dev.po4yka.chur.app.vault.AlbumOrder
 import dev.po4yka.chur.app.vault.browseQuery
+import dev.po4yka.chur.app.vault.PrivateNotesRoute
 import dev.po4yka.chur.app.vault.VaultShell
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
 import dev.po4yka.chur.app.vault.viewerPages
@@ -234,6 +235,8 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     val sharingOverview by controller.sharingOverview.collectAsState()
     val sharingRecipient by controller.sharingRecipient.collectAsState()
     val generation = (vaultState as? VaultState.Unlocked)?.generation ?: 0L
+    var showingPrivateNotes by remember(generation) { mutableStateOf(false) }
+    var choosingPrivateNoteExport by remember(generation) { mutableStateOf<PrivateNoteExportRequest?>(null) }
     var thumbnailsConcealed by remember(generation) { mutableStateOf(true) }
     var destination by remember { mutableStateOf(VaultDestination.LIBRARY) }
     var mediaView by remember { mutableStateOf(ContentView.GRID) }
@@ -585,6 +588,27 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         )
     }
 
+    if (showingPrivateNotes) {
+        PrivateNotesRoute(
+            vault = controller.vault, generation = generation,
+            onClose = { focusManager.clearFocus(); showingPrivateNotes = false },
+            onLock = { controller.lock() }, onPanic = controller::panic,
+            onTouch = { controller.recordPrivateNoteActivity(generation) },
+            onExport = { choosingPrivateNoteExport = PrivateNoteExportRequest.from(it, generation) },
+            systemBack = { _, _ -> }, operation = operation,
+            onCancelOperation = controller::cancelActiveOperation,
+            notice = notice, onNoticeShown = controller::consume,
+        )
+        choosingPrivateNoteExport?.let { request ->
+            ExportOptionsDialog(media = false, files = true, share = true,
+                onChoose = { target ->
+                    choosingPrivateNoteExport = null
+                    controller.exportPrivateNote(request, target)
+                }, onDismiss = { choosingPrivateNoteExport = null })
+        }
+        return
+    }
+
     // The viewer below is drawn over the shell, so the shell stays composed
     // and keeps its scroll position. Covered, it is out of a screen reader's
     // reach, §4 of `PLAINTEXT_LIFECYCLE.md`, and out of keyboard focus, §23.3
@@ -669,6 +693,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 onToggleSelection = { projection ->
                     selection = selection.toggle(projection.id)
                 },
+                onOpenPrivateNotes = { focusManager.clearFocus(); selection = emptySet(); showingPrivateNotes = true },
                 onImport = { choosingImportSource = true },
                 onSearch = {
                     terms = it

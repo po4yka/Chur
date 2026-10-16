@@ -21,6 +21,7 @@ pub mod db;
 pub mod deletion;
 pub mod journal;
 pub mod model;
+pub mod notes;
 pub mod object_grants;
 pub mod paths;
 pub mod query;

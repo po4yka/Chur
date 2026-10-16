@@ -1577,6 +1577,7 @@ pub(crate) fn run_deletion(session: &mut Session, object_id: &Id, now_ms: u64) -
 /// Rolls forward interrupted permanent deletions, then purges expired trash.
 pub(crate) fn sweep_expired_trash(session: &mut Session, now_ms: u64) -> Result<()> {
     finish_pending_deletions(session, now_ms)?;
+    chur_catalog::notes::purge_expired(session.catalog()?, now_ms)?;
     let ids = trash::pending(session.catalog_ref()?, Some(now_ms))?;
     for id in ids {
         run_deletion(session, &id, now_ms)?;

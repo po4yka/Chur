@@ -15,6 +15,7 @@ Potential plaintext locations:
 | JNI/direct buffers | Yes | bounded call; explicit ownership |
 | Kotlin `ByteArray` | Bounded | control data, authenticated document prefixes, and Android PDF ranges only; clear best-effort |
 | decoded document text | Yes | at most a 1 MiB UTF-8 prefix; current viewer/session only; drop references on disposal or lock |
+| private note text | Yes | bounded open editor and list previews; explicit save to SQLCipher only; drop UI references on lock/disposal |
 | Swift `Data` | Avoid | small bounded interop only |
 | decoded image surfaces | Yes | session-scoped cache; clear on lock |
 | Media3/AVFoundation buffers | Yes | player lifetime; invalidate on lock |
@@ -72,6 +73,14 @@ Requirements:
 Document previews add no plaintext scratch file. Text preview decodes at most a 1 MiB authenticated UTF-8 prefix. It shows truncation and rejects malformed text. Clear the byte array after decoding and drop UI text references on disposal or lock. Managed strings, platform text layout, and graphics surfaces cannot provide a secure-erasure guarantee. Do not enable text selection, clipboard, active HTML, scripts, external links, or an external viewer by default.
 
 PDF preview is optional and limited to 32 MiB of encoded data and one raster page at a time, with at most 2048 pixels per edge and 4 million pixels. Android uses a read-only proxy descriptor over authenticated ranges. iOS holds an authenticated native buffer for the Core Graphics document lifetime. Release the reader, PDF parser, bytes, and raster on disposal or lock. Native platform PDF parsers run in the app process; a malformed file can still expose platform parser defects. An unavailable, protected, malformed, or oversized preview falls back to metadata and explicit export. Preview limits never limit original storage or streaming export.
+
+### 4.1 Private note editing
+
+A private note title has at most 256 UTF-8 bytes and its body at most 256 KiB. List pages contain at most 100 bounded previews. Private editing uses a separate controller, no public NoteStore, and a null saveable-state registry. It executes no markup. Save is explicit; errors retain session edits for retry. Lock and disposal drop text, identifiers, previews, and search state without a final save. Only real input refreshes the idle timer.
+
+Modern and legacy clipboard write guards, context-action filtering, hardware shortcuts, and accessibility action guards prevent Copy/Cut. Cut must not delete editor text. Paste is an explicit user action and uses the existing clipboard without clearing it. Keyboard settings request no personalized learning on Android and disable autocorrection; they do not establish a trusted input method. Managed text and platform layout/input copies have no secure-erasure guarantee.
+
+Private-note UTF-8 request/output arrays are bounded and cleared after interop. Rust clears owned note text and the export buffer on drop. Export requires the normal plaintext warning, snapshots a saved revision, and releases catalog access before writing the owned destination. The existing scratch and cancellation rules apply. See [`../product/PRIVATE_NOTES.md`](../product/PRIVATE_NOTES.md).
 
 ## 5. Scratch files
 

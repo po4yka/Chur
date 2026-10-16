@@ -75,6 +75,7 @@ Document status describes a whole document. Individual statements inside a docum
 
 - [`product/DISCREET_MODE.md`](product/DISCREET_MODE.md) — public shell, launcher, notifications, recents, external surfaces, and product claims.
 - [`product/ALBUM_EXPORT.md`](product/ALBUM_EXPORT.md) — album trees, native folder selection, verified batch export, publication, and partial results.
+- [`product/PRIVATE_NOTES.md`](product/PRIVATE_NOTES.md) — local encrypted notes, explicit saving, private input, Trash, export, and backup.
 
 ## Security
 
@@ -101,6 +102,7 @@ Document status describes a whole document. Individual statements inside a docum
 - [`format/CATALOG_SCHEMA_V3.md`](format/CATALOG_SCHEMA_V3.md)
 - [`format/CATALOG_SCHEMA_V4.md`](format/CATALOG_SCHEMA_V4.md)
 - [`format/CATALOG_SCHEMA_V5.md`](format/CATALOG_SCHEMA_V5.md)
+- [`format/CATALOG_SCHEMA_V9.md`](format/CATALOG_SCHEMA_V9.md) — local private notes.
 - [`format/BACKUP_FORMAT_V1.md`](format/BACKUP_FORMAT_V1.md)
 - [`format/TEST_VECTORS.md`](format/TEST_VECTORS.md)
 

@@ -206,6 +206,8 @@ data class VaultActions(
     val onCreateAlbum: () -> Unit,
     val onShowAllMedia: () -> Unit = {},
     val onShowFavorites: () -> Unit = {},
+    /** Open local encrypted notes in the currently unlocked identity. */
+    val onOpenPrivateNotes: (() -> Unit)? = null,
     val onShowTags: () -> Unit = {},
     val onShowTrash: () -> Unit = {},
     val onShowQuarantine: () -> Unit = {},
@@ -384,6 +386,11 @@ fun VaultShell(
                                     DropdownMenuItem(text = { Text("All media") }, onClick = {
                                         scopesExpanded = false; actions.onShowAllMedia()
                                     })
+                                    actions.onOpenPrivateNotes?.let { openNotes ->
+                                        DropdownMenuItem(text = { Text("Private notes") }, onClick = {
+                                            scopesExpanded = false; openNotes()
+                                        })
+                                    }
                                     DropdownMenuItem(text = { Text("Favorites") }, onClick = {
                                         scopesExpanded = false; actions.onShowFavorites()
                                     })

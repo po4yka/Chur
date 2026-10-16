@@ -499,4 +499,11 @@ internal expect object ChurNative {
         destination: ChurBuffer,
         outWritten: IntArray,
     ): Int
+    // Local private notes. Requests contain private text and are cleared by the caller.
+    fun privateNotesQuery(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int
+    fun privateNoteGet(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int
+    fun privateNoteSave(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int
+    fun privateNoteChange(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int
+    fun privateNoteExportBegin(session: Long, noteId: ByteArray, expectedRevision: Long, destinationFd: Int, outOperation: LongArray): Int
+
 }

@@ -22,8 +22,8 @@ use chur_crypto::{
 use chur_format::constants::{
     CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V3,
     CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V5, CATALOG_FORMAT_VERSION_V6,
-    CATALOG_FORMAT_VERSION_V7, CATALOG_FORMAT_VERSION_V8, DESCRIPTOR_VERSION_V1, SlotType,
-    VaultState,
+    CATALOG_FORMAT_VERSION_V7, CATALOG_FORMAT_VERSION_V8, CATALOG_FORMAT_VERSION_V9,
+    DESCRIPTOR_VERSION_V1, SlotType, VaultState,
 };
 use chur_format::descriptor::{
     CatalogDescriptor, KeySlotDescriptor, MigrationDescriptor, ObjectStoreDescriptor,
@@ -326,7 +326,7 @@ pub fn create_with_params(
         descriptor_generation: 0,
         state: VaultState::Initializing,
         catalog: CatalogDescriptor {
-            catalog_format_version: CATALOG_FORMAT_VERSION_V8,
+            catalog_format_version: CATALOG_FORMAT_VERSION_V9,
             opaque_catalog_path_id: catalog_path_id,
             catalog_generation,
             catalog_header_commitment: header_commitment,
@@ -799,7 +799,10 @@ fn finish_unlock(
         if descriptor.state == VaultState::Active {
             let (to, migration_generation) =
                 match (descriptor.catalog.catalog_format_version, version) {
-                    (CATALOG_FORMAT_VERSION_V8, CATALOG_FORMAT_VERSION_V8) => break,
+                    (CATALOG_FORMAT_VERSION_V9, CATALOG_FORMAT_VERSION_V9) => break,
+                    (CATALOG_FORMAT_VERSION_V8, CATALOG_FORMAT_VERSION_V8) => {
+                        (CATALOG_FORMAT_VERSION_V9, 8)
+                    }
                     (CATALOG_FORMAT_VERSION_V7, CATALOG_FORMAT_VERSION_V7) => {
                         (CATALOG_FORMAT_VERSION_V8, 7)
                     }
@@ -867,6 +870,9 @@ fn finish_unlock(
                 (CATALOG_FORMAT_VERSION_V6, CATALOG_FORMAT_VERSION_V7) => {
                     schema::migrate_v6_to_v7(&mut catalog)?;
                 }
+                (CATALOG_FORMAT_VERSION_V8, CATALOG_FORMAT_VERSION_V9) => {
+                    schema::migrate_v8_to_v9(&mut catalog)?;
+                }
                 (CATALOG_FORMAT_VERSION_V7, CATALOG_FORMAT_VERSION_V8) => {
                     schema::migrate_v7_to_v8(&mut catalog)?;
                 }
@@ -889,8 +895,8 @@ fn finish_unlock(
     let version = schema::open_at_current_version(&mut catalog, now_ms)?;
     ensure!(
         descriptor.state == VaultState::Active
-            && descriptor.catalog.catalog_format_version == CATALOG_FORMAT_VERSION_V8
-            && version == CATALOG_FORMAT_VERSION_V8,
+            && descriptor.catalog.catalog_format_version == CATALOG_FORMAT_VERSION_V9
+            && version == CATALOG_FORMAT_VERSION_V9,
         CatalogCorrupt,
         "the catalog format version disagrees with the descriptor"
     );
@@ -975,6 +981,7 @@ fn validate_catalog_migration(descriptor: &VaultDescriptor) -> Result<MigrationD
                     | (CATALOG_FORMAT_VERSION_V5, CATALOG_FORMAT_VERSION_V6, 5)
                     | (CATALOG_FORMAT_VERSION_V6, CATALOG_FORMAT_VERSION_V7, 6)
                     | (CATALOG_FORMAT_VERSION_V7, CATALOG_FORMAT_VERSION_V8, 7)
+                    | (CATALOG_FORMAT_VERSION_V8, CATALOG_FORMAT_VERSION_V9, 8)
             ),
         MigrationRequired,
         "the descriptor names an unsupported migration"
@@ -1689,7 +1696,7 @@ pub fn install_descriptor(
 ///
 /// The restore namespace is not openable yet, so it does not need an
 /// intermediate installed `MIGRATING` descriptor. The caller must update the
-/// unpublished descriptor to catalog v7 before making it active when this
+/// unpublished descriptor to catalog v9 before making it active when this
 /// function returns `true`.
 pub fn prepare_restored_catalog(
     catalog: &mut CatalogDb,
@@ -1711,6 +1718,7 @@ pub fn prepare_restored_catalog(
             schema::migrate_v5_to_v6(catalog)?;
             schema::migrate_v6_to_v7(catalog)?;
             schema::migrate_v7_to_v8(catalog)?;
+            schema::migrate_v8_to_v9(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
@@ -1721,6 +1729,7 @@ pub fn prepare_restored_catalog(
             schema::migrate_v5_to_v6(catalog)?;
             schema::migrate_v6_to_v7(catalog)?;
             schema::migrate_v7_to_v8(catalog)?;
+            schema::migrate_v8_to_v9(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
@@ -1730,6 +1739,7 @@ pub fn prepare_restored_catalog(
             schema::migrate_v5_to_v6(catalog)?;
             schema::migrate_v6_to_v7(catalog)?;
             schema::migrate_v7_to_v8(catalog)?;
+            schema::migrate_v8_to_v9(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
@@ -1738,6 +1748,7 @@ pub fn prepare_restored_catalog(
             schema::migrate_v5_to_v6(catalog)?;
             schema::migrate_v6_to_v7(catalog)?;
             schema::migrate_v7_to_v8(catalog)?;
+            schema::migrate_v8_to_v9(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
@@ -1745,21 +1756,29 @@ pub fn prepare_restored_catalog(
             schema::migrate_v5_to_v6(catalog)?;
             schema::migrate_v6_to_v7(catalog)?;
             schema::migrate_v7_to_v8(catalog)?;
+            schema::migrate_v8_to_v9(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
         (CATALOG_FORMAT_VERSION_V6, CATALOG_FORMAT_VERSION_V6) => {
             schema::migrate_v6_to_v7(catalog)?;
             schema::migrate_v7_to_v8(catalog)?;
+            schema::migrate_v8_to_v9(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
         (CATALOG_FORMAT_VERSION_V7, CATALOG_FORMAT_VERSION_V7) => {
             schema::migrate_v7_to_v8(catalog)?;
+            schema::migrate_v8_to_v9(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
-        (CATALOG_FORMAT_VERSION_V8, CATALOG_FORMAT_VERSION_V8) => Ok(false),
+        (CATALOG_FORMAT_VERSION_V8, CATALOG_FORMAT_VERSION_V8) => {
+            schema::migrate_v8_to_v9(catalog)?;
+            catalog.checkpoint()?;
+            Ok(true)
+        }
+        (CATALOG_FORMAT_VERSION_V9, CATALOG_FORMAT_VERSION_V9) => Ok(false),
         _ => bail!(
             MigrationRequired,
             "the restored descriptor and catalog versions are unsupported"
@@ -2236,18 +2255,18 @@ mod tests {
         let reopened = unlock_with_password(&root_dir, PASSWORD, 2).expect("migrate and unlock");
         assert_eq!(
             reopened.descriptor.catalog.catalog_format_version,
-            CATALOG_FORMAT_VERSION_V8
+            CATALOG_FORMAT_VERSION_V9
         );
         assert_eq!(reopened.descriptor.state, VaultState::Active);
         assert!(reopened.descriptor.migration.is_none());
         assert_eq!(
             reopened.descriptor.descriptor_generation,
-            source.descriptor_generation + 14
+            source.descriptor_generation + 16
         );
     }
 
     #[test]
-    fn a_v1_to_v2_migration_resumes_then_reaches_v6() {
+    fn a_v1_to_v2_migration_resumes_then_reaches_v9() {
         for sql_committed in [false, true] {
             let root_dir = scratch();
             let mut session = make(&root_dir);
@@ -2271,18 +2290,18 @@ mod tests {
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V8
+                CATALOG_FORMAT_VERSION_V9
             );
             assert!(reopened.descriptor.migration.is_none());
             assert_eq!(
                 reopened.descriptor.descriptor_generation,
-                migrating.descriptor_generation + 13
+                migrating.descriptor_generation + 15
             );
         }
     }
 
     #[test]
-    fn a_v2_to_v3_migration_resumes_then_reaches_v6() {
+    fn a_v2_to_v3_migration_resumes_then_reaches_v9() {
         for sql_committed in [false, true] {
             let root_dir = scratch();
             let mut session = make(&root_dir);
@@ -2305,12 +2324,12 @@ mod tests {
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V8
+                CATALOG_FORMAT_VERSION_V9
             );
             assert!(reopened.descriptor.migration.is_none());
             assert_eq!(
                 reopened.descriptor.descriptor_generation,
-                migrating.descriptor_generation + 11
+                migrating.descriptor_generation + 13
             );
         }
     }
@@ -2339,12 +2358,12 @@ mod tests {
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V8
+                CATALOG_FORMAT_VERSION_V9
             );
             assert!(reopened.descriptor.migration.is_none());
             assert_eq!(
                 reopened.descriptor.descriptor_generation,
-                migrating.descriptor_generation + 9
+                migrating.descriptor_generation + 11
             );
         }
     }
@@ -2373,12 +2392,12 @@ mod tests {
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V8
+                CATALOG_FORMAT_VERSION_V9
             );
             assert!(reopened.descriptor.migration.is_none());
             assert_eq!(
                 reopened.descriptor.descriptor_generation,
-                migrating.descriptor_generation + 5
+                migrating.descriptor_generation + 7
             );
         }
     }
@@ -2880,5 +2899,98 @@ mod tests {
         .expect("page");
         assert!(result.objects.is_empty());
         assert_eq!(result.total_count, 0);
+    }
+    #[test]
+    fn an_authenticated_v8_vault_migrates_to_v9_and_keeps_media_tables() {
+        let root_dir = scratch();
+        let mut session = make(&root_dir);
+        session.catalog().expect("catalog").transaction(|tx| {
+            tx.execute_batch("DROP TABLE private_note_search; DROP TABLE private_notes; UPDATE vault_state SET catalog_format_version=8;")
+                .expect("historical v8 fixture"); Ok(())
+        }).expect("v8 catalog");
+        let mut descriptor = session.descriptor.clone();
+        descriptor.descriptor_generation += 1;
+        descriptor.catalog.catalog_format_version =
+            chur_format::constants::CATALOG_FORMAT_VERSION_V8;
+        install_authenticated_descriptor(
+            &session.root_dir,
+            &session.entry_name,
+            &descriptor,
+            session.root_secret().expect("root"),
+        )
+        .expect("authenticated v8 descriptor");
+        drop(session);
+        let mut reopened =
+            unlock_with_password(&root_dir, PASSWORD, 1_700_000_001_000).expect("v8 migration");
+        assert_eq!(
+            reopened.descriptor.catalog.catalog_format_version,
+            CATALOG_FORMAT_VERSION_V9
+        );
+        let note = crate::notes::save(
+            reopened.catalog().expect("catalog"),
+            None,
+            0,
+            "title",
+            "body",
+            false,
+            1_700_000_001_000,
+        )
+        .expect("save");
+        let id = note.id;
+        drop(note);
+        reopened.lock().expect("lock");
+        drop(reopened);
+        let reopened =
+            unlock_with_password(&root_dir, PASSWORD, 1_700_000_002_000).expect("reopen");
+        assert_eq!(
+            crate::notes::get(reopened.catalog_ref().expect("catalog"), &id)
+                .expect("durable")
+                .body,
+            "body"
+        );
+    }
+    #[test]
+    fn a_v8_to_v9_migration_resumes_on_either_side_of_the_sql_commit() {
+        for sql_committed in [false, true] {
+            let root_dir = scratch();
+            let mut session = make(&root_dir);
+            session.catalog().expect("catalog").transaction(|tx| {
+                tx.execute_batch("DROP TABLE private_note_search; DROP TABLE private_notes; UPDATE vault_state SET catalog_format_version=8;").expect("v8 fixture"); Ok(())
+            }).expect("fixture");
+            let mut source = session.descriptor.clone();
+            source.catalog.catalog_format_version = CATALOG_FORMAT_VERSION_V8;
+            let migrating = migrating_descriptor(&source, CATALOG_FORMAT_VERSION_V9, 8);
+            install_authenticated_descriptor(
+                &root_dir,
+                &session.entry_name,
+                &migrating,
+                session.root_secret().expect("root"),
+            )
+            .expect("migrating descriptor");
+            if sql_committed {
+                schema::migrate_v8_to_v9(session.catalog().expect("catalog")).expect("SQL commit");
+            }
+            drop(session);
+            let reopened =
+                unlock_with_password(&root_dir, PASSWORD, 1_700_000_001_000).expect("resume");
+            assert_eq!(
+                reopened.descriptor.catalog.catalog_format_version,
+                CATALOG_FORMAT_VERSION_V9
+            );
+            assert_eq!(reopened.descriptor.state, VaultState::Active);
+            assert!(reopened.descriptor.migration.is_none());
+            assert!(
+                crate::notes::page(
+                    reopened.catalog_ref().expect("catalog"),
+                    "",
+                    false,
+                    50,
+                    None
+                )
+                .expect("notes table")
+                .notes
+                .is_empty()
+            );
+        }
     }
 }

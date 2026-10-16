@@ -1073,3 +1073,137 @@ fn a_material_buffer_smaller_than_the_record_writes_nothing() {
     assert_eq!(small, [0u8; 8], "a refused write leaves the buffer alone");
     assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
 }
+
+#[test]
+fn private_note_output_preflight_cannot_commit_a_failed_create_or_change() {
+    use chur_ffi::private_notes::*;
+    let root = scratch();
+    let runtime = open_runtime(&root);
+    let mut creation = 0;
+    let mut session = 0;
+    assert_eq!(
+        unsafe { chur_vault_create_begin(runtime, &create_request(PASSWORD), &mut creation) },
+        OK
+    );
+    assert_eq!(
+        unsafe { chur_vault_creation_activate(creation, &mut session) },
+        OK
+    );
+    let mut save = vec![0; 16];
+    save.extend_from_slice(&0u64.to_be_bytes());
+    save.push(0);
+    save.extend_from_slice(&1u32.to_be_bytes());
+    save.push(b't');
+    save.extend_from_slice(&1u32.to_be_bytes());
+    save.push(b'b');
+    let mut written = 999usize;
+    assert_eq!(
+        unsafe {
+            chur_private_note_save(
+                session,
+                save.as_ptr(),
+                save.len(),
+                core::ptr::null_mut(),
+                0,
+                &mut written,
+            )
+        },
+        ChurStatus::ResourceLimitExceeded as i32
+    );
+    assert_eq!(written, 0);
+    assert_eq!(
+        unsafe {
+            chur_private_note_save(
+                session,
+                save.as_ptr(),
+                save.len(),
+                core::ptr::null_mut(),
+                1048576,
+                &mut written,
+            )
+        },
+        ChurStatus::InvalidInput as i32
+    );
+    let mut query = vec![0];
+    query.extend_from_slice(&50u64.to_be_bytes());
+    query.extend_from_slice(&[0; 8]);
+    let mut output = vec![0; 1048576];
+    assert_eq!(
+        unsafe {
+            chur_private_notes_query(
+                session,
+                query.as_ptr(),
+                query.len(),
+                output.as_mut_ptr(),
+                output.len(),
+                &mut written,
+            )
+        },
+        OK
+    );
+    assert_eq!(&output[..4], &[0; 4]);
+    assert_eq!(
+        unsafe {
+            chur_private_note_save(
+                session,
+                save.as_ptr(),
+                save.len(),
+                output.as_mut_ptr(),
+                output.len(),
+                &mut written,
+            )
+        },
+        OK
+    );
+    let id = output[..16].to_vec();
+    let mut change = id.clone();
+    change.extend_from_slice(&1u64.to_be_bytes());
+    change.push(3);
+    assert_eq!(
+        unsafe {
+            chur_private_note_change(
+                session,
+                change.as_ptr(),
+                change.len(),
+                core::ptr::null_mut(),
+                0,
+                &mut written,
+            )
+        },
+        ChurStatus::ResourceLimitExceeded as i32
+    );
+    assert_eq!(
+        unsafe {
+            chur_private_note_get(
+                session,
+                id.as_ptr(),
+                id.len(),
+                output.as_mut_ptr(),
+                output.len(),
+                &mut written,
+            )
+        },
+        OK
+    );
+    assert_eq!(&output[16..24], &1u64.to_be_bytes());
+    assert_eq!(&output[40..48], &u64::MAX.to_be_bytes());
+    assert_eq!(
+        unsafe {
+            chur_private_notes_query(
+                session,
+                query.as_ptr(),
+                query.len(),
+                output.as_mut_ptr(),
+                output.len(),
+                &mut written,
+            )
+        },
+        OK
+    );
+    assert_eq!(&output[..4], &1u32.to_be_bytes());
+    output.fill(0);
+    save.fill(0);
+    assert_eq!(unsafe { chur_session_close(session) }, OK);
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+    std::fs::remove_dir_all(root).unwrap();
+}

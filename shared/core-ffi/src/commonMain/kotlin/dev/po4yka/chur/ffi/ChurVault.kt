@@ -806,6 +806,58 @@ object ChurVault {
         }
     }
 
+    private fun noteControl(session: Long, request: ByteArray, call: (Long, ByteArray, ChurBuffer, IntArray) -> Int): ByteArray =
+        try { withChurBuffer(1_048_576) { buffer ->
+            val written = IntArray(1)
+            ChurFailure.check(call(session, request, buffer, written), "private note")
+            buffer.copyOut(written[0])
+        } } finally { request.fill(0) }
+
+    fun privateNotes(session: Long, terms: String = "", trashed: Boolean = false, limit: Int = 50, cursor: ByteArray? = null): PrivateNotePage {
+        val text = terms.encodeToByteArray()
+        try {
+            require(text.size <= 256 && limit in 1..100 && (cursor == null || cursor.size == 65))
+            val writer = PrivateNoteWriter(1 + 8 + 4 + text.size + 4 + (cursor?.size ?: 0))
+            writer.byte(if (trashed) 1 else 0); writer.number(limit.toLong()); writer.sized(text); writer.sized(cursor ?: byteArrayOf())
+            val bytes = noteControl(session, writer.bytes, ChurNative::privateNotesQuery)
+            return try { decodePrivateNotePage(bytes) } finally { bytes.fill(0) }
+        } finally { text.fill(0) }
+    }
+
+    fun privateNote(session: Long, id: ByteArray): PrivateNote {
+        require(id.size == 16)
+        val bytes = noteControl(session, id.copyOf(), ChurNative::privateNoteGet)
+        return try { decodePrivateNote(bytes) } finally { bytes.fill(0) }
+    }
+
+    fun savePrivateNote(session: Long, id: ByteArray? = null, expectedRevision: Long = 0, title: String, body: String, pinned: Boolean = false): PrivateNote {
+        val titleBytes = title.encodeToByteArray(); val bodyBytes = body.encodeToByteArray()
+        try {
+            require(id == null || id.size == 16)
+            if (titleBytes.size > 256 || bodyBytes.size > 262144) throw ChurFailure(ChurStatus.RESOURCE_LIMIT_EXCEEDED, "private note text exceeds its bound")
+            require(expectedRevision >= 0)
+            val writer = PrivateNoteWriter(16 + 8 + 1 + 4 + titleBytes.size + 4 + bodyBytes.size)
+            writer.raw(id ?: ByteArray(16)); writer.number(expectedRevision); writer.byte(if (pinned) 1 else 0); writer.sized(titleBytes); writer.sized(bodyBytes)
+            val bytes = noteControl(session, writer.bytes, ChurNative::privateNoteSave)
+            return try { decodePrivateNote(bytes) } finally { bytes.fill(0) }
+        } finally { titleBytes.fill(0); bodyBytes.fill(0) }
+    }
+
+    fun changePrivateNote(session: Long, id: ByteArray, expectedRevision: Long, action: PrivateNoteAction): PrivateNote? {
+        require(id.size == 16 && expectedRevision > 0)
+        val writer = PrivateNoteWriter(25)
+        writer.raw(id); writer.number(expectedRevision); writer.byte(action.ordinal + 1)
+        val bytes = noteControl(session, writer.bytes, ChurNative::privateNoteChange)
+        return try { if (bytes.isEmpty()) null else decodePrivateNote(bytes) } finally { bytes.fill(0) }
+    }
+
+    fun beginPrivateNoteExport(session: Long, id: ByteArray, expectedRevision: Long, destinationFd: Int): Long {
+        require(id.size == 16 && expectedRevision > 0)
+        val out = LongArray(1)
+        ChurFailure.check(ChurNative.privateNoteExportBegin(session, id, expectedRevision, destinationFd, out), "export private note")
+        return out[0]
+    }
+
     /** Creates a tag and returns its identifier. */
     fun createTag(
         session: Long,

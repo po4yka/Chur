@@ -15,7 +15,7 @@ use chur_format::{
     constants::{
         CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V3,
         CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V5, CATALOG_FORMAT_VERSION_V6,
-        CATALOG_FORMAT_VERSION_V7, CATALOG_FORMAT_VERSION_V8,
+        CATALOG_FORMAT_VERSION_V7, CATALOG_FORMAT_VERSION_V8, CATALOG_FORMAT_VERSION_V9,
     },
     envelope::ObjectKeyEnvelope,
 };
@@ -55,6 +55,9 @@ const STEPS: &[Step] = &[
     },
     Step {
         version: CATALOG_FORMAT_VERSION_V8,
+    },
+    Step {
+        version: CATALOG_FORMAT_VERSION_V9,
     },
 ];
 
@@ -617,6 +620,24 @@ CREATE INDEX trash_entries_expiry ON trash_entries(expires_ms, object_id);
 CREATE INDEX trash_entries_recent ON trash_entries(deleted_ms DESC, object_id DESC);
 "#;
 
+/// Private local notes; these tables are never part of media synchronization.
+const V9_DDL: &str = r#"
+CREATE TABLE private_notes (
+ note_id BLOB NOT NULL UNIQUE CHECK(length(note_id)=16),
+ revision INTEGER NOT NULL CHECK(revision>0),
+ title TEXT NOT NULL CHECK(length(CAST(title AS BLOB))<=256),
+ body TEXT NOT NULL CHECK(length(CAST(body AS BLOB))<=262144),
+ created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL,
+ pinned INTEGER NOT NULL CHECK(pinned IN (0,1)),
+ deleted_ms INTEGER, expires_ms INTEGER,
+ CHECK((deleted_ms IS NULL)=(expires_ms IS NULL))
+) STRICT;
+CREATE INDEX private_notes_order ON private_notes(pinned DESC,updated_ms DESC,note_id DESC);
+CREATE INDEX private_notes_expiry ON private_notes(expires_ms);
+CREATE VIRTUAL TABLE private_note_search USING fts5(title,body,tokenize='unicode61');
+INSERT INTO private_note_search(private_note_search,rank) VALUES('secure-delete',1);
+"#;
+
 /// Creates the current schema or opens it without performing an implicit migration.
 ///
 /// `docs/format/CATALOG_SCHEMA_V1.md` §18 forbids skipping an untested step, so
@@ -626,15 +647,15 @@ pub fn open_at_current_version(db: &mut CatalogDb, now_ms: u64) -> Result<u16> {
     let present = recorded_version(db.connection())?;
     let Some(present) = present else {
         install(db, now_ms)?;
-        return Ok(CATALOG_FORMAT_VERSION_V8);
+        return Ok(CATALOG_FORMAT_VERSION_V9);
     };
-    if present != CATALOG_FORMAT_VERSION_V8 {
+    if present != CATALOG_FORMAT_VERSION_V9 {
         bail!(
             MigrationRequired,
             "the catalog requires an authenticated schema migration"
         );
     }
-    Ok(CATALOG_FORMAT_VERSION_V8)
+    Ok(CATALOG_FORMAT_VERSION_V9)
 }
 
 /// The version the database records, or `None` when the schema is absent.
@@ -693,21 +714,42 @@ fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
             .execute_batch(V8_DDL)
             .map_err(|error| map_sqlite(error, "the trash schema could not be created"))?;
         transaction
+            .execute_batch(V9_DDL)
+            .map_err(|error| map_sqlite(error, "the private notes schema could not be created"))?;
+        transaction
             .execute(
                 "INSERT INTO vault_state (
                      only_row, catalog_format_version, catalog_generation,
                      active_migration_target, object_store_checkpoint,
                      integrity_checkpoint_ms, capability_flags
                  ) VALUES (1, ?1, 1, NULL, 0, ?2, 0)",
-                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V8), checkpoint],
+                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V9), checkpoint],
             )
             .map_err(|error| map_sqlite(error, "the catalog state row could not be written"))?;
         Ok(())
     })
 }
 
+/// Adds private local notes after an authenticated v8 descriptor transition.
+pub fn migrate_v8_to_v9(db: &mut CatalogDb) -> Result<()> {
+    ensure!(
+        recorded_version(db.connection())? == Some(CATALOG_FORMAT_VERSION_V8),
+        MigrationRequired,
+        "the catalog is not version eight"
+    );
+    db.transaction(|tx| {
+        tx.execute("UPDATE vault_state SET active_migration_target=?1 WHERE only_row=1", [i64::from(CATALOG_FORMAT_VERSION_V9)]).map_err(|error|map_sqlite(error,"the note migration target could not be written"))?;
+        tx.execute_batch(V9_DDL).map_err(|error| map_sqlite(error, "the private notes migration failed"))?;
+        tx.execute("UPDATE vault_state SET catalog_format_version=?1,active_migration_target=NULL WHERE only_row=1", [i64::from(CATALOG_FORMAT_VERSION_V9)])
+          .map_err(|error| map_sqlite(error,"the catalog version could not be written"))?;
+        Ok(())
+    })
+}
+
 #[cfg(test)]
 const RESET_V7_DDL: &str = "
+DROP TABLE IF EXISTS private_note_search;
+DROP TABLE IF EXISTS private_notes;
 DROP TABLE trash_entries;
 DROP INDEX albums_siblings;
 DROP INDEX album_memberships_manual;
@@ -1148,11 +1190,11 @@ mod tests {
     }
 
     #[test]
-    fn a_new_catalog_installs_version_eight() {
+    fn a_new_catalog_installs_version_nine() {
         let mut db = open();
         assert_eq!(
             open_at_current_version(&mut db, 1_700_000_000_000).expect("install"),
-            CATALOG_FORMAT_VERSION_V8
+            CATALOG_FORMAT_VERSION_V9
         );
         let sharing_tables: i64 = db
             .connection()
@@ -1224,7 +1266,7 @@ mod tests {
         }
         assert_eq!(
             STEPS.last().map(|step| step.version),
-            Some(CATALOG_FORMAT_VERSION_V8)
+            Some(CATALOG_FORMAT_VERSION_V9)
         );
     }
 

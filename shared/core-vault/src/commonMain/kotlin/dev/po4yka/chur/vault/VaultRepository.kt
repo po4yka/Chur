@@ -3,6 +3,9 @@ package dev.po4yka.chur.vault
 import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.core.platformkeys.DeviceSlot
 import dev.po4yka.chur.core.platformkeys.DeviceSlotException
+import dev.po4yka.chur.ffi.PrivateNote
+import dev.po4yka.chur.ffi.PrivateNotePage
+import dev.po4yka.chur.ffi.PrivateNoteAction
 import dev.po4yka.chur.ffi.AlbumSummary
 import dev.po4yka.chur.ffi.ChurBuffer
 import dev.po4yka.chur.ffi.ChurFailure
@@ -354,6 +357,14 @@ class VaultRepository(
     suspend fun emptyTrash() = withSession { ChurVault.emptyTrash(it) }
 
     suspend fun restoreTrash() = withSession { ChurVault.restoreTrash(it) }
+
+    /** A stale editor must not access a later unlocked identity. */
+    suspend fun privateNotes(generation: Long, terms: String = "", trashed: Boolean = false, limit: Int = 50, cursor: ByteArray? = null): PrivateNotePage = withNoteSession(generation) { ChurVault.privateNotes(it, terms, trashed, limit, cursor) }
+    suspend fun privateNote(generation: Long, id: ByteArray): PrivateNote = withNoteSession(generation) { ChurVault.privateNote(it, id) }
+    suspend fun savePrivateNote(generation: Long, id: ByteArray? = null, expectedRevision: Long = 0, title: String, body: String, pinned: Boolean = false): PrivateNote = withNoteSession(generation) { ChurVault.savePrivateNote(it, id, expectedRevision, title, body, pinned) }
+    suspend fun changePrivateNote(generation: Long, id: ByteArray, expectedRevision: Long, action: PrivateNoteAction): PrivateNote? = withNoteSession(generation) { ChurVault.changePrivateNote(it, id, expectedRevision, action) }
+    suspend fun beginPrivateNoteExport(generation: Long, id: ByteArray, expectedRevision: Long, destinationFd: Int): Long = withNoteSession(generation) { ChurVault.beginPrivateNoteExport(it, id, expectedRevision, destinationFd) }
+    suspend fun privateNoteActivity(generation: Long) { withNoteSession(generation) { Unit } }
 
     /** Every album. */
     suspend fun albums(): List<AlbumSummary> = withSession { ChurVault.albums(it) }
@@ -991,4 +1002,13 @@ class VaultRepository(
         touch()
         result
     }
+    private suspend inline fun <T> withNoteSession(expectedGeneration: Long, body: (Long) -> T): T = mutex.withLock {
+        if (session == 0L || generation != expectedGeneration || _state.value !is VaultState.Unlocked) {
+            throw ChurFailure(ChurStatus.VAULT_LOCKED, "the private note session has ended")
+        }
+        val result = body(session)
+        touch()
+        result
+    }
+
 }

@@ -39,6 +39,7 @@ pub fn registry_live_handles() -> usize {
 }
 mod operation;
 mod panic;
+pub mod private_notes;
 pub mod product;
 pub mod records;
 mod registry;
@@ -61,8 +62,8 @@ pub const ABI_VERSION_MAJOR: u32 = 2;
 /// behaviour; it never selects a cryptographic suite from untrusted input.
 ///
 /// ABI 2 breaks the album list record to carry hierarchy and manual order.
-/// Minor 20 reads and acknowledges the persisted sync fork state (§6.24).
-pub const ABI_VERSION_MINOR: u32 = 20;
+/// Minor 21 adds local private notes and cancellable text export.
+pub const ABI_VERSION_MINOR: u32 = 21;
 
 /// Capability bit: independent decoy identity supported.
 pub const CHUR_CAP_DECOY_VAULT: u64 = 1 << 0;
@@ -293,7 +294,7 @@ mod tests {
     #[test]
     fn the_handshake_answers_every_documented_fact() {
         assert_eq!(chur_abi_version_major(), 2);
-        assert_eq!(chur_abi_version_minor(), 20);
+        assert_eq!(chur_abi_version_minor(), 21);
         assert_eq!(chur_object_format_min(), 1);
         assert_eq!(chur_object_format_max(), 1);
         assert_eq!(chur_key_slot_format_min(), 1);

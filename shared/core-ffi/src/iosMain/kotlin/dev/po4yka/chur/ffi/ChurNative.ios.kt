@@ -12,6 +12,11 @@ import dev.po4yka.chur.native.ChurRuntimeConfigV1
 import dev.po4yka.chur.native.ChurScanRequestV1
 import dev.po4yka.chur.native.ChurSyncReportV1
 import dev.po4yka.chur.native.ChurUnlockRequestV1
+import dev.po4yka.chur.native.chur_private_notes_query
+import dev.po4yka.chur.native.chur_private_note_get
+import dev.po4yka.chur.native.chur_private_note_save
+import dev.po4yka.chur.native.chur_private_note_change
+import dev.po4yka.chur.native.chur_private_note_export_begin
 import dev.po4yka.chur.native.chur_abi_version_major
 import dev.po4yka.chur.native.chur_abi_version_minor
 import dev.po4yka.chur.native.chur_album_create
@@ -1375,4 +1380,37 @@ internal actual object ChurNative {
             }
             status
         }
+    // Local private notes. Requests contain private text and are cleared by the caller.
+    actual fun privateNotesQuery(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        val written = alloc<ULongVar>()
+        val status = request.usePinned { pin -> chur_private_notes_query(session.toULong(), pin.addressOf(0).reinterpret(), request.size.toULong(), destination.pointer, destination.size.toULong(), written.ptr) }
+        if (status == 0) outWritten[0] = written.value.toInt()
+        status
+    }
+    actual fun privateNoteGet(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        val written = alloc<ULongVar>()
+        val status = request.usePinned { pin -> chur_private_note_get(session.toULong(), pin.addressOf(0).reinterpret(), request.size.toULong(), destination.pointer, destination.size.toULong(), written.ptr) }
+        if (status == 0) outWritten[0] = written.value.toInt()
+        status
+    }
+    actual fun privateNoteSave(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        val written = alloc<ULongVar>()
+        val status = request.usePinned { pin -> chur_private_note_save(session.toULong(), pin.addressOf(0).reinterpret(), request.size.toULong(), destination.pointer, destination.size.toULong(), written.ptr) }
+        if (status == 0) outWritten[0] = written.value.toInt()
+        status
+    }
+    actual fun privateNoteChange(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        val written = alloc<ULongVar>()
+        val status = request.usePinned { pin -> chur_private_note_change(session.toULong(), pin.addressOf(0).reinterpret(), request.size.toULong(), destination.pointer, destination.size.toULong(), written.ptr) }
+        if (status == 0) outWritten[0] = written.value.toInt()
+        status
+    }
+    actual fun privateNoteExportBegin(session: Long, noteId: ByteArray, expectedRevision: Long, destinationFd: Int, outOperation: LongArray): Int = memScoped {
+        require(noteId.size == 16)
+        val operation = alloc<chur_handle_tVar>()
+        val status = noteId.usePinned { pin -> chur_private_note_export_begin(session.toULong(), pin.addressOf(0).reinterpret(), expectedRevision.toULong(), destinationFd, operation.ptr) }
+        if (status == 0) outOperation[0] = operation.value.toLong()
+        status
+    }
+
 }

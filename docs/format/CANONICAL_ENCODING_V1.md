@@ -288,6 +288,7 @@ Each format version field has its own namespace:
 | `catalog_format_version` | `0x0006` | private catalog schema v6 with an accepted object-operation index | [`CATALOG_SCHEMA_V6.md`](CATALOG_SCHEMA_V6.md) |
 | `catalog_format_version` | `0x0007` | private catalog schema v7 with album hierarchy and manual order | [`CATALOG_SCHEMA_V7.md`](CATALOG_SCHEMA_V7.md) |
 | `catalog_format_version` | `0x0008` | private catalog schema v8 with recoverable trash | [`CATALOG_SCHEMA_V8.md`](CATALOG_SCHEMA_V8.md) |
+| `catalog_format_version` | `0x0009` | private catalog schema v9 with local private notes | [`CATALOG_SCHEMA_V9.md`](CATALOG_SCHEMA_V9.md) |
 | `object_store_format_version` | `0x0001` | object store layout v1 | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §6 |
 | `slot_version` | `0x0001` | v1 key-slot families | [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §1 |
 
@@ -465,6 +466,7 @@ A domain tag is a fixed ASCII byte constant written without a length prefix, per
 | `CHUR\x00OBJECT\x00FINAL-COMMIT-AAD\x00V1` | final-commit AAD | [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §38 |
 | `CHUR\x00VAULT\x00DESCRIPTOR-AUTH\x00V1` | vault-descriptor authentication tag | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §8 |
 | `CHUR\x00CATALOG\x00HEADER-COMMITMENT\x00V1` | catalog header commitment | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §5 |
+| `CHUR\x00PRIVATE-NOTES\x00QUERY\x00V1` | local private-note cursor query fingerprint; not a keyed authorization token | [`CATALOG_SCHEMA_V9.md`](CATALOG_SCHEMA_V9.md) |
 | `CHUR\x00BACKUP\x00INVENTORY-COMMITMENT\x00V1` | ordered backup inventory commitment | [`BACKUP_FORMAT_V1.md`](BACKUP_FORMAT_V1.md) §7.2 |
 | `CHUR\x00BACKUP\x00MANIFEST-AAD\x00V1` | encrypted backup manifest AAD | [`BACKUP_FORMAT_V1.md`](BACKUP_FORMAT_V1.md) §4 |
 | `CHUR\x00BACKUP\x00FINAL-COMMIT-AAD\x00V1` | final backup commit AAD | [`BACKUP_FORMAT_V1.md`](BACKUP_FORMAT_V1.md) §7 |

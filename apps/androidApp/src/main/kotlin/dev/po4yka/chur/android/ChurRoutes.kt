@@ -93,6 +93,8 @@ import dev.po4yka.chur.app.vault.VaultDestination
 import dev.po4yka.chur.app.vault.ContentView
 import dev.po4yka.chur.app.vault.AlbumOrder
 import dev.po4yka.chur.app.vault.browseQuery
+import dev.po4yka.chur.app.PrivateNoteExportRequest
+import dev.po4yka.chur.app.vault.PrivateNotesRoute
 import dev.po4yka.chur.app.vault.VaultShell
 import dev.po4yka.chur.app.vault.VaultUiState
 import androidx.compose.ui.graphics.ImageBitmap
@@ -419,6 +421,9 @@ private fun VaultRoute(controller: ChurController) {
     val deviceConnected by deviceControl.connected.collectAsState()
 
     val generation = (vaultState as? VaultState.Unlocked)?.generation ?: 0L
+    var showingPrivateNotes by remember(generation) { mutableStateOf(false) }
+    var choosingPrivateNoteExport by remember(generation) { mutableStateOf<PrivateNoteExportRequest?>(null) }
+    var pendingPrivateNoteExport by remember(generation) { mutableStateOf<PrivateNoteExportRequest?>(null) }
     var thumbnailsConcealed by remember(generation) { mutableStateOf(true) }
     var destination by remember { mutableStateOf(VaultDestination.LIBRARY) }
     var mediaView by remember { mutableStateOf(ContentView.GRID) }
@@ -461,6 +466,12 @@ private fun VaultRoute(controller: ChurController) {
         onDispose {
             if (pendingAlbumExport != null) {
                 pendingAlbumExport = null
+                if ((controller.vaultState.value as? VaultState.Unlocked)?.generation == generation) {
+                    controller.endHostActivity()
+                }
+            }
+            if (pendingPrivateNoteExport != null) {
+                pendingPrivateNoteExport = null
                 if ((controller.vaultState.value as? VaultState.Unlocked)?.generation == generation) {
                     controller.endHostActivity()
                 }
@@ -543,6 +554,16 @@ private fun VaultRoute(controller: ChurController) {
             if (uris.isNotEmpty()) scope.launch {
                 controller.importAll(importer, uris.size, pending.second) { index, _ -> codec.open(uris[index], asFile = true) }
             }
+        }
+    }
+    val privateNoteFilePicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+        val request = pendingPrivateNoteExport
+        pendingPrivateNoteExport = null
+        if (request != null) {
+            if ((controller.vaultState.value as? VaultState.Unlocked)?.generation == request.generation) {
+                controller.endHostActivity()
+            }
+            if (uri != null) controller.exportPrivateNote(request, ExportTarget.FILES, uri.toString())
         }
     }
     val albumExportPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -819,6 +840,35 @@ private fun VaultRoute(controller: ChurController) {
         )
     }
 
+    if (showingPrivateNotes) {
+        PrivateNotesRoute(
+            vault = controller.vault, generation = generation,
+            onClose = { focusManager.clearFocus(); showingPrivateNotes = false },
+            onLock = { controller.lock() }, onPanic = controller::panic,
+            onTouch = { controller.recordPrivateNoteActivity(generation) },
+            onExport = { choosingPrivateNoteExport = PrivateNoteExportRequest.from(it, generation) },
+            systemBack = { enabled, back -> BackHandler(enabled = enabled, onBack = back) },
+            operation = operation, onCancelOperation = controller::cancelActiveOperation,
+            notice = notice, onNoticeShown = controller::consume,
+        )
+        choosingPrivateNoteExport?.let { request ->
+            ExportOptionsDialog(media = false, files = true, share = true, downloads = true,
+                onChoose = { target ->
+                    choosingPrivateNoteExport = null
+                    if (target == ExportTarget.FILES) {
+                        pendingPrivateNoteExport = request
+                        controller.beginHostActivity()
+                        try { privateNoteFilePicker.launch(request.filename) } catch (_: Exception) {
+                            pendingPrivateNoteExport = null
+                            controller.endHostActivity()
+                            controller.report("The file picker could not be opened.")
+                        }
+                    } else controller.exportPrivateNote(request, target)
+                }, onDismiss = { choosingPrivateNoteExport = null })
+        }
+        return
+    }
+
     // The viewer is drawn over the shell rather than in its place, as on
     // iOS: `ChurApp` stacks a route's content, so the shell stays composed and
     // its grid and list keep their scroll positions when the viewer closes.
@@ -909,6 +959,7 @@ private fun VaultRoute(controller: ChurController) {
                 onToggleSelection = { projection ->
                     selection = selection.toggle(projection.id)
                 },
+                onOpenPrivateNotes = { focusManager.clearFocus(); selection = emptySet(); showingPrivateNotes = true },
                 onImport = { choosingImport = true },
                 onSearch = {
                     terms = it

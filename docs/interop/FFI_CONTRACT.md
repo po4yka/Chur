@@ -649,6 +649,23 @@ chur_status_t chur_sync_fork_acknowledge(chur_handle_t session);
 
 [`../sync/ROLLBACK_PROTECTION.md`](../sync/ROLLBACK_PROTECTION.md) §4 keeps a fork state per (vault, device) in the encrypted catalog until reconciliation or an accepted revocation clears it, and has the user told. `chur_sync_process` reports a fork only in the pass that found it (§6.8), so a host that restarted could not read the state again. `chur_sync_fork_state` writes how many device chains are `detected` and how many are `acknowledged`. `chur_sync_fork_acknowledge` moves every `detected` chain to `acknowledged` in one transaction, and changes nothing when none is detected. Neither call unfreezes a chain, returns evidence, or names a device, and both return `VAULT_LOCKED` on a locked session. A later record of a frozen chain is still refused as `SYNC_CHAIN_FORK` and leaves the state as it is, so a host tells a new fork from an acknowledged one by reading the state. A head rollback leaves no state here: the engine refuses the checkpoint and freezes no chain.
 
+### 6.25 Local private notes, ABI 2.21
+
+`chur_private_notes_query`, `chur_private_note_get`, `chur_private_note_save`, and `chur_private_note_change` take a session, a bounded request byte range, a writable destination, its capacity, and a `bytes_written` pointer. The destination capacity must be at least 1048576 bytes before any catalog mutation can begin. Requests are at most 1048576 bytes. Request and destination ranges must not overlap. Native temporary output is zeroized; the host must clear its output buffer after decoding.
+
+All integers below are big endian. A string is a u32 byte count followed by UTF-8. Identifiers are 16 bytes. A note record contains identifier, revision u64, creation time u64, update time u64, deletion time u64 (`UINT64_MAX` means absent), pinned u8, export byte count u64, title string, and body string. A summary uses the same encoding, with at most 160 Unicode scalar values in the body preview and the export size of the complete saved note.
+
+| Call | Request | Successful output |
+| --- | --- | --- |
+| Query | Trash u8, limit u64, search string, cursor u32 length + bytes | Count u32, summary records, next cursor u32 length + bytes |
+| Get | Identifier | Note record |
+| Save | Identifier (all zero means create), expected revision u64, pinned u8, title string, body string | Committed note record |
+| Change | Identifier, expected revision u64, action u8 | Committed note record, or zero bytes for purge |
+
+Booleans are 0 or 1. Actions are 1 pin, 2 unpin, 3 trash, 4 restore, and 5 purge. Creation requires expected revision zero; updates require the current revision. Purge requires a trashed note. A stale revision fails without changing the note. See [catalog v9](../format/CATALOG_SCHEMA_V9.md) for input bounds, expiry, search, cursor bytes, and atomic index updates. These records do not enter media or sync/sharing operations.
+
+`chur_private_note_export_begin(session, note_id, expected_revision, destination_fd, out_operation)` snapshots the saved revision and returns a normal operation handle. It duplicates the destination descriptor; ownership of the caller's descriptor stays with the caller. The exact output is UTF-8 title, two LF bytes, then UTF-8 body. The worker releases the session guard before destination writes, clears its plaintext buffer on completion, and uses the existing progress, cancellation, and close operations. Host publication requires successful completion and the same unlocked session generation. Cancel or lock discards an unpublished destination. Provider writes can still block as described for other descriptor exports. The selected destination or share receiver may retain plaintext after publication.
+
 ## 7. Buffer ownership
 
 Each function specifies:
