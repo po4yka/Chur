@@ -26,7 +26,7 @@ pub fn request(
     collection_id: Id,
     object_id: Id,
 ) -> Result<ObjectPrekey> {
-    ensure_not_deleted(db, &object_id)?;
+    ensure_not_deleted(db, &collection_id, &object_id)?;
     let object = sharing_receive::pending_object_for_collection(
         db,
         root,
@@ -59,6 +59,11 @@ pub fn request(
         .map_err(|error| map_sqlite(error, "object key request could not be read"))?;
     if let Some(bytes) = stored {
         let prekey = ObjectPrekey::decode(&bytes)?;
+        ensure!(
+            prekey.collection_id() == &collection_id && prekey.object_id() == &object_id,
+            AuthenticationFailed,
+            "stored object request belongs to another collection or object"
+        );
         ensure!(
             prekey.object_generation() == object.object_generation
                 && prekey.container_commitment() == &object.container_commitment,
@@ -131,7 +136,7 @@ pub fn issue(
     source_vault_id: Id,
     prekey: &ObjectPrekey,
 ) -> Result<ObjectKeyGrant> {
-    ensure_not_deleted(db, prekey.object_id())?;
+    ensure_not_deleted(db, prekey.collection_id(), prekey.object_id())?;
     if prekey.recipient_vault_id() == &source_vault_id {
         ensure!(
             crate::own_sync::is_local_collection(db, prekey.collection_id())?,
@@ -279,7 +284,7 @@ pub fn accept(
     issuers: &[sharing_service::IssuerEvidence<'_>],
     grant: &ObjectKeyGrant,
 ) -> Result<()> {
-    ensure_not_deleted(db, grant.object_id())?;
+    ensure_not_deleted(db, grant.collection_id(), grant.object_id())?;
     let membership = sync_membership::load(db)?.ok_or_else(|| {
         Error::new(
             ChurStatus::RecoveryRequired,
@@ -478,7 +483,6 @@ pub fn accept(
 
 /// Reads the local key custody row required by container activation.
 pub fn pending_envelope(db: &CatalogDb, object_id: &Id) -> Result<ObjectKeyEnvelope> {
-    ensure_not_deleted(db, object_id)?;
     let bytes: Vec<u8> = db
         .connection()
         .query_row(
@@ -487,7 +491,9 @@ pub fn pending_envelope(db: &CatalogDb, object_id: &Id) -> Result<ObjectKeyEnvel
             |row| row.get(0),
         )
         .map_err(|error| map_sqlite(error, "object key grant has not arrived"))?;
-    ObjectKeyEnvelope::decode(&bytes)
+    let envelope = ObjectKeyEnvelope::decode(&bytes)?;
+    ensure_not_deleted(db, envelope.collection_id(), object_id)?;
+    Ok(envelope)
 }
 
 /// Removes temporary local key custody after atomic object activation.
@@ -501,12 +507,15 @@ pub fn remove_pending(tx: &Transaction<'_>, object_id: &Id) -> Result<()> {
 }
 
 /// Returns a stable not-found verdict for locally erased objects.
-pub(crate) fn ensure_not_deleted(db: &CatalogDb, object_id: &Id) -> Result<()> {
+pub(crate) fn ensure_not_deleted(db: &CatalogDb, collection_id: &Id, object_id: &Id) -> Result<()> {
     let deleted: i64 = db
         .connection()
         .query_row(
-            "SELECT count(*) FROM tombstones WHERE object_id = ?1",
-            [object_id.as_bytes().as_slice()],
+            "SELECT count(*) FROM tombstones WHERE object_id = ?1 AND collection_id = ?2",
+            params![
+                object_id.as_bytes().as_slice(),
+                collection_id.as_bytes().as_slice()
+            ],
             |row| row.get(0),
         )
         .map_err(|error| map_sqlite(error, "local object tombstone could not be read"))?;
@@ -540,13 +549,17 @@ mod tests {
     }
     #[test]
     fn unavailable_requests_do_not_starve_later_keys_or_evict_asynchronous_replies() {
-        recipient_key_fixture(false);
+        recipient_key_fixture(false, false);
     }
     #[test]
     fn active_object_rejects_wrong_signed_grant_before_idempotent_acknowledgment() {
-        recipient_key_fixture(true);
+        recipient_key_fixture(true, false);
     }
-    fn recipient_key_fixture(check_active: bool) {
+    #[test]
+    fn a_foreign_collection_purge_cannot_erase_pending_keys_or_block_later_arrival() {
+        recipient_key_fixture(false, true);
+    }
+    fn recipient_key_fixture(check_active: bool, check_scope: bool) {
         let source_vault = id(21);
         let collection = id(22);
         let source_root = Key::new([23; 32]);
@@ -759,6 +772,258 @@ mod tests {
             private_count, 64,
             "only accepted replies consume their own private keys"
         );
+        if check_scope {
+            // Both collections have real source-signed membership, metadata grants,
+            // and causally valid content logs. The adversarial source controls the
+            // object IDs of its own collection, not custody in another collection.
+            let foreign = id(90);
+            let foreign_key = Key::new([91; 32]);
+            let envelope = CollectionKeyEnvelope::seal(
+                &source_root,
+                source_vault,
+                foreign,
+                1,
+                1,
+                Nonce::random().expect("nonce"),
+                &foreign_key,
+            )
+            .expect("foreign envelope");
+            store::put_collection_with_envelope(
+                &mut source,
+                &Collection {
+                    collection_id: foreign,
+                    current_epoch: 1,
+                    policy_type: COLLECTION_POLICY_VAULT_DEFAULT,
+                    created_revision: 1,
+                    status: COLLECTION_STATUS_ACTIVE,
+                },
+                1,
+                &envelope.encode(),
+            )
+            .expect("foreign collection");
+            let share = sharing_service::prepare_share(
+                &mut source,
+                &source_root,
+                source_vault,
+                foreign,
+                &recipient_enrollment,
+                PermissionProfile::Read,
+                true,
+            )
+            .expect("foreign authenticated share");
+            let foreign_state = sharing::load(&source, &foreign)
+                .expect("state")
+                .expect("present");
+            let domain = KeyDomain::collection(&foreign_key, &foreign, 1).expect("domain");
+            let mut foreign_log = DurableCollectionOperationLog::provision(
+                &mut source,
+                foreign,
+                1,
+                *domain.selector(),
+            )
+            .expect("foreign log");
+            let future = random::id().expect("future object");
+            let mut foreign_keys =
+                sync_keys::key_directory(&source, &source_root, source_vault).expect("source keys");
+            foreign_keys
+                .insert(KeyDomain::collection(&foreign_key, &foreign, 1).expect("domain"))
+                .expect("foreign domain");
+            let mut malicious = Vec::new();
+            for object in [objects[1].0, objects[0].0, future] {
+                for body in [
+                    PayloadBody::CreateObject {
+                        object_id: object,
+                        object_generation: 1,
+                        store_id: object,
+                        stream_id: object,
+                        metadata_fields: vec![],
+                    },
+                    PayloadBody::PurgeObject {
+                        object_id: object,
+                        object_generation: 1,
+                        authored_at_ms: 10,
+                    },
+                ] {
+                    malicious.push(
+                        foreign_log
+                            .author_with_keys(
+                                &mut source,
+                                &foreign_keys,
+                                random::id().expect("operation"),
+                                source_vault,
+                                *source_enrollment.device_id(),
+                                domain.operation_key(),
+                                Nonce::random().expect("nonce"),
+                                &OperationPayload::new(foreign, 1, body).expect("payload"),
+                                identity.signing_key(),
+                                &source_membership,
+                                &source_membership,
+                                &foreign_state,
+                            )
+                            .expect("valid foreign signed lifecycle"),
+                    );
+                }
+            }
+            // A second valid foreign create/commit copies a victim's public
+            // container binding. It must not reuse or rotate the victim request.
+            {
+                let index = 2;
+                let (object, content) = &objects[index];
+                for body in [
+                    PayloadBody::CreateObject {
+                        object_id: *object,
+                        object_generation: 1,
+                        store_id: *object,
+                        stream_id: *object,
+                        metadata_fields: vec![],
+                    },
+                    PayloadBody::CommitObject {
+                        object_id: *object,
+                        object_generation: 1,
+                        store_id: *object,
+                        container_length: 1024,
+                        container_commitment: [index as u8 + 1; 32],
+                        object_key_commitment: object_key_commitment(&foreign, object, content),
+                    },
+                ] {
+                    malicious.push(
+                        foreign_log
+                            .author_with_keys(
+                                &mut source,
+                                &foreign_keys,
+                                random::id().expect("operation"),
+                                source_vault,
+                                *source_enrollment.device_id(),
+                                domain.operation_key(),
+                                Nonce::random().expect("nonce"),
+                                &OperationPayload::new(foreign, 1, body).expect("payload"),
+                                identity.signing_key(),
+                                &source_membership,
+                                &source_membership,
+                                &foreign_state,
+                            )
+                            .expect("valid foreign copied commit"),
+                    );
+                }
+            }
+            let proof = sync_log::records_after(&source, source_enrollment.device_id(), 0)
+                .expect("evidence")
+                .iter()
+                .map(|b| Operation::decode(b).expect("operation"))
+                .collect::<Vec<_>>();
+            let evidence = [sharing_service::IssuerEvidence {
+                membership: &membership_records,
+                operations: &proof,
+            }];
+            sharing_receive::receive(
+                &mut recipient,
+                &recipient_root,
+                recipient_vault,
+                &evidence,
+                &[(
+                    share.membership().clone(),
+                    share.membership_operation().clone(),
+                )],
+                share.grant(),
+                share.grant_operation(),
+                &malicious,
+            )
+            .expect("foreign purge accepted only in its own scope");
+            assert!(matches!(
+                request(&mut recipient, &recipient_root, recipient_vault, foreign, objects[2].0),
+                Err(error) if error.status() == ChurStatus::AuthenticationFailed
+            ));
+            assert_eq!(
+                request(
+                    &mut recipient,
+                    &recipient_root,
+                    recipient_vault,
+                    collection,
+                    objects[2].0
+                )
+                .expect("victim request unchanged")
+                .encode(),
+                requests[2].encode()
+            );
+            assert_eq!(
+                request(
+                    &mut recipient,
+                    &recipient_root,
+                    recipient_vault,
+                    collection,
+                    objects[1].0
+                )
+                .expect("victim private key survives")
+                .encode(),
+                requests[1].encode()
+            );
+            assert_eq!(
+                pending_envelope(&recipient, &objects[0].0)
+                    .expect("victim accepted envelope survives")
+                    .open(&metadata_key)
+                    .expect("victim content key")
+                    .expose(),
+                objects[0].1.expose()
+            );
+            let content = Key::new([92; 32]);
+            let mut arrival = Vec::new();
+            for body in [
+                PayloadBody::CreateObject {
+                    object_id: future,
+                    object_generation: 1,
+                    store_id: future,
+                    stream_id: future,
+                    metadata_fields: vec![],
+                },
+                PayloadBody::CommitObject {
+                    object_id: future,
+                    object_generation: 1,
+                    store_id: future,
+                    container_length: 1024,
+                    container_commitment: [92; 32],
+                    object_key_commitment: object_key_commitment(&collection, &future, &content),
+                },
+            ] {
+                arrival.push(
+                    log.author(
+                        &mut source,
+                        random::id().expect("operation"),
+                        source_vault,
+                        *source_enrollment.device_id(),
+                        KeyDomain::collection(&metadata_key, &collection, 1)
+                            .expect("domain")
+                            .operation_key(),
+                        Nonce::random().expect("nonce"),
+                        &OperationPayload::new(collection, 1, body).expect("payload"),
+                        identity.signing_key(),
+                        &source_membership,
+                        &source_membership,
+                        &shared,
+                    )
+                    .expect("legitimate later arrival"),
+                );
+            }
+            sharing_receive::receive(
+                &mut recipient,
+                &recipient_root,
+                recipient_vault,
+                &evidence,
+                &changes,
+                prepared.grant(),
+                prepared.grant_operation(),
+                &arrival,
+            )
+            .expect("later victim collection remains receivable");
+            request(
+                &mut recipient,
+                &recipient_root,
+                recipient_vault,
+                collection,
+                future,
+            )
+            .expect("foreign preemptive purge does not block victim request");
+            return;
+        }
         if check_active {
             use crate::model::{MetadataRevision, Object, Stream};
             use chur_format::constants::{IntegritySummary, MediaClass, ObjectState, StreamKind};

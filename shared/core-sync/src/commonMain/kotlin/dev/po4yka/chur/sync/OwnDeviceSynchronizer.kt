@@ -14,6 +14,9 @@ internal class OwnDeviceSynchronizer(private val client: SyncClient, private val
     var hasMoreDownloads: Boolean = false
         private set
 
+    var pendingOperations: Long = 0
+        private set
+
     suspend fun publishOperations(vaultId: ByteArray, after: ULong, acknowledged: suspend (ULong) -> Unit): ULong {
         var cursor = after
         while (true) {
@@ -65,12 +68,14 @@ internal class OwnDeviceSynchronizer(private val client: SyncClient, private val
         pendingObjectKeys = 0
         unavailableObjects = 0
         hasMoreDownloads = false
+        pendingOperations = 0
         val collections = vault.ownSyncCollections() ?: return
         if (collections.isEmpty()) return
         val grants = client.objectKeyGrants(vaultId)
         val downloader = SharingPuller(client, vault)
         for (collection in collections) {
             val plan = vault.ownSyncPlan(collection) ?: return
+            pendingOperations += plan.pendingOperations.toLong()
             // Native dispatch is bounded. A full plan can hide another page,
             // including when every download in this page succeeds.
             hasMoreDownloads = hasMoreDownloads || plan.downloads.size >= DOWNLOAD_PAGE_MAX

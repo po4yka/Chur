@@ -94,11 +94,15 @@ One device signs. There is no quorum: a quorum rule needs a membership the recei
 - a checkpoint naming a head at a sequence the receiver accepted with a different `operation_digest` is fork evidence under §4;
 - no checkpoint proves the server hid nothing that no signer had seen. Completeness still needs cross-device comparison or a witness service.
 
+Current signed revocation bounds these floors. A checkpoint head above that device's signed cutoff is retained as a historical claim, but creates no new floor. A previously retained above-cutoff floor is ignored on reconstruction and retired when a valid checkpoint is accepted. Bootstrap applies the same rule. The signed checkpoint bytes are not rewritten. Below-cutoff digest checks and active-device floors remain in force; no checkpoint restores revoked-device authorization.
+
 A device issues a checkpoint at the end of every sync session in which it accepted an operation, and includes its latest one in every portable backup. It retains its own latest checkpoint and the latest it has accepted from each other device.
 
 ### 6.1 Collection and catalog commitments
 
 `collection_epoch_commitment` is BLAKE3-256 over `CHUR\x00SYNC\x00COLLECTION-EPOCHS\x00V1` followed by every `(collection_id:bytes[16], current_epoch:u64)` entry. Entries use ascending `collection_id` order, with no count or separator. Duplicate identifiers and epoch zero are invalid. An empty vault commits to the domain tag alone.
+
+Claims with the same accepted head frontier are unordered; this digest does not create an epoch floor. Readers validate actual epoch and grant state from signed operations, and the relay retains exact checkpoint records for enrollment and retry proofs.
 
 V1 does not compact signed operation history and has no portable materialized-catalog snapshot. Its `catalog_state_commitment` is therefore exactly 32 zero bytes. A V1 reader rejects any other value as an unsupported snapshot format. Object ciphertext and local catalog rows can still complete the tombstone GC flow, but the signed operations and tombstones remain available for bootstrap and stale devices.
 

@@ -162,6 +162,8 @@ pub fn load_materialized_state(db: &CatalogDb, keys: &KeyDirectory) -> Result<Ma
         .collect::<BTreeMap<_, _>>();
     let mut restored = 0;
     let mut state = MaterializedState::new();
+    let membership = sync_membership::load(db)?;
+    let mut pruned_since = BTreeMap::<Id, u64>::new();
 
     while restored < operation_count {
         let mut progressed = false;
@@ -177,6 +179,35 @@ pub fn load_materialized_state(db: &CatalogDb, keys: &KeyDirectory) -> Result<Ma
                 CatalogCorrupt,
                 "an accepted operation digest contradicts its record"
             );
+            // Restore causal predecessors before computing whether their
+            // signed branches contain history excluded by current revocation.
+            if operation.observed_heads().iter().any(|head| {
+                let required = match membership
+                    .as_ref()
+                    .and_then(|m| m.device(head.device_id()))
+                    .map(|device| device.status())
+                {
+                    Some(chur_sync_protocol::state::DeviceStatus::Revoked { sequence, .. }) => {
+                        head.device_sequence().min(sequence)
+                    }
+                    _ => head.device_sequence(),
+                };
+                next_sequence.get(head.device_id()).copied().unwrap_or(1) - 1 < required
+            }) {
+                continue;
+            }
+            let pruned = membership.as_ref().is_some_and(|m| {
+                chur_sync_protocol::operation_log::OperationLog::observes_pruned_revocation(
+                    &operation, m,
+                )
+            }) || pruned_since
+                .get(device_id)
+                .is_some_and(|first| *first < sequence)
+                || operation.observed_heads().iter().any(|head| {
+                    pruned_since
+                        .get(head.device_id())
+                        .is_some_and(|first| *first <= head.device_sequence())
+                });
             let payload = OperationPayload::open_for_operation(&operation, keys)
                 .map_err(corrupt_materialized_state)?;
             if !matches!(
@@ -191,14 +222,25 @@ pub fn load_materialized_state(db: &CatalogDb, keys: &KeyDirectory) -> Result<Ma
                     | PayloadBody::IssueCollectionGrant(_)
             ) {
                 let mut candidate = state.clone();
-                if candidate
-                    .apply(&operation, &payload)
-                    .map_err(corrupt_materialized_state)?
-                    == MergeOutcome::PendingCause
-                {
-                    continue;
+                let result = candidate.apply(&operation, &payload);
+                if matches!(result, Ok(MergeOutcome::PendingCause)) || (pruned && result.is_err()) {
+                    if !pruned {
+                        continue;
+                    }
+                    candidate = state.clone();
+                    candidate.defer_revoked_content(&operation, &payload);
+                } else {
+                    result.map_err(corrupt_materialized_state)?;
+                    for purge in candidate.retry_deferred_after(&payload) {
+                        // The receiving/authoring transaction must commit a
+                        // resolved terminal effect before publishing its state.
+                        validate_projected_purge(db, &purge)?;
+                    }
                 }
                 state = candidate;
+            }
+            if pruned {
+                pruned_since.entry(*device_id).or_insert(sequence);
             }
             next_sequence.insert(
                 *device_id,
@@ -224,6 +266,29 @@ pub fn load_materialized_state(db: &CatalogDb, keys: &KeyDirectory) -> Result<Ma
         );
     }
     Ok(state)
+}
+
+fn validate_projected_purge(db: &CatalogDb, payload: &OperationPayload) -> Result<()> {
+    let PayloadBody::PurgeObject { object_id, .. } = payload.body() else {
+        return Ok(());
+    };
+    let projected: i64 = db
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM tombstones WHERE collection_id = ?1 AND object_id = ?2",
+            rusqlite::params![
+                payload.collection_id().as_bytes().as_slice(),
+                object_id.as_bytes().as_slice()
+            ],
+            |row| row.get(0),
+        )
+        .map_err(|error| map_sqlite(error, "resolved purge custody could not be checked"))?;
+    ensure!(
+        projected != 0,
+        RecoveryRequired,
+        "resolved permanent purge has not completed its custody projection"
+    );
+    Ok(())
 }
 
 fn corrupt_materialized_state(_error: Error) -> Error {
@@ -288,9 +353,14 @@ pub fn author_content_operation(
         InvalidInput,
         "local content operation does not change the current state"
     );
+    let resolved_purges = projected.retry_deferred_after(payload);
     ensure!(
         log.accept_with(db, &operation, membership, |tx| {
-            crate::deletion::project_purge(tx, payload)
+            crate::deletion::project_purge(tx, payload)?;
+            for purge in &resolved_purges {
+                crate::deletion::project_purge(tx, purge)?;
+            }
+            Ok(())
         })? == ApplyOutcome::Applied,
         InternalFailure,
         "fresh local content operation was not applied"
@@ -785,25 +855,44 @@ pub fn accept_content_operation(
     let operation = Operation::decode(record)?;
     let payload = OperationPayload::open_for_operation(&operation, keys)?;
     let mut projected_state = None;
+    let purges = std::cell::RefCell::new(Vec::new());
     let outcome = log.accept_gated_with(
         db,
         &operation,
         membership,
-        || {
+        |authenticated_log| {
             let mut candidate = state.clone();
-            if candidate.apply(&operation, &payload)? == MergeOutcome::PendingCause {
-                return Ok(false);
+            let result = candidate.apply(&operation, &payload);
+            if matches!(result, Ok(MergeOutcome::PendingCause)) || result.is_err() {
+                if !authenticated_log.has_pruned_revocation_cause(&operation, membership)? {
+                    result?;
+                    return Ok(false);
+                }
+                candidate = state.clone();
+                candidate.defer_revoked_content(&operation, &payload);
+            } else {
+                if matches!(payload.body(), PayloadBody::PurgeObject { .. }) {
+                    purges.borrow_mut().push(payload.clone());
+                }
+                purges
+                    .borrow_mut()
+                    .extend(candidate.retry_deferred_after(&payload));
             }
             projected_state = Some(candidate);
             Ok(true)
         },
-        |tx| crate::deletion::project_purge(tx, &payload),
+        |tx| {
+            for purge in purges.borrow().iter() {
+                crate::deletion::project_purge(tx, purge)?;
+            }
+            Ok(())
+        },
     )?;
     if outcome == ApplyOutcome::Applied {
         *state = projected_state.ok_or_else(|| {
             Error::new(
                 ChurStatus::InternalFailure,
-                "applied content operation has no projection",
+                "applied content operation has no projection state",
             )
         })?;
     }

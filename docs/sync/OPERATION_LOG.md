@@ -94,7 +94,7 @@ Operation B observes operation A when B's entry for A's device is at or above A'
 
 ### 4.3 Referenced heads not held
 
-An operation that observes a head the receiver does not hold is not a fork and is not applied out of order:
+An operation that observes a required head the receiver does not hold is not a fork and is not applied out of order. Section 4.4 bounds required heads after revocation:
 
 - hold it in a pending set bounded by 1024 operations and 8 MiB per vault, whichever bound is reached first;
 - request the missing heads and retry the pending set after each accepted batch;
@@ -107,7 +107,8 @@ An operation that observes a head the receiver does not hold is not a fork and i
 A revoked device must not pin the vector:
 
 - the `RevokeDevice` operation records the revoked device's final accepted head, so ordering against that device's earlier operations survives without an entry in every later operation;
-- an operation whose author had observed a revocation must omit the revoked device. A receiver checks this from the same vector, because the entry for the revoking device shows whether the author had accepted the revocation; presence after that point is non-canonical;
+- native authors omit devices whose revocation they have accepted;
+- an active author's retained observation of a revoked device is a historical claim. Its required dependency is `min(observed_sequence, final_accepted_device_sequence)`. A zero cutoff requires no record from that device. This does not authorize any operation above the signed cutoff;
 - an author that had not yet observed the revocation may still name the device, and its operation is handled under [`REVOCATION.md`](REVOCATION.md) §7;
 - a revoked device stops counting against the 32-device maximum once its revocation is accepted.
 
@@ -217,3 +218,5 @@ A parser checks every declared length, count, and multiplication before allocati
 - server replay/rollback/fork/omission;
 - deterministic conflict application;
 - cross-platform vectors.
+
+An authenticated active-device branch can contain a private payload whose required content was removed from future delivery by revocation. Its signed outer record and head may be retained without applying that private effect. This exception requires a signed pruned observation in its causal ancestry. Ordinary missing causes retain the pending-log rule. Related accepted facts retry the deferred projection. Unresolved or contradictory private effects stay pending and do not block unrelated descendants. A resolved `PurgeObject` removes custody in the same catalog transaction; the key-erasure barrier still applies.

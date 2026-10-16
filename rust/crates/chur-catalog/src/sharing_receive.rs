@@ -249,7 +249,7 @@ pub fn pending_object_for_collection(
             object_id,
         );
     }
-    crate::object_grants::ensure_not_deleted(db, &object_id)?;
+    crate::object_grants::ensure_not_deleted(db, &collection_id, &object_id)?;
     let (state, keys, selector) = recipient_context(db, root, local_vault_id, collection_id)?;
     sharing_log::ensure_object_index(db, &selector, &keys)?;
     let (draft, missing) =
@@ -314,7 +314,7 @@ pub fn pending_objects(
     let dirty = sharing_log::dirty_object_ids(db, selector, 4096)?;
     let mut objects = Vec::new();
     for (object_id, revision) in dirty {
-        match crate::object_grants::ensure_not_deleted(db, &object_id) {
+        match crate::object_grants::ensure_not_deleted(db, domain.collection_id(), &object_id) {
             Ok(()) => {}
             Err(error) if error.status() == ChurStatus::NotFound => {
                 sharing_log::mark_object_clean(db, selector, &object_id, revision)?;

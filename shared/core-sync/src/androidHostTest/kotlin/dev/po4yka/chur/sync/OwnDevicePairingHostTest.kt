@@ -7,6 +7,7 @@ import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.toByteArray
 import io.ktor.http.HttpMethod
+import io.ktor.http.HttpStatusCode
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import java.io.File
@@ -50,6 +51,71 @@ class OwnDevicePairingHostTest {
             fixture.restartPeer()
             assertTrue(fixture.peerSync.syncNow())
             assertContentEquals(original, fixture.export(fixture.peer.session, objectId))
+        }
+    }
+
+    @Test
+    fun pending_dependency_signal_keeps_healthy_native_downloads_and_reports_waiting() = runBlocking {
+        Fixture().use { fixture ->
+            fixture.connectPeer()
+            val original = ByteArray(8192) { (it % 233).toByte() }
+            val objectId = fixture.import(original)
+            assertTrue(fixture.sourceSync.syncNow())
+            fixture.peer.additionalPendingDependencies = 1
+            assertTrue(fixture.peerSync.syncNow())
+            assertTrue(fixture.sourceSync.syncNow())
+            assertTrue(fixture.peerSync.syncNow())
+            assertContentEquals(original, fixture.export(fixture.peer.session, objectId))
+            val message = fixture.peerSync.status.value.message.orEmpty()
+            assertTrue(message.contains("Some changes are waiting for missing dependencies."), message)
+            assertFalse(message.contains("Up to date."), message)
+            fixture.peer.additionalPendingDependencies = 0
+            assertTrue(fixture.peerSync.syncNow())
+            assertTrue(fixture.peerSync.status.value.message.orEmpty().contains("Up to date."))
+        }
+    }
+
+    @Test
+    fun approval_checkpoints_follow_unpublished_originals_and_later_cached_retry_edits() = runBlocking {
+        Fixture().use { fixture ->
+            fixture.relay.requireRelayedCheckpointHeads = true
+            fixture.import(ByteArray(8192) { (it % 241).toByte() })
+            val request = fixture.peerSync.prepareDevicePairing()
+            val preview = fixture.sourceSync.inspectDevicePairing(request.request)
+            val approval = fixture.sourceSync.approveDevicePairing(request.request, preview.fingerprint)
+            val firstHead = ChurVault.ownSyncOperations(fixture.source.session, 0uL).last().sequence
+            assertEquals(firstHead, fixture.sourceStore.saved!!.ownPushCursor)
+            assertEquals(firstHead, fixture.relay.checkpointSequences.last())
+            fixture.leavePublishedMediaOperationsUnsent()
+            val nextHead = ChurVault.ownSyncOperations(fixture.source.session, firstHead).last().sequence
+            fixture.restartSource()
+            val retry = fixture.sourceSync.approveDevicePairing(request.request, preview.fingerprint)
+            assertContentEquals(approval, retry)
+            assertContentEquals(fixture.relay.enrollmentBodies[0], fixture.relay.enrollmentBodies[1])
+            assertEquals(nextHead, fixture.sourceStore.saved!!.ownPushCursor)
+            assertEquals(nextHead, fixture.relay.checkpointSequences.last())
+            assertTrue(fixture.peerSync.acceptPairingApproval(retry))
+        }
+    }
+
+    @Test
+    fun approval_recovers_an_older_revocation_before_advancing_its_prefix() = runBlocking {
+        Fixture().use { fixture ->
+            fixture.relay.requireRelayedCheckpointHeads = true
+            fixture.connectPeer()
+            assertTrue(fixture.peerSync.syncNow())
+            assertTrue(fixture.sourceSync.syncNow())
+            val peer = fixture.sourceSync.pairedDevices().single { !it.current }
+            fixture.sourceStore.failNextSave = true
+            assertFailsWith<IllegalStateException> {
+                fixture.sourceSync.revokePairedDevice(peer.deviceId, peer.fingerprint)
+            }
+            fixture.relay.publicationOrder.clear()
+            fixture.connectAdditionalPeer()
+            val revoke = fixture.relay.publicationOrder.indexOf("revoke")
+            val enroll = fixture.relay.publicationOrder.indexOf("enroll")
+            assertTrue(revoke >= 0 && enroll > revoke)
+            assertTrue(fixture.sourceStore.saved!!.pendingDeviceRevocations.isEmpty())
         }
     }
 
@@ -366,6 +432,8 @@ class OwnDevicePairingHostTest {
     private class NativeBoundary(val root: File) : SyncVaultBoundary, AutoCloseable {
         var runtime = ChurVault.openRuntime(root.apply { mkdirs() }.absolutePath)
         var session = 0L
+        // Inject only the pending signal; media transfer and verification use JNI.
+        var additionalPendingDependencies = 0
         override suspend fun identity(): SharingIdentity? = try { ChurVault.sharingIdentity(session) } catch (failure: ChurFailure) {
             if (failure.status == ChurStatus.RECOVERY_REQUIRED) null else throw failure
         }
@@ -383,7 +451,10 @@ class OwnDevicePairingHostTest {
         override suspend fun sourceAuthor(source: SharedSourceObject) = ChurVault.sharedSourceAuthor(session, source)
         override suspend fun ownSyncCollections() = ChurVault.ownSyncCollections(session)
         override suspend fun ownSyncOperations(after: ULong) = ChurVault.ownSyncOperations(session, after)
-        override suspend fun ownSyncPlan(collectionId: ByteArray) = ChurVault.ownSyncPlan(session, collectionId)
+        override suspend fun ownSyncPlan(collectionId: ByteArray) = ChurVault.ownSyncPlan(session, collectionId).let { plan ->
+            SharedReceivePlan(plan.sourceVaultId, plan.collectionId, plan.selector,
+                plan.pendingOperations + additionalPendingDependencies, plan.downloads)
+        }
         override suspend fun ownSyncAuthor(source: SharedSourceObject) = ChurVault.ownSyncAuthor(session, source)
         override suspend fun prepareDevicePairing() = ChurVault.prepareDevicePairing(session)
         override suspend fun inspectDevicePairing(request: ByteArray) = ChurVault.inspectDevicePairing(session, request)
@@ -436,6 +507,7 @@ class OwnDevicePairingHostTest {
                 path.endsWith("/bootstrap") -> { deviceTokens[body.copyOfRange(0, 32).toHex()] = body.copyOfRange(54, 70).toHex(); addOperation(body.copyOfRange(36 + unsigned(body, 32, 4).toInt(), body.size)); byteArrayOf() }
                 path.endsWith("/memberships/enroll") -> {
                     enrollmentBodies.add(body)
+                    publicationOrder.add("enroll")
                     if (failEnrollmentOnce) { failEnrollmentOnce = false; error("simulated enrollment connection loss") }
                     deviceTokens[body.copyOfRange(0, 32).toHex()] = body.copyOfRange(54, 70).toHex()
                     addOperation(body.copyOfRange(36 + unsigned(body, 32, 4).toInt(), body.size)); byteArrayOf()
@@ -461,8 +533,9 @@ class OwnDevicePairingHostTest {
                             val offset = 86 + index * 56
                             val device = body.copyOfRange(offset, offset + 16).toHex()
                             val sequence = unsigned(body, offset + 16, 8)
-                            check(sequence == 0uL || operations[device]?.containsKey(sequence) == true) {
-                                "checkpoint head has not reached the relay"
+                            if (sequence != 0uL && operations[device]?.containsKey(sequence) != true) {
+                                val code = ChurStatus.SYNC_HEAD_ROLLBACK.value
+                                return@MockEngine respond(byteArrayOf(0, 0, 0, code.toByte()), HttpStatusCode.Conflict)
                             }
                         }
                     }

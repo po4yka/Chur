@@ -222,11 +222,74 @@ impl OperationLog {
         operation: &Operation,
         membership: &MembershipState,
     ) -> Result<ApplyOutcome> {
-        let outcome = self.check_history(operation, membership, None, true)?;
+        let outcome = self.check_history(operation, membership, None)?;
         if outcome == ApplyOutcome::Applied {
             self.commit_inner(operation);
         }
         Ok(outcome)
+    }
+
+    /// Whether this signed branch contains an observation excluded by a later
+    /// revocation. This is used only after ordinary authentication succeeds,
+    /// when a private content projection has a missing cause.
+    pub fn has_pruned_revocation_cause(
+        &self,
+        operation: &Operation,
+        membership: &MembershipState,
+    ) -> Result<bool> {
+        if Self::observes_pruned_revocation(operation, membership) {
+            return Ok(true);
+        }
+        let mut pending = operation
+            .observed_heads()
+            .iter()
+            .map(|head| (*head.device_id(), head.device_sequence()))
+            .collect::<Vec<_>>();
+        if operation.device_sequence() > 1 {
+            pending.push((*operation.device_id(), operation.device_sequence() - 1));
+        }
+        let mut visited = std::collections::BTreeSet::new();
+        while let Some(position) = pending.pop() {
+            if !visited.insert(position) {
+                continue;
+            }
+            let Some(accepted) = self.accepted.get(&position) else {
+                continue;
+            };
+            let record = Operation::decode(&accepted.bytes)?;
+            if Self::observes_pruned_revocation(&record, membership) {
+                return Ok(true);
+            }
+            pending.extend(
+                record
+                    .observed_heads()
+                    .iter()
+                    .map(|head| (*head.device_id(), head.device_sequence())),
+            );
+            if record.device_sequence() > 1 {
+                pending.push((*record.device_id(), record.device_sequence() - 1));
+            }
+        }
+        Ok(false)
+    }
+
+    /// Whether one signed observation extends beyond its current revocation cut.
+    pub fn observes_pruned_revocation(operation: &Operation, membership: &MembershipState) -> bool {
+        operation.observed_heads().iter().any(|head| {
+            matches!(
+                membership.device(head.device_id()).map(|device| device.status()),
+                Some(DeviceStatus::Revoked { sequence, .. }) if head.device_sequence() > sequence
+            )
+        })
+    }
+
+    fn retire_revoked_floors(&mut self, membership: &MembershipState) {
+        self.floors.retain(|device_id, floor| {
+            !matches!(
+                membership.device(device_id).map(|device| device.status()),
+                Some(DeviceStatus::Revoked { sequence, .. }) if floor.sequence > sequence
+            )
+        });
     }
 
     /// Restores one authenticated checkpoint floor from the protected catalog.
@@ -242,6 +305,12 @@ impl OperationLog {
             CatalogCorrupt,
             "a durable checkpoint floor is malformed"
         );
+        if matches!(membership.device(device_id).map(|device| device.status()),
+            Some(DeviceStatus::Revoked { sequence: cutoff, .. }) if sequence > cutoff)
+        {
+            self.floors.remove(device_id);
+            return Ok(());
+        }
         if let Some(record) = self.accepted.get(&(*device_id, sequence)) {
             ensure!(
                 record.digest == digest,
@@ -387,6 +456,7 @@ impl OperationLog {
         // contributes no new floors or authority. Unknown older checkpoints
         // still require the current membership below.
         if self.checkpoints.get(checkpoint.issuer_device_id()) == Some(&checkpoint.commitment()) {
+            self.retire_revoked_floors(membership);
             return Ok(CheckpointOutcome::Unchanged);
         }
         ensure!(
@@ -411,6 +481,11 @@ impl OperationLog {
                 "checkpoint names an unknown device"
             );
             let device_id = *checkpoint_head.device_id();
+            if matches!(membership.device(&device_id).map(|device| device.status()),
+                Some(DeviceStatus::Revoked { sequence, .. }) if checkpoint_head.device_sequence() > sequence)
+            {
+                continue;
+            }
             let offered = AcceptedHead {
                 sequence: checkpoint_head.device_sequence(),
                 digest: *checkpoint_head.operation_digest(),
@@ -449,6 +524,7 @@ impl OperationLog {
             pending.insert(device_id, offered);
             raised = true;
         }
+        self.retire_revoked_floors(membership);
         self.floors.extend(pending);
         // Retain the latest checkpoint, not the last offered one: floors only
         // move up, so a replayed older checkpoint raises nothing and must not
@@ -532,6 +608,11 @@ impl OperationLog {
                 AuthenticationFailed,
                 "bootstrap checkpoint names a device outside prior membership"
             );
+            if matches!(membership.device(head.device_id()).map(|device| device.status()),
+                Some(DeviceStatus::Revoked { sequence, .. }) if head.device_sequence() > sequence)
+            {
+                continue;
+            }
             floors.insert(
                 *head.device_id(),
                 AcceptedHead {
@@ -710,7 +791,7 @@ impl OperationLog {
         membership: &MembershipState,
         cutoff: Option<(u64, Commitment)>,
     ) -> Result<ApplyOutcome> {
-        self.check_history(operation, membership, cutoff, false)
+        self.check_history(operation, membership, cutoff)
     }
 
     fn check_history(
@@ -718,7 +799,6 @@ impl OperationLog {
         operation: &Operation,
         membership: &MembershipState,
         cutoff: Option<(u64, Commitment)>,
-        protected_history: bool,
     ) -> Result<ApplyOutcome> {
         ensure!(
             operation.vault_id() == membership.vault_id(),
@@ -813,24 +893,20 @@ impl OperationLog {
                     "operation observes an unknown device",
                 )
             })?;
-            if let DeviceStatus::Revoked { sequence, .. } = device.status()
-                && !protected_history
-            {
-                // `OPERATION_LOG.md` §4.4: a record above the revocation point
-                // is rejected unconditionally, so an observed head above it is
-                // non-canonical. Waiting for it as a missing cause would stall
-                // the author's chain forever, because the named record can
-                // never be accepted.
-                ensure!(
-                    observed.device_sequence() <= sequence,
-                    AuthenticationFailed,
-                    "operation observes a revoked device above its revocation point"
-                );
+            // A still-authorized signer can retain an observation made before
+            // it learned the revocation. That claim grants no authority to the
+            // revoked device and cannot require its forbidden future records.
+            let required = match device.status() {
+                DeviceStatus::Active => observed.device_sequence(),
+                DeviceStatus::Revoked { sequence, .. } => observed.device_sequence().min(sequence),
+            };
+            if required == 0 {
+                continue;
             }
             if self
                 .heads
                 .get(observed.device_id())
-                .is_none_or(|head| head.sequence < observed.device_sequence())
+                .is_none_or(|head| head.sequence < required)
             {
                 return Ok(ApplyOutcome::PendingCause);
             }
@@ -1771,7 +1847,7 @@ mod tests {
     }
 
     #[test]
-    fn an_operation_cannot_observe_a_revoked_device_above_its_revocation_point() {
+    fn active_observations_wait_only_for_the_revoked_devices_pinned_prefix() {
         let (mut membership, issuer_key, _revoked_key, enrollment_commitment) =
             enrolled_second_device();
         let first = operation_for(&_revoked_key, id(6), 1, [0; 32], 10);
@@ -1784,10 +1860,8 @@ mod tests {
             second.digest(),
         );
 
-        // OPERATION_LOG.md §4.4: an entry above the accepted revocation point
-        // is non-canonical. The old receive path answered PendingCause, so a
-        // third device whose author had accepted records the issuer never saw
-        // stalled forever instead of learning the claim is impossible.
+        // The active author's old observation waits only for the signed
+        // revocation point; the forbidden suffix is not its dependency.
         let above = Operation::seal(
             id(20),
             id(1),
@@ -1803,10 +1877,10 @@ mod tests {
         .expect("operation")
         .sign(&issuer_key);
         let mut log = OperationLog::new();
-        let error = log
-            .accept(&above, &membership)
-            .expect_err("observed head above the revocation point");
-        assert_eq!(error.status(), ChurStatus::AuthenticationFailed);
+        assert_eq!(
+            log.accept(&above, &membership).expect("historical claim"),
+            ApplyOutcome::PendingCause
+        );
         assert!(log.fork(&id(2)).is_none());
 
         // An author that had not yet observed the revocation may still name
@@ -1828,6 +1902,84 @@ mod tests {
         assert!(
             log.accept(&below, &membership).expect("legal claim") == ApplyOutcome::PendingCause
         );
+        assert_eq!(
+            log.accept_revoked_chain(&[first, second.clone()], &membership)
+                .expect("pinned prefix"),
+            vec![ApplyOutcome::Applied, ApplyOutcome::Applied]
+        );
+        assert_eq!(
+            log.accept(&above, &membership).expect("active author"),
+            ApplyOutcome::Applied
+        );
+        let forbidden = operation_for(&_revoked_key, id(6), 3, second.digest(), 24);
+        assert_eq!(
+            log.accept(&forbidden, &membership)
+                .expect_err("no revoked authority")
+                .status(),
+            ChurStatus::AuthenticationFailed
+        );
+    }
+
+    #[test]
+    fn historical_revoked_checkpoint_heads_never_become_new_floors() {
+        use crate::checkpoint::{Checkpoint, CheckpointHead, UNCOMPACTED_CATALOG_STATE_COMMITMENT};
+        let (mut membership, issuer, revoked, commitment) = enrolled_second_device();
+        let ready = operation_for(&revoked, id(6), 1, [0; 32], 50);
+        let owner = operation_for(&issuer, id(2), 1, [0; 32], 51);
+        let mut log = OperationLog::new();
+        log.restore_floor(&id(6), 1, ready.digest(), &membership)
+            .expect("earlier active floor");
+        revoke_second_device(&mut membership, &issuer, commitment, 0, [0; 32]);
+        let checkpoint = Checkpoint::new(
+            id(1),
+            id(2),
+            1,
+            membership.generation(),
+            *membership.commitment(),
+            vec![
+                CheckpointHead::new(id(2), 1, owner.digest()),
+                CheckpointHead::new(id(6), 1, ready.digest()),
+            ],
+            [9; 32],
+            UNCOMPACTED_CATALOG_STATE_COMMITMENT,
+        )
+        .expect("checkpoint")
+        .sign(&issuer);
+        log.accept_checkpoint(&checkpoint, &membership)
+            .expect("active issuer historical claim");
+        assert_eq!(log.floor(&id(6)), None);
+        assert_eq!(log.floor(&id(2)), Some((1, owner.digest())));
+        log.restore_floor(&id(6), 1, ready.digest(), &membership)
+            .expect("old durable floor ignored");
+        assert_eq!(log.floor(&id(6)), None);
+        assert_eq!(
+            log.accept(&ready, &membership)
+                .expect_err("no restored authority")
+                .status(),
+            ChurStatus::AuthenticationFailed
+        );
+        let enrollment = EnrollmentRecord::new(
+            id(1),
+            id(90),
+            [7; 32],
+            [8; 32],
+            2,
+            id(2),
+            membership.generation() + 1,
+            *membership.commitment(),
+            checkpoint.commitment(),
+        )
+        .expect("new device")
+        .sign(&issuer);
+        membership
+            .accept_enrollment(&enrollment, &id(2), 2)
+            .expect("enrollment");
+        let mut bootstrap = OperationLog::new();
+        bootstrap
+            .bootstrap_from_enrollment(&enrollment, &checkpoint, &membership)
+            .expect("bootstrap keeps current revocation bounds");
+        assert_eq!(bootstrap.floor(&id(6)), None);
+        assert_eq!(bootstrap.floor(&id(2)), Some((1, owner.digest())));
     }
 
     #[test]

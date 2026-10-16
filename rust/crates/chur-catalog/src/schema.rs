@@ -275,9 +275,11 @@ CREATE TABLE integrity_records (
 -- §14. Written before physical garbage collection so recovery cannot resurrect
 -- a removed object.
 CREATE TABLE tombstones (
-    object_id     BLOB PRIMARY KEY,
+    collection_id BLOB NOT NULL CHECK (length(collection_id) = 16),
+    object_id     BLOB NOT NULL CHECK (length(object_id) = 16),
     authored_ms   INTEGER NOT NULL,
-    object_generation INTEGER NOT NULL
+    object_generation INTEGER NOT NULL,
+    PRIMARY KEY (collection_id, object_id)
 ) STRICT;
 
 -- Object content keys use disposable, object-bound requests. Private request

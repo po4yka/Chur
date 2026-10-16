@@ -434,7 +434,7 @@ public class SyncCoordinator(
     }
 
     public suspend fun approveDevicePairing(request: ByteArray, fingerprint: String): ByteArray = pairingLocked {
-        val state = requireConfiguredState()
+        var state = requireConfiguredState()
         requireMatchingIdentity(state)
         val vault = pairingVault()
         val preview = vault.inspectDevicePairing(request)
@@ -451,9 +451,22 @@ public class SyncCoordinator(
         shown = SyncStatus(true, state.serverUrl, "Approving device…", true)
         try {
             val transport = clientFactory(state.serverUrl) { state.transportToken }.also { client = it }
+            // Every own-outbox writer recovers native commits before advancing
+            // the cursor. Fresh builds cannot acknowledge an unsubmitted revoke.
+            state = recoverDeviceRevocations(state)
+            state = flushOwnPrefixBefore(transport, state, vault, prepared.operation) { current, record ->
+                current.pendingDeviceRevocations.firstOrNull { it.operation.contentEquals(record) }?.let { pending ->
+                    transport.putCheckpoint(current.vaultId, pending.checkpoint)
+                    transport.revoke(current.vaultId, pending.revocation, pending.operation)
+                }
+            }
             transport.putCheckpoint(state.vaultId, prepared.checkpoint)
             transport.enroll(state.vaultId, prepared.transportToken, prepared.enrollment, prepared.operation)
-            vault.currentDeviceCheckpoint(clock())?.let { transport.putCheckpoint(state.vaultId, it) }
+            state = flushPending(transport, state)
+            state = flushOwnOperations(transport, state, vault)
+            val checkpoint = vault.currentDeviceCheckpoint(clock())
+                ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "device approval checkpoint was locked")
+            transport.putCheckpoint(state.vaultId, checkpoint)
             shown = SyncStatus(true, state.serverUrl, "Device approved. Save the approval file.", false)
             prepared.approval
         } finally {
@@ -663,7 +676,7 @@ public class SyncCoordinator(
                                 message =
                                     listOfNotNull(
                                         "Up to date.".takeIf {
-                                            integrityStop == null && publicationFailure == null && !pullReport.hasMoreOperations && !ownSync.hasMoreDownloads && processReport != null && sharingPuller.pendingObjectKeys + ownSync.pendingObjectKeys + sharingPuller.unavailableObjects + ownSync.unavailableObjects == 0
+                                            integrityStop == null && publicationFailure == null && !pullReport.hasMoreOperations && !ownSync.hasMoreDownloads && processReport != null && sharingPuller.pendingObjectKeys + ownSync.pendingObjectKeys + sharingPuller.unavailableObjects + ownSync.unavailableObjects == 0 && ownSync.pendingOperations == 0L
                                         },
                                         "More changes need sync. Sync will continue on the next run.".takeIf {
                                             integrityStop == null && (pullReport.hasMoreOperations || ownSync.hasMoreDownloads)
@@ -677,6 +690,9 @@ public class SyncCoordinator(
                                         },
                                         "Some encrypted files are unavailable. Sync will retry.".takeIf {
                                             integrityStop == null && sharingPuller.unavailableObjects + ownSync.unavailableObjects > 0
+                                        },
+                                        "Some changes are waiting for missing dependencies.".takeIf {
+                                            integrityStop == null && ownSync.pendingOperations > 0
                                         },
                                         "Received $shares share(s).".takeIf { shares > 0 },
                                     ).joinToString(" ").ifEmpty { null },
@@ -766,6 +782,8 @@ public class SyncCoordinator(
         }
     }
 
+    // All own-cursor writers recover native revocations before an ACK can
+    // cover them. A committed cursor therefore covers their revoke endpoint.
     private suspend fun flushOwnOperations(client: SyncClient, state: SyncState, vault: SyncVaultBoundary): SyncState {
         var latest = state
         OwnDeviceSynchronizer(client, vault).publishOperations(state.vaultId, state.ownPushCursor) { sequence ->
@@ -776,12 +794,13 @@ public class SyncCoordinator(
         return latest
     }
 
-    /** Publishes the checkpoint's ordinary prefix without passing its revocation. */
+    /** Publishes the checkpoint's ordinary prefix without passing its control operation. */
     private suspend fun flushOwnPrefixBefore(
         client: SyncClient,
         initial: SyncState,
         vault: SyncVaultBoundary,
         stop: ByteArray,
+        beforeOperation: suspend (SyncState, ByteArray) -> Unit = { _, _ -> },
     ): SyncState {
         // A manual retry can reference an already acknowledged operation. Find
         // the native boundary before sending any newer records in that case.
@@ -789,7 +808,7 @@ public class SyncCoordinator(
         var stopSequence: ULong? = null
         while (stopSequence == null) {
             val page = vault.ownSyncOperations(search)
-                ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "device revocation prefix was locked")
+                ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "device checkpoint prefix was locked")
             if (page.isEmpty()) return initial
             for (operation in page) {
                 require(operation.sequence > search) { "the native own operation page did not advance" }
@@ -800,15 +819,16 @@ public class SyncCoordinator(
         var state = initial
         while (true) {
             val page = vault.ownSyncOperations(state.ownPushCursor)
-                ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "device revocation prefix was locked")
-            check(page.isNotEmpty()) { "the native revocation prefix disappeared" }
+                ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "device checkpoint prefix was locked")
+            check(page.isNotEmpty()) { "the native checkpoint prefix disappeared" }
             for (operation in page) {
                 require(operation.sequence > state.ownPushCursor) { "the native own operation page did not advance" }
                 if (operation.sequence == stopSequence) {
-                    check(operation.record.contentEquals(stop)) { "the native revocation operation changed" }
+                    check(operation.record.contentEquals(stop)) { "the native control operation changed" }
                     return state
                 }
-                check(operation.sequence < stopSequence) { "the native revocation operation was skipped" }
+                check(operation.sequence < stopSequence) { "the native control operation was skipped" }
+                beforeOperation(state, operation.record)
                 client.putOperation(state.vaultId, operation.record)
                 state = state.copy(ownPushCursor = operation.sequence)
                 store.save(state)

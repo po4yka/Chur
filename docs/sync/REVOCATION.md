@@ -93,6 +93,14 @@ Acceptance is decided by the revocation point of [`DEVICE_IDENTITY.md`](DEVICE_I
 
 A signed cutoff describes the issuer's accepted prefix. A relay can hold a concurrent operation above it; that operation is retained as signed history but is not returned by ordinary operation delivery. At cutoff zero the issuer's signed outer operation must not observe the target. A late revocation does not rewrite protected catalog history or checkpoints that this device authenticated before it received the revocation. Native catalog reconstruction verifies that retained history separately; this path is not exposed by FFI or used for untrusted operation or sharing-proof acceptance. Current membership still prevents the revoked device from signing through native APIs or issuing grants.
 
+### 7.1 Active peers with concurrent history
+
+An active device C can have accepted B's history before it learned that A revoked B at a lower point. C remains an authorized author. Its signed observation of B is a historical claim, not permission for B to author another operation. For C, require only `min(observed_B_sequence, signed_B_cutoff)` as a causal predecessor. A zero cutoff needs no B record. Operations authored by B above the cutoff remain rejected and are not projected.
+
+For example, B's `DeviceReady` can reach C before A's zero cutoff. A new device D can accept C's independent object and later descendants without receiving B's no-op. C's checkpoint can retain its historical B head, but that head cannot create a floor above B's cutoff.
+
+Content that depends on a rejected B operation may remain unavailable. Retain the authenticated C record, retry its private projection after related valid facts arrive, and report the unresolved count. Do not let that payload block C's unrelated objects, cursor, or downloads. Do not report the vault as fully up to date while accepted content is unresolved. A deferred terminal purge has no deletion effect until its content cause validates and custody removal commits. Revocation does not recover rejected B content or erase data that C already obtained.
+
 ## 8. Backups
 
 Old backups may contain revoked slots/grants/keys. Revocation does not rewrite them. User guidance must explain replacing/destroying old backups when revocation of portable factors matters.

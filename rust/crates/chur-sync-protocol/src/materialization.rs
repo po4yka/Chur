@@ -79,6 +79,7 @@ pub struct MaterializedState {
     favorites: ObservedRemoveSet<Id>,
     tag_names: BTreeMap<Id, ScalarRegister<String>>,
     object_tags: ObservedRemoveSet<(Id, Id)>,
+    deferred: BTreeMap<Id, (Operation, OperationPayload)>,
 }
 
 impl MaterializedState {
@@ -317,6 +318,74 @@ impl MaterializedState {
         }
     }
 
+    /// Retains an authenticated fact whose content cause was cut by revocation.
+    /// The caller must first verify its ordinary signature, chain and key domain.
+    pub fn defer_revoked_content(&mut self, operation: &Operation, payload: &OperationPayload) {
+        self.deferred.insert(
+            *operation.operation_id(),
+            (operation.clone(), payload.clone()),
+        );
+    }
+
+    /// Accepted content that is still unavailable in this collection.
+    #[must_use]
+    pub fn pending_operations(&self, collection: Option<&Id>) -> usize {
+        self.deferred
+            .values()
+            .filter(|(_, payload)| collection.is_none_or(|id| payload.collection_id() == id))
+            .count()
+    }
+
+    /// Retries facts only when a related content target changes. Unrelated
+    /// imports do not clone the gallery for each unavailable revoked object.
+    /// Returns terminal effects for the caller's same catalog transaction.
+    pub fn retry_deferred_after(&mut self, trigger: &OperationPayload) -> Vec<OperationPayload> {
+        let targets = content_targets(trigger.body());
+        let mut purges = Vec::new();
+        loop {
+            let ready = self
+                .deferred
+                .iter()
+                .filter_map(|(id, (_, payload))| {
+                    let other = content_targets(payload.body());
+                    (payload.collection_id() == trigger.collection_id()
+                        && targets
+                            .iter()
+                            .flatten()
+                            .any(|target| other.contains(&Some(*target))))
+                    .then_some(*id)
+                })
+                .collect::<Vec<_>>();
+            let mut progressed = false;
+            for id in ready {
+                let Some((operation, payload)) = self.deferred.remove(&id) else {
+                    continue;
+                };
+                let mut candidate = self.clone();
+                match candidate.apply(&operation, &payload) {
+                    Ok(outcome) if outcome != MergeOutcome::PendingCause => {
+                        if outcome == MergeOutcome::Applied
+                            && matches!(payload.body(), PayloadBody::PurgeObject { .. })
+                        {
+                            purges.push(payload);
+                        }
+                        *self = candidate;
+                        progressed = true;
+                    }
+                    // An unresolved or contradictory private effect must not
+                    // invalidate its authenticated author's unrelated branch.
+                    _ => {
+                        self.deferred.insert(id, (operation, payload));
+                    }
+                }
+            }
+            if !progressed {
+                break;
+            }
+        }
+        purges
+    }
+
     /// Whether a permanent deletion has been accepted for this object.
     #[must_use]
     pub fn object_is_purged(&self, id: &Id) -> bool {
@@ -422,5 +491,39 @@ impl MaterializedState {
         self.objects
             .get(object_id)
             .is_some_and(|object| object.committed.is_some() && object.lifecycle.is_visible())
+    }
+}
+
+fn content_targets(body: &PayloadBody) -> [Option<Id>; 2] {
+    match body {
+        PayloadBody::CreateObject { object_id, .. }
+        | PayloadBody::CommitObject { object_id, .. }
+        | PayloadBody::UpdateMetadata { object_id, .. }
+        | PayloadBody::SetFavorite { object_id, .. }
+        | PayloadBody::AddTag { object_id, .. }
+        | PayloadBody::RemoveTag { object_id, .. }
+        | PayloadBody::DeleteObject { object_id, .. }
+        | PayloadBody::PurgeObject { object_id, .. }
+        | PayloadBody::RestoreObject { object_id, .. } => [Some(*object_id), None],
+        PayloadBody::CreateAlbum { album_id, .. } | PayloadBody::RenameAlbum { album_id, .. } => {
+            [None, Some(*album_id)]
+        }
+        PayloadBody::AddAlbumMembership {
+            album_id,
+            object_id,
+        }
+        | PayloadBody::RemoveAlbumMembership {
+            album_id,
+            object_id,
+            ..
+        } => [Some(*object_id), Some(*album_id)],
+        PayloadBody::AddDevice(_)
+        | PayloadBody::DeviceReady
+        | PayloadBody::DeclareCollection { .. }
+        | PayloadBody::RevokeDevice(_)
+        | PayloadBody::CreateCollectionEpoch { .. }
+        | PayloadBody::RewrapObjectKey { .. }
+        | PayloadBody::ChangeCollectionMembership(_)
+        | PayloadBody::IssueCollectionGrant(_) => [None, None],
     }
 }

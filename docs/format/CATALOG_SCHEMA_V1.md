@@ -204,7 +204,7 @@ Record structural and cryptographic status with stable codes, not secret error s
 
 ## 14. Tombstones
 
-Deletion creates a tombstone before physical garbage collection so synchronization or crash recovery cannot resurrect removed objects. Tombstone retention and crypto-erasure are distinct:
+Deletion creates a tombstone before physical garbage collection so synchronization or crash recovery cannot resurrect removed objects. Each tombstone is keyed by `(collection_id, object_id)`. A signed lifecycle can remove custody rows only in that collection. A purge of an unknown object cannot block the same object ID in another collection. Tombstone retention and crypto-erasure are distinct:
 
 - key envelopes are destroyed at step 2 of §14.1, which is the erasure moment;
 - ciphertext cleanup may lag, because steps 3 to 6 of §14.1 carry no security property;

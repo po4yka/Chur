@@ -1491,8 +1491,11 @@ fn rotation_accepts_waiting_keys_pending_envelopes_and_permanent_tombstones() {
         .db
         .transaction(|tx| {
             tx.execute(
-                "INSERT INTO tombstones VALUES (?1, 1, 1)",
-                [id(117).as_bytes().as_slice()],
+                "INSERT INTO tombstones VALUES (?1, ?2, 1, 1)",
+                rusqlite::params![
+                    collection.as_bytes().as_slice(),
+                    id(117).as_bytes().as_slice()
+                ],
             )
             .expect("permanent tombstone");
             Ok(())

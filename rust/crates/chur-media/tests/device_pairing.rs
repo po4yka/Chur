@@ -548,7 +548,8 @@ fn approval_can_be_revoked_before_the_new_device_ever_authors() {
             .iter()
             .any(|device| device.device_id == *request.device_id()
                 && !device.active
-                && !device.current)
+                && !device.current
+                && device.retry_available)
     );
 }
 

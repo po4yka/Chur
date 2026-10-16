@@ -141,21 +141,7 @@ pub unsafe extern "C" fn chur_own_sync_plan(
                     collection,
                 )?;
                 crate::product::finish_pending_deletions(session, crate::api::now_ms())?;
-                let mut writer = Writer::new();
-                writer
-                    .u16(1)
-                    .id(&plan.source_vault_id)
-                    .id(&plan.collection_id)
-                    .id(&plan.selector)
-                    .u32(0)
-                    .u32(plan.objects.len().min(256) as u32);
-                for object in plan.objects.iter().take(256) {
-                    writer
-                        .id(&object.object_id)
-                        .id(&object.store_id)
-                        .u64(object.container_length);
-                }
-                Ok(writer.finish())
+                encode_receive_plan(&plan)
             },
         )
     }
@@ -232,6 +218,29 @@ pub unsafe extern "C" fn chur_own_sync_author(
     }
 }
 
+fn encode_receive_plan(plan: &chur_catalog::sharing_receive::ReceivePlan) -> Result<Vec<u8>> {
+    let mut writer = Writer::new();
+    writer
+        .u16(1)
+        .id(&plan.source_vault_id)
+        .id(&plan.collection_id)
+        .id(&plan.selector)
+        .u32(u32::try_from(plan.pending_operations).map_err(|_| {
+            Error::new(
+                ChurStatus::ResourceLimitExceeded,
+                "pending operation count exceeds u32",
+            )
+        })?)
+        .u32(plan.objects.len().min(256) as u32);
+    for object in plan.objects.iter().take(256) {
+        writer
+            .id(&object.object_id)
+            .id(&object.store_id)
+            .u64(object.container_length);
+    }
+    Ok(writer.finish())
+}
+
 #[expect(
     unsafe_code,
     reason = "the common ABI implementation checks borrowed ranges"
@@ -272,4 +281,62 @@ unsafe fn call(
         destination[..encoded.len()].copy_from_slice(&encoded);
         unsafe { write_out(written, encoded.len()) }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chur_catalog::sharing_receive::{ReceivePlan, SharedObject};
+    use chur_core::Id;
+
+    #[test]
+    fn receive_plan_keeps_pending_operations_and_healthy_objects_on_the_wire() -> Result<()> {
+        let vault = Id::new([1; 16])?;
+        let collection = Id::new([2; 16])?;
+        let selector = Id::new([3; 16])?;
+        let object = Id::new([4; 16])?;
+        let stream = Id::new([5; 16])?;
+        let store = Id::new([6; 16])?;
+        let plan = ReceivePlan {
+            selector,
+            source_vault_id: vault,
+            collection_id: collection,
+            pending_operations: 7,
+            objects: vec![SharedObject {
+                source_vault_id: vault,
+                collection_id: collection,
+                object_id: object,
+                object_generation: 1,
+                stream_id: stream,
+                store_id: store,
+                container_length: 1024,
+                container_commitment: [7; 32],
+                object_key_commitment: [8; 32],
+                metadata: Vec::new(),
+            }],
+        };
+        let encoded = encode_receive_plan(&plan)?;
+        // Decode the public wire fields independently from the production writer.
+        let mut reader = Reader::new(&encoded, ChurStatus::NonCanonicalEncoding);
+        assert_eq!(reader.u16()?, 1);
+        assert_eq!(reader.id()?, vault);
+        assert_eq!(reader.id()?, collection);
+        assert_eq!(reader.id()?, selector);
+        assert_eq!(
+            reader.u32()?,
+            7,
+            "native pending operations must reach the host"
+        );
+        assert_eq!(reader.u32()?, 1);
+        assert_eq!(reader.id()?, object);
+        assert_eq!(reader.id()?, store);
+        assert_eq!(reader.u64()?, 1024);
+        reader.finish()?;
+        assert_eq!(
+            encoded.len(),
+            98,
+            "the existing v1 wire layout is unchanged"
+        );
+        Ok(())
+    }
 }

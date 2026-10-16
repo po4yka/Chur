@@ -1039,3 +1039,129 @@ async fn cached_approval_and_revocation_checkpoints_recover_across_outbox_advanc
         .await;
     }
 }
+
+#[tokio::test]
+async fn accepting_a_foreign_share_can_advance_checkpoint_epochs_without_own_operations() {
+    use chur_catalog::{sharing_service, sync_membership};
+    use chur_sync_protocol::grant::PermissionProfile;
+
+    let directory = Directory::new();
+    let recipient_path = VaultRoot::new(directory.0.join("recipient"));
+    let donor_path = VaultRoot::new(directory.0.join("donor"));
+    let relay_path = directory.0.join("relay");
+    let mut recipient = vault::create(&recipient_path, PASSWORD, NOW)
+        .unwrap()
+        .activate()
+        .unwrap();
+    let recipient_root = recipient.root_secret().unwrap().duplicate();
+    let recipient_vault = recipient.vault_id();
+    let token = [18; 32];
+    let mut app = http::router(
+        ReferenceServer::open(&relay_path, 1_048_576, 4_194_304).unwrap(),
+        BOOTSTRAP,
+    );
+    let recipient_device = bootstrap(&app, &mut recipient, &recipient_root, token).await;
+    let before = device_pairing::current_checkpoint(
+        recipient.catalog().unwrap(),
+        &recipient_root,
+        recipient_vault,
+        NOW + 1,
+    )
+    .unwrap();
+    let route = format!("/v1/vaults/{}/checkpoints", recipient_vault.to_hex());
+    ok(&app, Method::POST, &route, &token, before.clone()).await;
+    let own_before =
+        sync_log::records_after(recipient.catalog_ref().unwrap(), &recipient_device, 0).unwrap();
+    let recipient_enrollment =
+        sync_membership::enrollment_for_device(recipient.catalog_ref().unwrap(), &recipient_device)
+            .unwrap();
+
+    let mut donor = vault::create(&donor_path, PASSWORD, NOW)
+        .unwrap()
+        .activate()
+        .unwrap();
+    let donor_root = donor.root_secret().unwrap().duplicate();
+    let donor_vault = donor.vault_id();
+    let (donor_enrollment, _) =
+        sync_receive::provision_local_identity(donor.catalog().unwrap(), &donor_root, donor_vault)
+            .unwrap();
+    append_offline_own_edit(&mut donor, &donor_root, NOW + 2);
+    let collection = store::default_collection(donor.catalog_ref().unwrap())
+        .unwrap()
+        .unwrap();
+    let share = sharing_service::prepare_share(
+        donor.catalog().unwrap(),
+        &donor_root,
+        donor_vault,
+        collection,
+        &recipient_enrollment,
+        PermissionProfile::Read,
+        true,
+    )
+    .unwrap();
+    let donor_membership = [sharing_service::IssuerMembershipRecord::Enrollment(
+        donor_enrollment.clone(),
+    )];
+    let donor_operations: Vec<_> = sync_log::records_after(
+        donor.catalog_ref().unwrap(),
+        donor_enrollment.device_id(),
+        0,
+    )
+    .unwrap()
+    .iter()
+    .map(|record| Operation::decode(record).unwrap())
+    .collect();
+    sharing_service::accept_share(
+        recipient.catalog().unwrap(),
+        &recipient_root,
+        &[sharing_service::IssuerEvidence {
+            membership: &donor_membership,
+            operations: &donor_operations,
+        }],
+        &[(
+            share.membership().clone(),
+            share.membership_operation().clone(),
+        )],
+        share.grant(),
+        share.grant_operation(),
+    )
+    .unwrap();
+    let after = device_pairing::current_checkpoint(
+        recipient.catalog().unwrap(),
+        &recipient_root,
+        recipient_vault,
+        NOW + 3,
+    )
+    .unwrap();
+    let old_checkpoint = Checkpoint::decode(&before).unwrap();
+    let new_checkpoint = Checkpoint::decode(&after).unwrap();
+    assert!(old_checkpoint.heads() == new_checkpoint.heads());
+    assert_eq!(
+        old_checkpoint.membership_generation(),
+        new_checkpoint.membership_generation()
+    );
+    assert_eq!(
+        old_checkpoint.membership_commitment(),
+        new_checkpoint.membership_commitment()
+    );
+    assert_ne!(
+        old_checkpoint.collection_epoch_commitment(),
+        new_checkpoint.collection_epoch_commitment()
+    );
+    assert_eq!(
+        own_before,
+        sync_log::records_after(recipient.catalog_ref().unwrap(), &recipient_device, 0).unwrap()
+    );
+    ok(&app, Method::POST, &route, &token, after.clone()).await;
+    drop(app);
+    app = http::router(
+        ReferenceServer::open(&relay_path, 1_048_576, 4_194_304).unwrap(),
+        BOOTSTRAP,
+    );
+    ok(&app, Method::POST, &route, &token, before).await;
+    ok(&app, Method::POST, &route, &token, after.clone()).await;
+    assert_eq!(
+        records(&ok(&app, Method::GET, &route, &token, vec![]).await),
+        vec![after]
+    );
+}

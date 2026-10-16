@@ -187,11 +187,14 @@ fn author_cached_content(
         InvalidInput,
         "source content does not change accepted state"
     );
+    let resolved_purges = cache.state.retry_deferred_after(payload);
     ensure!(
-        cache
-            .log
-            .accept_with(db, &operation, membership, |_| Ok(()))?
-            == chur_sync_protocol::operation_log::ApplyOutcome::Applied,
+        cache.log.accept_with(db, &operation, membership, |tx| {
+            for purge in &resolved_purges {
+                crate::deletion::project_purge(tx, purge)?;
+            }
+            Ok(())
+        })? == chur_sync_protocol::operation_log::ApplyOutcome::Applied,
         InternalFailure,
         "source content was not applied"
     );
@@ -454,7 +457,7 @@ fn pending_for_collection_in(
         if scope != collection_id {
             continue;
         }
-        match crate::object_grants::ensure_not_deleted(db, &object_id) {
+        match crate::object_grants::ensure_not_deleted(db, &collection_id, &object_id) {
             Ok(()) => {}
             Err(error) if error.status() == ChurStatus::NotFound => continue,
             Err(error) => return Err(error),
@@ -536,7 +539,7 @@ fn pending_for_collection_in(
         source_vault_id: vault_id,
         collection_id,
         objects,
-        pending_operations: 0,
+        pending_operations: state.pending_operations(Some(&collection_id)),
     })
 }
 
@@ -548,7 +551,7 @@ pub fn pending_object_for_collection(
     collection_id: Id,
     object_id: Id,
 ) -> Result<SharedObject> {
-    crate::object_grants::ensure_not_deleted(db, &object_id)?;
+    crate::object_grants::ensure_not_deleted(db, &collection_id, &object_id)?;
     pending_for_collection_in(db, root, vault_id, collection_id, false)?
         .objects
         .into_iter()

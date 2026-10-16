@@ -177,7 +177,7 @@ impl DurableOperationLog {
         membership: &MembershipState,
         apply: impl FnOnce(&Transaction<'_>) -> Result<()>,
     ) -> Result<ApplyOutcome> {
-        self.accept_gated_with(db, operation, membership, || Ok(true), apply)
+        self.accept_gated_with(db, operation, membership, |_| Ok(true), apply)
     }
 
     pub(crate) fn accept_gated_with(
@@ -185,7 +185,7 @@ impl DurableOperationLog {
         db: &mut CatalogDb,
         operation: &Operation,
         membership: &MembershipState,
-        gate: impl FnOnce() -> Result<bool>,
+        gate: impl FnOnce(&OperationLog) -> Result<bool>,
         apply: impl FnOnce(&Transaction<'_>) -> Result<()>,
     ) -> Result<ApplyOutcome> {
         if self.forked_devices.contains(operation.device_id()) {
@@ -201,7 +201,7 @@ impl DurableOperationLog {
         // record - is gone with its O(n^2) accept cost.
         match self.log.accept(operation, membership) {
             Ok(ApplyOutcome::Applied) => {
-                let admitted = match gate() {
+                let admitted = match gate(&self.log) {
                     Ok(admitted) => admitted,
                     Err(error) => {
                         self.log.undo_accept(operation);
@@ -1399,7 +1399,7 @@ mod tests {
         let mut log = load(&db, &membership).expect("empty log");
         let first = operation(&key, 1, [0; 32], 5);
         assert_eq!(
-            log.accept_gated_with(&mut db, &first, &membership, || Ok(false), |_| Ok(()))
+            log.accept_gated_with(&mut db, &first, &membership, |_| Ok(false), |_| Ok(()))
                 .expect("refused"),
             ApplyOutcome::PendingCause
         );
@@ -1409,17 +1409,17 @@ mod tests {
         // the same sequence can carry a different record once the gate admits.
         let second = operation(&key, 2, first.digest(), 6);
         assert_eq!(
-            log.accept_gated_with(&mut db, &second, &membership, || Ok(false), |_| Ok(()))
+            log.accept_gated_with(&mut db, &second, &membership, |_| Ok(false), |_| Ok(()))
                 .expect("gap"),
             ApplyOutcome::PendingGap
         );
         assert_eq!(
-            log.accept_gated_with(&mut db, &first, &membership, || Ok(true), |_| Ok(()))
+            log.accept_gated_with(&mut db, &first, &membership, |_| Ok(true), |_| Ok(()))
                 .expect("admitted"),
             ApplyOutcome::Applied
         );
         assert_eq!(
-            log.accept_gated_with(&mut db, &second, &membership, || Ok(true), |_| Ok(()))
+            log.accept_gated_with(&mut db, &second, &membership, |_| Ok(true), |_| Ok(()))
                 .expect("admitted tail"),
             ApplyOutcome::Applied
         );

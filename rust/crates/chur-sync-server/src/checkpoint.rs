@@ -85,8 +85,6 @@ impl ReferenceServer {
         if let Some(previous) = previous {
             let previous = Checkpoint::decode(&previous)
                 .map_err(corrupt_row("stored checkpoint is invalid"))?;
-            let mut advanced =
-                checkpoint.membership_generation() > previous.membership_generation();
             for head in previous.heads() {
                 let current = checkpoint
                     .heads()
@@ -109,18 +107,13 @@ impl ReferenceServer {
                         SyncChainFork,
                         "checkpoint changes an accepted head digest"
                     );
-                } else {
-                    advanced = true;
                 }
             }
-            advanced |= checkpoint.heads().len() > previous.heads().len();
-            ensure!(
-                advanced
-                    || checkpoint.collection_epoch_commitment()
-                        == previous.collection_epoch_commitment(),
-                SyncChainFork,
-                "checkpoint changes epochs without an authenticated frontier advance"
-            );
+            // Epoch commitments are signed claims, not relay-verifiable roots.
+            // Receiving a foreign share can change them without an own operation.
+            // Same-frontier claims are unordered; this digest is not an epoch floor.
+            // Signed operations and grants validate actual epoch state. Exact
+            // checkpoints remain stored for enrollment and retry proofs.
         }
         for head in checkpoint.heads() {
             ensure!(
@@ -339,7 +332,7 @@ mod tests {
                 .expect("checkpoint replay"),
             crate::RelayOutcome::Duplicate
         );
-        let epoch_fork = Checkpoint::new(
+        let epoch_update = Checkpoint::new(
             vault,
             device,
             1,
@@ -349,14 +342,13 @@ mod tests {
             [10; 32],
             [0; 32],
         )
-        .expect("epoch fork")
+        .expect("epoch update")
         .sign(&key);
         assert_eq!(
             server
-                .accept_checkpoint(&epoch_fork)
-                .expect_err("unauthenticated epoch change")
-                .status(),
-            ChurStatus::SyncChainFork
+                .accept_checkpoint(&epoch_update)
+                .expect("signed epoch update"),
+            RelayOutcome::Stored
         );
         let next_operation = Operation::new(
             id(10),
@@ -409,9 +401,21 @@ mod tests {
                 .status(),
             ChurStatus::SyncChainFork
         );
+        let rollback = Checkpoint::new(
+            vault,
+            device,
+            1,
+            1,
+            enrollment.commitment(),
+            vec![CheckpointHead::new(device, 1, operation.digest())],
+            [11; 32],
+            [0; 32],
+        )
+        .expect("unknown old checkpoint")
+        .sign(&key);
         assert_eq!(
             server
-                .accept_checkpoint(&epoch_fork)
+                .accept_checkpoint(&rollback)
                 .expect_err("new stale checkpoint")
                 .status(),
             ChurStatus::SyncHeadRollback
@@ -423,7 +427,7 @@ mod tests {
             server.checkpoints(vault).expect("fetch latest"),
             vec![next.encode()]
         );
-        for known in [&checkpoint, &next] {
+        for known in [&checkpoint, &epoch_update, &next] {
             assert_eq!(
                 server
                     .checkpoint(vault, known.commitment())
@@ -444,7 +448,7 @@ mod tests {
         );
         assert_eq!(
             server
-                .accept_checkpoint(&epoch_fork)
+                .accept_checkpoint(&rollback)
                 .expect_err("rollback after restart")
                 .status(),
             ChurStatus::SyncHeadRollback

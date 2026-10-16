@@ -174,6 +174,198 @@ fn rotate(source: &mut Session, secret: &Key, collection: Id, objects: &[Id]) {
         .unwrap();
     }
 }
+fn foreign_purge_preserves_active_original(
+    target: &mut Session,
+    secret: &Key,
+    object: Id,
+    target_device: Id,
+    first_enrollment: &chur_sync_protocol::membership::EnrollmentRecord,
+) {
+    use chur_catalog::{
+        query, sharing, sharing_log::DurableCollectionOperationLog, sharing_receive,
+        sharing_service,
+    };
+    use chur_sync_protocol::{
+        KeyDomain,
+        grant::PermissionProfile,
+        operation::Operation,
+        payload::{OperationPayload, PayloadBody},
+    };
+    let query = query::ObjectQuery {
+        scope: query::Scope::Search("private".into()),
+        ..query::ObjectQuery::timeline()
+    };
+    assert!(
+        query::page(target.catalog_ref().unwrap(), &query)
+            .unwrap()
+            .objects
+            .iter()
+            .any(|row| row.object_id == object)
+    );
+    let original_key = keys::object_key(target, &object).unwrap();
+    let original = chur_catalog::store::object(target.catalog_ref().unwrap(), &object).unwrap();
+    let target_vault = target.vault_id();
+    let second =
+        sync_membership::enrollment_for_device(target.catalog_ref().unwrap(), &target_device)
+            .unwrap();
+    let membership_records = [
+        sharing_service::IssuerMembershipRecord::Enrollment(first_enrollment.clone()),
+        sharing_service::IssuerMembershipRecord::Enrollment(second),
+    ];
+    let mut own_records = Vec::new();
+    for device in [*first_enrollment.device_id(), target_device] {
+        own_records.extend(
+            sync_log::records_after(target.catalog_ref().unwrap(), &device, 0)
+                .unwrap()
+                .iter()
+                .map(|bytes| Operation::decode(bytes).unwrap()),
+        );
+    }
+    let attacker_root = root();
+    let mut attacker = vault::create(&attacker_root, PASSWORD, NOW)
+        .unwrap()
+        .activate()
+        .unwrap();
+    let attacker_secret = attacker.root_secret().unwrap().duplicate();
+    let attacker_vault = attacker.vault_id();
+    let (enrollment, _) = sync_receive::provision_local_identity(
+        attacker.catalog().unwrap(),
+        &attacker_secret,
+        attacker_vault,
+    )
+    .unwrap();
+    let seed_object = import(&mut attacker, b"foreign source original");
+    let collection = chur_catalog::store::object(attacker.catalog_ref().unwrap(), &seed_object)
+        .unwrap()
+        .collection_id;
+    let share = sharing_service::prepare_share_for_device(
+        attacker.catalog().unwrap(),
+        &attacker_secret,
+        attacker_vault,
+        collection,
+        sharing_service::IssuerEvidence {
+            membership: &membership_records,
+            operations: &own_records,
+        },
+        target_device,
+        PermissionProfile::Read,
+        true,
+    )
+    .unwrap();
+    let membership = sync_membership::load(attacker.catalog_ref().unwrap())
+        .unwrap()
+        .unwrap();
+    let (_, identity) = sync_keys::local_identity(
+        attacker.catalog_ref().unwrap(),
+        &attacker_secret,
+        &membership,
+    )
+    .unwrap()
+    .unwrap();
+    let state = sharing::load(attacker.catalog_ref().unwrap(), &collection)
+        .unwrap()
+        .unwrap();
+    let metadata_key = keys::collection_key(&attacker, &collection, 1).unwrap();
+    let domain = KeyDomain::collection(&metadata_key, &collection, 1).unwrap();
+    let directory = sync_keys::key_directory(
+        attacker.catalog_ref().unwrap(),
+        &attacker_secret,
+        attacker_vault,
+    )
+    .unwrap();
+    let mut log = DurableCollectionOperationLog::provision(
+        attacker.catalog().unwrap(),
+        collection,
+        1,
+        *domain.selector(),
+    )
+    .unwrap();
+    let mut events = Vec::new();
+    for body in [
+        PayloadBody::CreateObject {
+            object_id: object,
+            object_generation: 1,
+            store_id: object,
+            stream_id: object,
+            metadata_fields: vec![],
+        },
+        PayloadBody::PurgeObject {
+            object_id: object,
+            object_generation: 1,
+            authored_at_ms: NOW,
+        },
+    ] {
+        events.push(
+            log.author_with_keys(
+                attacker.catalog().unwrap(),
+                &directory,
+                random::id().unwrap(),
+                attacker_vault,
+                *enrollment.device_id(),
+                domain.operation_key(),
+                chur_crypto::Nonce::random().unwrap(),
+                &OperationPayload::new(collection, 1, body).unwrap(),
+                identity.signing_key(),
+                &membership,
+                &membership,
+                &state,
+            )
+            .unwrap(),
+        );
+    }
+    let proofs =
+        sync_log::records_after(attacker.catalog_ref().unwrap(), enrollment.device_id(), 0)
+            .unwrap()
+            .iter()
+            .map(|bytes| Operation::decode(bytes).unwrap())
+            .collect::<Vec<_>>();
+    let records = [sharing_service::IssuerMembershipRecord::Enrollment(
+        enrollment,
+    )];
+    sharing_receive::receive(
+        target.catalog().unwrap(),
+        secret,
+        target_vault,
+        &[sharing_service::IssuerEvidence {
+            membership: &records,
+            operations: &proofs,
+        }],
+        &[(
+            share.membership().clone(),
+            share.membership_operation().clone(),
+        )],
+        share.grant(),
+        share.grant_operation(),
+        &events,
+    )
+    .unwrap();
+    finish(target, secret);
+    assert_eq!(
+        chur_catalog::store::object(target.catalog_ref().unwrap(), &object).unwrap(),
+        original
+    );
+    assert_eq!(
+        keys::object_key(target, &object).unwrap().expose(),
+        original_key.expose()
+    );
+    assert!(
+        query::page(target.catalog_ref().unwrap(), &query)
+            .unwrap()
+            .objects
+            .iter()
+            .any(|row| row.object_id == object)
+    );
+    let mut bytes = Vec::new();
+    export::export_stream(
+        target,
+        &object,
+        StreamKind::Original,
+        &mut bytes,
+        &mut Uninterrupted,
+    )
+    .unwrap();
+    assert_eq!(bytes, b"neighbor remains readable");
+}
 #[test]
 fn source_purge_relay_erases_sibling_after_restart_and_backup_without_damaging_neighbor() {
     let source_root = root();
@@ -283,6 +475,13 @@ fn source_purge_relay_erases_sibling_after_restart_and_backup_without_damaging_n
         sync_download::activate_shared(&mut target, &object, NOW + 11).unwrap();
     }
     assert!(keys::object_key(&target, &removed).is_ok());
+    foreign_purge_preserves_active_original(
+        &mut target,
+        &secret,
+        neighbor,
+        *request.device_id(),
+        &source_enrollment,
+    );
     rotate(
         &mut source,
         &secret,

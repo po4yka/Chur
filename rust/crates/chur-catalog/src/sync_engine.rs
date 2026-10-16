@@ -147,6 +147,7 @@ pub fn process_staged(
             settled = true;
         }
     }
+    report.pending += state.pending_operations(None);
     Ok(report)
 }
 

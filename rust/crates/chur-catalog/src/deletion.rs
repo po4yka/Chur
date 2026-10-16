@@ -115,11 +115,11 @@ pub fn erase(db: &mut CatalogDb, object_id: &Id, now_ms: u64) -> Result<()> {
     let object_id = *object_id;
     let authored = as_sqlite_integer(now_ms, "the time is out of range")?;
     db.transaction(|transaction| {
-        let generation: i64 = transaction
+        let (generation, collection): (i64, Vec<u8>) = transaction
             .query_row(
-                "SELECT object_generation FROM objects WHERE object_id = ?1",
+                "SELECT object_generation, collection_id FROM objects WHERE object_id = ?1",
                 [object_id.as_bytes().as_slice()],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .map_err(|error| map_sqlite(error, "the object could not be read"))?;
         transaction
@@ -146,10 +146,15 @@ pub fn erase(db: &mut CatalogDb, object_id: &Id, now_ms: u64) -> Result<()> {
             .map_err(|error| map_sqlite(error, "the key envelopes could not be destroyed"))?;
         transaction
             .execute(
-                "INSERT INTO tombstones (object_id, authored_ms, object_generation)
-                 VALUES (?1, ?2, ?3)
-                 ON CONFLICT(object_id) DO NOTHING",
-                params![object_id.as_bytes().as_slice(), authored, generation],
+                "INSERT INTO tombstones (collection_id, object_id, authored_ms, object_generation)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(collection_id, object_id) DO NOTHING",
+                params![
+                    collection,
+                    object_id.as_bytes().as_slice(),
+                    authored,
+                    generation
+                ],
             )
             .map_err(|error| map_sqlite(error, "the tombstone could not be written"))?;
         transaction
@@ -198,39 +203,46 @@ pub(crate) fn project_purge(
         return Ok(());
     };
     let key = object_id.as_bytes().as_slice();
-    let conflict: i64 = transaction
-        .query_row(
-            "SELECT count(*) FROM objects WHERE object_id = ?1 AND collection_id != ?2",
-            params![key, payload.collection_id().as_bytes().as_slice()],
-            |row| row.get(0),
-        )
-        .map_err(|error| map_sqlite(error, "purged object scope could not be checked"))?;
-    ensure!(
-        conflict == 0,
-        AuthenticationFailed,
-        "purged object belongs to another collection"
-    );
+    let collection = payload.collection_id().as_bytes().as_slice();
+    // A pending object has no `objects` row. Its custody rows carry their own
+    // collection binding. Never let a foreign signed lifecycle erase them.
     for sql in [
-        "DELETE FROM object_key_requests WHERE object_id = ?1",
-        "DELETE FROM pending_object_keys WHERE object_id = ?1",
-        "DELETE FROM object_key_envelopes WHERE object_id = ?1",
-        "DELETE FROM sync_object_envelope_epochs WHERE object_id = ?1",
-        "DELETE FROM trash_entries WHERE object_id = ?1",
+        "DELETE FROM object_key_requests WHERE object_id = ?1 AND collection_id = ?2",
+        "DELETE FROM pending_object_keys WHERE object_id = ?1 AND collection_id = ?2",
+        "DELETE FROM object_key_envelopes WHERE object_id = ?1 AND EXISTS (
+            SELECT 1 FROM objects WHERE object_id = ?1 AND collection_id = ?2)",
+        "DELETE FROM sync_object_envelope_epochs WHERE object_id = ?1 AND EXISTS (
+            SELECT 1 FROM objects WHERE object_id = ?1 AND collection_id = ?2)",
+        "DELETE FROM trash_entries WHERE object_id = ?1 AND EXISTS (
+            SELECT 1 FROM objects WHERE object_id = ?1 AND collection_id = ?2)",
     ] {
         transaction
-            .execute(sql, [key])
+            .execute(sql, params![key, collection])
             .map_err(|error| map_sqlite(error, "purged keys could not be destroyed"))?;
     }
-    transaction.execute("INSERT INTO tombstones (object_id, authored_ms, object_generation) VALUES (?1, ?2, ?3) ON CONFLICT(object_id) DO NOTHING",
-        params![key, as_sqlite_integer(*authored_at_ms, "purge time is too large")?, as_sqlite_integer(*object_generation, "purge generation is too large")?])
-        .map_err(|error| map_sqlite(error, "permanent purge tombstone could not be written"))?;
     transaction
         .execute(
-            "UPDATE objects SET state = ?2 WHERE object_id = ?1",
-            params![key, i64::from(ObjectState::Deleting.value())],
+            "INSERT INTO tombstones
+        (collection_id, object_id, authored_ms, object_generation) VALUES (?1, ?2, ?3, ?4)
+        ON CONFLICT(collection_id, object_id) DO NOTHING",
+            params![
+                collection,
+                key,
+                as_sqlite_integer(*authored_at_ms, "purge time is too large")?,
+                as_sqlite_integer(*object_generation, "purge generation is too large")?
+            ],
+        )
+        .map_err(|error| map_sqlite(error, "permanent purge tombstone could not be written"))?;
+    let changed = transaction
+        .execute(
+            "UPDATE objects SET state = ?2 WHERE object_id = ?1 AND collection_id = ?3",
+            params![key, i64::from(ObjectState::Deleting.value()), collection],
         )
         .map_err(|error| map_sqlite(error, "purged object could not await key erasure"))?;
-    unindex_search(transaction, object_id)
+    if changed != 0 {
+        unindex_search(transaction, object_id)?;
+    }
+    Ok(())
 }
 
 /// Completes key erasure after durable source and own-vault tombstone publication.
@@ -824,7 +836,7 @@ mod tests {
             neighbor_envelope.encode()
         );
         assert_eq!(
-            crate::object_grants::ensure_not_deleted(&vault.db, &object_id)
+            crate::object_grants::ensure_not_deleted(&vault.db, &vault.collection, &object_id)
                 .expect_err("local tombstone")
                 .status(),
             ChurStatus::NotFound
