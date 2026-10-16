@@ -2103,13 +2103,39 @@ class BackNavigationTest {
         awaitFrames()
     }
 
-    /** Two taps at [x], [y], as close together as a user's double tap. */
+    /** Two taps on the focused decor, without an input-transaction wait between taps. */
     private fun doubleTap(x: Int, y: Int) {
+        assertEquals("the gesture must target Chur", activity.packageName,
+            instrumentation.uiAutomation.rootInActiveWindow?.packageName?.toString())
+        lateinit var decor: android.view.View
+        var localX = 0f
+        var localY = 0f
+        fun checkTarget() {
+            assertEquals(androidx.lifecycle.Lifecycle.State.RESUMED, activity.lifecycle.currentState)
+            assertTrue("the gesture requires an attached focused window", decor.isAttachedToWindow && decor.hasWindowFocus())
+        }
+        instrumentation.runOnMainSync {
+            decor = activity.window.decorView
+            checkTarget()
+            val origin = IntArray(2).also(decor::getLocationOnScreen)
+            localX = (x - origin[0]).toFloat()
+            localY = (y - origin[1]).toFloat()
+            assertTrue(localX >= 0 && localX < decor.width && localY >= 0 && localY < decor.height)
+        }
         repeat(2) {
-            val down = SystemClock.uptimeMillis()
-            inject(down, MotionEvent.ACTION_DOWN, listOf(x to y))
+            var down = 0L
+            fun send(action: Int) = instrumentation.runOnMainSync {
+                checkTarget()
+                val now = SystemClock.uptimeMillis()
+                if (action == MotionEvent.ACTION_DOWN) down = now
+                val event = MotionEvent.obtain(down, now, action, localX, localY, 0)
+                event.source = InputDevice.SOURCE_TOUCHSCREEN
+                try { assertTrue("the gesture must reach the view", decor.dispatchTouchEvent(event)) }
+                finally { event.recycle() }
+            }
+            send(MotionEvent.ACTION_DOWN)
             Thread.sleep(40)
-            inject(down, MotionEvent.ACTION_UP, listOf(x to y))
+            send(MotionEvent.ACTION_UP)
             Thread.sleep(80)
         }
         awaitFrames()
