@@ -40,7 +40,7 @@ fun registerCargo(
     group = "build"
     description = "Builds the $profile $artifact for $triple"
     workingDir = rustDirectory.asFile
-    val cargoArgs = mutableListOf("build", "-p", crate, "--target", triple)
+    val cargoArgs = mutableListOf("build", "--locked", "-p", crate, "--target", triple)
     if (release) {
         cargoArgs.add(1, "--release")
     }
@@ -55,6 +55,8 @@ fun registerCargo(
     }
     inputs.dir(rustDirectory.dir("crates"))
     inputs.file(rustDirectory.file("Cargo.toml"))
+    inputs.file(rustDirectory.file("Cargo.lock"))
+    inputs.file(rustDirectory.file("rust-toolchain.toml"))
     outputs.file(cargoTargetDirectory.file("$triple/$profile/$artifact"))
 }
 

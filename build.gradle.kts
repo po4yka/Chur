@@ -37,6 +37,7 @@ val hostTarget: String =
     }
 
 val hostLibraryDirectory = cargoTargetDirectory.dir("$hostTarget/debug")
+val hostLibraryFile = hostLibraryDirectory.file(System.mapLibraryName("chur_jni"))
 
 /**
  * Builds `libchur_jni` for the host, ADR-0040.
@@ -51,7 +52,7 @@ val cargoBuildHostJni =
         group = "build"
         description = "Builds libchur_jni for the host, for the JVM host tests"
         workingDir = rustDirectory.asFile
-        commandLine("cargo", "build", "-p", "chur-jni", "--target", hostTarget)
+        commandLine("cargo", "build", "--locked", "-p", "chur-jni", "--target", hostTarget)
         environment("CARGO_TARGET_DIR", cargoTargetDirectory.asFile.absolutePath)
         environment("IPHONEOS_DEPLOYMENT_TARGET", libs.versions.iosDeploymentTarget.get())
         // The `cc` crate treats an sccache RUSTC_WRAPPER as a C compiler wrapper,
@@ -62,12 +63,18 @@ val cargoBuildHostJni =
         }
         inputs.dir(rustDirectory.dir("crates"))
         inputs.file(rustDirectory.file("Cargo.toml"))
+        inputs.file(rustDirectory.file("Cargo.lock"))
+        inputs.file(rustDirectory.file("rust-toolchain.toml"))
         outputs.dir(hostLibraryDirectory)
     }
 
 subprojects {
     tasks.withType<Test>().configureEach {
         dependsOn(cargoBuildHostJni)
+        inputs
+            .file(hostLibraryFile)
+            .withPropertyName("churHostJniLibrary")
+            .withPathSensitivity(PathSensitivity.NONE)
         systemProperty("java.library.path", hostLibraryDirectory.asFile.absolutePath)
     }
 
