@@ -822,6 +822,22 @@ class VaultRepository(
         }
     }
 
+    suspend fun objectKeyRequest(collectionId: ByteArray, objectId: ByteArray): ByteArray? = mutex.withLock {
+        require(session != 0L) { "the vault is locked" }
+        ChurVault.objectKeyRequest(session, collectionId, objectId)
+    }
+
+    suspend fun objectKeyIssue(prekey: ByteArray): ByteArray? = mutex.withLock {
+        if (session == 0L) null else ChurVault.objectKeyIssue(session, prekey)
+    }
+
+    suspend fun objectKeyAccept(packageBytes: ByteArray, grant: ByteArray): Boolean = mutex.withLock {
+        if (session == 0L) false else {
+            ChurVault.objectKeyAccept(session, packageBytes, grant)
+            true
+        }
+    }
+
     suspend fun receiveSharedOperations(
         packageBytes: ByteArray,
         operations: List<ByteArray>,

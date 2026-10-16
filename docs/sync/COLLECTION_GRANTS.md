@@ -2,7 +2,7 @@
 
 > **Status:** Accepted normative Phase 4 protocol
 
-A collection grant authorizes a recipient device/user to unwrap one Security Collection key epoch. Public-key cryptography wraps only the small collection key, never bulk media.
+A collection grant authorizes a recipient device/user to unwrap one Security Collection key epoch. This grant opens collection metadata. Object content keys use separate [disposable object-key grants](OBJECT_KEY_GRANTS.md). The signed operation log never contains an object-key envelope. Public-key cryptography wraps only small keys, never bulk media.
 
 ## 1. Cryptographic profile
 

@@ -34,6 +34,14 @@ pub mod tag {
     pub const COLLECTION_KEY_ENVELOPE: &[u8] = b"CHUR\0COLLECTION\0KEY-ENVELOPE\0V1";
     /// Object-key envelope AAD.
     pub const OBJECT_KEY_ENVELOPE: &[u8] = b"CHUR\0OBJECT\0KEY-ENVELOPE\0V1";
+    /// Object-bound disposable key request signature.
+    pub const OBJECT_PREKEY_SIGNATURE: &[u8] = b"CHUR\0OBJECT-PREKEY\0SIGNATURE\0V1";
+    /// Disposable object-key grant signature.
+    pub const OBJECT_KEY_GRANT_SIGNATURE: &[u8] = b"CHUR\0OBJECT-KEY-GRANT\0SIGNATURE\0V1";
+    /// Disposable object-key grant HPKE context.
+    pub const OBJECT_KEY_GRANT_HPKE: &[u8] = b"CHUR\0OBJECT-KEY-GRANT\0HPKE\0V1";
+    /// Key-free content-key commitment.
+    pub const OBJECT_KEY_COMMITMENT: &[u8] = b"CHUR\0OBJECT-KEY\0COMMITMENT\0V1";
     /// Encrypted manifest AAD.
     pub const OBJECT_MANIFEST_AAD: &[u8] = b"CHUR\0OBJECT\0MANIFEST-AAD\0V1";
     /// Manifest commitment.
@@ -108,6 +116,10 @@ pub mod tag {
         SLOT_APPLE_KEYCHAIN,
         COLLECTION_KEY_ENVELOPE,
         OBJECT_KEY_ENVELOPE,
+        OBJECT_PREKEY_SIGNATURE,
+        OBJECT_KEY_GRANT_SIGNATURE,
+        OBJECT_KEY_GRANT_HPKE,
+        OBJECT_KEY_COMMITMENT,
         OBJECT_MANIFEST_AAD,
         OBJECT_MANIFEST_COMMITMENT,
         OBJECT_CHUNK_AAD,

@@ -4,8 +4,8 @@
 //! runs it and no other:
 //!
 //! 1. one catalog transaction sets `state` to `DELETING`, [`begin`];
-//! 2. one catalog transaction destroys every object-key envelope, writes the
-//!    tombstone, and sets `state` to `TOMBSTONED`, [`erase`];
+//! 2. one catalog transaction destroys every object-key envelope and writes
+//!    the tombstone; a verified WAL truncation then permits `TOMBSTONED`, [`erase`];
 //! 3. unlink the derived-asset containers;
 //! 4. unlink the original container;
 //! 5. delete the object's scratch entries;
@@ -33,11 +33,10 @@ use crate::schema::bump_generation;
 pub struct Pending {
     /// The object.
     pub object_id: Id,
-    /// Whether step 2 has already committed.
+    /// Whether step 2 and its durable WAL erasure barrier have completed.
     ///
-    /// `docs/format/CATALOG_SCHEMA_V1.md` §14.1 makes this the whole recovery
-    /// question: an object whose envelopes are gone is past the erasure moment
-    /// and never returns to `ACTIVE`, whatever its `state` column says.
+    /// An object stays `DELETING` until old WAL frames have been removed.
+    /// Missing envelopes alone cannot prove that the barrier completed.
     pub erased: bool,
     /// The opaque store identifiers of the containers steps 3 and 4 unlink, the
     /// derived assets first.
@@ -50,7 +49,7 @@ pub struct Pending {
 /// `ACTIVE` an object whose key may already be gone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Rollforward {
-    /// `DELETING` with envelopes present: step 2 never committed, so run it now.
+    /// `DELETING`: repeat key removal and its WAL barrier.
     Erase,
     /// The envelopes are already destroyed: finish steps 3 to 6.
     Collect,
@@ -102,7 +101,8 @@ pub fn begin(db: &mut CatalogDb, object_id: &Id) -> Result<()> {
 
 /// Step 2: the erasure moment.
 ///
-/// Once this transaction commits durably the `ContentKey` is unrecoverable from
+/// Once the key-removal transaction and verified WAL truncation complete, the
+/// `ContentKey` is unrecoverable from
 /// this vault's live state, and every copy of the container that state reaches,
 /// including WAL pages and queued sync operations, is ciphertext no reachable
 /// key opens.
@@ -127,6 +127,16 @@ pub fn erase(db: &mut CatalogDb, object_id: &Id, now_ms: u64) -> Result<()> {
                 [object_id.as_bytes().as_slice()],
             )
             .map_err(|error| map_sqlite(error, "the envelope epoch could not be destroyed"))?;
+        for statement in [
+            "DELETE FROM object_key_requests WHERE object_id = ?1",
+            "DELETE FROM pending_object_keys WHERE object_id = ?1",
+        ] {
+            transaction
+                .execute(statement, [object_id.as_bytes().as_slice()])
+                .map_err(|error| {
+                    map_sqlite(error, "temporary object keys could not be destroyed")
+                })?;
+        }
         transaction
             .execute(
                 "DELETE FROM object_key_envelopes WHERE object_id = ?1",
@@ -146,11 +156,27 @@ pub fn erase(db: &mut CatalogDb, object_id: &Id, now_ms: u64) -> Result<()> {
                 "UPDATE objects SET state = ?2 WHERE object_id = ?1",
                 params![
                     object_id.as_bytes().as_slice(),
+                    i64::from(ObjectState::Deleting.value())
+                ],
+            )
+            .map_err(|error| map_sqlite(error, "the object could not await key erasure"))?;
+        unindex_search(transaction, &object_id)?;
+        bump_generation(transaction)
+    })?;
+    // secure_delete clears cells in the current pages; old WAL frames retain
+    // their former contents until a verified TRUNCATE finishes. Keep DELETING
+    // until this barrier, so recovery never treats a failed barrier as erasure.
+    db.checkpoint()?;
+    db.transaction(|transaction| {
+        transaction
+            .execute(
+                "UPDATE objects SET state = ?2 WHERE object_id = ?1",
+                params![
+                    object_id.as_bytes().as_slice(),
                     i64::from(ObjectState::Tombstoned.value())
                 ],
             )
             .map_err(|error| map_sqlite(error, "the object could not be tombstoned"))?;
-        unindex_search(transaction, &object_id)?;
         bump_generation(transaction)
     })
 }
@@ -163,6 +189,14 @@ pub fn finish(db: &mut CatalogDb, object_id: &Id) -> Result<()> {
     let object_id = *object_id;
     db.transaction(|transaction| {
         let key = object_id.as_bytes().as_slice();
+        let unfinished: i64 = transaction
+            .query_row(
+                "SELECT count(*) FROM objects WHERE object_id = ?1 AND state != ?2",
+                params![key, i64::from(ObjectState::Tombstoned.value())],
+                |row| row.get(0),
+            )
+            .map_err(|error| map_sqlite(error, "the erasure state could not be read"))?;
+        ensure!(unfinished == 0, Conflict, "key erasure has not completed");
         // Step 5.
         transaction
             .execute("DELETE FROM scratch_entries WHERE object_id = ?1", [key])
@@ -215,7 +249,8 @@ pub fn discard_tombstone(db: &mut CatalogDb, object_id: &Id) -> Result<()> {
         );
         transaction
             .execute(
-                "DELETE FROM tombstones WHERE object_id = ?1",
+                "DELETE FROM tombstones WHERE object_id = ?1
+                   AND NOT EXISTS (SELECT 1 FROM sharing_object_operations WHERE object_id = ?1)",
                 [object_id.as_bytes().as_slice()],
             )
             .map_err(|error| map_sqlite(error, "the tombstone could not be discarded"))?;
@@ -233,7 +268,8 @@ pub fn sweep(db: &CatalogDb) -> Result<Vec<Pending>> {
     let mut statement = connection
         .prepare(
             "SELECT o.object_id,
-                    (SELECT count(*) FROM object_key_envelopes e WHERE e.object_id = o.object_id)
+                    (SELECT count(*) FROM object_key_envelopes e WHERE e.object_id = o.object_id),
+                    o.state
                FROM objects o
               WHERE o.state IN (?1, ?2)
               ORDER BY o.object_id",
@@ -245,17 +281,23 @@ pub fn sweep(db: &CatalogDb) -> Result<Vec<Pending>> {
                 i64::from(ObjectState::Deleting.value()),
                 i64::from(ObjectState::Tombstoned.value()),
             ],
-            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
         )
         .map_err(|error| map_sqlite(error, "the sweep could not be read"))?;
     let mut pending = Vec::new();
     for row in rows {
-        let (object_id, envelopes) =
+        let (object_id, envelopes, state) =
             row.map_err(|error| map_sqlite(error, "a sweep row could not be read"))?;
         let object_id = crate::row::id(&object_id, "the object id is malformed")?;
         pending.push(Pending {
             object_id,
-            erased: envelopes == 0,
+            erased: envelopes == 0 && state == i64::from(ObjectState::Tombstoned.value()),
             containers: containers_of(db, &object_id)?,
         });
     }
@@ -371,7 +413,11 @@ mod tests {
         let root: Key = random::secret::<32>().expect("root");
         let vault_id = random::id().expect("id");
         let key = CatalogKey::derive(&root, &vault_id).expect("key");
-        let mut db = CatalogDb::open(&CatalogLocation::Memory, &key).expect("open");
+        vault_at(&CatalogLocation::Memory, &key)
+    }
+
+    fn vault_at(location: &CatalogLocation<'_>, key: &CatalogKey) -> Vault {
+        let mut db = CatalogDb::open(location, key).expect("open");
         open_at_current_version(&mut db, 1).expect("schema");
         let collection = random::id().expect("id");
         store::put_collection(
@@ -540,6 +586,257 @@ mod tests {
         assert_eq!(
             rejection(store::active_envelope(&vault.db, &id)),
             ChurStatus::NotFound
+        );
+    }
+
+    #[test]
+    fn published_history_remains_valid_without_retaining_a_deleted_object_key() {
+        use crate::{sharing, sharing_publication, sync_keys, sync_receive};
+        use chur_format::envelope::CollectionKeyEnvelope;
+        use chur_sync_protocol::payload::{OperationPayload, PayloadBody};
+
+        let mut vault = vault();
+        let (object_id, _) = import(&mut vault);
+        let (neighbor_id, _) = import(&mut vault);
+        let root = Key::new([71; 32]);
+        let vault_id = Id::new([72; 16]).expect("vault id");
+        let collection_key = Key::new([73; 32]);
+        let content_key = Key::new([74; 32]);
+        let envelope = ObjectKeyEnvelope::seal(
+            &collection_key,
+            vault_id,
+            vault.collection,
+            1,
+            object_id,
+            1,
+            Nonce::new([75; 24]),
+            &content_key,
+        )
+        .expect("object envelope");
+        vault
+            .db
+            .connection()
+            .execute(
+                "UPDATE object_key_envelopes SET body = ?2 WHERE object_id = ?1",
+                params![object_id.as_bytes().as_slice(), envelope.encode()],
+            )
+            .expect("replace envelope");
+        let neighbor_envelope = ObjectKeyEnvelope::seal(
+            &collection_key,
+            vault_id,
+            vault.collection,
+            1,
+            neighbor_id,
+            1,
+            Nonce::new([78; 24]),
+            &Key::new([79; 32]),
+        )
+        .expect("neighbor envelope");
+        vault
+            .db
+            .connection()
+            .execute(
+                "UPDATE object_key_envelopes SET body = ?2 WHERE object_id = ?1",
+                params![
+                    neighbor_id.as_bytes().as_slice(),
+                    neighbor_envelope.encode()
+                ],
+            )
+            .expect("replace neighbor envelope");
+        vault
+            .db
+            .connection()
+            .execute(
+                "UPDATE object_streams SET final_commitment = ?2 WHERE object_id = ?1",
+                params![object_id.as_bytes().as_slice(), [76u8; 32].as_slice()],
+            )
+            .expect("committed original");
+        let collection = store::collection(&vault.db, &vault.collection).expect("collection");
+        let collection_envelope = CollectionKeyEnvelope::seal(
+            &root,
+            vault_id,
+            vault.collection,
+            1,
+            1,
+            Nonce::new([77; 24]),
+            &collection_key,
+        )
+        .expect("collection envelope");
+        store::put_collection_with_envelope(
+            &mut vault.db,
+            &collection,
+            1,
+            &collection_envelope.encode(),
+        )
+        .expect("retain collection key");
+        sync_receive::provision_local_identity(&mut vault.db, &root, vault_id).expect("identity");
+        sharing::provision(&mut vault.db, vault_id, vault.collection, 1).expect("sharing");
+        let candidate = sharing_publication::candidate(&vault.db, &vault.collection, &object_id)
+            .expect("candidate");
+        let publication = sharing_publication::publish_page(
+            &mut vault.db,
+            &root,
+            vault_id,
+            vault.collection,
+            &[candidate],
+        )
+        .expect("publish")
+        .remove(0);
+        let retained_record = publication.commit_operation.encode();
+        let keys = sync_keys::key_directory(&vault.db, &root, vault_id).expect("keys");
+        let payload =
+            OperationPayload::open_for_collection_operation(&publication.commit_operation, &keys)
+                .expect("retained publication opens");
+        let PayloadBody::CommitObject {
+            object_key_commitment,
+            ..
+        } = payload.body()
+        else {
+            panic!("not an object commit");
+        };
+        assert_eq!(
+            *object_key_commitment,
+            chur_sync_protocol::object_grant::object_key_commitment(
+                &vault.collection,
+                &object_id,
+                &content_key
+            )
+        );
+        assert!(
+            !payload
+                .encode()
+                .windows(ObjectKeyEnvelope::LEN)
+                .any(|window| window == envelope.encode())
+        );
+        begin(&mut vault.db, &object_id).expect("begin published deletion");
+        erase(&mut vault.db, &object_id, 2).expect("erase published key");
+        finish(&mut vault.db, &object_id).expect("collect published object");
+        discard_tombstone(&mut vault.db, &object_id).expect("retain required tombstone");
+        assert_eq!(
+            rejection(store::active_envelope(&vault.db, &object_id)),
+            ChurStatus::NotFound
+        );
+        assert_eq!(
+            store::active_envelope(&vault.db, &neighbor_id).expect("neighbor key"),
+            neighbor_envelope.encode()
+        );
+        assert_eq!(
+            crate::object_grants::ensure_not_deleted(&vault.db, &object_id)
+                .expect_err("local tombstone")
+                .status(),
+            ChurStatus::NotFound
+        );
+        let membership = crate::sync_membership::load(&vault.db)
+            .expect("membership")
+            .expect("present");
+        let state = sharing::load(&vault.db, &vault.collection)
+            .expect("sharing")
+            .expect("present");
+        let memberships = std::collections::BTreeMap::from([(vault_id, membership)]);
+        crate::sharing_log::load(
+            &vault.db,
+            vault.collection,
+            1,
+            *publication.commit_operation.key_selector(),
+            &keys,
+            &memberships,
+            &state,
+        )
+        .expect("signed chain still replays");
+        assert_eq!(publication.commit_operation.encode(), retained_record);
+    }
+
+    #[test]
+    fn blocked_erasure_retries_after_restart_and_keeps_neighbor_keys() {
+        let directory =
+            std::env::temp_dir().join(format!("chur-erase-{}", random::id().expect("id").to_hex()));
+        std::fs::create_dir_all(&directory).expect("directory");
+        let path = directory.join("catalog.db");
+        let root = Key::new([81; 32]);
+        let vault_id = Id::new([82; 16]).expect("vault id");
+        let key = CatalogKey::derive(&root, &vault_id).expect("catalog key");
+        let mut vault = vault_at(&CatalogLocation::File(&path), &key);
+        let (object_id, _) = import(&mut vault);
+        let (neighbor_id, _) = import(&mut vault);
+        let neighbor_envelope =
+            store::active_envelope(&vault.db, &neighbor_id).expect("neighbor key");
+        begin(&mut vault.db, &object_id).expect("begin");
+        let reader = CatalogDb::open(&CatalogLocation::File(&path), &key).expect("reader");
+        reader
+            .connection()
+            .execute_batch("BEGIN; SELECT body FROM object_key_envelopes;")
+            .expect("retain snapshot with the old envelope");
+        vault
+            .db
+            .connection()
+            .execute_batch("PRAGMA busy_timeout = 0;")
+            .expect("do not wait");
+        assert_eq!(
+            rejection(erase(&mut vault.db, &object_id, 2)),
+            ChurStatus::IoFailure
+        );
+        assert_eq!(
+            store::object(&vault.db, &object_id).expect("object").state,
+            ObjectState::Deleting
+        );
+        assert_eq!(
+            sweep(&vault.db).expect("sweep")[0].rollforward(),
+            Rollforward::Erase
+        );
+        assert_eq!(
+            rejection(finish(&mut vault.db, &object_id)),
+            ChurStatus::Conflict
+        );
+        reader
+            .connection()
+            .execute_batch("ROLLBACK;")
+            .expect("release old snapshot");
+        reader.close().expect("close reader");
+        vault.db.close().expect("restart");
+        let mut db = CatalogDb::open(&CatalogLocation::File(&path), &key).expect("reopen");
+        assert_eq!(
+            sweep(&db).expect("recovery")[0].rollforward(),
+            Rollforward::Erase
+        );
+        erase(&mut db, &object_id, 3).expect("erase after restart");
+        assert_eq!(
+            sweep(&db).expect("sweep")[0].rollforward(),
+            Rollforward::Collect
+        );
+        assert_eq!(
+            store::active_envelope(&db, &neighbor_id).expect("neighbor key"),
+            neighbor_envelope
+        );
+        assert_eq!(
+            rejection(store::active_envelope(&db, &object_id)),
+            ChurStatus::NotFound
+        );
+        finish(&mut db, &object_id).expect("finish");
+        db.close().expect("close");
+        std::fs::remove_dir_all(directory).expect("cleanup");
+    }
+
+    #[test]
+    fn an_absent_envelope_before_the_wal_barrier_still_requires_erasure() {
+        let mut vault = vault();
+        let (object_id, _) = import(&mut vault);
+        begin(&mut vault.db, &object_id).expect("begin");
+        vault
+            .db
+            .connection()
+            .execute(
+                "DELETE FROM object_key_envelopes WHERE object_id = ?1",
+                [object_id.as_bytes().as_slice()],
+            )
+            .expect("simulate interrupted erasure");
+        assert_eq!(
+            sweep(&vault.db).expect("sweep")[0].rollforward(),
+            Rollforward::Erase
+        );
+        erase(&mut vault.db, &object_id, 3).expect("complete barrier");
+        assert_eq!(
+            sweep(&vault.db).expect("sweep")[0].rollforward(),
+            Rollforward::Collect
         );
     }
 

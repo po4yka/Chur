@@ -17,6 +17,7 @@ use chur_sync_protocol::collection_operation::CollectionOperation;
 use chur_sync_protocol::deletion::ServerDeletionAuthorization;
 use chur_sync_protocol::grant::CollectionGrant;
 use chur_sync_protocol::membership::{EnrollmentRecord, RevocationRecord};
+use chur_sync_protocol::object_grant::{ObjectKeyGrant, ObjectPrekey};
 use chur_sync_protocol::operation::Operation;
 
 use crate::{DeletionOutcome, ReferenceServer, RelayOutcome, UploadProgress};
@@ -52,6 +53,30 @@ pub fn router(server: ReferenceServer, bootstrap_token: [u8; 32]) -> Router {
             get(sharing_grants).post(sharing_grant),
         )
         .route("/v1/vaults/{vault}/sharing/packages", get(sharing_packages))
+        .route(
+            "/v1/vaults/{vault}/sharing/object-key-requests",
+            get(object_key_requests).post(object_key_request),
+        )
+        .route(
+            "/v1/vaults/{vault}/sharing/object-key-requests/ack",
+            post(object_key_request_ack),
+        )
+        .route(
+            "/v1/vaults/{vault}/sharing/object-key-grants",
+            get(object_key_grants).post(object_key_grant),
+        )
+        .route(
+            "/v1/vaults/{vault}/sharing/object-key-grants/ack",
+            post(object_key_grant_ack),
+        )
+        .route(
+            "/v1/vaults/{vault}/sharing/object-key-grants/reject",
+            post(object_key_grant_reject),
+        )
+        .route(
+            "/v1/vaults/{vault}/sharing/object-key-grants/discard",
+            post(object_key_grant_discard),
+        )
         .route(
             "/v1/vaults/{vault}/sharing/operations",
             post(sharing_operation),
@@ -333,6 +358,118 @@ async fn sharing_packages(
     let server = lock(&state)?;
     let device = authenticate(&server, vault, &headers)?;
     binary(records(server.share_acceptance_packages(vault, device)?))
+}
+
+async fn object_key_request(
+    State(state): State<AppState>,
+    Path(vault): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> HttpResult<StatusCode> {
+    let vault = id(&vault)?;
+    let prekey = ObjectPrekey::decode(&body)?;
+    let mut server = lock(&state)?;
+    let device = authenticate(&server, vault, &headers)?;
+    Ok(relay_status(
+        server.accept_object_key_request(vault, device, &prekey)?,
+    ))
+}
+
+async fn object_key_requests(
+    State(state): State<AppState>,
+    Path(vault): Path<String>,
+    headers: HeaderMap,
+) -> HttpResult<Response> {
+    let vault = id(&vault)?;
+    let server = lock(&state)?;
+    let device = authenticate(&server, vault, &headers)?;
+    binary(records(
+        server.object_key_requests_for_source(vault, device)?,
+    ))
+}
+
+async fn object_key_grant(
+    State(state): State<AppState>,
+    Path(vault): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> HttpResult<StatusCode> {
+    let vault = id(&vault)?;
+    let grant = ObjectKeyGrant::decode(&body)?;
+    let mut server = lock(&state)?;
+    let device = authenticate(&server, vault, &headers)?;
+    Ok(relay_status(
+        server.accept_object_key_grant(vault, device, &grant)?,
+    ))
+}
+
+async fn object_key_grants(
+    State(state): State<AppState>,
+    Path(vault): Path<String>,
+    headers: HeaderMap,
+) -> HttpResult<Response> {
+    let vault = id(&vault)?;
+    let server = lock(&state)?;
+    let device = authenticate(&server, vault, &headers)?;
+    binary(records(
+        server.object_key_grants_for_recipient(vault, device)?,
+    ))
+}
+
+async fn object_key_grant_ack(
+    State(state): State<AppState>,
+    Path(vault): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> HttpResult<StatusCode> {
+    let vault = id(&vault)?;
+    let grant_id = Id::from_slice(&body)?;
+    let mut server = lock(&state)?;
+    let device = authenticate(&server, vault, &headers)?;
+    server.acknowledge_object_key_grant(vault, device, &grant_id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn object_key_grant_reject(
+    State(state): State<AppState>,
+    Path(vault): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> HttpResult<StatusCode> {
+    let vault = id(&vault)?;
+    let grant_id = Id::from_slice(&body)?;
+    let mut server = lock(&state)?;
+    let device = authenticate(&server, vault, &headers)?;
+    server.reject_object_key_grant(vault, device, &grant_id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn object_key_grant_discard(
+    State(state): State<AppState>,
+    Path(vault): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> HttpResult<StatusCode> {
+    let vault = id(&vault)?;
+    let grant_id = Id::from_slice(&body)?;
+    let mut server = lock(&state)?;
+    let device = authenticate(&server, vault, &headers)?;
+    server.discard_object_key_grant(vault, device, &grant_id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn object_key_request_ack(
+    State(state): State<AppState>,
+    Path(vault): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> HttpResult<StatusCode> {
+    let vault = id(&vault)?;
+    let prekey_id = Id::from_slice(&body)?;
+    let mut server = lock(&state)?;
+    let device = authenticate(&server, vault, &headers)?;
+    server.acknowledge_object_key_request(vault, device, &prekey_id)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn sharing_issuer_memberships(

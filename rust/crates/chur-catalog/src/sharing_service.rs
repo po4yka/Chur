@@ -680,7 +680,11 @@ pub fn prepare_share_revocation(
                 target_epoch,
                 PayloadBody::RewrapObjectKey {
                     object_id,
-                    object_key_envelope: envelope,
+                    object_key_commitment: chur_sync_protocol::object_grant::object_key_commitment(
+                        &collection_id,
+                        &object_id,
+                        &envelope.open(&current_key)?,
+                    ),
                 },
             )?,
         )?);
@@ -934,7 +938,11 @@ pub fn prepare_collection_epoch_rotation_after_device_loss(
                 target_epoch,
                 PayloadBody::RewrapObjectKey {
                     object_id,
-                    object_key_envelope: envelope,
+                    object_key_commitment: chur_sync_protocol::object_grant::object_key_commitment(
+                        &collection_id,
+                        &object_id,
+                        &envelope.open(&current_key)?,
+                    ),
                 },
             )?,
         )?);

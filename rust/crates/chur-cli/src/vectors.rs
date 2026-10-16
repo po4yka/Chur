@@ -48,7 +48,9 @@ use chur_sync_protocol::collection_operation::{CollectionObservedHead, Collectio
 use chur_sync_protocol::grant::{CollectionGrant, PermissionProfile, hpke_key_id, signing_key_id};
 use chur_sync_protocol::identity::DeviceIdentity;
 use chur_sync_protocol::membership::{EnrollmentRecord, RevocationRecord};
+use chur_sync_protocol::object_grant::{ObjectKeyGrant, ObjectPrekey, object_key_commitment};
 use chur_sync_protocol::operation::{DeviceSigningKey, ObservedHead, Operation};
+use chur_sync_protocol::payload::{OperationPayload, PayloadBody};
 
 use crate::manifest::{Vector, VectorBuilder, hex_of, number};
 
@@ -107,6 +109,7 @@ pub fn build_all() -> Result<Vec<Vector>> {
     object_containers(&mut vectors)?;
     backup_packages(&mut vectors)?;
     sync_protocol(&mut vectors)?;
+    disposable_object_keys(&mut vectors)?;
     sharing_protocol(&mut vectors)?;
     vectors.sort_by(|left, right| left.entry.vector_id.cmp(&right.entry.vector_id));
     Ok(vectors)
@@ -1888,5 +1891,103 @@ fn sharing_protocol(out: &mut Vec<Vector>) -> Result<()> {
         .input_bytes("record", &unknown_profile)
         .build(),
     );
+    Ok(())
+}
+
+fn disposable_object_keys(out: &mut Vec<Vector>) -> Result<()> {
+    let recipient = DeviceSigningKey::from_seed([0xa1; 32]);
+    let sender = DeviceSigningKey::from_seed([0xa2; 32]);
+    let collection = id(0xa3)?;
+    let object = id(0xa4)?;
+    let private = key(0xa5);
+    let content = key(0xa6);
+    let request = ObjectPrekey::sign(
+        id(0xa7)?,
+        collection,
+        object,
+        1,
+        [0xa8; 32],
+        id(0xa9)?,
+        id(0xaa)?,
+        1,
+        &private,
+        &recipient,
+    )?;
+    out.push(
+        VectorBuilder::accept(
+            "operation",
+            "operation-v1-object-key-request",
+            "docs/sync/OBJECT_KEY_GRANTS.md",
+            "1",
+            "One signed disposable key request binds the recipient to one committed object.",
+        )
+        .input_bytes("recipient_signing_seed", &[0xa1; 32])
+        .input_bytes("disposable_private_key", private.expose())
+        .expect_bytes("record", &request.encode())
+        .expect("record_length", json!(request.encode().len()))
+        .note(TEST_ONLY)
+        .build(),
+    );
+    let grant = ObjectKeyGrant::seal_for_test_vector(
+        id(0xab)?,
+        id(0xac)?,
+        id(0xad)?,
+        object,
+        1,
+        [0xa8; 32],
+        &request,
+        &content,
+        &sender,
+        [0xae; 32],
+    )?;
+    out.push(
+        VectorBuilder::accept(
+            "operation",
+            "operation-v1-object-key-grant",
+            "docs/sync/OBJECT_KEY_GRANTS.md",
+            "2",
+            "One signed HPKE grant opens only with the object's disposable private key.",
+        )
+        .input_bytes("source_signing_seed", &[0xa2; 32])
+        .input_bytes("ephemeral_ikm", &[0xae; 32])
+        .input_bytes("object_key", content.expose())
+        .input_bytes("request", &request.encode())
+        .expect_bytes("record", &grant.encode())
+        .expect("record_length", json!(grant.encode().len()))
+        .expect_bytes(
+            "opened_key",
+            grant
+                .open(&request, &private, &sender.verifying_key())?
+                .expose(),
+        )
+        .note(TEST_ONLY)
+        .build(),
+    );
+    for (vector_id, body) in [
+        (
+            "operation-v1-key-free-object-commit",
+            PayloadBody::CommitObject {
+                object_id: object,
+                object_generation: 1,
+                store_id: id(0xaf)?,
+                container_length: 1024,
+                container_commitment: [0xa8; 32],
+                object_key_commitment: object_key_commitment(&collection, &object, &content),
+            },
+        ),
+        (
+            "operation-v1-key-free-object-rewrap",
+            PayloadBody::RewrapObjectKey {
+                object_id: object,
+                object_key_commitment: object_key_commitment(&collection, &object, &content),
+            },
+        ),
+    ] {
+        let payload = OperationPayload::new(collection, 1, body)?;
+        out.push(VectorBuilder::accept("operation", vector_id, "docs/sync/OPERATION_PAYLOAD_V1.md", "2",
+            "The signed payload contains a key commitment and no recoverable object-key envelope.")
+            .input_bytes("object_key", content.expose()).expect_bytes("record", &payload.encode())
+            .expect("record_length", json!(payload.encode().len())).note(TEST_ONLY).build());
+    }
     Ok(())
 }

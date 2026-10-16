@@ -3,7 +3,6 @@
 use std::collections::BTreeMap;
 
 use chur_core::{ChurStatus, Error, Id, Result};
-use chur_format::envelope::ObjectKeyEnvelope;
 
 use crate::convergence::{
     CausalRelation, CausalStamp, MergeOutcome, ObjectLifecycle, ObservedRemoveSet, ScalarRegister,
@@ -35,7 +34,7 @@ pub struct CommittedObject {
     stream_id: Id,
     container_length: u64,
     container_commitment: [u8; 32],
-    object_key_envelope: ObjectKeyEnvelope,
+    object_key_commitment: [u8; 32],
 }
 
 impl CommittedObject {
@@ -65,8 +64,8 @@ impl CommittedObject {
 
     /// Object key envelope carried by the commit.
     #[must_use]
-    pub const fn object_key_envelope(&self) -> &ObjectKeyEnvelope {
-        &self.object_key_envelope
+    pub const fn object_key_commitment(&self) -> &[u8; 32] {
+        &self.object_key_commitment
     }
 }
 
@@ -134,7 +133,7 @@ impl MaterializedState {
                 store_id,
                 container_length,
                 container_commitment,
-                object_key_envelope,
+                object_key_commitment,
             } => {
                 let Some(object) = self.objects.get_mut(object_id) else {
                     return Ok(MergeOutcome::PendingCause);
@@ -161,7 +160,7 @@ impl MaterializedState {
                     stream_id: object.stream_id,
                     container_length: *container_length,
                     container_commitment: *container_commitment,
-                    object_key_envelope: object_key_envelope.clone(),
+                    object_key_commitment: *object_key_commitment,
                 });
                 Ok(MergeOutcome::Applied)
             }

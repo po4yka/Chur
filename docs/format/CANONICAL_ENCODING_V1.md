@@ -454,6 +454,10 @@ A domain tag is a fixed ASCII byte constant written without a length prefix, per
 | `CHUR\x00SLOT\x00APPLE-KEYCHAIN\x00V1` | Apple Keychain key-slot AAD | [`KEY_SLOT_BODIES_V1.md`](KEY_SLOT_BODIES_V1.md) §6 |
 | `CHUR\x00COLLECTION\x00KEY-ENVELOPE\x00V1` | collection-key envelope AAD | [`COLLECTION_KEY_ENVELOPE_V1.md`](COLLECTION_KEY_ENVELOPE_V1.md) §3 |
 | `CHUR\x00OBJECT\x00KEY-ENVELOPE\x00V1` | object-key envelope AAD | [`OBJECT_KEY_ENVELOPE_V1.md`](OBJECT_KEY_ENVELOPE_V1.md) §3 |
+| `CHUR\x00OBJECT-PREKEY\x00SIGNATURE\x00V1` | object-bound public key request signature | [`../sync/OBJECT_KEY_GRANTS.md`](../sync/OBJECT_KEY_GRANTS.md) section 1 |
+| `CHUR\x00OBJECT-KEY-GRANT\x00SIGNATURE\x00V1` | disposable object-key grant signature | [`../sync/OBJECT_KEY_GRANTS.md`](../sync/OBJECT_KEY_GRANTS.md) section 2 |
+| `CHUR\x00OBJECT-KEY-GRANT\x00HPKE\x00V1` | disposable object-key grant HPKE context | [`../sync/OBJECT_KEY_GRANTS.md`](../sync/OBJECT_KEY_GRANTS.md) section 2 |
+| `CHUR\x00OBJECT-KEY\x00COMMITMENT\x00V1` | key-free content-key commitment | [`../sync/OBJECT_KEY_GRANTS.md`](../sync/OBJECT_KEY_GRANTS.md) section 2 |
 | `CHUR\x00OBJECT\x00MANIFEST-AAD\x00V1` | encrypted manifest AAD | [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §32 |
 | `CHUR\x00OBJECT\x00MANIFEST-COMMITMENT\x00V1` | manifest commitment | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §5 |
 | `CHUR\x00OBJECT\x00CHUNK-AAD\x00V1` | chunk AAD | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §9 |

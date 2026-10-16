@@ -22,6 +22,76 @@ import kotlin.test.assertTrue
 
 class SharingPullerTest {
     @Test
+    fun pending_key_is_requested_before_download_and_acknowledged_after_native_acceptance() = runTest {
+        val collection = ByteArray(16) { 3 }
+        val objectId = ByteArray(16) { 4 }
+        val grant = ByteArray(346).apply { collection.copyInto(this, 18); this[2] = 9 }
+        val prekey = ByteArray(226) { 7 }
+        var requested = false
+        var nativeAccepted = false
+        var acknowledged = false
+        var downloads = 0
+        var offerGrant = false
+        val engine = MockEngine { request ->
+            when {
+                request.url.encodedPath.endsWith("/sharing/packages") -> respond(frame(byteArrayOf(1)))
+                request.url.encodedPath.contains("/sharing/operations/") -> respond(frame())
+                request.url.encodedPath.endsWith("/sharing/object-key-grants") ->
+                    respond(if (offerGrant) frame(grant) else frame())
+                request.url.encodedPath.endsWith("/sharing/object-key-requests") -> {
+                    requested = true
+                    respond(ByteArray(0))
+                }
+                request.url.encodedPath.endsWith("/sharing/object-key-grants/ack") -> {
+                    assertTrue(nativeAccepted, "transport ACK must follow durable native acceptance")
+                    acknowledged = true
+                    respond(ByteArray(0))
+                }
+                request.url.encodedPath.contains("/sharing/issuers/") -> {
+                    assertTrue(nativeAccepted)
+                    downloads++
+                    respond(byteArrayOf(7, 8, 9))
+                }
+                else -> error(request.url.toString())
+            }
+        }
+        val boundary = object : SyncVaultBoundary {
+            override suspend fun identity(): SharingIdentity? = null
+            override suspend fun stage(vaultId: ByteArray, kind: SyncRecordKind, stagedAtMs: Long, record: ByteArray) = Unit
+            override suspend fun process(): SyncProcessReport? = null
+            override suspend fun forkState(): SyncForkState? = null
+            override suspend fun acknowledgeForks(): Boolean = false
+            override suspend fun acceptSharePackage(packageBytes: ByteArray): Boolean = true
+            override suspend fun receiveSharedOperations(packageBytes: ByteArray, operations: List<ByteArray>) =
+                SharedReceivePlan(ByteArray(16), collection, ByteArray(16), 0,
+                    listOf(SharedDownload(objectId, ByteArray(16), 3uL)))
+            override suspend fun objectKeyRequest(collectionId: ByteArray, objectId: ByteArray): ByteArray? =
+                if (nativeAccepted) null else prekey
+            override suspend fun objectKeyAccept(packageBytes: ByteArray, grant: ByteArray): Boolean {
+                assertTrue(requested)
+                nativeAccepted = true
+                return true
+            }
+            override suspend fun sharedDownloadOffset(collectionId: ByteArray, objectId: ByteArray): ULong = 0uL
+            override suspend fun appendSharedDownload(collectionId: ByteArray, objectId: ByteArray, offset: ULong, bytes: ByteArray) = true
+            override suspend fun finishSharedDownload(collectionId: ByteArray, objectId: ByteArray, nowMs: Long) = true
+            override suspend fun sourceCollectionId(): ByteArray? = null
+            override suspend fun sourcePage(collectionId: ByteArray, afterObjectId: ByteArray): List<SharedSourceObject>? = null
+            override suspend fun sourceRange(objectId: ByteArray, offset: ULong, maxBytes: Int): SharedSourceRange? = null
+            override suspend fun sourceAuthor(source: SharedSourceObject): SharedSourceObject? = null
+        }
+        val client = SyncClient("https://sync.example", { ByteArray(32) }, HttpClient(engine))
+        val puller = SharingPuller(client, boundary)
+        assertEquals(1, puller.pullOnce(ByteArray(16)))
+        assertTrue(requested)
+        assertEquals(0, downloads)
+        offerGrant = true
+        assertEquals(1, puller.pullOnce(ByteArray(16)))
+        assertTrue(acknowledged)
+        assertEquals(1, downloads)
+    }
+
+    @Test
     fun opaque_acceptance_packages_are_passed_to_the_native_core_in_order() = runTest {
         val first = byteArrayOf(1, 2)
         val second = byteArrayOf(3, 4, 5)
@@ -68,11 +138,13 @@ class SharingPullerTest {
         var downloadRequests = 0
         val engine = MockEngine { request ->
             when {
+                request.url.encodedPath.endsWith("/sharing/object-key-grants") -> respond(frame())
                 request.url.encodedPath.endsWith("/sharing/packages") -> respond(frame(byteArrayOf(1)))
                 request.url.encodedPath.contains("/sharing/operations/") -> {
                     val cursor = request.url.parameters["after_vault"]
                     val device = request.url.parameters["after_device"]
                     when {
+                request.url.encodedPath.endsWith("/sharing/object-key-grants") -> respond(frame())
                         cursor == null -> respond(frame(commit))
                         device == ByteArray(16).apply { this[15] = 1 }.toHex() -> respond(frame(create))
                         else -> respond(frame())
@@ -143,6 +215,7 @@ class SharingPullerTest {
         var failOnce = true
         val engine = MockEngine { request ->
             when {
+                request.url.encodedPath.endsWith("/sharing/object-key-grants") -> respond(frame())
                 request.url.encodedPath.endsWith("/sharing/packages") -> respond(frame(byteArrayOf(1)))
                 request.url.encodedPath.contains("/sharing/operations/") -> respond(frame())
                 request.url.encodedPath.contains("/sharing/issuers/") -> {

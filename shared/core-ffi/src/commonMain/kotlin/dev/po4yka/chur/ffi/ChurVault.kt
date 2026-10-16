@@ -303,6 +303,39 @@ object ChurVault {
         }
     }
 
+    /** Returns null if the object key is ready, otherwise its signed one-use request. */
+    fun objectKeyRequest(session: Long, collectionId: ByteArray, objectId: ByteArray): ByteArray? {
+        require(collectionId.size == 16 && objectId.size == 16)
+        val result = objectKeyCall(session, collectionId + objectId, ChurNative::objectKeyRequest)
+        require(result.isNotEmpty() && (result[0] == 0.toByte() || result[0] == 1.toByte()))
+        if (result[0] == 0.toByte()) { require(result.size == 1); return null }
+        require(result.size == 227)
+        return result.copyOfRange(1, result.size)
+    }
+
+    fun objectKeyIssue(session: Long, prekey: ByteArray): ByteArray =
+        objectKeyCall(session, prekey, ChurNative::objectKeyIssue)
+
+    fun objectKeyAccept(session: Long, packageBytes: ByteArray, grant: ByteArray) {
+        require(packageBytes.size <= 16_776_000 && grant.size == 346)
+        fun length(value: Int) = byteArrayOf((value ushr 24).toByte(), (value ushr 16).toByte(),
+            (value ushr 8).toByte(), value.toByte())
+        objectKeyCall(session, length(packageBytes.size) + packageBytes + length(grant.size) + grant,
+            ChurNative::objectKeyAccept)
+    }
+
+    private fun objectKeyCall(
+        session: Long, bytes: ByteArray,
+        call: (Long, ChurBuffer, Int, ChurBuffer, IntArray) -> Int,
+    ): ByteArray = withChurBuffer(bytes.size) { input ->
+        input.copyIn(bytes)
+        withChurBuffer(512) { output ->
+            val written = IntArray(1)
+            ChurFailure.check(call(session, input, bytes.size, output, written), "object key delivery")
+            output.copyOut(written[0])
+        }
+    }
+
     /** Authenticates one collection-operation page and returns missing objects. */
     fun receiveSharedOperations(
         session: Long,

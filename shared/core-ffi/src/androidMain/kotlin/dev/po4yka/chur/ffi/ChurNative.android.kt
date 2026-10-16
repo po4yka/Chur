@@ -166,6 +166,15 @@ internal actual object ChurNative {
         session, objectId, offset, maxBytes, destination.buffer, outWritten, rangeSha256,
     )
 
+    actual fun objectKeyRequest(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.objectKeyRequest(session, input.buffer, length, destination.buffer, outWritten)
+
+    actual fun objectKeyIssue(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.objectKeyIssue(session, input.buffer, length, destination.buffer, outWritten)
+
+    actual fun objectKeyAccept(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.objectKeyAccept(session, input.buffer, length, destination.buffer, outWritten)
+
     actual fun sharingReceive(
         session: Long,
         bundle: ChurBuffer,

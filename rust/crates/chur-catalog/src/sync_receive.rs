@@ -813,8 +813,8 @@ pub fn accept_rotation_operation(
             Ok(outcome)
         }
         PayloadBody::RewrapObjectKey {
-            object_key_envelope,
-            ..
+            object_id,
+            object_key_commitment,
         } => {
             let current_epoch = payload.collection_epoch();
             let previous_epoch = current_epoch.checked_sub(1).ok_or_else(|| {
@@ -837,7 +837,88 @@ pub fn accept_rotation_operation(
                 *payload.collection_id(),
                 current_epoch,
             )?;
+            // The signed log commits to the key without carrying it. Every
+            // device rewraps its own live envelope with a fresh local nonce.
+            let (stored, pending) = match crate::store::active_envelope(db, object_id) {
+                Ok(bytes) => (
+                    chur_format::envelope::ObjectKeyEnvelope::decode(&bytes)?,
+                    false,
+                ),
+                Err(error) if error.status() == ChurStatus::NotFound => {
+                    let state = load_materialized_state(db, keys)?;
+                    let committed = state.committed_object(object_id).ok_or_else(|| {
+                        Error::new(
+                            ChurStatus::NotFound,
+                            "rewrap precedes the accepted object commit",
+                        )
+                    })?;
+                    ensure!(
+                        committed.object_key_commitment() == object_key_commitment,
+                        AuthenticationFailed,
+                        "rewrap differs from the accepted object key commitment"
+                    );
+                    match crate::object_grants::pending_envelope(db, object_id) {
+                        Ok(envelope) => (envelope, true),
+                        Err(error) if error.status() == ChurStatus::NotFound => {
+                            return log.accept_with(db, &operation, membership, |_| Ok(()));
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                Err(error) => return Err(error),
+            };
+            let old_key = if stored.collection_epoch() == current_epoch {
+                &current_key
+            } else {
+                ensure!(
+                    stored.collection_epoch() == previous_epoch,
+                    AuthenticationFailed,
+                    "local object envelope is outside the rotation epochs"
+                );
+                &previous_key
+            };
+            let content = stored.open(old_key)?;
+            ensure!(
+                chur_sync_protocol::object_grant::object_key_commitment(
+                    payload.collection_id(),
+                    object_id,
+                    &content
+                ) == *object_key_commitment,
+                AuthenticationFailed,
+                "rewrap key commitment differs from local key"
+            );
+            let object_key_envelope = if stored.collection_epoch() == current_epoch {
+                stored
+            } else {
+                stored.rewrap(
+                    &previous_key,
+                    &current_key,
+                    *payload.collection_id(),
+                    current_epoch,
+                    stored.envelope_generation().checked_add(1).ok_or_else(|| {
+                        Error::new(
+                            ChurStatus::ResourceLimitExceeded,
+                            "object envelope generation overflowed",
+                        )
+                    })?,
+                    Nonce::random()?,
+                )?
+            };
             log.accept_with(db, &operation, membership, |transaction| {
+                if pending {
+                    transaction
+                        .execute(
+                            "UPDATE pending_object_keys SET envelope = ?2 WHERE object_id = ?1",
+                            rusqlite::params![
+                                object_id.as_bytes().as_slice(),
+                                object_key_envelope.encode()
+                            ],
+                        )
+                        .map_err(|error| {
+                            map_sqlite(error, "pending object envelope could not be rewrapped")
+                        })?;
+                    return Ok(());
+                }
                 sync_rotation::project_rewrap(
                     transaction,
                     *operation.vault_id(),

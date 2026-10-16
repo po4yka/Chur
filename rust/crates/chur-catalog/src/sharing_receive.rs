@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 use chur_core::{ChurStatus, Error, Id, Result, ensure};
 use chur_crypto::Key;
 use chur_format::constants::{IntegritySummary, ObjectState, StreamKind};
-use chur_format::envelope::ObjectKeyEnvelope;
 use chur_sync_protocol::{
     KeyDirectory, KeyDomain,
     collection_membership::{CollectionMembershipRecord, CollectionMembershipState},
@@ -42,7 +41,7 @@ pub struct SharedObject {
     /// Signed final chunk commitment.
     pub container_commitment: [u8; 32],
     /// Signed wrapping of the object key.
-    pub object_key_envelope: ObjectKeyEnvelope,
+    pub object_key_commitment: [u8; 32],
     /// Initial private metadata from the creation operation.
     pub metadata: Vec<MetadataField>,
 }
@@ -238,6 +237,7 @@ pub fn pending_object_for_collection(
     collection_id: Id,
     object_id: Id,
 ) -> Result<SharedObject> {
+    crate::object_grants::ensure_not_deleted(db, &object_id)?;
     let (state, keys, selector) = recipient_context(db, root, local_vault_id, collection_id)?;
     sharing_log::ensure_object_index(db, &selector, &keys)?;
     let (draft, missing) =
@@ -275,7 +275,7 @@ struct Draft {
     store_id: Id,
     stream_id: Id,
     metadata: Vec<MetadataField>,
-    commit: Option<(u64, [u8; 32], ObjectKeyEnvelope)>,
+    commit: Option<(u64, [u8; 32], [u8; 32])>,
 }
 
 impl Draft {
@@ -302,6 +302,14 @@ pub fn pending_objects(
     let dirty = sharing_log::dirty_object_ids(db, selector, 4096)?;
     let mut objects = Vec::new();
     for (object_id, revision) in dirty {
+        match crate::object_grants::ensure_not_deleted(db, &object_id) {
+            Ok(()) => {}
+            Err(error) if error.status() == ChurStatus::NotFound => {
+                sharing_log::mark_object_clean(db, selector, &object_id, revision)?;
+                continue;
+            }
+            Err(error) => return Err(error),
+        }
         let (draft, missing) = project_object(
             db,
             keys,
@@ -338,10 +346,21 @@ pub fn pending_objects(
         }
         if !deleted {
             objects.push(expected);
+            if objects.len() == crate::receive_queue::PAGE_MAX {
+                break;
+            }
         } else {
             sharing_log::mark_object_clean(db, selector, &object_id, revision)?;
         }
     }
+    crate::receive_queue::dispatched(
+        db,
+        collection_state.collection_id(),
+        &objects
+            .iter()
+            .map(|object| object.object_id)
+            .collect::<Vec<_>>(),
+    )?;
     Ok(objects)
 }
 
@@ -438,7 +457,7 @@ fn committed_shared_object(
     state: &CollectionMembershipState,
     object_id: Id,
 ) -> Option<SharedObject> {
-    let (container_length, container_commitment, object_key_envelope) = draft.commit?;
+    let (container_length, container_commitment, object_key_commitment) = draft.commit?;
     Some(SharedObject {
         source_vault_id: *state.source_vault_id(),
         collection_id: *state.collection_id(),
@@ -448,7 +467,7 @@ fn committed_shared_object(
         store_id: draft.store_id,
         container_length,
         container_commitment,
-        object_key_envelope,
+        object_key_commitment,
         metadata: draft.metadata,
     })
 }
@@ -537,7 +556,7 @@ fn reconcile_present(
 
 fn project_drafts(
     payloads: &[(CausalStamp, OperationPayload)],
-    source_vault_id: &Id,
+    _source_vault_id: &Id,
 ) -> Result<(BTreeMap<Id, Draft>, usize)> {
     let mut drafts = BTreeMap::<Id, Draft>::new();
     let mut missing_creations = 0;
@@ -579,7 +598,7 @@ fn project_drafts(
                 store_id,
                 container_length,
                 container_commitment,
-                object_key_envelope,
+                object_key_commitment,
             } => {
                 let Some(draft) = drafts.get_mut(object_id) else {
                     missing_creations += 1;
@@ -589,7 +608,6 @@ fn project_drafts(
                     draft.created_generation == *object_generation
                         && draft.store_id == *store_id
                         && draft.commit.is_none()
-                        && object_key_envelope.vault_id() == source_vault_id
                         && causal_relation(&draft.created_stamp, stamp)? == CausalRelation::Before,
                     AuthenticationFailed,
                     "shared commit contradicts its creation"
@@ -597,7 +615,7 @@ fn project_drafts(
                 draft.commit = Some((
                     *container_length,
                     *container_commitment,
-                    object_key_envelope.clone(),
+                    *object_key_commitment,
                 ));
             }
             _ => {}
@@ -748,17 +766,7 @@ mod tests {
                 store_id: id(201),
                 container_length: 64,
                 container_commitment: [6; 32],
-                object_key_envelope: ObjectKeyEnvelope::seal(
-                    &Key::new([7; 32]),
-                    source,
-                    collection,
-                    1,
-                    ready,
-                    1,
-                    Nonce::new([8; 24]),
-                    &Key::new([9; 32]),
-                )
-                .expect("envelope"),
+                object_key_commitment: [9; 32],
             },
         )
         .expect("commit");
@@ -934,17 +942,6 @@ mod tests {
         let source = id(2);
         let object = id(3);
         let store = id(4);
-        let envelope = ObjectKeyEnvelope::seal(
-            &Key::new([5; 32]),
-            source,
-            collection,
-            1,
-            object,
-            1,
-            Nonce::new([6; 24]),
-            &Key::new([7; 32]),
-        )
-        .expect("envelope");
         let create = OperationPayload::new(
             collection,
             1,
@@ -966,7 +963,7 @@ mod tests {
                 store_id: store,
                 container_length: 64,
                 container_commitment: [9; 32],
-                object_key_envelope: envelope,
+                object_key_commitment: [7; 32],
             },
         )
         .expect("commit");
@@ -1001,17 +998,7 @@ mod tests {
             store_id: id(5),
             container_length: 64,
             container_commitment: [9; 32],
-            object_key_envelope: ObjectKeyEnvelope::seal(
-                &Key::new([6; 32]),
-                source,
-                collection,
-                1,
-                object_id,
-                1,
-                Nonce::new([7; 24]),
-                &Key::new([8; 32]),
-            )
-            .expect("envelope"),
+            object_key_commitment: [9; 32],
             metadata: Vec::new(),
         };
         let local = Object {
@@ -1102,17 +1089,7 @@ mod tests {
                 store_id: store,
                 container_length: 64,
                 container_commitment: [7; 32],
-                object_key_envelope: ObjectKeyEnvelope::seal(
-                    &Key::new([8; 32]),
-                    source,
-                    collection,
-                    1,
-                    object,
-                    1,
-                    Nonce::new([9; 24]),
-                    &Key::new([10; 32]),
-                )
-                .expect("envelope"),
+                object_key_commitment: [9; 32],
             },
         )
         .expect("commit");

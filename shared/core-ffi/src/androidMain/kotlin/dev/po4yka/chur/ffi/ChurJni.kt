@@ -163,6 +163,12 @@ internal object ChurJni {
         rangeSha256: ByteArray,
     ): Int
 
+    external fun objectKeyRequest(session: Long, input: ByteBuffer, length: Int, destination: ByteBuffer, outWritten: IntArray): Int
+
+    external fun objectKeyIssue(session: Long, input: ByteBuffer, length: Int, destination: ByteBuffer, outWritten: IntArray): Int
+
+    external fun objectKeyAccept(session: Long, input: ByteBuffer, length: Int, destination: ByteBuffer, outWritten: IntArray): Int
+
     external fun sharingReceive(
         session: Long,
         bundle: ByteBuffer,

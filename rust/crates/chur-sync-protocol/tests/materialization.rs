@@ -4,7 +4,6 @@
 
 use chur_core::Id;
 use chur_crypto::{Key, Nonce};
-use chur_format::envelope::ObjectKeyEnvelope;
 use chur_sync_protocol::convergence::MergeOutcome;
 use chur_sync_protocol::materialization::MaterializedState;
 use chur_sync_protocol::operation::{DeviceSigningKey, ObservedHead, Operation};
@@ -236,17 +235,6 @@ fn a_commit_and_edit_of_an_older_generation_land_in_both_arrival_orders() {
         Vec::new(),
         &edit,
     );
-    let envelope = ObjectKeyEnvelope::seal(
-        &Key::new([44; 32]),
-        id(1),
-        id(10),
-        1,
-        id(60),
-        1,
-        Nonce::new([45; 24]),
-        &Key::new([46; 32]),
-    )
-    .expect("envelope");
     let commit = OperationPayload::new(
         id(10),
         1,
@@ -256,7 +244,7 @@ fn a_commit_and_edit_of_an_older_generation_land_in_both_arrival_orders() {
             store_id: id(61),
             container_length: 100,
             container_commitment: [47; 32],
-            object_key_envelope: envelope,
+            object_key_commitment: [46; 32],
         },
     )
     .expect("commit");
@@ -359,17 +347,6 @@ fn committed_object_keeps_the_stream_identity_needed_for_download() {
     )
     .expect("create");
     let create_operation = operation(&key, 43, id(2), 1, [0; 32], Vec::new(), &create);
-    let envelope = ObjectKeyEnvelope::seal(
-        &Key::new([44; 32]),
-        id(1),
-        id(10),
-        1,
-        id(40),
-        1,
-        Nonce::new([45; 24]),
-        &Key::new([46; 32]),
-    )
-    .expect("envelope");
     let commit = OperationPayload::new(
         id(10),
         1,
@@ -379,7 +356,7 @@ fn committed_object_keeps_the_stream_identity_needed_for_download() {
             store_id: id(41),
             container_length: 100,
             container_commitment: [47; 32],
-            object_key_envelope: envelope,
+            object_key_commitment: [46; 32],
         },
     )
     .expect("commit");

@@ -6,10 +6,10 @@
 use chur_ffi::api::{chur_runtime_close, chur_runtime_open, chur_session_close, chur_vault_unlock};
 use chur_ffi::records::{ChurRuntimeConfigV1, ChurUnlockRequestV1};
 use chur_ffi::sharing::{
-    chur_sharing_accept, chur_sharing_download_append, chur_sharing_download_finish,
-    chur_sharing_download_offset, chur_sharing_identity, chur_sharing_inspect_enrollment,
-    chur_sharing_overview, chur_sharing_prepare, chur_sharing_prepare_device, chur_sharing_receive,
-    chur_sharing_revoke,
+    chur_object_key_accept, chur_object_key_issue, chur_object_key_request, chur_sharing_accept,
+    chur_sharing_download_append, chur_sharing_download_finish, chur_sharing_download_offset,
+    chur_sharing_identity, chur_sharing_inspect_enrollment, chur_sharing_overview,
+    chur_sharing_prepare, chur_sharing_prepare_device, chur_sharing_receive, chur_sharing_revoke,
 };
 use chur_ffi::sharing_publish::{chur_sharing_author, chur_sharing_publication};
 use chur_format::codec::{Reader, Writer};
@@ -568,6 +568,84 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
     assert_eq!(plan.u64().expect("planned length"), ciphertext.len() as u64);
     plan.finish().expect("plan");
 
+    // The signed content log carries a commitment only. The receiver requests
+    // this exact object with a disposable key before it can open its container.
+    let request_input = [
+        collection_id.as_bytes().as_slice(),
+        shared_object_id.as_bytes().as_slice(),
+    ]
+    .concat();
+    let mut request_bytes = vec![0u8; 227];
+    let mut request_length = 0;
+    assert_eq!(
+        unsafe {
+            chur_object_key_request(
+                recipient_session,
+                request_input.as_ptr(),
+                request_input.len() as u32,
+                request_bytes.as_mut_ptr(),
+                request_bytes.len(),
+                &mut request_length,
+            )
+        },
+        0
+    );
+    request_bytes.truncate(request_length);
+    assert_eq!(request_bytes[0], 1);
+    let prekey_bytes = request_bytes[1..].to_vec();
+    let mut object_grant_bytes = vec![0u8; 346];
+    let mut object_grant_length = 0;
+    assert_eq!(
+        unsafe {
+            chur_object_key_issue(
+                session,
+                prekey_bytes.as_ptr(),
+                prekey_bytes.len() as u32,
+                object_grant_bytes.as_mut_ptr(),
+                object_grant_bytes.len(),
+                &mut object_grant_length,
+            )
+        },
+        0
+    );
+    object_grant_bytes.truncate(object_grant_length);
+    let mut accept_object_key = Writer::new();
+    accept_object_key
+        .variable(&bundle)
+        .expect("issuer evidence");
+    accept_object_key
+        .variable(&object_grant_bytes)
+        .expect("object key grant");
+    let accept_object_key = accept_object_key.finish();
+    let mut ignored_length = 0;
+    assert_eq!(
+        unsafe {
+            chur_object_key_accept(
+                recipient_session,
+                accept_object_key.as_ptr(),
+                accept_object_key.len() as u32,
+                std::ptr::null_mut(),
+                0,
+                &mut ignored_length,
+            )
+        },
+        0
+    );
+    assert_eq!(
+        unsafe {
+            chur_object_key_accept(
+                recipient_session,
+                accept_object_key.as_ptr(),
+                accept_object_key.len() as u32,
+                std::ptr::null_mut(),
+                0,
+                &mut ignored_length,
+            )
+        },
+        0,
+        "grant acceptance retries without retaining its private prekey"
+    );
+
     let mut offset = u64::MAX;
     assert_eq!(
         unsafe {
@@ -692,10 +770,13 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
         .expect("pending shared object");
     let received_collection_key =
         chur_media::keys::collection_key(&interrupted, &collection_id, 1).expect("collection key");
-    let received_object_key = planned_object
-        .object_key_envelope
-        .open(&received_collection_key)
-        .expect("object key");
+    let received_object_key = chur_catalog::object_grants::pending_envelope(
+        interrupted.catalog_ref().expect("catalog"),
+        &shared_object_id,
+    )
+    .expect("local pending key envelope")
+    .open(&received_collection_key)
+    .expect("object key");
     let expectation = chur_media::sync_download::Expectation::new(
         shared_object_id,
         planned_object.stream_id,
@@ -984,7 +1065,137 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
             .expose(),
         collection_key.expose()
     );
+    // Local permanent deletion must leave no content key reachable through
+    // old public requests, grants, signed logs, retained epoch keys or root.
+    chur_catalog::deletion::begin(received.catalog().expect("catalog"), &shared_object_id)
+        .expect("begin recipient erasure");
+    chur_catalog::deletion::erase(received.catalog().expect("catalog"), &shared_object_id, 4)
+        .expect("erase recipient key");
+    for entry in
+        chur_catalog::deletion::sweep(received.catalog_ref().expect("catalog")).expect("sweep")
+    {
+        for container in entry.containers {
+            chur_media::store::unlink_container(
+                received.root_dir(),
+                &received.object_store_id(),
+                &container,
+            )
+            .expect("collect recipient ciphertext");
+        }
+    }
+    chur_catalog::deletion::finish(received.catalog().expect("catalog"), &shared_object_id)
+        .expect("finish recipient deletion");
+    chur_catalog::deletion::discard_tombstone(
+        received.catalog().expect("catalog"),
+        &shared_object_id,
+    )
+    .expect("retain shared tombstone");
+    assert!(
+        chur_catalog::object_grants::pending_envelope(
+            received.catalog_ref().expect("catalog"),
+            &shared_object_id
+        )
+        .is_err()
+    );
+    assert!(
+        chur_catalog::object_grants::request(
+            received.catalog().expect("catalog"),
+            &received_root,
+            recipient_vault_id,
+            collection_id,
+            shared_object_id
+        )
+        .is_err(),
+        "old commits cannot request a new key after deletion"
+    );
     drop(received);
+    let mut received = chur_catalog::vault::unlock_with_password(&recipient_root, PASSWORD, 5)
+        .expect("recipient restart after delete");
+    assert!(chur_media::keys::object_key(&received, &shared_object_id).is_err());
+    assert!(
+        chur_catalog::object_grants::pending_envelope(
+            received.catalog_ref().expect("catalog"),
+            &shared_object_id
+        )
+        .is_err()
+    );
+    // A backup created after erasure retains the tombstone and no object key.
+    let mut package = std::io::Cursor::new(Vec::new());
+    chur_media::backup::create(
+        &mut received,
+        &mut package,
+        6,
+        &mut chur_media::progress::Uninterrupted,
+    )
+    .expect("backup after erasure");
+    let restored_path = std::env::temp_dir().join(format!(
+        "chur-erased-restore-{}",
+        chur_crypto::random::id().expect("id").to_hex()
+    ));
+    let restored_root = chur_catalog::paths::VaultRoot::new(&restored_path);
+    chur_media::backup::restore(
+        &restored_root,
+        &mut package,
+        PASSWORD,
+        &mut chur_media::progress::Uninterrupted,
+    )
+    .expect("restore after erasure");
+    let restored = chur_catalog::vault::unlock_with_password(&restored_root, PASSWORD, 7)
+        .expect("restored vault");
+    assert!(chur_media::keys::object_key(&restored, &shared_object_id).is_err());
+    assert!(
+        chur_catalog::object_grants::pending_envelope(
+            restored.catalog_ref().expect("catalog"),
+            &shared_object_id
+        )
+        .is_err()
+    );
+    drop(restored);
+    std::fs::remove_dir_all(restored_path).expect("cleanup restore");
+    drop(received);
+
+    let mut source_after =
+        chur_catalog::vault::unlock_with_password(&root, PASSWORD, 5).expect("source restart");
+    let source_root_after = source_after.root_secret().expect("source root").duplicate();
+    let signed_commit =
+        chur_sync_protocol::collection_operation::CollectionOperation::decode(&commit)
+            .expect("retained commit");
+    let source_keys = chur_catalog::sync_keys::key_directory(
+        source_after.catalog_ref().expect("catalog"),
+        &source_root_after,
+        source_vault_id,
+    )
+    .expect("retained epoch keys");
+    let payload = chur_sync_protocol::payload::OperationPayload::open_for_collection_operation(
+        &signed_commit,
+        &source_keys,
+    )
+    .expect("old log authenticates");
+    assert!(
+        matches!(payload.body(), chur_sync_protocol::payload::PayloadBody::CommitObject { object_key_commitment, .. } if *object_key_commitment != [0; 32])
+    );
+    chur_catalog::deletion::begin(source_after.catalog().expect("catalog"), &shared_object_id)
+        .expect("begin source erasure");
+    chur_catalog::deletion::erase(
+        source_after.catalog().expect("catalog"),
+        &shared_object_id,
+        8,
+    )
+    .expect("erase source key despite retained logs");
+    assert!(chur_media::keys::object_key(&source_after, &shared_object_id).is_err());
+    let old_request = chur_sync_protocol::object_grant::ObjectPrekey::decode(&prekey_bytes)
+        .expect("old public request");
+    assert!(
+        chur_catalog::object_grants::issue(
+            source_after.catalog().expect("catalog"),
+            &source_root_after,
+            source_vault_id,
+            &old_request
+        )
+        .is_err(),
+        "source cannot reopen a key from retained signed logs or grant cache"
+    );
+    drop(source_after);
     std::fs::remove_dir_all(path).expect("cleanup");
     std::fs::remove_dir_all(recipient_path).expect("cleanup recipient");
 }

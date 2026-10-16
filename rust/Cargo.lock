@@ -335,9 +335,11 @@ name = "chur-sync-server"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chur-catalog",
  "chur-core",
  "chur-crypto",
  "chur-format",
+ "chur-media",
  "chur-sync-protocol",
  "hex",
  "rusqlite",

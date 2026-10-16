@@ -326,7 +326,12 @@ pub fn publish_page(
                         store_id: item.store_id,
                         container_length: item.container_length,
                         container_commitment: item.container_commitment,
-                        object_key_envelope: envelope,
+                        object_key_commitment:
+                            chur_sync_protocol::object_grant::object_key_commitment(
+                                &collection_id,
+                                &item.object_id,
+                                &envelope.open(&collection_key)?,
+                            ),
                     },
                 )?;
                 log.author(

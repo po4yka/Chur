@@ -160,6 +160,12 @@ internal expect object ChurNative {
         rangeSha256: ByteArray,
     ): Int
 
+    fun objectKeyRequest(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int
+
+    fun objectKeyIssue(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int
+
+    fun objectKeyAccept(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int
+
     fun sharingReceive(
         session: Long,
         bundle: ChurBuffer,

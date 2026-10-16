@@ -88,6 +88,7 @@ A locked device cannot check an inbound record against membership or head state,
 - the staging area holds ciphertext and signed bytes only. It is app-private, excluded from platform backup, and separate from the catalog, per SEC-034;
 - it is bounded at 4096 records, 64 MiB per vault, and 7 days per record, whichever bound is reached first. Past a bound the oldest record is dropped. Dropping is safe because nothing is acknowledged while locked, so a dropped record is fetched again;
 - staged records advance no accepted head, no membership generation, and no epoch. A locked device's freshness state is exactly what it was at lock;
+- transport pull cursors are read from authenticated native device heads after unlocked processing. A downloaded page does not advance a cursor, even if every record was staged. At unlock the host saves the verified heads; rejected, evicted, or expired records remain fetchable from the last accepted head;
 - at unlock every staged record is validated from the start under [`OPERATION_LOG.md`](OPERATION_LOG.md) §9: signature, sequence, previous hash, membership at its generation, and observed heads. Staging is not partial validation and grants a record nothing.
 
 ## 8. Conflict resolution

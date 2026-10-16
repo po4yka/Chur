@@ -78,6 +78,13 @@ public interface SyncVaultBoundary {
         operations: List<ByteArray>,
     ): SharedReceivePlan?
 
+    /** Requests a key only for an authenticated pending object; null means already ready. */
+    public suspend fun objectKeyRequest(collectionId: ByteArray, objectId: ByteArray): ByteArray? = null
+
+    public suspend fun objectKeyIssue(prekey: ByteArray): ByteArray? = null
+
+    public suspend fun objectKeyAccept(packageBytes: ByteArray, grant: ByteArray): Boolean = false
+
     /** Reads the durable prefix of one authenticated pending shared object. */
     public suspend fun sharedDownloadOffset(collectionId: ByteArray, objectId: ByteArray): ULong?
 
@@ -432,6 +439,7 @@ public class SyncCoordinator(
                         acceptedCursors(state, vault)?.let { state = state.copy(cursors = it) }
                         if (vault.identity()?.let { matches(state, it) } == true) {
                             publishSourceObjects(client, state, vault)
+                            serviceObjectKeyRequests(client, state, vault)
                         }
                         val puller =
                             LockedSyncPuller(client) { vaultId, kind, stagedAtMs, record ->
@@ -441,9 +449,10 @@ public class SyncCoordinator(
                         val processingVault = vault.identity()?.vaultId
                         val processReport = vault.process()
                         fold(processingVault, processReport)
+                        val sharingPuller = SharingPuller(client, vault)
                         val shares =
                             if (vault.identity()?.let { matches(state, it) } == true) {
-                                SharingPuller(client, vault).pullOnce(state.vaultId, clock())
+                                sharingPuller.pullOnce(state.vaultId, clock())
                             } else {
                                 0
                             }
@@ -461,10 +470,16 @@ public class SyncCoordinator(
                                 message =
                                     listOfNotNull(
                                         "Up to date.".takeIf {
-                                            integrityStop == null && processReport != null
+                                            integrityStop == null && processReport != null && sharingPuller.pendingObjectKeys + sharingPuller.unavailableObjects == 0
                                         },
                                         "Downloaded encrypted records. Unlock to apply.".takeIf {
                                             integrityStop == null && processReport == null
+                                        },
+                                        "Waiting for the source device to send object keys.".takeIf {
+                                            integrityStop == null && sharingPuller.pendingObjectKeys > 0
+                                        },
+                                        "Some encrypted files are unavailable. Sync will retry.".takeIf {
+                                            integrityStop == null && sharingPuller.unavailableObjects > 0
                                         },
                                         "Received $shares share(s).".takeIf { shares > 0 },
                                     ).joinToString(" ").ifEmpty { null },
@@ -551,6 +566,9 @@ public class SyncCoordinator(
             after = page.last().objectId
         }
     }
+
+    private suspend fun serviceObjectKeyRequests(client: SyncClient, state: SyncState, vault: SyncVaultBoundary): Unit =
+        respondToObjectKeyRequests(client, state.vaultId, vault::objectKeyIssue)
 
     /** Publishes one already prepared forward-only revocation batch. */
     public suspend fun publishRevocation(revocation: PreparedShareRevocation): Unit =

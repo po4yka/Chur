@@ -489,6 +489,27 @@ internal actual object ChurNative {
         }
     }
 
+    actual fun objectKeyRequest(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        writtenCall(outWritten) { written ->
+            dev.po4yka.chur.native.chur_object_key_request(session.toULong(), input.pointer, length.toUInt(),
+                destination.pointer, destination.size.toULong(), written)
+        }
+    }
+
+    actual fun objectKeyIssue(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        writtenCall(outWritten) { written ->
+            dev.po4yka.chur.native.chur_object_key_issue(session.toULong(), input.pointer, length.toUInt(),
+                destination.pointer, destination.size.toULong(), written)
+        }
+    }
+
+    actual fun objectKeyAccept(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        writtenCall(outWritten) { written ->
+            dev.po4yka.chur.native.chur_object_key_accept(session.toULong(), input.pointer, length.toUInt(),
+                destination.pointer, destination.size.toULong(), written)
+        }
+    }
+
     actual fun sharingReceive(
         session: Long,
         bundle: ChurBuffer,

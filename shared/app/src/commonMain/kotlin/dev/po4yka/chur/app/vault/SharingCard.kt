@@ -52,7 +52,7 @@ internal fun SharingCard(state: VaultUiState, actions: VaultActions) {
             Text(
                 "This grant covers the entire vault collection, including future imports. " +
                     "Albums do not limit access. Both devices must use the same sync server. " +
-                    "Photos do not yet sync between devices.",
+                    "Keep both devices available until the recipient receives the photos and videos.",
                 style = MaterialTheme.typography.bodySmall,
             )
             state.sharingIdentity?.let { identity ->

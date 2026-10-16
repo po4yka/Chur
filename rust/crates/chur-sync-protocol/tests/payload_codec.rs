@@ -4,7 +4,7 @@
 
 use chur_core::{ChurStatus, Id};
 use chur_crypto::{Key, Nonce};
-use chur_format::envelope::{CollectionKeyEnvelope, ObjectKeyEnvelope};
+use chur_format::envelope::CollectionKeyEnvelope;
 use chur_sync_protocol::collection_membership::{
     CollectionMembershipAction, CollectionMembershipRecord,
 };
@@ -18,20 +18,6 @@ use chur_sync_protocol::{KeyDirectory, KeyDomain};
 
 fn id(byte: u8) -> Id {
     Id::new([byte; 16]).expect("non-zero identifier")
-}
-
-fn object_envelope(vault: Id, collection: Id, epoch: u64, object: Id) -> ObjectKeyEnvelope {
-    ObjectKeyEnvelope::seal(
-        &Key::new([1; 32]),
-        vault,
-        collection,
-        epoch,
-        object,
-        1,
-        Nonce::new([2; 24]),
-        &Key::new([3; 32]),
-    )
-    .expect("object envelope")
 }
 
 #[test]
@@ -176,7 +162,6 @@ fn every_allocated_payload_kind_has_one_canonical_round_trip() {
     let vault = id(1);
     let collection = id(2);
     let object = id(3);
-    let object_envelope = object_envelope(vault, collection, 7, object);
     let collection_envelope = CollectionKeyEnvelope::seal(
         &Key::new([4; 32]),
         vault,
@@ -218,7 +203,7 @@ fn every_allocated_payload_kind_has_one_canonical_round_trip() {
                 store_id: id(13),
                 container_length: 100,
                 container_commitment: [14; 32],
-                object_key_envelope: object_envelope.clone(),
+                object_key_commitment: [3; 32],
             },
         ),
         OperationPayload::new(
@@ -324,7 +309,7 @@ fn every_allocated_payload_kind_has_one_canonical_round_trip() {
             7,
             PayloadBody::RewrapObjectKey {
                 object_id: object,
-                object_key_envelope: object_envelope,
+                object_key_commitment: [3; 32],
             },
         ),
     ];
@@ -393,7 +378,7 @@ fn parser_and_semantic_non_canonical_forms_fail_closed() {
 }
 
 #[test]
-fn nested_records_must_match_the_authenticated_outer_operation() {
+fn key_free_records_must_match_the_authenticated_outer_domain() {
     let vault = id(1);
     let collection = id(2);
     let object = id(3);
@@ -402,7 +387,7 @@ fn nested_records_must_match_the_authenticated_outer_operation() {
         7,
         PayloadBody::RewrapObjectKey {
             object_id: object,
-            object_key_envelope: object_envelope(id(9), collection, 7, object),
+            object_key_commitment: [3; 32],
         },
     )
     .expect("payload");
@@ -421,8 +406,8 @@ fn nested_records_must_match_the_authenticated_outer_operation() {
 
     assert_eq!(
         payload
-            .validate_for_operation(&operation, &collection, 7)
-            .expect_err("wrong envelope vault")
+            .validate_for_operation(&operation, &id(9), 7)
+            .expect_err("wrong collection domain")
             .status(),
         ChurStatus::AuthenticationFailed
     );

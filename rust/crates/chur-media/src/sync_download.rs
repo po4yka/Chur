@@ -270,22 +270,61 @@ fn verify_container(
 
 /// Verifies the signed object against its container and activates the local row.
 pub fn activate_shared(session: &mut Session, object: &SharedObject, now_ms: u64) -> Result<()> {
+    let object_key_envelope =
+        chur_catalog::object_grants::pending_envelope(session.catalog_ref()?, &object.object_id)?;
     ensure!(
-        object.object_key_envelope.vault_id() == &object.source_vault_id
-            && object.object_key_envelope.collection_id() == &object.collection_id
-            && object.object_key_envelope.object_id() == &object.object_id,
+        object_key_envelope.vault_id() == &session.vault_id()
+            && object_key_envelope.collection_id() == &object.collection_id
+            && object_key_envelope.object_id() == &object.object_id,
         AuthenticationFailed,
         "shared object envelope names another source"
     );
     let collection = catalog_store::collection(session.catalog_ref()?, &object.collection_id)?;
     ensure!(
-        object.object_key_envelope.collection_epoch() == collection.current_epoch,
+        object_key_envelope.collection_epoch() <= collection.current_epoch,
         AuthenticationFailed,
-        "shared object envelope uses another collection epoch"
+        "shared object envelope uses a future collection epoch"
     );
-    let collection_key =
-        keys::collection_key(session, &object.collection_id, collection.current_epoch)?;
-    let object_key = object.object_key_envelope.open(&collection_key)?;
+    let collection_key = keys::collection_key(
+        session,
+        &object.collection_id,
+        object_key_envelope.collection_epoch(),
+    )?;
+    let object_key = object_key_envelope.open(&collection_key)?;
+    ensure!(
+        chur_sync_protocol::object_grant::object_key_commitment(
+            &object.collection_id,
+            &object.object_id,
+            &object_key
+        ) == object.object_key_commitment,
+        AuthenticationFailed,
+        "received object key differs from the signed commitment"
+    );
+    // A grant can be accepted before a later metadata-key epoch arrives.
+    // The signed content-key commitment stays unchanged across that rotation.
+    let object_key_envelope = if object_key_envelope.collection_epoch() == collection.current_epoch
+    {
+        object_key_envelope
+    } else {
+        let current =
+            keys::collection_key(session, &object.collection_id, collection.current_epoch)?;
+        object_key_envelope.rewrap(
+            &collection_key,
+            &current,
+            object.collection_id,
+            collection.current_epoch,
+            object_key_envelope
+                .envelope_generation()
+                .checked_add(1)
+                .ok_or_else(|| {
+                    Error::new(
+                        ChurStatus::ResourceLimitExceeded,
+                        "pending envelope generation overflowed",
+                    )
+                })?,
+            chur_crypto::Nonce::random()?,
+        )?
+    };
     let expected = Expectation::new(
         object.object_id,
         object.stream_id,
@@ -428,8 +467,8 @@ pub fn activate_shared(session: &mut Session, object: &SharedObject, now_ms: u64
                 complete_verified_ms: Some(now_ms),
                 final_commitment: object.container_commitment,
             },
-            envelope: object.object_key_envelope.encode(),
-            envelope_generation: object.object_key_envelope.envelope_generation(),
+            envelope: object_key_envelope.encode(),
+            envelope_generation: object_key_envelope.envelope_generation(),
             metadata: MetadataRevision {
                 object_id: object.object_id,
                 revision: 1,

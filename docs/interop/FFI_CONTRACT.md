@@ -777,3 +777,26 @@ Android loads ABI-specific native libraries through the application shell/JNI ad
 ### Open readers and permanent erasure
 
 Permanent deletion revokes every reader for that object in the same physical vault. It waits for an in-flight read, removes its retained stream keys and cached plaintext, and completes the durable catalog erasure barrier before it reports success. Subsequent size, information, read, and verification calls return `SESSION_EXPIRED`. Reader close stays idempotent. Readers for other objects remain usable. Reader registration and deletion take a shared lifecycle mutex after the session lock. This covers different session handles for the same physical vault, so a reader cannot escape revocation between opening its key and publishing its handle. Ordinary reads do not take the lifecycle mutex. Close and owner teardown use the same barrier and clear a retained reader even if an in-flight call still owns its Arc. Once owner teardown starts, prepared child handles cannot be registered.
+
+### Disposable object-key delivery
+
+`chur_object_key_request`, `chur_object_key_issue`, and `chur_object_key_accept`
+use the same buffer contract: `(session, input, input_length, destination,
+capacity, bytes_written)`. Inputs are bounded to 16 MiB. The output count is
+zero on failure. The caller checks output capacity before any key mutation.
+
+- Request input is `collection_id[16] || object_id[16]`. A ready local key returns
+  one zero byte. Otherwise the result is `0x01 || ObjectPrekey[226]`. The request
+  must match an authenticated pending Commit and must have no local tombstone.
+- Issue input is `ObjectPrekey[226]`. The result is `ObjectKeyGrant[346]`. The
+  canonical source checks current recipient membership and the exact object
+  generation and container commitment before it signs a grant.
+- Accept input is `u32(package_length) || acceptance_package || u32(346) || grant`.
+  The package supplies authenticated source membership evidence. On success the
+  output is empty. Native acceptance stores a local encrypted object key and
+  destroys the private prekey in one transaction, then checks the WAL erasure
+  barrier. The transport acknowledges the grant only after this call succeeds.
+
+The JNI names are `objectKeyRequest`, `objectKeyIssue`, and `objectKeyAccept`.
+Collection-operation logs contain object-key commitments and no wrapped object
+keys. Collection keys can decrypt metadata only.

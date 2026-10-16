@@ -212,6 +212,8 @@ Deletion creates a tombstone before physical garbage collection so synchronizati
 
 Retention: in a vault with no enrolled peer device a tombstone may be discarded once garbage collection for its object has completed, because nothing local can resurrect an object whose row, envelopes, and containers are all gone. Every other vault follows the membership rule of [`../sync/OPERATION_LOG.md`](../sync/OPERATION_LOG.md) §11, which stays normative for retention wherever a peer exists.
 
+Shared content keys use [disposable object-key grants](../sync/OBJECT_KEY_GRANTS.md). `object_key_requests` stores one object-bound private prekey per authenticated pending object. `pending_object_keys` stores a local envelope until atomic activation removes it. `issued_object_key_grants` contains public request and grant bytes only. Signed commit and rewrap records contain key commitments, never object-key envelopes. Deletion also destroys the object's private request and pending envelope. A shared object's local tombstone is retained to prevent a new request after replay.
+
 ### 14.1 Deletion transaction
 
 Deletion runs in this order and no other:
@@ -412,3 +414,5 @@ Catalog policy bounds, enforced on insert and re-checked on restore, the search-
 - at most 512 bytes per search query.
 
 A value above any bound is `RESOURCE_LIMIT_EXCEEDED`. These are catalog policy, not encoded field widths, so raising one is a `catalog_format_version` change only when it changes a stored width.
+
+Pending media uses durable dispatch tickets in `object_receive_dispatch`. A native plan holds at most 256 downloads. The ticket is the primary queue order, and the next visit rotates the first attempted item. This order survives restart and backup. A missing key or unavailable container cannot permanently hide later objects behind the 4096-row projection scan. Private prekeys remain until their grant is accepted or their exact object is permanently deleted; an unavailable neighbor never evicts them.

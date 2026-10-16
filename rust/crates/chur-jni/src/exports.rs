@@ -2653,3 +2653,132 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_backupRestore<'local>(
         finish_handle(env, status, &out_operation, handle)
     })
 }
+
+/// Disposable object-key request.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectKeyRequest<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    input: JByteBuffer<'local>,
+    input_length: jint,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((input_ptr, input_capacity)) = direct_buffer(env, &input) else {
+            return INVALID_INPUT;
+        };
+        let Some((destination_ptr, destination_capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let Ok(length) = usize::try_from(input_length) else {
+            return INVALID_INPUT;
+        };
+        if length > input_capacity {
+            return INVALID_INPUT;
+        }
+        let Ok(length) = u32::try_from(length) else {
+            return INVALID_INPUT;
+        };
+        let mut written = 0;
+        // SAFETY: validated direct buffers remain live during this call.
+        let status = unsafe {
+            chur_ffi::sharing::chur_object_key_request(
+                handle_of(session),
+                input_ptr,
+                length,
+                destination_ptr,
+                destination_capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Disposable object-key issue.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectKeyIssue<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    input: JByteBuffer<'local>,
+    input_length: jint,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((input_ptr, input_capacity)) = direct_buffer(env, &input) else {
+            return INVALID_INPUT;
+        };
+        let Some((destination_ptr, destination_capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let Ok(length) = usize::try_from(input_length) else {
+            return INVALID_INPUT;
+        };
+        if length > input_capacity {
+            return INVALID_INPUT;
+        }
+        let Ok(length) = u32::try_from(length) else {
+            return INVALID_INPUT;
+        };
+        let mut written = 0;
+        // SAFETY: validated direct buffers remain live during this call.
+        let status = unsafe {
+            chur_ffi::sharing::chur_object_key_issue(
+                handle_of(session),
+                input_ptr,
+                length,
+                destination_ptr,
+                destination_capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Disposable object-key accept.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectKeyAccept<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    input: JByteBuffer<'local>,
+    input_length: jint,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((input_ptr, input_capacity)) = direct_buffer(env, &input) else {
+            return INVALID_INPUT;
+        };
+        let Some((destination_ptr, destination_capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let Ok(length) = usize::try_from(input_length) else {
+            return INVALID_INPUT;
+        };
+        if length > input_capacity {
+            return INVALID_INPUT;
+        }
+        let Ok(length) = u32::try_from(length) else {
+            return INVALID_INPUT;
+        };
+        let mut written = 0;
+        // SAFETY: validated direct buffers remain live during this call.
+        let status = unsafe {
+            chur_ffi::sharing::chur_object_key_accept(
+                handle_of(session),
+                input_ptr,
+                length,
+                destination_ptr,
+                destination_capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}

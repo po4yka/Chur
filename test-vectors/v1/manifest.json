@@ -1,10 +1,10 @@
 {
   "manifest_version": 1,
-  "spec_commit": "19befa6e40c0c2704d3a3d6c279cd423cdc7abf4",
+  "spec_commit": "956dcab60ba535c66ca39d0ed3d34979ae353475",
   "generator": {
     "name": "chur-cli",
     "version": "0.1.0",
-    "commit": "19befa6e40c0c2704d3a3d6c279cd423cdc7abf4",
+    "commit": "956dcab60ba535c66ca39d0ed3d34979ae353475",
     "toolchain": "1.97.0-aarch64-apple-darwin"
   },
   "vectors": [
@@ -1351,6 +1351,36 @@
       "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
     },
     {
+      "vector_id": "operation-v1-key-free-object-commit",
+      "spec": "docs/sync/OPERATION_PAYLOAD_V1.md",
+      "spec_section": "2",
+      "purpose": "The signed payload contains a key commitment and no recoverable object-key envelope.",
+      "outcome": "accept",
+      "inputs": {
+        "object_key": "a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6"
+      },
+      "expected": {
+        "record": "000102a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a30000000000000001a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a40000000000000001afafafafafafafafafafafafafafafaf0000000000000400a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8043dd6954cd750832fdadbcd3cb218cad9673b078cabb6dcae19fac52963ad94",
+        "record_length": 139
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "operation-v1-key-free-object-rewrap",
+      "spec": "docs/sync/OPERATION_PAYLOAD_V1.md",
+      "spec_section": "2",
+      "purpose": "The signed payload contains a key commitment and no recoverable object-key envelope.",
+      "outcome": "accept",
+      "inputs": {
+        "object_key": "a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6"
+      },
+      "expected": {
+        "record": "000110a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a30000000000000001a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4043dd6954cd750832fdadbcd3cb218cad9673b078cabb6dcae19fac52963ad94",
+        "record_length": 75
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
       "vector_id": "operation-v1-modified-signature",
       "spec": "docs/sync/OPERATION_LOG.md",
       "spec_section": "7",
@@ -1361,6 +1391,41 @@
         "signing_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37"
       },
       "error_code": "AUTHENTICATION_FAILED"
+    },
+    {
+      "vector_id": "operation-v1-object-key-grant",
+      "spec": "docs/sync/OBJECT_KEY_GRANTS.md",
+      "spec_section": "2",
+      "purpose": "One signed HPKE grant opens only with the object's disposable private key.",
+      "outcome": "accept",
+      "inputs": {
+        "ephemeral_ikm": "aeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeae",
+        "object_key": "a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6",
+        "request": "0001a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a40000000000000001a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000000000015fef13fc76023a9ee6ded987b6aa93958cdc2097ef9fc845d5319c9ca100d35e6878759dfe6305b1e1c4167942ce3cb8062b5af71895d80ff528965b9ea5c94be807ee98f3a13e67dbdf043c79e3ecdd052d7e37d4a671ddff59cbf90287ea0f",
+        "source_signing_seed": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
+      },
+      "expected": {
+        "opened_key": "a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6",
+        "record": "0001ababababababababababababababababa3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4acacacacacacacacacacacacacacacacadadadadadadadadadadadadadadadada9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a70000000000000001a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8043dd6954cd750832fdadbcd3cb218cad9673b078cabb6dcae19fac52963ad948cd9bb491eb40375a05de2f990dbf865b0b345c3aad7eeb0c32e15a77bb0ac4e57fd2c93319ea289f1cf49f9bb288472cc427acafb5cbc092768a8b19348f188f543390d3d5aaad2d6ca913c3c9c4cbd958c4535045f79378297717d1492661c5ad135c33589d8aa2d257067c02d4d26a213d90f5e1c39c37b8420cb9fb1d56bdde7606fbb64f94ad1f8c1558b9d2b08",
+        "record_length": 346
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "operation-v1-object-key-request",
+      "spec": "docs/sync/OBJECT_KEY_GRANTS.md",
+      "spec_section": "1",
+      "purpose": "One signed disposable key request binds the recipient to one committed object.",
+      "outcome": "accept",
+      "inputs": {
+        "disposable_private_key": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+        "recipient_signing_seed": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+      },
+      "expected": {
+        "record": "0001a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a40000000000000001a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000000000015fef13fc76023a9ee6ded987b6aa93958cdc2097ef9fc845d5319c9ca100d35e6878759dfe6305b1e1c4167942ce3cb8062b5af71895d80ff528965b9ea5c94be807ee98f3a13e67dbdf043c79e3ecdd052d7e37d4a671ddff59cbf90287ea0f",
+        "record_length": 226
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
     },
     {
       "vector_id": "operation-v1-revocation",

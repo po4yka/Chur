@@ -793,16 +793,6 @@ fn locally_authored_rotation_rewraps_the_collection_and_commits_log_heads() {
     assert_eq!(begin.device_sequence(), 1);
     assert_eq!(log.head(&id(4)), Some((1, begin.digest())));
 
-    let new_object_envelope = old_object_envelope
-        .rewrap(
-            &old_key,
-            &new_key,
-            collection_id,
-            2,
-            2,
-            Nonce::new([80; 24]),
-        )
-        .expect("rewrap envelope");
     let new_domain = KeyDomain::collection(&new_key, &collection_id, 2).expect("new domain");
     let rewrap = sync_receive::author_rotation_operation(
         &mut fixture.db,
@@ -819,7 +809,11 @@ fn locally_authored_rotation_rewraps_the_collection_and_commits_log_heads() {
             2,
             PayloadBody::RewrapObjectKey {
                 object_id,
-                object_key_envelope: new_object_envelope,
+                object_key_commitment: chur_sync_protocol::object_grant::object_key_commitment(
+                    &collection_id,
+                    &object_id,
+                    &object_key,
+                ),
             },
         )
         .expect("rewrap payload"),
@@ -1223,4 +1217,222 @@ fn inbound_sharing_membership_routes_through_accept_operation() {
         &record.commitment()
     );
     assert_eq!(log.head(&id(4)), Some((1, operation.digest())));
+}
+
+#[test]
+fn rotation_accepts_waiting_keys_pending_envelopes_and_permanent_tombstones() {
+    use chur_format::envelope::{CollectionKeyEnvelope, ObjectKeyEnvelope};
+    use chur_sync_protocol::object_grant::{ObjectKeyGrant, ObjectPrekey, object_key_commitment};
+    let mut fixture = setup();
+    let collection = id(110);
+    let old = Key::new([111; 32]);
+    let next = Key::new([112; 32]);
+    let envelope = CollectionKeyEnvelope::seal(
+        &fixture.root,
+        id(2),
+        collection,
+        1,
+        1,
+        Nonce::new([113; 24]),
+        &old,
+    )
+    .expect("old envelope");
+    store::put_collection_with_envelope(
+        &mut fixture.db,
+        &Collection {
+            collection_id: collection,
+            current_epoch: 1,
+            policy_type: COLLECTION_POLICY_VAULT_DEFAULT,
+            created_revision: 1,
+            status: COLLECTION_STATUS_ACTIVE,
+        },
+        1,
+        &envelope.encode(),
+    )
+    .expect("collection");
+    let mut keys = sync_keys::key_directory(&fixture.db, &fixture.root, id(2)).expect("keys");
+    let mut log = sync_log::load(&fixture.db, &fixture.membership).expect("log");
+    let mut state = MaterializedState::new();
+    let old_domain = KeyDomain::collection(&old, &collection, 1).expect("old domain");
+    for object in [id(115), id(116), id(117)] {
+        let content = Key::new([object.as_bytes()[0]; 32]);
+        for body in [
+            PayloadBody::CreateObject {
+                object_id: object,
+                object_generation: 1,
+                store_id: object,
+                stream_id: id(118),
+                metadata_fields: vec![],
+            },
+            PayloadBody::CommitObject {
+                object_id: object,
+                object_generation: 1,
+                store_id: object,
+                container_length: 1024,
+                container_commitment: [119; 32],
+                object_key_commitment: object_key_commitment(&collection, &object, &content),
+            },
+        ] {
+            sync_receive::author_content_operation(
+                &mut fixture.db,
+                &mut log,
+                &fixture.membership,
+                &mut state,
+                &old_domain,
+                id(4),
+                &fixture.issuer,
+                &OperationPayload::new(collection, 1, body).expect("content payload"),
+            )
+            .expect("accepted commit cause");
+        }
+    }
+    let private = Key::new([120; 32]);
+    for object in [id(115), id(116)] {
+        let content = Key::new([object.as_bytes()[0]; 32]);
+        let request = ObjectPrekey::sign(
+            object,
+            collection,
+            object,
+            1,
+            [119; 32],
+            id(2),
+            id(4),
+            1,
+            &private,
+            &fixture.issuer,
+        )
+        .expect("request");
+        fixture
+            .db
+            .transaction(|tx| {
+                if object == id(115) {
+                    let grant = ObjectKeyGrant::seal(
+                        id(121),
+                        id(2),
+                        id(4),
+                        object,
+                        1,
+                        [119; 32],
+                        &request,
+                        &content,
+                        &fixture.issuer,
+                    )
+                    .expect("grant");
+                    let envelope = ObjectKeyEnvelope::seal(
+                        &old,
+                        id(2),
+                        collection,
+                        1,
+                        object,
+                        1,
+                        Nonce::new([122; 24]),
+                        &content,
+                    )
+                    .expect("pending envelope");
+                    tx.execute(
+                        "INSERT INTO pending_object_keys VALUES (?1, ?2, ?3, ?4, ?5)",
+                        rusqlite::params![
+                            object.as_bytes().as_slice(),
+                            collection.as_bytes().as_slice(),
+                            request.encode(),
+                            grant.encode(),
+                            envelope.encode()
+                        ],
+                    )
+                    .expect("accepted pending projection");
+                } else {
+                    tx.execute(
+                        "INSERT INTO object_key_requests VALUES (?1, ?2, ?3, ?4, ?5)",
+                        rusqlite::params![
+                            object.as_bytes().as_slice(),
+                            collection.as_bytes().as_slice(),
+                            request.prekey_id().as_bytes().as_slice(),
+                            private.expose().as_slice(),
+                            request.encode()
+                        ],
+                    )
+                    .expect("waiting private prekey");
+                }
+                Ok(())
+            })
+            .expect("pending state");
+    }
+    fixture
+        .db
+        .transaction(|tx| {
+            tx.execute(
+                "INSERT INTO tombstones VALUES (?1, 1, 1)",
+                [id(117).as_bytes().as_slice()],
+            )
+            .expect("permanent tombstone");
+            Ok(())
+        })
+        .expect("tombstone");
+    let envelope = CollectionKeyEnvelope::seal(
+        &fixture.root,
+        id(2),
+        collection,
+        2,
+        2,
+        Nonce::new([123; 24]),
+        &next,
+    )
+    .expect("new metadata key");
+    sync_receive::author_rotation_operation(
+        &mut fixture.db,
+        &mut log,
+        &fixture.membership,
+        &mut keys,
+        &fixture.root,
+        &old_domain,
+        id(4),
+        &fixture.issuer,
+        10,
+        &OperationPayload::new(
+            collection,
+            1,
+            PayloadBody::CreateCollectionEpoch {
+                previous_collection_epoch: 1,
+                membership_generation: 1,
+                collection_key_envelope: envelope,
+            },
+        )
+        .expect("rotation"),
+    )
+    .expect("rotation accepted");
+    let new_domain = KeyDomain::collection(&next, &collection, 2).expect("new domain");
+    for object in [id(115), id(116), id(117)] {
+        let content = Key::new([object.as_bytes()[0]; 32]);
+        sync_receive::author_rotation_operation(
+            &mut fixture.db,
+            &mut log,
+            &fixture.membership,
+            &mut keys,
+            &fixture.root,
+            &new_domain,
+            id(4),
+            &fixture.issuer,
+            11,
+            &OperationPayload::new(
+                collection,
+                2,
+                PayloadBody::RewrapObjectKey {
+                    object_id: object,
+                    object_key_commitment: object_key_commitment(&collection, &object, &content),
+                },
+            )
+            .expect("rewrap"),
+        )
+        .expect("missing local media cannot block key-free rewrap");
+    }
+    assert_eq!(log.head(&id(4)).expect("advanced head").0, 10);
+    let pending = chur_catalog::object_grants::pending_envelope(&fixture.db, &id(115))
+        .expect("rewrapped pending key");
+    assert_eq!(pending.collection_epoch(), 2);
+    assert_eq!(
+        pending.open(&next).expect("current metadata key").expose(),
+        Key::new([115; 32]).expose()
+    );
+    assert!(store::active_envelope(&fixture.db, &id(116)).is_err());
+    assert!(chur_catalog::object_grants::pending_envelope(&fixture.db, &id(117)).is_err());
 }

@@ -312,6 +312,7 @@ pub fn activate_object(db: &mut CatalogDb, activation: &ObjectActivation) -> Res
         )?;
         insert_metadata_row(transaction, &activation.metadata)?;
         reindex_search(transaction, &activation.object.object_id)?;
+        crate::object_grants::remove_pending(transaction, &activation.object.object_id)?;
         bump_generation(transaction)
     })
 }

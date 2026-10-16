@@ -160,6 +160,9 @@ impl ReferenceServer {
             .map_err(|error| map_sqlite(error, "account deletion transaction failed"))?;
         insert_receipt(&transaction, authorization)?;
         for sql in [
+            "DELETE FROM object_key_grants WHERE source_vault_id = ?1 OR recipient_vault_id = ?1",
+            "DELETE FROM object_key_requests WHERE source_vault_id = ?1 OR recipient_vault_id = ?1",
+            "DELETE FROM object_key_receipts WHERE source_vault_id = ?1 OR recipient_vault_id = ?1",
             "DELETE FROM object_transfers WHERE vault_id = ?1",
             "DELETE FROM operations WHERE vault_id = ?1",
             "DELETE FROM membership_records WHERE vault_id = ?1",

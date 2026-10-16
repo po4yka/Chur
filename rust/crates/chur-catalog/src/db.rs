@@ -44,6 +44,7 @@ const SESSION_PRAGMAS: &str = "\
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = FULL;
 PRAGMA foreign_keys = ON;
+PRAGMA secure_delete = ON;
 PRAGMA temp_store = MEMORY;
 PRAGMA busy_timeout = 5000;
 ";
@@ -234,9 +235,21 @@ impl CatalogDb {
     /// Returns [`ChurStatus::CatalogCorrupt`] or [`ChurStatus::IoFailure`] as
     /// the engine reports them.
     pub fn checkpoint(&mut self) -> Result<()> {
-        self.connection
-            .pragma_update(None, "wal_checkpoint", "TRUNCATE")
-            .map_err(|error| map_sqlite(error, "the catalog could not be checkpointed"))
+        let (busy, frames, checkpointed): (i64, i64, i64) = self
+            .connection
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .map_err(|error| map_sqlite(error, "the catalog could not be checkpointed"))?;
+        // SQLite reports a blocked TRUNCATE as a result row, not an SQL error.
+        // In-memory catalogs have no WAL and report (-1, -1) for its size.
+        chur_core::ensure!(
+            busy == 0
+                && ((frames == 0 && checkpointed == 0) || (frames == -1 && checkpointed == -1)),
+            IoFailure,
+            "the catalog WAL could not be fully truncated"
+        );
+        Ok(())
     }
 
     /// Closes the connection.
@@ -304,6 +317,62 @@ mod tests {
         let vault = random::id().expect("vault id");
         let catalog = CatalogKey::derive(&root, &vault).expect("catalog key");
         (root, vault, catalog)
+    }
+
+    #[test]
+    fn key_deletion_overwrites_cells_and_truncates_the_wal() {
+        let directory = tempdir();
+        let path = directory.join("catalog.db");
+        let (_root, _vault, catalog) = key();
+        let mut db = CatalogDb::open(&CatalogLocation::File(&path), &catalog).expect("create");
+        let secure_delete: i64 = db
+            .connection()
+            .query_row("PRAGMA secure_delete", [], |row| row.get(0))
+            .expect("secure delete pragma");
+        assert_eq!(secure_delete, 1, "deleted key cells must be overwritten");
+        db.connection().execute_batch(
+            "CREATE TABLE keys (body BLOB); INSERT INTO keys VALUES (randomblob(8192)); DELETE FROM keys;",
+        ).expect("create deleted key pages");
+        db.checkpoint().expect("erase old WAL frames");
+        let wal = path.with_extension("db-wal");
+        assert_eq!(std::fs::metadata(wal).expect("WAL").len(), 0);
+        db.close().expect("close");
+        std::fs::remove_dir_all(directory).expect("cleanup");
+    }
+
+    #[test]
+    fn a_reader_that_prevents_wal_truncation_is_a_failed_checkpoint() {
+        let directory = tempdir();
+        let path = directory.join("catalog.db");
+        let (_root, _vault, catalog) = key();
+        let mut writer = CatalogDb::open(&CatalogLocation::File(&path), &catalog).expect("writer");
+        writer
+            .connection()
+            .execute_batch(
+                "CREATE TABLE keys (body BLOB); INSERT INTO keys VALUES (randomblob(8192));",
+            )
+            .expect("write");
+        let reader = CatalogDb::open(&CatalogLocation::File(&path), &catalog).expect("reader");
+        reader
+            .connection()
+            .execute_batch("BEGIN; SELECT body FROM keys;")
+            .expect("retain old snapshot");
+        writer
+            .connection()
+            .execute_batch("DELETE FROM keys; PRAGMA busy_timeout = 0;")
+            .expect("delete");
+        let error = writer
+            .checkpoint()
+            .expect_err("a busy checkpoint must not report erasure success");
+        assert_eq!(error.status(), ChurStatus::IoFailure);
+        reader
+            .connection()
+            .execute_batch("ROLLBACK;")
+            .expect("release reader");
+        writer.checkpoint().expect("retry checkpoint");
+        reader.close().expect("close reader");
+        writer.close().expect("close writer");
+        std::fs::remove_dir_all(directory).expect("cleanup");
     }
 
     #[test]

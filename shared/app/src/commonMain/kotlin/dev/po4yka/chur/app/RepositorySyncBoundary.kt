@@ -47,6 +47,14 @@ class RepositorySyncBoundary(
         operations: List<ByteArray>,
     ): SharedReceivePlan? = repository.receiveSharedOperations(packageBytes, operations)
 
+    override suspend fun objectKeyRequest(collectionId: ByteArray, objectId: ByteArray): ByteArray? =
+        repository.objectKeyRequest(collectionId, objectId)
+
+    override suspend fun objectKeyIssue(prekey: ByteArray): ByteArray? = repository.objectKeyIssue(prekey)
+
+    override suspend fun objectKeyAccept(packageBytes: ByteArray, grant: ByteArray): Boolean =
+        repository.objectKeyAccept(packageBytes, grant)
+
     override suspend fun sharedDownloadOffset(collectionId: ByteArray, objectId: ByteArray): ULong? =
         repository.sharedDownloadOffset(collectionId, objectId)
 

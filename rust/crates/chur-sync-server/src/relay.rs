@@ -71,6 +71,11 @@ impl ReferenceServer {
             .map_err(|error| map_sqlite(error, "initial membership transaction failed"))?;
         insert_operation(&transaction, outer, operation_outcome)?;
         insert_membership(&transaction, ENROLLMENT_KIND, enrollment, outer)?;
+        crate::object_keys::retire_device_deliveries(
+            &transaction,
+            enrollment.vault_id(),
+            enrollment.device_id(),
+        )?;
         transaction
             .commit()
             .map_err(|error| map_sqlite(error, "initial membership commit failed"))?;
@@ -109,6 +114,11 @@ impl ReferenceServer {
             .map_err(|error| map_sqlite(error, "enrollment transaction failed"))?;
         insert_operation(&transaction, outer, operation_outcome)?;
         insert_membership(&transaction, ENROLLMENT_KIND, enrollment, outer)?;
+        crate::object_keys::retire_device_deliveries(
+            &transaction,
+            enrollment.vault_id(),
+            enrollment.device_id(),
+        )?;
         transaction
             .commit()
             .map_err(|error| map_sqlite(error, "enrollment commit failed"))?;
@@ -163,6 +173,11 @@ impl ReferenceServer {
             .map_err(|error| map_sqlite(error, "revocation transaction failed"))?;
         insert_operation(&transaction, outer, operation_outcome)?;
         insert_revocation(&transaction, revocation, outer)?;
+        crate::object_keys::retire_device_deliveries(
+            &transaction,
+            revocation.vault_id(),
+            revocation.revoked_device_id(),
+        )?;
         crate::auth::revoke_in_transaction(
             &transaction,
             revocation.vault_id(),
@@ -293,7 +308,12 @@ impl ReferenceServer {
                   + COALESCE((SELECT SUM(length(record)) FROM collection_operations WHERE issuer_vault_id = ?1), 0)
                   + COALESCE((SELECT COUNT(*) * 48 FROM shared_objects WHERE source_vault_id = ?1), 0)
                   + COALESCE((SELECT SUM(length(record)) FROM deletion_requests WHERE vault_id = ?1), 0)
-                  + COALESCE((SELECT SUM(length(record)) FROM checkpoints WHERE vault_id = ?1), 0)",
+                  + COALESCE((SELECT SUM(length(record)) FROM checkpoints WHERE vault_id = ?1), 0)
+                  + COALESCE((SELECT SUM(length(record)) FROM object_key_requests WHERE recipient_vault_id = ?1), 0)
+                  + COALESCE((SELECT SUM(length(record)) FROM object_key_grants WHERE source_vault_id = ?1), 0)
+                  + COALESCE((SELECT COUNT(*) * 48 FROM object_key_dismissals WHERE source_vault_id = ?1), 0)
+                  + COALESCE((SELECT COUNT(*) * 128 FROM object_key_rejections WHERE source_vault_id = ?1), 0)
+                  + COALESCE((SELECT COUNT(*) * 192 FROM object_key_receipts WHERE recipient_vault_id = ?1), 0)",
                 params![vault_id.as_bytes().as_slice()],
                 |row| row.get(0),
             )

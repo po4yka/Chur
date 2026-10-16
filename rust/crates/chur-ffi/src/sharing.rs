@@ -968,3 +968,185 @@ fn bounded_count(
     }
     Ok(count)
 }
+
+/// Requests an object key through an authenticated disposable recipient key.
+///
+/// # Safety
+/// Input and output pointers cover their declared lengths; `bytes_written` is writable.
+#[unsafe(no_mangle)]
+#[expect(unsafe_code, reason = "the C ABI borrows caller-owned buffers")]
+pub unsafe extern "C" fn chur_object_key_request(
+    session: Handle,
+    input: *const u8,
+    input_length: u32,
+    destination: *mut u8,
+    capacity: usize,
+    bytes_written: *mut usize,
+) -> Status {
+    // SAFETY: the caller guarantees all declared buffers and the out-parameter.
+    unsafe {
+        object_key_call(
+            session,
+            input,
+            input_length,
+            destination,
+            capacity,
+            bytes_written,
+            227,
+            |db, root, vault_id, input| {
+                let mut reader = Reader::new(input, ChurStatus::NonCanonicalEncoding);
+                let collection = reader.id()?;
+                let object = reader.id()?;
+                reader.finish()?;
+                let request =
+                    chur_catalog::object_grants::request(db, root, vault_id, collection, object)?;
+                match chur_catalog::object_grants::pending_envelope(db, &object) {
+                    Ok(_) => Ok(vec![0]),
+                    Err(error) if error.status() == ChurStatus::NotFound => {
+                        let mut bytes = vec![1];
+                        bytes.extend_from_slice(&request.encode());
+                        Ok(bytes)
+                    }
+                    Err(error) => Err(error),
+                }
+            },
+        )
+    }
+}
+
+/// Issues an object key through an authenticated disposable recipient key.
+///
+/// # Safety
+/// Input and output pointers cover their declared lengths; `bytes_written` is writable.
+#[unsafe(no_mangle)]
+#[expect(unsafe_code, reason = "the C ABI borrows caller-owned buffers")]
+pub unsafe extern "C" fn chur_object_key_issue(
+    session: Handle,
+    input: *const u8,
+    input_length: u32,
+    destination: *mut u8,
+    capacity: usize,
+    bytes_written: *mut usize,
+) -> Status {
+    // SAFETY: the caller guarantees all declared buffers and the out-parameter.
+    unsafe {
+        object_key_call(
+            session,
+            input,
+            input_length,
+            destination,
+            capacity,
+            bytes_written,
+            346,
+            |db, root, vault_id, input| {
+                let prekey = chur_sync_protocol::object_grant::ObjectPrekey::decode(input)?;
+                Ok(chur_catalog::object_grants::issue(db, root, vault_id, &prekey)?.encode())
+            },
+        )
+    }
+}
+
+/// Accepts an object key through an authenticated disposable recipient key.
+///
+/// # Safety
+/// Input and output pointers cover their declared lengths; `bytes_written` is writable.
+#[unsafe(no_mangle)]
+#[expect(unsafe_code, reason = "the C ABI borrows caller-owned buffers")]
+pub unsafe extern "C" fn chur_object_key_accept(
+    session: Handle,
+    input: *const u8,
+    input_length: u32,
+    destination: *mut u8,
+    capacity: usize,
+    bytes_written: *mut usize,
+) -> Status {
+    // SAFETY: the caller guarantees all declared buffers and the out-parameter.
+    unsafe {
+        object_key_call(
+            session,
+            input,
+            input_length,
+            destination,
+            capacity,
+            bytes_written,
+            0,
+            |db, root, vault_id, input| {
+                let mut reader = Reader::new(input, ChurStatus::NonCanonicalEncoding);
+                let (issuers, _, _, _) = decode_accept_bundle(reader.variable(BUNDLE_BYTES_MAX)?)?;
+                let grant = chur_sync_protocol::object_grant::ObjectKeyGrant::decode(
+                    reader.variable(1024)?,
+                )?;
+                reader.finish()?;
+                let evidence = issuers
+                    .iter()
+                    .map(|issuer| chur_catalog::sharing_service::IssuerEvidence {
+                        membership: &issuer.membership,
+                        operations: &issuer.operations,
+                    })
+                    .collect::<Vec<_>>();
+                chur_catalog::object_grants::accept(db, root, vault_id, &evidence, &grant)?;
+                Ok(Vec::new())
+            },
+        )
+    }
+}
+
+#[expect(
+    unsafe_code,
+    reason = "the shared ABI implementation checks caller-owned buffers"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "shared buffer ABI and an internal checked operation"
+)]
+unsafe fn object_key_call(
+    session: Handle,
+    input: *const u8,
+    input_length: u32,
+    destination: *mut u8,
+    capacity: usize,
+    bytes_written: *mut usize,
+    required: usize,
+    run: impl FnOnce(&mut chur_catalog::db::CatalogDb, &Key, Id, &[u8]) -> Result<Vec<u8>, Error>,
+) -> Status {
+    guard_status_for(session, || {
+        // SAFETY: caller owns the out-parameter and all declared ranges.
+        unsafe { write_out(bytes_written, 0usize)? };
+        ensure!(
+            input_length <= BUNDLE_BYTES_MAX,
+            ResourceLimitExceeded,
+            "object key input exceeds the ABI bound"
+        );
+        // SAFETY: the input covers input_length bytes.
+        let input = unsafe { borrow_large(input, input_length)? };
+        // Check output capacity before any destructive key acceptance.
+        ensure!(
+            capacity >= required,
+            ResourceLimitExceeded,
+            "object key output is too small"
+        );
+        // SAFETY: caller declares this destination range writable.
+        let output = unsafe { borrow_bytes_mut(destination, capacity)? };
+        let entry = registry::get(session, Kind::Session)?;
+        let Entry::Session { session, .. } = entry.as_ref() else {
+            return Err(Error::new(
+                ChurStatus::InvalidInput,
+                "the handle is of another type",
+            ));
+        };
+        let encoded = {
+            let mut session = registry::lock(session);
+            let vault_id = session.vault_id();
+            let root = Key::new(*session.root_secret()?.expose());
+            run(session.catalog()?, &root, vault_id, input)?
+        };
+        ensure!(
+            encoded.len() <= output.len(),
+            ResourceLimitExceeded,
+            "object key output does not fit"
+        );
+        output[..encoded.len()].copy_from_slice(&encoded);
+        // SAFETY: caller owns the writable out-parameter.
+        unsafe { write_out(bytes_written, encoded.len()) }
+    })
+}

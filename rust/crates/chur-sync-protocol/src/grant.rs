@@ -606,14 +606,14 @@ fn recipient_public_key(bytes: &[u8; 32]) -> Result<<X25519HkdfSha256 as KemTrai
 }
 
 #[cfg(feature = "test-vectors")]
-struct FixedTestRng {
+pub(crate) struct FixedTestRng {
     bytes: [u8; 32],
     offset: usize,
 }
 
 #[cfg(feature = "test-vectors")]
 impl FixedTestRng {
-    const fn new(bytes: [u8; 32]) -> Self {
+    pub(crate) const fn new(bytes: [u8; 32]) -> Self {
         Self { bytes, offset: 0 }
     }
 

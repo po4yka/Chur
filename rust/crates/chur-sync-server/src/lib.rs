@@ -4,6 +4,7 @@ mod auth;
 mod checkpoint;
 mod deletion;
 pub mod http;
+mod object_keys;
 mod relay;
 mod sharing;
 
@@ -174,6 +175,7 @@ impl ReferenceServer {
         )
         .map_err(|error| map_sqlite(error, "server schema creation failed"))?;
         sharing::migrate_outer_associations(&mut db)?;
+        object_keys::create_schema(&db)?;
         Ok(Self {
             root,
             db,

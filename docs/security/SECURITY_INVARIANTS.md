@@ -47,7 +47,7 @@ Security invariants are properties that implementation, migrations, platform ada
 | SEC-023 | A catalog entry never points to an uncommitted object. | `chur-catalog` | transaction tests |
 | SEC-024 | Interrupted writes are recoverable, resumable, or removable without exposing partial plaintext. | store/catalog | fault injection |
 | SEC-025 | Private catalog and object migrations are versioned and atomic. | migration runtime | migration matrix |
-| SEC-026 | Crypto-erasure claims require destruction of every accessible key envelope, not only ciphertext deletion. | deletion flow | backup/sync tests |
+| SEC-026 | Crypto-erasure requires destruction of every accessible object envelope, pending key and disposable private request key, including old WAL frames. Signed replay logs contain key commitments only. A local permanent tombstone prevents a new key request after deletion. | deletion and object-grant flow | source/recipient deletion, restart, old-log/grant replay, blocked WAL barrier and post-deletion backup/restore tests |
 | SEC-027 | Physical filenames and paths reveal no user filename or unkeyed plaintext hash. | object store | filesystem inspection |
 | SEC-057 | Original media containers are immutable after commit. | `chur-format` | write-path and rewrap tests |
 | SEC-058 | Derived assets are bound to their parent content revision and asset kind. | `chur-media` | derivation vectors |

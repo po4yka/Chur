@@ -43,6 +43,14 @@ All identifiers in paths are 32 hexadecimal characters. All request and response
 | `POST /v1/vaults/{vault}/sharing/grants` | collection grant, outer operation | stored recipient grant |
 | `GET /v1/vaults/{vault}/sharing/grants` | none | current grants for the caller device |
 | `GET /v1/vaults/{vault}/sharing/packages` | none | complete opaque acceptance packages for the caller device |
+| `POST /v1/vaults/{vault}/sharing/object-key-requests` | signed public object prekey | store an exact request for a current reader |
+| `GET /v1/vaults/{vault}/sharing/object-key-requests` | none | at most 64 ungranted requests for the canonical source |
+| `POST /v1/vaults/{vault}/sharing/object-key-requests/ack` | 16-byte prekey ID | source device dismisses an unavailable request |
+| `POST /v1/vaults/{vault}/sharing/object-key-grants` | signed disposable object-key grant | store a source response for the exact request |
+| `GET /v1/vaults/{vault}/sharing/object-key-grants` | none | at most 64 grants for the current reader device |
+| `POST /v1/vaults/{vault}/sharing/object-key-grants/ack` | 16-byte grant ID | recipient removes delivery records after durable acceptance |
+| `POST /v1/vaults/{vault}/sharing/object-key-grants/reject` | 16-byte grant ID | addressed recipient rejects an unusable delivery and retains the request |
+| `POST /v1/vaults/{vault}/sharing/object-key-grants/discard` | 16-byte grant ID | addressed recipient drops an absent object delivery without accepting its key |
 | `POST /v1/vaults/{vault}/sharing/operations` | `CollectionOperationV1` | stored opaque collection operation |
 | `GET /v1/vaults/{vault}/sharing/operations/{selector}` | optional `after_vault`, `after_device`, and `after` cursor | current bounded operation page for the caller device |
 | `GET /v1/vaults/{vault}/sharing/issuers/{issuer}/memberships?after={generation}` | none | authenticated issuer membership page for a current recipient |
@@ -88,3 +96,15 @@ A valid signed deletion authorization removes an object immediately. An account 
 ## Files and access
 
 Give the process user exclusive read and write access to `CHUR_SYNC_DATA`. Do not put plaintext, TLS private keys, transport tokens, or reverse-proxy logs in that directory. The SQLite database stores SHA-256 transport-token digests, not tokens.
+
+### Disposable object-key delivery
+
+The routes use the canonical records in [OBJECT_KEY_GRANTS.md](OBJECT_KEY_GRANTS.md). POST accepts one raw record. GET uses the same count and length framing as other record lists. The transport credential must match the recipient of a request or the source of a grant. The server checks current device membership, current collection read access, signatures, and exact request bindings. It rejects noncontributory X25519 prekeys before queue admission. Older invalid public requests are excluded from the source inbox. Only an active device of the canonical source vault can list requests or issue grants.
+
+A device revocation or signing-key change retires its unaccepted source grants in the membership transaction, while retaining valid recipient requests for another active source device. The same transaction retires requests and grants addressed to a revoked or key-changed recipient. A collection read revocation retires only that collection's addressed deliveries. Public grant caches revalidate their current signer before reuse.
+
+A stored grant removes its request from the source inbox. A recipient acknowledges a grant only after native code commits acceptance. This removes the public request and grant bytes. Hash receipts reject conflicting ID reuse. An exact signed request and grant can be delivered again after acknowledgement, so an older backup with the original private prekey can recover. Requests are served in SQLite arrival order. A source can acknowledge an ungranted request when its object is unavailable locally. This dismisses the request only for that source device; another active source device can still serve it. A recipient retry after a dismissal moves the request to the queue tail and clears the dismissals, so a source that has caught up can retry without starving older requests. An unanswered duplicate keeps its original queue position. Both inboxes stop at 64 records; acknowledgements let later records advance. Request bytes and receipts count against the recipient quota. Grant bytes and per-device dismissals count against the source quota. Request removal also removes its dismissals. Source revocation or key changes remove that device's dismissals. Account deletion removes all delivery records, dismissals, and receipts that name the account.
+
+A recipient rejects a grant when native authentication or decoding fails; it does not acknowledge that grant as accepted. Rejection removes only that grant, retains the request, and stores a public quarantine for the issuer and request. Other active source devices can serve the request. This quarantine survives recipient retries and blocks new grant IDs from the same issuer for that request. It does not commit the rejected key commitment. Successful delivery removes the request and its quarantine. Device revocation or signing-key changes remove that device's quarantine. Each quarantine uses 128 quota bytes charged to its source account; it replaces the larger grant record, so rejection remains available when that account is full. Account and recipient deletion remove the associated quarantine.
+
+If native code reports that the object is absent or locally deleted, the recipient discards the grant. Discard removes its public request and grant without adding an acceptance receipt or issuer quarantine. An older backup can submit its original request and receive the same valid grant again. Only successful native acceptance uses the acceptance ACK.

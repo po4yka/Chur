@@ -18,6 +18,8 @@ axum.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+chur-catalog.workspace = true
+chur-media.workspace = true
 hex.workspace = true
 serde_json.workspace = true
 tower.workspace = true

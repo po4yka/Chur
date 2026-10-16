@@ -3,7 +3,7 @@
 use chur_core::limits::{COMMITMENT_LEN, envelope as envelope_bounds, sync as sync_bounds};
 use chur_core::{ChurStatus, Error, Id, Result, ensure};
 use chur_format::codec::{Reader, Writer};
-use chur_format::envelope::{CollectionKeyEnvelope, ObjectKeyEnvelope};
+use chur_format::envelope::CollectionKeyEnvelope;
 
 use crate::KeyDirectory;
 use crate::collection_membership::CollectionMembershipRecord;
@@ -107,8 +107,8 @@ pub enum PayloadBody {
         container_length: u64,
         /// Container final commitment.
         container_commitment: [u8; COMMITMENT_LEN],
-        /// Canonical object-key envelope.
-        object_key_envelope: ObjectKeyEnvelope,
+        /// Commitment to the object key; the key is delivered by a disposable grant.
+        object_key_commitment: [u8; 32],
     },
     /// Replaces one scalar metadata value.
     UpdateMetadata {
@@ -211,8 +211,8 @@ pub enum PayloadBody {
     RewrapObjectKey {
         /// Object identifier.
         object_id: Id,
-        /// Rewrapped object-key envelope.
-        object_key_envelope: ObjectKeyEnvelope,
+        /// Commitment to the unchanged object key.
+        object_key_commitment: [u8; 32],
     },
     /// Changes one recipient-device membership entry.
     ChangeCollectionMembership(CollectionMembershipRecord),
@@ -420,24 +420,6 @@ impl OperationPayload {
                     "revocation does not match its containing operation"
                 );
             }
-            PayloadBody::CommitObject {
-                object_id,
-                object_key_envelope,
-                ..
-            }
-            | PayloadBody::RewrapObjectKey {
-                object_id,
-                object_key_envelope,
-            } => {
-                ensure!(
-                    object_key_envelope.vault_id() == operation.vault_id()
-                        && object_key_envelope.collection_id() == &self.collection_id
-                        && object_key_envelope.collection_epoch() == self.collection_epoch
-                        && object_key_envelope.object_id() == object_id,
-                    AuthenticationFailed,
-                    "object-key envelope does not match its containing operation"
-                );
-            }
             PayloadBody::CreateCollectionEpoch {
                 previous_collection_epoch,
                 collection_key_envelope,
@@ -503,11 +485,10 @@ impl OperationPayload {
                 validate_metadata_fields(metadata_fields)?;
             }
             PayloadBody::CommitObject {
-                object_id,
                 object_generation,
                 container_length,
                 container_commitment,
-                object_key_envelope,
+                object_key_commitment,
                 ..
             } => {
                 validate_counter(*object_generation, "object generation")?;
@@ -516,12 +497,11 @@ impl OperationPayload {
                     NonCanonicalEncoding,
                     "object commit length or commitment is zero"
                 );
-                validate_object_envelope(
-                    object_key_envelope,
-                    &self.collection_id,
-                    self.collection_epoch,
-                    object_id,
-                )?;
+                ensure!(
+                    *object_key_commitment != [0; 32],
+                    NonCanonicalEncoding,
+                    "object key commitment is zero"
+                );
             }
             PayloadBody::UpdateMetadata {
                 object_generation,
@@ -576,14 +556,15 @@ impl OperationPayload {
                 );
             }
             PayloadBody::RewrapObjectKey {
-                object_id,
-                object_key_envelope,
-            } => validate_object_envelope(
-                object_key_envelope,
-                &self.collection_id,
-                self.collection_epoch,
-                object_id,
-            )?,
+                object_key_commitment,
+                ..
+            } => {
+                ensure!(
+                    *object_key_commitment != [0; 32],
+                    NonCanonicalEncoding,
+                    "object key commitment is zero"
+                );
+            }
             PayloadBody::ChangeCollectionMembership(record) => {
                 ensure!(
                     record.collection_id() == &self.collection_id
@@ -639,7 +620,7 @@ impl OperationPayload {
                 store_id,
                 container_length,
                 container_commitment,
-                object_key_envelope,
+                object_key_commitment,
             } => {
                 writer
                     .id(object_id)
@@ -647,7 +628,7 @@ impl OperationPayload {
                     .id(store_id)
                     .u64(*container_length)
                     .fixed(container_commitment)
-                    .fixed(&object_key_envelope.encode());
+                    .fixed(object_key_commitment);
             }
             PayloadBody::UpdateMetadata {
                 object_id,
@@ -738,9 +719,9 @@ impl OperationPayload {
             }
             PayloadBody::RewrapObjectKey {
                 object_id,
-                object_key_envelope,
+                object_key_commitment,
             } => {
-                writer.id(object_id).fixed(&object_key_envelope.encode());
+                writer.id(object_id).fixed(object_key_commitment);
             }
             PayloadBody::ChangeCollectionMembership(record) => {
                 writer.fixed(&record.encode());
@@ -767,9 +748,7 @@ fn decode_body(kind: u8, reader: &mut Reader<'_>) -> Result<PayloadBody> {
             store_id: reader.id()?,
             container_length: reader.u64()?,
             container_commitment: reader.fixed::<COMMITMENT_LEN>()?,
-            object_key_envelope: ObjectKeyEnvelope::decode(
-                reader.slice(envelope_bounds::OBJECT_KEY_ENVELOPE_LEN)?,
-            )?,
+            object_key_commitment: reader.fixed::<32>()?,
         },
         0x03 => PayloadBody::UpdateMetadata {
             object_id: reader.id()?,
@@ -829,9 +808,7 @@ fn decode_body(kind: u8, reader: &mut Reader<'_>) -> Result<PayloadBody> {
         },
         0x10 => PayloadBody::RewrapObjectKey {
             object_id: reader.id()?,
-            object_key_envelope: ObjectKeyEnvelope::decode(
-                reader.slice(envelope_bounds::OBJECT_KEY_ENVELOPE_LEN)?,
-            )?,
+            object_key_commitment: reader.fixed::<32>()?,
         },
         0x11 => PayloadBody::ChangeCollectionMembership(CollectionMembershipRecord::decode(
             reader.slice(CollectionMembershipRecord::LEN)?,
@@ -865,22 +842,6 @@ fn validate_name(value: &str) -> Result<()> {
         value.len() <= ALBUM_OR_TAG_NAME_MAX as usize,
         ResourceLimitExceeded,
         "album or tag name exceeds the protocol limit"
-    );
-    Ok(())
-}
-
-fn validate_object_envelope(
-    envelope: &ObjectKeyEnvelope,
-    collection_id: &Id,
-    collection_epoch: u64,
-    object_id: &Id,
-) -> Result<()> {
-    ensure!(
-        envelope.collection_id() == collection_id
-            && envelope.collection_epoch() == collection_epoch
-            && envelope.object_id() == object_id,
-        NonCanonicalEncoding,
-        "object-key envelope does not match its payload"
     );
     Ok(())
 }

@@ -712,6 +712,18 @@ impl ReferenceServer {
                 ],
             )
             .map_err(|error| map_sqlite(error, "collection membership storage failed"))?;
+        if !state.is_authorized(
+            record.recipient_identity_vault_id(),
+            record.recipient_device_id(),
+            PermissionProfile::Read,
+        ) {
+            crate::object_keys::retire_reader_deliveries(
+                &transaction,
+                record.recipient_identity_vault_id(),
+                record.recipient_device_id(),
+                Some(record.collection_id()),
+            )?;
+        }
         transaction
             .commit()
             .map_err(|error| map_sqlite(error, "collection membership commit failed"))?;
@@ -1569,7 +1581,7 @@ fn restore_relayed_epoch(
     Ok(())
 }
 
-fn collection_state(
+pub(super) fn collection_state(
     server: &ReferenceServer,
     collection_id: &Id,
 ) -> Result<Option<CollectionMembershipState>> {

@@ -26,6 +26,7 @@ pub mod identity;
 mod key_domain;
 pub mod materialization;
 pub mod membership;
+pub mod object_grant;
 pub mod operation;
 pub mod operation_log;
 pub mod payload;

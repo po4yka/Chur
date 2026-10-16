@@ -438,6 +438,15 @@ chur_status_t chur_sharing_object_read(chur_handle_t session,
                                       uint8_t range_sha256[32]);
 
 /* Authenticated recipient operation page and verified ciphertext activation. */
+chur_status_t chur_object_key_request(chur_handle_t session,
+    const uint8_t *input, uint32_t input_length,
+    uint8_t *destination, size_t capacity, size_t *bytes_written);
+chur_status_t chur_object_key_issue(chur_handle_t session,
+    const uint8_t *input, uint32_t input_length,
+    uint8_t *destination, size_t capacity, size_t *bytes_written);
+chur_status_t chur_object_key_accept(chur_handle_t session,
+    const uint8_t *input, uint32_t input_length,
+    uint8_t *destination, size_t capacity, size_t *bytes_written);
 chur_status_t chur_sharing_receive(chur_handle_t session,
                                    const uint8_t *bundle, uint32_t bundle_length,
                                    const uint8_t *operations, uint32_t operations_length,

@@ -277,6 +277,38 @@ CREATE TABLE tombstones (
     object_generation INTEGER NOT NULL
 ) STRICT;
 
+-- Object content keys use disposable, object-bound requests. Private request
+-- keys and pending local envelopes are mutable SQLCipher state, never log data.
+CREATE TABLE object_receive_dispatch (
+    collection_id BLOB NOT NULL CHECK (length(collection_id) = 16),
+    object_id BLOB NOT NULL CHECK (length(object_id) = 16),
+    ticket INTEGER NOT NULL CHECK (ticket > 0),
+    PRIMARY KEY (collection_id, object_id)
+) STRICT;
+CREATE INDEX object_receive_dispatch_order ON object_receive_dispatch(collection_id, ticket);
+
+CREATE TABLE object_key_requests (
+    object_id BLOB PRIMARY KEY CHECK (length(object_id) = 16),
+    collection_id BLOB NOT NULL CHECK (length(collection_id) = 16),
+    prekey_id BLOB NOT NULL UNIQUE CHECK (length(prekey_id) = 16),
+    private_key BLOB NOT NULL CHECK (length(private_key) = 32),
+    record BLOB NOT NULL CHECK (length(record) = 226)
+) STRICT;
+CREATE INDEX object_key_requests_by_collection ON object_key_requests(collection_id);
+CREATE TABLE pending_object_keys (
+    object_id BLOB PRIMARY KEY CHECK (length(object_id) = 16),
+    collection_id BLOB NOT NULL CHECK (length(collection_id) = 16),
+    request_record BLOB NOT NULL CHECK (length(request_record) = 226),
+    grant_record BLOB NOT NULL CHECK (length(grant_record) = 346),
+    envelope BLOB NOT NULL CHECK (length(envelope) = 142)
+) STRICT;
+CREATE TABLE issued_object_key_grants (
+    prekey_id BLOB PRIMARY KEY CHECK (length(prekey_id) = 16),
+    object_id BLOB NOT NULL CHECK (length(object_id) = 16),
+    request_record BLOB NOT NULL CHECK (length(request_record) = 226),
+    grant_record BLOB NOT NULL CHECK (length(grant_record) = 346)
+) STRICT;
+
 -- §16.3. The five indexes that cover a scope under a sort, then the four that
 -- serve lookups which are not query scopes.
 CREATE INDEX objects_by_capture ON objects (state, capture_time_ms, object_id);

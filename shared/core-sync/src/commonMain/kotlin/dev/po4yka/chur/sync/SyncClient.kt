@@ -100,6 +100,30 @@ public class SyncClient(
     public suspend fun sharingGrants(vaultId: ByteArray): List<ByteArray> =
         page(HttpMethod.Get, "/v1/vaults/${vaultId.id()}/sharing/grants")
 
+    public suspend fun putObjectKeyRequest(vaultId: ByteArray, request: ByteArray): Unit =
+        success(HttpMethod.Post, "/v1/vaults/${vaultId.id()}/sharing/object-key-requests", request)
+
+    public suspend fun acknowledgeObjectKeyRequest(vaultId: ByteArray, prekeyId: ByteArray): Unit =
+        success(HttpMethod.Post, "/v1/vaults/${vaultId.id()}/sharing/object-key-requests/ack", prekeyId.fixed(16, "prekey ID"))
+
+    public suspend fun objectKeyRequests(vaultId: ByteArray): List<ByteArray> =
+        page(HttpMethod.Get, "/v1/vaults/${vaultId.id()}/sharing/object-key-requests")
+
+    public suspend fun putObjectKeyGrant(vaultId: ByteArray, grant: ByteArray): Unit =
+        success(HttpMethod.Post, "/v1/vaults/${vaultId.id()}/sharing/object-key-grants", grant)
+
+    public suspend fun objectKeyGrants(vaultId: ByteArray): List<ByteArray> =
+        page(HttpMethod.Get, "/v1/vaults/${vaultId.id()}/sharing/object-key-grants")
+
+    public suspend fun discardObjectKeyGrant(vaultId: ByteArray, grantId: ByteArray): Unit =
+        success(HttpMethod.Post, "/v1/vaults/${vaultId.id()}/sharing/object-key-grants/discard", grantId.fixed(16, "grant ID"))
+
+    public suspend fun rejectObjectKeyGrant(vaultId: ByteArray, grantId: ByteArray): Unit =
+        success(HttpMethod.Post, "/v1/vaults/${vaultId.id()}/sharing/object-key-grants/reject", grantId.fixed(16, "grant ID"))
+
+    public suspend fun acknowledgeObjectKeyGrant(vaultId: ByteArray, grantId: ByteArray): Unit =
+        success(HttpMethod.Post, "/v1/vaults/${vaultId.id()}/sharing/object-key-grants/ack", grantId.fixed(16, "grant ID"))
+
     /** Fetches complete opaque share-acceptance packages for this device. */
     public suspend fun sharingPackages(vaultId: ByteArray): List<ByteArray> =
         page(HttpMethod.Get, "/v1/vaults/${vaultId.id()}/sharing/packages")
