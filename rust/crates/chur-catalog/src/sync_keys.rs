@@ -141,6 +141,94 @@ pub(crate) fn project_local_identity(
     Ok(())
 }
 
+/// Prepares the private identity in an isolated backup catalog snapshot.
+///
+/// The caller must pass a disposable catalog copy, never the live catalog.
+/// It replaces all private identity rows with one recovery-only envelope and
+/// seals a checkpoint over the current heads before converting an ordinary
+/// signer. An already recovered identity retains its authenticated checkpoint.
+///
+/// # Errors
+///
+/// Returns catalog or authentication errors for an invalid stored identity,
+/// and [`ChurStatus::VaultIncomplete`] when a recovery checkpoint is stale.
+pub fn prepare_backup_identity(
+    snapshot: &mut CatalogDb,
+    root: &Key,
+    membership: &MembershipState,
+    now_ms: u64,
+) -> Result<Option<DeviceIdentityEnvelope>> {
+    let Some(stored) = active_identity_envelope(snapshot, root, membership)? else {
+        return Ok(None);
+    };
+    let mut log = crate::sync_log::load(snapshot, membership)?;
+    let portable = if stored.is_recovery_only() {
+        ensure!(
+            log.own_checkpoint_covers_current_heads(snapshot)?,
+            VaultIncomplete,
+            "the recovered sync identity has no current own checkpoint"
+        );
+        stored
+    } else {
+        let identity = stored.open_for_local(root).map_err(corrupt_identity)?;
+        log.issue_own_checkpoint(
+            snapshot,
+            membership,
+            stored.device_id(),
+            identity.signing_key(),
+            now_ms,
+        )?;
+        DeviceIdentityEnvelope::seal_for_recovery(
+            root,
+            *stored.vault_id(),
+            *stored.device_id(),
+            stored.identity_generation(),
+            chur_crypto::Nonce::random()?,
+            &identity,
+        )?
+    };
+    let checkpoint_record: Vec<u8> = snapshot
+        .connection()
+        .query_row(
+            "SELECT checkpoint.record FROM sync_checkpoints AS checkpoint
+          JOIN sync_state AS state ON checkpoint.commitment = state.latest_own_checkpoint_commitment
+         WHERE state.only_row = 1 AND checkpoint.own = 1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| map_sqlite(error, "the snapshot checkpoint could not be read"))?;
+    let checkpoint = chur_sync_protocol::checkpoint::Checkpoint::decode(&checkpoint_record)
+        .map_err(corrupt_identity)?;
+    ensure!(
+        checkpoint.issuer_device_id() == portable.device_id(),
+        CatalogCorrupt,
+        "the recovery checkpoint belongs to another device"
+    );
+    snapshot.transaction(|transaction| {
+        // The snapshot already contains these exact accepted heads. Persist
+        // them as explicit recovery floors as well as signed checkpoint evidence.
+        for head in checkpoint.heads() {
+            transaction.execute(
+                "UPDATE sync_heads SET floor_sequence = ?1, floor_digest = ?2 WHERE device_id = ?3",
+                params![as_sqlite_integer(head.device_sequence(), "the recovery floor is too large")?,
+                    head.operation_digest().as_slice(), head.device_id().as_bytes().as_slice()],
+            ).map_err(|error| map_sqlite(error, "the snapshot recovery floor could not be stored"))?;
+        }
+        transaction.execute("DELETE FROM sync_identity_envelopes", [])
+            .map_err(|error| map_sqlite(error, "snapshot identities could not be removed"))?;
+        transaction.execute(
+            "INSERT INTO sync_identity_envelopes
+                 (device_id, identity_generation, active, recovery_only, body)
+             VALUES (?1, ?2, 1, 1, ?3)",
+            params![portable.device_id().as_bytes().as_slice(),
+                as_sqlite_integer(portable.identity_generation(), "the identity generation is too large")?,
+                portable.encode()],
+        ).map_err(|error| map_sqlite(error, "the snapshot recovery identity could not be stored"))?;
+        bump_generation(transaction)
+    })?;
+    Ok(Some(portable))
+}
+
 /// Loads and authenticates the local portable recovery identity, when present.
 pub fn portable_identity_envelope(
     db: &CatalogDb,
@@ -370,6 +458,52 @@ mod tests {
 
     fn id(byte: u8) -> Id {
         Id::new([byte; 16]).expect("id")
+    }
+
+    #[test]
+    fn backup_snapshot_keeps_one_recovery_identity_and_no_retired_signers() {
+        let root = Key::new([21; 32]);
+        let vault_id = id(22);
+        let key = CatalogKey::derive(&root, &vault_id).expect("catalog key");
+        let mut snapshot = CatalogDb::open(&CatalogLocation::Memory, &key).expect("catalog");
+        open_at_current_version(&mut snapshot, 1).expect("schema");
+        crate::sync_receive::provision_local_identity(&mut snapshot, &root, vault_id)
+            .expect("production identity");
+        let membership = sync_membership::load(&snapshot)
+            .expect("membership")
+            .expect("present");
+        let (device_id, identity) = local_identity(&snapshot, &root, &membership)
+            .expect("identity")
+            .expect("present");
+        let replacement = DeviceIdentityEnvelope::seal_for_local(
+            &root,
+            vault_id,
+            device_id,
+            2,
+            Nonce::new([23; 24]),
+            &identity,
+        )
+        .expect("generation two");
+        store_local_identity_envelope(&mut snapshot, &root, &membership, &replacement)
+            .expect("retire generation one");
+        let portable = prepare_backup_identity(&mut snapshot, &root, &membership, 2)
+            .expect("backup identity")
+            .expect("present");
+        assert!(portable.is_recovery_only());
+        assert_eq!(portable.identity_generation(), 2);
+        let rows: (i64, i64) = snapshot
+            .connection()
+            .query_row(
+                "SELECT count(*), sum(recovery_only) FROM sync_identity_envelopes",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("identity rows");
+        assert_eq!(rows, (1, 1));
+        let restored = portable_identity_envelope(&snapshot, &root, &membership)
+            .expect("portable identity")
+            .expect("present");
+        assert_eq!(restored.encode(), portable.encode());
     }
 
     #[test]

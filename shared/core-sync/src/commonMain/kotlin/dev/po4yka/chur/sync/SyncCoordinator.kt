@@ -272,7 +272,7 @@ public class SyncCoordinator(
         mutex.withLock {
             val at = session
             val state = store.load()
-            val identity = boundary?.identity()
+            val identity = if (state == null) null else boundary?.identity()
             val own = state != null && identity != null && matches(state, identity)
             if (own) {
                 scopeVerdict(identity.vaultId)

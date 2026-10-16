@@ -98,7 +98,7 @@ Excluded:
 - local device-only caches and transfer state;
 - private identity keys other than the one optional root-wrapped recovery identity of [ADR-0048](../adr/0048-recover-a-device-from-a-portable-identity-envelope.md).
 
-For a sync-enabled vault, the creating device includes its current `DeviceIdentityEnvelopeV1` as an `Envelope` record and its latest signed checkpoint in the encrypted catalog snapshot. The checkpoint covers all current accepted heads. Restore authenticates the catalog envelope under the root key and requires its canonical bytes to match the separate `Envelope` record before it installs the descriptor. A local-only backup has no `Envelope` record.
+For a sync-enabled vault, the creating device seals its current private identity into a recovery-only `DeviceIdentityEnvelopeV1` for the backup. The separate `Envelope` record and the encrypted catalog snapshot contain the same recovery envelope. The snapshot excludes ordinary and retired private identity envelopes. It includes the latest checkpoint signed by that device, with a freshness floor for each current accepted head. Backup creation does not replace the live ordinary identity or change the live catalog. Restore authenticates the catalog envelope under the root key and requires its canonical bytes to match the separate `Envelope` record before it installs the descriptor. A local-only backup has no `Envelope` record.
 
 ## 4. Backup manifest
 

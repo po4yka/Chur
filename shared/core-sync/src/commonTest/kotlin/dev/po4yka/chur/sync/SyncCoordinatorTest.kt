@@ -57,6 +57,7 @@ class SyncCoordinatorTest {
 
     private class FakeBoundary : SyncVaultBoundary {
         var identity: SharingIdentity? = null
+        var identityCalls = 0
         val staged = mutableListOf<Pair<SyncRecordKind, ByteArray>>()
         var processed = 0
         var firstRejection = 0
@@ -66,7 +67,10 @@ class SyncCoordinatorTest {
         var forks: SyncForkState? = null
         var acknowledgements = 0
 
-        override suspend fun identity(): SharingIdentity? = identity
+        override suspend fun identity(): SharingIdentity? {
+            identityCalls++
+            return identity
+        }
 
         override suspend fun stage(
             vaultId: ByteArray,
@@ -243,6 +247,19 @@ class SyncCoordinatorTest {
             }
 
             assertNull(store.saved)
+        }
+
+    @Test
+    fun refresh_without_a_saved_server_does_not_provision_a_sync_identity() =
+        runTest {
+            val store = FakeStore()
+            val boundary = FakeBoundary()
+            val engine = okEngine { error("status refresh must not request the network") }
+            val coordinator = coordinator(store, boundary, engine)
+
+            assertFalse(coordinator.refresh())
+            assertEquals(0, boundary.identityCalls)
+            assertFalse(coordinator.status.value.configured)
         }
 
     @Test

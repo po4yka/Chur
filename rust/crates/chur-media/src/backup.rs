@@ -22,7 +22,7 @@
 //! there rather than restoring a vault that is quietly missing something.
 
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chur_catalog::paths::{RegistryName, VaultRoot};
 use chur_catalog::vault::{self, Session};
@@ -182,36 +182,41 @@ pub fn create(
     // carry a catalog older than the containers beside it.
     session.checkpoint_catalog()?;
 
-    let identity_payload = match chur_catalog::sync_membership::load(session.catalog_ref()?)? {
-        Some(membership) => {
-            let envelope = chur_catalog::sync_keys::portable_identity_envelope(
-                session.catalog_ref()?,
+    let snapshot = CatalogSnapshot::create(session, progress)?;
+    let catalog_path = snapshot.directory.join("catalog.db");
+    let catalog_key =
+        chur_catalog::db::CatalogKey::derive(session.root_secret()?, &session.vault_id())?;
+    let mut catalog = chur_catalog::CatalogDb::open(
+        &chur_catalog::db::CatalogLocation::File(&catalog_path),
+        &catalog_key,
+    )?;
+    let identity_payload = match chur_catalog::sync_membership::load(&catalog)? {
+        Some(membership) => Some(
+            chur_catalog::sync_keys::prepare_backup_identity(
+                &mut catalog,
                 session.root_secret()?,
                 &membership,
+                now_ms,
             )?
             .ok_or_else(|| {
                 chur_core::err!(
                     VaultIncomplete,
                     "the sync vault has no portable device identity"
                 )
-            })?;
-            let log = chur_catalog::sync_log::load(session.catalog_ref()?, &membership)?;
-            ensure!(
-                log.own_checkpoint_covers_current_heads(session.catalog_ref()?)?,
-                VaultIncomplete,
-                "the sync vault has no current own checkpoint"
-            );
-            Some(envelope.encode())
-        }
+            })?
+            .encode(),
+        ),
         None => None,
     };
+    let catalog_generation = schema::generation(&catalog)?;
+    catalog.checkpoint()?;
+    catalog.close()?;
 
     let vault_id = session.vault_id();
     let store_id = session.object_store_id();
     let backup_id = random::id()?;
     let descriptor = portable_descriptor(session.descriptor())?;
     let descriptor_bytes = session.seal_descriptor(&descriptor)?;
-    let catalog_path = session.catalog_path();
     let catalog_length = file_length(&catalog_path)?;
     let root_dir = session.root_dir().clone();
 
@@ -263,7 +268,7 @@ pub fn create(
         vault_id,
         created_time_ms: now_ms,
         base_backup_id: None,
-        catalog_generation: schema::generation(session.catalog_ref()?)?,
+        catalog_generation,
         catalog_format_version: descriptor.catalog.catalog_format_version,
         stream_entry_count: stream_count,
         slot_entry_count: slot_count,
@@ -338,6 +343,43 @@ pub fn create(
         slot_count,
         package_length: written,
     })
+}
+
+/// Owns the encrypted catalog copy, including any SQLite sidecar files.
+struct CatalogSnapshot {
+    directory: PathBuf,
+}
+
+impl CatalogSnapshot {
+    fn create(session: &Session, progress: &impl Progress) -> Result<Self> {
+        let directory = session
+            .root_dir()
+            .incoming(&session.object_store_id())
+            .join(random::id()?.to_hex());
+        std::fs::create_dir(&directory).map_err(|_| {
+            chur_core::err!(
+                IoFailure,
+                "the backup snapshot directory could not be created"
+            )
+        })?;
+        let snapshot = Self { directory };
+        let mut destination = std::fs::File::create(snapshot.directory.join("catalog.db"))
+            .map_err(|_| {
+                chur_core::err!(
+                    IoFailure,
+                    "the backup catalog snapshot could not be created"
+                )
+            })?;
+        let source = session.catalog_path();
+        copy_file(&mut destination, &source, file_length(&source)?, progress)?;
+        Ok(snapshot)
+    }
+}
+
+impl Drop for CatalogSnapshot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.directory);
+    }
 }
 
 /// Builds one stream's inventory entry, §7.1.
