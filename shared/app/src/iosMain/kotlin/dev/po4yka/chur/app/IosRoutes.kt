@@ -112,6 +112,13 @@ internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: 
     val phrase by controller.recoveryPhrase.collectAsState()
     val formError by controller.formError.collectAsState()
     val unlocking by controller.unlocking.collectAsState()
+    val incomingCodec = remember { IosMediaCodec() }
+    val incomingImporter = remember(incomingCodec) { MediaImporter(incomingCodec) }
+    DisposableEffect(controller) {
+        IosIncomingShares.cancelOperation = controller::cancelActiveOperation
+        onDispose { IosIncomingShares.cancelOperation = null }
+    }
+    IncomingSharePrompt(IosIncomingShares.inbox, controller, route, incomingImporter)
 
     phrase?.let { value ->
         // Copying 24 words by hand, `RECOVERY.md` §2.3, outlasts the

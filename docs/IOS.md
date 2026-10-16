@@ -1025,11 +1025,11 @@ No BG task assumes protected files or Keychain items are available merely becaus
 
 Widgets, Share Extensions, File Provider extensions, and other targets increase the secret and filesystem boundary.
 
-They are excluded from v1 unless separately specified.
+They are excluded from v1 unless separately specified. The implemented Share Extension is specified by [ADR-0064](adr/0064-receive-system-shares.md) and [Share to Chur](product/INCOMING_SHARES.md). Other extension types remain excluded.
 
 ### 26.1 Share Extension considerations
 
-A future Share Extension cannot simply open the main vault:
+A Share Extension cannot simply open the main vault:
 
 - interactive user presence may be unavailable or fragile;
 - extending the Keychain access group broadens access;
@@ -1037,7 +1037,7 @@ A future Share Extension cannot simply open the main vault:
 - the extension may be terminated while holding plaintext;
 - private catalog concurrency becomes more complex.
 
-A future design may use a dedicated encrypted staging protocol and main-app finalization. It requires its own threat model, key hierarchy, Data Protection policy, and crash-recovery tests.
+Chur uses a dedicated encrypted staging protocol and main-app finalization. The extension receives an independent public encryption key, not a vault root or private Keychain access group. The main app creates the device-local receiving key on its first foreground launch; this is an explicit exception for ingress preparation and does not create a vault. The App Group stores opaque encrypted files and public key material only. The [iOS host contract](../apps/iosApp/README.md#incoming-system-shares) records the threat model, protection classes, retention, bounds, and signing prerequisite. Complete envelope authentication precedes exposing any source to the native importer. Plaintext media scratch is permitted only for the existing URL-only codec APIs, under the existing shared caps and lock cleanup policy. Documents and text stream without scratch.
 
 ### 26.2 Widgets and intents
 

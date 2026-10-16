@@ -61,6 +61,7 @@ val iosHostSymbols =
         "IosMediaCodec",
         "IosMediaPicker",
         "IosDocumentPicker",
+        "IosIncomingShares",
         // Step 6: the background task and the sync engine it drives.
         "IosSyncBackground",
         "SyncCoordinator",

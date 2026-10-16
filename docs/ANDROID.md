@@ -621,6 +621,8 @@ Rules:
 
 A non-seekable source can still be imported sequentially. It MUST NOT be copied into a plaintext temporary file solely to make it seekable.
 
+The application also receives `ACTION_SEND` and `ACTION_SEND_MULTIPLE` through its single task activity. [Share to Chur](product/INCOMING_SHARES.md) defines the user flow. Incoming URI grants and bounded text remain in process memory until explicit destination confirmation in an unlocked vault. A new intent cannot replace a pending batch. No source-deletion request is offered for an incoming share. Native import, derived writes, and album placement use the confirmed session generation.
+
 ### 14.4 Cloud-backed providers
 
 Import UX must support:

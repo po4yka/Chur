@@ -1218,11 +1218,13 @@ class ChurController(
         objectIds: List<ByteArray>,
         fromAlbumId: ByteArray? = null,
         move: Boolean = false,
+        expectedGeneration: Long? = null,
         onSuccess: () -> Unit = {},
     ) = guarded {
         withContext(Dispatchers.Default) {
-            repository.placeAlbumObjects(albumId, "", null, fromAlbumId.takeIf { move }, objectIds, move)
+            repository.placeAlbumObjects(albumId, "", null, fromAlbumId.takeIf { move }, objectIds, move, expectedGeneration)
         }
+        if (expectedGeneration != null && (repository.state.value as? VaultState.Unlocked)?.generation != expectedGeneration) return@guarded
         reload()
         refreshAlbums()
         sayPlaced(objectIds.size, move)
@@ -2406,7 +2408,11 @@ class ChurController(
     }
 
     /** Reports the outcome of a host-driven import, §13 of the media pipeline. */
-    fun reportImport(message: String?) = guarded {
+    fun reportImport(message: String?, expectedGeneration: Long? = null) = guarded(clearMessage = expectedGeneration == null) {
+        if (expectedGeneration != null) {
+            if ((repository.state.value as? VaultState.Unlocked)?.generation != expectedGeneration) return@guarded
+            say(null)
+        }
         // The order is the point: `guarded` clears the message first, so the
         // one this call carries is set after it, not before.
         say(message)
@@ -2441,16 +2447,21 @@ class ChurController(
      * work. It is a pick of one, so its card reads in the `DESIGN.md` §15.2
      * phases, as [importAll] does, and not in bytes.
      */
-    suspend fun importMedia(importer: MediaImporter, open: () -> PickedMedia?): MediaImporter.Outcome? =
-        tracked("import") { token ->
+    suspend fun importMedia(importer: MediaImporter, open: () -> PickedMedia?): MediaImporter.Outcome? {
+        val generation = (repository.state.value as? VaultState.Unlocked)?.generation ?: return null
+        return tracked("import") { token ->
             _activeOperation.update { current ->
                 current?.takeIf { it.id == token }?.copy(item = 1, items = 1) ?: current
             }
-            importItem(importer, token) { open() }
+            importItem(importer, token, generation) { open() }
         }
+    }
 
     /**
      * Imports what one picker session returned, as one operation.
+     *
+     * [expectedGeneration] pins a delayed incoming selection to its confirmed
+     * session. Ordinary picker imports bind the session current at this call.
      *
      * A picker hands back many items at once, and each used to need its own
      * round trip through the picker, because a second import was refused
@@ -2481,18 +2492,21 @@ class ChurController(
         importer: MediaImporter,
         count: Int,
         albumId: ByteArray?,
+        expectedGeneration: Long? = null,
         open: suspend (index: Int, prepare: (processed: Long, total: Long) -> Boolean) -> PickedMedia?,
     ): List<MediaImporter.Outcome> {
+        val generation = expectedGeneration ?: (repository.state.value as? VaultState.Unlocked)?.generation ?: return emptyList()
+        if ((repository.state.value as? VaultState.Unlocked)?.generation != generation) return emptyList()
         val outcomes = mutableListOf<MediaImporter.Outcome>()
         tracked("import") { token ->
             val prepare = { processed: Long, total: Long ->
                 _activeOperation.update { current ->
                     current?.takeIf { it.id == token }?.copy(processed = processed, total = total) ?: current
                 }
-                !cancellationRequested(token)
+                !cancellationRequested(token) && (repository.state.value as? VaultState.Unlocked)?.generation == generation
             }
             for (index in 0 until count) {
-                if (cancellationRequested(token) || repository.state.value !is VaultState.Unlocked) break
+                if (cancellationRequested(token) || (repository.state.value as? VaultState.Unlocked)?.generation != generation) break
                 _activeOperation.update { current ->
                     current?.takeIf { it.id == token }?.copy(
                         processed = 0,
@@ -2503,18 +2517,18 @@ class ChurController(
                         items = count,
                     ) ?: current
                 }
-                val outcome = importItem(importer, token) { open(index, prepare) }
+                val outcome = importItem(importer, token, generation) { open(index, prepare) }
                 outcomes += outcome
                 if (outcome is MediaImporter.Outcome.Refused && outcome.status in PICK_STOPPING_STATUSES) break
             }
         } ?: return outcomes
-        if (outcomes.isEmpty() || repository.state.value !is VaultState.Unlocked) return outcomes
+        if (outcomes.isEmpty() || (repository.state.value as? VaultState.Unlocked)?.generation != generation) return outcomes
         val summary = importSummary(outcomes, count, intoAlbum = albumId != null)
         val imported = outcomes.filterIsInstance<MediaImporter.Outcome.Imported>().map { it.objectId }
         if (albumId != null && imported.isNotEmpty()) {
-            placeObjectsInAlbum(albumId, imported) { report(summary) }
+            placeObjectsInAlbum(albumId, imported, expectedGeneration = generation) { report(summary) }
         } else {
-            reportImport(summary)
+            reportImport(summary, expectedGeneration = generation)
         }
         return outcomes
     }
@@ -2543,12 +2557,14 @@ class ChurController(
     private suspend fun importItem(
         importer: MediaImporter,
         token: Long,
+        generation: Long,
         open: suspend () -> PickedMedia?,
     ): MediaImporter.Outcome = try {
         withContext(Dispatchers.Default) {
             importer.import(
                 repository = repository,
                 source = open(),
+                expectedGeneration = generation,
                 onProgress = { updateOperation(token, it, keepCancellableOnSuccess = true) },
                 cancelRequested = { cancellationRequested(token) },
             )

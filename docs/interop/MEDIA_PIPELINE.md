@@ -84,6 +84,8 @@ Normalized model may include:
 
 Rust validates ranges and serializes/encrypts the canonical representation. Raw provider dictionaries are not persisted wholesale without review.
 
+A reported source length remains a hint: extra bytes are read and the authenticated final commit records the actual length. A stream that ends before its reported length is refused as `IO_FAILURE` and its unfinished transaction is abandoned. This prevents a cancelled or failed incoming producer from activating a truncated prefix. Unknown-length sources remain supported. Cancellation is checked after source reads, before commit, and during final verification.
+
 Capture time comes from the provider when it publishes one; on Android that is the `DATE_TAKEN` column of the photo picker and the media store. The iOS photo picker publishes none, because the asset's date needs photo library access, which import does not ask for ([`../IOS.md`](../IOS.md) §15.1). When the provider publishes none, the platform reads the file, on both platforms: a photo's EXIF `DateTimeOriginal` with its `OffsetTimeOriginal`, and a video container's creation date, which names an instant and needs no time zone. An EXIF time with no offset is read in the device's time zone at import. A time that does not parse, or that falls before 1970, is absent, and the catalog substitutes the import time under [`CATALOG_SCHEMA_V1.md`](../format/CATALOG_SCHEMA_V1.md) §8.1.
 
 ## 5. Originals

@@ -126,6 +126,9 @@ internal class ChurHost private constructor(context: Context) {
 
     private val exports = ExportDestinations(context, ::beginShareActivity, ::endShareActivity)
 
+    /** Incoming grants exist only in this process and never in public Notes. */
+    val incomingShares = dev.po4yka.chur.app.IncomingShareInbox()
+
     /** The one controller, over the one repository, over the one runtime. */
     val controller = ChurController(
         storageRoot = context.storageRoot(),

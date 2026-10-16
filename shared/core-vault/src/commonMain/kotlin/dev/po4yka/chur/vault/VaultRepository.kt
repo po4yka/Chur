@@ -415,7 +415,8 @@ class VaultRepository(
         sourceId: ByteArray?,
         objectIds: List<ByteArray>,
         moveMembers: Boolean,
-    ): ByteArray = withSession {
+        expectedGeneration: Long? = null,
+    ): ByteArray = withSession(expectedGeneration) {
         ChurVault.placeAlbumObjects(it, targetId, newName, parentId, sourceId, objectIds, moveMembers)
     }
 
@@ -601,7 +602,8 @@ class VaultRepository(
         width: Int,
         height: Int,
         bytes: ByteArray,
-    ) = withSession { ChurVault.putDerived(it, objectId, kind, width, height, bytes) }
+        expectedGeneration: Long? = null,
+    ) = withSession(expectedGeneration) { ChurVault.putDerived(it, objectId, kind, width, height, bytes) }
 
     /** Reads a derivative, which the timeline does for every visible row. */
     suspend fun readDerived(objectId: ByteArray, kind: StreamKind): ByteArray =
@@ -689,8 +691,8 @@ class VaultRepository(
     }
 
     /** Starts an import from a descriptor the platform opened. */
-    suspend fun beginImport(sourceFd: Int, request: ImportRequest): Long =
-        withSession { ChurVault.beginImport(it, sourceFd, request) }
+    suspend fun beginImport(sourceFd: Int, request: ImportRequest, expectedGeneration: Long? = null): Long =
+        withSession(expectedGeneration) { ChurVault.beginImport(it, sourceFd, request) }
 
     /** Starts an export to a descriptor the platform opened. */
     suspend fun beginExport(objectId: ByteArray, destinationFd: Int): Long =
@@ -1079,8 +1081,9 @@ class VaultRepository(
      * handle of zero, which the boundary would refuse with `INVALID_INPUT` and
      * a less useful message.
      */
-    private suspend inline fun <T> withSession(body: (Long) -> T): T = mutex.withLock {
-        if (session == 0L) {
+    private suspend inline fun <T> withSession(expectedGeneration: Long? = null, body: (Long) -> T): T = mutex.withLock {
+        if (session == 0L || (expectedGeneration != null &&
+                (generation != expectedGeneration || _state.value !is VaultState.Unlocked))) {
             throw ChurFailure(ChurStatus.VAULT_LOCKED, "no session is open")
         }
         val result = body(session)

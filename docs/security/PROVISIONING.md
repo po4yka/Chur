@@ -15,12 +15,14 @@ Covers first launch, public-shell selection, vault creation, and the first teach
 First launch opens the public shell. It does not open a vault flow.
 
 - no vault exists and none is created until the user asks for one;
-- the public shell is usable immediately, with no account, no permission prompt, and no key generation;
+- the public shell is usable immediately, with no account, no permission prompt, and no vault-key generation;
 - v1 ships one shell, Notes, and selects it without asking. A release that ships a second shell adds the choice here and in [`../product/DISCREET_MODE.md`](../product/DISCREET_MODE.md);
 - the public-shell disclosure required by [`../product/DISCREET_MODE.md`](../product/DISCREET_MODE.md) is shown the first time the user writes public-shell content, not during vault creation;
 - the route to vault creation is a visible settings entry. A hidden gesture is configured later, from an unlocked session, and never replaces the visible route.
 
 After a vault exists, its owner may opt in to a whole-app gate. This choice is made inside an unlocked vault. At the next launch and after backgrounding, the app accepts the vault password or PIN, recovery phrase, or enrolled device factor, then closes the temporary vault session before it shows the public shell. The default remains the public shell without this gate.
+
+The iOS Share Extension is a separate ingress boundary under [ADR-0064](../adr/0064-receive-system-shares.md). The main app prepares an independent device-local receiving key on foreground activation, so that the extension can encrypt external content before a vault exists. This key does not create or open a vault. Only its public key enters the App Group; private receiving-key access stays with the main app. Import still requires normal vault authentication and explicit destination confirmation.
 
 ## 3. Creation
 

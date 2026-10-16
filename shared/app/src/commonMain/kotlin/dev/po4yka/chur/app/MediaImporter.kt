@@ -11,6 +11,7 @@ import dev.po4yka.chur.imports.MediaBounds
 import dev.po4yka.chur.imports.requiredDerivatives
 import dev.po4yka.chur.imports.fileImportProbe
 import dev.po4yka.chur.vault.VaultRepository
+import dev.po4yka.chur.vault.VaultState
 import kotlinx.coroutines.CancellationException
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -83,6 +84,7 @@ class MediaImporter(
     suspend fun import(
         repository: VaultRepository,
         source: PickedMedia?,
+        expectedGeneration: Long? = null,
         onProgress: (OperationProgress) -> Unit = {},
         cancelRequested: () -> Boolean = { false },
     ): Outcome {
@@ -90,6 +92,11 @@ class MediaImporter(
             ?: return if (cancelRequested()) Outcome.Refused(ChurStatus.CANCELLED) else Outcome.Unreadable
         try {
             if (cancelRequested()) return Outcome.Refused(ChurStatus.CANCELLED)
+            val generation = expectedGeneration ?: (repository.state.value as? VaultState.Unlocked)?.generation
+                ?: return Outcome.Refused(ChurStatus.VAULT_LOCKED)
+            if ((repository.state.value as? VaultState.Unlocked)?.generation != generation) {
+                return Outcome.Refused(ChurStatus.VAULT_LOCKED)
+            }
             // §2 stage 3, before stage 4: an over-large source is refused
             // before an object key exists.
             val probe =
@@ -101,6 +108,7 @@ class MediaImporter(
             val operation =
                 repository.beginImport(
                     sourceFd = media.descriptor,
+                    expectedGeneration = generation,
                     request =
                         ImportRequest(
                             contentType = probe.contentType,
@@ -170,6 +178,7 @@ class MediaImporter(
                         width = derivative.width,
                         height = derivative.height,
                         bytes = derivative.bytes,
+                        expectedGeneration = generation,
                     )
                     written += 1
                 } catch (cancelled: CancellationException) {

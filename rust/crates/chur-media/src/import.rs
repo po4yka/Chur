@@ -78,6 +78,7 @@ pub struct SourceCapability {
     /// Whether the source can be re-read from an offset.
     pub seekable: bool,
     /// The length the provider reported, when it reported one.
+    /// A shorter stream is refused; an underreported hint does not truncate it.
     pub known_length: Option<u64>,
     /// The provider's media-type hint, untrusted.
     pub content_type_hint: String,
@@ -712,6 +713,10 @@ pub fn stream_into(
             }
             filled += read;
         }
+        if progress.cancelled() {
+            import.abandon(session)?;
+            return Err(progress::cancelled("the import was cancelled"));
+        }
         if filled == 0 {
             break;
         }
@@ -722,11 +727,39 @@ pub fn stream_into(
             break;
         }
     }
+    // A cancelled producer can close a pipe before the host's next cancel
+    // poll. Do not activate its prefix as a complete original. The reported
+    // length remains a hint: additional source bytes are still accepted.
+    if import
+        .source
+        .known_length
+        .is_some_and(|length| processed < length)
+    {
+        import.abandon(session)?;
+        bail!(
+            IoFailure,
+            "the import source ended before its reported length"
+        );
+    }
+    if progress.cancelled() {
+        import.abandon(session)?;
+        return Err(progress::cancelled("the import was cancelled"));
+    }
     if processed == 0 && import.media.media_class != MediaClass::Opaque {
         import.abandon(session)?;
         bail!(InvalidInput, "an object carries at least one byte");
     }
-    import.commit(session, content_type, now_ms)
+    import.commit_with_display_checked(
+        session,
+        content_type,
+        now_ms,
+        CopiedDisplay {
+            caption: None,
+            favorite: false,
+            capture_time: None,
+        },
+        &|| progress.cancelled(),
+    )
 }
 
 /// The layout of a committed container, for the reader and the integrity scan.

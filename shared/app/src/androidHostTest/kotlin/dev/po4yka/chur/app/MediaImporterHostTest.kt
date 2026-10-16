@@ -398,11 +398,10 @@ class MediaImporterHostTest {
     }
 
     @Test
-    fun a_refusal_carries_its_status_rather_than_its_name() = runBlocking {
-        // Both refusals return before the repository is reached, so it is
-        // never started. The host tells a cancellation from a failure by this
-        // code, never by text, `ERROR_MODEL.md` "Layer mapping".
-        val vault = VaultRepository(System.getProperty("java.io.tmpdir"), { 1_700_000_000_000L })
+    fun a_refusal_carries_its_status_rather_than_its_name() = withVault { controller, root ->
+        // Import first binds a live session. The host then distinguishes a
+        // cancellation from an unsupported source by its code, never by
+        // text, `ERROR_MODEL.md` "Layer mapping".
         val unidentified = object : MediaCodec {
             override fun probe(media: PickedMedia): ProbedMedia? = null
 
@@ -413,24 +412,13 @@ class MediaImporterHostTest {
                 cancelRequested: () -> Boolean,
             ): Derivative = error("a refused source has no derivatives")
         }
-        fun picked() = PickedMedia(
-            descriptor = -1,
-            seekable = true,
-            knownLength = null,
-            contentTypeHint = "image/jpeg",
-            originalFilename = null,
-            captureTimeMs = null,
-            platformHandle = null,
-            close = {},
-        )
-
         assertEquals(
             MediaImporter.Outcome.Refused(ChurStatus.CANCELLED),
-            MediaImporter(unidentified).import(vault, picked(), cancelRequested = { true }),
+            MediaImporter(unidentified).import(controller.vault, picked(root, 0), cancelRequested = { true }),
         )
         assertEquals(
             MediaImporter.Outcome.Refused(ChurStatus.UNSUPPORTED_VERSION),
-            MediaImporter(unidentified).import(vault, picked()),
+            MediaImporter(unidentified).import(controller.vault, picked(root, 0)),
         )
     }
 

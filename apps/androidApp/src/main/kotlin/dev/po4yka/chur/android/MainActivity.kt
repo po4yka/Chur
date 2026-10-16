@@ -1,12 +1,14 @@
 package dev.po4yka.chur.android
 
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -50,6 +52,10 @@ class MainActivity : FragmentActivity() {
 
         host = ChurHost.of(this)
         host.activity = this
+        // Recreation keeps the process inbox. A restored activity never replays
+        // the original payload after process death or a completed import.
+        if (savedInstanceState == null) receiveShare(intent)
+        else clearShareIntent()
         // The window is new and the session it will show may already be open.
         // §1 of `PLAINTEXT_LIFECYCLE.md` puts the switcher snapshot in the
         // forbidden column, and the platform can take one before the collector
@@ -67,6 +73,8 @@ class MainActivity : FragmentActivity() {
             // activity's, because `lifecycleScope` is cancelled at `onDestroy`
             // and a start cancelled part-way arms no timer at all.
             controller.begin()
+        } else {
+            host.incomingShares.discard()
         }
 
         setContent {
@@ -74,6 +82,14 @@ class MainActivity : FragmentActivity() {
             val route by controller.route.collectAsState()
             ChurApp(gate = verdict, route = route) {
                 ChurRoutes(controller = controller, route = route, vaultState = state)
+                val codec = remember { dev.po4yka.chur.imports.AndroidMediaCodec(applicationContext) }
+                val importer = remember { dev.po4yka.chur.app.MediaImporter(codec) }
+                dev.po4yka.chur.app.IncomingSharePrompt(
+                    inbox = host.incomingShares,
+                    controller = controller,
+                    route = route,
+                    importer = importer,
+                )
             }
         }
 
@@ -98,6 +114,29 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        receiveShare(intent)
+    }
+
+    private fun receiveShare(incoming: Intent) {
+        if (incoming.action != Intent.ACTION_SEND && incoming.action != Intent.ACTION_SEND_MULTIPLE) return
+        val payload = incomingSharePayload(this, incoming)
+        clearShareIntent()
+        if (payload == null) {
+            android.widget.Toast.makeText(this, "That shared content could not be received. Share up to 100 files or 1 MiB of text.", android.widget.Toast.LENGTH_LONG).show()
+            return
+        }
+        if (!host.incomingShares.offer(AndroidIncomingShareSource(applicationContext, payload))) {
+            android.widget.Toast.makeText(this, "Finish or discard the pending share before sending more content.", android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun clearShareIntent() {
+        // Do not retain external extras, ClipData, names or text on the Activity.
+        intent = sanitizedIncomingShareIntent(this, intent)
     }
 
     /**

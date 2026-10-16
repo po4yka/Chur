@@ -16,6 +16,7 @@ targets:
         CFBundleVersion: "1"
         CADisableMinimumFrameDurationOnPhone: true
         LSRequiresIPhoneOS: true
+        NSCameraUsageDescription: "Take public photos when you tap Take photo. Photos are saved only when you choose Save photo."
         NSPhotoLibraryAddUsageDescription: "Save selected vault media to your photo library."
         NSPhotoLibraryUsageDescription: "Delete originals you imported into the vault, when you ask to."
         NSLocalNetworkUsageDescription: "Sync this vault with a server on your local network, when you connect to one."
@@ -39,6 +40,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.po4yka.chur
+        CODE_SIGN_ENTITLEMENTS: IncomingShare.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ARCHS: arm64
         TARGETED_DEVICE_FAMILY: "1,2"
@@ -50,6 +52,9 @@ targets:
       configs:
         Debug:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+    dependencies:
+      - target: ChurShare
+        embed: true
     preBuildScripts:
       - name: Build shared framework
         basedOnDependencyAnalysis: false
@@ -70,3 +75,39 @@ targets:
           mkdir -p "$DERIVED_FILE_DIR"
           ditto "shared/app/build/bin/$directory/$variant/ChurApp.framework" "$DERIVED_FILE_DIR/ChurApp.framework"
           ditto "rust/target/$triple/${variant%Framework}/libchur_ffi.a" "$DERIVED_FILE_DIR/libchur_ffi.a"
+
+  ChurShare:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - ShareExtension
+      - path: Sources/IncomingShareInbox.swift
+      - path: Sources/IncomingShareItems.swift
+    info:
+      path: ShareExtension/Info.plist
+      properties:
+        CFBundleDisplayName: Chur
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).ShareViewController"
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsAttachmentsWithMaxCount: 64
+              NSExtensionActivationSupportsFileWithMaxCount: 64
+              NSExtensionActivationSupportsImageWithMaxCount: 64
+              NSExtensionActivationSupportsMovieWithMaxCount: 64
+              NSExtensionActivationSupportsText: true
+              NSExtensionActivationSupportsWebURLWithMaxCount: 64
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.po4yka.chur.share
+        CODE_SIGN_ENTITLEMENTS: IncomingShare.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+        ARCHS: arm64
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "5.0"
+        CODE_SIGNING_ALLOWED: NO

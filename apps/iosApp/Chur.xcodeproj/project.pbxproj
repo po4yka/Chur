@@ -7,22 +7,59 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		AE526322736D45C3B0909A11 /* PublicCamera.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE526322736D45C3B0909A12 /* PublicCamera.swift */; };
 		0B89FE5F310BFE65CBCA410E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BA457393957CC3760250CA00 /* Assets.xcassets */; };
 		3C2F99026109BB38D8A3A6B5 /* DirectoryExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 585146D2614423BAEC21F11B /* DirectoryExport.swift */; };
+		436EEBE1565AF5D80B62B712 /* IncomingShareSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8273036673BB879A9FAC937 /* IncomingShareSelection.swift */; };
+		447A82A14D059F7F406C3264 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 875D1A98DA0F6D353EA2C2F6 /* ShareViewController.swift */; };
 		5E2A781CF29AA242C39DCFFB /* ScratchCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3B19C20AB1C110C0E63735C /* ScratchCopy.swift */; };
+		66315BC5A8904169C52C47C6 /* PublicCamera.swift in Sources */ = {isa = PBXBuildFile; fileRef = A78EC5913FC317057CE38C63 /* PublicCamera.swift */; };
+		7D9C51CF50DBD191FEA70385 /* IncomingShareInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D4757613DACDFC38CB949AB /* IncomingShareInbox.swift */; };
+		9134555525F2B5F6A9C0F816 /* IncomingShareItems.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FEF35F12A854F397F674ABE /* IncomingShareItems.swift */; };
 		9EF133A9F98E205C798773E1 /* DocumentImport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0523F2FBC67DAC872B495D25 /* DocumentImport.swift */; };
+		B31A462401E5FF9600FA411C /* ChurShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 9FFD1F5028336D1A75EA2CEE /* ChurShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		C2F50F7FDF7FEC15452F18A5 /* IncomingShareItems.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FEF35F12A854F397F674ABE /* IncomingShareItems.swift */; };
+		E198BEBB3DE6A67DA79C432E /* IncomingShareInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D4757613DACDFC38CB949AB /* IncomingShareInbox.swift */; };
 		F45227CA2321CC19791DBBA6 /* ChurApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31B0CA2861DF43D785A14AA2 /* ChurApp.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		BC70E18A77AC3A88226934E6 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 56E1AB31EB5545454BADF3E5 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1B8B7D65C8F07C4A4FF1E912;
+			remoteInfo = ChurShare;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		2FCEC3A96485F99D64098DED /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				B31A462401E5FF9600FA411C /* ChurShare.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
-		AE526322736D45C3B0909A12 /* PublicCamera.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublicCamera.swift; sourceTree = "<group>"; };
 		0523F2FBC67DAC872B495D25 /* DocumentImport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentImport.swift; sourceTree = "<group>"; };
+		2FEF35F12A854F397F674ABE /* IncomingShareItems.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncomingShareItems.swift; sourceTree = "<group>"; };
 		31B0CA2861DF43D785A14AA2 /* ChurApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChurApp.swift; sourceTree = "<group>"; };
 		585146D2614423BAEC21F11B /* DirectoryExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectoryExport.swift; sourceTree = "<group>"; };
+		5D4757613DACDFC38CB949AB /* IncomingShareInbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncomingShareInbox.swift; sourceTree = "<group>"; };
+		6F7130D48FBEA04E2DF3740B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		875D1A98DA0F6D353EA2C2F6 /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
 		8C652D17A053110BD2DA9F40 /* Chur.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Chur.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		9FFD1F5028336D1A75EA2CEE /* ChurShare.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = ChurShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		A78EC5913FC317057CE38C63 /* PublicCamera.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublicCamera.swift; sourceTree = "<group>"; };
 		BA457393957CC3760250CA00 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C3B19C20AB1C110C0E63735C /* ScratchCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchCopy.swift; sourceTree = "<group>"; };
+		F8273036673BB879A9FAC937 /* IncomingShareSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncomingShareSelection.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -30,9 +67,12 @@
 			isa = PBXGroup;
 			children = (
 				31B0CA2861DF43D785A14AA2 /* ChurApp.swift */,
-				AE526322736D45C3B0909A12 /* PublicCamera.swift */,
 				585146D2614423BAEC21F11B /* DirectoryExport.swift */,
 				0523F2FBC67DAC872B495D25 /* DocumentImport.swift */,
+				5D4757613DACDFC38CB949AB /* IncomingShareInbox.swift */,
+				2FEF35F12A854F397F674ABE /* IncomingShareItems.swift */,
+				F8273036673BB879A9FAC937 /* IncomingShareSelection.swift */,
+				A78EC5913FC317057CE38C63 /* PublicCamera.swift */,
 				C3B19C20AB1C110C0E63735C /* ScratchCopy.swift */,
 			);
 			path = Sources;
@@ -42,6 +82,7 @@
 			isa = PBXGroup;
 			children = (
 				BA457393957CC3760250CA00 /* Assets.xcassets */,
+				589BA454C8350C8720674B2C /* ShareExtension */,
 				02A8F559F87009166EBB3A44 /* Sources */,
 				19985ADCB5C3FD6A634305D9 /* Products */,
 			);
@@ -51,13 +92,40 @@
 			isa = PBXGroup;
 			children = (
 				8C652D17A053110BD2DA9F40 /* Chur.app */,
+				9FFD1F5028336D1A75EA2CEE /* ChurShare.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		589BA454C8350C8720674B2C /* ShareExtension */ = {
+			isa = PBXGroup;
+			children = (
+				6F7130D48FBEA04E2DF3740B /* Info.plist */,
+				875D1A98DA0F6D353EA2C2F6 /* ShareViewController.swift */,
+			);
+			path = ShareExtension;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		1B8B7D65C8F07C4A4FF1E912 /* ChurShare */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DC6F1CF36C0FD1FAE79B32D6 /* Build configuration list for PBXNativeTarget "ChurShare" */;
+			buildPhases = (
+				F3612FA111273F5F19BFA0FB /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ChurShare;
+			packageProductDependencies = (
+			);
+			productName = ChurShare;
+			productReference = 9FFD1F5028336D1A75EA2CEE /* ChurShare.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		2FB0527B103A0CA26BE121D7 /* Chur */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 2566466B1AF05526D5985B02 /* Build configuration list for PBXNativeTarget "Chur" */;
@@ -65,10 +133,12 @@
 				A1FFB4BC62A6FEDADFC513D0 /* Build shared framework */,
 				45147A62F65556BAF0218434 /* Sources */,
 				4AF3C00A1F41212ED50AEF7B /* Resources */,
+				2FCEC3A96485F99D64098DED /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				6524E1B8E358813C976B10B5 /* PBXTargetDependency */,
 			);
 			name = Chur;
 			packageProductDependencies = (
@@ -103,6 +173,7 @@
 			projectRoot = "";
 			targets = (
 				2FB0527B103A0CA26BE121D7 /* Chur */,
+				1B8B7D65C8F07C4A4FF1E912 /* ChurShare */,
 			);
 		};
 /* End PBXProject section */
@@ -146,14 +217,35 @@
 			buildActionMask = 2147483647;
 			files = (
 				F45227CA2321CC19791DBBA6 /* ChurApp.swift in Sources */,
-				AE526322736D45C3B0909A11 /* PublicCamera.swift in Sources */,
 				3C2F99026109BB38D8A3A6B5 /* DirectoryExport.swift in Sources */,
 				9EF133A9F98E205C798773E1 /* DocumentImport.swift in Sources */,
+				E198BEBB3DE6A67DA79C432E /* IncomingShareInbox.swift in Sources */,
+				C2F50F7FDF7FEC15452F18A5 /* IncomingShareItems.swift in Sources */,
+				436EEBE1565AF5D80B62B712 /* IncomingShareSelection.swift in Sources */,
+				66315BC5A8904169C52C47C6 /* PublicCamera.swift in Sources */,
 				5E2A781CF29AA242C39DCFFB /* ScratchCopy.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F3612FA111273F5F19BFA0FB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7D9C51CF50DBD191FEA70385 /* IncomingShareInbox.swift in Sources */,
+				9134555525F2B5F6A9C0F816 /* IncomingShareItems.swift in Sources */,
+				447A82A14D059F7F406C3264 /* ShareViewController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		6524E1B8E358813C976B10B5 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 1B8B7D65C8F07C4A4FF1E912 /* ChurShare */;
+			targetProxy = BC70E18A77AC3A88226934E6 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		2702BCC2C82857C2548075DA /* Debug */ = {
@@ -162,6 +254,7 @@
 				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_ENTITLEMENTS = IncomingShare.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				FRAMEWORK_SEARCH_PATHS = "$(inherited) $(DERIVED_FILE_DIR)";
@@ -242,12 +335,57 @@
 			};
 			name = Debug;
 		};
+		631EA2B11583FE8C1D6187A1 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				ARCHS = arm64;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_ENTITLEMENTS = IncomingShare.entitlements;
+				INFOPLIST_FILE = ShareExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.po4yka.chur.share;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		6FC01BC4452007F955F843E0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				ARCHS = arm64;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_ENTITLEMENTS = IncomingShare.entitlements;
+				INFOPLIST_FILE = ShareExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.po4yka.chur.share;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		87FB2DB5DE19132B601E0DA9 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_ENTITLEMENTS = IncomingShare.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				FRAMEWORK_SEARCH_PATHS = "$(inherited) $(DERIVED_FILE_DIR)";
@@ -337,6 +475,15 @@
 			buildConfigurations = (
 				4BECC7AF7785237D3025445C /* Debug */,
 				DA1B0B72F8219099F2C9CC8C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		DC6F1CF36C0FD1FAE79B32D6 /* Build configuration list for PBXNativeTarget "ChurShare" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				631EA2B11583FE8C1D6187A1 /* Debug */,
+				6FC01BC4452007F955F843E0 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

@@ -12,6 +12,55 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     private(set) var gate: GateResult!
     private(set) var storageReady = false
     weak var scene: SceneDelegate?
+    private var incomingSelection: IncomingShareSelection?
+    private var checkingIncoming = false
+    private var incomingScratchReady = false
+    private let incomingScratch = FileManager.default.temporaryDirectory
+        .appendingPathComponent("chur-incoming-media", isDirectory: true)
+
+    func refreshIncomingShares() {
+        guard storageReady, gate is GateResultCompatible, !checkingIncoming,
+            incomingSelection == nil, !IosIncomingShares.shared.hasPending(),
+            UIApplication.shared.applicationState == .active else { return }
+        checkingIncoming = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            var prepared: IncomingShareSelection?
+            do {
+                if !self.incomingScratchReady {
+                    try IncomingShareSelection.prepareScratch(self.incomingScratch)
+                    self.incomingScratchReady = true
+                }
+                let inbox = try IncomingShareInbox.open(forApplication: true)
+                if let batch = try inbox.pending().first {
+                    prepared = try IncomingShareSelection(inbox: inbox, batch: batch,
+                        scratch: self.incomingScratch, onExpired: { [weak self] in
+                            guard self?.incomingSelection?.batchID == batch.lastPathComponent else { return }
+                            IosIncomingShares.shared.cancelImport()
+                        }, onClosed: { [weak self] in
+                            DispatchQueue.main.async {
+                                self?.incomingSelection = nil
+                                self?.refreshIncomingShares()
+                            }
+                        })
+                }
+            } catch { /* Unavailable App Group or locked Keychain: try on next activation. */ }
+            DispatchQueue.main.async {
+                self.checkingIncoming = false
+                guard let selected = prepared else { return }
+                guard UIApplication.shared.applicationState == .active,
+                    !IosIncomingShares.shared.hasPending() else { return }
+                self.incomingSelection = selected
+                _ = IosIncomingShares.shared.offer(count: Int32(selected.count), load: { index, prepare, loaded in
+                    selected.load(index: Int(truncating: index), shouldContinue: {
+                        prepare(KotlinLong(longLong: 0), KotlinLong(longLong: 0)).boolValue
+                    }) { descriptor, name, type, size, path, release in
+                        _ = loaded(KotlinInt(int: descriptor), name, type, KotlinLong(longLong: size), path,
+                            { release(); return KotlinUnit() })
+                    }
+                }, releaseSelection: { selected.close() })
+            }
+        }
+    }
 
     private lazy var publicCamera = PublicCamera(
         presenter: { [weak self] in self?.scene?.window?.rootViewController },
@@ -29,7 +78,10 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
                 try? FileManager.default.removeItem(at: url)
             }
         },
-        cancel: { [weak self] in self?.scene?.cancelPendingExports() }
+        cancel: { [weak self] in
+            self?.incomingSelection?.cancelPlaintext()
+            self?.scene?.cancelPendingExports()
+        }
     )
 
     func registerExportDirectory(_ url: URL) -> String? { exports.registerDirectory(url) }
@@ -196,6 +248,9 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     func sceneDidBecomeActive(_ scene: UIScene) {
         host.privacy.detach()
+        // UIApplication can remain inactive during the scene callback. Check
+        // its foreground guard after UIKit completes that state transition.
+        DispatchQueue.main.async { [weak self] in self?.host.refreshIncomingShares() }
     }
 
     func sceneDidDisconnect(_ scene: UIScene) {
@@ -675,7 +730,7 @@ private final class MediaPickerDelegate: NSObject, PHPickerViewControllerDelegat
         let target = scratch.appendingPathComponent(UUID().uuidString).appendingPathExtension(ext)
         do {
             let exports = FileManager.default.temporaryDirectory.appendingPathComponent("chur-exports", isDirectory: true)
-            let limit = try ScratchCopy.remainingBudget(in: [scratch, exports])
+            let limit = try ScratchCopy.remainingBudget(in: [scratch, exports, FileManager.default.temporaryDirectory.appendingPathComponent("chur-incoming-media")])
             let continueCopy: (Int64, Int64) -> Bool = { processed, total in
                 if Thread.isMainThread { return prepare(processed, total) }
                 return DispatchQueue.main.sync { prepare(processed, total) }
@@ -853,7 +908,7 @@ private final class ShareExportSink: NSObject, ExportSink {
     func archiveCapacity(target: ExportTarget) -> Int64 {
         guard target == .files || target == .share else { return 0 }
         let imports = FileManager.default.temporaryDirectory.appendingPathComponent("chur-media-imports", isDirectory: true)
-        return (try? ScratchCopy.remainingBudget(in: [directory, imports])) ?? 0
+        return (try? ScratchCopy.remainingBudget(in: [directory, imports, FileManager.default.temporaryDirectory.appendingPathComponent("chur-incoming-media")])) ?? 0
     }
 
     func create(displayName: String, contentType: String) -> ExportSinkDestination? {
@@ -862,7 +917,7 @@ private final class ShareExportSink: NSObject, ExportSink {
 
     func create(displayName: String, contentType: String, target: ExportTarget, uri: String?, plaintextSize: Int64) -> ExportSinkDestination? {
         let imports = FileManager.default.temporaryDirectory.appendingPathComponent("chur-media-imports", isDirectory: true)
-        guard let budget = try? ScratchCopy.remainingBudget(in: [directory, imports]),
+        guard let budget = try? ScratchCopy.remainingBudget(in: [directory, imports, FileManager.default.temporaryDirectory.appendingPathComponent("chur-incoming-media")]),
               plaintextSize >= 0, plaintextSize <= budget else { return nil }
         return create(displayName: displayName, contentType: contentType, target: target, uri: uri)
     }

@@ -1084,6 +1084,99 @@ fn a_cancelled_import_activates_nothing_and_leaves_no_live_transaction() {
     assert_eq!(listed.total_count, 0);
 }
 
+#[test]
+fn a_streamed_source_cannot_commit_a_prefix_but_an_underreported_hint_keeps_all_bytes() {
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+
+    let (_root, mut session) = new_vault();
+    for (actual, reported, accepted) in [
+        (128, 256, false),
+        (0, 256, false),
+        (513, 0, true),
+        (0, 0, true),
+    ] {
+        let before = page(session.catalog_ref().unwrap(), &ObjectQuery::timeline())
+            .unwrap()
+            .total_count;
+        let mut capability = source("shared.bin", reported);
+        capability.seekable = false;
+        let pending =
+            import::begin(&mut session, capability, CanonicalMedia::opaque(), NOW).unwrap();
+        let bytes = vec![0x42; actual];
+        let (mut input, mut output) = UnixStream::pair().unwrap();
+        output.write_all(&bytes).unwrap();
+        drop(output);
+        let result = import::stream_into(
+            pending,
+            &mut session,
+            &mut input,
+            "application/octet-stream",
+            NOW,
+            &mut Uninterrupted,
+        );
+        if accepted {
+            let object = result.expect("complete source");
+            let mut exported = Vec::new();
+            export::export_stream(
+                &session,
+                &object,
+                StreamKind::Original,
+                &mut exported,
+                &mut Uninterrupted,
+            )
+            .unwrap();
+            assert_eq!(exported, bytes);
+        } else {
+            assert_eq!(rejection(result), ChurStatus::IoFailure);
+        }
+        assert!(
+            journal::live(session.catalog_ref().unwrap())
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            page(session.catalog_ref().unwrap(), &ObjectQuery::timeline())
+                .unwrap()
+                .total_count,
+            before + u64::from(accepted)
+        );
+    }
+}
+
+#[test]
+fn cancellation_on_the_last_short_chunk_does_not_activate_an_original() {
+    let (_root, mut session) = new_vault();
+    let pending = import::begin(
+        &mut session,
+        source("shared.bin", 513),
+        CanonicalMedia::opaque(),
+        NOW,
+    )
+    .unwrap();
+    let mut input = std::io::Cursor::new(vec![0x42; 513]);
+    let status = rejection(import::stream_into(
+        pending,
+        &mut session,
+        &mut input,
+        "application/octet-stream",
+        NOW,
+        &mut CancelAfter::new(1),
+    ));
+    assert_eq!(status, ChurStatus::Cancelled);
+    assert!(
+        journal::live(session.catalog_ref().unwrap())
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        page(session.catalog_ref().unwrap(), &ObjectQuery::timeline())
+            .unwrap()
+            .total_count,
+        0
+    );
+}
+
 /// An integrity scan of one long object must observe cancellation inside the
 /// object, and a cancelled scan records no verdict: it proved nothing.
 #[test]
