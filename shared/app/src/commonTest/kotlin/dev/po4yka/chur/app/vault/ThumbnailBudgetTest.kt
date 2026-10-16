@@ -12,7 +12,7 @@ class ThumbnailBudgetTest {
     @Test
     fun large_previews_are_evicted_by_decoded_bytes_before_the_entry_limit() = runTest {
         var reads = 0
-        val cache = ThumbnailCache(256, StandardTestDispatcher(testScheduler), maxBytes = 64) { _, _ -> BudgetImage() }
+        val cache = ThumbnailCache(256, StandardTestDispatcher(testScheduler), maxDecodedBytes = 64) { _, _ -> BudgetImage() }
         suspend fun load(id: String) = cache.load(1, id) { reads++; byteArrayOf(1) }
         load("first")
         load("second")

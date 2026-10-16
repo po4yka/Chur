@@ -20,7 +20,7 @@ fun thumbnailRendition(mediaKind: Int, concealed: Boolean): ThumbnailRendition =
 /**
  * A presentation map belongs to one session and rendition. A switch replaces
  * the map during composition, before a frame can show the previous rendition.
- * The viewer requests its own Plain map only while it is open.
+ * The caller supplies only the objects visible in the gallery viewport.
  */
 @Composable
 fun rememberGalleryThumbnails(
@@ -30,6 +30,48 @@ fun rememberGalleryThumbnails(
     objects: List<ObjectProjection>,
     concealed: Boolean,
     enabled: Boolean = true,
+): Map<String, ImageBitmap> = rememberThumbnailImages(
+    repository, cache, generation, objects, concealed, enabled,
+)
+
+/**
+ * Plain previews for the current viewer page and its immediate neighbours.
+ * No preview is requested while [currentObjectId] is null. The viewer has a
+ * separate map, so its Plain pixels cannot replace concealed gallery pixels.
+ */
+@Composable
+fun rememberViewerThumbnails(
+    repository: VaultRepository,
+    cache: ThumbnailCache,
+    generation: Long,
+    objects: List<ObjectProjection>,
+    currentObjectId: String?,
+): Map<String, ImageBitmap> = rememberThumbnailImages(
+    repository, cache, generation, viewerThumbnailWindow(objects, currentObjectId),
+    concealed = false, enabled = currentObjectId != null,
+)
+
+/** The current page and at most one loaded neighbour on each side. */
+internal fun viewerThumbnailWindow(
+    objects: List<ObjectProjection>,
+    currentObjectId: String?,
+): List<ObjectProjection> {
+    if (currentObjectId == null) return emptyList()
+    val currentIndex = objects.indexOfFirst { it.id == currentObjectId }
+    if (currentIndex < 0) return emptyList()
+    return objects.subList(
+        (currentIndex - 1).coerceAtLeast(0), (currentIndex + 2).coerceAtMost(objects.size),
+    )
+}
+
+@Composable
+private fun rememberThumbnailImages(
+    repository: VaultRepository,
+    cache: ThumbnailCache,
+    generation: Long,
+    objects: List<ObjectProjection>,
+    concealed: Boolean,
+    enabled: Boolean,
 ): Map<String, ImageBitmap> {
     val images = remember(repository, cache, generation, concealed, enabled) {
         mutableStateMapOf<String, ImageBitmap>()

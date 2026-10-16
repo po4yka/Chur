@@ -119,12 +119,33 @@ class ThumbnailCacheTest {
 
     @Test
     fun a_failed_mosaic_returns_no_plain_image_and_does_not_cache_the_failure() = runTest {
-        val bytes = byteArrayOf(1, 2)
-        val cache = ThumbnailCache(256, StandardTestDispatcher(testScheduler)) { _, _ ->
-            error("raster failed")
+        var reads = 0
+        var renders = 0
+        val failedBytes = byteArrayOf(1, 2)
+        val retryBytes = byteArrayOf(3, 4)
+        val image = CacheImage()
+        val cache = ThumbnailCache(256, StandardTestDispatcher(testScheduler)) { _, rendition ->
+            assertEquals(ThumbnailRendition.Mosaic, rendition, "a failed mosaic must not fall back to Plain")
+            renders += 1
+            if (renders == 1) error("raster failed")
+            image
         }
-        assertNull(cache.load(1, "photo", rendition = ThumbnailRendition.Mosaic) { bytes })
-        assertTrue(bytes.all { it == 0.toByte() })
+        suspend fun load() = cache.load(1, "photo", rendition = ThumbnailRendition.Mosaic) {
+            reads += 1
+            if (reads == 1) failedBytes else retryBytes
+        }
+
+        assertNull(load())
+        assertEquals(1, renders)
+        assertEquals(1, reads)
+        assertTrue(failedBytes.all { it == 0.toByte() })
+        assertSame(image, load(), "the same key retries after a render failure")
+        assertEquals(2, renders)
+        assertEquals(2, reads)
+        assertTrue(retryBytes.all { it == 0.toByte() })
+        assertSame(image, load(), "the successful retry is cached")
+        assertEquals(2, renders)
+        assertEquals(2, reads)
     }
 
     /** No platform bitmap calls: this is a token for cache identity checks. */

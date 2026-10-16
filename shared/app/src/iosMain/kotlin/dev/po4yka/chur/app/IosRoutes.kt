@@ -43,6 +43,7 @@ import dev.po4yka.chur.app.vault.importedOriginals
 import dev.po4yka.chur.app.vault.ThumbnailCache
 import dev.po4yka.chur.app.vault.ThumbnailRendition
 import dev.po4yka.chur.app.vault.rememberGalleryThumbnails
+import dev.po4yka.chur.app.vault.rememberViewerThumbnails
 import dev.po4yka.chur.app.vault.thumbnailRendition
 import dev.po4yka.chur.app.vault.UnlockScreen
 import dev.po4yka.chur.app.vault.VaultActions
@@ -265,7 +266,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     var selection by remember(generation) { mutableStateOf(setOf<String>()) }
     // The item on screen in the viewer; a swipe moves it through the page.
     var viewing by remember(generation) { mutableStateOf<ObjectProjection?>(null) }
-    var visibleMedia by remember(generation) { mutableStateOf(emptySet<String>()) }
+    var visibleMediaIds by remember(generation) { mutableStateOf(emptySet<String>()) }
     var creatingAlbum by remember { mutableStateOf(false) }
     var choosingAlbum by remember { mutableStateOf(false) }
     var movingSelection by remember { mutableStateOf(false) }
@@ -311,17 +312,12 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     }
 
     val thumbnails = rememberGalleryThumbnails(
-        controller.vault, cache, generation, page.objects.filter { it.id in visibleMedia }, thumbnailsConcealed,
+        controller.vault, cache, generation, page.objects.filter { it.id in visibleMediaIds }, thumbnailsConcealed,
     )
     // Plain pixels are loaded separately only while the viewer is open. They
     // never enter the gallery map, including the viewer's adjacent pages.
-    val viewerIndex = page.objects.indexOfFirst { it.id == viewing?.id }
-    val viewerObjects = if (viewerIndex < 0) emptyList() else page.objects.subList(
-        (viewerIndex - 1).coerceAtLeast(0), (viewerIndex + 2).coerceAtMost(page.objects.size),
-    )
-    val viewerThumbnails = rememberGalleryThumbnails(
-        controller.vault, cache, generation, viewerObjects, concealed = false,
-        enabled = viewing != null,
+    val viewerThumbnails = rememberViewerThumbnails(
+        controller.vault, cache, generation, page.objects, currentObjectId = viewing?.id,
     )
 
     originals?.let { picked ->
@@ -658,7 +654,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                     }
                 },
                 onLoadMore = controller::loadNextPage,
-                onVisibleMediaChanged = { visibleMedia = it },
+                onVisibleMediaChanged = { visibleMediaIds = it },
                 onLock = { controller.lock() },
                 onPanic = { controller.panic() },
                 onVerifyAll = { controller.verifyEverything() },

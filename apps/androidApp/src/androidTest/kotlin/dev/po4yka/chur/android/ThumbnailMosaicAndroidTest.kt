@@ -68,11 +68,56 @@ class ThumbnailMosaicAndroidTest {
             )
             val pixels = IntArray(256).also { transparent.readPixels(it) }
             assertTrue("transparent pixels cover previous images with neutral gray", pixels.all { it == 0xFF808080.toInt() })
+
+            repository.putDerived(id, StreamKind.THUMBNAIL, 32, 32, spatialPng())
+            cache.clear()
+            val spatial = requireNotNull(cache.load(repository, 1, id, "photo", rendition = ThumbnailRendition.Mosaic))
+            val anchors = IntArray(256).also { spatial.readPixels(it) }
+            // Two-pixel stripes become gray after the 8 px reduction. A direct
+            // 32 -> 16 resize preserves alternating white and black instead.
+            for (x in listOf(1, 2, 5)) assertRgbNear(anchors[3 * 16 + x], 128, 128, 128)
+            assertRgbNear(anchors[3 * 16 + 13], 64, 64, 192) // half-alpha blue over gray
+            assertRgbNear(anchors[13 * 16 + 2], 0, 255, 0)
+            assertRgbNear(anchors[13 * 16 + 13], 128, 128, 128)
+            // At this boundary Low blends 1/4 and 3/4 of the adjacent cells.
+            // Nearest-neighbor enlargement would retain their endpoint colors.
+            assertRgbNear(anchors[3 * 16 + 7], 112, 112, 144)
+            assertRgbNear(anchors[3 * 16 + 8], 80, 80, 176)
+            assertTrue("every spatial sample is opaque", anchors.all { Color.alpha(it) == 255 })
         } finally {
             cache.clear()
             repository.shutdown()
             source.delete()
             root.deleteRecursively()
+        }
+    }
+
+    private fun assertRgbNear(pixel: Int, red: Int, green: Int, blue: Int) {
+        assertTrue("red: ${Color.red(pixel)} near $red", kotlin.math.abs(Color.red(pixel) - red) <= 2)
+        assertTrue("green: ${Color.green(pixel)} near $green", kotlin.math.abs(Color.green(pixel) - green) <= 2)
+        assertTrue("blue: ${Color.blue(pixel)} near $blue", kotlin.math.abs(Color.blue(pixel) - blue) <= 2)
+    }
+
+    private fun spatialPng(): ByteArray {
+        val bitmap = Bitmap.createBitmap(32, 32, Bitmap.Config.ARGB_8888)
+        try {
+            val pixels = IntArray(32 * 32) { index ->
+                val x = index % 32
+                val y = index / 32
+                when {
+                    y < 16 && x < 16 -> if (x % 4 < 2) Color.WHITE else Color.BLACK
+                    y < 16 -> 0x800000FF.toInt()
+                    x < 16 -> Color.GREEN
+                    else -> Color.TRANSPARENT
+                }
+            }
+            bitmap.setPixels(pixels, 0, 32, 0, 0, 32, 32)
+            return ByteArrayOutputStream().use {
+                assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
+                it.toByteArray()
+            }
+        } finally {
+            bitmap.recycle()
         }
     }
 

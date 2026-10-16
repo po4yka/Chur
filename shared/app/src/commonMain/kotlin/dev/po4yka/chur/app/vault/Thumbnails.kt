@@ -26,7 +26,11 @@ enum class ThumbnailRendition { Plain, Mosaic }
  *
  * The cache is bounded. §12 of the media pipeline bounds one derivative and
  * this bounds how many are held, so a library of a million objects scrolls
- * without the cache growing to a million thumbnails.
+ * without the cache growing to a million thumbnails. Both renditions share a
+ * limit of 256 entries and an estimated 32 MiB of cache-resident bitmap bytes.
+ * The estimate uses dimensions and pixel format. It does not include temporary
+ * decode buffers or images held only by a presentation map. Eviction is FIFO:
+ * a cache hit does not move an entry to the end of the insertion order.
  *
  * Only the decode is per platform, so only the decode is an `expect`. The
  * eviction, the key, and the lock rule are the same on both and live here,
@@ -35,14 +39,14 @@ enum class ThumbnailRendition { Plain, Mosaic }
 class ThumbnailCache internal constructor(
     private val capacity: Int,
     private val dispatcher: CoroutineDispatcher,
-    private val maxBytes: Long = DEFAULT_BYTES,
+    private val maxDecodedBytes: Long = DEFAULT_BYTES,
     private val render: (ByteArray, ThumbnailRendition) -> ImageBitmap?,
 ) {
     constructor(capacity: Int = DEFAULT_CAPACITY) : this(capacity, Dispatchers.Default, DEFAULT_BYTES, ::renderThumbnail)
 
     init {
         require(capacity > 0) { "Thumbnail cache capacity must be positive" }
-        require(maxBytes > 0) { "Thumbnail cache byte budget must be positive" }
+        require(maxDecodedBytes > 0) { "Thumbnail cache byte budget must be positive" }
     }
 
     private data class Key(
@@ -55,7 +59,7 @@ class ThumbnailCache internal constructor(
     private val mutex = Mutex()
     private val entries = LinkedHashMap<Key, ImageBitmap>()
     private var epoch = 0L
-    private var decodedBytes = 0L
+    private var cachedDecodedBytes = 0L
 
     /**
      * The decoded derivative, loading it when the cache does not hold it.
@@ -83,7 +87,7 @@ class ThumbnailCache internal constructor(
     ): ImageBitmap? {
         currentCoroutineContext().ensureActive()
         val key = Key(generation, id, kind, rendition)
-        val startedAt = mutex.withLock {
+        val loadEpoch = mutex.withLock {
             entries[key]?.let { return it }
             epoch
         }
@@ -92,7 +96,7 @@ class ThumbnailCache internal constructor(
                 val bytes = read()
                 try {
                     // A lock during the read needs no decode or raster allocation.
-                    if (mutex.withLock { epoch != startedAt }) return@withContext null
+                    if (mutex.withLock { epoch != loadEpoch }) return@withContext null
                     currentCoroutineContext().ensureActive()
                     render(bytes, rendition)
                 } finally {
@@ -110,15 +114,15 @@ class ThumbnailCache internal constructor(
         } ?: return null
         return mutex.withLock {
             currentCoroutineContext().ensureActive()
-            if (epoch != startedAt) return null
-            val cost = decodedSize(image)
-            if (cost > maxBytes) return image
-            entries.remove(key)?.let { decodedBytes -= decodedSize(it) }
+            if (epoch != loadEpoch) return null
+            val cost = estimatedDecodedBytes(image)
+            if (cost > maxDecodedBytes) return image
+            entries.remove(key)?.let { cachedDecodedBytes -= estimatedDecodedBytes(it) }
             entries[key] = image
-            decodedBytes += cost
-            while (entries.size > capacity || decodedBytes > maxBytes) {
+            cachedDecodedBytes += cost
+            while (entries.size > capacity || cachedDecodedBytes > maxDecodedBytes) {
                 val oldest = entries.keys.firstOrNull() ?: break
-                entries.remove(oldest)?.let { decodedBytes -= decodedSize(it) }
+                entries.remove(oldest)?.let { cachedDecodedBytes -= estimatedDecodedBytes(it) }
             }
             image
         }
@@ -135,7 +139,7 @@ class ThumbnailCache internal constructor(
         mutex.withLock {
             epoch += 1
             entries.clear()
-            decodedBytes = 0
+            cachedDecodedBytes = 0
         }
     }
 
@@ -152,7 +156,7 @@ class ThumbnailCache internal constructor(
     }
 }
 
-private fun decodedSize(image: ImageBitmap): Long = image.width.toLong() * image.height *
+private fun estimatedDecodedBytes(image: ImageBitmap): Long = image.width.toLong() * image.height *
     if (image.config == androidx.compose.ui.graphics.ImageBitmapConfig.F16) 8 else 4
 
 private fun renderThumbnail(bytes: ByteArray, rendition: ThumbnailRendition): ImageBitmap? {

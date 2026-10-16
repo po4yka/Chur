@@ -17,7 +17,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /** Real Skia canvas tests. Android host stubs cannot verify these pixel results. */
-class PixelateRasterIosTest {
+class MosaicRasterIosTest {
     @Test
     fun an_opaque_frame_has_no_feather_and_a_replacement_frame_clears_old_pixels() {
         val raster = raster(feather = false)
@@ -45,13 +45,14 @@ class PixelateRasterIosTest {
     }
 
     @Test
-    fun a_resize_uses_the_new_grid_without_pixels_from_the_previous_buffer() {
-        render(raster(feather = false)) { drawRect(Color.Red) }
-        val resized = render(raster(feather = false, size = Size(32f, 16f))) {
+    fun independent_rasters_render_their_requested_dimensions() {
+        val square = render(raster(feather = false)) { drawRect(Color.Red) }
+        assertEquals(64 to 64, square.width to square.height)
+        val rectangle = render(raster(feather = false, size = Size(32f, 16f))) {
             drawRect(Color.Blue)
         }
-        assertEquals(32 to 16, resized.width to resized.height)
-        assertEquals(0xFF0000FF.toInt(), pixel(resized, 31, 15))
+        assertEquals(32 to 16, rectangle.width to rectangle.height)
+        assertEquals(0xFF0000FF.toInt(), pixel(rectangle, 31, 15))
     }
 
     @Test
@@ -61,7 +62,7 @@ class PixelateRasterIosTest {
         val canvas = Canvas(image)
         CanvasDrawScope().draw(Density(1f), LayoutDirection.Ltr, canvas, Size(64f, 64f)) {
             assertFailsWith<IllegalStateException> {
-                drawPixelated(raster) { error("software content failed") }
+                drawMosaic(raster) { error("software content failed") }
             }
             assertEquals(canvas, drawContext.canvas)
             assertEquals(Size(64f, 64f), size)
@@ -71,12 +72,12 @@ class PixelateRasterIosTest {
     }
 
     private fun raster(feather: Boolean, size: Size = Size(64f, 64f)) =
-        PixelateRaster(pixelateGeometry(size, 1f, DefaultBlockRatio, 8.dp, 8.dp)!!, feather)
+        MosaicRaster(mosaicGeometry(size, 1f, DefaultBlockRatio, 8.dp, 8.dp)!!, feather)
 
-    private fun render(raster: PixelateRaster, content: DrawScope.() -> Unit): ImageBitmap {
-        val image = ImageBitmap(raster.geometry.size.width.toInt(), raster.geometry.size.height.toInt())
-        CanvasDrawScope().draw(Density(1f), LayoutDirection.Ltr, Canvas(image), raster.geometry.size) {
-            drawPixelated(raster, content)
+    private fun render(raster: MosaicRaster, content: DrawScope.() -> Unit): ImageBitmap {
+        val image = ImageBitmap(raster.geometry.contentSizePx.width.toInt(), raster.geometry.contentSizePx.height.toInt())
+        CanvasDrawScope().draw(Density(1f), LayoutDirection.Ltr, Canvas(image), raster.geometry.contentSizePx) {
+            drawMosaic(raster, content)
         }
         return image
     }

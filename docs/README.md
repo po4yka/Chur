@@ -112,7 +112,7 @@ The complete platform documents are [`ANDROID.md`](ANDROID.md) and [`IOS.md`](IO
 - [`interop/ANDROID_INTEGRATION.md`](interop/ANDROID_INTEGRATION.md)
 - [`interop/IOS_INTEGRATION.md`](interop/IOS_INTEGRATION.md)
 - [`interop/MEDIA_PIPELINE.md`](interop/MEDIA_PIPELINE.md)
-- [`interop/PIXELATE.md`](interop/PIXELATE.md) — internal mosaic rendering, source provenance, and gallery thumbnail policy.
+- [`interop/MOSAIC.md`](interop/MOSAIC.md) — internal mosaic rendering, source provenance, and gallery thumbnail policy.
 
 ## Assurance
 

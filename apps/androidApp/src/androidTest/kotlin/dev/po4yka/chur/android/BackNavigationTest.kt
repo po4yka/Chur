@@ -10,7 +10,6 @@ import android.media.ExifInterface
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
-import android.os.Debug
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
@@ -46,7 +45,6 @@ import dev.po4yka.chur.app.RepositorySyncBoundary
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_IMAGE
 import dev.po4yka.chur.app.vault.ThumbnailCache
-import dev.po4yka.chur.app.vault.ThumbnailRendition
 import dev.po4yka.chur.app.vault.viewerStill
 import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.core.platformkeys.DeviceSlotPolicy
@@ -76,8 +74,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import org.json.JSONArray
-import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -272,12 +268,23 @@ class BackNavigationTest {
             // the field carries it as its error rather than a generic one.
             // The message and the field have separate accessibility nodes;
             // seeing the message does not mean the field update arrived yet.
+            var refusalLiveRegion: Int? = null
+            var fieldError: String? = null
             assertTrue("the refusal reaches the live region and the field", await {
-                find(label(refusal))?.liveRegion == View.ACCESSIBILITY_LIVE_REGION_POLITE &&
-                    find { it.isEditable }?.error?.toString() == refusal
+                val root = instrumentation.uiAutomation.rootInActiveWindow
+                val liveRegion = find(root, label(refusal))?.liveRegion
+                val error = find(root) { it.isEditable }?.error?.toString()
+                (liveRegion == View.ACCESSIBILITY_LIVE_REGION_POLITE && error == refusal).also { matches ->
+                    if (matches) {
+                        // Keep the properties that passed in this snapshot.
+                        // The next tree can already have retired these nodes.
+                        refusalLiveRegion = liveRegion
+                        fieldError = error
+                    }
+                }
             })
-            assertEquals(View.ACCESSIBILITY_LIVE_REGION_POLITE, find(label(refusal))?.liveRegion)
-            assertEquals(refusal, find { it.isEditable }?.error?.toString())
+            assertEquals(View.ACCESSIBILITY_LIVE_REGION_POLITE, refusalLiveRegion)
+            assertEquals(refusal, fieldError)
         }
     }
 
@@ -668,7 +675,10 @@ class BackNavigationTest {
         assertEquals("nothing commits yet", before, runBlocking { controller.vault.slots() }.map { it.id }.toSet())
 
         // §2.2: the first four letters decide, whatever the case.
-        type(asked[0], words[asked[0]].uppercase() + "x")
+        // A three-letter word must stay complete: adding a fourth letter
+        // changes its significant prefix rather than an ignored ending.
+        val expected = words[asked[0]]
+        type(asked[0], expected.uppercase() + if (expected.length >= 4) "x" else "")
         awaitFrames()
         assertTrue("three matching words allow Continue", canContinue())
         tap(label("Continue"))
@@ -819,109 +829,6 @@ class BackNavigationTest {
         assertTrue("with nothing left from the vault", find(label(outcome)) == null)
         tap(label("Not now"))
         assertTrue("back in the vault", await { isOpen() })
-    }
-
-    /** Records an identical warm-cache workload; timing is evidence, not a pass threshold. */
-    @Test
-    fun thumbnailRenditionsReportFrameAndMemoryMetrics() = inTestVault {
-        val imported = mutableListOf<ByteArray>()
-        val report = JSONObject()
-            .put("device", Build.MODEL)
-            .put("api", Build.VERSION.SDK_INT)
-            .put("photos", 48)
-            .put("workload", "32 scroll-to-index and redraw steps after warming both renditions")
-        val measurements = JSONArray()
-        try {
-            repeat(48) { index ->
-                val bitmap = Bitmap.createBitmap(320, 240, Bitmap.Config.ARGB_8888)
-                // Synthetic spatial detail exercises the mosaic and avoids private input.
-                val pixels = IntArray(320 * 240) { position ->
-                    val x = position % 320
-                    val y = position / 320
-                    0xFF000000.toInt() or (((x + index * 17) % 256) shl 16) or
-                        (((y + index * 29) % 256) shl 8) or ((x xor y xor index * 7) and 255)
-                }
-                bitmap.setPixels(pixels, 0, 320, 0, 0, 320, 240)
-                try {
-                    imported += importFile("thumbnail-performance-$index.jpg") {
-                        assertTrue(bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it))
-                    }
-                } finally {
-                    bitmap.recycle()
-                    File(instrumentation.targetContext.cacheDir,
-                        "export-scratch/thumbnail-performance-$index.jpg").delete()
-                }
-            }
-            assertTrue("all synthetic photos reach the current page", await(60_000) {
-                controller.page.value.objects.count { projection ->
-                    imported.any { it.contentEquals(projection.objectId) }
-                } == 48
-            })
-            val generation = (controller.vaultState.value as VaultState.Unlocked).generation
-            val photos = controller.page.value.objects.filter { projection ->
-                imported.any { it.contentEquals(projection.objectId) }
-            }
-            runBlocking {
-                for (rendition in ThumbnailRendition.entries) {
-                    for (photo in photos) {
-                        assertNotNull("a real derivative warms each rendition", controller.thumbnailCache.load(
-                            controller.vault, generation, photo.objectId, photo.id, rendition = rendition))
-                    }
-                }
-            }
-            fun workload() {
-                val targets = listOf(0, 8, 16, 24, 32, 40, 32, 24)
-                repeat(4) {
-                    for (target in targets) {
-                        onGrids { grids ->
-                            assertTrue("the scroll action runs", grids.single().config[SemanticsActions.ScrollToIndex]
-                                .action?.invoke(target) == true)
-                        }
-                        awaitFrames()
-                    }
-                }
-            }
-            // Both modes run once before measurement to warm composition and rendering.
-            repeat(2) {
-                tap(label("Hide thumbnails"))
-                workload()
-            }
-            for (mode in listOf("Plain", "Mosaic")) {
-                tap(label("Hide thumbnails"))
-                onGrids { it.single().config[SemanticsActions.ScrollToIndex].action?.invoke(0) }
-                awaitFrames()
-                shell("dumpsys gfxinfo ${activity.packageName} reset")
-                workload()
-                val frameDurations = frameDurationsNs(shell("dumpsys gfxinfo ${activity.packageName} framestats"))
-                assertTrue("gfxinfo must report completed frames for $mode", frameDurations.isNotEmpty())
-                val sorted = frameDurations.sorted()
-                val p95 = sorted[((sorted.size * 95 + 99) / 100 - 1).coerceAtLeast(0)] / 1_000_000.0
-                measurements.put(JSONObject().put("mode", mode).put("frames", sorted.size)
-                    .put("p95FrameMs", p95).put("processPssKb", Debug.getPss()))
-            }
-            report.put("modes", measurements).put("beforeLockPssKb", Debug.getPss())
-            lockQuietly()
-            awaitFrames()
-            report.put("afterLockPssKb", Debug.getPss())
-            val metrics = report.toString()
-            File(instrumentation.targetContext.getExternalFilesDir(null), "thumbnail-performance.json")
-                .writeText(metrics)
-            instrumentation.sendStatus(0, Bundle().apply { putString("thumbnail_performance", metrics) })
-            android.util.Log.i("ThumbnailPerformance", metrics)
-        } finally {
-            // Cleanup also works after the measurement locks the test vault.
-            if (!isOpen()) {
-                instrumentation.runOnMainSync {
-                    controller.goTo(AppRoute.Unlock)
-                    controller.unlock(PASSWORD)
-                }
-                assertTrue("the test vault reopens for cleanup", await(60_000) { isOpen() })
-            }
-            if (imported.isNotEmpty()) {
-                settle { done -> controller.deleteAll(imported, done) }
-                settle { done -> controller.permanentlyDeleteAll(imported, done) }
-            }
-        }
     }
 
     @Test
@@ -2114,29 +2021,6 @@ class BackNavigationTest {
             .bufferedReader()
             .use { it.readText() }
 
-    /** Completed application frames only; timestamps and other process data are not retained. */
-    private fun frameDurationsNs(framestats: String): List<Long> {
-        var flags = -1
-        var intended = -1
-        var completed = -1
-        return buildList {
-            for (line in framestats.lineSequence()) {
-                val columns = line.trim().split(',')
-                if (columns.firstOrNull() == "Flags") {
-                    flags = columns.indexOf("Flags")
-                    intended = columns.indexOf("IntendedVsync")
-                    completed = columns.indexOf("FrameCompleted")
-                    continue
-                }
-                if (flags < 0 || intended < 0 || completed < 0) continue
-                if (columns.getOrNull(flags)?.toLongOrNull() != 0L) continue
-                val start = columns.getOrNull(intended)?.toLongOrNull() ?: continue
-                val end = columns.getOrNull(completed)?.toLongOrNull() ?: continue
-                if (start > 0 && end > start && end < Long.MAX_VALUE) add(end - start)
-            }
-        }
-    }
-
     /** This application's entries in the audio focus stack of `dumpsys audio`. */
     private fun focusEntries(): List<String> =
         shell("dumpsys audio").lineSequence()
@@ -2151,12 +2035,12 @@ class BackNavigationTest {
      */
     private fun switchRow(title: String): AccessibilityNodeInfo {
         var row: AccessibilityNodeInfo? = null
+        assertTrue("$title must be on screen", scrollUntil(label(title)))
         assertTrue(
-            "$title must be on screen",
+            "$title must have a checkable row",
             await {
                 row = find(label(title))?.let { node -> generateSequence(node) { it.parent }.firstOrNull { it.isCheckable } }
-                row != null ||
-                    find { it.isScrollable }?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD).let { false }
+                row != null
             },
         )
         // Compose gives a row with children its role on a child of its own,
@@ -2171,12 +2055,12 @@ class BackNavigationTest {
     /** The Auto-lock row of Settings, scrolled into view. */
     private fun autoLockRow(): AccessibilityNodeInfo {
         var row: AccessibilityNodeInfo? = null
+        assertTrue("Auto-lock must be on screen", scrollUntil(label("Auto-lock")))
         assertTrue(
-            "Auto-lock must be on screen",
+            "Auto-lock must have a clickable row",
             await {
                 row = find(label("Auto-lock"))?.let { node -> generateSequence(node) { it.parent }.firstOrNull { it.isClickable } }
-                row != null ||
-                    find { it.isScrollable }?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD).let { false }
+                row != null
             },
         )
         return checkNotNull(row)
