@@ -1,6 +1,6 @@
 # Selective encrypted archives
 
-> **Status:** Implemented product contract; physical-device and release acceptance remain separate
+> **Status:** Accepted product contract; physical-device and release acceptance remain separate
 
 ## Export
 

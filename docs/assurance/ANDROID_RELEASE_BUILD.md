@@ -1,5 +1,7 @@
 # Android release candidate build
 
+> **Status:** Accepted release-build procedure; device and audit gates remain separate
+
 The `android application` job in `.github/workflows/rust.yml` builds a release APK and AAB on every pull request with a disposable signing key. A push to `main` uses the configured release key and retains the signed packages, native symbols, R8 mapping, and checksum report as one `android-release-candidate-<commit>` Actions artifact. It does not publish to Google Play.
 
 The release certificate SHA-256 digest is pinned in that job. The private key and password are GitHub Actions secrets `CHUR_RELEASE_KEYSTORE_BASE64` and `CHUR_RELEASE_PASSWORD`; they are not repository files. The job does not save a build cache after those secrets enter its environment.

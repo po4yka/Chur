@@ -1,5 +1,7 @@
 # Local Content Search
 
+> **Status:** Accepted implementation contract; security release gates remain separate
+
 Search can find filenames, captions, tags, and indexed words from documents or images in the open vault. It does not search the public Notes shell. Private notes keep their separate search screen.
 
 ## Use

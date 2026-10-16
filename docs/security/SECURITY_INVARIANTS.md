@@ -41,7 +41,7 @@ Security invariants are properties that implementation, migrations, platform ada
 | ID | Invariant | Primary owner | Required evidence |
 | --- | --- | --- | --- |
 | SEC-019 | Rust is the only canonical owner of private vault bytes and migrations. | architecture | dependency checks/review |
-| SEC-020 | Public Room/DataStore storage contains no private-vault metadata or keys. | KMP/platform | storage inspection tests |
+| SEC-020 | Public stores, including Notes JSON, shell preferences, and camera files, contain no private-vault metadata or keys. | KMP/platform | storage inspection tests |
 | SEC-021 | Object-key envelopes are separate from immutable media containers. | `chur-format` | format vectors |
 | SEC-022 | Source media is not deleted before encrypted import is durably committed. | import coordinator | crash/fault tests |
 | SEC-023 | A catalog entry never points to an uncommitted object. | `chur-catalog` | transaction tests |

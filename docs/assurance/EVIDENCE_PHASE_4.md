@@ -1,6 +1,8 @@
 # Phase 4 Evidence
 
-> **Status:** Evidence record for the Phase 4 scope and exit criteria of [`../../ROADMAP.md`](../../ROADMAP.md). It records what is true; it approves nothing.
+> **Status:** Accepted historical evidence record for the Phase 4 scope and exit criteria of [`../../ROADMAP.md`](../../ROADMAP.md). It records what is true; it approves nothing.
+
+This is a phase-closeout snapshot. Counts, versions, and limitations below describe that phase, not the current checkout. See [Implementation status](../IMPLEMENTATION_STATUS.md) for current features and open acceptance; this record approves no release gate.
 
 [`RELEASE_GATES.md`](RELEASE_GATES.md) requires an evidence package and a list of items with no enforcing job. This document records both for collection sharing. Regenerate each result with the command in the same row.
 
@@ -8,7 +10,7 @@
 
 | Item | Value |
 | --- | --- |
-| Source commit | the commit this file is read at; `git rev-parse HEAD` |
+| Source commit | the phase snapshot in this file's Git history; not the current HEAD |
 | Sharing protocol | v1 canonical collection grant, membership, and operation records; grants are 309 bytes and membership records are 292 bytes |
 | Cryptography | X25519 HPKE with HKDF-SHA-256 and ChaCha20-Poly1305; Ed25519 signatures bind the complete canonical records |
 | FFI ABI | 1.9, capabilities `0x00000000000000BF`; `CHUR_CAP_COLLECTION_SHARING` is bit 7 and concurrent reads remain clear |
@@ -62,7 +64,7 @@
 - **physical multi-device interoperability.** No job verifies sender and recipient flows across supported Android and iOS devices through a deployed service;
 - **operating-system background execution.** The transport primitives build and are tested, but no Android scheduler or iOS background session runs on a device;
 - **an operator deployment.** No job tests reverse-proxy TLS, persistent-volume backup and restore, process supervision, disk exhaustion, or disaster recovery;
-- **recipient erasure, the claim half of SEC-045.** No protocol can prove deletion of plaintext, keys, screenshots, exports, or backups already controlled by a recipient, and the product wording that states this limit is the half of the invariant [`../security/SECURITY_TEST_PLAN.md`](../security/SECURITY_TEST_PLAN.md) §13 marks audit-only; no job checks a claim only review can judge;
+- **recipient erasure, the claim half of SEC-045.** No protocol can prove deletion of plaintext, keys, screenshots, exports, or backups already controlled by a recipient, and the product wording that states this limit is the half of the invariant [`SECURITY_TEST_PLAN.md`](SECURITY_TEST_PLAN.md) §13 marks audit-only; no job checks a claim only review can judge;
 - **deduplication design review, SEC-046.** The invariant that global deduplication never uses an unkeyed plaintext content hash has no automated evidence and no enforcing job; [`SECURITY_TEST_PLAN.md`](SECURITY_TEST_PLAN.md) §13 marks it audit-only, to be discharged by a design review of any deduplication proposal, and none has been commissioned;
 - **production approval.** Passing this package does not approve Gate 6 while the separate audit and earlier release-gate gaps remain open.
 

@@ -1,6 +1,6 @@
 # Chur Test Vectors
 
-> **Status:** v1 is generated and checked in; `chur-cli` produces it and `chur-cli vectors verify` rebuilds and compares it
+> **Status:** Accepted vector-set guide; v1 is generated and checked in; `chur-cli` produces it and `chur-cli vectors verify` rebuilds and compares it
 
 This directory holds deterministic, machine-readable compatibility fixtures for Chur formats and protocols.
 
@@ -17,4 +17,4 @@ Read [`docs/format/TEST_VECTORS.md`](../docs/format/TEST_VECTORS.md) for governa
 
 ## Versions
 
-- [`v1/`](v1/README.md) — the frozen v1 formats: 78 vectors covering canonical encoding, every HKDF label, every key-slot family, both key envelopes, the vault descriptor, the object container, and the backup package.
+- [`v1/`](v1/README.md) — the current manifest contains 106 vectors covering canonical encoding, HKDF labels, key slots and envelopes, descriptors, containers, backup structures, waveforms, device identities, signed operations, and collection grants. Read the manifest for the exact current set; phase evidence retains historical counts.

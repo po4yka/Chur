@@ -2,7 +2,7 @@
 
 > **Status:** Proposed platform architecture for implementation  
 > **Audience:** Android, KMP, Rust, security, QA, and release-engineering contributors  
-> **Last updated:** 2026-08-26  
+> **Last updated:** 2026-10-16\
 > **Related:** [Project README](../README.md) · [System architecture](ARCHITECTURE.md) · [iOS architecture](IOS.md)
 
 Chur is a local-first private media archive with a functional public shell and a Rust-owned encrypted vault. This document defines the Android-specific implementation boundary: application startup, platform services, Android Keystore integration, biometric authorization, storage placement, media import and playback, lifecycle locking, task privacy, background execution, native packaging, testing, and release requirements.
@@ -56,9 +56,9 @@ Android MUST NOT own:
 
 ---
 
-## 3. Planned Android baseline
+## 3. Android baseline
 
-| Area | Planned choice |
+| Area | Current implementation |
 | --- | --- |
 | Application ID | `dev.po4yka.chur` |
 | Compile SDK | Android API 37 |
@@ -66,14 +66,14 @@ Android MUST NOT own:
 | Minimum SDK | API 29, frozen by [ADR-0017](adr/0017-freeze-the-supported-device-set.md) |
 | Kotlin | Kotlin 2.4.20 / K2 |
 | UI | Compose Multiplatform 1.12.1 hosted by a thin Android shell |
-| Navigation | Navigation 3 Multiplatform |
-| State | AndroidX ViewModel, StateFlow, Flow, UDF/MVVM |
-| Public persistence | Room 3.0.1 KMP and DataStore KMP |
-| Images | Coil 3.5 with a separate private loader |
+| Navigation | shared route state in `shared/app` |
+| State | controllers, StateFlow, Flow, UDF |
+| Public persistence | JSON Notes, platform shell preferences, public camera files |
+| Images | authenticated derivatives, platform decoders, bounded session cache |
 | Media | AndroidX Media3 |
 | Background work | WorkManager for policy-approved jobs |
 | Native core | Rust library through an isolated JNI/C-ABI adapter |
-| Build | Gradle version catalog, convention plugins, KSP, pinned NDK/toolchains |
+| Build | root Gradle scripts, version catalog, pinned NDK/toolchains |
 
 Version numbers are implementation targets rather than protocol identifiers. Upgrading Android, Kotlin, Compose, Media3, the NDK, or Rust dependencies MUST NOT silently change vault bytes or security policy.
 
@@ -136,38 +136,22 @@ The Android shell stays deliberately thin. Shared application code owns user-vis
 
 ---
 
-## 5. Planned module boundaries
+## 5. Module boundaries
 
 ```text
-apps/androidApp/
-├── application startup
-├── activity/window setup
-├── manifest and resources
-├── Android composition root
-└── release configuration
-
-shared/core-platform/
-├── expect platform contracts
-└── platform-neutral models
-
-shared/core-platform-android/
-├── KeystoreRootKeyProtector
-├── AndroidUserAuthenticator
-├── AndroidMediaPicker
-├── AndroidReadHandleFactory
-├── AndroidExportDestination
-├── AndroidLifecycleSignals
-├── AndroidTaskPrivacyController
-└── AndroidBackgroundScheduler
-
-shared/core-media/
-├── private image-loader contracts
-├── player coordination
-└── opaque media-source models
-
-rust/crates/chur-ffi/
-└── stable Android-facing native ABI
+apps/androidApp/        ChurHost, MainActivity, pickers, shares, export, lock tile
+shared/app/            shared screens and Android UI adapters
+shared/feature-import/ descriptor contracts, decoder process, media/OCR APIs
+shared/core-platform-keys/ Android Keystore and authentication adapters
+shared/core-ffi/        NativeVault actual adapter to JNI
+shared/core-vault/      private repository and session state
+shared/core-sync/       ciphertext transport and sync orchestration
+shared/feature-notes/   public Notes; no private module dependency
+rust/crates/chur-jni/   JNI bridge
+rust/crates/chur-ffi/   stable C ABI and one process-global registry
 ```
+
+The host and designated platform source sets bind native APIs. There are no separate `core-platform-android/` or `core-media/` modules.
 
 Feature modules MUST depend on interfaces in shared code. They MUST NOT import `android.security.keystore`, `BiometricPrompt`, Media3 `DataSource`, JNI symbols, or filesystem APIs directly.
 
@@ -227,10 +211,10 @@ It MUST NOT restore:
 
 ```text
 AndroidApplicationGraph
-├── PublicGraph                    Koin classic DSL
+├── PublicGraph                    explicit construction
 │   ├── public repositories
-│   ├── Room
-│   ├── DataStore
+│   ├── public Notes JSON and camera files
+│   ├── platform shell preferences
 │   ├── public navigation
 │   └── non-sensitive schedulers
 │
@@ -253,7 +237,7 @@ AndroidApplicationGraph
 
 The secure graph is constructed only after Rust returns an authenticated session handle. Its destruction order is part of locking and MUST remain explicit.
 
-Koin MUST NOT own root, collection, object, stream, password, recovery, or platform-unwrapped secret values.
+Long-lived public owners MUST NOT retain root, collection, object, stream, password, recovery, or platform-unwrapped secret values.
 
 ---
 
@@ -440,7 +424,7 @@ Suggested platform placement:
 
 ```text
 filesDir/
-├── public/                         public Room-owned state as designed
+├── public/                         public Notes JSON and camera files
 ├── registry/                       vault descriptors, at most two entries
 └── vaults/
     ├── <opaque-vault-id>/
@@ -693,12 +677,12 @@ Rules:
 
 ## 16. Private image pipeline
 
-Private images use a dedicated Coil `ImageLoader`:
+Private images use a bounded session cache and platform decoders:
 
 ```text
 Compose request
     ↓
-private Coil model containing opaque session/object reference
+opaque session/object reference
     ↓
 Chur private fetcher
     ↓
@@ -720,7 +704,7 @@ Requirements:
 - every private bitmap cache is cleared during lock;
 - decode failures return redacted object errors.
 
-Coil must never receive the filesystem path of an encrypted object as if it were ordinary image content.
+The private image decoder must never receive the filesystem path of an encrypted object as if it were ordinary image content.
 
 ---
 
@@ -781,7 +765,7 @@ Export destinations include:
 - user-selected SAF destination;
 - MediaStore insertion;
 - Android share sheet through a temporary content URI;
-- a future encrypted backup destination.
+- encrypted full backup and selective-archive destinations.
 
 ### 18.1 Direct destination export
 
@@ -1382,7 +1366,7 @@ Production claims require independent review of the Rust core, key-slot integrat
 - platform contracts;
 - Rust library loading and version handshake;
 - locked-only lifecycle and privacy overlay;
-- Room/DataStore for public data.
+- JSON Notes, public camera files, and platform preferences for public data.
 
 ### Phase B — recoverable local unlock
 
@@ -1397,7 +1381,7 @@ Production claims require independent review of the Rust core, key-slot integrat
 - Photo Picker import;
 - file-descriptor bridge;
 - encrypted thumbnails;
-- private Coil loader;
+- private authenticated image loader;
 - library and viewer;
 - verified export;
 - atomic lock and cache clearing.
@@ -1464,7 +1448,7 @@ Before an Android release candidate:
 - [ ] Photo/video imports do not require broad library permission where picker access is sufficient.
 - [ ] Complete media never crosses Kotlin as one `ByteArray`.
 - [ ] Media3 readers fail with `SESSION_EXPIRED` after lock.
-- [ ] Lock clears private Coil, player, decoder, and Rust caches.
+- [ ] Lock clears private image, player, decoder, and Rust caches.
 - [ ] `FLAG_SECURE` and task-cover policies match product settings.
 - [ ] Notifications contain no private names, counts, thumbnails, or deep-link data.
 - [ ] Auto Backup excludes device-bound and plaintext state.

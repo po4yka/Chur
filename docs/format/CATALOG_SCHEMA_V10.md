@@ -1,5 +1,7 @@
 # Catalog schema v10: local content search
 
+> **Status:** Accepted implementation contract; security release gates remain separate
+
 Version `0x000a` adds a rebuildable local index for document and image text. The index uses the existing Rust-owned SQLCipher catalog. The database, WAL, and FTS pages remain encrypted with the catalog key. It creates no public database, system search entry, remote OCR request, sync operation, or plaintext scratch file.
 
 ## Stored state

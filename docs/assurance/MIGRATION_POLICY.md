@@ -59,6 +59,14 @@ A crash at any step must reopen into old valid state, resumable migration, or ex
 - do not expose private rows to KMP during migration;
 - close/lock on failure.
 
+### Current catalog and ABI
+
+Fresh catalogs use schema v10 (`0x000a`). Versioned extensions cover [v6 sharing indexes](../format/CATALOG_SCHEMA_V6.md), [v7 album hierarchy](../format/CATALOG_SCHEMA_V7.md), [v8 Trash](../format/CATALOG_SCHEMA_V8.md), [v9 local notes](../format/CATALOG_SCHEMA_V9.md), and [v10 content search](../format/CATALOG_SCHEMA_V10.md). Unlock and backup restore run authenticated sequential migrations; interrupted migrations must resume safely. An older writer must refuse a newer catalog.
+
+Native ABI 2.24 is separate from the catalog version. Documents, audio artwork, Recently added, album breadcrumbs, and incoming shares reuse existing object/container fields; they do not allocate a new container version. Selective and external archives use existing CHURBAK1 framing and independent vault identities.
+
+The physical SQLCipher snapshot used by current backup is a known divergence from the canonical-export requirement. Cross-build portability needs an approved resolution and restore evidence; do not treat a same-build round trip as a migration or compatibility guarantee. See [release gates](RELEASE_GATES.md).
+
 ## 5. Object/container migrations
 
 Prefer lazy migration when old object remains safely readable and immutable. Options:
@@ -87,7 +95,7 @@ Older applications must refuse newer unsupported vaults rather than modifying th
 
 ## 9. Sync coordination
 
-Future migrations distinguish:
+Sync-related migrations distinguish:
 
 - local materialized catalog schema change, invisible to wire peers;
 - wire operation version change;

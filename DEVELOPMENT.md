@@ -1,8 +1,8 @@
 # Chur Development Guide
 
-> **Status:** Proposed development environment and workflow
+> **Status:** Accepted development environment and workflow
 
-This document describes the intended development environment and workflow. The repository is still being scaffolded; commands marked **planned** become normative only after the corresponding build files exist.
+This document describes the checked-in Android, iOS, KMP, and Rust builds. Run commands from the indicated directory. A local pass is evidence for that checkout; it does not approve a security release gate.
 
 ## Target toolchain
 
@@ -11,42 +11,38 @@ This document describes the intended development environment and workflow. The r
 | JDK | 21, pinned for Gradle builds |
 | Kotlin | 2.4.20 / K2 |
 | Compose Multiplatform | 1.12.1 |
-| Gradle | version pinned by wrapper |
+| Gradle | 9.8.1, pinned by wrapper and distribution SHA-256 |
 | Android | compile/target API 37; NDK pinned in version catalog |
-| Xcode | version supporting the selected iOS deployment target |
+| Xcode | 27 for the documented local host build; deployment target iOS 18.0 |
 | Swift | toolchain shipped with pinned Xcode |
 | Rust | exact version pinned by `rust/rust-toolchain.toml`; supported floor in `rust-version` |
 | Cargo tools | pinned or locked where reproducibility matters |
 
 Do not rely on globally mutable defaults for JDK, NDK, Rust target, Xcode, or code-generation versions.
 
-Every row except Xcode and Swift is enforced today by the workflow of [`docs/assurance/RELEASE_GATES.md`](docs/assurance/RELEASE_GATES.md#enforcement). The Xcode and Swift rows stay planned until an iOS application target exists; the Kotlin/Native iOS targets already build and test in that workflow. The version catalog is [`gradle/libs.versions.toml`](gradle/libs.versions.toml) and it pins the JDK, Kotlin, Compose Multiplatform, Gradle, Android, and NDK rows exactly. The Gradle wrapper records the distribution SHA-256, so the pinned Gradle version is the one that runs. The Xcode and Swift rows stay planned until an iOS application target exists.
+The version catalog is [`gradle/libs.versions.toml`](gradle/libs.versions.toml). The wrapper owns the Gradle version, and `rust/rust-toolchain.toml` owns the Rust toolchain. CI builds all four mobile Rust targets and runs shared tests. It does not compile the Swift app or Share Extension; those require the local Xcode checks below. Xcode and its Swift toolchain are not pinned by CI.
 
 ## Repository layout
 
-Modules marked *planned* do not exist yet and land with the phase that needs them.
-
 ```text
-apps/                planned
-  androidApp/        planned
-  iosApp/            planned
-shared/
-  app/               Compose Multiplatform shell, currently the ABI gate
-  core-model/        error taxonomy and vector contract
-  core-platform-keys/ Android Keystore and Apple Keychain slots
-  feature-*/         planned
-rust/
-  crates/
-  fuzz/
-  Cargo.toml
-scripts/             native cross-compilation and vendored-skill checks
-build-logic/         planned
-  convention/
+apps/androidApp/        Android host and instrumentation tests
+apps/iosApp/            Xcode host, Share Extension, Swift package tests
+shared/app/             shared screens, controller, routes, platform UI
+shared/core-model/      error taxonomy and vector contract
+shared/core-ffi/        NativeVault and hand-written C ABI adapters
+shared/core-vault/      private repository and session/lock state
+shared/core-platform-keys/ Android Keystore and Apple Keychain slots
+shared/core-sync/       Ktor transport and synchronization orchestration
+shared/feature-import/  codecs, OCR, descriptors, export contracts
+shared/feature-notes/   public Notes and JSON persistence
+rust/crates/            secure core, JNI/C ABI, CLI, reference server
+rust/fuzz/              separate Cargo workspace
+scripts/                native builds, device control, release/policy checks
 docs/
 test-vectors/
 ```
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for module ownership.
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for module ownership. There is no convention-plugin build or separate module for each private screen.
 
 ## Initial setup
 
@@ -58,13 +54,13 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for module ownership.
 6. Clone the repository without copying local credentials into it.
 7. Verify that generated/native artifact directories are ignored.
 
-The project must eventually provide bootstrap scripts that validate versions instead of silently accepting incompatible tools.
+Use `./gradlew --version`, `rustup show` from `rust/`, and `xcodebuild -version` to check the selected tools. `ANDROID_HOME` identifies the SDK. Set `ANDROID_NDK_HOME` for the native script if more than one NDK is installed; Gradle uses the catalog pin.
 
 ## Build commands
 
 The `:shared:app` iOS tests include real Apple Vision OCR. They need a fully booted simulator. A standalone simulator process can return no text without an API error. CI creates, boots, and removes its own compatible iPhone simulator. For a local run, boot a simulator that you own and set `CHUR_IOS_TEST_DEVICE` to its UDID. The build does not change the state of existing devices. Without this variable, Gradle uses its normal Xcode-selected device, which must already be booted.
 
-The workflow named in [`docs/assurance/RELEASE_GATES.md`](docs/assurance/RELEASE_GATES.md#enforcement) is the source of truth. It runs exactly these, and each is runnable locally:
+The workflow named in [`docs/assurance/RELEASE_GATES.md`](docs/assurance/RELEASE_GATES.md#enforcement) is the CI source of truth. The following are local equivalents for its main checks; release signing and job-specific setup remain in the workflow:
 
 ```text
 ./gradlew jvmTest
@@ -72,30 +68,72 @@ The workflow named in [`docs/assurance/RELEASE_GATES.md`](docs/assurance/RELEASE
 ./gradlew iosSimulatorArm64Test
 ./gradlew compileKotlinIosArm64
 ./gradlew linkDebugFrameworkIosSimulatorArm64
+./gradlew :shared:feature-notes:churPublicShellIsolation
+./gradlew :apps:androidApp:assembleDebug :apps:androidApp:lintDebug :apps:androidApp:assembleDebugAndroidTest
 
 scripts/build-native-targets.sh all
 python3 scripts/check-vendored-skills.py
 python3 scripts/check-backup-rules.py
 
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
 cargo deny check
-cargo run -p chur-cli -- vectors verify --dir ../test-vectors/v1
-cargo run -p chur-cli -- vectors digest --dir ../test-vectors/v1
-cargo +nightly fuzz run <target> -- -runs=20000
+(cd fuzz && cargo deny --config ../deny.toml check)
+cargo run --locked -p chur-cli -- vectors verify --dir ../test-vectors/v1
+cargo run --locked -p chur-cli -- vectors digest --dir ../test-vectors/v1
+(cd fuzz && cargo +nightly fuzz run <target> -- -runs=20000)
 ```
 
-The `cargo` commands run in `rust/`; the `./gradlew` commands run at the repository root. The C ABI harness is built and run by the `abi` job and locally with:
+The `cargo` commands run in `rust/`; `cargo fuzz` runs in `rust/fuzz/`. The Gradle commands and scripts run at the repository root. The C ABI harness is built and run by the `abi` job. Its Linux command is:
 
 ```text
-cargo build -p chur-ffi --release
+cargo build --locked -p chur-ffi --release
 cc -Wall -Wextra -Werror -I crates/chur-ffi/include \
-   crates/chur-ffi/tests/handshake.c target/release/libchur_ffi.a -o handshake
+   crates/chur-ffi/tests/handshake.c target/release/libchur_ffi.a \
+   -lpthread -ldl -lm -o handshake
 ./handshake
 ```
 
-An application module, and with it a `./gradlew build` that assembles one, lands with the Phase 1 shell. Exact module paths may still change while the feature modules are added.
+### Mobile runtime and Swift checks
+
+Android instrumentation requires a selected emulator or device. Build and run with:
+
+```sh
+./gradlew :apps:androidApp:connectedDebugAndroidTest
+```
+
+Use a test device with synthetic data. These tests include lifecycle, files, notes, archives, OCR, incoming shares, and public-shell flows. CI assembles the test APK but does not run it.
+
+On macOS, run the host helpers and compile the full iOS app and embedded extension:
+
+```sh
+swift test --package-path apps/iosApp
+xcodebuild -project apps/iosApp/Chur.xcodeproj -scheme Chur \
+  -configuration Debug -destination 'generic/platform=iOS Simulator' \
+  CODE_SIGNING_ALLOWED=NO build
+```
+
+The Swift package tests exclude `ChurApp.swift`; they do not replace the app build. For simulator Share Extension acceptance, use Xcode ad-hoc signing:
+`CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_IDENTITY=-`.
+A distribution build needs the registered App Group for both bundle IDs. See
+[`apps/iosApp/README.md`](apps/iosApp/README.md#incoming-system-shares).
+Do not change an Apple Developer account or provisioning profile as part of a local compile check.
+
+Test actual system Share delivery separately from direct importer tests: public notice,
+normal unlock, destination confirmation, import/cancel, and no replay after completion.
+For iOS, also verify encrypted queue cleanup and cold/foreground delivery. For Android,
+use another UID's content provider and temporary URI grants.
+
+### OCR assets and native dependencies
+
+English and Russian traineddata, hashes, and license notices are checked in under
+`shared/feature-import/src/androidMain/assets/ocr/`. The app makes no runtime model
+download. The restricted Tesseract4Android repository, exact AAR pin, and model
+provenance are in [`docs/DEPENDENCY_POLICY.md`](docs/DEPENDENCY_POLICY.md#tesseract4android-490-and-bundled-englishrussian-models).
+Changing the engine or models requires real recognition fixtures, decoder-custody
+checks, native alignment checks, and license/advisory review. See
+[`docs/product/CONTENT_SEARCH.md`](docs/product/CONTENT_SEARCH.md).
 
 ## Native targets
 
@@ -163,7 +201,7 @@ sanitizers for native/FFI paths
 cargo-deny or equivalent policy checks
 ```
 
-`chur-cli` should be able to create, inspect structurally, verify, migrate, and repair synthetic vaults without Android or iOS UI code. It must never print plaintext secrets by default.
+`chur-cli` supports synthetic vault creation, import/export, listing, integrity checks, recovery, backup, vectors, and benchmarks. Use its `--help` for the implemented commands; do not infer a general repair command from the architecture. Credential reveal is an explicit setup/recovery action.
 
 ## KMP workflow
 

@@ -10,7 +10,20 @@ A gate item is enforced by continuous integration, by a named review procedure, 
 
 The workflow exists and runs those four jobs. It also runs the vector-set check, the C ABI harness, the fuzz smoke pass, and the Gradle and Kotlin/Native test jobs, which joined it as their subjects landed. Its file is still named `rust.yml` because ADR-0031 named it when Rust was the only build. A gate item that one of them covers is enforced from the first pull request they ran on; every other item is still enforced by a named review procedure or by nothing, and every gated release records which of its items had no enforcing job. A contributor may run the equivalent command locally and attach its output to a pull request; that attachment is evidence for that pull request and is never recorded as a passed gate.
 
-The Swift host build is a gate item with no enforcing job. The Kotlin/Native job links the shared framework, but no job compiles `apps/iosApp` (`ChurApp.swift`, `Info.plist`, and the checked-in `Chur.xcodeproj`), so a host change can break the iOS app while every job passes. Until an Xcode job joins the workflow, every gated release records this item, and the check is `xcodebuild -project apps/iosApp/Chur.xcodeproj -scheme Chur -configuration Debug -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build`, as [`../../apps/iosApp/README.md`](../../apps/iosApp/README.md) describes.
+The Swift host and embedded Share Extension build, and the Swift package helper tests, are gate items with no enforcing job. The Kotlin/Native job links the shared framework, but no job compiles `apps/iosApp` (`ChurApp.swift`, `Info.plist`, and the checked-in `Chur.xcodeproj`), so a host change can break the iOS app while every job passes. Until an Xcode job joins the workflow, every gated release records this item, and the check is `xcodebuild -project apps/iosApp/Chur.xcodeproj -scheme Chur -configuration Debug -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build`, as [`../../apps/iosApp/README.md`](../../apps/iosApp/README.md) describes.
+
+## Current feature acceptance
+
+Files, private notes, selective archives, external encryption, OCR, public camera, the Android lock tile, and incoming shares extend the review surface without advancing a gate. The [current inventory](../IMPLEMENTATION_STATUS.md) links their contracts. Each release must include:
+
+- parser, source/output bound, cancellation, stale-session, and partial-publication evidence for files and archives;
+- note/index SQLCipher migration, cleanup, backup, and transfer-exclusion evidence;
+- real English/Russian image/PDF recognition, native dependency/license/advisory review, decoder custody, and Android 16 KiB packaging checks;
+- cold/warm OS Share delivery, provider revocation, encrypted iOS queue integrity, lock cleanup, and no automatic replay after import;
+- iOS app/extension archive inspection with the registered App Group on both distribution profiles; simulator ad-hoc signing is insufficient;
+- public-shell backup and no-private-data leakage checks, and a neutral Android tile that cannot unlock or reveal an identity.
+
+[Development](../../DEVELOPMENT.md) gives local checks. No CI job currently executes Android instrumentation, Swift package tests, or the full Xcode app/extension build. Physical-device provider, key-slot, camera, performance, and interoperability checks remain separate.
 
 ## Gate 0 — design prototype
 
@@ -87,7 +100,7 @@ Phase 2 met four of the six and left two. The format exists and is exercised by 
 
 The vectors are partly there. Sixteen vectors under the `backup` format word carry every deterministic structure the format defines — the public preamble, the record header, the two inventory entries, the ordered inventory commitment, and the two sealed records — with the negative cases §5 of [`../format/TEST_VECTORS.md`](../format/TEST_VECTORS.md) requires. A *whole package* is not among them and cannot be: §2 has it carry the encrypted catalog, which is a SQLCipher file with a random salt, so two runs over one vault produce two packages that differ in bytes and mean the same thing. The eleven cases §14 of the backup format lists are covered by `chur-media` `tests/backup_flow.rs` as round trips instead.
 
-One requirement remains open. **Cross-platform restore** is met for the CLI only: one implementation serves all three, and no job runs either host. [`EVIDENCE_PHASE_2.md`](EVIDENCE_PHASE_2.md) §5 carries it.
+Two requirements remain open: the independent backup-construction review and supported-device cross-platform restore. Local native/mobile tests do not supply either approval. The current `chur-media::backup::CatalogSnapshot` checkpoints and copies the encrypted SQLCipher database; it does not implement the canonical catalog export required by [catalog v1](../format/CATALOG_SCHEMA_V1.md) §15. Resolve that format/implementation divergence with an approved compatibility decision and cross-build restore evidence before claiming portable production backup. [`EVIDENCE_PHASE_2.md`](EVIDENCE_PHASE_2.md) §5 is historical evidence, not a current gate pass.
 
 ## Gate 5 — synchronization
 

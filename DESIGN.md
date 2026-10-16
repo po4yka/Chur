@@ -434,7 +434,7 @@ It is not expressed through:
 
 1. **Media is the content.** The gallery grid should recede behind photos and video.
 2. **Privacy has no spectacle.** Unlock, lock, integrity, and recovery are calm and precise.
-3. **Public means credible.** Notes, journal, or calculator modes must look and behave like complete utilities.
+3. **Public means credible.** Notes, Calculator, and Camera must look and behave like complete utilities.
 4. **Locked means gone.** Private content is covered before animation and removed from restorable navigation state.
 5. **Real and decoy look identical.** Visual or timing differences must not reveal the selected identity.
 6. **Native where it matters.** Pickers, authentication, share sheets, keyboard behavior, and accessibility conventions stay platform-native.
@@ -451,7 +451,7 @@ Chur has four presentation domains.
 
 ### 4.1 Public shell
 
-The public shell may be Notes, Journal, Calculator, Files, or another approved utility. It is a real workspace with its own data, navigation, empty states, editing behavior, and settings.
+The implemented public shells are Notes, Calculator, and Camera. Journal, public Files, or another utility would require separate product scope. It is a real workspace with its own data, navigation, empty states, editing behavior, and settings.
 
 Requirements:
 
@@ -808,7 +808,7 @@ Public navigation follows the selected utility. It must not resemble the private
 Examples:
 
 - Notes: folders/list/editor;
-- Journal: timeline/calendar/editor;
+- Camera: explicit capture, review, local public album, and confirmed deletion;
 - Calculator: single-purpose keypad with history;
 - Files: locations/list/detail.
 
@@ -868,6 +868,12 @@ Import photos, videos, or audio stored on this device.
 
 Avoid security marketing copy after onboarding.
 
+### Recently added and incoming shares
+
+[Recently added](docs/product/RECENTLY_ADDED.md) is a Library scope ordered by import time, not capture time. It keeps the normal filters, paging, selection, and viewer behavior; it excludes local private notes.
+
+[Share to Chur](docs/product/INCOMING_SHARES.md) first shows a neutral count-only public notice, then normal authentication and private destination confirmation. The user selects All items or an existing album. Keep actions reachable with large text; do not show a filename in the public notice or save pending private UI state. Progress/cancel uses the normal import card and reports saved partial results.
+
 ### 11.4 Selection mode
 
 Selection replaces ordinary top actions with:
@@ -910,7 +916,7 @@ Album card content:
 - cover mosaic;
 - album name;
 - item count;
-- optional shared/status metadata when future sharing exists.
+- album title, count, path, and supported organization actions; collection sharing stays a separate access-control surface.
 
 The Albums list/grid choice marks the active view with both a checkmark and
 the blue accent. The inactive choice uses muted ink. Album rename fields use
@@ -918,7 +924,7 @@ the same blue focus border, label, and cursor as other outlined fields.
 
 ### 12.2 Search
 
-Search is local and private. Its data model is the bounded catalog query of [`docs/format/CATALOG_SCHEMA_V1.md`](docs/format/CATALOG_SCHEMA_V1.md) §16, which owns it; this section owns presentation only.
+Search is local and private. The bounded query of [`docs/format/CATALOG_SCHEMA_V1.md`](docs/format/CATALOG_SCHEMA_V1.md) §16 uses the combined metadata/content FTS of [catalog v10](docs/format/CATALOG_SCHEMA_V10.md). [Content search](docs/product/CONTENT_SEARCH.md) owns foreground indexing, retry/rebuild/clear, partial results, and English/Russian OCR limits. Public Notes and private-note bodies are not part of this media Search screen.
 
 Rules:
 
@@ -968,6 +974,12 @@ Audio viewer includes:
 - elapsed/remaining time;
 - play, seek, speed, and output controls;
 - optional transcript only when explicitly enabled and encrypted.
+
+### Documents and private notes
+
+[Document viewing](docs/product/DOCUMENTS_AND_FILES.md) shows metadata and bounded text/PDF previews. Unsupported, protected, malformed, and oversized previews keep export available. Do not execute markup, expose external links, or silently send a document to another viewer.
+
+[Private notes](docs/product/PRIVATE_NOTES.md) have a separate list, search, editor, pin order, and Trash. Save is explicit. Errors retain the draft for retry; lock/disposal clears it without a final save. Apply private input, clipboard, and accessibility guards. Do not reuse public Notes persistence or imply that notes synchronize.
 
 ### 13.4 Chrome auto-hide
 
@@ -1149,7 +1161,7 @@ An open album offers **Export album**. The confirmation explains that the album 
 - distinguish cancellation from integrity failure;
 - do not expose scratch paths or filenames in errors.
 
-### 16.4 Future encrypted sharing
+### 16.4 Encrypted collection sharing and archives
 
 Encrypted collection sharing is visually distinct from plaintext export:
 
@@ -1158,7 +1170,9 @@ Export a copy
 Share encrypted access
 ```
 
-The latter remains deferred until identity and sharing protocols are implemented and audited.
+Collection sharing is implemented, with independent audit and physical-device gates still open. Its UI must state recipient verification, permissions, and forward-only revocation.
+
+[Selective encrypted archives](docs/product/SELECTIVE_ENCRYPTED_EXPORT.md) are a separate action with an independent password, **Save to Files** or **Share**, and separate-vault restore or logical import. Do not present them as revocable collection access. [External file encryption](docs/product/EXTERNAL_FILE_ENCRYPTION.md) is also available from Public Settings and does not add files to the library.
 
 ---
 
@@ -1225,7 +1239,7 @@ Decoy content should be credible and editable, not a static gallery of stock ima
 
 ---
 
-## 19. Public Notes, Journal, and Calculator
+## 19. Public Notes, Camera, and Calculator
 
 ### 19.1 Notes
 
@@ -1235,12 +1249,11 @@ Decoy content should be credible and editable, not a static gallery of stock ima
 - standard text-editor spacing and selection;
 - calm neutral empty state.
 
-### 19.2 Journal
+### 19.2 Camera
 
-- date-oriented entries;
-- optional calendar/timeline;
-- restrained editorial typography;
-- no accidental import of private media without session authentication.
+Camera uses explicit Take photo, review, Save photo or Discard photo, and a local public album. Display the public-data disclosure before first capture. Permission refusal, unavailable hardware, cancellation, full storage, and failed save retain a visible Settings/vault entry. Saved photos are not encrypted by Chur and are not system Photos entries. Apply the bounds and backup policy in [Discreet Mode](docs/product/DISCREET_MODE.md#camera-and-public-album).
+
+Journal remains an unimplemented exploration, not a selectable shell.
 
 ### 19.3 Calculator
 
@@ -1324,9 +1337,7 @@ A local vault remains usable. Offline is not an error unless a requested remote 
 
 ### Locked background work
 
-Ciphertext upload/download may continue in future versions, but UI must not imply that private media is currently decrypted.
-
-In Phase 1 there is nothing to present. Startup reconciliation, garbage collection, and integrity scans all need the catalog key, so they run only inside an unlocked session, and [`ROADMAP.md`](ROADMAP.md) excludes sync from the phase. The locked-state surface is specified by the phase that first runs work while locked, and until then no locked screen shows background activity of any kind.
+Configured sync can stage bounded ciphertext while locked. It must not open the catalog, derive vault keys, run OCR, or suggest that private content is decrypted. Public status must be neutral. The iOS incoming Share queue is a separate encrypted transport and must not expose filenames or destinations before unlock. Reconciliation, garbage collection, and integrity scans require an unlocked session.
 
 ---
 

@@ -17,12 +17,12 @@ Potential plaintext locations:
 | decoded document text | Yes | at most a 1 MiB UTF-8 prefix; current viewer/session only; drop references on disposal or lock |
 | private note text | Yes | bounded open editor and list previews; explicit save to SQLCipher only; drop UI references on lock/disposal |
 | OCR text and page pixels | Bounded | extraction only; clear owned arrays and rasters after custody drains; persist text only in SQLCipher |
-| Swift `Data` | Avoid | small bounded interop only |
+| Swift `Data` | Bounded | interop, incoming authenticated chunks, and bounded PDF input; clear owned bytes after consumer custody drains |
 | decoded image surfaces | Yes | session-scoped cache; clear on lock |
 | Media3/AVFoundation buffers | Yes | player lifetime; invalidate on lock |
 | private catalog pages in memory | Yes | DB connection lifetime |
 | scratch files | Exceptional | protected, backup-excluded, random-named, promptly deleted |
-| Room/DataStore/public DB | No | private data forbidden |
+| public JSON/preferences/camera files or DB | No | private-vault data forbidden; public-shell content has a separate policy |
 | logs/analytics/crash reports | No | forbidden |
 | clipboard | No by default | explicit user export only with warning/policy |
 | notifications/widgets/search | No | forbidden |
@@ -60,6 +60,14 @@ Requirements:
 - cancel promptly on lock;
 - clean partial plaintext and temporary ciphertext according to journal state;
 - never delete source before durable encrypted commit.
+
+### 3.1 External shares
+
+[Share to Chur](../product/INCOMING_SHARES.md) is untrusted ingress. Android keeps content URI grants in process memory and bounds shared text in an owned memory-backed descriptor. It creates no persistent plaintext copy. Opening sources requires import confirmation in the current session; late results after lock are closed.
+
+The iOS extension necessarily handles provider plaintext before a vault session exists. It encrypts one bounded chunk at a time into an independent App Group queue under a fresh per-item AES key wrapped to the main app's public receiving key. No vault secret enters the extension. It clears owned buffers, but cannot erase NSItemProvider, managed, or platform copies. The queue contains encrypted metadata and payload only and is excluded from backup.
+
+After unlock and confirmation, the main app authenticates the complete incoming envelope before exposing a source. Documents and text stream through a pipe without plaintext scratch. URL-only media codecs may use protected scratch under §5's shared caps and lock cleanup. A shortened or cancelled producer must not commit a prefix as a complete original. Consuming or discarding removes the queued ciphertext; automatic replay cannot duplicate completed imports.
 
 ## 4. Viewing and playback
 
@@ -194,6 +202,10 @@ Tests should inspect:
 - process-death restoration;
 - background tasks while locked;
 - platform snapshots and notifications.
+
+## External file encryption
+
+[External file encryption](../product/EXTERNAL_FILE_ENCRYPTION.md) accepts user-selected provider sources without requiring or creating a library vault. It streams plaintext into a temporary encrypted vault and publishes CHURBAK1. The public tool uses private-window, switcher-cover, transient credential, cancellation, and descriptor-custody rules. No plaintext staging copy is created by Chur. Provider originals and external output remain outside app cleanup authority.
 
 ## Selective archive transfer
 

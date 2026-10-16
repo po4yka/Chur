@@ -123,7 +123,7 @@ It must not claim complete prevention.
 
 `BGTaskScheduler` and background URL sessions are ciphertext-only while locked. They must not release Keychain secret, open private catalog, or generate plaintext derivatives.
 
-Extensions/App Groups are deferred until a dedicated threat model; they widen the process/storage boundary.
+The embedded Share Extension and its App Group are implemented under [ADR-0064](../adr/0064-receive-system-shares.md). It receives an independent public key and writes encrypted staging; it never opens the vault or shares the main app's private Keychain access. The main app imports only after authentication and confirmation. Other extension types remain deferred. See [Share to Chur](../product/INCOMING_SHARES.md) and [the host signing requirements](../../apps/iosApp/README.md#incoming-system-shares).
 
 ## 12. Interop packaging
 

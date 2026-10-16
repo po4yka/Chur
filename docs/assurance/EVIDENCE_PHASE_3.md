@@ -1,6 +1,8 @@
 # Phase 3 Evidence
 
-> **Status:** Evidence record for the Phase 3 scope and exit criteria of [`../../ROADMAP.md`](../../ROADMAP.md). It records what is true; it approves nothing.
+> **Status:** Accepted historical evidence record for the Phase 3 scope and exit criteria of [`../../ROADMAP.md`](../../ROADMAP.md). It records what is true; it approves nothing.
+
+This is a phase-closeout snapshot. Counts, versions, and limitations below describe that phase, not the current checkout. See [Implementation status](../IMPLEMENTATION_STATUS.md) for current features and open acceptance; this record approves no release gate.
 
 [`RELEASE_GATES.md`](RELEASE_GATES.md) requires an evidence package and a list of items with no enforcing job. This document records both for encrypted synchronization. Regenerate each result with the command in the same row.
 
@@ -8,7 +10,7 @@
 
 | Item | Value |
 | --- | --- |
-| Source commit | the commit this file is read at; `git rev-parse HEAD` |
+| Source commit | the phase snapshot in this file's Git history; not the current HEAD |
 | Sync protocol | v1 canonical records and HTTP API under `/v1` |
 | FFI ABI | 1.4, capabilities `0x000000000000003F`; `CHUR_CAP_SYNC` is bit 5 and concurrent reads remain clear |
 | Catalog | schema v2 stores membership, operation heads, checkpoints, rotations, and locked staging metadata |
@@ -64,7 +66,7 @@
 - **operating-system background execution.** The locked transfer primitive builds and is tested with a mock transport, but no Android scheduler or iOS background session runs on a device;
 - **an operator deployment.** No job tests reverse-proxy TLS, persistent-volume backup and restore, process supervision, disk exhaustion, or disaster recovery;
 - **global omission detection.** A checkpoint can prove rollback relative to known authenticated state, but an untrusted server can keep devices in separate consistent views without a trusted witness. [`../sync/SERVER_TRUST_MODEL.md`](../sync/SERVER_TRUST_MODEL.md) §5 states this limit;
-- **deduplication design review, SEC-046.** The invariant that global deduplication never uses an unkeyed plaintext content hash has no automated evidence and no enforcing job; [`../security/SECURITY_TEST_PLAN.md`](../security/SECURITY_TEST_PLAN.md) §13 marks it audit-only, to be discharged by a design review of any deduplication proposal, and none has been commissioned;
+- **deduplication design review, SEC-046.** The invariant that global deduplication never uses an unkeyed plaintext content hash has no automated evidence and no enforcing job; [`SECURITY_TEST_PLAN.md`](SECURITY_TEST_PLAN.md) §13 marks it audit-only, to be discharged by a design review of any deduplication proposal, and none has been commissioned;
 - **the claim half of SEC-045.** That revocation never claims to erase keys or plaintext already obtained is half behavior, tested by the malicious-server harness, and half product claim wording, which only the independent review can judge; [`SECURITY_TEST_PLAN.md`](SECURITY_TEST_PLAN.md) §13 marks that half audit-only;
 - **production approval.** Passing this package does not approve Gate 5 while independent review and the earlier release-gate gaps remain open.
 

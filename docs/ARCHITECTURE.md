@@ -2,14 +2,14 @@
 
 > **Status:** Proposed architecture for implementation  
 > **Audience:** application, mobile-platform, Rust, security, and infrastructure contributors  
-> **Last updated:** 2026-08-26  
+> **Last updated:** 2026-10-16\
 > **Related:** [README](../README.md)
 
 Chur is a local-first private media archive for Android and iOS. Kotlin Multiplatform and Compose Multiplatform own the application experience; a Rust runtime owns the private vault format, key hierarchy, encrypted catalog, media containers, integrity decisions, and migrations.
 
 This document is the normative system-architecture description. The README explains the product and its intended capabilities; this file defines component boundaries, trust boundaries, runtime states, storage rules, cryptographic responsibilities, cross-platform integration, and implementation constraints.
 
-Chur is currently in the architecture and protocol-design stage. Nothing in this document should be interpreted as a completed independent audit or a production security guarantee.
+Chur has a pre-release Android and iOS implementation, including files, local private notes, archives, OCR, and incoming system shares. The [implementation status](IMPLEMENTATION_STATUS.md) maps features to their contracts. This document does not establish an independent audit or production approval.
 
 ---
 
@@ -19,7 +19,7 @@ The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT**, 
 
 Individual statements are classified as **Decision**, **Invariant**, **Proposal**, **Deferred**, or **Non-goal**, defined once in [`README.md`](README.md#statement-classification). The status of this document as a whole is in its header and uses the document-status vocabulary of the same file.
 
-The architecture is intentionally split from the future binary-format specification. This document defines the system model and required properties; byte-exact layouts, constants, encodings, and test vectors must be finalized in dedicated specifications before production data is stored.
+This document defines the system model and required properties. The versioned [format specifications](README.md#formats), accepted ADRs, and canonical vectors own byte-exact layouts. Schema extensions through v10 and ABI 2.24 are implemented; that fact does not close the security release gates.
 
 ---
 
@@ -51,7 +51,7 @@ Recorded as ADRs:
 - Rust is the canonical owner of all private-vault formats and cryptographic state transitions — [`ADR-0001`](adr/0001-rust-owns-private-vault.md).
 - Large media uses independent XChaCha20-Poly1305 chunks and an authenticated final commit — [`ADR-0002`](adr/0002-independent-aead-chunks.md), with the public container layout frozen by [`ADR-0008`](adr/0008-freeze-object-container-v1-layout.md).
 - The immutable encrypted media container is separate from the mutable object-key envelope — [`ADR-0003`](adr/0003-separate-object-key-envelope.md).
-- A Rust-owned SQLCipher catalog is the preferred private-catalog implementation — [`ADR-0004`](adr/0004-rust-owned-private-catalog.md), which remains Proposed until the build, linkage, WAL, migration, performance, and backup validation required by [`format/CATALOG_SCHEMA_V1.md`](format/CATALOG_SCHEMA_V1.md) §15 completes.
+- Rust owns the SQLCipher catalog — accepted [`ADR-0004`](adr/0004-rust-owned-private-catalog.md) and [`ADR-0038`](adr/0038-adopt-sqlcipher-as-the-v1-catalog-engine.md). The current physical schema is [v10](format/CATALOG_SCHEMA_V10.md), built on the earlier versioned schemas. Device and audit acceptance remain separate.
 - Real and decoy vaults have independent roots, catalogs, object namespaces, caches, and sessions — [`ADR-0005`](adr/0005-real-and-decoy-vault-isolation.md).
 - FFI is split into a structured control plane and a bounded streaming data plane — [`ADR-0006`](adr/0006-control-and-data-plane-ffi.md). Both planes use the hand-written C ABI frozen by [`ADR-0016`](adr/0016-freeze-the-v1-c-abi.md); v1 has no generated binding layer.
 - The initial product is a local recoverable vault without cloud sharing — [`ADR-0007`](adr/0007-local-first-before-sync.md).
@@ -62,7 +62,7 @@ Architectural rules this document owns, because no ADR states them:
 - KMP owns use cases, UDF state, navigation, and platform orchestration, but not private persistence formats.
 - Android Keystore and iOS Keychain protect release or unwrapping of a short vault root secret; they do not encrypt media streams. [`security/KEY_SLOTS.md`](security/KEY_SLOTS.md) owns the slot behavior.
 - Media uses envelope encryption with random vault, security-collection, and per-object keys, derived as [`security/KEY_HIERARCHY.md`](security/KEY_HIERARCHY.md) specifies.
-- Public-shell persistence uses Room/DataStore; private persistence is Rust-owned.
+- Public Notes uses JSON, shell choices use platform preferences, and public camera photos use public files. Private persistence is Rust-owned.
 - Locking invalidates native handles independently of UI cleanup, under [`security/PLAINTEXT_LIFECYCLE.md`](security/PLAINTEXT_LIFECYCLE.md).
 
 Rejected alternatives include:
@@ -111,7 +111,7 @@ External actors and systems:
 - **Android/iOS operating system** — supplies sandboxing, file protection, media pickers, decoders, players, lifecycle, and authentication UX.
 - **Platform key service** — controls use or release of device-bound key material.
 - **Application filesystem** — stores public data, encrypted catalogs, encrypted objects, journals, and temporary ciphertext.
-- **Optional remote server** — future untrusted storage and synchronization relay; it must not require plaintext media, private metadata, or user root keys.
+- **Optional remote server** — self-hosted untrusted storage and synchronization relay; it must not require plaintext media, private metadata, or user root keys.
 - **Recovery medium** — optional high-entropy recovery secret or encrypted portable backup controlled by the user.
 
 ---
@@ -157,7 +157,7 @@ After successful release or unwrapping, `VaultRootSecret` exists in the Chur pro
 
 ### 5.4 Server boundary
 
-The future server is untrusted for confidentiality and content integrity. It MAY store and relay:
+The configured server is untrusted for confidentiality and content integrity. It MAY store and relay:
 
 - opaque object identifiers;
 - encrypted object containers;
@@ -170,7 +170,16 @@ It MUST NOT be required to process plaintext filenames, metadata, thumbnails, al
 
 ### 5.5 Public-shell boundary
 
-The public shell is a privacy surface, not the cryptographic boundary. Compromise of its Room database MUST NOT expose private-vault metadata or keys.
+The public shell is a privacy surface, not the cryptographic boundary. Compromise of its JSON store or public files MUST NOT expose private-vault metadata or keys.
+
+### 5.6 Incoming content and local processing
+
+[Documents and files](product/DOCUMENTS_AND_FILES.md) use existing encrypted objects. [Private notes](product/PRIVATE_NOTES.md) and [recognized content](product/CONTENT_SEARCH.md) stay in SQLCipher, with separate note and object search surfaces. They do not become public Notes.
+
+[System sharing](product/INCOMING_SHARES.md) supplies untrusted external inputs, not collection grants. Android retains transient URI sources in process memory. The iOS extension encrypts a bounded queue with an independent public receiving key; only the main app holds its device-local private key. This is the narrow platform cryptographic exception of [ADR-0064](adr/0064-receive-system-shares.md), not another implementation of the vault format. Import requires normal authentication and explicit confirmation in the selected session.
+
+[Selective archives](product/SELECTIVE_ENCRYPTED_EXPORT.md) and [external file encryption](product/EXTERNAL_FILE_ENCRYPTION.md) create independent temporary encrypted vaults and use CHURBAK1. The latter works without a local vault and never adds sources to its library. Its temporary root is not a session in the user's library.
+
 
 ---
 
@@ -178,7 +187,7 @@ The public shell is a privacy surface, not the cryptographic boundary. Compromis
 
 | Class | Examples | Allowed persistence |
 | --- | --- | --- |
-| Public | functional notes/calculator data, theme, locale | Room/DataStore, platform backup according to public policy |
+| Public | Notes, calculator UI state, public photos, shell choice | JSON, public files, platform preferences and backup according to public policy |
 | Opaque sensitive | random vault directory IDs, ciphertext sizes, opaque operation IDs | application-private storage; never treated as harmless telemetry |
 | Private plaintext | filenames, EXIF, GPS, album names, tags, decoded thumbnails | only inside an unlocked session; encrypted at rest |
 | Secret | root, collection, object, stream, recovery, identity private keys | Rust secret types or platform key services only |
@@ -217,7 +226,7 @@ The application is composed from three dependency graphs:
 
 ```text
 ApplicationGraph
-├── PublicGraph             long-lived; Koin classic DSL
+├── PublicGraph             long-lived; explicit construction
 ├── PlatformGraph           long-lived; expect/actual services
 └── SecureGraph             session-scoped; manual construction
 ```
@@ -288,7 +297,8 @@ Chur/
 │   ├── core-model/          the status vocabulary and the vector index
 │   ├── core-ffi/            the expect/actual C ABI adapter and its records
 │   ├── core-vault/          the session state machine and the lock policy
-│   ├── core-platform-keys/  the Keystore and Keychain slot prototypes
+│   ├── core-platform-keys/  the Keystore and Keychain slot adapters
+│   ├── core-sync/           ciphertext transport and sync orchestration
 │   ├── feature-import/      the platform half of the media pipeline
 │   └── feature-notes/       the public shell's own logic
 │
@@ -303,6 +313,7 @@ Chur/
 │       ├── chur-sync-protocol/
 │       ├── chur-ffi/
 │       ├── chur-jni/
+│       ├── chur-sync-server/
 │       └── chur-cli/
 │
 ├── docs/
@@ -326,26 +337,20 @@ Module boundaries MUST prevent feature modules from importing platform-native ke
 
 ### 10.1 Stack
 
-| Area | Planned choice |
+| Area | Current implementation |
 | --- | --- |
-| Language | Kotlin 2.4.20 / K2 |
-| UI | Compose Multiplatform 1.12.1 |
-| Navigation | Navigation 3 Multiplatform |
-| Architecture | AndroidX ViewModel with UDF/MVVM |
-| State | StateFlow / Flow |
-| Concurrency | Coroutines 1.11 |
-| Dependency injection | Koin 4.2.2 classic DSL plus manual secure graph |
-| Network | Ktor Client 3.6.0 |
-| Serialization | kotlinx.serialization 1.11 |
-| Public database | Room 3.0.1 KMP |
-| Settings | DataStore KMP |
-| Images | Coil 3.5 |
-| Time | `kotlin.time` and kotlinx-datetime 0.8 |
-| Logging | Kermit with privacy-safe facade |
-| Build | version catalog, convention plugins, KSP |
-| Apple interop | Objective-C framework interop initially; selective Swift Export |
+| Shared UI | Kotlin 2.4.20, Compose Multiplatform 1.12.1, Material 3 |
+| Navigation/state | shared route state, controllers, StateFlow, UDF |
+| Composition | explicit host construction; private owners bound to a session generation |
+| Network | Ktor 3.6.0, OkHttp/Darwin engines |
+| Public persistence | JSON Notes, platform preferences, public camera files |
+| Private persistence | Rust-owned SQLCipher, schema v10 |
+| Images | authenticated derivatives, platform decoders, bounded session cache |
+| Local OCR | bundled English/Russian Tesseract on Android; Vision on iOS |
+| Interop | hand-written C ABI 2.24, JNI/cinterop, direct Swift media reads |
+| Build | root Gradle scripts and version catalog; Cargo and Xcode host builds |
 
-Versions in this table are implementation targets, not protocol identifiers. Dependency upgrades MUST NOT silently change vault bytes or cryptographic behavior.
+Exact pins are in the manifests and lockfiles; [Development](../DEVELOPMENT.md) owns the commands. The interfaces below explain ownership; they are not a list of generated classes or dependencies. Room, Koin, Navigation 3, Coil, and Kermit are not used in the current build.
 
 ### 10.2 UDF contract
 
@@ -379,7 +384,7 @@ Navigation is split into independent graphs:
 RootNavigation
 ├── PublicShellGraph
 │   ├── Notes
-│   ├── Journal
+│   ├── Camera
 │   ├── Calculator
 │   └── PublicSettings
 │
@@ -420,45 +425,21 @@ Locking destroys the complete `VaultGraph` back stack.
 
 ### 10.4 Dependency injection
 
-Koin classic DSL MAY manage long-lived application and public-feature dependencies. The secure graph MUST use explicit construction:
+The Android `ChurHost` and iOS `Host` construct dependencies explicitly. `ChurController` drives `VaultRepository`; private controllers, readers, caches, and selections are bound to one session generation. Repository mutations check that generation under the repository mutex. Lock invalidates the generation, cancels work, closes the native session, and drops private UI state.
 
-```kotlin
-class SecureGraph private constructor(
-    val session: VaultSession,
-    val mediaSourceFactory: PrivateMediaSourceFactory,
-    val privateImageLoader: ImageLoader,
-    val repositories: PrivateRepositories,
-) : AutoCloseable {
-    override fun close() {
-        // stop clients, clear caches, close session facade
-    }
-}
-```
-
-This explicit graph makes session lifetime auditable and prevents accidental process-wide singletons retaining private state.
+A long-lived public owner MUST NOT retain a private session projection. There is no process-wide dependency container that owns vault keys.
 
 ### 10.5 Public persistence
 
-Room stores only genuinely public-shell data and non-secret orchestration state:
+`FileNoteStore` persists public Notes and its disclosure state as JSON. Platform preferences persist the shell choice. Camera saves confirmed JPEGs in `public/camera/`. Calculator input is transient. No Journal, calculator-history database, Room database, or DataStore is implemented.
 
-```text
-public.db
-├── notes
-├── calculator_history
-├── journal_entries
-├── onboarding_state
-└── opaque_background_jobs
-```
-
-DataStore stores only settings whose disclosure is acceptable, such as locale, theme, public-shell selection, and non-secret UI preferences.
-
-Neither Room nor DataStore may store private-vault item counts, names, timestamps, identifiers, key slots, unlock history, or secret triggers.
+These stores are public and participate in normal platform backup. They MUST NOT contain private item counts, names, timestamps, identifiers, key slots, unlock history, or search text. [Discreet Mode](product/DISCREET_MODE.md) owns the disclosure and backup rules.
 
 ---
 
 ## 11. Platform abstraction layer
 
-KMP declares narrow interfaces:
+KMP and platform adapters use narrow contracts. These signatures illustrate ownership; see `shared/core-ffi`, `shared/core-platform-keys`, `shared/feature-import`, and host composition for the concrete interfaces:
 
 ```kotlin
 interface PlatformRootKeyProtector {
@@ -520,7 +501,7 @@ Owns:
 - random key and nonce-prefix generation;
 - key wrapping primitives;
 - secret types and zeroization;
-- future HPKE and signature primitives behind explicit protocol versions.
+- HPKE and signature primitives behind explicit protocol versions.
 
 The crate SHOULD expose purpose-specific operations rather than a broad generic cryptography toolbox.
 
@@ -757,7 +738,7 @@ chur/
 │   └── <random-vault-dir-B>/
 │       └── ...
 └── public/
-    └── public Room database and public files
+    └── public Notes JSON and camera files
 ```
 
 The `registry/` directory is not illustrative: its entry naming, its cap of two entries, and the order in which candidates are enumerated before unlock are normative in [`format/VAULT_DESCRIPTOR_V1.md`](format/VAULT_DESCRIPTOR_V1.md) §11 ([`ADR-0030`](adr/0030-freeze-the-vault-registry-and-discovery.md)). The per-attempt password-derivation count is fixed at two in [`security/KEY_SLOTS.md`](security/KEY_SLOTS.md) §8 ([`ADR-0026`](adr/0026-argon2id-memory-floor-and-candidate-set.md)) and does not follow the entry count.
@@ -780,7 +761,7 @@ The proposed local suite is:
 | Randomness | OS CSPRNG through Rust `getrandom` |
 | Ordered object commitment | BLAKE3, authenticated inside the final commit |
 | Secret cleanup | zeroizing secret wrappers and bounded mutable buffers |
-| Future sharing | RFC 9180 HPKE with X25519/HKDF-SHA-256/ChaCha20-Poly1305 |
+| Collection sharing | RFC 9180 HPKE with X25519/HKDF-SHA-256/ChaCha20-Poly1305 |
 | Future identity | Ed25519 signatures |
 
 Production v1 MUST support exactly the approved mandatory local suite. Format fields permit future suites, but runtime policy MUST reject unapproved algorithms and prevent downgrade selection.
@@ -1266,12 +1247,12 @@ Rust secrets use zeroizing wrappers and MUST NOT implement unredacted `Debug`. J
 
 ## 25. Private image pipeline
 
-Private images use a separate Coil `ImageLoader` and cache namespace.
+Private images use a bounded session cache and platform decoders, with no shared public/private cache.
 
 ```text
 Compose image request
        ↓
-Private Coil fetcher
+Private authenticated derivative loader
        ↓
 Opaque object/asset handle
        ↓
@@ -1503,7 +1484,7 @@ Background import, thumbnail generation, or metadata operations that require pla
 
 ## 29. iOS integration
 
-The iOS target uses a thin SwiftUI/UIKit shell with Compose content and native platform adapters.
+The iOS target uses a thin UIKit shell with Compose content and native platform adapters.
 
 ### 29.1 Key protection
 
@@ -1559,7 +1540,7 @@ Required sequence:
 6. Zeroize session secrets in place.
 7. Invalidate all object readers and operation handles.
 8. Close the private catalog connection.
-9. Clear Rust, Coil, Compose, platform decoder, and feature caches.
+9. Clear Rust, Compose, platform decoder, private image, and feature caches.
 10. Destroy the private navigation graph and secure dependency graph.
 11. Return to the public shell.
 
@@ -1596,7 +1577,7 @@ Rules:
 
 ## 32. Logging and observability
 
-Kermit is wrapped behind a privacy-safe logging facade. Rust uses an equivalent redacted event facade.
+Diagnostics MUST use privacy-safe event codes and redacted status values. The current dependency graph includes no Kermit or telemetry SDK; a future logger remains subject to the rules below.
 
 Allowed events resemble:
 
@@ -1725,7 +1706,7 @@ Global deduplication through plaintext hashes is forbidden. Allowed options:
 
 ---
 
-## 35. Future sharing architecture
+## 35. Collection sharing architecture
 
 Public-key cryptography wraps security-collection keys, not media files.
 
@@ -2172,7 +2153,7 @@ functional public shell
     + Keystore/Keychain device protection
     + bounded random-access playback
     + explicit integrity and migration states
-    + future ciphertext-only sync and collection sharing
+    + ciphertext-only sync and collection sharing
 ```
 
 Local-first implementation, stable test vectors, recovery testing, fuzzing, and an independent review are prerequisites for treating Chur as a production vault.

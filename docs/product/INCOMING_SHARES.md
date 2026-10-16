@@ -1,5 +1,7 @@
 # Share to Chur
 
+> **Status:** Accepted implementation contract; security release gates remain separate
+
 Use the source application's **Share** command and select **Chur**. Chur receives files, photos, video, audio, plain text, and URLs. A URL is stored as text; Chur does not fetch its address. Shared text becomes a private `shared-text.txt` file, separate from public Notes and private notes.
 
 ## Import

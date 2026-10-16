@@ -2,10 +2,10 @@
 
 > **Status:** Proposed platform architecture for implementation  
 > **Audience:** iOS, KMP, Rust, security, QA, and release-engineering contributors  
-> **Last updated:** 2026-08-26  
+> **Last updated:** 2026-10-16\
 > **Related:** [Project README](../README.md) · [System architecture](ARCHITECTURE.md) · [Android architecture](ANDROID.md)
 
-Chur is a local-first private media archive with a functional public shell and a Rust-owned encrypted vault. This document defines the iOS-specific implementation boundary: the SwiftUI/UIKit host, Kotlin/Native integration, Keychain authorization, Data Protection, Photos and Files import, AVFoundation playback, scene locking, discreet presentation, background execution, native packaging, testing, App Store review, and release requirements.
+Chur is a local-first private media archive with a functional public shell and a Rust-owned encrypted vault. This document defines the iOS-specific implementation boundary: the UIKit host, Kotlin/Native integration, Keychain authorization, Data Protection, Photos and Files import, AVFoundation playback, scene locking, discreet presentation, background execution, native packaging, testing, App Store review, and release requirements.
 
 The system architecture remains authoritative for cryptographic formats, key hierarchy, object containers, integrity, private catalog ownership, migrations, real/decoy separation, and synchronization semantics. Swift, Objective-C, UIKit, SwiftUI, and Kotlin/Native MUST NOT independently reimplement those rules.
 
@@ -28,7 +28,7 @@ Byte-exact cryptographic behavior belongs to dedicated Rust format specification
 The iOS target owns:
 
 - application and scene startup;
-- SwiftUI/UIKit hosting of Compose Multiplatform content;
+- UIKit hosting of Compose Multiplatform content;
 - lifecycle, scene, protected-data, and capture-state signals;
 - Keychain storage and `SecAccessControl` policy;
 - LocalAuthentication authorization UX;
@@ -55,24 +55,24 @@ The iOS target MUST NOT own:
 
 ---
 
-## 3. Planned iOS baseline
+## 3. iOS baseline
 
-| Area | Planned choice |
+| Area | Current implementation |
 | --- | --- |
 | Bundle identifier | `dev.po4yka.chur` |
 | Primary platform target | iOS 26 design baseline; deployment target iOS 18.0, frozen by [ADR-0017](adr/0017-freeze-the-supported-device-set.md) |
-| Native language | Swift 6.2 target baseline |
+| Native language | Swift toolchain from Xcode 27; source settings in `project.yml` |
 | Shared language | Kotlin 2.4.20 / K2 |
 | Shared UI | Compose Multiplatform 1.12.1 |
-| Host UI | Thin SwiftUI/UIKit shell with Compose content |
-| Navigation/state | Shared Navigation 3, AndroidX ViewModel, StateFlow, Flow, UDF/MVVM |
-| Public persistence | Room 3.0.1 KMP and DataStore KMP |
-| Images | Coil 3.5 with a separate private loader |
+| Host UI | UIKit app and scene delegates, Compose content |
+| Navigation/state | shared route state, controllers, StateFlow, UDF |
+| Public persistence | JSON Notes, platform shell preferences, public camera files |
+| Images | authenticated derivatives, platform decoders, bounded session cache |
 | Media | PhotosUI, AVFoundation, system image/media frameworks |
 | Key protection | Keychain, LocalAuthentication, Data Protection |
 | Background work | Background URLSession and BGTaskScheduler for policy-approved ciphertext work |
-| Native core | Rust static library/XCFramework through isolated C interop |
-| Apple interop | Objective-C framework interop initially; selective Swift Export where stable and beneficial |
+| Native core | one Rust static library linked with the Kotlin framework and Swift C calls |
+| Apple interop | Kotlin Objective-C framework export and C interop |
 
 Version numbers are implementation targets rather than protocol identifiers. Upgrading Swift, Xcode, Kotlin, Compose, AVFoundation, or Rust dependencies MUST NOT silently change vault bytes or security policy.
 
@@ -112,7 +112,7 @@ Capability detection informs UX. It MUST NOT change the canonical vault format o
 ```text
 ┌──────────────────────────────────────────────────────────────┐
 │ iOS process                                                  │
-│ SwiftUI App · scene host · UIKit platform services           │
+│ UIKit app · scene host · native platform services           │
 ├──────────────────────────────────────────────────────────────┤
 │ Compose Multiplatform content                                │
 │ public shell · session gate · private vault UI               │
@@ -135,42 +135,23 @@ The iOS application is a native host, not a second application architecture. Sha
 
 ---
 
-## 5. Planned target structure
+## 5. Target structure
 
 ```text
-apps/iosApp/
-├── ChurApp.swift
-├── scene and lifecycle bridge
-├── Compose host
-├── platform composition root
-├── entitlements and privacy manifest
-├── assets and alternate icons
-└── release configuration
-
-shared/core-platform/
-├── expect platform contracts
-└── platform-neutral models
-
-shared/core-platform-ios/
-├── KeychainRootKeyProtector
-├── IOSUserAuthenticator
-├── IOSMediaPicker
-├── IOSReadHandleFactory
-├── IOSExportDestination
-├── IOSLifecycleSignals
-├── IOSScenePrivacyController
-└── IOSBackgroundScheduler
-
-shared/core-media/
-├── private image-loader contracts
-├── player coordination
-└── opaque media-source models
-
-ios/native/
-├── AVAsset resource-loader adapter
-├── C-ABI/module-map integration
-└── bounded native buffer helpers
+apps/iosApp/Chur.xcodeproj checked-in Xcode host and embedded ChurShare target
+apps/iosApp/project.yml   XcodeGen source for the project
+apps/iosApp/Sources/      UIKit host, scratch, file/album export, incoming queue
+apps/iosApp/ShareExtension/ NSItemProvider receiving UI and encrypted staging
+apps/iosApp/Tests/        Swift package host-helper tests
+shared/app/              shared UI, iOS routes, document/player UI adapters
+shared/feature-import/   platform codec/OCR and descriptor contracts
+shared/core-platform-keys/ Keychain and authentication adapters
+shared/core-ffi/          Kotlin/Native C interop and NativeVault adapter
+shared/core-vault/        private repository and session state
+shared/core-sync/         Ktor Darwin transport
 ```
+
+The platform adapters are source sets in these modules, not separate `core-platform-ios/`, `core-media/`, or `ios/native/` directories.
 
 Feature modules MUST depend on shared interfaces. They MUST NOT import Security, LocalAuthentication, PhotosUI, AVFoundation, or Rust C symbols directly.
 
@@ -180,9 +161,9 @@ A narrowly scoped AVFoundation data-plane adapter MAY call the stable Rust C ABI
 
 ## 6. App and scene startup
 
-### 6.1 SwiftUI application shell
+### 6.1 UIKit application shell
 
-The native `App` entry point SHOULD:
+`AppDelegate` and `SceneDelegate` SHOULD:
 
 1. install the platform composition root;
 2. create the Compose host;
@@ -196,12 +177,7 @@ It MUST NOT unlock a vault, open the private catalog, derive password keys, or r
 
 ### 6.2 Compose host
 
-The preferred host may be either:
-
-- a SwiftUI representable wrapping a Compose `UIViewController`; or
-- a UIKit root controller embedded by the SwiftUI app shell.
-
-The selected approach requires an ADR covering lifecycle propagation, keyboard/focus behavior, state restoration, accessibility, presentation of native sheets, and scene privacy.
+The checked-in UIKit scene delegate installs the Compose `ChurViewController` as the window's root controller. Native picker, export, camera, and privacy adapters bind through the host. There is no SwiftUI application entry point. Lifecycle, focus, restoration, accessibility, native sheets, and scene privacy remain part of acceptance.
 
 ### 6.3 Scene restoration
 
@@ -229,10 +205,10 @@ Every process launch begins logically in `PublicLocked` until a new authenticate
 
 ```text
 IOSApplicationGraph
-├── PublicGraph                    Koin classic DSL
+├── PublicGraph                    explicit construction
 │   ├── public repositories
-│   ├── Room
-│   ├── DataStore
+│   ├── public Notes JSON and camera files
+│   ├── platform shell preferences
 │   ├── public navigation
 │   └── non-sensitive schedulers
 │
@@ -253,7 +229,7 @@ IOSApplicationGraph
     └── session caches
 ```
 
-The secure graph exists only for one authenticated session generation. Swift property wrappers, environment objects, Koin scopes, and singleton containers MUST NOT retain secret-bearing session objects after lock.
+The secure graph exists only for one authenticated session generation. Swift properties, shared owners, and singleton containers MUST NOT retain secret-bearing session objects after lock.
 
 ---
 
@@ -678,14 +654,14 @@ The first release does not need to bundle every HEIF, RAW, ProRes, HDR, or spati
 
 ## 18. Private image pipeline
 
-Compose private images use a dedicated Coil `ImageLoader` and iOS-specific decoding path where required.
+Compose private images use a bounded session cache and iOS decoding adapters where required.
 
 ```text
 Compose request
     ↓
 opaque session/object model
     ↓
-private Coil fetcher
+private authenticated derivative loader
     ↓
 Rust authenticated thumbnail or preview reader
     ↓
@@ -705,7 +681,7 @@ Requirements:
 - all private images and decoded surfaces are invalidated during lock;
 - the decoder does not receive the encrypted-object path as an ordinary image file.
 
-Any native image cache created outside Coil must register with the secure graph and participate in lock cleanup.
+Every native image cache must participate in the same session generation and lock cleanup.
 
 ---
 
@@ -772,7 +748,7 @@ Export destinations include:
 - user-selected Files destination;
 - save-to-Photos flow;
 - `UIActivityViewController` through protected scratch;
-- future encrypted backup.
+- encrypted full backup and selective archives.
 
 ### 20.1 Direct destination export
 
@@ -1045,7 +1021,7 @@ Public-shell widgets MAY be possible later. Private-vault widgets, search intent
 
 ---
 
-## 27. Future networking and sync
+## 27. Networking and sync
 
 Ktor handles shared protocol transport. Native iOS networking provides platform background capabilities where needed.
 
@@ -1437,13 +1413,13 @@ The forbidden-claim list and the shared store answers are owned by [`product/DIS
 
 ### Phase A — shell and native handshake
 
-- SwiftUI/UIKit app skeleton;
+- UIKit app skeleton;
 - Compose host;
 - public shell;
 - platform contracts;
 - Kotlin/Rust API handshake;
 - locked-only lifecycle and scene cover;
-- public Room/DataStore persistence.
+- public JSON/preferences persistence.
 
 ### Phase B — recoverable local unlock
 
@@ -1459,7 +1435,7 @@ The forbidden-claim list and the shared store answers are owned by [`product/DIS
 - PhotosPicker import;
 - file-representation bridge;
 - encrypted thumbnails;
-- private Coil loader;
+- private authenticated image loader;
 - library and viewer;
 - verified export;
 - atomic lock and cache clearing.
@@ -1565,7 +1541,7 @@ Before an iOS release candidate:
 
 ## 42. Summary
 
-The iOS implementation is a thin, security-sensitive SwiftUI/UIKit host around shared KMP/CMP application code and a Rust-owned vault runtime.
+The iOS implementation is a thin, security-sensitive UIKit host around shared KMP/CMP application code and a Rust-owned vault runtime.
 
 Its central obligations are:
 

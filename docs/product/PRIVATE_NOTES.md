@@ -1,6 +1,6 @@
 # Private Notes
 
-> **Status:** Implemented local product contract; device and release gates remain separate
+> **Status:** Accepted local product contract; device and release gates remain separate
 
 ## Scope
 

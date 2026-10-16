@@ -16,9 +16,9 @@ First launch opens the public shell. It does not open a vault flow.
 
 - no vault exists and none is created until the user asks for one;
 - the public shell is usable immediately, with no account, no permission prompt, and no vault-key generation;
-- v1 ships one shell, Notes, and selects it without asking. A release that ships a second shell adds the choice here and in [`../product/DISCREET_MODE.md`](../product/DISCREET_MODE.md);
+- Notes is the default. Public Settings offers Notes, Calculator, and Camera; the public preference survives restart and is shared by all vault identities. Unknown values fall back to Notes. See [`../product/DISCREET_MODE.md`](../product/DISCREET_MODE.md);
 - the public-shell disclosure required by [`../product/DISCREET_MODE.md`](../product/DISCREET_MODE.md) is shown the first time the user writes public-shell content, not during vault creation;
-- the route to vault creation is a visible settings entry. A hidden gesture is configured later, from an unlocked session, and never replaces the visible route.
+- the route to vault creation is a visible settings entry. No hidden entry gesture is implemented. A future gesture must preserve the visible route.
 
 After a vault exists, its owner may opt in to a whole-app gate. This choice is made inside an unlocked vault. At the next launch and after backgrounding, the app accepts the vault password or PIN, recovery phrase, or enrolled device factor, then closes the temporary vault session before it shows the public shell. The default remains the public shell without this gate.
 

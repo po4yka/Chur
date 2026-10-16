@@ -1,5 +1,7 @@
 # Security correction evidence — 2026-10-16
 
+> **Status:** Accepted historical evidence record; not release approval
+
 Scope: all 15 findings in the 2026-10-16 audit of Chur, plus defects reproduced while testing the corrections. All media in these tests is synthetic. The application has no active clients. The audit corrections change the current schema and wire formats directly; no migration or new format version is required for them. Existing user-owned schema and ABI changes are preserved.
 
 ## Published corrections

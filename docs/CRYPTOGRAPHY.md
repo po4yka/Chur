@@ -2,16 +2,16 @@
 
 > **Status:** Proposed normative cryptographic design  
 > **Audience:** Rust, mobile-platform, application, security, protocol, and audit contributors  
-> **Last updated:** 2026-08-26  
+> **Last updated:** 2026-10-16\
 > **Related:** [README](../README.md) · [Architecture](ARCHITECTURE.md)
 
-Chur is a local-first encrypted media vault for Android and iOS. This document defines the cryptographic model that supports the product and system architecture: key ownership, key derivation, key wrapping, password processing, media encryption, integrity verification, platform-protected unlock, recovery, future synchronization, and collection sharing.
+Chur is a local-first encrypted media vault for Android and iOS. This document defines the cryptographic model that supports the product and system architecture: key ownership, key derivation, key wrapping, password processing, media encryption, integrity verification, platform-protected unlock, recovery, synchronization, and collection sharing.
 
 The central rule is:
 
 > **Rust owns the private cryptographic lifecycle. Android Keystore and iOS Keychain gate access to short root-key material. Kotlin, Compose, SwiftUI, UIKit, Room, DataStore, media players, and network clients never become independent owners of the vault protocol.**
 
-Chur is currently in the architecture and protocol-design stage. The design has not yet received an independent security audit and MUST NOT be represented as production-proven cryptography. Byte-exact formats, constants, algorithm identifiers, and stable test vectors MUST be finalized before the first production vault is created.
+Chur has a pre-release implementation. Versioned formats, catalog extensions through v10, and native ABI 2.24 exist. The design has not received an independent security audit and MUST NOT be represented as production-proven cryptography. [Implementation status](IMPLEMENTATION_STATUS.md) and [release gates](assurance/RELEASE_GATES.md) distinguish code and local validation from approval.
 
 ---
 
@@ -21,7 +21,7 @@ The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT**, 
 
 Individual statements are classified as **Decision**, **Invariant**, **Proposal**, **Deferred**, or **Non-goal**, defined once in [`README.md`](README.md#statement-classification). A **Decision** here is fixed unless replaced by an ADR and a migration plan, and **Deferred** means excluded from the initial local vault. The status of this document as a whole is in its header and uses the document-status vocabulary of the same file.
 
-This file is normative for cryptographic responsibilities and security properties. It is not yet a byte-level interoperability specification. Dedicated format specifications will define exact canonical encodings for:
+This file is normative for cryptographic responsibilities and security properties. It is not yet a byte-level interoperability specification. Dedicated [format specifications](README.md#formats) define the versioned encodings for:
 
 ```text
 VaultDescriptorV1
@@ -70,6 +70,10 @@ This document does not define:
 - cryptographically undetectable hidden volumes.
 
 ---
+
+### Platform ingress exception
+
+[ADR-0064](adr/0064-receive-system-shares.md) defines a separate iOS temporary receiving transport. The main app generates an independent RSA-2048 Keychain key; the extension receives only its public key. Each item has a fresh AES-256-GCM key wrapped with RSA-OAEP-SHA256, authenticated encrypted metadata, and ordered authenticated chunks. This transport does not define vault bytes, use a vault root, create a new vault suite, or change the collection-grant HPKE suite. The app authenticates the whole envelope before native import. See [the host contract](../apps/iosApp/README.md#incoming-system-shares) for nonces, AAD, limits, protection classes, and the trusted extension assumption.
 
 ## 3. Cryptographic ownership boundary
 
@@ -167,8 +171,8 @@ The initial local-vault profile is intentionally narrow.
 | Ordered ciphertext commitment | BLAKE3, authenticated by an AEAD-protected final commit | Proposed |
 | Android platform root wrapping | Android Keystore AES-256-GCM | Accepted |
 | iOS device unlock secret | Keychain-protected random secret with access control | Accepted |
-| Future recipient encryption | RFC 9180 HPKE: X25519/HKDF-SHA-256/ChaCha20-Poly1305 | Accepted for future sharing |
-| Device operation signatures | Ed25519 | Accepted for sync and future sharing |
+| Collection recipient encryption | RFC 9180 HPKE: X25519/HKDF-SHA-256/ChaCha20-Poly1305 | Implemented; independent sharing audit remains open |
+| Device operation signatures | Ed25519 | Implemented for sync and collection sharing |
 | Optional corporate/FIPS-oriented local suite | AES-256-GCM | Deferred |
 | Optional nonce-misuse-resistant suite | AES-256-GCM-SIV | Deferred |
 | Optional hybrid post-quantum recipient | X25519 plus ML-KEM profile | Deferred |
@@ -474,7 +478,7 @@ At minimum:
 | `SearchKey` | protects private search structures and keyed fingerprints |
 | `IdentifierKey` | optional keyed opaque-identifier derivations where required |
 | `PrivateSettingsKey` | protects private settings outside the catalog if any exist |
-| `IdentityWrapKey` | wraps future device/user identity private keys |
+| `IdentityWrapKey` | wraps device identity private keys |
 | `BackupManifestKey` | authenticates a Chur-native backup package manifest |
 
 A derived root-domain key MUST be scoped to one vault ID through its HKDF context.
@@ -1389,7 +1393,7 @@ Directory sharding may use bytes of a random object identifier. Object IDs MUST 
 
 The private catalog is owned by Rust.
 
-Preferred direction, pending validation:
+Implemented under [ADR-0038](adr/0038-adopt-sqlcipher-as-the-v1-catalog-engine.md):
 
 ```text
 Rust-owned SQLCipher database
@@ -1417,7 +1421,9 @@ If SQLCipher size, cross-compilation, or performance is unacceptable, the altern
 
 Search indexes, OCR indexes, face embeddings, and semantic embeddings are private.
 
-The v1 text search index is stored inside the encrypted catalog, as the FTS5 table of [`format/CATALOG_SCHEMA_V1.md`](format/CATALOG_SCHEMA_V1.md) §16.4, and derives no key of its own. OCR, face, and semantic-embedding indexes, which are not v1, are stored as encrypted index segments under `SearchKey`-derived subkeys.
+The metadata FTS5 index is defined by [`format/CATALOG_SCHEMA_V1.md`](format/CATALOG_SCHEMA_V1.md) §16.4. [Catalog v10](format/CATALOG_SCHEMA_V10.md) adds recognized document/image text and combined object FTS inside the same SQLCipher database under `CatalogDatabaseKey`; it derives no separate search or OCR key. [Private notes](format/CATALOG_SCHEMA_V9.md) have a separate title/body FTS table. No index text enters public storage or sync operations. Full backup preserves it; selective archives omit recognized text and rebuild only included metadata.
+
+Face and semantic embeddings remain deferred. The `SearchKey` and object `OcrKey` labels are reserved domain definitions, not the current content-index storage mechanism. A future encrypted-segment design requires a separate approved contract.
 
 Global deduplication through an unkeyed plaintext hash is forbidden because it reveals equality and allows confirmation attacks.
 
@@ -1579,7 +1585,7 @@ In synchronized/shared systems, Chur cannot force another authorized device or r
 
 ## 49. Native backup package
 
-A future Chur-native portable backup may contain:
+The implemented native full-backup path carries the following encrypted state. Its physical SQLCipher snapshot is a documented divergence from the canonical catalog-export requirement; see [Backup format §2](format/BACKUP_FORMAT_V1.md#2-package-model) and [release gates](assurance/RELEASE_GATES.md). This list is an inventory, not a new record layout:
 
 ```text
 BackupManifestV1
@@ -1635,7 +1641,7 @@ The outer framing and its detection are defined in [`format/BACKUP_FORMAT_V1.md`
 
 ## 51. Ciphertext-only synchronization
 
-The future server stores opaque encrypted data.
+The self-hosted reference server stores opaque encrypted data.
 
 It MAY observe:
 
@@ -1744,7 +1750,7 @@ Base-mode HPKE alone does not authenticate the sender. The Ed25519 signature pro
 
 ## 54. Identity and verification
 
-Future sharing identities require separate key purposes:
+Implemented sharing identities use separate key purposes:
 
 ```text
 X25519 key pair
@@ -2509,7 +2515,7 @@ The resulting system provides:
 - platform-backed daily unlock;
 - recoverable root-key envelopes;
 - independent real and decoy vault identities;
-- future ciphertext-only backup, sync, and collection sharing;
+- ciphertext-only backup, sync, and collection sharing, subject to release gates;
 - one portable Rust cryptographic implementation across Android, iOS, and CLI.
 
 The design remains provisional until canonical encodings, parameters, vectors, fault tests, and an independent audit are complete.

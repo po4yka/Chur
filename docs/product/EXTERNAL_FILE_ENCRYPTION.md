@@ -1,6 +1,6 @@
 # Encrypt external files
 
-> **Status:** Implemented product contract; physical-device and release acceptance remain separate
+> **Status:** Accepted product contract; physical-device and release acceptance remain separate
 
 Open **Public Settings → Encrypt external files**, or **Vault → Settings → Backup → Encrypt external files**. This tool works before a vault is created, while it is locked, and from an unlocked vault. It does not add files to the library or change the current vault's credentials, objects, albums, notes, or synchronization state.
 

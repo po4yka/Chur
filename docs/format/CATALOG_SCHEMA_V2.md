@@ -1,6 +1,6 @@
 # Private Catalog Schema v2
 
-> **Status:** Normative Phase 3 schema extension
+> **Status:** Accepted normative Phase 3 schema extension
 
 Catalog v2 is catalog v1 plus the durable encrypted-sync state below. Every v1 table, constraint, index, transaction boundary, parser rule, and limit remains unchanged unless this document says otherwise. Raw SQLCipher pages are never a sync format.
 

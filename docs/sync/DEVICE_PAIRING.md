@@ -1,5 +1,7 @@
 # Own-device pairing
 
+> **Status:** Accepted implementation contract; security release gates remain separate
+
 A restored sync backup has a recovery-only identity. It cannot enroll itself as an ordinary signer. An active ordinary device approves a fresh identity through this exchange. Root and device private keys remain in native code and the encrypted catalog.
 
 ## Request and approval

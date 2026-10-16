@@ -1,6 +1,6 @@
 # Pixelate gallery evidence: 2026-10-16
 
-> **Status:** Implemented locally. The authorized lock alignment is applied. All requested Gradle commands passed in the isolated validation checkout. The final full Android run passed 69 tests with no failures, errors, or skips. TalkBack smoke is complete within the limits below. iOS VoiceOver activation, app-switcher appearance, valid iOS frame measurements, and physical-device acceptance remain unverified.
+> **Status:** Accepted historical evidence record. Implemented locally. The authorized lock alignment is applied. All requested Gradle commands passed in the isolated validation checkout. The final full Android run passed 69 tests with no failures, errors, or skips. TalkBack smoke is complete within the limits below. iOS VoiceOver activation, app-switcher appearance, valid iOS frame measurements, and physical-device acceptance remain unverified.
 
 The implementation contract and source hash are in [`../interop/MOSAIC.md`](../interop/MOSAIC.md).
 No commit or publication is part of this change.

@@ -1,6 +1,8 @@
 # Phase 0 Evidence
 
-> **Status:** Evidence record for the Gate 0 and Gate 1 items of [`RELEASE_GATES.md`](RELEASE_GATES.md). It records what is true; it approves nothing.
+> **Status:** Accepted historical evidence record for the Gate 0 and Gate 1 items of [`RELEASE_GATES.md`](RELEASE_GATES.md). It records what is true; it approves nothing.
+
+This is a phase-closeout snapshot. Counts, versions, and limitations below describe that phase, not the current checkout. See [Implementation status](../IMPLEMENTATION_STATUS.md) for current features and open acceptance; this record approves no release gate.
 
 [`RELEASE_GATES.md`](RELEASE_GATES.md) requires every gated release to record its evidence and, explicitly, "which of its items had no enforcing job". This document is that record for Phase 0. The two approvals Phase 0 still owes — the release gates and the review scope — are decisions for the repository maintainer, and this exists so that decision is a reading rather than an investigation.
 
@@ -10,7 +12,7 @@ Regenerate every number below with the commands each row names. Nothing here is 
 
 | Item | Value |
 | --- | --- |
-| Source commit | the commit this file is read at; `git rev-parse HEAD` |
+| Source commit | the phase snapshot in this file's Git history; not the current HEAD |
 | Canonical encoding profile | `0x0001` |
 | Container, descriptor, envelope, slot, backup, catalog versions | `0x0001` each, [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15.2 |
 | Suite | `0x0001`; `0x0002` allocated for the Android Keystore wrap only |

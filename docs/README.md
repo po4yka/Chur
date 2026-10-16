@@ -39,7 +39,7 @@ This is the project's only document-status vocabulary. Every document under `doc
 
 Explanatory prose may follow the label, but the label itself comes from this list.
 
-Byte-exact v1 documents remain proposed until constants, encoding, vectors, and cross-platform implementations are frozen.
+A Proposed label does not mean that no code exists. It records review status. A current implementation inventory must state what was checked and keep release approval separate. Historical evidence retains its measured versions and counts. Generated fixture README files retain generator-owned headers; change their generator, not only the output.
 
 ## Statement classification
 
@@ -55,23 +55,34 @@ Document status describes a whole document. Individual statements inside a docum
 
 ## Root documents
 
-- [`README.md`](../README.md) — product overview and explanatory material; rank 6.
+- [`README.md`](../README.md) — product overview and explanatory material; rank 7.
 - [`ROADMAP.md`](../ROADMAP.md) — owns the phase definitions, their scope, exclusions, and exit criteria; `ARCHITECTURE.md` §44 and the root README point at it.
 - [`DESIGN.md`](../DESIGN.md) — visual and interaction contracts; rank 3 for presentation only. Privacy-sensitive transitions, lock behavior, and error semantics are owned by [`product/DISCREET_MODE.md`](product/DISCREET_MODE.md), [`security/PLAINTEXT_LIFECYCLE.md`](security/PLAINTEXT_LIFECYCLE.md), and [`ERROR_MODEL.md`](ERROR_MODEL.md).
 - [`CONTRIBUTING.md`](../CONTRIBUTING.md) — contribution process, reading order, and format-change requirements.
 - [`DEVELOPMENT.md`](../DEVELOPMENT.md) — development environment, pinned toolchains, and build workflow.
 - [`SECURITY.md`](../SECURITY.md) — vulnerability reporting and supported versions.
 
+## Current implementation
+
+- [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) — available features, transfer boundaries, current versions, observed evidence, and remaining acceptance.
+- Dated reports and phase evidence are historical snapshots. They do not override current format extensions or approve a release gate.
+
 ## Core documents
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — system components, trust boundaries, runtime states, ownership, and implementation constraints.
-- [`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md) — key hierarchy, primitives, wrapping, media encryption, integrity, recovery, and future sharing.
+- [`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md) — key hierarchy, primitives, wrapping, media encryption, integrity, recovery, and collection sharing.
 - [`ANDROID.md`](ANDROID.md) — complete Android platform architecture.
 - [`IOS.md`](IOS.md) — complete iOS platform architecture.
 - [`ERROR_MODEL.md`](ERROR_MODEL.md) — stable errors, redaction, retry behavior, and layer mappings.
 - [`DEPENDENCY_POLICY.md`](DEPENDENCY_POLICY.md) — dependency, supply-chain, native-code, license, and update requirements.
 
 ## Product
+
+- [`product/DOCUMENTS_AND_FILES.md`](product/DOCUMENTS_AND_FILES.md) — opaque files, text/PDF previews, library actions, export, and transfer.
+- [`product/RECENTLY_ADDED.md`](product/RECENTLY_ADDED.md) — import-time ordering, pagination, filters, and session lifetime.
+- [`product/CONTENT_SEARCH.md`](product/CONTENT_SEARCH.md) — local text extraction, English/Russian OCR, encrypted index, retries, and limits.
+- [`product/EXTERNAL_FILE_ENCRYPTION.md`](product/EXTERNAL_FILE_ENCRYPTION.md) — external sources to independent CHURBAK1 archives without library import.
+- [`product/INCOMING_SHARES.md`](product/INCOMING_SHARES.md) — Android share intents, iOS encrypted ingress queue, and confirmed vault import.
 
 - [`product/DISCREET_MODE.md`](product/DISCREET_MODE.md) — public shell, launcher, notifications, recents, external surfaces, and product claims.
 - [`product/AUDIO_ARTWORK.md`](product/AUDIO_ARTWORK.md) — embedded audio covers, bounded derivation, encrypted storage, playback, and concealment.
@@ -105,7 +116,11 @@ Document status describes a whole document. Individual statements inside a docum
 - [`format/CATALOG_SCHEMA_V3.md`](format/CATALOG_SCHEMA_V3.md)
 - [`format/CATALOG_SCHEMA_V4.md`](format/CATALOG_SCHEMA_V4.md)
 - [`format/CATALOG_SCHEMA_V5.md`](format/CATALOG_SCHEMA_V5.md)
+- [`format/CATALOG_SCHEMA_V6.md`](format/CATALOG_SCHEMA_V6.md) — accepted sharing-object indexes.
+- [`format/CATALOG_SCHEMA_V7.md`](format/CATALOG_SCHEMA_V7.md) — album hierarchy and manual order.
+- [`format/CATALOG_SCHEMA_V8.md`](format/CATALOG_SCHEMA_V8.md) — recoverable Trash.
 - [`format/CATALOG_SCHEMA_V9.md`](format/CATALOG_SCHEMA_V9.md) — local private notes.
+- [`format/CATALOG_SCHEMA_V10.md`](format/CATALOG_SCHEMA_V10.md) — local encrypted content index; current physical schema.
 - [`format/BACKUP_FORMAT_V1.md`](format/BACKUP_FORMAT_V1.md)
 - [`format/TEST_VECTORS.md`](format/TEST_VECTORS.md)
 
@@ -132,8 +147,16 @@ The complete platform documents are [`ANDROID.md`](ANDROID.md) and [`IOS.md`](IO
 - [`assurance/EVIDENCE_PHASE_3.md`](assurance/EVIDENCE_PHASE_3.md) — encrypted synchronization evidence and unenforced Gate 5 items
 - [`assurance/EVIDENCE_PHASE_4.md`](assurance/EVIDENCE_PHASE_4.md) — collection-sharing evidence and unenforced Gate 6 items
 - [`assurance/SECURITY_REVIEW_SCOPE.md`](assurance/SECURITY_REVIEW_SCOPE.md)
+- [`assurance/ANDROID_RELEASE_BUILD.md`](assurance/ANDROID_RELEASE_BUILD.md) — release artifact inspection record.
+- [`assurance/ANDROID_SECURITY_EMULATOR_2026-09-26.md`](assurance/ANDROID_SECURITY_EMULATOR_2026-09-26.md) — dated emulator security inspection.
+- [`assurance/PIXELATE_GALLERY_2026-10-16.md`](assurance/PIXELATE_GALLERY_2026-10-16.md) — dated gallery privacy and accessibility evidence.
+- [`assurance/SECURITY_FIXES_2026-10-16.md`](assurance/SECURITY_FIXES_2026-10-16.md) — dated security correction evidence.
 
 ## Sync and sharing
+
+- [`sync/SERVER_OPERATOR.md`](sync/SERVER_OPERATOR.md) — reference self-hosted server deployment.
+- [`sync/DEVICE_PAIRING.md`](sync/DEVICE_PAIRING.md) — device enrollment and pairing.
+- [`sync/OBJECT_KEY_GRANTS.md`](sync/OBJECT_KEY_GRANTS.md) — current object-key grant protocol.
 
 - [`sync/SERVER_TRUST_MODEL.md`](sync/SERVER_TRUST_MODEL.md)
 - [`sync/DEVICE_IDENTITY.md`](sync/DEVICE_IDENTITY.md)

@@ -1,5 +1,7 @@
 # Android security evidence: API 37 emulator
 
+> **Status:** Accepted historical evidence record; not release approval
+
 **Date:** 2026-09-26
 
 **Starting revision:** `ac0078226842b27fa36fba1d4fa506ddbb9f4e3b`

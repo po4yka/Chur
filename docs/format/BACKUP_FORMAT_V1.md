@@ -14,6 +14,12 @@ The backup format packages a complete or incremental encrypted vault for user-co
 - support streaming creation and restore;
 - fail safely under truncation, reordering, or stale manifests.
 
+### Current implementation and portability gap
+
+The code implements full native CHURBAK1 creation and restore. Selective archives and external-file encryption create a new independent vault and then use that same full-package path. Incremental backup and `age` outer wrapping remain proposed, not supported app features.
+
+The backup path checkpoints the catalog, then `chur-media::backup::CatalogSnapshot::create` copies the encrypted physical SQLCipher database for the `CatalogExport` record. This differs from the canonical catalog-export requirement in [catalog v1](CATALOG_SCHEMA_V1.md) §15 and [ADR-0038](../adr/0038-adopt-sqlcipher-as-the-v1-catalog-engine.md). The proposed package model below still names the required portable representation. Same-build round trips do not prove compatibility across SQLCipher builds or platforms. This documentation records the divergence; it does not approve physical pages as a portable format. An approved format/compatibility decision and cross-build restore evidence are required before the portable-backup release gate can close.
+
 ## 2. Package model
 
 ```text

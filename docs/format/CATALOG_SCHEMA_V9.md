@@ -1,5 +1,7 @@
 # Catalog schema v9: local private notes
 
+> **Status:** Accepted implementation contract; security release gates remain separate
+
 Version `0x0009` adds local editable notes inside the existing SQLCipher database. It does not add a media class, object container, sync operation, or sharing grant.
 
 ## Tables

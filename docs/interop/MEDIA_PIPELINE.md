@@ -94,7 +94,7 @@ Original bytes are preserved whenever feasible. Transforming import requires an 
 
 ## 6. Derived assets
 
-Planned kinds:
+Implemented picture/waveform kinds and reserved later kinds:
 
 ```text
 small thumbnail
@@ -103,7 +103,7 @@ screen preview
 video poster frame
 animated preview (future)
 audio waveform
-OCR text (future)
+OCR text (current storage is catalog v10, not a derived asset stream)
 face record (future)
 embedding record (future)
 ```

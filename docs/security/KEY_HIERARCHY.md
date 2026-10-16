@@ -135,6 +135,10 @@ A change to any element list is a new label plus the migration the change rule b
 
 A label selects key bytes, so a label is never redefined. A different purpose, tier, or spelling is a new label plus a migration that rewraps or re-encrypts everything derived under the old one. The old label and its vectors stay here until no reachable data depends on it. Editing a label in place is a silent key change and is a defect, not a correction.
 
+The presence of a label does not mean that a feature uses it. Current metadata search, private-note search, and OCR/content search use SQLCipher under `CatalogDatabaseKey`. They do not derive `SearchKey` or `OcrKey` for the index. Face and semantic embeddings remain unimplemented. Future encrypted segment storage would require its own approved contract; do not reinterpret these frozen labels.
+
+The iOS Share Extension receiving key is outside this vault hierarchy. The main app owns an independent device-local RSA private key and publishes only its public key to the App Group. Per-item AES keys protect temporary incoming ciphertext; they are never vault keys or exported credential slots. See [ADR-0064](../adr/0064-receive-system-shares.md).
+
 ## 4. Security collection keys
 
 A Security Collection is an access-control/key domain, not necessarily a UI album. The key is random and has an explicit epoch.

@@ -1,6 +1,6 @@
 # Chur Sync Server Operator Guide
 
-> **Status:** Phase 3 reference deployment
+> **Status:** Accepted Phase 3 reference deployment contract
 
 The Chur project operates no sync service. This process is for a deployment that the user controls. It stores opaque identifiers, signed encrypted records, ciphertext lengths, transfer state, and ciphertext objects. It cannot decrypt vault content.
 

@@ -1,5 +1,7 @@
 # Recently added
 
+> **Status:** Accepted implementation contract; security release gates remain separate
+
 Recently added is a Library view in the unlocked vault. Open **Library → Browse → Recently added**. It shows active photos, videos, audio, and files, with the most recently imported items first. Private notes remain in their own section.
 
 The view uses the existing catalog import time and normal cursor pagination. It includes the full import history, without a date cutoff or item limit. Capture dates and file modification dates do not determine the order. Trash and quarantined objects are excluded by the ordinary Timeline query.

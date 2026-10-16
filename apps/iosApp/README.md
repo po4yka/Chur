@@ -1,5 +1,7 @@
 # Chur for iOS
 
+> **Status:** Accepted implementation contract; security release gates remain separate
+
 `Chur.xcodeproj` is the UIKit host for the shared Compose application. The
 checked-in project builds without XcodeGen; `project.yml` is its source for
 future project changes. Regenerate it with:

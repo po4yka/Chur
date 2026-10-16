@@ -2,7 +2,7 @@
 
 > **Status:** Accepted security and vulnerability-reporting policy
 
-Chur is currently in the architecture and protocol-design stage. It has not received an independent security audit and is **not yet suitable for storing irreplaceable or high-risk data**.
+Chur has a pre-release Android, iOS, and Rust implementation. It has not received an independent security audit and is **not yet suitable for storing irreplaceable or high-risk data**.
 
 ## Supported versions
 
@@ -47,7 +47,10 @@ High-value report areas include:
 - Android Keystore and iOS Keychain integration;
 - plaintext scratch files, caches, app-switcher snapshots, logs, and backups;
 - real/decoy vault isolation;
-- sync identities, operation logs, rollback protection, and revocation, plus future collection grants;
+- sync identities, operation logs, rollback protection, and revocation, plus collection grants;
+- private notes, OCR text, encrypted indexes, and local export boundaries;
+- incoming share providers, the iOS encrypted queue and receiving key, archive passwords, and independent archive staging;
+- public camera/Notes storage accidentally containing private-vault content;
 - supply-chain or build-system compromise affecting released artifacts.
 
 Examples that are generally out of scope unless they demonstrate a Chur-specific defect:
@@ -89,4 +92,4 @@ Use synthetic test data. Do not access, modify, or retain another person's vault
 
 ## Cryptography status
 
-The design in [`docs/CRYPTOGRAPHY.md`](docs/CRYPTOGRAPHY.md) is provisional. A published specification, stable vectors, fuzzing, platform integration tests, and an independent review are required before production security claims are made.
+The design in [`docs/CRYPTOGRAPHY.md`](docs/CRYPTOGRAPHY.md) remains subject to the [release gates](docs/assurance/RELEASE_GATES.md). Implemented formats, vectors, fuzzing, and local integration tests are not an independent audit. The [implementation inventory](docs/IMPLEMENTATION_STATUS.md) names current features and known acceptance gaps, including catalog portability in backup. No documentation refresh closes those gaps.

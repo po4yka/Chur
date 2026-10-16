@@ -1,6 +1,6 @@
 # Disposable Object-Key Grants
 
-> **Status:** Normative current protocol. There are no deployed clients to migrate.
+> **Status:** Accepted normative current protocol. There are no deployed clients to migrate.
 
 Collection operations contain key commitments. They never contain an object-key envelope. Collection grants and retained collection epochs can open collection metadata, but they cannot open an object's content. A content key is delivered through an object-bound request and a disposable X25519 key. The receiver must request the key after it has accepted the signed object commit. The source must be online for a later sync pass to answer the request. Until then, the object waits for its key.
 

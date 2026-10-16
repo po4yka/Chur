@@ -37,7 +37,7 @@ Argon2id
 HKDF-SHA-256
 SHA-256
 BLAKE3 for authenticated commitments when finalized
-X25519 / Ed25519 for future sharing identities
+X25519 / Ed25519 for implemented sync and collection-sharing identities
 secure randomness through getrandom/OS CSPRNG
 zeroization helpers
 ```

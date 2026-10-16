@@ -37,6 +37,8 @@ Android and iOS code may authorize platform key use, open file descriptors, run 
 
 ### Documentation and specifications
 
+Check the [implementation inventory](docs/IMPLEMENTATION_STATUS.md), [product contracts](docs/README.md#product), current catalog extension, and FFI version before changing feature descriptions. Update overview, architecture, platform, threat, plaintext, migration, and test documentation when their boundary changes. Keep historical measurements and generated fixtures intact; do not promote a local test or CI pass to independent approval. Record a code/specification divergence explicitly instead of silently changing a security requirement to match it.
+
 Requirement strength follows the rule in [`docs/README.md`](docs/README.md#normative-language): in a normative document, lowercase must, must not, should, should not, and may carry full RFC 2119 force, and the four documents that capitalize them gain no extra strength by doing so. Use these words only for requirements. Proposed constants and undecided mechanisms must be labelled as proposals rather than frozen requirements.
 
 ## Pull-request requirements

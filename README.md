@@ -2,9 +2,11 @@
 
 > A local-first, cross-platform private media vault for Android and iOS, built with Kotlin Multiplatform, Compose Multiplatform, and a Rust-owned cryptographic storage engine.
 
-**Status:** Proposed — architecture and protocol design. Chur is not yet suitable for storing irreplaceable data, has not received an independent security audit, and does not currently make production security guarantees.
+**Status:** Proposed — pre-release implementation; security release gates remain open. Chur is not yet suitable for storing irreplaceable data, has not received an independent security audit, and does not currently make production security guarantees.
 
-Chur is designed for protected storage of photos, videos, audio, and eventually documents. The application can present a real, functional public interface—such as notes, a journal, or a calculator—while keeping the encrypted archive behind a separate authenticated session.
+Chur stores photos, videos, audio, documents, arbitrary files, and local private notes. Its public Notes, Calculator, and Camera shells work separately from the authenticated vault. Public content is not encrypted by Chur.
+
+The [implementation status](docs/IMPLEMENTATION_STATUS.md) lists current capabilities, limits, and remaining verification. [Development](DEVELOPMENT.md) gives build commands; [the documentation index](docs/README.md) links the product and protocol contracts.
 
 The public shell is a privacy feature, not the security boundary. The actual boundary is the Rust vault runtime: it owns the private catalog, key hierarchy, encrypted object format, integrity rules, migrations, and every transition between ciphertext and plaintext.
 
@@ -52,9 +54,8 @@ Chur is not intended to be a superficial “calculator vault” that hides ordin
 Chur
 ├── Public shell
 │   ├── Notes
-│   ├── Journal
 │   ├── Calculator
-│   └── other genuinely functional utilities
+│   └── Camera and local public album
 │
 ├── Session gate
 │   ├── password
@@ -65,7 +66,9 @@ Chur
 ├── Private vault
 │   ├── photos
 │   ├── videos
-│   ├── audio
+│   ├── audio and embedded covers
+│   ├── documents and arbitrary files
+│   ├── local private notes
 │   ├── albums
 │   ├── metadata
 │   └── encrypted search/indexes
@@ -81,26 +84,28 @@ Chur
 
 ### Public shell
 
-The public shell must be a real application surface, not a static fake screen. A user should be able to open it, create notes, perform calculations, or use a journal without exposing the existence or current state of a private session through the UI.
+The public shell is a functional application surface. Notes supports editing, search, and pinning. Calculator performs decimal calculations. Camera saves confirmed captures to a local public album. Public Settings selects the shell and provides the visible vault entry. A Journal shell is not implemented.
 
-Public-shell data is not mixed with private-vault data. It has its own Room database, navigation graph, dependency graph, and lifecycle.
+Public Notes uses a separate JSON store; shell preferences use platform preferences. Public photos use a separate public directory. These stores enter ordinary platform backup and do not contain private-vault data. See [Discreet Mode](docs/product/DISCREET_MODE.md).
 
 ### Private vault
 
 The private vault is a media-first archive with a user experience closer to a private Photos/Files application than to a directory protected by a PIN.
 
-Planned capabilities include:
+Implemented capabilities include:
 
-- encrypted photo, video, and audio import;
-- timeline, albums, favorites, and tags;
-- encrypted thumbnails, previews, waveforms, and metadata;
-- random-access media playback without decrypting complete files;
-- protected export through the platform share/save flows;
-- immediate and timed locking;
-- local integrity validation and repair tooling;
-- optional recovery and encrypted backup;
-- end-to-end encrypted synchronization;
-- end-to-end encrypted collection sharing.
+- media and [document/file import](docs/product/DOCUMENTS_AND_FILES.md), including [Share to Chur](docs/product/INCOMING_SHARES.md);
+- timeline, [Recently added](docs/product/RECENTLY_ADDED.md), favorites, tags, and [nested album navigation](docs/product/ALBUM_NAVIGATION.md);
+- encrypted thumbnails, previews, waveforms, metadata, and [embedded audio artwork](docs/product/AUDIO_ARTWORK.md);
+- authenticated range playback and bounded text/PDF previews;
+- [local private notes](docs/product/PRIVATE_NOTES.md), separate from public Notes;
+- [local OCR and encrypted content search](docs/product/CONTENT_SEARCH.md);
+- plaintext save/share and [album-tree export to a folder](docs/product/ALBUM_EXPORT.md);
+- portable backup, [selective encrypted archives](docs/product/SELECTIVE_ENCRYPTED_EXPORT.md), and [external file encryption without library import](docs/product/EXTERNAL_FILE_ENCRYPTION.md);
+- immediate, timed, background, and panic lock, plus an Android Quick Settings lock tile;
+- integrity scans, recovery, independent decoy identity, encrypted synchronization, and collection sharing.
+
+Implementation is separate from production approval. See [release gates](docs/assurance/RELEASE_GATES.md) for audit, device, signing, and interoperability requirements.
 
 ### Discreet mode
 
@@ -126,7 +131,7 @@ Store review and product documentation must disclose the vault functionality. Ch
 
 1. **Strong data-at-rest protection.** Copying the application sandbox must not reveal media, filenames, EXIF, album names, thumbnails, or private indexes.
 2. **Rust-owned private state.** Rust owns the storage format, key hierarchy, catalog schema, object lifecycle, migrations, and integrity decisions.
-3. **Cross-platform behavior.** Android, iOS, and the future CLI must read the same canonical vault format and pass the same test vectors.
+3. **Cross-platform behavior.** Android, iOS, and the CLI must read the same canonical vault format and pass the same test vectors.
 4. **Media-first random access.** Large videos and audio files must support bounded-memory import, playback, seek, and export.
 5. **Recoverable by explicit policy.** A user can choose a device-bound vault or a recoverable vault with password/recovery envelopes.
 6. **Independent object keys.** Compromise or deletion of one object key must not expose unrelated media.
@@ -188,141 +193,78 @@ The primary architectural invariant is:
 
 ### Dependency graphs
 
-Chur uses separate public and secure graphs:
+Chur constructs public and secure dependencies explicitly:
 
 ```text
-ApplicationGraph
-├── PublicGraph                       Koin classic DSL
-│   ├── public navigation
-│   ├── public shell features
-│   ├── Room
-│   ├── DataStore
-│   └── non-sensitive scheduling
-│
-└── SecureGraph                       manual DI
-    ├── VaultSession
-    ├── VaultEngine
-    ├── PlatformRootKeyProtector
-    ├── PrivateMediaSource
-    ├── PrivateCatalogRepository
-    └── SessionKeyLifetime
+Platform host (ChurHost / Host)
+├── public Notes JSON, shell preferences, public camera album
+├── platform pickers, incoming-share source, exports, privacy, keys
+└── ChurController
+    ├── VaultRepository and session-generation checks
+    ├── media/document importer and local content-index controller
+    ├── transient private screen state
+    └── NativeVault → C ABI → Rust runtime
 ```
 
-Manual construction is preferred for the secure graph because object ownership, destruction order, and session invalidation are security-relevant behavior. Koin remains useful for application and feature composition, but the cryptographic graph should not depend on a general-purpose service locator.
+`shared/feature-notes` cannot depend on private modules. Platform adapters own codecs and descriptor leases; Rust owns private storage and key lifetime. There is no Koin service locator in the current build.
 
 ---
 
 ## Technology stack
 
-The current planned baseline is:
+The checked-in version catalog, wrapper, and Cargo manifests are the version sources. Current components are:
 
-| Area | Choice |
+| Area | Implementation |
 | --- | --- |
-| Language | **Kotlin 2.4.20 / K2** |
-| UI | **Compose Multiplatform 1.12.1** |
-| Navigation | **Navigation 3 Multiplatform** |
-| Architecture | **AndroidX ViewModel + UDF/MVVM** |
-| State | **StateFlow / Flow** |
-| Concurrency | **Kotlin Coroutines 1.11** |
-| Dependency injection | **Koin 4.2.2 classic DSL** for application/features; **manual DI** for the secure graph |
-| Network | **Ktor Client 3.6.0** |
-| Serialization | **kotlinx.serialization 1.11** |
-| Public database | **Room 3.0.1 KMP** |
-| Public settings | **DataStore KMP** |
-| Images | **Coil 3.5** with a separate private loader |
-| Time | `kotlin.time` + **kotlinx-datetime 0.8** |
-| Logging | **Kermit**, behind a privacy-safe logging facade |
-| Testing | `kotlin.test`, Coroutines Test, Turbine, CMP UI tests |
-| Android | Thin native application shell |
-| iOS | Thin SwiftUI/UIKit shell with Compose content |
-| Build | Gradle Version Catalog, convention plugins, KSP |
-| Apple interop | Objective-C framework interop initially; selective Swift Export where stable and beneficial |
-| Secure storage engine | **Rust** |
-| Local media AEAD | **XChaCha20-Poly1305** |
-| Password KDF | **Argon2id** |
-| Key derivation | **HKDF-SHA-256** with explicit domain separation |
-| Sharing | RFC 9180 HPKE with X25519, plus separate sender identity/signatures |
-| Secret hygiene | `zeroize`, redacted secret wrappers, restricted logging |
+| Shared UI | Kotlin 2.4.20, Compose Multiplatform 1.12.1, Material 3 1.9.0 |
+| Navigation and state | shared route state, `ChurController`, StateFlow, coroutines |
+| Composition | explicit host construction and session-scoped owners |
+| Public persistence | JSON Notes, platform preferences, local public camera files |
+| Private persistence | Rust-owned SQLCipher catalog, schema v10 |
+| Images and media | bounded session cache, platform decoders, Media3 and AVFoundation |
+| Local recognition | bundled Tesseract4Android 4.9.0 English/Russian models; Apple Vision |
+| Network | Ktor 3.6.0, OkHttp on Android, Darwin on iOS |
+| Serialization | kotlinx.serialization for host/control records; Rust owns canonical bytes |
+| Android host | API 29 minimum, API 37 compile/target, pinned NDK |
+| iOS host | UIKit, Compose framework, embedded Share Extension, iOS 18.0 minimum |
+| Build | Gradle 9.8.1, AGP 9.4.1, JDK 21, pinned Rust toolchain, Xcode 27 for local host builds |
+| Native boundary | hand-written C ABI 2.24, JNI on Android, cinterop and Swift C calls on iOS |
+| Cryptography | XChaCha20-Poly1305, Argon2id, HKDF-SHA-256, HPKE, Ed25519 |
 
-Version numbers describe the intended project baseline and may be updated through normal dependency-management work before the first implementation release.
+Room, DataStore, Koin, Coil, Navigation 3, Kermit, and generated UniFFI bindings are not part of the current dependency graph. Do not infer a dependency from an illustrative interface in a design document.
 
-### Candidate Rust dependencies
+The iOS incoming queue is a separate temporary transport under [ADR-0064](docs/adr/0064-receive-system-shares.md). It uses platform RSA-OAEP and AES-GCM with an independent receiving key; it does not change the Rust vault suite.
 
-The secure core should use narrow, well-reviewed libraries rather than a broad crypto framework:
-
-```toml
-chacha20poly1305 = "..." # XChaCha20-Poly1305
-argon2           = "..." # Argon2id
-hkdf             = "..."
-sha2             = "..."
-blake3           = "..." # ordered object commitments
-getrandom        = "..." # platform CSPRNG
-zeroize          = "..."
-secrecy          = "..."
-subtle           = "..."
-thiserror        = "..."
-```
-
-Potential later dependencies include SQLCipher through `rusqlite`, HPKE/X25519, Ed25519, and an `age`-compatible backup layer. Dependency choice must remain subordinate to protocol tests and auditability.
+See [Development](DEVELOPMENT.md), [Dependency Policy](docs/DEPENDENCY_POLICY.md), and [Key Hierarchy](docs/security/KEY_HIERARCHY.md). Cargo manifests and lockfiles pin the actual Rust dependencies; backup uses CHURBAK1 rather than an `age`-compatible replacement format.
 
 ---
 
 ## Repository layout
 
-The repository is expected to evolve toward the following structure:
+The checked-in modules are:
 
 ```text
-Chur/
-├── apps/
-│   ├── androidApp/
-│   └── iosApp/
-│
-├── shared/
-│   ├── app/
-│   ├── design/
-│   ├── navigation/
-│   ├── core-model/
-│   ├── core-platform/
-│   ├── core-rust-bridge/
-│   ├── core-public-data/
-│   ├── core-settings/
-│   ├── core-network/
-│   ├── core-media/
-│   ├── feature-public-shell/
-│   ├── feature-unlock/
-│   ├── feature-library/
-│   ├── feature-import/
-│   ├── feature-viewer/
-│   ├── feature-audio/
-│   └── feature-settings/
-│
-├── rust/
-│   ├── Cargo.toml
-│   └── crates/
-│       ├── chur-core/
-│       ├── chur-crypto/
-│       ├── chur-format/
-│       ├── chur-catalog/
-│       ├── chur-media/
-│       ├── chur-sync-protocol/
-│       ├── chur-ffi/
-│       └── chur-cli/
-│
-├── build-logic/
-│   └── convention/
-│
-├── docs/
-│   ├── ARCHITECTURE.md
-│   ├── adr/
-│   ├── security/
-│   ├── format/
-│   ├── interop/
-│   ├── sync/
-│   ├── assurance/
-│   └── product/
-│
-└── test-vectors/
+apps/
+  androidApp/          Android host, incoming shares, camera, exports, lock tile
+  iosApp/              Xcode host, Share Extension, Swift package tests
+shared/
+  app/                 screens, controllers, navigation, design, platform UI
+  core-model/          status and vector contracts
+  core-ffi/            NativeVault, C ABI adapters, typed records
+  core-vault/          session state, private repository, lock policy
+  core-platform-keys/  Android Keystore and Apple Keychain adapters
+  core-sync/           encrypted protocol transport and synchronization
+  feature-import/     platform codecs, OCR, descriptor and export contracts
+  feature-notes/      public Notes model and JSON persistence
+rust/
+  crates/             secure core, JNI/C ABI, CLI, protocol, reference server
+  fuzz/               separate fuzz workspace
+scripts/              native builds, device control, release and policy checks
+docs/                 contracts, architecture, assurance, ADRs
+test-vectors/         generated canonical fixtures
 ```
+
+There is no `build-logic/` or separate `core-media/` module. [Architecture §9](docs/ARCHITECTURE.md#9-repository-structure) explains the ownership boundaries.
 
 ### Rust crate responsibilities
 
@@ -335,7 +277,9 @@ Chur/
 | `chur-media` | Streaming import/export, random-access readers, derived asset coordination |
 | `chur-sync-protocol` | Canonical encrypted operations, device logs, grants, protocol versioning |
 | `chur-ffi` | Stable C ABI, handle registry, and panic containment |
-| `chur-cli` | Test vectors, inspection, validation, migration, recovery, fuzz corpora |
+| `chur-jni` | Android/JVM adapter to the C ABI |
+| `chur-sync-server` | self-hosted ciphertext relay and reference server |
+| `chur-cli` | vectors, vault operations, backup, validation, and benchmarks |
 
 `chur-cli` is a first-class architecture component. The storage format must be testable and recoverable independently of Android and iOS UI code.
 
@@ -370,17 +314,18 @@ Chur/
 
 ```text
 Public shell
-    Room 3 KMP
-    DataStore KMP
+    JSON Notes
+    platform preferences
+    public camera JPEG files
 
 Private vault
     Rust-owned encrypted catalog
     Rust-owned encrypted object store
 ```
 
-Room is intended for real public-shell data such as notes, journal entries, or calculator history. DataStore is intended for non-sensitive application settings.
+The public stores are independent of the private catalog. Public Notes is not the private-notes feature, and the public camera album is not encrypted storage.
 
-The current private-catalog design direction is a **Rust-owned SQLCipher database**, subject to prototype and binary-size validation. Rust owns the connection, key, schema, queries, migrations, and close/zeroization lifecycle. Object keys remain individually wrapped even when stored inside SQLCipher; database encryption is defense in depth, not a replacement for envelope encryption.
+The private catalog is a **Rust-owned SQLCipher database**, currently schema v10. Rust owns the connection, key, schema, queries, migrations, and close/zeroization lifecycle. Object keys remain individually wrapped even when stored inside SQLCipher; database encryption is defense in depth, not a replacement for envelope encryption.
 
 The private catalog can contain queryable plaintext only while the database is open inside the unlocked Rust runtime. Its file, WAL, and related storage must remain encrypted at rest.
 
@@ -785,7 +730,7 @@ Crypto-erasure means destroying every accessible key envelope for the object. It
 
 ### Images
 
-Private images use a dedicated Coil `ImageLoader`:
+Private images use a dedicated bounded session cache and platform decoders:
 
 ```text
 PrivateImageLoader
@@ -1049,7 +994,7 @@ The command also supports tags, favorites, search, pagination, and album removal
 
 The iOS application remains thin and owns:
 
-- SwiftUI/UIKit application and scene lifecycle;
+- UIKit application and scene lifecycle;
 - Keychain and LocalAuthentication;
 - PhotosPicker and file import;
 - AVFoundation playback integration;
@@ -1147,7 +1092,7 @@ SecurityCollectionKey
     wrapped separately for each authorized recipient/device
 ```
 
-Planned standard suite:
+Implemented collection-grant suite:
 
 ```text
 KEM  = DHKEM(X25519, HKDF-SHA256)
@@ -1157,7 +1102,7 @@ AEAD = ChaCha20-Poly1305
 
 XChaCha20-Poly1305 remains the local media-container AEAD; it is not substituted into an RFC 9180 suite that does not define it.
 
-Sender identity is provided separately, preferably through Ed25519 signatures over canonical collection grants and sync operations. HPKE Base mode alone does not authenticate the sender or provide replay protection.
+Sender identity is provided separately through Ed25519 signatures over canonical collection grants and sync operations. HPKE Base mode alone does not authenticate the sender or provide replay protection.
 
 ### Deduplication
 

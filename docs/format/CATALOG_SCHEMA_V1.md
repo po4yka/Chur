@@ -2,6 +2,8 @@
 
 > **Status:** Proposed normative logical schema. The v1 catalog has two representations and no third: a physical SQLCipher schema for the live local database, and the canonical serialization of [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) when exported into a portable backup. The engine is decided in [ADR-0038](../adr/0038-adopt-sqlcipher-as-the-v1-catalog-engine.md), which records the build, linkage, WAL, and migration evidence; performance on a device from [ADR-0017](../adr/0017-freeze-the-supported-device-set.md) and backup correctness remain outstanding.
 
+This is the base schema. Physical extensions through [v10](CATALOG_SCHEMA_V10.md) add sharing indexes, album organization, Trash, private notes, and local content search. Current writers use v10; this document retains the base records and query contract.
+
 The private catalog is Rust-owned. It stores queryable private metadata, object and collection relationships, key envelopes, journals, integrity state, and synchronization projections. Room and DataStore never open or mirror it.
 
 ## 1. Logical entities
@@ -251,6 +253,8 @@ Proposed:
 - connection closes before key zeroization on lock;
 - no Room schema or DAO for private data;
 - a portable backup carries the canonical catalog export named in [`BACKUP_FORMAT_V1.md`](BACKUP_FORMAT_V1.md) §2, and never raw SQLCipher pages, WAL segments, or a file copy of the live database. Raw pages are a local storage detail: they carry one client's page format and SQLCipher build options into the package, and no other platform build is required to read them.
+
+**Known implementation divergence:** current `chur-media::backup::CatalogSnapshot` copies the encrypted physical database into a backup. It does not satisfy the canonical-export requirement above. [Backup format](BACKUP_FORMAT_V1.md#current-implementation-and-portability-gap) and [release gates](../assurance/RELEASE_GATES.md) track the required compatibility decision and cross-build restore evidence; this note does not weaken that requirement.
 
 The catalog key reaches SQLCipher through the raw-key pragma. It is already a full-entropy HKDF output under `chur/v1/root/catalog-database`, so SQLCipher's own password KDF is not run over it: a second KDF would add cost without adding entropy and would put a second profile into the at-rest format.
 

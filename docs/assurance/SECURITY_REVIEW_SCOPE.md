@@ -13,7 +13,9 @@ This document defines the artifacts and boundaries expected for Chur security re
 - validate FFI ownership, cancellation, panic containment, and stale handles;
 - validate Android/iOS platform key and plaintext lifecycle integration;
 - validate sync identities, operation logs, rollback, and device revocation;
-- later validate collection grants and sharing revocation.
+- validate collection grants and sharing revocation;
+- validate documents/PDF/OCR parser inputs, private-note/index storage, archive staging, and incoming system-share custody;
+- resolve the canonical-export versus SQLCipher-snapshot backup divergence and prove the supported cross-build restore contract.
 
 ## 2. Local-vault code scope
 
@@ -37,7 +39,9 @@ Expected platform/KMP scope:
 - iOS Keychain/LocalAuthentication adapter;
 - file descriptor/buffer adapters;
 - player/image/scratch/lifecycle code;
-- error/logging redaction.
+- error/logging redaction;
+- incoming Android URI/intent boundaries and the iOS extension, RSA receiving key, AES-GCM envelopes, App Group, and signing profiles;
+- private-note editing and export, local OCR engines/models/index lifecycle, selective/external archives, and public camera isolation.
 
 ## 3. Specification scope
 

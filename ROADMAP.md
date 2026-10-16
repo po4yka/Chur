@@ -6,7 +6,7 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 
 ## Current status
 
-**Phase 4 implementation.** Canonical collection grants, recipient verification, permissions, membership changes, collection operations, epochs, rewrap, forward-only revocation, durable client state, mobile bindings, reference-server relay, and multi-recipient/device-loss tests are implemented. Gate 6 is not approved: the separate sharing-protocol audit and physical-device interoperability proof are outstanding. Earlier phase device, review, deployment, and approval gaps remain open.
+**Phase 4 and local feature implementation.** Canonical collection grants, recipient verification, permissions, membership changes, collection operations, epochs, rewrap, forward-only revocation, durable client state, mobile bindings, reference-server relay, and multi-recipient/device-loss tests are implemented. Gate 6 is not approved: the separate sharing-protocol audit and physical-device interoperability proof are outstanding. Earlier phase device, review, deployment, and approval gaps remain open. The [current implementation inventory](docs/IMPLEMENTATION_STATUS.md) also covers the local features below; it is not a gate approval. The backup implementation uses a physical SQLCipher snapshot where the proposed contract requires canonical export. That portability divergence remains a blocker for a production portable-backup claim.
 
 ## Phase 0 — specification and repository foundation
 
@@ -15,13 +15,13 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 | Item | State |
 | --- | --- |
 | complete the normative documentation set | done |
-| create architecture decision records | done, 57 |
+| create architecture decision records | done; see the current [ADR index](docs/adr/README.md) |
 | scaffold KMP/CMP and Rust workspaces | done. `:shared:app` is a Compose Multiplatform module holding the one screen Phase 0 owns, the ABI gate; the Notes public shell and every private screen are Phase 1 |
 | pin toolchains and dependencies | done: `rust-toolchain.toml`, `gradle/libs.versions.toml`, a wrapper distribution SHA-256, `Cargo.lock`, and the four mobile Rust targets built and symbol-checked on every pull request |
 | establish canonical encoding and byte-exact v1 formats | done |
 | implement `chur-cli` foundations | done: vector generation and verification, container inspection, the two benchmarks, the ABI handshake |
-| publish deterministic positive and negative vectors | done, 99. It was 62 at the end of Phase 0; Phase 2 added the backup structures its own format needed, and Phase 3 the sync structures its protocol needed |
-| add fuzzing, corruption, migration, and FFI harnesses | done: ten fuzz targets, a bitwise corruption sweep, a version-domain migration harness, a header-consistency harness, and a C ABI harness |
+| publish deterministic positive and negative vectors | done; the current manifest has 106 vectors. Historical phase records keep their original counts |
+| add fuzzing, corruption, migration, and FFI harnesses | done: the current sixteen fuzz targets, a bitwise corruption sweep, a version-domain migration harness, a header-consistency harness, and a C ABI harness |
 | land the continuous-integration workflow that enforces the release gates | done, [ADR-0031](docs/adr/0031-continuous-integration-owns-gate-enforcement.md) |
 | prototype Android Keystore and iOS Keychain slots | done |
 | benchmark candidate chunk sizes and Argon2id profiles | done on a workstation; a measurement on the [ADR-0017](docs/adr/0017-freeze-the-supported-device-set.md) device set is outstanding, and no candidate above the frozen floor is approved until then |
@@ -31,7 +31,7 @@ Chur is developed in security-gated phases. Dates are intentionally omitted unti
 | Criterion | State |
 | --- | --- |
 | no unresolved circular key dependencies | met. The one circle the implementation found is recorded and broken: the manifest key and AAD bind fields sealed inside the manifest, so a reader supplies the stream identity from the catalog, per [`docs/format/OBJECT_CONTAINER_V1.md`](docs/format/OBJECT_CONTAINER_V1.md) §4 |
-| parser limits specified and tested | met. `chur-core::limits` gathers every bound beside the section that owns it and checks their consistency at compile time; ten fuzz targets and the corruption harness exercise them |
+| parser limits specified and tested | met. `chur-core::limits` gathers every bound beside the section that owns it and checks their consistency at compile time; the current sixteen fuzz targets and the corruption harness exercise them |
 | Android, iOS, and CLI consume identical vectors | met at the index level. One generated source embeds `test-vectors/v1`, and the same suite runs in `jvmTest`, `testAndroidHostTest`, and `iosSimulatorArm64Test`. Decoding a private record on a platform is not in scope: [`docs/format/CANONICAL_ENCODING_V1.md`](docs/format/CANONICAL_ENCODING_V1.md) §13 reserves that for Rust, so the platform side checks the index and the FFI handshake |
 | security invariants mapped to tests | met. Thirty-four rows of [`docs/assurance/SECURITY_TEST_PLAN.md`](docs/assurance/SECURITY_TEST_PLAN.md) §13 name a running test target, and the jobs the plan names execute them; every other row names a procedure no job executes, and the audit-only rows are named as such |
 | release gates and review scope approved | **outstanding.** Both are decisions, not artifacts. [`docs/assurance/EVIDENCE_PHASE_0.md`](docs/assurance/EVIDENCE_PHASE_0.md) §8 states what each one accepts and §5 states its cost |
@@ -50,7 +50,7 @@ Gate 1 may be declared once the two approvals are recorded.
 | vault creation and first run per [`docs/security/PROVISIONING.md`](docs/security/PROVISIONING.md) | done: the descriptor transaction of §9, an abandoned creation that leaves nothing openable, and the recovery phrase shown once |
 | password, device, and recovery key slots | done in code, unproved on a device. All four families enroll and unlock, and the Android Keystore family reaches the platform through [ADR-0041](docs/adr/0041-the-android-keystore-slot-exchanges-root-bytes.md) and the §6.6 surface it adds. No test calls a real Keystore or Keychain, because no job runs on a device |
 | Rust-owned encrypted catalog | done: SQLCipher with the pragma order of [ADR-0038](docs/adr/0038-adopt-sqlcipher-as-the-v1-catalog-engine.md), the schema of [`docs/format/CATALOG_SCHEMA_V1.md`](docs/format/CATALOG_SCHEMA_V1.md), and keyset paging |
-| photo import through platform pickers | **partly done.** The Android host imports through `PickVisualMedia` and requests no permission. The iOS picker is specified in [`apps/iosApp/README.md`](apps/iosApp/README.md) and lives in an Xcode project that is not in this repository |
+| photo import through platform pickers | implemented on Android and iOS, including multi-selection and provider custody. The UIKit host and `Chur.xcodeproj` are checked in. Device/provider acceptance remains separate |
 | immutable encrypted originals | done: the container is written once, and the catalog holds no operation that rewrites one |
 | encrypted metadata, thumbnails, and previews | done. All three are derived, encrypted, and read back by Rust, and both hosts decode them through one cache whose only per-platform part is the decode |
 | timeline, albums, favorites, viewer, and export | done |
@@ -61,7 +61,7 @@ Gate 1 may be declared once the two approvals are recorded.
 
 ### Explicit exclusions
 
-None of these is started, which is the intent:
+These were excluded from the Phase 1 scope. Later phases implement sync, collection sharing, and decoy identities; local OCR is implemented as a later local feature. The exclusions do not describe current feature availability:
 
 - cloud account;
 - sync;
@@ -105,7 +105,7 @@ None of these is started, which is the intent:
 | multi-gigabyte objects remain bounded in memory | met. `chur-media` `tests/bounded_memory.rs` measures the property rather than asserting it: a metered `ReadAt` records the largest single request, and a container 64 times longer does not change it. The backup path holds one inventory entry and one buffer whatever the vault's size |
 | random seek and lock invalidation meet budgets | **partly met.** Both are measured and both are far inside the §2 candidates on this host, and §1 there requires a release-like build on a device from [ADR-0017](docs/adr/0017-freeze-the-supported-device-set.md), which this is not. The benchmark runs through the binary both platforms build, so the device measurement needs a device and no new code |
 | real/decoy isolation tests pass | met. Nine tests over the §11 matrix: independent roots, catalogs, namespaces, and slots; a sibling credential failing exactly as a wrong one does, and a root holding one identity failing the same way; no path naming which identity it belongs to; locking, recovery, migration, and device-slot removal each touching one identity only |
-| backup restore succeeds across Android, iOS, and CLI | **partly met.** One implementation serves all three, and the CLI runs it end to end in `chur-cli` `tests/backup_flow.rs`. Both hosts now reach it: `ChurController.restoreBackup` drives the same `VaultRepository` call through §6.7, from a route the shell offers while the storage root holds no vault. Android presents its own picker; the iOS picker is step 7 of [`apps/iosApp/README.md`](apps/iosApp/README.md), whose Xcode project is not checked in. Neither host has been run on a device |
+| backup restore succeeds across Android, iOS, and CLI | **partly met.** Native and CLI round trips and mobile restore routes exist. Both hosts are checked in. Supported physical-device cross-platform restore and catalog portability across SQLCipher builds remain unproved; the physical snapshot diverges from the canonical-export requirement |
 
 ## Phase 3 — encrypted synchronization
 
@@ -130,7 +130,7 @@ None of these is started, which is the intent:
 | --- | --- |
 | server trust model and sync protocol finalized | met. The accepted v1 documents define the server's observable data, client trust rules, canonical records, limits, deletion authorization, and locked behavior |
 | malicious-server test harness operational | met. `chur-sync-protocol` `tests/malicious_server.rs` exercises replay, omission, key substitution, rollback, and equivocation |
-| protocol vectors published | met. The v1 set has 99 vectors and two fixtures, including accepted and rejected sync records, and the reference server consumes them |
+| protocol vectors published | met. The current v1 manifest has 106 vectors and the accompanying fixtures, including accepted and rejected sync records, and the reference server consumes them |
 | independent review of identity, log, and rollback design | **outstanding.** [`docs/assurance/SECURITY_REVIEW_SCOPE.md`](docs/assurance/SECURITY_REVIEW_SCOPE.md) defines the engagement; no repository job can supply an independent reviewer |
 
 [`docs/assurance/EVIDENCE_PHASE_3.md`](docs/assurance/EVIDENCE_PHASE_3.md) records the observed implementation and verification evidence.
@@ -158,16 +158,37 @@ None of these is started, which is the intent:
 
 [`docs/assurance/EVIDENCE_PHASE_4.md`](docs/assurance/EVIDENCE_PHASE_4.md) records the observed implementation and verification evidence.
 
+## Current local extensions
+
+These features are implemented; none closes an independent audit or device gate:
+
+| Feature | Contract |
+| --- | --- |
+| Documents and arbitrary files, text/PDF preview | [Documents and files](docs/product/DOCUMENTS_AND_FILES.md) |
+| Full album-tree export to a selected folder | [Album export](docs/product/ALBUM_EXPORT.md) |
+| Local private notes and encrypted backup | [Private notes](docs/product/PRIVATE_NOTES.md) |
+| Selected files, album subtrees, and notes to independent encrypted archives | [Selective export and import](docs/product/SELECTIVE_ENCRYPTED_EXPORT.md) |
+| Album breadcrumbs and parent/child navigation | [Album navigation](docs/product/ALBUM_NAVIGATION.md) |
+| Embedded audio cover extraction and playback | [Audio artwork](docs/product/AUDIO_ARTWORK.md) |
+| Android Quick Settings Lock Chur tile | [Discreet Mode](docs/product/DISCREET_MODE.md#android-quick-settings-lock) |
+| Notes, Calculator, and Camera public shells | [Public shells](docs/product/DISCREET_MODE.md#public-shell) |
+| Import-time Recently added view | [Recently added](docs/product/RECENTLY_ADDED.md) |
+| External files to CHURBAK1 without library import | [External encryption](docs/product/EXTERNAL_FILE_ENCRYPTION.md) |
+| Local English/Russian OCR and encrypted content index | [Content search](docs/product/CONTENT_SEARCH.md) |
+| Android and iOS Share to Chur | [Incoming shares](docs/product/INCOMING_SHARES.md) |
+
 ## Later exploration
 
-- encrypted documents;
-- local OCR and captions;
-- encrypted semantic indexes and embeddings;
-- embedding search indexes and private multimodal search, both beyond the bounded catalog query of [`docs/format/CATALOG_SCHEMA_V1.md`](docs/format/CATALOG_SCHEMA_V1.md) §16;
+- canonical portable catalog export and verified restore across different platform/SQLCipher builds;
+- private-note synchronization, with explicit conflict and deletion semantics;
+- Office content extraction, generated captions, and optional automatic or background indexing;
+- encrypted semantic indexes, embeddings, and private multimodal search beyond literal prefix queries;
 - optional hybrid post-quantum recipients;
 - shared family or team vaults;
 - advanced padding and batching;
-- additional functional public shells.
+- further functional public shells beyond Notes, Calculator, and Camera;
+- separately specified widgets or other system surfaces with no private persistence;
+- standalone archive decryption to a folder, distinct from the implemented restore/import paths.
 
 ## Permanent non-goals
 

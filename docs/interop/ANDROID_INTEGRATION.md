@@ -3,7 +3,7 @@
 > **Status:** Proposed focused interop contract  
 > **Relationship:** platform implementation detail; it does not define vault bytes
 
-This document complements the broader Android architecture guide when present. Rust remains authoritative for keys, slots, catalog, containers, integrity, and migrations.
+This document complements the broader [Android architecture](../ANDROID.md). Rust remains authoritative for keys, slots, catalog, containers, integrity, and migrations.
 
 ## 1. Application shell
 
@@ -100,7 +100,7 @@ A custom `DataSource` delegates range reads to `ObjectReaderHandle`:
 
 ## 7. Images
 
-Private images use a dedicated Coil `ImageLoader` with:
+Private images use the shared bounded session cache and platform decoder with:
 
 - Rust-backed thumbnail/preview fetcher;
 - separate bounded memory cache;

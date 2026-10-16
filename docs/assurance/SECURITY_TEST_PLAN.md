@@ -151,6 +151,22 @@ Test that resource controls remain enforced under:
 
 Optimization must not bypass authentication or completeness checks.
 
+## Current local-feature test surfaces
+
+These are concrete test locations, not a claim that every release has run them. Exact source revisions, commands, device/OS/provider details, and results belong in the release evidence. The original invariant mapping below remains in force.
+
+| Boundary | Test surfaces |
+| --- | --- |
+| Documents and file export | Android `DocumentsAndroidTest`, `DocumentPresentationTest`, `DocumentExportDirectoryTest`; Swift `DocumentImportTests`; iOS `PdfDocumentIosTest` |
+| Album folder export and navigation | common/host `AlbumExportTest`, `AlbumExportHostTest`, `RecentlyAddedHostTest`; Android `AlbumExportPresentationTest`, `AlbumNavigationPresentationTest`, `RecentlyAddedPresentationTest` |
+| Embedded audio covers | Android `AudioArtworkCodecTest`, `AudioArtworkPlaybackTest`, `AudioArtworkPresentationTest`; encrypted native derivative round trips |
+| Local private notes | native note/catalog tests; Android `PrivateNotesAndroidTest`, `PrivateNotesPresentationTest`; iOS `PrivateNotesIosTest` |
+| Selective and external archives | native selective/external archive tests; host `SelectiveArchiveControllerHostTest`, `ExternalArchiveControllerHostTest`; Android presentation tests and iOS archive round trips |
+| Content search | native catalog/content-index tests; Android `ContentOcrAndroidTest`, `ContentIndexUiTest`; iOS Vision and document tests in `shared/app`/`feature-import` |
+| Incoming shares | `IncomingShareHostTest`, `ImportGenerationHostTest`; Android `IncomingShareAndroidTest`, `IncomingShareUiTest` and a provider in another APK/UID; Swift `IncomingShareInboxTests`, `IncomingShareItemsTests`, `IncomingShareSelectionTests` |
+
+Failure cases must include malformed/truncated input, stale session results, lock/cancel, unavailable providers, index/preview bounds, and partial output. iOS incoming tests cover authenticated envelopes, metadata byte bounds, public-key-only confidentiality, streaming/scratch custody, captions, and expiry. Real OS Share delivery and distribution App Group entitlements require separate acceptance. CI compiles Android instrumentation and runs shared Kotlin/native tests; it does not run Android instrumentation, Swift package tests, or the Xcode host build.
+
 ## 12. Evidence
 
 Release evidence includes:

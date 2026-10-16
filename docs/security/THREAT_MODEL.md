@@ -1,11 +1,11 @@
 # Chur Threat Model
 
 > **Status:** Proposed normative threat model  
-> **Scope:** local vault first; future backup, sync, and sharing are identified but not production-approved
+> **Scope:** implemented local vault, documents, notes, OCR, archives, incoming shares, sync, and collection sharing; production gates remain open
 
 ## 1. Security objective
 
-Chur protects the confidentiality and integrity of private photos, videos, audio, metadata, derivatives, and access keys while a vault is locked. It also reduces accidental disclosure while the application is in use. The strongest guarantee is **data-at-rest protection under a locked-vault model**.
+Chur protects the confidentiality and integrity of private photos, videos, audio, documents, arbitrary files, notes, recognized text, metadata, derivatives, and access keys while a vault is locked. It also reduces accidental disclosure while the application is in use. The strongest guarantee is **data-at-rest protection under a locked-vault model**.
 
 Chur does not turn a compromised unlocked operating system into a trusted execution environment.
 
@@ -22,7 +22,9 @@ Chur does not turn a compromised unlocked operating system into a trusted execut
 | Private catalog and search indexes | Critical | Critical | High |
 | Device identity private keys | Critical | Critical | High |
 | Sync operation log and tombstones | High | Critical | High |
-| Public-shell data | User-defined | Medium | Medium |
+| Independent archive passwords and temporary vault keys | Critical | Critical | High |
+| iOS incoming receiving key and queued content | Critical | Critical | High |
+| Public Notes and public camera photos | Outside vault protection | Medium | Medium |
 | Ciphertext and opaque identifiers | Medium | Critical | High |
 | Security configuration and audit state | High | Critical | High |
 
@@ -50,13 +52,13 @@ Trusted for their stated role:
 
 Not trusted with plaintext or root keys:
 
-- public Room/DataStore storage;
+- public JSON, preferences, camera files, and ordinary platform backup;
 - media backup/sync server;
 - analytics, crash reporting, and log collection;
 - public-shell UI;
 - other applications and content providers;
 - network intermediaries;
-- future sharing recipients beyond granted access.
+- sharing recipients beyond granted access.
 
 ## 4. Attacker profiles
 
@@ -131,7 +133,7 @@ Attempts to compromise dependencies, build scripts, CI actions, signing, generat
 | T-009 | password change corrupts data | rewrap root only, transactional slot update | loss if every valid slot is destroyed |
 | T-010 | platform key invalidation causes lockout | independent password/recovery slot | user may lose every factor |
 | T-011 | logs/crashes leak private data | deny-by-default logging, redacted errors, tests | OS/runtime may inspect memory directly |
-| T-012 | public shell reveals private state | separate DB/graph/navigation/cache | storage volume may remain observable |
+| T-012 | public shell reveals private state | separate stores/graph/navigation/cache | storage volume may remain observable |
 | T-013 | real and decoy share state | separate roots/catalogs/namespaces/aliases/sessions | filesystem forensics may infer extra data |
 | T-014 | stale media reader survives lock | session generation, in-place zeroization, cancellation | compromised process can bypass application logic |
 | T-015 | server replays old valid data | signed operation chains, local accepted heads | server omission across all devices is difficult to prove |
@@ -141,6 +143,17 @@ Attempts to compromise dependencies, build scripts, CI actions, signing, generat
 | T-019 | dependency compromise | pinning, review, SBOM, reproducible release evidence | ecosystem compromise can still occur |
 | T-020 | backup omits objects | authenticated backup manifest and completeness check | stale but authentic backup remains possible without trusted checkpoint |
 | T-021 | another local app or host process connects to desktop control | loopback-only listener, random 128-bit pairing code shown in the unlocked vault, length bounds, session shutdown on pause/lock | a compromised unlocked device or paired desktop can observe authorized commands |
+
+### Additional local-feature boundaries
+
+- Private notes and OCR text persist only in SQLCipher, including their FTS pages. Notes remain local; OCR records are local derived data. Full backup includes them, while sync/sharing omit both and selective archives omit OCR records.
+- Documents, PDFs, OCR, embedded artwork, and incoming providers add untrusted parser inputs. Bounded memory, disposable Android decoder custody, platform parser isolation, cancellation, and import fallback reduce risk; they do not prove a malformed file safe. Tesseract's bundled native libraries and models remain in dependency review scope.
+- Selective and external archives use independent keys and a new archive password. External encryption needs no local vault. Source deletion, lock, and later password changes cannot revoke published archives or plaintext exports.
+- Android incoming sources use transient grants and process memory. Process death loses the pending batch. Untrusted intent extras, provider metadata, late results, and stale generations must not bypass confirmation or cross vault identities.
+- The iOS extension writes a separate bounded, protected, backup-excluded encrypted queue. Its public RSA key can encrypt but cannot decrypt; the private receiving key stays in the main app's device-local Keychain. It is independent of every vault root. Queue maintenance is not a secure-flash-erasure guarantee. [ADR-0064](../adr/0064-receive-system-shares.md) states the trusted same-team extension assumption and the complete-envelope check.
+- Public camera photos and public Notes are not encrypted by Chur and enter ordinary backup. The optional app gate does not change this. The Android lock tile exposes no identity, count, filename, thumbnail, or unlocked state.
+
+See [Implementation status](../IMPLEMENTATION_STATUS.md), [Plaintext Lifecycle](PLAINTEXT_LIFECYCLE.md), and the individual [product contracts](../README.md#product) for limits and remaining acceptance.
 
 ## 7. Locked-state guarantee
 
@@ -188,7 +201,7 @@ Decoy Vault protects against ordinary and coercive interface inspection by prese
 
 Marketing and UI must not use “undetectable,” “hidden volume,” or equivalent claims without a separate proven construction.
 
-## 11. Future server and sharing model
+## 11. Server and sharing model
 
 The server is assumed malicious for confidentiality and content integrity. Clients authenticate and encrypt canonical operations. Availability, global omission, traffic analysis, and recipient deletion cannot be guaranteed cryptographically by the local client alone.
 
