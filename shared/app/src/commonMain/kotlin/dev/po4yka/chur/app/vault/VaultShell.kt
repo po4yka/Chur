@@ -190,6 +190,8 @@ data class VaultUiState(
      * host reads no patch level and the row is hidden.
      */
     val systemSecurity: String? = null,
+    /** Session-only Library view ordered by import time. */
+    val recentlyAdded: Boolean = false,
 )
 
 /** What the shell can ask the application to do. */
@@ -320,6 +322,8 @@ data class VaultActions(
     val onRevokeSharingMember: (SharingMember) -> Unit = {},
     /** Open the Albums root from any level of an album path. */
     val onAlbumRoot: () -> Unit = {},
+    /** Show active media in import order, newest first. */
+    val onShowRecentlyAdded: () -> Unit = {},
 )
 
 /**
@@ -407,6 +411,9 @@ fun VaultShell(
                                     DropdownMenuItem(text = { Text("All media") }, onClick = {
                                         scopesExpanded = false; actions.onShowAllMedia()
                                     })
+                                    DropdownMenuItem(text = { Text("Recently added") }, onClick = {
+                                        scopesExpanded = false; actions.onShowRecentlyAdded()
+                                    })
                                     actions.onOpenPrivateNotes?.let { openNotes ->
                                         DropdownMenuItem(text = { Text("Private notes") }, onClick = {
                                             scopesExpanded = false; openNotes()
@@ -484,7 +491,8 @@ fun VaultShell(
             // nowhere. §11.4 replaces the ordinary actions while a selection
             // runs, and the floating action is one of them.
             if (state.operation == null && state.selectedCount == 0 &&
-                ((state.destination == VaultDestination.LIBRARY && state.libraryScopeTitle == null) ||
+                ((state.destination == VaultDestination.LIBRARY &&
+                    (state.libraryScopeTitle == null || state.recentlyAdded)) ||
                     state.openAlbum != null)
             ) {
                 FloatingActionButton(onClick = actions.onImport) {
@@ -504,7 +512,9 @@ fun VaultShell(
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             when {
                 state.openAlbum != null || state.destination == VaultDestination.LIBRARY ->
-                    LibraryBody(state, actions, state.mediaView, actions.onMediaViewChange)
+                    androidx.compose.runtime.key(state.recentlyAdded) {
+                        LibraryBody(state, actions, state.mediaView, actions.onMediaViewChange)
+                    }
                 state.destination == VaultDestination.ALBUMS ->
                     AlbumOrganizer(state.albums, actions, state.albumView, actions.onAlbumViewChange,
                         state.albumOrder, actions.onAlbumOrderChange,
@@ -772,6 +782,7 @@ private fun LibraryBody(state: VaultUiState, actions: VaultActions,
                 if (state.selectedCount == 0) MediaSortFilterControls(
                     sort = state.sort, kinds = state.kinds,
                     album = state.openAlbum != null, trash = state.trashOpen,
+                    recentlyAdded = state.recentlyAdded,
                     onSort = actions.onSortChange, onKinds = actions.onKindsChange,
                 )
             }
@@ -781,8 +792,11 @@ private fun LibraryBody(state: VaultUiState, actions: VaultActions,
                     modifier = Modifier.weight(1f),
                 )
                 else Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Text(if (state.kinds != 0) "No media matches these filters" else
-                        "No media in ${state.libraryScopeTitle}",
+                    Text(when {
+                        state.kinds != 0 -> "No media matches these filters"
+                        state.recentlyAdded -> "No recently added media. Import files to see them here."
+                        else -> "No media in ${state.libraryScopeTitle}"
+                    },
                         color = LocalChurColors.current.inkMuted,
                         style = MaterialTheme.typography.bodyMedium)
                 }

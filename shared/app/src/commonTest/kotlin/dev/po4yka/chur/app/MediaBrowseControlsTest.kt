@@ -74,4 +74,20 @@ class MediaBrowseControlsTest {
             false, true, "", QuerySort.CAPTURE_ASC, QuerySort.ALBUM_MANUAL, 0)!!.scope)
         assertEquals("Oldest deleted", sortLabel(QuerySort.CAPTURE_ASC, trash = true))
     }
+    @Test
+    fun recently_added_uses_import_order_and_keeps_the_kind_filter_in_the_timeline_query() {
+        val query = browseQuery(VaultDestination.LIBRARY, null, null, false, false,
+            "", QuerySort.CAPTURE_ASC, QuerySort.ALBUM_MANUAL, 8, recentlyAdded = true)!!
+        assertEquals(QueryScope.TIMELINE, query.scope)
+        assertEquals(QuerySort.IMPORT_DESC, query.sort)
+        assertEquals(8, query.kinds)
+        assertNull(query.scopeId)
+        assertNull(query.terms)
+        val ordinary = browseQuery(VaultDestination.LIBRARY, null, null, false, false,
+            "", QuerySort.CAPTURE_ASC, QuerySort.ALBUM_MANUAL, 8)!!
+        assertEquals(QuerySort.CAPTURE_ASC, ordinary.sort, "leaving the scope preserves the chosen library order")
+        assertNull(browseQuery(VaultDestination.SEARCH, null, null, false, false,
+            "", QuerySort.CAPTURE_ASC, QuerySort.ALBUM_MANUAL, 0, recentlyAdded = true))
+    }
+
 }

@@ -78,6 +78,7 @@ fun browseQuery(
     albumSort: QuerySort,
     kinds: Int,
     quarantine: Boolean = false,
+    recentlyAdded: Boolean = false,
 ): ObjectQuery? = when {
     album != null -> ObjectQuery(QueryScope.ALBUM, sort = albumSort,
         kinds = kinds, scopeId = album.albumId)
@@ -90,6 +91,8 @@ fun browseQuery(
         ObjectQuery(QueryScope.TAG, sort = mediaSort, kinds = kinds, scopeId = tag.tagId)
     destination == VaultDestination.LIBRARY && favorites ->
         ObjectQuery(QueryScope.FAVORITES, sort = mediaSort, kinds = kinds)
+    destination == VaultDestination.LIBRARY && recentlyAdded ->
+        ObjectQuery(QueryScope.TIMELINE, sort = QuerySort.IMPORT_DESC, kinds = kinds)
     destination == VaultDestination.LIBRARY ->
         ObjectQuery(QueryScope.TIMELINE, sort = mediaSort, kinds = kinds)
     destination == VaultDestination.SEARCH && terms.isNotBlank() ->
@@ -106,12 +109,17 @@ fun MediaSortFilterControls(
     trash: Boolean,
     onSort: (QuerySort) -> Unit,
     onKinds: (Int) -> Unit,
+    recentlyAdded: Boolean = false,
 ) {
     val colors = LocalChurColors.current
     var expanded by remember { mutableStateOf(false) }
     Column {
         Row(modifier = Modifier.padding(horizontal = ChurSpacing.gutter)) {
-            Box {
+            if (recentlyAdded) {
+                Text("Order: Recently added",
+                    modifier = Modifier.heightIn(min = 48.dp).padding(vertical = 12.dp),
+                    color = colors.inkMuted)
+            } else Box {
                 TextButton(onClick = { expanded = true }, modifier = Modifier.heightIn(min = 48.dp)) {
                     Text("Sort: ${sortLabel(sort, trash)} ▾", color = colors.accent)
                 }

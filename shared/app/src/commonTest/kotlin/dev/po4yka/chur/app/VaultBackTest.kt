@@ -42,10 +42,12 @@ class VaultBackTest {
             VaultUiState(destination = VaultDestination.ALBUMS, openAlbum = album, selectedCount = 2),
             VaultUiState(destination = VaultDestination.ALBUMS, openAlbum = album),
             VaultUiState(libraryScopeTitle = "Trash", trashOpen = true),
+            VaultUiState(libraryScopeTitle = "Recently added", recentlyAdded = true, selectedCount = 2),
+            VaultUiState(libraryScopeTitle = "Recently added", recentlyAdded = true),
             VaultUiState(destination = VaultDestination.SETTINGS),
         ).forEach { state -> state.backStep(actions)!!.invoke() }
 
-        assertEquals(listOf("selection", "album", "all media", "tab:LIBRARY"), steps)
+        assertEquals(listOf("selection", "album", "all media", "selection", "all media", "tab:LIBRARY"), steps)
         assertNull(VaultUiState().backStep(actions))
     }
 }
