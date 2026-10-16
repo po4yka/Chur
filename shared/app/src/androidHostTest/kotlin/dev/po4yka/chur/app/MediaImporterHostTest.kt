@@ -2,10 +2,12 @@ package dev.po4yka.chur.app
 
 import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.ChurFailure
+import dev.po4yka.chur.ffi.LockReason
 import dev.po4yka.chur.ffi.ObjectQuery
 import dev.po4yka.chur.ffi.QueryScope
 import dev.po4yka.chur.ffi.StreamKind
 import dev.po4yka.chur.imports.Derivative
+import dev.po4yka.chur.imports.DecoderCleanupException
 import dev.po4yka.chur.imports.MediaBounds
 import dev.po4yka.chur.imports.MediaCodec
 import dev.po4yka.chur.imports.PickedMedia
@@ -31,6 +33,8 @@ import kotlin.test.assertContentEquals
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TestTimeSource
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertSame
 import kotlin.test.assertContentEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
@@ -170,6 +174,54 @@ class MediaImporterHostTest {
             assertTrue(closed)
         } finally {
             vault.shutdown()
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun unconfirmed_decoder_cleanup_propagates_and_preserves_the_committed_original() = runBlocking {
+        val root = File(System.getProperty("java.io.tmpdir"), "chur-decoder-cleanup-${System.nanoTime()}").apply { mkdirs() }
+        val bytes = ByteArray(2_048) { 37 }
+        val source = File(root, "picked.jpg").apply { writeBytes(bytes) }
+        val password = "decoder-cleanup-fixture-password".encodeToByteArray()
+        val vault = VaultRepository(File(root, "vault").absolutePath, { 1_700_000_000_000L })
+        try {
+            vault.start()
+            vault.create(password, offerRecovery = false)
+            var closes = 0
+            val failure = DecoderCleanupException("decoder shutdown was not confirmed")
+            RandomAccessFile(source, "r").use { file ->
+                val descriptor = file.fd.javaClass.getDeclaredField("fd").apply { isAccessible = true }.getInt(file.fd)
+                val picked = PickedMedia(descriptor, true, source.length(), "image/jpeg", "picked.jpg", null, null, {
+                    closes += 1
+                    file.close()
+                })
+                val codec = object : MediaCodec {
+                    override fun probe(media: PickedMedia) = ProbedMedia(MediaBounds.CLASS_IMAGE, 80, 40, 0, "image/jpeg")
+                    override fun derive(media: PickedMedia, probe: ProbedMedia, kind: StreamKind,
+                        cancelRequested: () -> Boolean): Derivative = error("the bounded decoder owns cleanup")
+                    override suspend fun deriveBounded(media: PickedMedia, probe: ProbedMedia, kind: StreamKind,
+                        cancelRequested: () -> Boolean): Derivative {
+                        assertEquals(0, closes, "the importer retains its source until decoder cleanup returns")
+                        assertTrue(file.fd.valid())
+                        assertEquals(1, vault.page(ObjectQuery()).objects.size, "the original is already committed")
+                        throw failure
+                    }
+                }
+                val caught = assertFailsWith<DecoderCleanupException> { MediaImporter(codec).import(vault, picked) }
+                assertSame(failure, caught, "failed cleanup must not become Imported with a missing preview")
+                assertEquals(1, closes, "the importer releases its source once on failure")
+                assertTrue(!file.fd.valid())
+            }
+            val original = vault.page(ObjectQuery()).objects.single().objectId
+            assertContentEquals(bytes, vault.readRange(original, 0, bytes.size))
+            vault.lock(LockReason.USER)
+            vault.unlock(password)
+            assertEquals(1, vault.page(ObjectQuery()).objects.size)
+            assertContentEquals(bytes, vault.readRange(original, 0, bytes.size))
+        } finally {
+            vault.shutdown()
+            password.fill(0)
             root.deleteRecursively()
         }
     }

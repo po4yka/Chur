@@ -2,6 +2,11 @@ package dev.po4yka.chur.android
 
 import android.app.ActivityManager
 import android.content.Context
+import android.content.ContextWrapper
+import android.content.ComponentName
+import android.content.Intent
+import android.content.ServiceConnection
+import android.os.IBinder
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
@@ -20,11 +25,15 @@ import dev.po4yka.chur.imports.PickedMedia
 import dev.po4yka.chur.imports.ProbedMedia
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -69,10 +78,66 @@ class MediaDerivativeIsolationTest {
             work.cancelAndJoin()
             assertNoDecoderProcess()
         }
+        assertHealthyNextImport()
     }
 
-    private suspend fun withBlockedImage(body: suspend (AndroidMediaCodec, PickedMedia) -> Unit) {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
+    @Test
+    fun cancellationBeforeThePidHandshakeStillOwnsAndStopsTheRealChild() = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val delayed = DelayedConnectionContext(instrumentation.targetContext)
+        withBlockedImage(delayed) { codec, source ->
+            val work = async(start = CoroutineStart.UNDISPATCHED) {
+                codec.deriveBounded(source, imageProbe, StreamKind.THUMBNAIL) { false }
+            }
+            try {
+                assertTrue("the actual service must bind before cancellation", withContext(Dispatchers.IO) {
+                    delayed.connected.await(5, TimeUnit.SECONDS)
+                })
+                work.cancel()
+                // Deliver the real Binder only after cancellation is already requested.
+                instrumentation.runOnMainSync { delayed.deliverConnection() }
+                work.join()
+                assertNoDecoderProcess()
+            } finally {
+                instrumentation.runOnMainSync { delayed.deliverConnection() }
+                work.cancelAndJoin()
+            }
+        }
+        assertHealthyNextImport()
+    }
+
+    private class DelayedConnectionContext(base: Context) : ContextWrapper(base) {
+        val connected = CountDownLatch(1)
+        private var actual: ServiceConnection? = null
+        private var deliver: (() -> Unit)? = null
+        override fun getApplicationContext(): Context = this
+        override fun bindService(intent: Intent, connection: ServiceConnection, flags: Int): Boolean {
+            val forwarding = object : ServiceConnection {
+                override fun onServiceConnected(name: ComponentName, service: IBinder) {
+                    deliver = { connection.onServiceConnected(name, service) }
+                    connected.countDown()
+                }
+                override fun onServiceDisconnected(name: ComponentName) = connection.onServiceDisconnected(name)
+                override fun onBindingDied(name: ComponentName) = connection.onBindingDied(name)
+                override fun onNullBinding(name: ComponentName) = connection.onNullBinding(name)
+            }
+            actual = forwarding
+            return super.bindService(intent, forwarding, flags)
+        }
+        override fun unbindService(connection: ServiceConnection) {
+            super.unbindService(requireNotNull(actual))
+        }
+        fun deliverConnection() {
+            val callback = deliver
+            deliver = null
+            callback?.invoke()
+        }
+    }
+
+    private suspend fun withBlockedImage(
+        context: Context = InstrumentationRegistry.getInstrumentation().targetContext,
+        body: suspend (AndroidMediaCodec, PickedMedia) -> Unit,
+    ) {
         val file = File(context.cacheDir, "blocked-codec-${System.nanoTime()}.fifo")
         Os.mkfifo(file.absolutePath, 384)
         // Holding both ends makes reopening the FIFO succeed, but no pixels

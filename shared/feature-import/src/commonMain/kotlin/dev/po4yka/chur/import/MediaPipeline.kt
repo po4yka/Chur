@@ -216,6 +216,9 @@ object MediaBounds {
     }
 }
 
+/** Decoder shutdown was not confirmed. This is not an optional preview failure. */
+class DecoderCleanupException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
 /**
  * The platform's codec work, §1.
  *

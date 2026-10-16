@@ -14,10 +14,14 @@ import android.system.OsConstants
 import android.system.StructPollfd
 import dev.po4yka.chur.ffi.StreamKind
 import java.io.ByteArrayInputStream
+import java.io.File
+import java.io.IOException
 import java.io.DataInputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -41,6 +45,7 @@ internal class AndroidDerivativeClient(private val context: Context) {
                     // A child belongs to exactly one operation. A concurrent import must
                     // never stop another operation's decoder.
                     decoderLock.withLock {
+                        failedDecoder?.let { throw DecoderCleanupException("Previous decoder shutdown is unconfirmed", it.failure) }
                         val coroutine = currentCoroutineContext()
                         val started = System.nanoTime()
                         fun stopped(): Boolean {
@@ -48,21 +53,19 @@ internal class AndroidDerivativeClient(private val context: Context) {
                             return cancelRequested() || System.nanoTime() - started >= 30_000_000_000L
                         }
                         val connected = CountDownLatch(1)
-                        val dead = CountDownLatch(1)
                         val endpoint = AtomicReference<IBinder?>()
                         val connection = object : ServiceConnection {
                             override fun onServiceConnected(name: ComponentName, service: IBinder) {
                                 endpoint.set(service)
-                                runCatching { service.linkToDeath({ dead.countDown() }, 0) }
-                                    .onFailure { dead.countDown() }
                                 connected.countDown()
                             }
-                            override fun onServiceDisconnected(name: ComponentName) { dead.countDown() }
+                            override fun onServiceDisconnected(name: ComponentName) {}
                             override fun onNullBinding(name: ComponentName) { connected.countDown() }
-                            override fun onBindingDied(name: ComponentName) { dead.countDown(); connected.countDown() }
+                            override fun onBindingDied(name: ComponentName) { connected.countDown() }
                         }
                         var bound = false
-                        var childPid = 0
+                        var child: ChildIdentity? = null
+                        var originalFailure: Throwable? = null
                         var source: ParcelFileDescriptor? = null
                         var pipe: Array<ParcelFileDescriptor>? = null
                         try {
@@ -75,15 +78,8 @@ internal class AndroidDerivativeClient(private val context: Context) {
                                 if (stopped()) return@withLock null
                             }
                             val service = endpoint.get() ?: return@withLock null
-                            if (stopped()) return@withLock null
-                            val identity = Parcel.obtain()
-                            val identityReply = Parcel.obtain()
-                            try {
-                                identity.writeInterfaceToken(DERIVATIVE_INTERFACE)
-                                if (!service.transact(DERIVATIVE_PID, identity, identityReply, 0)) return@withLock null
-                                childPid = identityReply.readInt()
-                                check(childPid > 0 && childPid != Process.myPid())
-                            } finally { identity.recycle(); identityReply.recycle() }
+                            child = identify(service)
+                            if (child == null || child.hasExited()) return@withLock null
                             if (stopped()) return@withLock null
                             // The original import is committed before this duplicate is
                             // made. Its reader no longer uses the source position.
@@ -150,30 +146,54 @@ internal class AndroidDerivativeClient(private val context: Context) {
                                     null
                                 } finally { buffer.fill(0) }
                             }
+                        } catch (failure: Throwable) {
+                            originalFailure = failure
+                            throw failure
                         } finally {
-                            // The private process owns the native operation. Kill it even
-                            // after success so no codec/source/plaintext outlives this call.
-                            // Remove the binding first: the system must not restart a
-                            // killed codec service while an auto-create binding remains.
-                            try {
-                                if (bound) context.unbindService(connection)
-                                endpoint.get()?.let { service ->
-                                    if (childPid > 0 && childPid != Process.myPid() && service.isBinderAlive) {
-                                        // A parent-side SIGKILL cannot wait behind the native
-                                        // decode or the child's Binder transaction queue.
-                                        Process.killProcess(childPid)
-                                    }
-                                    while (childPid > 0 && service.isBinderAlive && !dead.await(50, TimeUnit.MILLISECONDS)) {
-                                        // Await actual child death before closing source FDs.
-                                    }
+                            // Cleanup is blocking IO and does not consult coroutine cancellation.
+                            // A cancelled bind still owns its late connection and PID handshake.
+                            val deadline = System.nanoTime() + 5_000_000_000L
+                            var cleanupFailure: Throwable? = null
+                            fun cleanupStep(action: () -> Unit) {
+                                try { action() } catch (failure: Throwable) {
+                                    cleanupFailure?.addSuppressed(failure) ?: run { cleanupFailure = failure }
                                 }
-                                pipe?.forEach { runCatching { it.close() } }
-                                source?.let { runCatching { it.close() } }
-                            } catch (failure: Throwable) {
-                                // A cleanup failure prevents delivery to the importer,
-                                // so no caller can take ownership of this final array.
+                            }
+                            cleanupStep {
+                                if (bound && child == null) {
+                                    if (!connected.await(maxOf(0L, deadline - System.nanoTime()), TimeUnit.NANOSECONDS)) {
+                                        throw IOException("Decoder connection did not complete during shutdown")
+                                    }
+                                    endpoint.get()?.let { child = identify(it) }
+                                }
+                            }
+                            // An unbind failure must not skip killing the already owned child.
+                            cleanupStep { if (bound) context.unbindService(connection) }
+                            var exited = child == null && source == null && cleanupFailure == null
+                            cleanupStep {
+                                child?.let { it.terminate(deadline); exited = true }
+                            }
+                            if (exited) {
+                                pipe?.forEach { descriptor -> cleanupStep { descriptor.close() } }
+                                cleanupStep { source?.close() }
+                            }
+                            cleanupFailure?.let { failure ->
                                 resultBytes?.fill(0)
-                                throw failure
+                                val fatal = DecoderCleanupException("Decoder shutdown could not be confirmed", failure)
+                                // Keep at most one unresolved owner. No later operation may bind
+                                // to this process or release its duplicated source descriptors.
+                                failedDecoder = FailedDecoder(fatal,
+                                    listOfNotNull<Any>(context, connection, endpoint.get(),
+                                        source.takeUnless { exited }, pipe.takeUnless { exited }))
+                                val original = originalFailure
+                                if (original is CancellationException && original !is TimeoutCancellationException) {
+                                    original.addSuppressed(fatal)
+                                } else {
+                                    // Our own withTimeoutOrNull must not convert failed shutdown
+                                    // into an ordinary missing preview after its deadline.
+                                    original?.let { fatal.addSuppressed(it) }
+                                    throw fatal
+                                }
                             }
                         }
                     }
@@ -189,7 +209,62 @@ internal class AndroidDerivativeClient(private val context: Context) {
         }
     }
 
+    private fun identify(service: IBinder): ChildIdentity? {
+        val request = Parcel.obtain()
+        val reply = Parcel.obtain()
+        try {
+            request.writeInterfaceToken(DERIVATIVE_INTERFACE)
+            if (!service.transact(DERIVATIVE_PID, request, reply, 0)) throw IOException("Decoder identity was unavailable")
+            val pid = reply.readInt()
+            check(pid > 0 && pid != Process.myPid())
+            return kernelTask(pid)?.let { ChildIdentity(pid, it.started) }
+        } finally { request.recycle(); reply.recycle() }
+    }
+
+    private data class KernelTask(val state: Char, val started: Long)
+
+    private data class ChildIdentity(val pid: Int, val started: Long) {
+        fun hasExited(): Boolean {
+            val task = kernelTask(pid) ?: return true
+            return task.started != started || task.state == 'Z' || task.state == 'X'
+        }
+
+        fun terminate(deadline: Long) {
+            if (hasExited()) return
+            // This app has only its main process and one private decoder process.
+            // decoderLock excludes another operation until cleanup completes; a
+            // failed unbind can restart only this operation's owned service.
+            // starttime detects stale PIDs, but is not an atomic process handle.
+            // Revisit numeric signalling if another app-UID process path is added.
+            try { Os.kill(pid, OsConstants.SIGKILL) } catch (failure: ErrnoException) {
+                if (failure.errno != OsConstants.ESRCH) throw failure
+            }
+            while (!hasExited()) {
+                if (System.nanoTime() >= deadline) throw IOException("Decoder task did not exit after SIGKILL")
+                Thread.sleep(10)
+            }
+        }
+    }
+
+    private class FailedDecoder(val failure: DecoderCleanupException, val retainedOwner: List<Any>)
+
     companion object {
         private val decoderLock = Mutex()
+        // Accessed only while decoderLock is held. An uncertain owner forbids reuse.
+        private var failedDecoder: FailedDecoder? = null
+
+        private fun kernelTask(pid: Int): KernelTask? {
+            val stat = try { File("/proc/$pid/stat").readText() } catch (failure: IOException) {
+                try { Os.kill(pid, 0) } catch (probe: ErrnoException) {
+                    if (probe.errno == OsConstants.ESRCH) return null
+                    failure.addSuppressed(probe)
+                }
+                throw failure
+            }
+            // comm can contain spaces and parentheses. starttime is field 22;
+            // the fields after the final ')' start with state (field 3).
+            val fields = stat.substring(stat.lastIndexOf(')') + 1).trim().split(Regex("\\s+"))
+            return KernelTask(fields[0].single(), fields[19].toLong())
+        }
     }
 }

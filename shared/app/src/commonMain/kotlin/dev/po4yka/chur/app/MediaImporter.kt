@@ -4,6 +4,7 @@ import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.ImportRequest
 import dev.po4yka.chur.ffi.OperationProgress
+import dev.po4yka.chur.imports.DecoderCleanupException
 import dev.po4yka.chur.imports.MediaCodec
 import dev.po4yka.chur.imports.PickedMedia
 import dev.po4yka.chur.imports.MediaBounds
@@ -148,6 +149,8 @@ class MediaImporter(
                     codec.deriveBounded(media, probe, kind) { cancelRequested() || timedOut() }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
+                } catch (failure: DecoderCleanupException) {
+                    throw failure
                 } catch (_: Exception) {
                     null
                 }
