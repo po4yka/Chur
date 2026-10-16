@@ -887,6 +887,32 @@ object ChurVault {
         }
     }
 
+    /**
+     * Encrypts external sources into an independent portable archive without a session.
+     *
+     * The native worker duplicates descriptors before return. The caller retains provider
+     * leases and does not seek, close, or reuse the sources until the operation is terminal.
+     * The destination must be writable and seekable. Close the operation off the UI thread.
+     */
+    fun beginExternalArchive(
+        runtime: Long,
+        files: List<ExternalArchiveFile>,
+        password: ByteArray,
+        destinationFd: Int,
+        maxOutputBytes: Long = Long.MAX_VALUE,
+    ): Long {
+        if (ChurNative.abiVersionMajor() != 2 || ChurNative.abiVersionMinor() < 23) {
+            throw ChurFailure(ChurStatus.ABI_INCOMPATIBLE, "external archive")
+        }
+        require(destinationFd >= 0) { "invalid archive destination" }
+        val request = encodeExternalArchiveRequest(files, password, maxOutputBytes)
+        return try {
+            handleOf("external archive") { out ->
+                ChurNative.externalArchiveBegin(runtime, request, files.map { it.descriptor }.toIntArray(), destinationFd, out)
+            }
+        } finally { request.fill(0) }
+    }
+
     fun beginSelectiveExport(session: Long, objectIds: List<ByteArray>, albumIds: List<ByteArray>, notes: List<PrivateNoteSelection>, password: ByteArray, destinationFd: Int, maxOutputBytes: Long = Long.MAX_VALUE): Long {
         require(password.size in 1..1024 && objectIds.size <= 1000 && albumIds.size <= 1000 && notes.size <= 1000)
         require(objectIds.all { it.size == 16 } && albumIds.all { it.size == 16 } && notes.all { it.noteId.size == 16 && it.revision > 0 })

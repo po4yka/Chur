@@ -152,6 +152,7 @@ internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: 
             },
         )
         AppRoute.RestoreBackup -> IosRestoreRoute(controller)
+        AppRoute.EncryptFiles -> IosExternalArchiveRoute(controller)
         AppRoute.Unlock -> UnlockScreen(
             busy = unlocking,
             error = formError,
@@ -194,6 +195,7 @@ private fun PublicShellRoute(controller: ChurController, route: AppRoute) {
         PublicSettingsScreen(
             onBack = { controller.goTo(AppRoute.PublicShell) },
             onOpenVault = controller::openVaultEntry,
+            onEncryptExternalFiles = controller::openExternalArchive,
             selectedShell = shell,
             onSelectShell = controller::setPublicShell,
             error = error,
@@ -245,6 +247,67 @@ private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> U
         onOpenSettings = { onOpenSettings() },
         showFirstWriteDisclosure = disclosureDue,
         onAcknowledgeDisclosure = controller::acknowledgeDisclosure,
+    )
+}
+
+/** Each source keeps its scoped provider lease until native encryption returns. */
+@Composable
+private fun IosExternalArchiveRoute(controller: ChurController) {
+    val codec = remember { IosMediaCodec() }
+    var alive by remember(controller) { mutableStateOf(true) }
+    var pending by remember(controller) { mutableStateOf<((ExternalArchiveSelection?) -> Unit)?>(null) }
+    DisposableEffect(controller) {
+        onDispose {
+            alive = false
+            val pickerWasOpen = pending != null
+            pending = null
+            // Once handed over, only the operation owner may close source grants.
+            if (pickerWasOpen) IosDocumentPicker.cancel?.invoke()
+        }
+    }
+    ExternalArchiveScreen(
+        controller = controller,
+        selectFiles = { answer ->
+            val present = IosDocumentPicker.present
+            if (present == null) {
+                controller.report("This build cannot open the document picker.")
+                answer(null)
+            } else {
+                pending = answer
+                try {
+                    present { count, load, releaseSelection ->
+                        val current = pending
+                        pending = null
+                        if (!alive || current == null || count <= 0 || count > 32) {
+                            releaseSelection()
+                            if (alive && current != null) {
+                                if (count > 32) controller.report("Select at most 32 files for one encrypted archive.")
+                                current(null)
+                            }
+                        } else {
+                            current(ExternalArchiveSelection(
+                                count = count,
+                                open = { index, prepare ->
+                                    withContext(Dispatchers.Main) {
+                                        suspendCancellableCoroutine { continuation ->
+                                            load(index, prepare) { fd, name, type, size, release ->
+                                                val picked = codec.openDocument(fd, name, type, size, release)
+                                                continuation.resume(picked) { _, item, _ -> item?.close?.invoke() }
+                                            }
+                                        }
+                                    }
+                                },
+                                close = releaseSelection,
+                            ))
+                        }
+                    }
+                } catch (_: Exception) {
+                    pending = null
+                    controller.report("The file picker could not be opened.")
+                    answer(null)
+                }
+            }
+        },
     )
 }
 
@@ -874,6 +937,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 onLoadPairedDevices = { controller.loadPairedDevices() },
                 onRevokePairedDevice = { controller.revokePairedDevice(it) },
                 onCreateBackup = controller::createBackup,
+                onEncryptExternalFiles = controller::openExternalArchive,
                 onImportArchive = { choosingArchiveImport = true },
                 onRestoreArchive = controller::restoreArchiveAsSeparateVault,
                 onCreateSecondIdentity = controller::createSecondIdentity,

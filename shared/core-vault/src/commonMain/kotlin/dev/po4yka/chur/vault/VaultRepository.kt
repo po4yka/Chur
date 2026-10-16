@@ -12,6 +12,7 @@ import dev.po4yka.chur.ffi.ChurBuffer
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.ChurVault
 import dev.po4yka.chur.ffi.ContentInfo
+import dev.po4yka.chur.ffi.ExternalArchiveFile
 import dev.po4yka.chur.ffi.ImportRequest
 import dev.po4yka.chur.ffi.KeystoreMaterial
 import dev.po4yka.chur.ffi.LockReason
@@ -702,10 +703,21 @@ class VaultRepository(
         ChurVault.beginRestore(runtime, sourceFd, password)
     }
 
-    /** One nonblocking progress snapshot. Active work refreshes the idle clock. */
-    fun poll(operation: Long): OperationProgress {
+    /** Encrypts external files without opening or changing the local vault. */
+    suspend fun beginExternalArchive(
+        files: List<ExternalArchiveFile>,
+        password: ByteArray,
+        destinationFd: Int,
+        maxOutputBytes: Long = Long.MAX_VALUE,
+    ): Long = mutex.withLock {
+        requireRuntime()
+        ChurVault.beginExternalArchive(runtime, files, password, destinationFd, maxOutputBytes)
+    }
+
+    /** One nonblocking snapshot. Set [noteActivity] false for work outside the vault. */
+    fun poll(operation: Long, noteActivity: Boolean = true): OperationProgress {
         val progress = ChurVault.poll(operation)
-        if (!progress.terminal && mutex.tryLock()) {
+        if (noteActivity && !progress.terminal && mutex.tryLock()) {
             try {
                 if (session != 0L) touch()
             } finally {

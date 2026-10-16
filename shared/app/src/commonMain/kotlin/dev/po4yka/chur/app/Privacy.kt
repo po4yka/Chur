@@ -59,7 +59,8 @@ interface PrivacyCover {
  */
 fun needsPrivacyCover(state: VaultState, route: AppRoute, phraseShown: Boolean = false): Boolean =
     phraseShown || state is VaultState.Unlocked || route == AppRoute.Unlock || route == AppRoute.Recover ||
-        route == AppRoute.AppUnlock || route == AppRoute.AppRecover || route == AppRoute.RestoreBackup
+        route == AppRoute.AppUnlock || route == AppRoute.AppRecover || route == AppRoute.RestoreBackup ||
+        route == AppRoute.EncryptFiles
 
 /** A cover that does nothing, for a host with no window to cover. */
 object NoPrivacyCover : PrivacyCover {

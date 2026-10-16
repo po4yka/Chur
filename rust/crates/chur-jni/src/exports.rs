@@ -3562,3 +3562,72 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_selectiveImportBegin<'lo
         }
     })
 }
+
+/// Starts runtime-owned external file encryption with borrowed host descriptors.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_externalArchiveBegin<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    runtime: jlong,
+    request: JByteArray<'local>,
+    source_fds: JIntArray<'local>,
+    destination_fd: jint,
+    out: JLongArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        if request.is_null() || source_fds.is_null() || out.is_null() {
+            return INVALID_INPUT;
+        }
+        let Ok(request_length) = request.len(env) else {
+            return INVALID_INPUT;
+        };
+        if request_length > 128 * 1024 {
+            return INVALID_INPUT;
+        }
+        let Ok(count) = source_fds.len(env) else {
+            return INVALID_INPUT;
+        };
+        if !(1..=32).contains(&count) {
+            return INVALID_INPUT;
+        }
+        let Ok(out_count) = out.len(env) else {
+            return INVALID_INPUT;
+        };
+        if out_count < 1 {
+            return INVALID_INPUT;
+        }
+        let Some(bytes) = byte_array(env, &request) else {
+            return INVALID_INPUT;
+        };
+        let mut descriptors = vec![0; count];
+        if source_fds.get_region(env, 0, &mut descriptors).is_err() {
+            return INVALID_INPUT;
+        }
+        let mut operation = 0;
+        // SAFETY: bounded copied arrays and local output are live through the call;
+        // native code duplicates descriptors before returning.
+        let status = unsafe {
+            chur_ffi::external_archive::chur_external_archive_begin(
+                handle_of(runtime),
+                bytes.as_ptr(),
+                bytes.len() as u32,
+                descriptors.as_ptr(),
+                count as u32,
+                destination_fd,
+                &mut operation,
+            )
+        };
+        if status != 0 {
+            return status;
+        }
+        if write_long(env, &out, 0, operation as jlong) {
+            0
+        } else {
+            // A failed result transfer must not leave an unreachable running operation.
+            unsafe {
+                chur_ffi::api::chur_operation_close(operation);
+            }
+            INVALID_INPUT
+        }
+    })
+}

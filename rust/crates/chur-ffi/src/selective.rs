@@ -117,7 +117,7 @@ fn decode(bytes: &[u8], export: bool) -> Result<Request> {
     );
     Ok(r)
 }
-struct CancelOnly<'a>(&'a Shared);
+pub(crate) struct CancelOnly<'a>(pub(crate) &'a Shared);
 impl Progress for CancelOnly<'_> {
     fn cancelled(&self) -> bool {
         self.0.cancelled()
@@ -517,11 +517,11 @@ fn authenticate_all(source: &mut Access, shared: &Shared) -> Result<()> {
         })
     })
 }
-struct BoundedOutput<'a> {
-    file: &'a mut std::fs::File,
-    limit: u64,
-    position: u64,
-    exceeded: bool,
+pub(crate) struct BoundedOutput<'a> {
+    pub(crate) file: &'a mut std::fs::File,
+    pub(crate) limit: u64,
+    pub(crate) position: u64,
+    pub(crate) exceeded: bool,
 }
 impl std::io::Write for BoundedOutput<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {

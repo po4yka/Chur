@@ -75,6 +75,9 @@ public sealed interface AppRoute {
     /** The visible settings entry of `PROVISIONING.md` §2. */
     public data object PublicSettings : AppRoute
 
+    /** Standalone external-file encryption; no vault session is required. */
+    public data object EncryptFiles : AppRoute
+
     /** Vault creation, §3 there. */
     public data object CreateVault : AppRoute
 

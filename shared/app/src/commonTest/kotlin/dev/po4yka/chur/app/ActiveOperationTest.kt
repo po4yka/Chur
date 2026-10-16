@@ -6,6 +6,14 @@ import kotlin.test.assertFalse
 
 class ActiveOperationTest {
     @Test
+    fun external_archive_progress_uses_bytes_and_keeps_unknown_lengths_indeterminate() {
+        val work = ActiveOperation(1, "external-archive", processed = 1_048_576, total = 5_242_880, stage = 2)
+        assertEquals("Creating encrypted archive · 1.0 MB of 5.2 MB", work.description)
+        assertEquals("Creating encrypted archive, 20 percent", work.spoken)
+        assertEquals("Creating encrypted archive…", work.copy(total = 0).description)
+    }
+
+    @Test
     fun archive_progress_counts_completed_items_without_using_byte_units() {
         val exporting = ActiveOperation(1, "archive-export", processed = 2, total = 5, stage = 2)
         assertEquals("Creating encrypted archive · 2 of 5 items", exporting.description)

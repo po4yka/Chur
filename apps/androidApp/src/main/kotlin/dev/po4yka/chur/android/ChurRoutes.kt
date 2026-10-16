@@ -64,6 +64,8 @@ import dev.po4yka.chur.app.AppRoute
 import dev.po4yka.chur.app.ActiveOperation
 import dev.po4yka.chur.app.ChurController
 import dev.po4yka.chur.app.ExportTarget
+import dev.po4yka.chur.app.ExternalArchiveScreen
+import dev.po4yka.chur.app.ExternalArchiveSelection
 import dev.po4yka.chur.app.MediaImporter
 import dev.po4yka.chur.app.Notice
 import dev.po4yka.chur.app.notes.NoteEditorScreen
@@ -218,6 +220,7 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
             )
         }
         AppRoute.RestoreBackup -> RestoreRoute(controller)
+        AppRoute.EncryptFiles -> ExternalArchiveRoute(controller)
         AppRoute.Unlock -> {
             // The screen has no way back of its own. It is entered from the
             // vault entry of the public settings, or after a restore, and Back
@@ -275,6 +278,7 @@ private fun PublicShellRoute(controller: ChurController, route: AppRoute) {
         PublicSettingsScreen(
             onBack = { controller.goTo(AppRoute.PublicShell) },
             onOpenVault = controller::openVaultEntry,
+            onEncryptExternalFiles = controller::openExternalArchive,
             selectedShell = shell,
             onSelectShell = controller::setPublicShell,
             error = error,
@@ -423,6 +427,78 @@ private fun RestoreRoute(controller: ChurController) {
             }
         },
         onBack = back, onCancel = controller::cancelActiveOperation,
+    )
+}
+
+/** Picked URIs stay in this route's memory and are opened only for encryption. */
+@Composable
+private fun ExternalArchiveRoute(controller: ChurController) {
+    val context = LocalContext.current
+    val codec = remember(context) { AndroidMediaCodec(context) }
+    val pickerOwner = remember(controller) { Any() }
+    var alive by remember(controller) { mutableStateOf(true) }
+    var pendingFiles by remember(controller) { mutableStateOf<((ExternalArchiveSelection?) -> Unit)?>(null) }
+    var pendingDestination by remember(controller) { mutableStateOf<((String?) -> Unit)?>(null) }
+    DisposableEffect(controller) {
+        onDispose {
+            alive = false
+            pendingFiles = null
+            pendingDestination = null
+        }
+    }
+    lateinit var files: ManagedActivityResultLauncher<Array<String>, List<Uri>>
+    lateinit var destination: ManagedActivityResultLauncher<String, Uri?>
+    // Restored activity results cannot attach to a new screen owner.
+    key(pickerOwner) {
+        CompositionLocalProvider(LocalSaveableStateRegistry provides null) {
+            files = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+                val answer = pendingFiles
+                pendingFiles = null
+                if (alive && answer != null) {
+                    if (uris.size > 32) {
+                        controller.report("Select at most 32 files for one encrypted archive.")
+                        answer(null)
+                    } else {
+                        answer(uris.takeIf { it.isNotEmpty() }?.toList()?.let { selected ->
+                            ExternalArchiveSelection(
+                                count = selected.size,
+                                open = { index, _ -> codec.open(selected[index], asFile = true) },
+                                close = {},
+                            )
+                        })
+                    }
+                }
+            }
+            destination = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+                val answer = pendingDestination
+                pendingDestination = null
+                if (alive && answer != null) answer(uri?.toString())
+                else uri?.let { controller.discardArchiveDestination(it.toString()) }
+            }
+        }
+    }
+    ExternalArchiveScreen(
+        controller = controller,
+        selectFiles = { answer ->
+            pendingFiles = answer
+            try {
+                files.launch(arrayOf("*/*"))
+            } catch (_: Exception) {
+                pendingFiles = null
+                controller.report("The file picker could not be opened.")
+                answer(null)
+            }
+        },
+        chooseDestination = { answer ->
+            pendingDestination = answer
+            try {
+                destination.launch("chur-archive.churbak")
+            } catch (_: Exception) {
+                pendingDestination = null
+                controller.report("The destination picker could not be opened.")
+                answer(null)
+            }
+        },
     )
 }
 
@@ -1178,6 +1254,7 @@ private fun VaultRoute(controller: ChurController) {
                     } ?: controller.revokePairedDevice(peer)
                 },
                 onCreateBackup = controller::createBackup,
+                onEncryptExternalFiles = controller::openExternalArchive,
                 onImportArchive = { choosingArchiveImport = true },
                 onRestoreArchive = controller::restoreArchiveAsSeparateVault,
                 onCreateSecondIdentity = controller::createSecondIdentity,

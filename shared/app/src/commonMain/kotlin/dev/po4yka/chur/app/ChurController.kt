@@ -989,7 +989,7 @@ class ChurController(
     suspend fun checkIdle() {
         withContext(NonCancellable) {
             if (withContext(Dispatchers.Default) {
-                if (_activeOperation.value?.cancelling == false) repository.noteActivity()
+                if (_activeOperation.value?.let { !it.cancelling && it.name != "external-archive" } == true) repository.noteActivity()
                 repository.lockIfIdle {
                     withContext(NonCancellable + Dispatchers.Main) {
                         lockEpoch += 1
@@ -1903,6 +1903,135 @@ class ChurController(
         }
     }
 
+    private var externalArchiveSecret: ArchiveCredential? = null
+    private var externalArchiveBytes: ByteArray? = null
+    private fun clearExternalArchiveSecret() {
+        externalArchiveSecret?.clear(); externalArchiveSecret = null
+        externalArchiveBytes?.fill(0); externalArchiveBytes = null
+    }
+    private var externalArchiveReturn: AppRoute = AppRoute.PublicSettings
+    private var externalArchiveGeneration: Long? = null
+    internal val externalArchiveVisit: Long get() = routeVisit
+    internal fun externalArchiveCurrent(visit: Long): Boolean =
+        _route.value == AppRoute.EncryptFiles && routeVisit == visit
+
+    fun openExternalArchive() {
+        if (_route.value != AppRoute.PublicSettings && _route.value != AppRoute.Vault) return
+        if (_activeOperation.value != null) { report("Finish the current operation first."); return }
+        externalArchiveReturn = _route.value
+        externalArchiveGeneration = (repository.state.value as? VaultState.Unlocked)?.generation
+        privacy.setEnabled(true)
+        setRoute(AppRoute.EncryptFiles)
+    }
+
+    fun closeExternalArchive() {
+        if (_route.value != AppRoute.EncryptFiles) return
+        cancelActiveOperation()
+        val sameVault = externalArchiveGeneration != null &&
+            (repository.state.value as? VaultState.Unlocked)?.generation == externalArchiveGeneration
+        val next = if (externalArchiveReturn == AppRoute.Vault && sameVault) AppRoute.Vault else AppRoute.PublicSettings
+        setRoute(next)
+        privacy.setEnabled(next == AppRoute.Vault)
+    }
+
+    internal fun externalArchiveActivity(visit: Long): (() -> Unit)? {
+        if (!externalArchiveCurrent(visit)) return null
+        val epoch = promptEpoch
+        beginHostActivity()
+        var ended = false
+        return {
+            if (!ended) {
+                ended = true
+                if (promptEpoch == epoch) endHostActivity()
+            }
+        }
+    }
+
+    /** Encrypts provider inputs into a fresh-key CHURBAK1 without touching the library. */
+    fun exportExternalArchive(
+        visit: Long,
+        selection: ExternalArchiveSelection,
+        credential: ArchiveCredential,
+        target: ExportTarget,
+        uri: String? = null,
+    ) = guarded {
+        val opened = mutableListOf<dev.po4yka.chur.imports.PickedMedia>()
+        var destination: ExportSink.Destination? = null
+        var password: ByteArray? = null
+        var published = false
+        var nativeOperation: Long? = null
+        try {
+            if (target == ExportTarget.FILES && uri != null) {
+                destination = exports.create("", "", target, uri)
+                    ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the archive destination")
+            }
+            tracked("external-archive") { token ->
+                fun checkOwner() {
+                    if (!externalArchiveCurrent(visit) || cancellationRequested(token)) {
+                        throw ChurFailure(ChurStatus.CANCELLED, "the external archive")
+                    }
+                }
+                checkOwner()
+                externalArchiveSecret = credential
+                if (selection.count !in 1..32 || target !in listOf(ExportTarget.FILES, ExportTarget.SHARE)) {
+                    throw ChurFailure(ChurStatus.INVALID_INPUT, "the external archive")
+                }
+                val files = mutableListOf<dev.po4yka.chur.ffi.ExternalArchiveFile>()
+                var knownTotal = 0L
+                for (index in 0 until selection.count) {
+                    checkOwner()
+                    val source = withContext(Dispatchers.Default) {
+                        selection.open(index) { _, _ ->
+                            externalArchiveCurrent(visit) && !cancellationRequested(token)
+                        }?.also { opened += it }
+                    } ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the external file")
+                    checkOwner()
+                    source.knownLength?.let { size ->
+                        if (size < 0 || size > 4L * 1024 * 1024 * 1024 - knownTotal) {
+                            throw ChurFailure(ChurStatus.RESOURCE_LIMIT_EXCEEDED, "the external files")
+                        }
+                        knownTotal += size
+                    }
+                    files += dev.po4yka.chur.ffi.ExternalArchiveFile(source.descriptor,
+                        source.originalFilename?.takeIf { it.isNotBlank() } ?: "file-${index + 1}", source.contentTypeHint, source.knownLength)
+                }
+                val capacity = if (destination != null) Long.MAX_VALUE else exports.archiveCapacity(target)
+                if (capacity <= 0) throw ChurFailure(ChurStatus.RESOURCE_LIMIT_EXCEEDED, "the archive destination")
+                val output = destination ?: exports.create("chur-archive.churbak", "application/octet-stream", target, uri, capacity)
+                    ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the archive destination")
+                destination = output
+                val bytes = credential.copyBytes()
+                password = bytes
+                externalArchiveBytes = bytes
+                try {
+                    withContext(Dispatchers.Default) {
+                        nativeOperation = repository.beginExternalArchive(files, bytes, output.descriptor, capacity)
+                    }
+                } finally { bytes.fill(0); credential.clear() }
+                val operation = requireNotNull(nativeOperation)
+                val result = drainProgress(operation, token, keepVaultAlive = false)
+                closeOperation(operation)
+                nativeOperation = null
+                if (result.status != 0) throw ChurFailure(ChurStatus.fromValue(result.status), "the external archive")
+                checkOwner()
+                if (!output.publishChecked()) throw ChurFailure(ChurStatus.IO_FAILURE, "the archive destination")
+                checkOwner()
+                published = true
+                say("Encrypted archive ready. Use its password to restore it or import fresh copies. The library was not changed.")
+            }
+        } finally {
+            nativeOperation?.let { runCatching { closeOperation(it) } }
+            password?.fill(0)
+            credential.clear()
+            if (externalArchiveSecret === credential) clearExternalArchiveSecret()
+            opened.forEach { runCatching { it.close() } }
+            runCatching { selection.close() }
+            destination?.let { output ->
+                try { if (!published) output.discard() } finally { output.close() }
+            }
+        }
+    }
+
     /** Writes a fresh-key archive; no source credential or unrelated catalog row leaves the vault. */
     fun exportSelectiveArchive(
         request: SelectiveExportRequest,
@@ -2289,6 +2418,7 @@ class ChurController(
 
     /** Requests cancellation; the worker sends it to Rust before its next poll. */
     fun cancelActiveOperation() {
+        if (_activeOperation.value?.name == "external-archive") clearExternalArchiveSecret()
         _activeOperation.update { current ->
             current?.takeIf { it.cancellable }?.copy(cancelling = true) ?: current
         }
@@ -2497,7 +2627,7 @@ class ChurController(
     }
 
     /** Polls one native operation and forwards its redacted snapshot to the UI. */
-    private suspend fun drainProgress(operation: Long, token: Long): OperationProgress {
+    private suspend fun drainProgress(operation: Long, token: Long, keepVaultAlive: Boolean = true): OperationProgress {
         var signalled = false
         while (true) {
             if (!signalled && cancellationRequested(token)) {
@@ -2505,7 +2635,7 @@ class ChurController(
                 signalled = true
             }
             val progress =
-                withContext(Dispatchers.Default) { repository.poll(operation) }
+                withContext(Dispatchers.Default) { repository.poll(operation, noteActivity = keepVaultAlive) }
             updateOperation(token, progress, keepCancellableOnSuccess = _activeOperation.value?.name == "album-export")
             if (progress.terminal) return progress
             delay(POLL_INTERVAL_MS)
@@ -2806,6 +2936,7 @@ class ChurController(
      * attempt.
      */
     private fun setRoute(next: AppRoute) {
+        if (_route.value == AppRoute.EncryptFiles && next != AppRoute.EncryptFiles) clearExternalArchiveSecret()
         routeVisit += 1
         _notice.value = null
         _formError.value = null

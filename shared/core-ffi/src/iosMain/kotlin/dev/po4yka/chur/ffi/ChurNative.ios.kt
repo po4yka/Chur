@@ -17,6 +17,7 @@ import dev.po4yka.chur.native.chur_private_note_get
 import dev.po4yka.chur.native.chur_private_note_save
 import dev.po4yka.chur.native.chur_private_note_change
 import dev.po4yka.chur.native.chur_private_note_export_begin
+import dev.po4yka.chur.native.chur_external_archive_begin
 import dev.po4yka.chur.native.chur_selective_export_begin
 import dev.po4yka.chur.native.chur_selective_import_begin
 import dev.po4yka.chur.native.chur_abi_version_major
@@ -1494,6 +1495,18 @@ internal actual object ChurNative {
         status
     }
 
+    actual fun externalArchiveBegin(runtime: Long, request: ByteArray, sourceFds: IntArray, destinationFd: Int, outOperation: LongArray): Int = memScoped {
+        require(request.isNotEmpty() && sourceFds.isNotEmpty())
+        val operation = alloc<chur_handle_tVar>()
+        val status = request.usePinned { requestPin ->
+            sourceFds.usePinned { sourcePin ->
+                chur_external_archive_begin(runtime.toULong(), requestPin.addressOf(0).reinterpret(), request.size.toUInt(),
+                    sourcePin.addressOf(0), sourceFds.size.toUInt(), destinationFd, operation.ptr)
+            }
+        }
+        if (status == 0) outOperation[0] = operation.value.toLong()
+        status
+    }
     actual fun selectiveExportBegin(session: Long, request: ByteArray, descriptor: Int, outOperation: LongArray): Int = memScoped {
         val operation = alloc<chur_handle_tVar>()
         val status = request.usePinned { pin -> chur_selective_export_begin(session.toULong(), pin.addressOf(0).reinterpret(), request.size.toUInt(), descriptor, operation.ptr) }

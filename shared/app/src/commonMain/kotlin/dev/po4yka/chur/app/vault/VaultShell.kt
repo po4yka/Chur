@@ -253,6 +253,7 @@ data class VaultActions(
     val onChangePassword: (String) -> Unit,
     /** Write a backup package, `BACKUP_FORMAT_V1.md` §7. */
     val onCreateBackup: () -> Unit = {},
+    val onEncryptExternalFiles: (() -> Unit)? = null,
     val onImportArchive: () -> Unit = {},
     val onRestoreArchive: () -> Unit = {},
     /** Provision a second vault identity, `DECOY_VAULT.md` §3. */
@@ -1022,6 +1023,11 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
         }
         item {
             SettingsAction("Write a backup file", actions.onCreateBackup, enabled = state.operation == null)
+        }
+        actions.onEncryptExternalFiles?.let { encrypt ->
+            item {
+                SettingsAction("Encrypt external files", encrypt, enabled = state.operation == null)
+            }
         }
         item {
             SettingsAction("Import encrypted archive", actions.onImportArchive, enabled = state.operation == null)

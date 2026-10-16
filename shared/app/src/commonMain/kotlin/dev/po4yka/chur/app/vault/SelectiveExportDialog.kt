@@ -44,6 +44,7 @@ fun SelectiveExportDialog(
     share: Boolean = true,
     onChoose: (String, ExportTarget) -> Unit,
     onDismiss: () -> Unit,
+    externalFiles: Boolean = false,
 ) {
     var password by remember { mutableStateOf("") }
     var confirmation by remember { mutableStateOf("") }
@@ -67,7 +68,9 @@ fun SelectiveExportDialog(
                 Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(ChurSpacing.two)) {
                     Text(summary)
-                    Text("Only the selected items are included. Selected albums include their subalbums. " +
+                    Text(if (externalFiles) "Only the chosen external files are included. They are not added to the library. " +
+                        "This archive has its own password. Keep the password: it cannot be recovered."
+                    else "Only the selected items are included. Selected albums include their subalbums. " +
                         "This archive has its own password. Keep the password: it cannot be recovered.")
                     ArchivePasswordField(password, { value ->
                         tooLong = utf8Size(value) > 1_024

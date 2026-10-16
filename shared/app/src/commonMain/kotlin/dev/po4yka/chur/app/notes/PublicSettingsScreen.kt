@@ -63,6 +63,7 @@ fun PublicSettingsScreen(
     selectedShell: PublicShell = PublicShell.NOTES,
     onSelectShell: (PublicShell) -> Unit = {},
     error: String? = null,
+    onEncryptExternalFiles: (() -> Unit)? = null,
 ) {
     val colors = LocalChurColors.current
     Scaffold(
@@ -111,6 +112,21 @@ fun PublicSettingsScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = colors.inkMuted,
                     )
+                }
+            }
+            onEncryptExternalFiles?.let { encrypt ->
+                Card(onClick = encrypt, modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(ChurSpacing.three),
+                        verticalArrangement = Arrangement.spacedBy(ChurSpacing.one),
+                    ) {
+                        Text("Encrypt external files", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Write a password-protected archive without adding files to the library. Original files stay in place.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = colors.inkMuted,
+                        )
+                    }
                 }
             }
             Text(

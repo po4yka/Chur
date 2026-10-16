@@ -35,7 +35,12 @@ impl Runtime {
     /// orphaned directory. That second sweep is best-effort: a directory it
     /// cannot remove stays inert and never stops the runtime from opening.
     pub fn open(root: PathBuf) -> Result<Self> {
+        std::fs::create_dir_all(&root)
+            .map_err(|_| chur_core::err!(IoFailure, "the runtime root could not be created"))?;
+        let root = std::fs::canonicalize(root)
+            .map_err(|_| chur_core::err!(IoFailure, "the runtime root could not be resolved"))?;
         let root = VaultRoot::new(root);
+        crate::external_archive::sweep_staging(root.base())?;
         root.sweep_temporary()?;
         chur_catalog::vault::sweep_orphaned_directories(&root);
         Ok(Self {

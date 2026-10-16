@@ -59,7 +59,7 @@ data class ActiveOperation(
         "import" -> if (items > 1) "Importing item $item of $items" else "Importing"
         "export" -> "Exporting"
         "album-export" -> if (items > 0) "Exporting item $item of $items" else "Preparing album export"
-        "archive-export" -> "Creating encrypted archive"
+        "archive-export", "external-archive" -> "Creating encrypted archive"
         "archive-import" -> "Importing encrypted archive"
         "backup" -> "Writing backup"
         "restore" -> "Restoring"
