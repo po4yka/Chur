@@ -105,6 +105,8 @@ import dev.po4yka.chur.app.vault.SelectiveExportDialog
 import dev.po4yka.chur.app.vault.SelectiveImportDialog
 import dev.po4yka.chur.app.PrivateNoteExportRequest
 import dev.po4yka.chur.app.vault.PrivateNotesRoute
+import dev.po4yka.chur.app.vault.albumParent
+import dev.po4yka.chur.app.vault.albumPath
 import dev.po4yka.chur.app.vault.VaultShell
 import dev.po4yka.chur.app.vault.VaultUiState
 import androidx.compose.ui.graphics.ImageBitmap
@@ -442,10 +444,8 @@ private fun VaultRoute(controller: ChurController) {
     var albumOrder by remember { mutableStateOf(AlbumOrder.MANUAL) }
     var albumFilter by remember { mutableStateOf("") }
     var terms by remember { mutableStateOf("") }
-    var openAlbum by remember { mutableStateOf<AlbumSummary?>(null) }
-    LaunchedEffect(albums) {
-        openAlbum = openAlbum?.let { current -> albums.firstOrNull { it.id == current.id } }
-    }
+    var openAlbum by remember(generation) { mutableStateOf<AlbumSummary?>(null) }
+
     var openTag by remember { mutableStateOf<TagSummary?>(null) }
     var favoritesOnly by remember { mutableStateOf(false) }
     var trashOpen by remember { mutableStateOf(false) }
@@ -457,6 +457,30 @@ private fun VaultRoute(controller: ChurController) {
     var viewing by remember(generation) { mutableStateOf<ObjectProjection?>(null) }
     var visibleMediaIds by remember(generation) { mutableStateOf(emptySet<String>()) }
     var selection by remember(generation) { mutableStateOf(setOf<String>()) }
+    LaunchedEffect(albums) {
+        val current = openAlbum
+        if (current != null) {
+            val resolved = albumPath(albums, current.id).lastOrNull()
+            if (resolved == null) {
+                selection = emptySet()
+                viewing = null
+                destination = VaultDestination.ALBUMS
+            }
+            openAlbum = resolved
+        }
+    }
+    fun navigateAlbum(target: AlbumSummary?) {
+        focusManager.clearFocus()
+        viewing = null
+        selection = emptySet()
+        openTag = null
+        favoritesOnly = false
+        trashOpen = false
+        quarantineOpen = false
+        destination = VaultDestination.ALBUMS
+        openAlbum = target?.let { albumPath(albums, it.id).lastOrNull() }
+    }
+
     var creatingAlbum by remember { mutableStateOf(false) }
     var choosingAlbum by remember { mutableStateOf(false) }
     var movingSelection by remember { mutableStateOf(false) }
@@ -1012,8 +1036,9 @@ private fun VaultRoute(controller: ChurController) {
                 onSearch = {
                     terms = it
                 },
-                onOpenAlbum = { openAlbum = it; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = false },
-                onCloseAlbum = { openAlbum = null },
+                onOpenAlbum = { navigateAlbum(it) },
+                onCloseAlbum = { navigateAlbum(albumParent(albums, openAlbum?.id)) },
+                onAlbumRoot = { navigateAlbum(null) },
                 onCreateAlbum = { creatingAlbum = true },
                 onMediaViewChange = { mediaView = it },
                 onAlbumViewChange = { albumView = it },

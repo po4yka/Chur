@@ -414,6 +414,78 @@ class BackNavigationTest {
     }
 
     @Test
+    fun backFromNestedAlbumsClearsSelectionThenVisitsTheLiveParent() = inTestVault {
+        withMedia()
+        val photo = controller.page.value.objects.first { it.mediaKind == MEDIA_CLASS_IMAGE }.objectId
+        val suffix = System.nanoTime()
+        val rootName = "Path Root $suffix"
+        val childName = "Path Child $suffix"
+        val leafName = "Path Leaf $suffix"
+        val ids = runBlocking {
+            val root = controller.vault.createAlbum(rootName)
+            val child = controller.vault.createAlbum(childName)
+            val leaf = controller.vault.createAlbum(leafName)
+            controller.vault.moveAlbum(child, root, null)
+            controller.vault.moveAlbum(leaf, child, null)
+            controller.vault.setAlbumMembership(leaf, photo, true)
+            listOf(root, child, leaf)
+        }
+        fun current(name: String, id: ByteArray): Boolean {
+            val album = controller.albums.value.firstOrNull { it.albumId.contentEquals(id) } ?: return false
+            val semanticCurrent = onScreen { nodes -> nodes.any {
+                it.config.getOrNull(SemanticsProperties.TestTag) == "album-breadcrumb-current-${album.id}" &&
+                    it.config.getOrNull(SemanticsProperties.StateDescription) == "Current album" &&
+                    it.config.getOrNull(SemanticsProperties.Selected) == true
+            } }
+            // Compose maps Selected to checked for a non-tab. Its merge node owns
+            // stateDescription, while the full label lives on a synthetic child.
+            return semanticCurrent && find { node ->
+                node.stateDescription?.toString() == "Current album" && node.isCheckable && node.isChecked &&
+                    find(node, label(name)) != null
+            } != null
+        }
+        try {
+            tap(label("Albums"))
+            instrumentation.runOnMainSync { controller.loadAlbums() }
+            tap(label(rootName)); tap { it.contentDescription?.startsWith("$childName,") == true }
+            tap { it.contentDescription?.startsWith("$leafName,") == true }
+            val opened = await { current(leafName, ids[2]) }
+            assertTrue("the nested leaf opens" + if (opened) "" else albumNavigationDiagnostic(ids[2]), opened)
+            longPress(photoTile())
+            assertTrue("selection starts in the leaf", await { find(label("1 selected")) != null })
+            pressBack()
+            assertTrue("first Back keeps the leaf and ends selection", await { current(leafName, ids[2]) && find(label("1 selected")) == null })
+            val renamed = "Renamed Child $suffix"
+            instrumentation.runOnMainSync { controller.renameAlbum(ids[1], renamed) }
+            assertTrue(await { controller.albums.value.any { it.name == renamed } })
+            pressBack()
+            assertTrue("Back follows the current parent row", await { current(renamed, ids[1]) })
+            pressBack()
+            assertTrue("Back visits the root album", await { current(rootName, ids[0]) })
+            runBlocking { controller.vault.moveAlbum(ids[2], ids[0], ids[1]) }
+            instrumentation.runOnMainSync { controller.loadAlbums() }
+            tap { it.contentDescription?.startsWith("$leafName,") == true }
+            assertTrue("the moved leaf remains reachable as an immediate child", await { current(leafName, ids[2]) })
+            pressBack()
+            assertTrue("Back uses the moved parent, not a retained stack", await { current(rootName, ids[0]) })
+            tap { it.contentDescription?.startsWith("$leafName,") == true }
+            instrumentation.runOnMainSync { controller.deleteAlbum(ids[2]) }
+            assertTrue("deleting the current album returns to Albums", await {
+                controller.albums.value.none { it.albumId.contentEquals(ids[2]) } && find(label("Back")) == null
+            })
+            pressBack()
+            assertFalse("the Albums root then returns to Library", backIsHandled())
+        } finally {
+            runBlocking {
+                val remaining = controller.vault.albums()
+                ids.asReversed().filter { id -> remaining.any { it.albumId.contentEquals(id) } }
+                    .forEach { controller.vault.deleteAlbum(it) }
+            }
+            instrumentation.runOnMainSync { controller.loadAlbums() }
+        }
+    }
+
+    @Test
     fun backClosesTheInfoOverlayAndThenTheViewer() = inTestVault {
         // The photo is imported on the first run only.
         if (!await(3_000) { controller.page.value.objects.any { it.mediaKind == MEDIA_CLASS_IMAGE } }) importPhoto()
@@ -1974,6 +2046,49 @@ class BackNavigationTest {
         actionList.firstOrNull { it.id == AccessibilityNodeInfo.ACTION_LONG_CLICK }?.label?.toString()
 
     private fun albumMembers(): Long = controller.albums.value.first { it.name == ALBUM }.memberCount
+
+    /** Failure-only evidence distinguishes route state from the active Android accessibility window. */
+    private fun albumNavigationDiagnostic(albumId: ByteArray): String {
+        val album = controller.albums.value.firstOrNull { it.albumId.contentEquals(albumId) }
+        val compose = onScreen { nodes ->
+            val current = nodes.firstOrNull {
+                it.config.getOrNull(SemanticsProperties.TestTag) == "album-breadcrumb-current-${album?.id}"
+            }
+            "composeBack=${nodes.any { "Back" in it.labels && SemanticsActions.OnClick in it.config }}, " +
+                "expectedCurrent=${current != null}, " +
+                "currentState=${current?.config?.getOrNull(SemanticsProperties.StateDescription)}, " +
+                "currentSelected=${current?.config?.getOrNull(SemanticsProperties.Selected)}, " +
+                "currentBounds=${current?.boundsInWindow}, currentPosition=${current?.positionInWindow}, " +
+                "currentSize=${current?.size}, pathBounds=${nodes.firstOrNull {
+                    it.config.getOrNull(SemanticsProperties.TestTag) == "album-breadcrumb-path"
+                }?.boundsInWindow}"
+        }
+        val window = instrumentation.uiAutomation.rootInActiveWindow
+        val accessibleCurrent = find { node ->
+            album != null && node.stateDescription?.toString() == "Current album" &&
+                node.isCheckable && node.isChecked && find(node, label(album.name)) != null
+        }
+        val candidates = findAll { node -> album != null &&
+            (node.contentDescription?.contains(album.name) == true || node.text?.contains(album.name) == true)
+        }.take(5).map { node ->
+            val bounds = Rect().also { node.getBoundsInScreen(it) }
+            "{cdMatches=${node.contentDescription?.contains(album?.name.orEmpty()) == true}, " +
+                "textMatches=${node.text?.contains(album?.name.orEmpty()) == true}, " +
+                "stateExact=${node.stateDescription?.toString() == "Current album"}, " +
+                "stateContains=${node.stateDescription?.contains("Current album") == true}, " +
+                "selected=${node.isSelected}, checked=${node.isChecked}, checkable=${node.isCheckable}, " +
+                "visible=${node.isVisibleToUser}, clickable=${node.isClickable}, bounds=$bounds}"
+        }
+        val pathValid = dev.po4yka.chur.app.vault.albumPath(controller.albums.value, album?.id).isNotEmpty()
+        return "; $compose, catalogPathValid=$pathValid, expectedMembers=${album?.memberCount}, " +
+            "a11yCurrent=${accessibleCurrent != null}, a11ySelected=${accessibleCurrent?.isSelected}, " +
+            "a11yStateExact=${accessibleCurrent?.stateDescription?.toString() == "Current album"}, " +
+            "a11yStateContains=${accessibleCurrent?.stateDescription?.contains("Current album") == true}, " +
+            "a11yCandidates=$candidates, " +
+            "pageCount=${controller.page.value.objects.size}, activeWindow=${window?.windowId}, " +
+            "activePackage=${window?.packageName}, activeClass=${window?.className}, " +
+            "activityState=${activity.lifecycle.currentState}"
+    }
 
     /**
      * Holds a finger on [node] past the long-press timeout and lifts it, as

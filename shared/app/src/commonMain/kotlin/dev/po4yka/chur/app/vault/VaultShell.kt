@@ -1,6 +1,7 @@
 package dev.po4yka.chur.app.vault
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -303,6 +304,8 @@ data class VaultActions(
     val onInspectSharingRecipient: (String) -> Unit = {},
     val onShareWithRecipient: (SharingPermission) -> Unit = {},
     val onRevokeSharingMember: (SharingMember) -> Unit = {},
+    /** Open the Albums root from any level of an album path. */
+    val onAlbumRoot: () -> Unit = {},
 )
 
 /**
@@ -734,39 +737,56 @@ private fun glyphFor(destination: VaultDestination) = when (destination) {
 @Composable
 private fun LibraryBody(state: VaultUiState, actions: VaultActions,
     view: ContentView, onViewChange: (ContentView) -> Unit) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        MediaPresentationControls(view, onViewChange, state.thumbnailsConcealed,
-            actions.onThumbnailsConcealedChange)
-        if (state.selectedCount == 0) MediaSortFilterControls(
-            sort = state.sort, kinds = state.kinds,
-            album = state.openAlbum != null, trash = state.trashOpen,
-            onSort = actions.onSortChange, onKinds = actions.onKindsChange,
-        )
-        if (state.tiles.isEmpty()) {
-            if (state.libraryScopeTitle == null && state.kinds == 0) EmptyLibrary(
-                onImport = actions.onImport.takeIf { state.operation == null },
-                modifier = Modifier.weight(1f),
-            )
-            else Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Text(if (state.kinds != 0) "No media matches these filters" else
-                    "No media in ${state.libraryScopeTitle}",
-                    color = LocalChurColors.current.inkMuted,
-                    style = MaterialTheme.typography.bodyMedium)
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val album = state.openAlbum
+        val headerScroll = remember(album?.id) { ScrollState(0) }
+        val path = remember(state.albums, album?.id) { albumPath(state.albums, album?.id) }
+        val children = remember(state.albums, album?.id, state.albumOrder) {
+            if (album == null) emptyList() else albumChildren(state.albums, album.id, state.albumOrder)
+        }
+        // Large text and deep paths must not take all the media viewport.
+        val header = if (album != null) Modifier.fillMaxWidth().heightIn(max = maxHeight / 2)
+            .verticalScroll(headerScroll) else Modifier.fillMaxWidth()
+        Column(modifier = Modifier.fillMaxSize()) {
+            Column(header) {
+                if (album != null && state.selectedCount == 0) {
+                    AlbumBreadcrumbs(path, album, actions.onAlbumRoot, actions.onOpenAlbum, Modifier.fillMaxWidth())
+                    AlbumChildren(children, actions.onOpenAlbum, Modifier.fillMaxWidth())
+                }
+                MediaPresentationControls(view, onViewChange, state.thumbnailsConcealed,
+                    actions.onThumbnailsConcealedChange)
+                if (state.selectedCount == 0) MediaSortFilterControls(
+                    sort = state.sort, kinds = state.kinds,
+                    album = state.openAlbum != null, trash = state.trashOpen,
+                    onSort = actions.onSortChange, onKinds = actions.onKindsChange,
+                )
             }
-        } else {
-            MediaBrowser(
-                tiles = state.tiles,
-                view = view,
-                onOpen = actions.onOpen,
-                onToggleSelection = actions.onToggleSelection,
-                onMove = if (state.openAlbum != null && state.sort == QuerySort.ALBUM_MANUAL &&
-                    state.kinds == 0 && state.selectedCount == 0) actions.onMoveAlbumMember else null,
-                albumTargets = state.albums.filterNot { it.id == state.openAlbum?.id },
-                onDropIntoAlbum = if (state.trashOpen) null else actions.onDropMediaIntoAlbum,
-                onLoadMore = if (state.canLoadMore) actions.onLoadMore else null,
-                onVisibleMediaChanged = actions.onVisibleMediaChanged,
-                modifier = Modifier.weight(1f),
-            )
+            if (state.tiles.isEmpty()) {
+                if (state.libraryScopeTitle == null && state.kinds == 0) EmptyLibrary(
+                    onImport = actions.onImport.takeIf { state.operation == null },
+                    modifier = Modifier.weight(1f),
+                )
+                else Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Text(if (state.kinds != 0) "No media matches these filters" else
+                        "No media in ${state.libraryScopeTitle}",
+                        color = LocalChurColors.current.inkMuted,
+                        style = MaterialTheme.typography.bodyMedium)
+                }
+            } else {
+                MediaBrowser(
+                    tiles = state.tiles,
+                    view = view,
+                    onOpen = actions.onOpen,
+                    onToggleSelection = actions.onToggleSelection,
+                    onMove = if (state.openAlbum != null && state.sort == QuerySort.ALBUM_MANUAL &&
+                        state.kinds == 0 && state.selectedCount == 0) actions.onMoveAlbumMember else null,
+                    albumTargets = state.albums.filterNot { it.id == state.openAlbum?.id },
+                    onDropIntoAlbum = if (state.trashOpen) null else actions.onDropMediaIntoAlbum,
+                    onLoadMore = if (state.canLoadMore) actions.onLoadMore else null,
+                    onVisibleMediaChanged = actions.onVisibleMediaChanged,
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
     }
 }

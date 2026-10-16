@@ -901,6 +901,8 @@ These are never collapsed into one ambiguous `Delete`.
 
 ### 12.1 Albums
 
+An open album shows a horizontally scrollable path from Albums through its ancestors to the current album. Albums stays visible; ancestors are links, and the current album is selected. Immediate subalbums appear below the path. Back clears selection first, then opens the parent album, then the organizer. See [`docs/product/ALBUM_NAVIGATION.md`](docs/product/ALBUM_NAVIGATION.md).
+
 Album cards use media mosaics without decorative tint. The UI does not expose cryptographic Security Collections as ordinary Albums.
 
 Album card content:

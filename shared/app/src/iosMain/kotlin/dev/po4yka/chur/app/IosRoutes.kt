@@ -59,6 +59,8 @@ import dev.po4yka.chur.app.vault.browseQuery
 import dev.po4yka.chur.app.vault.SelectiveExportDialog
 import dev.po4yka.chur.app.vault.SelectiveImportDialog
 import dev.po4yka.chur.app.vault.PrivateNotesRoute
+import dev.po4yka.chur.app.vault.albumParent
+import dev.po4yka.chur.app.vault.albumPath
 import dev.po4yka.chur.app.vault.VaultShell
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
 import dev.po4yka.chur.app.vault.viewerPages
@@ -236,6 +238,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     val sharingIdentity by controller.sharingIdentity.collectAsState()
     val sharingOverview by controller.sharingOverview.collectAsState()
     val sharingRecipient by controller.sharingRecipient.collectAsState()
+    val focusManager = LocalFocusManager.current
     val generation = (vaultState as? VaultState.Unlocked)?.generation ?: 0L
     val archiveTransfers = remember(controller, generation) { ArchiveTransferOwner(controller, generation) }
     DisposableEffect(archiveTransfers) { onDispose { archiveTransfers.close() } }
@@ -253,7 +256,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     var albumOrder by remember { mutableStateOf(AlbumOrder.MANUAL) }
     var albumFilter by remember { mutableStateOf("") }
     var terms by remember { mutableStateOf("") }
-    var openAlbum by remember { mutableStateOf<AlbumSummary?>(null) }
+    var openAlbum by remember(generation) { mutableStateOf<AlbumSummary?>(null) }
     var exportingAlbum by remember(generation) { mutableStateOf<AlbumSummary?>(null) }
     var albumPickerPending by remember(generation) { mutableStateOf(false) }
     var documentPickerPending by remember(generation) { mutableStateOf(false) }
@@ -276,9 +279,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             }
         }
     }
-    LaunchedEffect(albums) {
-        openAlbum = openAlbum?.let { current -> albums.firstOrNull { it.id == current.id } }
-    }
+
     var openTag by remember { mutableStateOf<TagSummary?>(null) }
     var favoritesOnly by remember { mutableStateOf(false) }
     var trashOpen by remember { mutableStateOf(false) }
@@ -289,6 +290,30 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     var selection by remember(generation) { mutableStateOf(setOf<String>()) }
     // The item on screen in the viewer; a swipe moves it through the page.
     var viewing by remember(generation) { mutableStateOf<ObjectProjection?>(null) }
+    LaunchedEffect(albums) {
+        val current = openAlbum
+        if (current != null) {
+            val resolved = albumPath(albums, current.id).lastOrNull()
+            if (resolved == null) {
+                selection = emptySet()
+                viewing = null
+                destination = VaultDestination.ALBUMS
+            }
+            openAlbum = resolved
+        }
+    }
+    fun navigateAlbum(target: AlbumSummary?) {
+        focusManager.clearFocus()
+        viewing = null
+        selection = emptySet()
+        openTag = null
+        favoritesOnly = false
+        trashOpen = false
+        quarantineOpen = false
+        destination = VaultDestination.ALBUMS
+        openAlbum = target?.let { albumPath(albums, it.id).lastOrNull() }
+    }
+
     var visibleMediaIds by remember(generation) { mutableStateOf(emptySet<String>()) }
     var creatingAlbum by remember { mutableStateOf(false) }
     var choosingAlbum by remember { mutableStateOf(false) }
@@ -303,7 +328,6 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     // The originals of the last import, until the user answers the step of
     // `DESIGN.md` §15.3. A lock disposes of the route and of them.
     var originals by remember { mutableStateOf<PickedOriginals?>(null) }
-    val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
     val codec = remember { IosMediaCodec() }
     val importer = remember { MediaImporter(codec) }
@@ -740,8 +764,9 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 },
                 onExportAlbum = { exportingAlbum = it },
                 onEncryptedExportAlbum = { choosingArchive = SelectiveExportRequest(generation, albumIds = listOf(it.albumId)) },
-                onOpenAlbum = { openAlbum = it; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = false },
-                onCloseAlbum = { openAlbum = null },
+                onOpenAlbum = { navigateAlbum(it) },
+                onCloseAlbum = { navigateAlbum(albumParent(albums, openAlbum?.id)) },
+                onAlbumRoot = { navigateAlbum(null) },
                 onCreateAlbum = { creatingAlbum = true },
                 onMediaViewChange = { mediaView = it },
                 onAlbumViewChange = { albumView = it },

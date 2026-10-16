@@ -194,7 +194,10 @@ class AlbumExportPresentationTest {
 
         fun assertTextFits(text: String, allowEllipsis: Boolean = false) {
             main {
-                val node = nodes(false).first { text in it.labels }
+                val node = nodes(false).first { node ->
+                    node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == text } == true &&
+                        SemanticsActions.GetTextLayoutResult in node.config
+                }
                 val layouts = mutableListOf<TextLayoutResult>()
                 assertTrue(node.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.invoke(layouts) == true)
                 assertTrue("$text has no layout", layouts.isNotEmpty())
@@ -207,7 +210,10 @@ class AlbumExportPresentationTest {
         }
 
         fun assertFontScale(text: String, expected: Float) = main {
-            val node = nodes(false).first { text in it.labels }
+            val node = nodes(false).first { node ->
+                node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == text } == true &&
+                    SemanticsActions.GetTextLayoutResult in node.config
+            }
             val layouts = mutableListOf<TextLayoutResult>()
             assertTrue(node.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.invoke(layouts) == true)
             assertTrue(layouts.isNotEmpty())
