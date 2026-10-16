@@ -12,6 +12,7 @@
 //! `docs/security/KEY_HIERARCHY.md` §3 carries `source_content_revision`, so a
 //! derivative of an older revision derives a different key and does not open.
 
+use chur_catalog::journal::{self, ImportTransaction, Stage};
 use chur_catalog::model::{DerivedAsset, Stream};
 use chur_catalog::store;
 use chur_catalog::vault::Session;
@@ -131,26 +132,54 @@ pub fn put(
     } else {
         MediaProperties::new(MediaClass::Image, width, height, 0)?
     };
+    let nonce_prefix = random::array::<16>()?;
     let manifest = CanonicalManifest::new(
         identity,
         Some(source_content_revision),
         DEFAULT_CHUNK_SIZE,
-        random::array::<16>()?,
+        nonce_prefix,
         1,
         properties,
     )?;
 
     let temp_path_id = random::id()?;
-    let container_path_id = random::id()?;
+    let container_path_id = temp_path_id;
+    let transaction_id = random::id()?;
+    journal::open(
+        session.catalog()?,
+        &ImportTransaction {
+            transaction_id,
+            temp_path_id,
+            object_id: *object_id,
+            stream_id,
+            stream_kind: kind,
+            stream_revision,
+            envelope_generation: 1,
+            envelope_body: None,
+            nonce_prefix,
+            chunk_size: DEFAULT_CHUNK_SIZE,
+            manifest_length: manifest.record_length(),
+            reserved_index: None,
+            expected_length: Some(bytes.len() as u64),
+            source_seekable: false,
+            stage: Stage::Opening,
+            opened_ms: now_ms,
+        },
+    )?;
     let store_id = session.object_store_id();
     let mut temporary = TemporaryContainer::open(session.root_dir(), &store_id, &temp_path_id)?;
     temporary.truncate_to(0)?;
     let mut writer = ContainerWriter::start(temporary, &object_key, manifest, Nonce::random()?)?;
+    writer.sink_mut().sync()?;
+    journal::mark_manifest_durable(session.catalog()?, &transaction_id)?;
     let chunk = usize::try_from(DEFAULT_CHUNK_SIZE)
         .map_err(|_| chur_core::err!(InternalFailure, "the chunk size exceeds a usize"))?;
     for piece in bytes.chunks(chunk) {
+        journal::reserve_chunk(session.catalog()?, &transaction_id, writer.chunk_count())?;
         writer.write_chunk(piece)?;
+        writer.sink_mut().sync()?;
     }
+    journal::mark_committing(session.catalog()?, &transaction_id)?;
     let plaintext_size = writer.total_plaintext_length();
     let mut container = writer.finish(Nonce::random()?, 1)?;
     container.sync()?;
@@ -197,6 +226,7 @@ pub fn put(
             final_commitment: commitment,
         },
     )?;
+    journal::close(session.catalog()?, &transaction_id)?;
     Ok(stream_id)
 }
 

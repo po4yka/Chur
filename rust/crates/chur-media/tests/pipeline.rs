@@ -585,6 +585,65 @@ fn lock_clears_every_scratch_entry() {
 }
 
 #[test]
+fn a_failed_derived_catalog_write_is_reconciled_without_a_ciphertext_orphan() {
+    let (root, mut session) = new_vault();
+    let (object_id, original_bytes) = import_photo(&mut session, 5_000, "original.jpg");
+    session
+        .catalog()
+        .unwrap()
+        .transaction(|transaction| {
+            transaction
+                .execute_batch(
+                    "CREATE TEMP TRIGGER reject_derivative BEFORE INSERT ON derived_assets
+             BEGIN SELECT RAISE(FAIL, 'injected derivative catalog failure'); END;",
+                )
+                .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    let result = derived::put(
+        &mut session,
+        &object_id,
+        StreamKind::ThumbnailSmall,
+        100,
+        100,
+        &plaintext(2_000),
+        NOW,
+    );
+    assert!(result.is_err(), "catalog fault must fire");
+    import::reconcile(&mut session, NOW).unwrap();
+    let mut containers = 0;
+    for shard in std::fs::read_dir(root.objects(&session.object_store_id())).unwrap() {
+        containers += std::fs::read_dir(shard.unwrap().path()).unwrap().count();
+    }
+    assert_eq!(
+        containers, 1,
+        "the failed derivative must not retain a committed orphan"
+    );
+    assert!(
+        journal::live(session.catalog_ref().unwrap())
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        derived::read(&session, &object_id, StreamKind::ThumbnailSmall)
+            .unwrap_err()
+            .status(),
+        ChurStatus::NotFound
+    );
+    let mut original = Vec::new();
+    export::export_stream(
+        &session,
+        &object_id,
+        StreamKind::Original,
+        &mut original,
+        &mut Uninterrupted,
+    )
+    .unwrap();
+    assert_eq!(original, *original_bytes);
+}
+
+#[test]
 fn a_derived_asset_round_trips_and_sets_the_thumbnail_flag() {
     let (_root, mut session) = new_vault();
     let (object_id, _) = import_photo(&mut session, 5_000, "a.jpg");

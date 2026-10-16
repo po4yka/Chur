@@ -165,12 +165,14 @@ pub fn open(db: &mut CatalogDb, transaction: &ImportTransaction) -> Result<()> {
         InvalidInput,
         "an import transaction opens with no reserved index"
     );
-    let envelope = transaction.envelope_body.as_deref().ok_or_else(|| {
-        chur_core::err!(
-            InvalidInput,
-            "an import transaction opens with its envelope"
-        )
-    })?;
+    ensure!(
+        transaction.stream_kind != StreamKind::Original || transaction.envelope_body.is_some(),
+        InvalidInput,
+        "an original import transaction opens with its envelope"
+    );
+    // A derivative reuses its existing object's key and introduces no key
+    // envelope. Its journal tracks only the new container's activation.
+    let envelope = transaction.envelope_body.as_deref();
     db.transaction(|tx| {
         let live: i64 = tx
             .query_row(

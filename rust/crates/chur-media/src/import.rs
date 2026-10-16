@@ -500,10 +500,17 @@ pub fn reconcile(session: &mut Session, now_ms: u64) -> Result<usize> {
         killed += 1;
     }
     for record in journal::live(session.catalog_ref()?)? {
-        if store::object_present(session.catalog_ref()?, &record.object_id)? {
+        if store::streams(session.catalog_ref()?, &record.object_id)?
+            .iter()
+            .any(|stream| {
+                stream.stream_id == record.stream_id
+                    && stream.container_path_id == record.temp_path_id
+            })
+        {
             // A death between the activation and the journal close left a
-            // finished import with an open record. The container, the
-            // envelope, and the catalog row agree; only the record lingers,
+            // finished stream with an open record. The exact stream and
+            // container match; an existing parent alone does not prove that
+            // a derivative activated. Only the record lingers,
             // so closing it completes what the process died before finishing
             // rather than destroying an activated object.
             journal::close(session.catalog()?, &record.transaction_id)?;

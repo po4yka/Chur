@@ -179,7 +179,7 @@ Asset kinds include thumbnail, preview, poster frame, waveform, OCR, faces, and 
 
 ## 11. Import journal
 
-The import journal is a catalog table, not a separate file or directory. An `ImportTransaction` row is the journal record of [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §14.1, and §14.2 to §14.4 govern its durability ordering, resume, and abandonment.
+The import journal is a catalog table, not a separate file or directory. It also tracks derived stream writes under the same temporary and committed path ID. A derived stream reuses its existing object key, so its journal row has no `envelope_body`. Reconciliation checks the exact stream and container IDs before it treats a row as activated. An `ImportTransaction` row is the journal record of [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §14.1, and §14.2 to §14.4 govern its durability ordering, resume, and abandonment.
 
 The `stage` of that record is catalog-internal and crosses no boundary, so it is not allocated in [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.4:
 
@@ -217,7 +217,7 @@ Retention: in a vault with no enrolled peer device a tombstone may be discarded 
 Deletion runs in this order and no other:
 
 1. one catalog transaction sets the object row's `state` to `DELETING`; the object stops being listable from this point;
-2. one catalog transaction destroys every object-key envelope for the object, writes the tombstone row, and sets `state` to `TOMBSTONED`. This transaction is the erasure moment: once it commits durably the `ContentKey` is unrecoverable from this vault's live state, and every copy of the container that state reaches, including WAL pages and queued sync operations, is ciphertext no reachable key opens. A backup package written before this commit is not reached: it carries its own object-key envelope, [`BACKUP_FORMAT_V1.md`](BACKUP_FORMAT_V1.md) §2, and its own portable slot, §12 there, so the object stays openable from that package until the package is destroyed, per [`../security/KEY_HIERARCHY.md`](../security/KEY_HIERARCHY.md) §10;
+2. one catalog transaction destroys every object-key envelope for the object and writes the tombstone row. `secure_delete=ON` overwrites deleted cells. The object stays `DELETING` until a `wal_checkpoint(TRUNCATE)` result confirms that no old WAL frames remain. Only then does another catalog transaction set `state` to `TOMBSTONED`. The successful WAL barrier is the erasure moment: once it completes durably the `ContentKey` is unrecoverable from this vault's live state, and every copy of the container that state reaches, including WAL pages and queued sync operations, is ciphertext no reachable key opens. A backup package written before this barrier is not reached: it carries its own object-key envelope, [`BACKUP_FORMAT_V1.md`](BACKUP_FORMAT_V1.md) §2, and its own portable slot, §12 there, so the object stays openable from that package until the package is destroyed, per [`../security/KEY_HIERARCHY.md`](../security/KEY_HIERARCHY.md) §10;
 3. unlink the derived-asset containers of §10;
 4. unlink the original container;
 5. delete the scratch entries of §12 that the object owns;
@@ -229,8 +229,8 @@ Garbage collection runs at the first unlock of a session and again after each de
 
 Recovery of a half-deleted object rolls forward and never back, because rolling back would return to `ACTIVE` an object whose key may already be gone:
 
-- `state` `DELETING` with envelopes present: step 2 never committed, so step 2 is run now;
-- `state` `DELETING` or any other value with every envelope already destroyed: step 2 is completed, and the row is never returned to `ACTIVE`;
+- `state` `DELETING`, with or without envelopes: repeat key removal and the WAL barrier; missing rows alone do not prove that old WAL frames were removed;
+- an object with every envelope already destroyed never returns to `ACTIVE`;
 - `state` `TOMBSTONED` with containers still present: steps 3 to 6 are re-run;
 - a container in the committed namespace with no object row and no `ImportTransaction` row is deleted; the import-temporary case is §14.4 of [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md).
 
