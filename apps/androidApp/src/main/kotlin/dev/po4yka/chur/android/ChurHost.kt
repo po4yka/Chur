@@ -154,6 +154,7 @@ internal class ChurHost private constructor(context: Context) {
         ),
         autoLockSetting = autoLockSetting,
         sync = sync,
+        contentExtractor = dev.po4yka.chur.app.vault.AndroidContentTextExtractor(context.applicationContext),
         syncReachable = { serverUrl -> !localNetworkBlocked(context, serverUrl) },
     )
 

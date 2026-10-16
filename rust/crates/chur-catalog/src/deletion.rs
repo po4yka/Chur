@@ -480,6 +480,12 @@ pub fn is_orphan_container(db: &CatalogDb, container_path_id: &Id) -> Result<boo
 fn unindex_search(transaction: &Transaction<'_>, object_id: &Id) -> Result<()> {
     transaction
         .execute(
+            "DELETE FROM content_index WHERE object_id=?1",
+            [object_id.as_bytes().as_slice()],
+        )
+        .map_err(|e| map_sqlite(e, "the content text could not be erased"))?;
+    transaction
+        .execute(
             "DELETE FROM object_search WHERE rowid = ?1",
             [crate::store::row_key(object_id)],
         )

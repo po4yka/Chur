@@ -62,6 +62,8 @@ The project must eventually provide bootstrap scripts that validate versions ins
 
 ## Build commands
 
+The `:shared:app` iOS tests include real Apple Vision OCR. They need a fully booted simulator. A standalone simulator process can return no text without an API error. CI creates, boots, and removes its own compatible iPhone simulator. For a local run, boot a simulator that you own and set `CHUR_IOS_TEST_DEVICE` to its UDID. The build does not change the state of existing devices. Without this variable, Gradle uses its normal Xcode-selected device, which must already be booted.
+
 The workflow named in [`docs/assurance/RELEASE_GATES.md`](docs/assurance/RELEASE_GATES.md#enforcement) is the source of truth. It runs exactly these, and each is runnable locally:
 
 ```text

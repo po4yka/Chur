@@ -796,6 +796,11 @@ chur_status_t chur_private_note_save(chur_handle_t session, const uint8_t *reque
 chur_status_t chur_private_note_change(chur_handle_t session, const uint8_t *request, size_t request_len, uint8_t *destination, size_t capacity, size_t *written);
 chur_status_t chur_private_note_export_begin(chur_handle_t session, const uint8_t *note_id, uint64_t expected_revision, int32_t destination_fd, chur_handle_t *out_operation);
 
+/* ABI 2.24 local encrypted content index. Bounded record layout: FFI_CONTRACT section 6.28. */
+chur_status_t chur_content_index_candidates(chur_handle_t session, const uint8_t *request, size_t request_len, uint8_t *destination, size_t capacity, size_t *written);
+chur_status_t chur_content_index_put(chur_handle_t session, const uint8_t *request, size_t request_len, uint8_t *destination, size_t capacity, size_t *written);
+chur_status_t chur_content_index_clear(chur_handle_t session, const uint8_t *request, size_t request_len, uint8_t *destination, size_t capacity, size_t *written);
+
 /* ABI 2.23 external encrypted archives. Runtime-owned; no open vault required.
  * Request <= 128 KiB: u8=1, BE u32 password bytes <=1024, password,
  * BE u64 output limit, BE u32 count 1..32. Each file: BE u32 name bytes

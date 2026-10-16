@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. The current library reports 2.23: §6.19 changes the album-list record, §6.20 adds atomic album placement, §6.21 adds tag and favourite selection controls, §6.22 adds recoverable trash, §6.23 stages the recovery slot until its phrase is confirmed, and §6.24 reads and acknowledges the sync fork state. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
+- native API version is the (major, minor) pair. The current library reports 2.24: §6.19 changes the album-list record, §6.20 adds atomic album placement, §6.21 adds tag and favourite selection controls, §6.22 adds recoverable trash, §6.23 stages the recovery slot until its phrase is confirmed, and §6.24 reads and acknowledges the sync fork state. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -714,6 +714,18 @@ Own-vault media calls use the same bounded control-buffer signature:
 | `chur_own_sync_plan` | Collection ID | Existing shared-receive-plan format |
 
 Author verifies the immutable ciphertext before it creates key-free ordinary CreateObject and CommitObject operations. The host uploads the ciphertext before it publishes those operations, and persists its push cursor only after each relay acknowledgement. Receive uses the existing bounded download and full-container verification calls. Disposable object keys use authenticated current vault membership for same-vault delivery; an empty issuer bundle grants no cross-vault permission.
+
+### 6.28 Local encrypted content index, ABI 2.24
+
+`chur_content_index_candidates`, `chur_content_index_put`, and `chur_content_index_clear` use `(session, request, request_len, destination, capacity, written)`. They require an unlocked session. A caller provides a writable 1 MiB destination for every call, including calls with empty responses. Native code sets `written` to zero and checks output capacity and pointers before a mutation. Input is at most 262208 bytes. All integers below are big endian. IDs are 16 bytes. Strings use a `u32` UTF-8 byte count followed by bytes. Unknown versions, trailing bytes, invalid UTF-8, and unknown flags fail closed.
+
+| Call | Request | Response |
+| --- | --- | --- |
+| Candidates | `version:u8=1`, `rebuild:u8` (0 or 1), `after_object_id:16 bytes`, `limit:u32` (1 through 100) | `version:u8=1`, `count:u32`, then object ID, primary stream ID, media class `u8`, original size `u64`, content-type string per item |
+| Put | `version:u8=1`, object ID, expected primary stream ID, status `u8` (1 complete, 2 partial), engine version `u32=1`, text string | Empty |
+| Clear | `version:u8=1` | Empty |
+
+An all-zero candidate cursor starts the scan; all object and source IDs in responses are nonzero. Candidates use a stable ascending object-ID keyset, independent of catalog-generation changes made by indexing. A normal scan excludes current indexed sources; rebuild includes them. Complete and partial records both count as indexed. Supported originals are images and opaque files with image, PDF, text, JSON, or XML content types. Candidates exclude Trash, hidden/deleted objects, and quarantined objects. Put checks lifecycle, integrity, and the immutable original stream again within its write transaction; a stale source returns `CONFLICT`. Text rejects NUL and has a 256 KiB UTF-8 byte limit. No recognized text is returned by these calls. Clear removes content text, rebuilds metadata-only search, and completes the WAL checkpoint before success. These records are local derived state; they allocate no synchronization operation or archive field.
 
 ## 7. Buffer ownership
 

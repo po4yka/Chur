@@ -206,7 +206,7 @@ private suspend fun readPdfPage(vault: VaultRepository, generation: Long, projec
 }
 
 /** One page raster, explicitly wiped when replaced or removed from the scene. */
-internal class PdfPageRaster(private val bitmap: Bitmap, val pages: Int) {
+internal class PdfPageRaster(internal val bitmap: Bitmap, val pages: Int) {
     val image: ImageBitmap = bitmap.asComposeImageBitmap()
     private var closed = false
     fun close() {

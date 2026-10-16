@@ -938,6 +938,35 @@ object ChurVault {
         return out[0]
     }
 
+    /** Local derived text stays in the encrypted catalog. The caller owns and clears [text]. */
+    fun putContentIndex(session: Long, candidate: ContentIndexCandidate, text: ByteArray, partial: Boolean) {
+        require(candidate.objectId.size == ID_LENGTH && candidate.primaryStreamId.size == ID_LENGTH)
+        if (text.size > CONTENT_INDEX_TEXT_MAX_BYTES) throw ChurFailure(ChurStatus.RESOURCE_LIMIT_EXCEEDED, "content index text exceeds its bound")
+        val writer = PrivateNoteWriter(42 + text.size)
+        writer.byte(1); writer.raw(candidate.objectId); writer.raw(candidate.primaryStreamId)
+        writer.byte(if (partial) 2 else 1); writer.count(1); writer.sized(text)
+        contentIndexControl(session, writer.bytes, ChurNative::contentIndexPut).fill(0)
+    }
+
+    fun contentIndexCandidates(session: Long, afterId: ByteArray? = null, rebuild: Boolean = false, limit: Int = 25): List<ContentIndexCandidate> {
+        require((afterId == null || afterId.size == ID_LENGTH) && limit in 1..100)
+        val writer = PrivateNoteWriter(22)
+        writer.byte(1); writer.byte(if (rebuild) 1 else 0); writer.raw(afterId ?: ByteArray(ID_LENGTH)); writer.count(limit)
+        val bytes = contentIndexControl(session, writer.bytes, ChurNative::contentIndexCandidates)
+        return try { decodeContentIndexCandidates(bytes) } finally { bytes.fill(0) }
+    }
+
+    fun clearContentIndex(session: Long) {
+        contentIndexControl(session, byteArrayOf(1), ChurNative::contentIndexClear).fill(0)
+    }
+
+    private fun contentIndexControl(session: Long, request: ByteArray, call: (Long, ByteArray, ChurBuffer, IntArray) -> Int): ByteArray =
+        try { withChurBuffer(1_048_576) { buffer ->
+            val written = IntArray(1)
+            ChurFailure.check(call(session, request, buffer, written), "content index")
+            buffer.copyOut(written[0])
+        } } finally { request.fill(0) }
+
     private fun noteControl(session: Long, request: ByteArray, call: (Long, ByteArray, ChurBuffer, IntArray) -> Int): ByteArray =
         try { withChurBuffer(1_048_576) { buffer ->
             val written = IntArray(1)

@@ -1077,4 +1077,149 @@ mod tests {
         std::fs::remove_dir_all(source_root.base()).expect("cleanup");
         std::fs::remove_dir_all(outside.base()).expect("cleanup");
     }
+    #[test]
+    fn selective_archive_and_import_omit_derived_content_but_offer_fresh_sources_for_ocr() {
+        use chur_catalog::{
+            content_index,
+            query::{ObjectQuery, Scope, page},
+        };
+        let source_root = root();
+        let target_root = root();
+        let restored_root = root();
+        let mut source = session(&source_root);
+        let target = session(&target_root);
+        let source_vault = source.vault_id();
+        let target_vault = target.vault_id();
+        let object_id = original(&mut source, 800, 600);
+        let source_stream = store::object(source.catalog_ref().unwrap(), &object_id)
+            .unwrap()
+            .primary_stream_id;
+        let text = "Уникальныйраспознанныйтекст OCR_SELECTIVE_CANARY_714829";
+        content_index::put(
+            source.catalog().unwrap(),
+            &object_id,
+            &source_stream,
+            1,
+            1,
+            text,
+        )
+        .unwrap();
+        let query = ObjectQuery {
+            scope: Scope::Search("уникальныйраспознанныйтекст".into()),
+            ..ObjectQuery::timeline()
+        };
+        assert_eq!(
+            page(source.catalog_ref().unwrap(), &query)
+                .unwrap()
+                .objects
+                .len(),
+            1
+        );
+        let archive = source_root.base().join("selected.churbak");
+        let output = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&archive)
+            .unwrap();
+        let password = b"independent selective content fixture";
+        let export_request = Request {
+            password: Zeroizing::new(password.to_vec()),
+            objects: vec![object_id],
+            albums: Vec::new(),
+            notes: Vec::new(),
+            max_output_bytes: i64::MAX as u64,
+        };
+        let export_operation = Operation::spawn(OperationKind::Export, 0, move |shared| {
+            run_export(
+                Access::Local(Box::new(source)),
+                export_request,
+                output,
+                shared,
+            )
+        })
+        .unwrap();
+        export_operation.join();
+        assert_eq!(export_operation.poll().status, 0);
+        drop(export_operation);
+        let encrypted = std::fs::read(&archive).unwrap();
+        let canary = b"OCR_SELECTIVE_CANARY_714829";
+        assert!(!encrypted.windows(canary.len()).any(|bytes| bytes == canary));
+        let mut restore_input = std::fs::File::open(&archive).unwrap();
+        backup::restore(
+            &restored_root,
+            &mut restore_input,
+            password,
+            &mut chur_media::progress::Uninterrupted,
+        )
+        .unwrap();
+        let restored =
+            vault::unlock_with_password(&restored_root, password, api::now_ms()).unwrap();
+        assert_ne!(restored.vault_id(), source_vault);
+        assert!(
+            page(restored.catalog_ref().unwrap(), &query)
+                .unwrap()
+                .objects
+                .is_empty()
+        );
+        let exported_candidates =
+            content_index::candidates(restored.catalog_ref().unwrap(), None, 100, false).unwrap();
+        assert_eq!(exported_candidates.len(), 1);
+        assert_ne!(exported_candidates[0].object_id, object_id);
+        assert_ne!(exported_candidates[0].primary_stream_id, source_stream);
+        let archive_object = exported_candidates[0].object_id;
+        drop(restored);
+        let input = std::fs::File::open(&archive).unwrap();
+        let import_request = Request {
+            password: Zeroizing::new(password.to_vec()),
+            objects: Vec::new(),
+            albums: Vec::new(),
+            notes: Vec::new(),
+            max_output_bytes: i64::MAX as u64,
+        };
+        let import_operation = Operation::spawn(OperationKind::Import, 0, move |shared| {
+            run_import(
+                Access::Local(Box::new(target)),
+                import_request,
+                input,
+                shared,
+            )
+        })
+        .unwrap();
+        import_operation.join();
+        assert_eq!(import_operation.poll().status, 0);
+        drop(import_operation);
+        let reopened = vault::unlock_with_password(&target_root, PASSWORD, api::now_ms()).unwrap();
+        assert_eq!(reopened.vault_id(), target_vault);
+        assert!(
+            page(reopened.catalog_ref().unwrap(), &query)
+                .unwrap()
+                .objects
+                .is_empty()
+        );
+        let imported_candidates =
+            content_index::candidates(reopened.catalog_ref().unwrap(), None, 100, false).unwrap();
+        assert_eq!(imported_candidates.len(), 1);
+        assert_ne!(imported_candidates[0].object_id, object_id);
+        assert_ne!(imported_candidates[0].object_id, archive_object);
+        assert_ne!(imported_candidates[0].primary_stream_id, source_stream);
+        let mut original_reader = reader::open(
+            &reopened,
+            &imported_candidates[0].object_id,
+            StreamKind::Original,
+        )
+        .unwrap();
+        assert_eq!(
+            original_reader
+                .read_range(0, original_reader.size())
+                .unwrap()
+                .as_slice(),
+            &[1, 2, 3, 4]
+        );
+        drop(original_reader);
+        drop(reopened);
+        std::fs::remove_dir_all(source_root.base()).unwrap();
+        std::fs::remove_dir_all(target_root.base()).unwrap();
+        std::fs::remove_dir_all(restored_root.base()).unwrap();
+    }
 }

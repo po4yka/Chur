@@ -283,6 +283,7 @@ com.sun.xml.fastinfoset:FastInfoset:1.2.16=androidLintTool
 commons-codec:commons-codec:1.17.1=androidLintTool
 commons-io:commons-io:2.16.1=androidLintTool
 commons-logging:commons-logging:1.2=androidLintTool
+cz.adaptech.tesseract4android:tesseract4android:4.9.0=androidHostTestRuntimeClasspath,androidMainLintChecksClasspath,androidRuntimeClasspath
 io.ktor:ktor-client-core-iosarm64:3.5.2=iosArm64CompilationDependenciesMetadata,iosArm64TestCompilationDependenciesMetadata,iosArm64TestCompileKlibraries
 io.ktor:ktor-client-core-iosarm64:3.6.0=iosArm64CompileKlibraries,resolvableIosArm64CompilationApi
 io.ktor:ktor-client-core-iossimulatorarm64:3.5.2=iosSimulatorArm64CompilationDependenciesMetadata,iosSimulatorArm64TestCompilationDependenciesMetadata

@@ -289,6 +289,7 @@ Each format version field has its own namespace:
 | `catalog_format_version` | `0x0007` | private catalog schema v7 with album hierarchy and manual order | [`CATALOG_SCHEMA_V7.md`](CATALOG_SCHEMA_V7.md) |
 | `catalog_format_version` | `0x0008` | private catalog schema v8 with recoverable trash | [`CATALOG_SCHEMA_V8.md`](CATALOG_SCHEMA_V8.md) |
 | `catalog_format_version` | `0x0009` | private catalog schema v9 with local private notes | [`CATALOG_SCHEMA_V9.md`](CATALOG_SCHEMA_V9.md) |
+| `catalog_format_version` | `0x000a` | private catalog schema v10 with encrypted content search | [`CATALOG_SCHEMA_V10.md`](CATALOG_SCHEMA_V10.md) |
 | `object_store_format_version` | `0x0001` | object store layout v1 | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §6 |
 | `slot_version` | `0x0001` | v1 key-slot families | [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §1 |
 

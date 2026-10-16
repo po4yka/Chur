@@ -16,6 +16,7 @@ use chur_format::{
         CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V3,
         CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V5, CATALOG_FORMAT_VERSION_V6,
         CATALOG_FORMAT_VERSION_V7, CATALOG_FORMAT_VERSION_V8, CATALOG_FORMAT_VERSION_V9,
+        CATALOG_FORMAT_VERSION_V10,
     },
     envelope::ObjectKeyEnvelope,
 };
@@ -58,6 +59,9 @@ const STEPS: &[Step] = &[
     },
     Step {
         version: CATALOG_FORMAT_VERSION_V9,
+    },
+    Step {
+        version: CATALOG_FORMAT_VERSION_V10,
     },
 ];
 
@@ -669,6 +673,47 @@ CREATE VIRTUAL TABLE private_note_search USING fts5(title,body,tokenize='unicode
 INSERT INTO private_note_search(private_note_search,rank) VALUES('secure-delete',1);
 "#;
 
+/// Local derived text and a combined metadata/content FTS index, all SQLCipher pages.
+const V10_DDL: &str = r#"
+CREATE TABLE content_index (
+ object_id BLOB PRIMARY KEY REFERENCES objects(object_id) CHECK(length(object_id)=16),
+ primary_stream_id BLOB NOT NULL CHECK(length(primary_stream_id)=16),
+ engine_version INTEGER NOT NULL CHECK(engine_version=1),
+ status INTEGER NOT NULL CHECK(status IN (1,2)),
+ body TEXT NOT NULL CHECK(length(CAST(body AS BLOB))<=262144)
+) STRICT;
+DROP TABLE object_search;
+CREATE VIRTUAL TABLE object_search USING fts5(
+ filename,caption,tag_names,content_body,
+ content='',contentless_delete=1,tokenize='unicode61 remove_diacritics 2',prefix='2 3'
+);
+INSERT INTO object_search(object_search,rank) VALUES('secure-delete',1);
+INSERT INTO object_search(rowid,filename,caption,tag_names,content_body)
+ SELECT o.search_key,COALESCE(m.original_filename,''),COALESCE(m.caption,''),
+ COALESCE((SELECT group_concat(t.name,' ') FROM object_tags ot JOIN tags t ON t.tag_id=ot.tag_id WHERE ot.object_id=o.object_id),''),''
+ FROM objects o JOIN metadata_revisions m ON m.object_id=o.object_id AND m.active=1 WHERE o.state=1;
+"#;
+
+/// Adds encrypted local content search after the authenticated v9 transition.
+pub fn migrate_v9_to_v10(db: &mut CatalogDb) -> Result<()> {
+    ensure!(
+        recorded_version(db.connection())? == Some(CATALOG_FORMAT_VERSION_V9),
+        MigrationRequired,
+        "the catalog is not version nine"
+    );
+    db.transaction(|tx| {
+        tx.execute(
+            "UPDATE vault_state SET active_migration_target=10 WHERE only_row=1", [],
+        ).map_err(|error|map_sqlite(error,"the content migration target could not be written"))?;
+        tx.execute_batch(V10_DDL)
+            .map_err(|error|map_sqlite(error,"the content index migration failed"))?;
+        tx.execute(
+            "UPDATE vault_state SET catalog_format_version=10,active_migration_target=NULL WHERE only_row=1", [],
+        ).map_err(|error|map_sqlite(error,"the content catalog version could not be written"))?;
+        Ok(())
+    })
+}
+
 /// Creates the current schema or opens it without performing an implicit migration.
 ///
 /// `docs/format/CATALOG_SCHEMA_V1.md` §18 forbids skipping an untested step, so
@@ -678,15 +723,15 @@ pub fn open_at_current_version(db: &mut CatalogDb, now_ms: u64) -> Result<u16> {
     let present = recorded_version(db.connection())?;
     let Some(present) = present else {
         install(db, now_ms)?;
-        return Ok(CATALOG_FORMAT_VERSION_V9);
+        return Ok(CATALOG_FORMAT_VERSION_V10);
     };
-    if present != CATALOG_FORMAT_VERSION_V9 {
+    if present != CATALOG_FORMAT_VERSION_V10 {
         bail!(
             MigrationRequired,
             "the catalog requires an authenticated schema migration"
         );
     }
-    Ok(CATALOG_FORMAT_VERSION_V9)
+    Ok(CATALOG_FORMAT_VERSION_V10)
 }
 
 /// The version the database records, or `None` when the schema is absent.
@@ -748,13 +793,16 @@ fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
             .execute_batch(V9_DDL)
             .map_err(|error| map_sqlite(error, "the private notes schema could not be created"))?;
         transaction
+            .execute_batch(V10_DDL)
+            .map_err(|e| map_sqlite(e, "the content index schema could not be created"))?;
+        transaction
             .execute(
                 "INSERT INTO vault_state (
                      only_row, catalog_format_version, catalog_generation,
                      active_migration_target, object_store_checkpoint,
                      integrity_checkpoint_ms, capability_flags
                  ) VALUES (1, ?1, 1, NULL, 0, ?2, 0)",
-                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V9), checkpoint],
+                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V10), checkpoint],
             )
             .map_err(|error| map_sqlite(error, "the catalog state row could not be written"))?;
         Ok(())
@@ -779,6 +827,7 @@ pub fn migrate_v8_to_v9(db: &mut CatalogDb) -> Result<()> {
 
 #[cfg(test)]
 const RESET_V7_DDL: &str = "
+DROP TABLE IF EXISTS content_index;
 DROP TABLE IF EXISTS private_note_search;
 DROP TABLE IF EXISTS private_notes;
 DROP TABLE trash_entries;
@@ -1221,11 +1270,11 @@ mod tests {
     }
 
     #[test]
-    fn a_new_catalog_installs_version_nine() {
+    fn a_new_catalog_installs_version_ten() {
         let mut db = open();
         assert_eq!(
             open_at_current_version(&mut db, 1_700_000_000_000).expect("install"),
-            CATALOG_FORMAT_VERSION_V9
+            CATALOG_FORMAT_VERSION_V10
         );
         let sharing_tables: i64 = db
             .connection()
@@ -1297,7 +1346,7 @@ mod tests {
         }
         assert_eq!(
             STEPS.last().map(|step| step.version),
-            Some(CATALOG_FORMAT_VERSION_V9)
+            Some(CATALOG_FORMAT_VERSION_V10)
         );
     }
 

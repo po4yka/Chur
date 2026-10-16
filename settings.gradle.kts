@@ -33,6 +33,11 @@ dependencyResolutionManagement {
             }
         }
         mavenCentral()
+        maven {
+            name = "Tesseract4Android"
+            url = uri("https://jitpack.io")
+            content { includeGroup("cz.adaptech.tesseract4android") }
+        }
     }
 }
 

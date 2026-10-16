@@ -55,6 +55,8 @@ pub const CATALOG_FORMAT_VERSION_V7: u16 = 0x0007;
 pub const CATALOG_FORMAT_VERSION_V8: u16 = 0x0008;
 /// Local private notes.
 pub const CATALOG_FORMAT_VERSION_V9: u16 = 0x0009;
+/// Local encrypted document and image content index.
+pub const CATALOG_FORMAT_VERSION_V10: u16 = 0x000a;
 /// §15.2: `object_store_format_version`.
 pub const OBJECT_STORE_FORMAT_VERSION_V1: u16 = 0x0001;
 /// §15.2: `slot_version` of the v1 key-slot families.

@@ -135,6 +135,7 @@ data class VaultUiState(
     val albums: List<AlbumSummary> = emptyList(),
     /** The search text. */
     val searchTerms: String = "",
+    val contentIndex: dev.po4yka.chur.app.ContentIndexState = dev.po4yka.chur.app.ContentIndexState(available = false),
     /** The key slots, for settings. */
     val slots: List<SlotSummary> = emptyList(),
     /** The album whose contents the library is showing, if any. */
@@ -206,6 +207,10 @@ data class VaultActions(
     val onImport: () -> Unit,
     /** Change the search text. */
     val onSearch: (String) -> Unit,
+    val onIndexContent: () -> Unit = {},
+    val onRebuildContentIndex: () -> Unit = {},
+    val onCancelContentIndex: () -> Unit = {},
+    val onClearContentIndex: () -> Unit = {},
     /** Open one album. */
     val onOpenAlbum: (AlbumSummary) -> Unit,
     /** Leave an open album. */
@@ -835,11 +840,12 @@ private fun SearchBody(state: VaultUiState, actions: VaultActions,
                     value = state.searchTerms,
                     onValueChange = actions.onSearch,
                     singleLine = true,
-                    label = { Text("Search filenames, captions, and tags") },
+                    label = { Text("Search names, tags, and indexed content") },
                     keyboardOptions = privateKeyboardOptions(),
                     modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter),
                     colors = churOutlinedTextFieldColors(),
                 )
+                ContentIndexControls(state.contentIndex, actions)
                 MediaPresentationControls(view, onViewChange, state.thumbnailsConcealed,
                     actions.onThumbnailsConcealedChange)
                 if (state.selectedCount == 0) MediaSortFilterControls(
@@ -853,9 +859,7 @@ private fun SearchBody(state: VaultUiState, actions: VaultActions,
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        // §16.4 of the catalog: the index covers exactly these
-                        // three, so the copy says so rather than implying more.
-                        "Search covers filenames, captions, and tag names.",
+                        "Search names, captions, tags, and indexed text.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = colors.inkMuted,
                     )

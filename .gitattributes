@@ -1,0 +1,2 @@
+# Preserve the bytes and cross-reference padding of binary PDF test fixtures.
+apps/androidApp/src/androidTest/assets/ocr/*.pdf binary

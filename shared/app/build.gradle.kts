@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest
+
 // The Compose Multiplatform shell.
 //
 // It holds the design system of `DESIGN.md` §6 to §9, the public Notes shell,
@@ -280,4 +282,13 @@ kotlin {
             implementation(libs.kotlinx.coroutines.test)
         }
     }
+}
+
+// Vision needs the services of a fully booted iOS simulator. The default
+// `simctl spawn --standalone` can report a successful request with no text.
+// The build does not boot, stop, or select a user's device on their behalf.
+tasks.withType<KotlinNativeSimulatorTest>().configureEach {
+    standalone.set(false)
+    val selected = providers.environmentVariable("CHUR_IOS_TEST_DEVICE")
+    if (selected.isPresent) device.set(selected)
 }

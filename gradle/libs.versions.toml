@@ -54,8 +54,10 @@ androidxMedia3 = "1.11.1"
 # The system security patch line of `ANDROID.md` §25.1 and ADR-0059.
 androidxSecurityState = "1.1.0"
 ktor = "3.6.0"
+androidTesseract = "4.9.0"
 
 [libraries]
+android-tesseract = { module = "cz.adaptech.tesseract4android:tesseract4android", version.ref = "androidTesseract" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinxCoroutines" }

@@ -31,16 +31,18 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** Owns the child and all IPC descriptors until the child is dead. */
-internal class AndroidDerivativeClient(private val context: Context) {
-    suspend fun derive(
+class AndroidDerivativeClient(private val context: Context) {
+    internal suspend fun derive(
         media: PickedMedia,
         probe: ProbedMedia,
         kind: StreamKind,
         cancelRequested: () -> Boolean,
+        operation: Int = DERIVATIVE_DECODE,
     ): Derivative? {
+        val timeoutMs = if (operation == DERIVATIVE_OCR) 120_000L else 30_000L
         var resultBytes: ByteArray? = null
         return try {
-            val result = withTimeoutOrNull(30_000) {
+            val result = withTimeoutOrNull(timeoutMs) {
                 withContext(Dispatchers.IO) {
                     // A child belongs to exactly one operation. A concurrent import must
                     // never stop another operation's decoder.
@@ -50,7 +52,7 @@ internal class AndroidDerivativeClient(private val context: Context) {
                         val started = System.nanoTime()
                         fun stopped(): Boolean {
                             coroutine.ensureActive()
-                            return cancelRequested() || System.nanoTime() - started >= 30_000_000_000L
+                            return cancelRequested() || System.nanoTime() - started >= timeoutMs * 1_000_000L
                         }
                         val connected = CountDownLatch(1)
                         val endpoint = AtomicReference<IBinder?>()
@@ -97,7 +99,7 @@ internal class AndroidDerivativeClient(private val context: Context) {
                                 request.writeLong(probe.durationMs)
                                 request.writeString(probe.contentType)
                                 request.writeInt(kind.code)
-                                if (!service.transact(DERIVATIVE_DECODE, request, null, IBinder.FLAG_ONEWAY)) {
+                                if (!service.transact(operation, request, null, IBinder.FLAG_ONEWAY)) {
                                     return@withLock null
                                 }
                             } finally {
@@ -140,7 +142,7 @@ internal class AndroidDerivativeClient(private val context: Context) {
                                                 } finally { if (!transferred) encoded.fill(0) }
                                             } finally { received.fill(0) }
                                         }
-                                        if (bytes.size() + count > DERIVATIVE_RESULT_MAX + 12) return@withLock null
+                                        if (bytes.size() + count > (if (operation == DERIVATIVE_OCR) OCR_RESULT_MAX else DERIVATIVE_RESULT_MAX) + 12) return@withLock null
                                         bytes.write(buffer, 0, count)
                                     }
                                     null
@@ -209,6 +211,18 @@ internal class AndroidDerivativeClient(private val context: Context) {
         }
     }
 
+    /** Shares the disposable decoder custody and mutex with media imports. */
+    suspend fun recognize(source: ParcelFileDescriptor, contentType: String, cancelRequested: () -> Boolean): AndroidRecognizedText? {
+        val media = PickedMedia(source.fd, true, null, contentType, null, null, android.net.Uri.EMPTY, {})
+        val probe = ProbedMedia(if (contentType == "application/pdf") 4 else 1, 0, 0, 0, contentType)
+        val result = derive(media, probe, StreamKind.ORIGINAL, cancelRequested, DERIVATIVE_OCR) ?: return null
+        if (result.width !in 1..100 || result.height !in 0..1 || result.bytes.size > OCR_RESULT_MAX) {
+            result.bytes.fill(0)
+            return null
+        }
+        return AndroidRecognizedText(result.bytes, result.height == 1, result.width)
+    }
+
     private fun identify(service: IBinder): ChildIdentity? {
         val request = Parcel.obtain()
         val reply = Parcel.obtain()
@@ -268,3 +282,6 @@ internal class AndroidDerivativeClient(private val context: Context) {
         }
     }
 }
+
+/** Caller clears [bytes] after its encrypted index write. */
+data class AndroidRecognizedText(val bytes: ByteArray, val partial: Boolean, val pages: Int)

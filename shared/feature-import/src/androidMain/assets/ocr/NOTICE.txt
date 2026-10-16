@@ -1,0 +1,23 @@
+Chur offline OCR inputs
+
+Tesseract4Android 4.9.0 (standard build, without OpenMP)
+Source: https://github.com/adaptech-cz/Tesseract4Android
+Source revision: 15c534717b1cb58261b58d4e4c1200c7f81f668c
+AAR SHA-256: bce5d6413a1a5ae3d7240033fbbc851ba3217d0a08d9769400e17a077f42cb2a
+Copyright 2019 Adaptech s.r.o., based on tess-two.
+License: Apache-2.0. See APACHE-2.0.txt.
+
+The binary contains Tesseract 5.5.1, Leptonica 1.85.0, libjpeg 9f,
+and libpng 1.6.48. Their license texts are included in this directory.
+LIBJPEG.txt is the complete upstream README, which includes its license.
+
+English and Russian LSTM models are unmodified tessdata_fast inputs.
+Source: https://github.com/tesseract-ocr/tessdata_fast
+Source revision: 87416418657359cb625c412a48b6e1d6d41c29bd
+License: Apache-2.0. See APACHE-2.0.txt.
+eng.traineddata SHA-256: 7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2
+rus.traineddata SHA-256: e16e5e036cce1d9ec2b00063cf8b54472625b9e14d893a169e2b0dedeb4df225
+
+Models are bundled with the application. No model is downloaded at build
+or runtime. Only these public model files are installed in the app's
+no-backup directory. Originals and recognized text are never written there.

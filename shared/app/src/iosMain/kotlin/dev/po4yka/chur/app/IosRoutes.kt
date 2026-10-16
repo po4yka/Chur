@@ -313,6 +313,7 @@ private fun IosExternalArchiveRoute(controller: ChurController) {
 
 @Composable
 private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
+    val contentIndex by controller.contentIndex.collectAsState()
     val page by controller.page.collectAsState()
     val albums by controller.albums.collectAsState()
     val tags by controller.tags.collectAsState()
@@ -796,6 +797,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 },
                 albums = albums,
                 searchTerms = terms,
+                contentIndex = contentIndex,
                 slots = slots,
                 openAlbum = openAlbum,
                 libraryScopeTitle = if (recentlyAdded) "Recently added" else if (trashOpen) "Trash" else if (quarantineOpen) "Quarantine" else openTag?.name ?: if (favoritesOnly) "Favorites" else null,
@@ -859,6 +861,10 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 onSearch = {
                     terms = it
                 },
+                onIndexContent = { controller.indexContent() },
+                onRebuildContentIndex = { controller.indexContent(rebuild = true) },
+                onCancelContentIndex = controller::cancelContentIndex,
+                onClearContentIndex = controller::clearContentIndex,
                 onExportAlbum = { exportingAlbum = it },
                 onEncryptedExportAlbum = { choosingArchive = SelectiveExportRequest(generation, albumIds = listOf(it.albumId)) },
                 onOpenAlbum = { navigateAlbum(it) },

@@ -703,10 +703,15 @@ mod tests {
     }
 
     fn vault() -> Vault {
+        vault_at(None)
+    }
+
+    fn vault_at(path: Option<&std::path::Path>) -> Vault {
         let root: Key = random::secret::<32>().expect("root");
         let vault_id = random::id().expect("id");
         let key = CatalogKey::derive(&root, &vault_id).expect("key");
-        let mut db = CatalogDb::open(&CatalogLocation::Memory, &key).expect("open");
+        let location = path.map_or(CatalogLocation::Memory, CatalogLocation::File);
+        let mut db = CatalogDb::open(&location, &key).expect("open");
         open_at_current_version(&mut db, 1).expect("schema");
         let collection = random::id().expect("id");
         store::put_collection(
@@ -1419,5 +1424,226 @@ mod tests {
         rows.map(|row| row.expect("row"))
             .collect::<Vec<_>>()
             .join("; ")
+    }
+    fn content_search(db: &CatalogDb, terms: &str) -> Vec<Id> {
+        ids(&page(
+            db,
+            &ObjectQuery {
+                scope: Scope::Search(terms.into()),
+                ..ObjectQuery::timeline()
+            },
+        )
+        .expect("search"))
+    }
+    fn content_source(db: &CatalogDb, id: &Id) -> Id {
+        store::object(db, id).expect("object").primary_stream_id
+    }
+    #[test]
+    fn content_index_combines_metadata_unicode_and_survives_rename_trash_restore() {
+        use crate::{content_index as ci, trash};
+        let mut v = vault();
+        let id = import(&mut v, 1, MediaClass::Image, "receipt.jpg");
+        let stream = content_source(&v.db, &id);
+        ci::put(
+            &mut v.db,
+            &id,
+            &stream,
+            1,
+            1,
+            "Секретный документ invoice Café",
+        )
+        .expect("put");
+        assert_eq!(content_search(&v.db, "СЕКРЕТНЫЙ"), vec![id]);
+        assert_eq!(content_search(&v.db, "receipt invoice cafe"), vec![id]);
+        let mut metadata = store::active_metadata(&v.db, &id).expect("metadata");
+        metadata.revision += 1;
+        metadata.original_filename = Some("renamed.jpg".into());
+        store::activate_metadata_revision(&mut v.db, &metadata).expect("rename");
+        assert_eq!(content_search(&v.db, "renamed документ"), vec![id]);
+        assert!(content_search(&v.db, "receipt").is_empty());
+        trash::set(&mut v.db, &[id], false, 100).expect("trash");
+        assert!(content_search(&v.db, "документ").is_empty());
+        assert!(ci::put(&mut v.db, &id, &stream, 1, 1, "late").is_err());
+        trash::set(&mut v.db, &[id], true, 101).expect("restore");
+        assert_eq!(content_search(&v.db, "документ"), vec![id]);
+        ci::clear(&mut v.db).expect("clear");
+        assert!(content_search(&v.db, "документ").is_empty());
+        assert_eq!(content_search(&v.db, "renamed"), vec![id]);
+    }
+    #[test]
+    fn content_index_is_bounded_source_bound_replaceable_and_purged_before_erasure() {
+        use crate::{content_index as ci, deletion};
+        let mut v = vault();
+        let id = import(&mut v, 1, MediaClass::Image, "source.jpg");
+        let stream = content_source(&v.db, &id);
+        for (text, status, version, source, want) in [
+            (
+                "x".repeat(ci::TEXT_MAX + 1),
+                1,
+                1,
+                stream,
+                ChurStatus::ResourceLimitExceeded,
+            ),
+            ("\0".into(), 1, 1, stream, ChurStatus::InvalidInput),
+            ("text".into(), 3, 1, stream, ChurStatus::InvalidInput),
+            ("text".into(), 1, 2, stream, ChurStatus::InvalidInput),
+            (
+                "text".into(),
+                1,
+                1,
+                random::id().unwrap(),
+                ChurStatus::Conflict,
+            ),
+        ] {
+            assert_eq!(
+                ci::put(&mut v.db, &id, &source, status, version, &text)
+                    .expect_err("refuse")
+                    .status(),
+                want
+            );
+        }
+        ci::put(&mut v.db, &id, &stream, 2, 1, &"я".repeat(ci::TEXT_MAX / 2))
+            .expect("exact UTF8 byte bound");
+        ci::put(&mut v.db, &id, &stream, 1, 1, "oldsecret").expect("replace");
+        ci::put(&mut v.db, &id, &stream, 1, 1, "newsecret").expect("replace");
+        assert!(content_search(&v.db, "oldsecret").is_empty());
+        assert_eq!(content_search(&v.db, "newsecret"), vec![id]);
+        deletion::begin(&mut v.db, &id).expect("begin");
+        let n: i64 =
+            v.db.connection()
+                .query_row("SELECT count(*) FROM content_index", [], |r| r.get(0))
+                .unwrap();
+        assert_eq!(n, 0);
+        deletion::erase(&mut v.db, &id, 100).expect("erase");
+        assert!(content_search(&v.db, "newsecret").is_empty());
+    }
+    #[test]
+    fn content_candidates_keyset_ignores_catalog_generation_and_filters_unsupported_kinds() {
+        use crate::content_index as ci;
+        let mut v = vault();
+        let first = import(&mut v, 1, MediaClass::Image, "a.jpg");
+        let second = import(&mut v, 2, MediaClass::Image, "b.jpg");
+        import(&mut v, 3, MediaClass::Video, "movie.mp4");
+        let all = ci::candidates(&v.db, None, 100, false).expect("all");
+        assert_eq!(all.len(), 2);
+        let a = ci::candidates(&v.db, None, 1, false)
+            .expect("first")
+            .remove(0);
+        ci::put(&mut v.db, &a.object_id, &a.primary_stream_id, 2, 1, "")
+            .expect("empty completed attempt");
+        let b = ci::candidates(&v.db, Some(&a.object_id), 1, false).expect("next");
+        assert_eq!(b.len(), 1);
+        assert_ne!(b[0].object_id, a.object_id);
+        assert_eq!(ci::candidates(&v.db, None, 100, false).unwrap().len(), 1);
+        assert_eq!(ci::candidates(&v.db, None, 100, true).unwrap().len(), 2);
+        assert!(ci::candidates(&v.db, None, 101, false).is_err());
+        assert!(
+            all.iter().any(|c| c.object_id == first) && all.iter().any(|c| c.object_id == second)
+        );
+    }
+
+    #[test]
+    fn content_text_and_fts_terms_never_appear_in_catalog_wal_or_shm() {
+        use crate::content_index as ci;
+        let directory = std::env::temp_dir().join(format!(
+            "chur-content-index-{}",
+            random::id().unwrap().to_hex()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("catalog.db");
+        let mut v = vault_at(Some(&path));
+        let id = import(&mut v, 1, MediaClass::Image, "scan.jpg");
+        let source = content_source(&v.db, &id);
+        let text = "OCR_PRIVATE_CANARY_832718 Содержимое конфиденциального документа";
+        ci::put(&mut v.db, &id, &source, 1, 1, text).expect("index");
+        assert_eq!(content_search(&v.db, "конфиденциального"), vec![id]);
+        for entry in std::fs::read_dir(&directory).unwrap() {
+            let bytes = std::fs::read(entry.unwrap().path()).unwrap();
+            for canary in [
+                b"OCR_PRIVATE_CANARY_832718".as_slice(),
+                "конфиденциального".as_bytes(),
+            ] {
+                assert!(
+                    !bytes.windows(canary.len()).any(|w| w == canary),
+                    "private text is visible outside SQLCipher"
+                );
+            }
+        }
+        v.db.checkpoint().unwrap();
+        drop(v);
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(!bytes.starts_with(b"SQLite format 3\0"));
+        assert!(!bytes.windows(24).any(|w| w == b"OCR_PRIVATE_CANARY_832718"));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn content_candidates_support_opaque_image_pdf_and_utf8_files_and_refuse_quarantine_race() {
+        use crate::content_index as ci;
+        let mut v = vault();
+        for mime in [
+            "image/png",
+            "application/pdf",
+            "text/plain",
+            "application/json",
+            "application/xml",
+        ] {
+            let id = import(&mut v, 1, MediaClass::Opaque, "file.bin");
+            let source = content_source(&v.db, &id);
+            let mut metadata = store::active_metadata(&v.db, &id).unwrap();
+            metadata.revision += 1;
+            metadata.content_type = mime.into();
+            store::activate_metadata_revision(&mut v.db, &metadata).unwrap();
+            assert!(
+                ci::candidates(&v.db, None, 100, false)
+                    .unwrap()
+                    .iter()
+                    .any(|c| c.object_id == id)
+            );
+            ci::put(&mut v.db, &id, &source, 1, 1, "content").unwrap();
+        }
+        let id = import(&mut v, 1, MediaClass::Image, "quarantine.jpg");
+        let source = content_source(&v.db, &id);
+        v.db.transaction(|tx| {
+            tx.execute(
+                "UPDATE objects SET integrity_summary=6 WHERE object_id=?1",
+                [id.as_bytes().as_slice()],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+        assert!(
+            !ci::candidates(&v.db, None, 100, true)
+                .unwrap()
+                .iter()
+                .any(|c| c.object_id == id)
+        );
+        assert_eq!(
+            ci::put(&mut v.db, &id, &source, 1, 1, "late")
+                .expect_err("quarantined after read")
+                .status(),
+            ChurStatus::Conflict
+        );
+    }
+    #[test]
+    fn content_migration_rebuilds_real_v9_metadata_search_without_losing_labels() {
+        let mut v = vault();
+        let id = import(&mut v, 1, MediaClass::Image, "migrationreceipt.jpg");
+        let mut metadata = store::active_metadata(&v.db, &id).unwrap();
+        metadata.revision += 1;
+        metadata.caption = Some("importantcaption".into());
+        store::activate_metadata_revision(&mut v.db, &metadata).unwrap();
+        v.db.transaction(|tx|{tx.execute_batch("DROP TABLE content_index; DROP TABLE object_search; CREATE VIRTUAL TABLE object_search USING fts5(filename,caption,tag_names,content='',contentless_delete=1,tokenize='unicode61 remove_diacritics 2',prefix='2 3'); UPDATE vault_state SET catalog_format_version=9;").unwrap();Ok(())}).unwrap();
+        crate::schema::migrate_v9_to_v10(&mut v.db).expect("real v9 migration");
+        assert_eq!(
+            content_search(&v.db, "migrationreceipt importantcaption"),
+            vec![id]
+        );
+        assert_eq!(
+            crate::content_index::candidates(&v.db, None, 100, false)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

@@ -3631,3 +3631,105 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_externalArchiveBegin<'lo
         }
     })
 }
+
+/// Bounded content-index control call. Payload copies are zeroed before return.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_contentIndexCandidates<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    request: JByteArray<'local>,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(input) = byte_array(env, &request) else {
+            return INVALID_INPUT;
+        };
+        let input = zeroize::Zeroizing::new(input);
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let mut written = 0usize;
+        // SAFETY: copied request, direct output buffer, and local written live through this call.
+        let status = unsafe {
+            chur_ffi::content_index::chur_content_index_candidates(
+                handle_of(session),
+                input.as_ptr(),
+                input.len(),
+                address,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Bounded content-index control call. Payload copies are zeroed before return.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_contentIndexPut<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    request: JByteArray<'local>,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(input) = byte_array(env, &request) else {
+            return INVALID_INPUT;
+        };
+        let input = zeroize::Zeroizing::new(input);
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let mut written = 0usize;
+        // SAFETY: copied request, direct output buffer, and local written live through this call.
+        let status = unsafe {
+            chur_ffi::content_index::chur_content_index_put(
+                handle_of(session),
+                input.as_ptr(),
+                input.len(),
+                address,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Bounded content-index control call. Payload copies are zeroed before return.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_contentIndexClear<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    request: JByteArray<'local>,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(input) = byte_array(env, &request) else {
+            return INVALID_INPUT;
+        };
+        let input = zeroize::Zeroizing::new(input);
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let mut written = 0usize;
+        // SAFETY: copied request, direct output buffer, and local written live through this call.
+        let status = unsafe {
+            chur_ffi::content_index::chur_content_index_clear(
+                handle_of(session),
+                input.as_ptr(),
+                input.len(),
+                address,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}

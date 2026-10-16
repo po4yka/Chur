@@ -20,7 +20,7 @@ class AndroidDerivativeService : Service() {
             data.enforceInterface(DERIVATIVE_INTERFACE)
             when (code) {
                 DERIVATIVE_PID -> requireNotNull(reply).writeInt(Process.myPid())
-                DERIVATIVE_DECODE -> {
+                DERIVATIVE_DECODE, DERIVATIVE_OCR -> {
                     val source = data.readTypedObject(ParcelFileDescriptor.CREATOR) ?: return false
                     val output = data.readTypedObject(ParcelFileDescriptor.CREATOR)
                     if (output == null) { source.close(); return false }
@@ -37,15 +37,17 @@ class AndroidDerivativeService : Service() {
                                 source.fd, true, null, probe.contentType, null, null, uri, {},
                             )
                             try {
-                                val result = AndroidMediaCodec(contentResolver, source)
-                                    .derive(media, probe, kind)
+                                val result = if (code == DERIVATIVE_OCR) AndroidOfflineOcr(this@AndroidDerivativeService).recognize(source, probe.contentType)
+                                    else AndroidMediaCodec(contentResolver, source).derive(media, probe, kind)
                                 DataOutputStream(ParcelFileDescriptor.AutoCloseOutputStream(output)).use { into ->
-                                    if (result != null && result.bytes.size <= DERIVATIVE_RESULT_MAX) {
-                                        into.writeInt(result.width)
-                                        into.writeInt(result.height)
-                                        into.writeInt(result.bytes.size)
-                                        into.write(result.bytes)
-                                    }
+                                    if (result != null) try {
+                                        if (result.bytes.size <= if (code == DERIVATIVE_OCR) OCR_RESULT_MAX else DERIVATIVE_RESULT_MAX) {
+                                            into.writeInt(result.width)
+                                            into.writeInt(result.height)
+                                            into.writeInt(result.bytes.size)
+                                            into.write(result.bytes)
+                                        }
+                                    } finally { result.bytes.fill(0) }
                                 }
                             } catch (_: Exception) {
                                 // EOF carries an unavailable derivative. The parent
@@ -67,3 +69,6 @@ internal const val DERIVATIVE_INTERFACE = "dev.po4yka.chur.imports.Derivative"
 internal const val DERIVATIVE_DECODE = IBinder.FIRST_CALL_TRANSACTION
 internal const val DERIVATIVE_PID = IBinder.FIRST_CALL_TRANSACTION + 1
 internal const val DERIVATIVE_RESULT_MAX = 32 * 1024 * 1024
+
+internal const val DERIVATIVE_OCR = IBinder.FIRST_CALL_TRANSACTION + 2
+internal const val OCR_RESULT_MAX = 256 * 1024

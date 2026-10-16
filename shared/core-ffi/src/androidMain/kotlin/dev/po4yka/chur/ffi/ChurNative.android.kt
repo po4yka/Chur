@@ -586,6 +586,9 @@ internal actual object ChurNative {
         outWritten: IntArray,
     ): Int = ChurJni.derivedRead(session, objectId, kind, destination.buffer, outWritten)
     // Local private notes. Requests contain private text and are cleared by the caller.
+    actual fun contentIndexCandidates(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int = ChurJni.contentIndexCandidates(session, request, destination.buffer, outWritten)
+    actual fun contentIndexPut(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int = ChurJni.contentIndexPut(session, request, destination.buffer, outWritten)
+    actual fun contentIndexClear(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int = ChurJni.contentIndexClear(session, request, destination.buffer, outWritten)
     actual fun privateNotesQuery(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int = ChurJni.privateNotesQuery(session, request, destination.buffer, outWritten)
     actual fun privateNoteGet(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int = ChurJni.privateNoteGet(session, request, destination.buffer, outWritten)
     actual fun privateNoteSave(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int = ChurJni.privateNoteSave(session, request, destination.buffer, outWritten)

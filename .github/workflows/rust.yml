@@ -392,6 +392,23 @@ jobs:
       - name: add the targets to the pinned toolchain
         working-directory: rust
         run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+      # Vision OCR needs a fully booted simulator; standalone spawn has no
+      # complete Vision service environment. This job owns this device only.
+      - name: boot an owned simulator for Vision tests
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          runtimes = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "runtimes", "--json"]))["runtimes"]
+          available = [runtime for runtime in runtimes if runtime["isAvailable"] and runtime["name"].startswith("iOS ")]
+          runtime = max(available, key=lambda item: tuple(map(int, item["version"].split("."))))
+          device_type = next(item["identifier"] for item in runtime["supportedDeviceTypes"] if item["productFamily"] == "iPhone")
+          name = "Chur CI " + os.environ["GITHUB_RUN_ID"] + " " + os.environ["GITHUB_RUN_ATTEMPT"]
+          device = subprocess.check_output(["xcrun", "simctl", "create", name, device_type, runtime["identifier"]], text=True).strip()
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
+              environment.write("CHUR_IOS_TEST_DEVICE=" + device + "\n")
+          subprocess.run(["xcrun", "simctl", "boot", device], check=True)
+          subprocess.run(["xcrun", "simctl", "bootstatus", device, "-b"], check=True)
+          PY
       # TEST_VECTORS.md section 7 requires the vector suite to run on iOS as
       # well. This is that run, as a real Kotlin/Native binary.
       - run: ./gradlew --no-daemon iosSimulatorArm64Test
@@ -407,6 +424,13 @@ jobs:
         run: |
           ./gradlew --no-daemon iosSimulatorArm64Test compileKotlinIosArm64 linkDebugFrameworkIosSimulatorArm64 --write-locks --quiet
           git diff --exit-code -- '**/gradle.lockfile'
+      - name: remove the owned Vision test simulator
+        if: always()
+        run: |
+          if [[ -n "${CHUR_IOS_TEST_DEVICE:-}" ]]; then
+            xcrun simctl shutdown "$CHUR_IOS_TEST_DEVICE" || true
+            xcrun simctl delete "$CHUR_IOS_TEST_DEVICE"
+          fi
 
   deny:
     name: cargo deny

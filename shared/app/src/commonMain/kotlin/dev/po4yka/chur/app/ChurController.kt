@@ -117,6 +117,7 @@ class ChurController(
      * action, `ANDROID.md` §24, and keeps the default.
      */
     private val localNetworkAlert: Boolean = false,
+    private val contentExtractor: dev.po4yka.chur.app.vault.ContentTextExtractor? = null,
 ) {
     /**
      * The last net under every coroutine this controller starts.
@@ -149,6 +150,15 @@ class ChurController(
     )
     private val repository =
         VaultRepository(storageRoot, clock, policy.copy(idleTimeoutMs = _autoLock.value.idleTimeoutMs))
+
+    private val contentIndexer = ContentIndexController(repository.state,
+        VaultContentIndexAccess(repository), contentExtractor, scope, changed = { reload() })
+    val contentIndex: StateFlow<ContentIndexState> = contentIndexer.state
+
+    /** OCR starts only on an explicit foreground action and remains inside this session. */
+    fun indexContent(rebuild: Boolean = false) { contentIndexer.start(rebuild) }
+    fun cancelContentIndex() { contentIndexer.cancel() }
+    fun clearContentIndex() { contentIndexer.clear() }
 
     private val initiallyLockWholeApp = runCatching { appLockSetting.read() }.getOrDefault(false)
     private val _route = MutableStateFlow<AppRoute>(
@@ -833,6 +843,7 @@ class ChurController(
 
     /** Locks now, `DESIGN.md` §14.3. */
     fun lock(reason: LockReason = LockReason.USER) = guarded {
+        contentIndexer.reset()
         lockEpoch += 1
         _activeOperation.value = null
         exports.cancelPending()
@@ -935,6 +946,7 @@ class ChurController(
 
     /** The application left the foreground. */
     suspend fun onBackground() {
+        contentIndexer.cancel()
         privacy.setEnabled(true)
         promptHeldLock = prompts > 0
         if (hostActivities > 0) return
@@ -2719,6 +2731,7 @@ class ChurController(
     }
 
     private suspend fun clearPrivateProjections() {
+        contentIndexer.reset()
         _activeOperation.value = null
         exports.cancelPending()
         currentQuery = ObjectQuery()

@@ -114,6 +114,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0060](0060-bounded-document-previews.md) | Import arbitrary files and bound private document previews | Proposed |
 | [0061](0061-local-private-notes.md) | Store local private notes in the encrypted catalog | Proposed |
 | [0062](0062-independent-selective-archives.md) | Create independent selective archives | Proposed |
+| [0063](0063-local-encrypted-content-search.md) | Keep local OCR text in the encrypted catalog | Proposed |
 
 Rows are ordered by ADR number. Number 0015 was not used; no ADR carries it and none will.
 

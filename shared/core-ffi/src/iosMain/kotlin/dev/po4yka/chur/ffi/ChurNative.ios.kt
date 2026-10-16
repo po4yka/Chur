@@ -12,6 +12,9 @@ import dev.po4yka.chur.native.ChurRuntimeConfigV1
 import dev.po4yka.chur.native.ChurScanRequestV1
 import dev.po4yka.chur.native.ChurSyncReportV1
 import dev.po4yka.chur.native.ChurUnlockRequestV1
+import dev.po4yka.chur.native.chur_content_index_candidates
+import dev.po4yka.chur.native.chur_content_index_put
+import dev.po4yka.chur.native.chur_content_index_clear
 import dev.po4yka.chur.native.chur_private_notes_query
 import dev.po4yka.chur.native.chur_private_note_get
 import dev.po4yka.chur.native.chur_private_note_save
@@ -1462,6 +1465,25 @@ internal actual object ChurNative {
             }
             status
         }
+    actual fun contentIndexCandidates(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        val written = alloc<ULongVar>()
+        val status = request.usePinned { pin -> chur_content_index_candidates(session.toULong(), pin.addressOf(0).reinterpret(), request.size.toULong(), destination.pointer, destination.size.toULong(), written.ptr) }
+        if (status == 0) outWritten[0] = written.value.toInt()
+        status
+    }
+    actual fun contentIndexPut(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        val written = alloc<ULongVar>()
+        val status = request.usePinned { pin -> chur_content_index_put(session.toULong(), pin.addressOf(0).reinterpret(), request.size.toULong(), destination.pointer, destination.size.toULong(), written.ptr) }
+        if (status == 0) outWritten[0] = written.value.toInt()
+        status
+    }
+    actual fun contentIndexClear(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        val written = alloc<ULongVar>()
+        val status = request.usePinned { pin -> chur_content_index_clear(session.toULong(), pin.addressOf(0).reinterpret(), request.size.toULong(), destination.pointer, destination.size.toULong(), written.ptr) }
+        if (status == 0) outWritten[0] = written.value.toInt()
+        status
+    }
+
     // Local private notes. Requests contain private text and are cleared by the caller.
     actual fun privateNotesQuery(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
         val written = alloc<ULongVar>()

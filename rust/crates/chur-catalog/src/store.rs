@@ -1810,13 +1810,14 @@ pub(crate) fn reindex_search(transaction: &Transaction<'_>, object_id: &Id) -> R
         .map_err(|error| map_sqlite(error, "the search row could not be replaced"))?;
     transaction
         .execute(
-            "INSERT INTO object_search (rowid, filename, caption, tag_names)
+            "INSERT INTO object_search (rowid, filename, caption, tag_names, content_body)
              SELECT ?1,
                     COALESCE(m.original_filename, ''),
                     COALESCE(m.caption, ''),
                     COALESCE((SELECT group_concat(t.name, ' ')
                                 FROM object_tags o JOIN tags t ON t.tag_id = o.tag_id
-                               WHERE o.object_id = ?2), '')
+                               WHERE o.object_id = ?2), ''),
+                    COALESCE((SELECT c.body FROM content_index c JOIN objects source ON source.object_id=c.object_id AND source.primary_stream_id=c.primary_stream_id WHERE c.object_id=?2),'')
                FROM metadata_revisions m
               WHERE m.object_id = ?2 AND m.active = 1",
             params![rowid, object_id.as_bytes().as_slice()],

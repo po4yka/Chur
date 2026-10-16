@@ -834,3 +834,72 @@ fn the_slot_inventory_order_does_not_depend_on_enrolment_order() {
         backup::restore(&destination, &mut package, PASSWORD, &mut Uninterrupted).expect("restore");
     }
 }
+
+#[test]
+fn encrypted_backup_restores_content_only_cyrillic_search_and_its_source_identity() {
+    use chur_catalog::{content_index, query::Scope, store};
+    let (root, mut source) = new_vault();
+    let (object_id, original_bytes) = import_one(&mut source, 4096, "scan.jpg", 0x7342);
+    let stream_id = store::object(source.catalog_ref().unwrap(), &object_id)
+        .unwrap()
+        .primary_stream_id;
+    let vault_id = source.vault_id();
+    let text = "Конфиденциальная расшифровка OCR_BACKUP_CANARY_934817";
+    content_index::put(
+        source.catalog().unwrap(),
+        &object_id,
+        &stream_id,
+        1,
+        1,
+        text,
+    )
+    .expect("encrypted content index");
+    let query = ObjectQuery {
+        scope: Scope::Search("конфиденциальная расшифровка".into()),
+        ..ObjectQuery::timeline()
+    };
+    assert_eq!(
+        page(source.catalog_ref().unwrap(), &query).unwrap().objects[0].object_id,
+        object_id
+    );
+    let mut package = Cursor::new(Vec::new());
+    backup::create(&mut source, &mut package, NOW, &mut Uninterrupted).expect("backup");
+    for canary in [text.as_bytes(), b"OCR_BACKUP_CANARY_934817".as_slice()] {
+        assert!(
+            !package
+                .get_ref()
+                .windows(canary.len())
+                .any(|bytes| bytes == canary)
+        );
+    }
+    source.lock().unwrap();
+    let destination = scratch_root();
+    backup::restore(&destination, &mut package, PASSWORD, &mut Uninterrupted).expect("restore");
+    let opened = vault::unlock_with_password(&destination, PASSWORD, NOW + 2000).expect("unlock");
+    assert_eq!(opened.vault_id(), vault_id);
+    assert_eq!(
+        store::object(opened.catalog_ref().unwrap(), &object_id)
+            .unwrap()
+            .primary_stream_id,
+        stream_id
+    );
+    let restored_hits =
+        page(opened.catalog_ref().unwrap(), &query).expect("restored content search");
+    assert_eq!(restored_hits.objects.len(), 1);
+    assert_eq!(restored_hits.objects[0].object_id, object_id);
+    assert!(
+        content_index::candidates(opened.catalog_ref().unwrap(), None, 100, false)
+            .unwrap()
+            .is_empty()
+    );
+    let indexed =
+        content_index::candidates(opened.catalog_ref().unwrap(), None, 100, true).unwrap();
+    assert_eq!(indexed.len(), 1);
+    assert_eq!(indexed[0].object_id, object_id);
+    assert_eq!(indexed[0].primary_stream_id, stream_id);
+    assert_eq!(exported(&opened, &object_id), original_bytes);
+    drop(opened);
+    drop(source);
+    std::fs::remove_dir_all(root.base()).unwrap();
+    std::fs::remove_dir_all(destination.base()).unwrap();
+}

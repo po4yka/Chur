@@ -362,6 +362,9 @@ fn every_declared_function_is_exported() {
         "chur_selective_export_begin",
         "chur_selective_import_begin",
         "chur_private_notes_query",
+        "chur_content_index_candidates",
+        "chur_content_index_put",
+        "chur_content_index_clear",
         "chur_private_note_get",
         "chur_private_note_save",
         "chur_private_note_change",
@@ -434,7 +437,7 @@ fn every_declared_function_is_exported() {
 
     // Calling each one proves the list above is not a stale copy.
     assert_eq!(chur_ffi::chur_abi_version_major(), 2);
-    assert_eq!(chur_ffi::chur_abi_version_minor(), 23);
+    assert_eq!(chur_ffi::chur_abi_version_minor(), 24);
     assert_eq!(
         chur_ffi::chur_capabilities(),
         chur_ffi::CHUR_CAP_DECOY_VAULT

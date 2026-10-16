@@ -524,6 +524,9 @@ internal object ChurJni {
         outWritten: IntArray,
     ): Int
     // Local private notes. Requests contain private text and are cleared by the caller.
+    external fun contentIndexCandidates(session: Long, request: ByteArray, destination: java.nio.ByteBuffer, outWritten: IntArray): Int
+    external fun contentIndexPut(session: Long, request: ByteArray, destination: java.nio.ByteBuffer, outWritten: IntArray): Int
+    external fun contentIndexClear(session: Long, request: ByteArray, destination: java.nio.ByteBuffer, outWritten: IntArray): Int
     external fun privateNotesQuery(session: Long, request: ByteArray, destination: java.nio.ByteBuffer, outWritten: IntArray): Int
     external fun privateNoteGet(session: Long, request: ByteArray, destination: java.nio.ByteBuffer, outWritten: IntArray): Int
     external fun privateNoteSave(session: Long, request: ByteArray, destination: java.nio.ByteBuffer, outWritten: IntArray): Int

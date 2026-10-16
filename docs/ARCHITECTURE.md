@@ -977,7 +977,8 @@ MediaObject
 ├── encrypted screen preview
 ├── encrypted video poster frame
 ├── encrypted audio waveform
-└── future encrypted OCR / embeddings
+├── local OCR text in the encrypted catalog
+└── future encrypted embeddings
 ```
 
 The original container is immutable after commit. Metadata and derived assets are independently revisioned so that favorites, captions, tags, thumbnails, and semantic indexes do not require rewriting a multi-gigabyte original.

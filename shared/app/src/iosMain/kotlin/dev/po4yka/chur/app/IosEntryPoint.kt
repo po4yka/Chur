@@ -143,6 +143,7 @@ fun churController(privacy: IosPrivacyCover, exports: ExportSink): ChurControlle
         clock = clock,
         notes = churNoteStore(),
         sync = sync,
+        contentExtractor = dev.po4yka.chur.app.vault.IosContentTextExtractor(),
         // iOS shows its local network alert as a run's first connection to a
         // local server goes out. It has no link check, `IOS.md` §27.
         localNetworkAlert = true,

@@ -13,9 +13,10 @@ Potential plaintext locations:
 | Rust secret buffers | Yes | unlocked operation/session only; zeroize |
 | Rust media buffers | Yes | bounded operation; overwrite/reuse |
 | JNI/direct buffers | Yes | bounded call; explicit ownership |
-| Kotlin `ByteArray` | Bounded | control data, authenticated document prefixes, and Android PDF ranges only; clear best-effort |
+| Kotlin `ByteArray` | Bounded | control data, authenticated document/OCR ranges, and extracted UTF-8 text; clear best-effort |
 | decoded document text | Yes | at most a 1 MiB UTF-8 prefix; current viewer/session only; drop references on disposal or lock |
 | private note text | Yes | bounded open editor and list previews; explicit save to SQLCipher only; drop UI references on lock/disposal |
+| OCR text and page pixels | Bounded | extraction only; clear owned arrays and rasters after custody drains; persist text only in SQLCipher |
 | Swift `Data` | Avoid | small bounded interop only |
 | decoded image surfaces | Yes | session-scoped cache; clear on lock |
 | Media3/AVFoundation buffers | Yes | player lifetime; invalidate on lock |

@@ -17,6 +17,7 @@
 //! [`schema`], and the canonical serialization of
 //! `docs/format/CANONICAL_ENCODING_V1.md` when a portable backup exports it.
 
+pub mod content_index;
 pub mod db;
 pub mod deletion;
 pub mod device_pairing;

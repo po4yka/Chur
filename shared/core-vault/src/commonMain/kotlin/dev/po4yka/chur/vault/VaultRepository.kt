@@ -12,6 +12,7 @@ import dev.po4yka.chur.ffi.ChurBuffer
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.ChurVault
 import dev.po4yka.chur.ffi.ContentInfo
+import dev.po4yka.chur.ffi.ContentIndexCandidate
 import dev.po4yka.chur.ffi.ExternalArchiveFile
 import dev.po4yka.chur.ffi.ImportRequest
 import dev.po4yka.chur.ffi.KeystoreMaterial
@@ -370,6 +371,20 @@ class VaultRepository(
     suspend fun changePrivateNote(generation: Long, id: ByteArray, expectedRevision: Long, action: PrivateNoteAction): PrivateNote? = withNoteSession(generation) { ChurVault.changePrivateNote(it, id, expectedRevision, action) }
     suspend fun beginPrivateNoteExport(generation: Long, id: ByteArray, expectedRevision: Long, destinationFd: Int): Long = withNoteSession(generation) { ChurVault.beginPrivateNoteExport(it, id, expectedRevision, destinationFd) }
     suspend fun privateNoteActivity(generation: Long) { withNoteSession(generation) { Unit } }
+
+    /** An old indexing job must never read or write a later unlocked identity. */
+    suspend fun contentIndexCandidates(generation: Long, afterId: ByteArray? = null, rebuild: Boolean = false, limit: Int = 25): List<ContentIndexCandidate> =
+        withGenerationSession(generation) { ChurVault.contentIndexCandidates(it, afterId, rebuild, limit) }
+
+    suspend fun putContentIndex(generation: Long, candidate: ContentIndexCandidate, text: ByteArray, partial: Boolean) =
+        withGenerationSession(generation) { ChurVault.putContentIndex(it, candidate, text, partial) }
+
+    suspend fun clearContentIndex(generation: Long) =
+        withGenerationSession(generation) { ChurVault.clearContentIndex(it) }
+
+    /** Rust invalidates this lease on lock; the caller releases it in finally. */
+    suspend fun leaseContentIndexReader(generation: Long, objectId: ByteArray): Long =
+        withGenerationSession(generation) { ChurVault.openReader(it, objectId, StreamKind.ORIGINAL) }
 
     /** Every album. */
     suspend fun albums(): List<AlbumSummary> = withSession { ChurVault.albums(it) }
@@ -1067,6 +1082,14 @@ class VaultRepository(
     private suspend inline fun <T> withSession(body: (Long) -> T): T = mutex.withLock {
         if (session == 0L) {
             throw ChurFailure(ChurStatus.VAULT_LOCKED, "no session is open")
+        }
+        val result = body(session)
+        touch()
+        result
+    }
+    private suspend inline fun <T> withGenerationSession(expectedGeneration: Long, body: (Long) -> T): T = mutex.withLock {
+        if (session == 0L || generation != expectedGeneration || _state.value !is VaultState.Unlocked) {
+            throw ChurFailure(ChurStatus.VAULT_LOCKED, "the content index session has ended")
         }
         val result = body(session)
         touch()

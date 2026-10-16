@@ -1207,3 +1207,181 @@ fn private_note_output_preflight_cannot_commit_a_failed_create_or_change() {
     assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn content_index_records_validate_bounds_source_and_output_before_mutation() {
+    use chur_ffi::content_index::*;
+    let root = scratch();
+    let runtime = open_runtime(&root);
+    let mut creation = 0;
+    let mut session = 0;
+    assert_eq!(
+        unsafe { chur_vault_create_begin(runtime, &create_request(PASSWORD), &mut creation) },
+        OK
+    );
+    assert_eq!(
+        unsafe { chur_vault_creation_activate(creation, &mut session) },
+        OK
+    );
+    let object = import(session, b"authenticated original", b"scan.jpg");
+    let mut request = vec![1, 0];
+    request.extend_from_slice(&[0; 16]);
+    request.extend_from_slice(&100u32.to_be_bytes());
+    let mut out = vec![0u8; 1_048_576];
+    let mut written = 999;
+    assert_eq!(
+        unsafe {
+            chur_content_index_candidates(
+                session,
+                request.as_ptr(),
+                request.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                &mut written,
+            )
+        },
+        OK
+    );
+    assert_eq!(&out[..5], &[1, 0, 0, 0, 1]);
+    assert_eq!(&out[5..21], &object);
+    let source = &out[21..37];
+    let mut put = vec![1];
+    put.extend_from_slice(&object);
+    put.extend_from_slice(source);
+    put.push(1);
+    put.extend_from_slice(&1u32.to_be_bytes());
+    let text = "Секретный OCR text";
+    put.extend_from_slice(&(text.len() as u32).to_be_bytes());
+    put.extend_from_slice(text.as_bytes());
+    assert_eq!(
+        status(unsafe {
+            chur_content_index_put(
+                session,
+                put.as_ptr(),
+                put.len(),
+                core::ptr::null_mut(),
+                0,
+                &mut written,
+            )
+        }),
+        ChurStatus::ResourceLimitExceeded
+    );
+    assert_eq!(written, 0);
+    let mut trailing = put.clone();
+    trailing.push(0);
+    assert_eq!(
+        status(unsafe {
+            chur_content_index_put(
+                session,
+                trailing.as_ptr(),
+                trailing.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                &mut written,
+            )
+        }),
+        ChurStatus::InvalidInput
+    );
+    let mut wrong = put.clone();
+    wrong[17] ^= 1;
+    assert_eq!(
+        status(unsafe {
+            chur_content_index_put(
+                session,
+                wrong.as_ptr(),
+                wrong.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                &mut written,
+            )
+        }),
+        ChurStatus::Conflict
+    );
+    assert_eq!(
+        unsafe {
+            chur_content_index_candidates(
+                session,
+                request.as_ptr(),
+                request.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                &mut written,
+            )
+        },
+        OK
+    );
+    assert_eq!(&out[..5], &[1, 0, 0, 0, 1]);
+    assert_eq!(
+        unsafe {
+            chur_content_index_put(
+                session,
+                put.as_ptr(),
+                put.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                &mut written,
+            )
+        },
+        OK
+    );
+    assert_eq!(written, 0);
+    assert_eq!(
+        unsafe {
+            chur_content_index_candidates(
+                session,
+                request.as_ptr(),
+                request.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                &mut written,
+            )
+        },
+        OK
+    );
+    assert_eq!(&out[..5], &[1, 0, 0, 0, 0]);
+    assert_eq!(
+        unsafe {
+            chur_content_index_clear(
+                session,
+                [1u8].as_ptr(),
+                1,
+                out.as_mut_ptr(),
+                out.len(),
+                &mut written,
+            )
+        },
+        OK
+    );
+    assert_eq!(
+        unsafe {
+            chur_content_index_candidates(
+                session,
+                request.as_ptr(),
+                request.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                &mut written,
+            )
+        },
+        OK
+    );
+    assert_eq!(&out[..5], &[1, 0, 0, 0, 1]);
+    assert_eq!(unsafe { chur_session_close(session) }, OK);
+    assert_eq!(
+        status(unsafe {
+            chur_content_index_candidates(
+                session,
+                request.as_ptr(),
+                request.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                &mut written,
+            )
+        }),
+        ChurStatus::SessionExpired
+    );
+    out.fill(0);
+    put.fill(0);
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+    std::fs::remove_dir_all(root).unwrap();
+}
