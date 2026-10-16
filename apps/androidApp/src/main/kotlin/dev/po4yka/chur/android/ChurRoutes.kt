@@ -421,6 +421,11 @@ private fun VaultRoute(controller: ChurController) {
     val appLockEnabled by controller.appLockEnabled.collectAsState()
     val autoLock by controller.autoLock.collectAsState()
     val context = LocalContext.current
+    val activity = LocalActivity.current
+    val quickSettingsLock = remember(activity) { activity?.let(::QuickSettingsLock) }
+    val quickSettingsLockAvailable = activity != null
+    var quickSettingsLockBusy by remember(activity) { mutableStateOf(false) }
+    var quickSettingsLockMessage by remember(activity) { mutableStateOf<String?>(null) }
     val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
     val deviceControl = remember(context) { ChurHost.of(context).deviceControl }
@@ -998,6 +1003,9 @@ private fun VaultRoute(controller: ChurController) {
                 appLockEnabled = appLockEnabled,
                 autoLock = autoLock,
                 deviceControlAvailable = true,
+                quickSettingsLockAvailable = quickSettingsLockAvailable,
+                quickSettingsLockBusy = quickSettingsLockBusy,
+                quickSettingsLockMessage = quickSettingsLockMessage,
                 sync = if (localNetworkOff) syncStatus?.copy(message = LOCAL_NETWORK_OFF, failure = null) else syncStatus,
                 devicePairing = vaultDevicePairing,
                 sharingIdentity = sharingIdentity,
@@ -1103,6 +1111,16 @@ private fun VaultRoute(controller: ChurController) {
                 onToggleAppLock = controller::toggleAppLock,
                 onSetAutoLock = controller::setAutoLock,
                 onDeviceControl = { deviceControl.start() },
+                onAddQuickSettingsLock = {
+                    if (!quickSettingsLockBusy && quickSettingsLock != null) {
+                        quickSettingsLockBusy = true
+                        quickSettingsLockMessage = null
+                        quickSettingsLock.request { message ->
+                            quickSettingsLockBusy = false
+                            quickSettingsLockMessage = message
+                        }
+                    }
+                },
                 onPrepareDevicePairing = { controller.prepareDevicePairing() },
                 onInspectDevicePairing = { controller.inspectDevicePairing(it) },
                 onApproveDevicePairing = { request, fingerprint ->

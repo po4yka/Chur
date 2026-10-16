@@ -13,6 +13,7 @@ import dev.po4yka.chur.notes.FileNoteStore
 import dev.po4yka.chur.sync.FileSyncStateStore
 import dev.po4yka.chur.sync.SyncCoordinator
 import java.io.File
+import java.io.IOException
 
 /**
  * The process-scoped half of the composition root.
@@ -152,12 +153,37 @@ internal class ChurHost private constructor(context: Context) {
     /** Explicit, foreground-only desktop control of the open session. */
     val deviceControl = DeviceControlBridge(context.applicationContext, controller)
 
+    /** Locks the process session even if the activity that opened it is gone. */
+    internal fun lockFromSystemControl() {
+        try {
+            privacy.setEnabled(true)
+            try {
+                deviceControl.stop()
+            } catch (_: IOException) {
+                // A failed socket close must not leave the vault open.
+            }
+        } finally {
+            controller.panic()
+        }
+    }
+
     init {
         sync.bind(RepositorySyncBoundary(controller.vault))
     }
 
     companion object {
         private var instance: ChurHost? = null
+
+        /** A tile must never initialize storage or a runtime in a cold process. */
+        @Synchronized
+        internal fun existing(): ChurHost? = instance
+
+        /** Returns false when there is no process session to lock. */
+        internal fun lockExistingFromSystemControl(): Boolean {
+            val host = existing() ?: return false
+            host.lockFromSystemControl()
+            return true
+        }
 
         /**
          * The one host of this process, built on the first launch.

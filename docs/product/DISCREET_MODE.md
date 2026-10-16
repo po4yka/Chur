@@ -99,6 +99,14 @@ Accessibility: a long press is exposed as a custom accessibility action on the s
 
 The reason reaches Rust as `LockReason::PANIC`, which the vault records and treats identically. A reason that changed the transition would make panic a different operation, and this section says it is not.
 
+### Android Quick Settings lock
+
+Android offers an optional **Lock Chur** tile. The user adds it from private Settings or the system Quick Settings editor. Android 13 and later show the system add-tile request; Android 10–12 use the editor. A refusal leaves the tile absent and the user can try again later.
+
+A tap performs the same panic lock described above, including while a picker or other host activity holds off automatic background locking. It covers the private window first, stops desktop control, and closes the process session. It does not open the app, authenticate, unlock the device or vault, or delete stored content. It can therefore run from a locked device without an authentication challenge.
+
+The tile has one fixed action label, icon, and inactive action state. It must not disclose whether a vault exists or is open, its identity, object counts, or public Notes content. A process with no existing host has no open session; the tap does nothing and must not create a runtime or storage. Repeated taps are safe. The tile uses the same process host as the activity and sync worker; it must not create a separate session.
+
 ## Launcher and icon presentation
 
 The default launcher presentation uses the Chur name and boundary-post icon; the public shell remains Notes.

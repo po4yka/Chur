@@ -876,6 +876,14 @@ Before the app can be represented in recents:
 
 ---
 
+### 19.4 Quick Settings lock
+
+The optional **Lock Chur** tile invokes the panic lock of [`product/DISCREET_MODE.md`](product/DISCREET_MODE.md#android-quick-settings-lock). It MUST use the existing process-scoped host, cover its private window, stop desktop control, and lock even while a picker or system prompt holds off background locking. A cold-process tap MUST NOT initialize the host, create storage, or open an activity.
+
+The `TileService` MUST be in the application process and protected by `android.permission.BIND_QUICK_SETTINGS_TILE`. Its exported service declares the `android.service.quicksettings.action.QS_TILE` action. The icon, label, content description, and action state remain constant across session states. The tile is not a toggle or an unlock action. It updates its presentation only while listening and does not retain private state.
+
+Private Settings provides a user-started add action. Android 13 and later use [`StatusBarManager.requestAddTileService`](https://developer.android.com/reference/android/app/StatusBarManager#requestAddTileService(android.content.ComponentName,java.lang.CharSequence,android.graphics.drawable.Icon,java.util.concurrent.Executor,java.util.function.Consumer)); earlier supported versions show manual editor instructions. Added, already added, declined, busy, and unavailable outcomes receive explicit feedback. No request runs at app launch. The system editor remains the path for removing or reordering the tile.
+
 ## 20. Screen, task, and external-display privacy
 
 ### 20.1 `FLAG_SECURE`

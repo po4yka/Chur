@@ -166,6 +166,10 @@ data class VaultUiState(
     val autoLock: AutoLock = AutoLock.DEFAULT,
     /** The Android host offers an explicit, foreground desktop session. */
     val deviceControlAvailable: Boolean = false,
+    /** Android offers a lock-only action in the system Quick Settings panel. */
+    val quickSettingsLockAvailable: Boolean = false,
+    val quickSettingsLockBusy: Boolean = false,
+    val quickSettingsLockMessage: String? = null,
     /** How many tiles the selection holds, §11.4. */
     val selectedCount: Int = 0,
     val canLoadMore: Boolean = false,
@@ -261,6 +265,8 @@ data class VaultActions(
     val onSetAutoLock: (AutoLock) -> Unit = {},
     /** Open the Android-only, user-approved desktop control dialog. */
     val onDeviceControl: () -> Unit = {},
+    /** Ask Android to add its lock tile, or show the manual steps on older versions. */
+    val onAddQuickSettingsLock: () -> Unit = {},
     /** Select every tile the current scope shows. */
     val onSelectAll: () -> Unit = {},
     /** Leave selection mode without acting. */
@@ -968,6 +974,24 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
                 supportingContent = { Text(state.autoLock.label) },
                 colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                 modifier = Modifier.clickable(role = Role.Button) { choosingAutoLock = true },
+            )
+        }
+        if (state.quickSettingsLockAvailable) item {
+            SettingsAction(
+                "Add Quick Settings lock",
+                actions.onAddQuickSettingsLock,
+                enabled = !state.quickSettingsLockBusy,
+            )
+            Text(
+                state.quickSettingsLockMessage ?: if (state.quickSettingsLockBusy) {
+                    "Complete the request in Android."
+                } else {
+                    "Lock Chur closes the open session without opening the app. " +
+                        "The tile does not show whether a session is open."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.inkMuted,
+                modifier = Modifier.padding(horizontal = ChurSpacing.three),
             )
         }
         item {
