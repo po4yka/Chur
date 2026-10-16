@@ -168,18 +168,19 @@ class BackNavigationTest {
 
     @Test
     fun damagedFileCleanupRequiresConfirmationAndKeepsHealthyMedia() = inTestVault {
-        val count = controller.page.value.objects.size
+        withMedia()
+        val healthy = nativeHealthyContents()
         tap(label("Settings"))
         assertTrue("the cleanup action must be reachable", scrollUntil(label("Delete damaged files")))
         tap(label("Delete damaged files"))
         assertTrue("permanent cleanup asks first", await { find(label("Delete damaged files permanently?")) != null })
         tap(label("Cancel"))
         assertTrue("Cancel dismisses the question", await { find(label("Delete damaged files permanently?")) == null })
-        assertEquals(count, controller.page.value.objects.size)
+        assertHealthyUnchanged(healthy, "Cancel")
         tap(label("Delete damaged files"))
         tap(label("Delete permanently"))
         assertTrue("native cleanup completes", await { find(label("Damaged files deleted permanently.")) != null })
-        assertEquals("healthy media must remain", count, controller.page.value.objects.size)
+        assertHealthyUnchanged(healthy, "Confirmed cleanup")
     }
 
 
@@ -1069,7 +1070,8 @@ class BackNavigationTest {
         // stands in for a bootstrap, and the case needs no server of its own.
         val store = FileSyncStateStore(File(activity.noBackupFilesDir, "chur-sync.json").path)
         assumeTrue("a sync server this test did not configure", runBlocking { store.load() } == null)
-        val objects = controller.page.value.objects.size
+        withMedia()
+        val healthy = nativeHealthyContents()
         try {
             runBlocking {
                 store.save(savedServer("https://sync.invalid"))
@@ -1090,6 +1092,7 @@ class BackNavigationTest {
             tap(label("Cancel"))
             assertTrue("Cancel closes the question", await { find(label("Stop syncing with this server?")) == null })
             assertFalse("Cancel must keep the server", await(1_000) { !sync.status.value.configured })
+            assertHealthyUnchanged(healthy, "Cancel disconnect")
 
             tap(label("Stop using the server"))
             tap(label("Stop syncing"))
@@ -1104,7 +1107,7 @@ class BackNavigationTest {
                     direction = AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD,
                 ),
             )
-            assertEquals("nothing in the vault changes", objects, controller.page.value.objects.size)
+            assertHealthyUnchanged(healthy, "Confirmed disconnect")
         } finally {
             // The case began with no state, so it leaves none.
             runBlocking { sync.disconnect() }
@@ -1997,6 +2000,31 @@ class BackNavigationTest {
     private fun withMedia() {
         if (!await(3_000) { controller.page.value.objects.any { it.mediaKind == MEDIA_CLASS_IMAGE } }) importPhoto()
         if (controller.page.value.objects.none { it.mediaKind == MEDIA_CLASS_AUDIO }) importRecording()
+    }
+
+    // These generated test-vault sources are small. The UI page is cleared
+    // during async loads, so retention checks read the native catalog instead.
+    private fun nativeHealthyContents(): Map<String, ByteArray> = runBlocking {
+        val contents = linkedMapOf<String, ByteArray>()
+        var cursor: ByteArray? = null
+        do {
+            val page = controller.vault.page(dev.po4yka.chur.ffi.ObjectQuery(cursor = cursor))
+            for (item in page.objects) {
+                assertTrue("the test fixture fits one byte array", item.plaintextSize in 0..Int.MAX_VALUE.toLong())
+                contents[item.id] = controller.vault.readRange(item.objectId, 0, item.plaintextSize.toInt())
+            }
+            cursor = page.nextCursor
+        } while (cursor != null)
+        assertTrue("healthy media must exist before checking retention", contents.isNotEmpty())
+        contents
+    }
+
+    private fun assertHealthyUnchanged(expected: Map<String, ByteArray>, stage: String) {
+        val actual = nativeHealthyContents()
+        assertEquals("$stage keeps every healthy object ID", expected.keys, actual.keys)
+        for ((id, bytes) in expected) {
+            assertTrue("$stage keeps the complete healthy original", bytes.contentEquals(actual.getValue(id)))
+        }
     }
 
     private fun photoTile(): AccessibilityNodeInfo {
