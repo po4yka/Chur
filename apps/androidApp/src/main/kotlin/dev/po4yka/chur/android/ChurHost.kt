@@ -7,6 +7,7 @@ import dev.po4yka.chur.app.AppLockSetting
 import dev.po4yka.chur.app.AutoLockSetting
 import dev.po4yka.chur.app.ChurController
 import dev.po4yka.chur.app.DeviceSlotPolicySetting
+import dev.po4yka.chur.app.PublicShellSetting
 import dev.po4yka.chur.app.RepositorySyncBoundary
 import dev.po4yka.chur.core.platformkeys.DeviceSlotPolicy
 import dev.po4yka.chur.notes.FileNoteStore
@@ -145,6 +146,12 @@ internal class ChurHost private constructor(context: Context) {
             ),
         deviceSlotPolicy = deviceSlotPolicy,
         appLockSetting = appLockSetting,
+        publicShellSetting = PublicShellSetting(
+            reader = {
+                File(context.publicShellFile("shell.txt")).takeIf { it.isFile && it.length() <= 32 }?.readText()
+            },
+            writer = { File(context.publicShellFile("shell.txt")).writeText(it) },
+        ),
         autoLockSetting = autoLockSetting,
         sync = sync,
         syncReachable = { serverUrl -> !localNetworkBlocked(context, serverUrl) },

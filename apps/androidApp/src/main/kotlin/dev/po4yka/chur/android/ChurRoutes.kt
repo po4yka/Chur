@@ -70,6 +70,8 @@ import dev.po4yka.chur.app.notes.NoteEditorScreen
 import dev.po4yka.chur.app.notes.NotesScreen
 import dev.po4yka.chur.app.notes.OpenNote
 import dev.po4yka.chur.app.notes.PublicSettingsScreen
+import dev.po4yka.chur.app.PublicShell as PublicShellKind
+import dev.po4yka.chur.app.publicshell.CalculatorScreen
 import dev.po4yka.chur.app.notes.rememberOpenNote
 import dev.po4yka.chur.app.vault.CreateVaultScreen
 import dev.po4yka.chur.app.vault.LibraryTile
@@ -184,7 +186,7 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
     }
 
     when (route) {
-        AppRoute.PublicShell, AppRoute.PublicSettings -> PublicShell(controller, route)
+        AppRoute.PublicShell, AppRoute.PublicSettings -> PublicShellRoute(controller, route)
         AppRoute.CreateVault -> {
             // A second identity is created from an open session, `DECOY_VAULT.md`
             // §3, so leaving returns to that vault and never shows the public
@@ -264,9 +266,38 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
 }
 
 @Composable
-private fun PublicShell(controller: ChurController, route: AppRoute) {
+private fun PublicShellRoute(controller: ChurController, route: AppRoute) {
+    val shell by controller.publicShell.collectAsState()
+    val error by controller.publicShellError.collectAsState()
+    val disclosureDue by controller.publicDisclosureRequired.collectAsState()
+    if (route == AppRoute.PublicSettings) {
+        BackHandler { controller.goTo(AppRoute.PublicShell) }
+        PublicSettingsScreen(
+            onBack = { controller.goTo(AppRoute.PublicShell) },
+            onOpenVault = controller::openVaultEntry,
+            selectedShell = shell,
+            onSelectShell = controller::setPublicShell,
+            error = error,
+        )
+        return
+    }
+    key(shell) {
+        when (shell) {
+            PublicShellKind.NOTES -> PublicNotesShell(controller) { controller.goTo(AppRoute.PublicSettings) }
+            PublicShellKind.CALCULATOR -> CalculatorScreen(onOpenSettings = { controller.goTo(AppRoute.PublicSettings) })
+            PublicShellKind.CAMERA -> AndroidPublicCameraScreen(
+                onOpenSettings = { controller.goTo(AppRoute.PublicSettings) },
+                showFirstWriteDisclosure = disclosureDue,
+                onAcknowledgeDisclosure = controller::acknowledgeDisclosure,
+                onBeginCapture = controller::beginPublicCameraActivity,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> Unit) {
     val notes by controller.notesState.collectAsState()
-    val vaultState by controller.vaultState.collectAsState()
     val disclosureDue by controller.disclosureDue.collectAsState()
     var query by remember { mutableStateOf("") }
     // Saved state, so a recreation or a process restart reopens the note being
@@ -312,18 +343,11 @@ private fun PublicShell(controller: ChurController, route: AppRoute) {
         // would take keystrokes meant for nothing and the first Back.
         onOpenSettings = {
             focusManager.clearFocus()
-            controller.goTo(AppRoute.PublicSettings)
+            onOpenSettings()
         },
         showFirstWriteDisclosure = disclosureDue,
         onAcknowledgeDisclosure = controller::acknowledgeDisclosure,
     )
-    if (route == AppRoute.PublicSettings) {
-        BackHandler { controller.goTo(AppRoute.PublicShell) }
-        PublicSettingsScreen(
-            onBack = { controller.goTo(AppRoute.PublicShell) },
-            onOpenVault = controller::openVaultEntry,
-        )
-    }
 }
 
 /**

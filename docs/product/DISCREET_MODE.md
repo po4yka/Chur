@@ -22,16 +22,32 @@ Discreet Mode makes Chur unobtrusive during ordinary device use. It is not the c
 
 ## Public shell
 
-The public shell must be functional rather than a static decoy screen. Initial direction is a Notes surface; later shells may include Journal or Calculator.
+The public shell must be functional rather than a static decoy screen. Public Settings offers Notes, Calculator, and Camera. Notes is the default. The choice is stored in public device preferences, is the same for every vault identity, and survives a restart. Switching screens does not delete Notes, public photos, or vault data. An unreadable or unknown choice falls back to Notes.
 
 Public-shell requirements:
 
-- data stored only in public Room/DataStore storage;
+- data stored only in the public shell's own platform storage;
 - no private object count, filename, date, album, thumbnail, or search state;
 - independent navigation graph and dependency graph;
 - usable after process restart without opening a vault;
 - no code path that treats public content as private encryption metadata;
 - backup policy as stated in "Public-shell disclosure and backup" below.
+
+### Calculator
+
+Calculator performs decimal addition, subtraction, multiplication, and division. It supports sign changes, percentages, repeated equals, clear, and deletion of the last digit. Chaining executes in entry order. Results use at most 12 significant digits. Division by zero and results outside the supported finite range show a recoverable error. Calculator input is public UI state; it is not a vault credential or a secret entry gesture.
+
+### Camera and public album
+
+Camera uses the platform's photo capture interface. Capture starts only after the user chooses Take photo. The first capture requires the public-data statement. The user then reviews the result and chooses Save photo or Discard photo. Cancellation, missing camera hardware or app, and denied camera access leave Settings and the vault entry available.
+
+Save photo writes only to Chur's local public album, not the system photo library or the vault. The album can list, open, and delete saved photos after a restart. Delete requires confirmation. Photos are normalized JPEGs with a maximum long edge of 4096 pixels; image metadata is removed. Storage is limited to 100 photos and 256 MiB. A failed or full save retains the reviewed capture for retry and does not replace earlier photos.
+
+The album is under Android `filesDir/public/camera/` or iOS `Documents/public/camera/`. It is not encrypted by Chur and enters normal platform backup. Temporary capture and review files are separate from vault import/export scratch and are not album entries. Leaving the screen cancels pending work and discards unsaved captures; it does not delete saved album photos. An Android activity or process recreation discards an unfinished capture and reports that outcome.
+
+Android delegates capture to a camera app through a narrowly granted output URI. Its app-requested activity uses the existing picker lifecycle exception, with the idle timer as the backstop; explicit lock still closes it. iOS uses the native camera picker, asks for camera access only on Take photo, and cancels on real background or scene disconnect. Neither implementation requests microphone access or reads the system photo library. Camera hardware and permission behavior on physical devices require separate acceptance from simulator and fixture checks.
+
+Every public screen has a visible Settings control. Settings is a separate route: no Notes editor or camera preview remains composed behind it. No shell reveals a private count, identity, route, or thumbnail.
 
 ### Public-shell disclosure and backup
 

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AE526322736D45C3B0909A11 /* PublicCamera.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE526322736D45C3B0909A12 /* PublicCamera.swift */; };
 		0B89FE5F310BFE65CBCA410E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BA457393957CC3760250CA00 /* Assets.xcassets */; };
 		3C2F99026109BB38D8A3A6B5 /* DirectoryExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 585146D2614423BAEC21F11B /* DirectoryExport.swift */; };
 		5E2A781CF29AA242C39DCFFB /* ScratchCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3B19C20AB1C110C0E63735C /* ScratchCopy.swift */; };
@@ -15,6 +16,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		AE526322736D45C3B0909A12 /* PublicCamera.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublicCamera.swift; sourceTree = "<group>"; };
 		0523F2FBC67DAC872B495D25 /* DocumentImport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentImport.swift; sourceTree = "<group>"; };
 		31B0CA2861DF43D785A14AA2 /* ChurApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChurApp.swift; sourceTree = "<group>"; };
 		585146D2614423BAEC21F11B /* DirectoryExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectoryExport.swift; sourceTree = "<group>"; };
@@ -28,6 +30,7 @@
 			isa = PBXGroup;
 			children = (
 				31B0CA2861DF43D785A14AA2 /* ChurApp.swift */,
+				AE526322736D45C3B0909A12 /* PublicCamera.swift */,
 				585146D2614423BAEC21F11B /* DirectoryExport.swift */,
 				0523F2FBC67DAC872B495D25 /* DocumentImport.swift */,
 				C3B19C20AB1C110C0E63735C /* ScratchCopy.swift */,
@@ -143,6 +146,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				F45227CA2321CC19791DBBA6 /* ChurApp.swift in Sources */,
+				AE526322736D45C3B0909A11 /* PublicCamera.swift in Sources */,
 				3C2F99026109BB38D8A3A6B5 /* DirectoryExport.swift in Sources */,
 				9EF133A9F98E205C798773E1 /* DocumentImport.swift in Sources */,
 				5E2A781CF29AA242C39DCFFB /* ScratchCopy.swift in Sources */,

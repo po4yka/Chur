@@ -13,6 +13,14 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     private(set) var storageReady = false
     weak var scene: SceneDelegate?
 
+    private lazy var publicCamera = PublicCamera(
+        presenter: { [weak self] in self?.scene?.window?.rootViewController },
+        beginPrompt: { [unowned self] in self.controller.beginPrompt() },
+        endPrompt: { [unowned self] in self.controller.endPrompt(bracket: $0) }
+    )
+
+    func cancelPublicCamera() { publicCamera.cancel() }
+
     private lazy var exports = ShareExportSink(
         present: { [weak self] url, target in
             if let scene = self?.scene {
@@ -51,6 +59,26 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         if storageReady, gate is GateResultCompatible {
             IosSyncBackground.shared.register(controller: controller)
         }
+        let publicCameraReady = publicCamera.prepare()
+        IosPublicCamera.shared.capture = { [weak self] answer in
+            guard publicCameraReady, let self, self.scene != nil else { _ = answer(nil, nil, "Camera is unavailable."); return }
+            self.publicCamera.capture(answer)
+        }
+        IosPublicCamera.shared.save = { [weak self] path, answer in
+            guard let self else { _ = answer(KotlinBoolean(bool: false), "Saving photos is unavailable."); return }
+            self.publicCamera.save(path, answer: answer)
+        }
+        IosPublicCamera.shared.list = { [weak self] in self?.publicCamera.list() ?? [] }
+        IosPublicCamera.shared.open = { [weak self] id, answer in
+            guard let self else { _ = answer(nil, "Photo is unavailable."); return }
+            self.publicCamera.open(id, answer: answer)
+        }
+        IosPublicCamera.shared.delete_ = { [weak self] id in
+            guard let self else { return "Camera is unavailable." }
+            return self.publicCamera.delete(id)
+        }
+        IosPublicCamera.shared.discard = { [weak self] path in self?.publicCamera.discard(path) }
+        IosPublicCamera.shared.cancel = { [weak self] in self?.publicCamera.cancel() }
         let mediaScratchReady = MediaPickerDelegate.prepareScratch()
         IosMediaPicker.shared.present = { [weak self] answer in
             guard mediaScratchReady, let scene = self?.scene else { MediaPickerDelegate.answerNothing(answer); return }
@@ -153,6 +181,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidEnterBackground(_ scene: UIScene) {
+        host.cancelPublicCamera()
         // UIKit takes the switcher picture after this returns, and a session
         // can have opened since the scene resigned active: a vault creation
         // finishes its key derivation without the lock epoch check an unlock
@@ -170,6 +199,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidDisconnect(_ scene: UIScene) {
+        host.cancelPublicCamera()
         cancelAlbumExportPicker()
         cancelDocumentImports()
         if host.scene === self { host.scene = nil }

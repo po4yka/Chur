@@ -28,6 +28,9 @@ import dev.po4yka.chur.app.notes.NoteEditorScreen
 import dev.po4yka.chur.app.notes.NotesScreen
 import dev.po4yka.chur.app.notes.OpenNote
 import dev.po4yka.chur.app.notes.PublicSettingsScreen
+import dev.po4yka.chur.app.PublicShell as PublicShellKind
+import dev.po4yka.chur.app.publicshell.CalculatorScreen
+import androidx.compose.runtime.key
 import dev.po4yka.chur.app.notes.rememberOpenNote
 import dev.po4yka.chur.app.vault.CreateVaultScreen
 import dev.po4yka.chur.app.vault.LibraryTile
@@ -128,7 +131,7 @@ internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: 
     }
 
     when (route) {
-        AppRoute.PublicShell, AppRoute.PublicSettings -> PublicShell(controller, route)
+        AppRoute.PublicShell, AppRoute.PublicSettings -> PublicShellRoute(controller, route)
         AppRoute.CreateVault -> CreateVaultScreen(
             busy = vaultState is VaultState.Creating,
             error = formError,
@@ -183,7 +186,35 @@ internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: 
 }
 
 @Composable
-private fun PublicShell(controller: ChurController, route: AppRoute) {
+private fun PublicShellRoute(controller: ChurController, route: AppRoute) {
+    val shell by controller.publicShell.collectAsState()
+    val error by controller.publicShellError.collectAsState()
+    val disclosureDue by controller.publicDisclosureRequired.collectAsState()
+    if (route == AppRoute.PublicSettings) {
+        PublicSettingsScreen(
+            onBack = { controller.goTo(AppRoute.PublicShell) },
+            onOpenVault = controller::openVaultEntry,
+            selectedShell = shell,
+            onSelectShell = controller::setPublicShell,
+            error = error,
+        )
+        return
+    }
+    key(shell) {
+        when (shell) {
+            PublicShellKind.NOTES -> PublicNotesShell(controller) { controller.goTo(AppRoute.PublicSettings) }
+            PublicShellKind.CALCULATOR -> CalculatorScreen(onOpenSettings = { controller.goTo(AppRoute.PublicSettings) })
+            PublicShellKind.CAMERA -> IosPublicCameraScreen(
+                onOpenSettings = { controller.goTo(AppRoute.PublicSettings) },
+                showFirstWriteDisclosure = disclosureDue,
+                onAcknowledgeDisclosure = controller::acknowledgeDisclosure,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> Unit) {
     val notes by controller.notesState.collectAsState()
     val disclosureDue by controller.disclosureDue.collectAsState()
     var query by remember { mutableStateOf("") }
@@ -211,16 +242,10 @@ private fun PublicShell(controller: ChurController, route: AppRoute) {
             val now = (NSDate().timeIntervalSince1970 * 1000).toLong()
             editing = OpenNote(Note(id = "note-$now", title = "", body = "", updatedMs = now), isNew = true)
         },
-        onOpenSettings = { controller.goTo(AppRoute.PublicSettings) },
+        onOpenSettings = { onOpenSettings() },
         showFirstWriteDisclosure = disclosureDue,
         onAcknowledgeDisclosure = controller::acknowledgeDisclosure,
     )
-    if (route == AppRoute.PublicSettings) {
-        PublicSettingsScreen(
-            onBack = { controller.goTo(AppRoute.PublicShell) },
-            onOpenVault = controller::openVaultEntry,
-        )
-    }
 }
 
 @Composable

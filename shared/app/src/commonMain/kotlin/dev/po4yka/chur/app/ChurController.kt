@@ -82,6 +82,7 @@ class ChurController(
      */
     private val deviceSlotPolicy: DeviceSlotPolicySetting = DeviceSlotPolicySetting.unset(),
     private val appLockSetting: AppLockSetting = AppLockSetting.unset(),
+    private val publicShellSetting: PublicShellSetting = PublicShellSetting.unset(),
     /** The auto-lock choice of `DESIGN.md` §14.4, which sets the idle limit. */
     private val autoLockSetting: AutoLockSetting = AutoLockSetting.unset(),
     private val clock: () -> Long,
@@ -155,6 +156,9 @@ class ChurController(
     )
     private val _notes = MutableStateFlow<List<Note>>(emptyList())
     private val _disclosureDue = MutableStateFlow(false)
+    private val _publicDisclosureRequired = MutableStateFlow(true)
+    /** Camera must show the public-data statement before its first file write. */
+    val publicDisclosureRequired: StateFlow<Boolean> = _publicDisclosureRequired.asStateFlow()
     private val _page = MutableStateFlow(ObjectPage(emptyList(), 0, 0, null))
     private val _albums = MutableStateFlow<List<AlbumSummary>>(emptyList())
     private val _tags = MutableStateFlow<List<TagSummary>>(emptyList())
@@ -202,6 +206,37 @@ class ChurController(
 
     /** Whether the entire app is gated on start and return from background. */
     val appLockEnabled: StateFlow<Boolean> = _appLockEnabled.asStateFlow()
+
+    private val _publicShell = MutableStateFlow(runCatching { publicShellSetting.read() }.getOrDefault(PublicShell.NOTES))
+    private val _publicShellError = MutableStateFlow<String?>(null)
+    val publicShell: StateFlow<PublicShell> = _publicShell.asStateFlow()
+    val publicShellError: StateFlow<String?> = _publicShellError.asStateFlow()
+
+    /** A public preference. It never opens or changes a vault. */
+    fun setPublicShell(shell: PublicShell) {
+        if (_route.value != AppRoute.PublicSettings) return
+        try {
+            publicShellSetting.write(shell)
+            _publicShell.value = shell
+            _publicShellError.value = null
+        } catch (_: Exception) {
+            _publicShellError.value = "The public screen could not be changed. Try again."
+        }
+    }
+
+    /** The external camera is an app-requested activity, like the photo picker. */
+    fun beginPublicCameraActivity(): () -> Unit {
+        if (_route.value != AppRoute.PublicShell || _publicShell.value != PublicShell.CAMERA) return {}
+        val epoch = promptEpoch
+        var open = true
+        beginHostActivity()
+        return {
+            if (open) {
+                open = false
+                if (epoch == promptEpoch) endHostActivity()
+            }
+        }
+    }
 
     /** How long an idle vault stays open in the foreground, `DESIGN.md` §14.4. */
     val autoLock: StateFlow<AutoLock> = _autoLock.asStateFlow()
@@ -377,6 +412,7 @@ class ChurController(
             setRoute(AppRoute.PublicShell)
         }
         _notes.value = notes.all()
+        _publicDisclosureRequired.value = !notes.disclosureAcknowledged()
         _deviceSlotStrict.value =
             withContext(Dispatchers.Default) { deviceSlotPolicy.read() }
         refreshDeviceUnlockOffer()
@@ -2213,6 +2249,7 @@ class ChurController(
     fun acknowledgeDisclosure() = guarded {
         notes.acknowledgeDisclosure()
         _disclosureDue.value = false
+        _publicDisclosureRequired.value = false
     }
 
     /**

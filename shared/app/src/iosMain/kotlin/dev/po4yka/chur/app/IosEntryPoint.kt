@@ -132,6 +132,10 @@ fun churController(privacy: IosPrivacyCover, exports: ExportSink): ChurControlle
             reader = { NSUserDefaults.standardUserDefaults.boolForKey("lockWholeApp") },
             writer = { NSUserDefaults.standardUserDefaults.setBool(it, forKey = "lockWholeApp") },
         ),
+        publicShellSetting = PublicShellSetting(
+            reader = { NSUserDefaults.standardUserDefaults.stringForKey("publicShell") },
+            writer = { NSUserDefaults.standardUserDefaults.setObject(it, forKey = "publicShell") },
+        ),
         autoLockSetting = AutoLockSetting(
             reader = { NSUserDefaults.standardUserDefaults.stringForKey("autoLock") },
             writer = { NSUserDefaults.standardUserDefaults.setObject(it, forKey = "autoLock") },

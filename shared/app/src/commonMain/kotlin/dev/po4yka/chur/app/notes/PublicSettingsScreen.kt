@@ -2,19 +2,31 @@ package dev.po4yka.chur.app.notes
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.unit.dp
+import dev.po4yka.chur.app.PublicShell
+import dev.po4yka.chur.app.publicshell.PUBLIC_CAMERA_DISCLOSURE
 import dev.po4yka.chur.app.theme.BackGlyph
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.LocalChurColors
@@ -22,7 +34,7 @@ import dev.po4yka.chur.app.theme.LocalChurColors
 /**
  * The public shell's own settings, `docs/product/DISCREET_MODE.md`.
  *
- * It carries two things and nothing else.
+ * It carries the public screen choice, the disclosure, and the visible vault entry.
  *
  * The permanent disclosure that section requires, beside the entry that reaches
  * the vault: public-shell content is not encrypted by Chur and is in the
@@ -45,7 +57,13 @@ import dev.po4yka.chur.app.theme.LocalChurColors
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PublicSettingsScreen(onBack: () -> Unit, onOpenVault: () -> Unit) {
+fun PublicSettingsScreen(
+    onBack: () -> Unit,
+    onOpenVault: () -> Unit,
+    selectedShell: PublicShell = PublicShell.NOTES,
+    onSelectShell: (PublicShell) -> Unit = {},
+    error: String? = null,
+) {
     val colors = LocalChurColors.current
     Scaffold(
         containerColor = colors.canvas,
@@ -61,9 +79,24 @@ fun PublicSettingsScreen(onBack: () -> Unit, onOpenVault: () -> Unit) {
         },
     ) { padding ->
         Column(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(ChurSpacing.gutter),
+            modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(ChurSpacing.gutter),
             verticalArrangement = Arrangement.spacedBy(ChurSpacing.three),
         ) {
+            Text("Public screen", style = MaterialTheme.typography.titleMedium)
+            Column(Modifier.fillMaxWidth().selectableGroup()) {
+                PublicShell.entries.forEach { shell ->
+                    Row(
+                        Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                            .selectable(selected = selectedShell == shell, role = Role.RadioButton, onClick = { onSelectShell(shell) })
+                            .padding(horizontal = ChurSpacing.two),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = selectedShell == shell, onClick = null)
+                        Text(shell.label, modifier = Modifier.padding(start = ChurSpacing.two))
+                    }
+                }
+            }
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             Card(onClick = onOpenVault, modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(ChurSpacing.three),
@@ -85,6 +118,7 @@ fun PublicSettingsScreen(onBack: () -> Unit, onOpenVault: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = colors.inkMuted,
             )
+            Text(PUBLIC_CAMERA_DISCLOSURE, style = MaterialTheme.typography.bodyMedium, color = colors.inkMuted)
         }
     }
 }

@@ -113,6 +113,15 @@
                 android:resource="@xml/export_paths" />
         </provider>
         <provider
+            android:name=".PublicCameraProvider"
+            android:authorities="${applicationId}.public-camera"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/public_camera_paths" />
+        </provider>
+        <provider
             android:name=".DeviceImportProvider"
             android:authorities="${applicationId}.device-import"
             android:exported="false" />

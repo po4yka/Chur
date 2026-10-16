@@ -657,6 +657,12 @@ This session authorizes the currently open identity only. It does not unlock a v
 
 ---
 
+### 14.7 Public camera
+
+The public Camera screen delegates photo capture to a system camera activity. It does not request `CAMERA`, microphone, or photo-library read permission. A dedicated non-exported FileProvider grants only the current file under `cache/public-camera/`; it does not expose the public album, vault, or export scratch. The result is bounded, oriented, and normalized before review. Cancellation and screen disposal revoke the grant and remove temporary files.
+
+An accepted Save photo writes atomically to `filesDir/public/camera/`, subject to the count and byte limits in [`product/DISCREET_MODE.md`](product/DISCREET_MODE.md#camera-and-public-album). Saved photos use the existing public backup include. No MediaStore row is created. Only a validated album identifier can open or delete a saved photo. The external camera owns an idempotent host-activity lease; a lease from before a lock must not end a newer session's prompt or picker.
+
 ## 15. Metadata and derived assets
 
 Rust owns canonical metadata serialization and private persistence. Android platform APIs MAY perform media probing or decoding when system codecs are needed.

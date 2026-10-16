@@ -26,6 +26,8 @@
 	<string>1</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Take public photos when you tap Take photo. Photos are saved only when you choose Save photo.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save selected vault media to your photo library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

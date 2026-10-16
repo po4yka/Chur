@@ -626,6 +626,12 @@ Import stays selection-only (§15.1). The owner chose in-app deletion over an ex
 
 ---
 
+### 15.5 Public camera
+
+The public Camera screen uses a photo-only `UIImagePickerController` after an explicit Take photo action. Camera access is requested at that point with `NSCameraUsageDescription`; no microphone or Photos authorization is requested by this flow. Missing camera hardware, restricted access, or a denial receives public feedback. The native picker and bounded review files belong to the public camera host, not a vault import or export.
+
+Save photo atomically writes a normalized JPEG to `Documents/public/camera/`. The local public album supports list, open, and confirmed deletion within the limits of [`product/DISCREET_MODE.md`](product/DISCREET_MODE.md#camera-and-public-album). This directory enters normal platform backup. No system Photos asset is created. Temporary files are protected separately and removed on discard, screen disposal, background, or scene disconnect. Generation checks reject late permission or capture callbacks. Only the camera authorization alert uses a system-prompt bracket; actual background still closes the public camera and enforces the whole-app gate.
+
 ## 16. Files import and security-scoped URLs
 
 Files selected through document pickers may provide security-scoped URLs.
