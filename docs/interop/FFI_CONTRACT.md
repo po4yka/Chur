@@ -773,3 +773,7 @@ Android loads ABI-specific native libraries through the application shell/JNI ad
 - cancellation at every stage;
 - no secret values in errors/logs;
 - Android/iOS byte-equivalent behavior.
+
+### Open readers and permanent erasure
+
+Permanent deletion revokes every reader for that object in the same physical vault. It waits for an in-flight read, removes its retained stream keys and cached plaintext, and completes the durable catalog erasure barrier before it reports success. Subsequent size, information, read, and verification calls return `SESSION_EXPIRED`. Reader close stays idempotent. Readers for other objects remain usable. Reader registration and deletion take a shared lifecycle mutex after the session lock. This covers different session handles for the same physical vault, so a reader cannot escape revocation between opening its key and publishing its handle. Ordinary reads do not take the lifecycle mutex. Close and owner teardown use the same barrier and clear a retained reader even if an in-flight call still owns its Arc. Once owner teardown starts, prepared child handles cannot be registered.

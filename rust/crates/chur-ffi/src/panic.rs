@@ -145,23 +145,37 @@ mod tests {
     }
 
     /// Registers one operation handle the test owns and closes at the end.
-    fn registered_handle() -> crate::registry::Handle {
+    fn registered_handle() -> (
+        crate::registry::Handle,
+        crate::registry::Handle,
+        std::path::PathBuf,
+    ) {
+        let path = std::env::temp_dir().join(format!(
+            "chur-panic-owner-{}",
+            chur_crypto::random::id().expect("id").to_hex()
+        ));
+        std::fs::create_dir_all(&path).expect("directory");
+        let runtime = crate::registry::insert(crate::registry::Entry::Runtime(
+            std::sync::Mutex::new(crate::runtime::Runtime::open(path.clone()).expect("runtime")),
+        ))
+        .expect("runtime handle");
         let operation = crate::operation::Operation::spawn(
             crate::operation::OperationKind::Import,
             0,
             |_shared| Ok(None),
         )
         .expect("spawn");
-        crate::registry::insert(crate::registry::Entry::Operation {
-            owner: crate::registry::NULL_HANDLE,
+        let handle = crate::registry::insert(crate::registry::Entry::Operation {
+            owner: runtime,
             operation,
         })
-        .expect("insert")
+        .expect("insert");
+        (handle, runtime, path)
     }
 
     #[test]
     fn a_panicking_call_invalidates_the_handle_that_owned_it() {
-        let handle = registered_handle();
+        let (handle, runtime, path) = registered_handle();
         assert_eq!(
             quietly(|| guard_status_for(handle, || panic!("injected"))),
             ChurStatus::InternalFailure.as_i32()
@@ -173,11 +187,13 @@ mod tests {
                 .map(|error| error.status()),
             Some(ChurStatus::SessionExpired)
         );
+        drop(crate::registry::close(runtime).expect("close runtime"));
+        std::fs::remove_dir_all(path).expect("remove directory");
     }
 
     #[test]
     fn an_ordinary_error_does_not_invalidate_the_handle() {
-        let handle = registered_handle();
+        let (handle, runtime, path) = registered_handle();
         assert_eq!(
             guard_status_for(handle, || Err(chur_core::err!(
                 AuthenticationFailed,
@@ -190,5 +206,7 @@ mod tests {
             "an ordinary error must not invalidate the handle"
         );
         drop(crate::registry::close(handle).expect("close"));
+        drop(crate::registry::close(runtime).expect("close runtime"));
+        std::fs::remove_dir_all(path).expect("remove directory");
     }
 }

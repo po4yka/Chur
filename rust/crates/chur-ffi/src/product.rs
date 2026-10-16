@@ -1564,10 +1564,12 @@ pub(crate) fn sweep_expired_trash(session: &mut Session, now_ms: u64) -> Result<
 }
 
 fn finish_pending_deletions(session: &mut Session, now_ms: u64) -> Result<()> {
+    let _lifecycle = registry::reader_lifecycle();
     let store_id = session.object_store_id();
     let root = session.root_dir().clone();
     let pending = deletion::sweep(session.catalog_ref()?)?;
     for entry in pending {
+        registry::invalidate_object_readers(session, &entry.object_id)?;
         if !entry.erased {
             deletion::erase(session.catalog()?, &entry.object_id, now_ms)?;
         }

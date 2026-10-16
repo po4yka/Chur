@@ -896,3 +896,177 @@ fn unlocking_reconciles_the_import_journal() {
         "a reconciled transaction leaves no record behind"
     );
 }
+
+#[test]
+fn permanent_delete_invalidates_cached_and_uncached_readers_but_keeps_neighbor_open() {
+    let root = scratch();
+    create_vault(&root);
+    let runtime = open_runtime(&root);
+    let (_, session) = unlock(runtime, PASSWORD, 1);
+    let removed = import_at(session, &vec![71; 600_000], 1_700_000_000_001);
+    let neighbor = import_at(session, &[72; 4096], 1_700_000_000_000);
+    let mut cached = 0;
+    let mut cold = 0;
+    let mut healthy = 0;
+    for (id, reader) in [
+        (removed, &mut cached),
+        (removed, &mut cold),
+        (neighbor, &mut healthy),
+    ] {
+        assert_eq!(
+            unsafe {
+                chur_object_reader_open(session, &ChurObjectRefV1 { object_id: id }, 1, reader)
+            },
+            OK
+        );
+    }
+    let mut buffer = [0; 32];
+    let mut written = 0;
+    assert_eq!(
+        unsafe {
+            chur_object_reader_read_at(cached, 0, buffer.as_mut_ptr(), buffer.len(), &mut written)
+        },
+        OK
+    );
+    assert_eq!(buffer, [71; 32]);
+    assert_eq!(
+        unsafe {
+            chur_ffi::product::chur_object_delete(session, &ChurObjectRefV1 { object_id: removed })
+        },
+        OK
+    );
+    for (reader, offset) in [(cached, 0), (cached, 262_144), (cold, 262_144)] {
+        buffer.fill(0xa5);
+        written = 99;
+        assert_eq!(
+            status(unsafe {
+                chur_object_reader_read_at(
+                    reader,
+                    offset,
+                    buffer.as_mut_ptr(),
+                    buffer.len(),
+                    &mut written,
+                )
+            }),
+            ChurStatus::SessionExpired
+        );
+        assert_eq!(written, 0);
+        assert_eq!(buffer, [0xa5; 32]);
+    }
+    assert_eq!(
+        unsafe {
+            chur_object_reader_read_at(healthy, 0, buffer.as_mut_ptr(), buffer.len(), &mut written)
+        },
+        OK
+    );
+    assert_eq!(buffer, [72; 32]);
+    for reader in [cached, cold, healthy] {
+        assert_eq!(unsafe { chur_object_reader_close(reader) }, OK);
+    }
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+}
+
+#[test]
+fn deletion_serializes_with_reader_publication_from_another_session() {
+    let root = scratch();
+    let runtime = open_runtime(&root);
+    let request = ChurCreateRequestV1 {
+        password: PASSWORD.as_ptr(),
+        password_length: PASSWORD.len() as u32,
+        memory_kib: 0,
+        iterations: 0,
+        parallelism: 0,
+    };
+    let mut creation = 0;
+    assert_eq!(
+        unsafe { chur_ffi::product::chur_vault_create_begin(runtime, &request, &mut creation) },
+        OK
+    );
+    let mut first = 0;
+    assert_eq!(
+        unsafe { chur_ffi::product::chur_vault_creation_activate(creation, &mut first) },
+        OK
+    );
+    let object = import(first, &[73; 4096]);
+    let second_runtime = open_runtime(&root);
+    let (code, second) = unlock(second_runtime, PASSWORD, 1);
+    assert_eq!(
+        code, OK,
+        "a newly created session does not yet hold the descriptor unlock lock"
+    );
+    let mut initial = 0;
+    assert_eq!(
+        unsafe {
+            chur_object_reader_open(
+                first,
+                &ChurObjectRefV1 { object_id: object },
+                1,
+                &mut initial,
+            )
+        },
+        OK
+    );
+    let start = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let opened = std::thread::scope(|scope| {
+        let read_start = start.clone();
+        let opening = scope.spawn(move || {
+            read_start.wait();
+            let mut handles = vec![initial];
+            for _ in 0..64 {
+                let mut handle = 0;
+                let code = unsafe {
+                    chur_object_reader_open(
+                        first,
+                        &ChurObjectRefV1 { object_id: object },
+                        1,
+                        &mut handle,
+                    )
+                };
+                if code == OK {
+                    handles.push(handle);
+                } else {
+                    assert_eq!(status(code), ChurStatus::NotFound);
+                }
+            }
+            handles
+        });
+        start.wait();
+        assert_eq!(
+            unsafe {
+                chur_ffi::product::chur_object_delete(
+                    second,
+                    &ChurObjectRefV1 { object_id: object },
+                )
+            },
+            OK
+        );
+        opening.join().unwrap()
+    });
+    for reader in opened {
+        let mut buffer = [0xa5; 16];
+        let mut written = 99;
+        assert_eq!(
+            status(unsafe {
+                chur_object_reader_read_at(
+                    reader,
+                    0,
+                    buffer.as_mut_ptr(),
+                    buffer.len(),
+                    &mut written,
+                )
+            }),
+            ChurStatus::SessionExpired
+        );
+        assert_eq!(written, 0);
+        assert_eq!(buffer, [0xa5; 16]);
+        let mut size = 0;
+        assert_eq!(
+            status(unsafe { chur_object_reader_size(reader, &mut size) }),
+            ChurStatus::SessionExpired
+        );
+        assert_eq!(unsafe { chur_object_reader_close(reader) }, OK);
+        assert_eq!(unsafe { chur_object_reader_close(reader) }, OK);
+    }
+    assert_eq!(unsafe { chur_runtime_close(second_runtime) }, OK);
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+}

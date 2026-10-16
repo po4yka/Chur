@@ -63,8 +63,14 @@ pub enum Entry {
     Reader {
         /// The session this reader belongs to.
         session: Handle,
-        /// The reader.
-        reader: Mutex<chur_media::reader::ObjectReader>,
+        /// Physical vault scope, distinct from an independent restored copy.
+        root: std::path::PathBuf,
+        /// Physical encrypted object store.
+        store_id: chur_core::Id,
+        /// The object whose keys this reader retains.
+        object_id: chur_core::Id,
+        /// None after permanent erasure, including for an in-flight Arc.
+        reader: Mutex<Option<chur_media::reader::ObjectReader>>,
     },
     /// A vault being created, `PROVISIONING.md` §3.
     ///
@@ -145,6 +151,8 @@ struct Slot {
     /// [`NULL_HANDLE`], and it only increases.
     generation: u32,
     entry: Option<Arc<Entry>>,
+    // Prevents a child prepared before teardown from publishing after its owner drains.
+    closing: bool,
 }
 
 struct Table {
@@ -182,11 +190,25 @@ fn join(index: usize, generation: u32) -> Result<Handle> {
 /// Returns [`ChurStatus::ResourceLimitExceeded`] when the registry is full.
 pub fn insert(entry: Entry) -> Result<Handle> {
     let mut table = table();
+    if let Some(owner) = entry.owner() {
+        let (index, generation) = split(owner);
+        let live = table.slots.get(index).is_some_and(|slot| {
+            slot.generation == generation && slot.entry.is_some() && !slot.closing
+        });
+        if !live {
+            drop(table);
+            return Err(Error::new(
+                ChurStatus::SessionExpired,
+                "the owning handle is closing",
+            ));
+        }
+    }
     if let Some(index) = table.slots.iter().position(|slot| slot.entry.is_none()) {
         let slot = &mut table.slots[index];
         // The generation increments on every allocation, so the value this slot
         // issues has never been issued before.
         slot.generation = slot.generation.wrapping_add(1).max(1);
+        slot.closing = false;
         slot.entry = Some(Arc::new(entry));
         return join(index, slot.generation);
     }
@@ -198,6 +220,7 @@ pub fn insert(entry: Entry) -> Result<Handle> {
     }
     table.slots.push(Slot {
         generation: 1,
+        closing: false,
         entry: Some(Arc::new(entry)),
     });
     let index = table.slots.len() - 1;
@@ -241,6 +264,12 @@ pub fn get(handle: Handle, expected: Kind) -> Result<Arc<Entry>> {
             "the handle belongs to an older generation of its slot",
         ));
     }
+    if slot.closing && expected != Kind::Session {
+        return Err(Error::new(
+            ChurStatus::SessionExpired,
+            "the handle is closing",
+        ));
+    }
     let Some(entry) = slot.entry.as_ref() else {
         return Err(Error::new(
             ChurStatus::SessionExpired,
@@ -267,6 +296,7 @@ pub fn get(handle: Handle, expected: Kind) -> Result<Arc<Entry>> {
 /// Returns [`ChurStatus::InvalidInput`] for the null handle or one this process
 /// never issued.
 pub fn close(handle: Handle) -> Result<Option<Arc<Entry>>> {
+    let _lifecycle = reader_lifecycle();
     if handle == NULL_HANDLE {
         return Err(Error::new(
             ChurStatus::InvalidInput,
@@ -292,7 +322,12 @@ pub fn close(handle: Handle) -> Result<Option<Arc<Entry>>> {
         // released. A re-close is success.
         return Ok(None);
     }
-    Ok(slot.entry.take())
+    let taken = slot.entry.take();
+    drop(table);
+    if let Some(entry) = taken.as_ref() {
+        revoke_reader(entry);
+    }
+    Ok(taken)
 }
 
 /// Closes every handle `owner` transitively owns, and returns them.
@@ -305,9 +340,16 @@ pub fn close(handle: Handle) -> Result<Option<Arc<Entry>>> {
 /// a session owns its readers and operations, so closing a runtime reaches a
 /// reader two levels down.
 pub fn drain_owned_by(owner: Handle) -> Vec<Arc<Entry>> {
+    let _lifecycle = reader_lifecycle();
     let mut frontier = vec![owner];
     let mut taken = Vec::new();
     let mut table = table();
+    let (index, generation) = split(owner);
+    if let Some(slot) = table.slots.get_mut(index)
+        && slot.generation == generation
+    {
+        slot.closing = true;
+    }
     while let Some(current) = frontier.pop() {
         // The handles are collected before the entries are taken, because a
         // taken entry no longer names its slot and its own children would then
@@ -334,7 +376,61 @@ pub fn drain_owned_by(owner: Handle) -> Vec<Arc<Entry>> {
             }
         }
     }
+    drop(table);
+    for entry in &taken {
+        revoke_reader(entry);
+    }
     taken
+}
+
+fn revoke_reader(entry: &Entry) {
+    if let Entry::Reader { reader, .. } = entry {
+        drop(lock(reader).take());
+    }
+}
+
+/// Revokes object readers before permanent erasure can report success.
+///
+/// The session lock serializes this with reader creation. Remove public handles
+/// under the table lock, then wait for any in-flight read and drop both its
+/// derived keys and cached plaintext without holding the registry lock.
+pub fn invalidate_object_readers(
+    session: &chur_catalog::vault::Session,
+    object: &chur_core::Id,
+) -> Result<()> {
+    let scope = std::fs::canonicalize(session.root_dir().base()).map_err(|_| {
+        Error::new(
+            ChurStatus::IoFailure,
+            "the reader storage root could not be resolved",
+        )
+    })?;
+    let entries = {
+        let mut table = table();
+        table
+            .slots
+            .iter_mut()
+            .filter_map(|slot| {
+                let matches = slot.entry.as_ref().is_some_and(|entry| {
+                    matches!(entry.as_ref(), Entry::Reader {
+                root, store_id, object_id, ..
+            } if root == &scope && store_id == &session.object_store_id() && object_id == object)
+                });
+                if matches { slot.entry.take() } else { None }
+            })
+            .collect::<Vec<_>>()
+    };
+    for entry in entries {
+        revoke_reader(&entry);
+    }
+    Ok(())
+}
+
+/// Serializes key acquisition and reader publication with permanent erasure.
+/// Acquire after the session lock. Ordinary reads do not take this guard.
+/// One process-wide guard also covers separate handles for the same physical vault.
+pub fn reader_lifecycle() -> MutexGuard<'static, ()> {
+    static LIFECYCLE: Mutex<()> = Mutex::new(());
+    lock(&LIFECYCLE)
 }
 
 /// The number of live handles, for the leak test §15 asks for.
@@ -375,4 +471,152 @@ pub fn invalidate(handle: Handle) {
     drop(owned);
     let taken = close(handle);
     drop(taken);
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[expect(unsafe_code, reason = "the regression tests drive the real C ABI")]
+mod reader_teardown_tests {
+    use super::*;
+    use crate::{api, records::*};
+    use chur_catalog::{paths::VaultRoot, vault};
+    use chur_media::import::{self, CanonicalMedia, SourceCapability};
+    use zeroize::Zeroizing;
+
+    #[test]
+    fn close_and_owner_drain_erase_a_reader_retained_by_an_in_flight_arc() {
+        for owner_drain in [false, true] {
+            let path = std::env::temp_dir().join(format!(
+                "chur-reader-drain-{}",
+                chur_crypto::random::id().unwrap().to_hex()
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            let password = b"synthetic reader teardown password";
+            let mut native =
+                vault::create(&VaultRoot::new(path.clone()), password, 1_700_000_000_000)
+                    .unwrap()
+                    .activate()
+                    .unwrap();
+            let object = import::import_bytes(
+                &mut native,
+                SourceCapability {
+                    seekable: true,
+                    known_length: Some(4096),
+                    content_type_hint: "application/octet-stream".into(),
+                    original_filename: None,
+                    capture_time_ms: None,
+                },
+                CanonicalMedia::opaque(),
+                "application/octet-stream",
+                &Zeroizing::new(vec![17; 4096]),
+                1_700_000_000_001,
+            )
+            .unwrap();
+            drop(native);
+            let bytes = path.to_str().unwrap().as_bytes();
+            let config = ChurRuntimeConfigV1 {
+                root_path: bytes.as_ptr(),
+                root_path_length: bytes.len() as u32,
+            };
+            let mut runtime = 0;
+            assert_eq!(unsafe { api::chur_runtime_open(&config, &mut runtime) }, 0);
+            let request = ChurUnlockRequestV1 {
+                factor: 1,
+                reserved: [0; 3],
+                secret: password.as_ptr(),
+                secret_length: password.len() as u32,
+            };
+            let mut session = 0;
+            assert_eq!(
+                unsafe { api::chur_vault_unlock(runtime, &request, &mut session) },
+                0
+            );
+            let mut reader = 0;
+            assert_eq!(
+                unsafe {
+                    api::chur_object_reader_open(
+                        session,
+                        &ChurObjectRefV1 {
+                            object_id: *object.as_bytes(),
+                        },
+                        1,
+                        &mut reader,
+                    )
+                },
+                0
+            );
+            let mut buffer = [0; 32];
+            let mut written = 0;
+            assert_eq!(
+                unsafe {
+                    api::chur_object_reader_read_at(
+                        reader,
+                        0,
+                        buffer.as_mut_ptr(),
+                        buffer.len(),
+                        &mut written,
+                    )
+                },
+                0
+            );
+            assert_eq!(buffer, [17; 32]);
+            let unpublished = if owner_drain {
+                let entry = get(session, Kind::Session).unwrap();
+                let Entry::Session {
+                    session: guarded, ..
+                } = entry.as_ref()
+                else {
+                    unreachable!()
+                };
+                let native = lock(guarded);
+                Some((
+                    chur_media::reader::open(
+                        &native,
+                        &object,
+                        chur_format::constants::StreamKind::Original,
+                    )
+                    .unwrap(),
+                    native.object_store_id(),
+                ))
+            } else {
+                None
+            };
+            // A concurrent read can retain this reference before close detaches its slot.
+            let retained = get(reader, Kind::Reader).unwrap();
+            if owner_drain {
+                assert_eq!(unsafe { api::chur_vault_lock(session, 0) }, 0);
+            } else {
+                assert_eq!(unsafe { api::chur_object_reader_close(reader) }, 0);
+            }
+            let Entry::Reader {
+                reader: retained_reader,
+                ..
+            } = retained.as_ref()
+            else {
+                unreachable!()
+            };
+            assert!(
+                lock(retained_reader).is_none(),
+                "a detached Arc must not retain keys or cached plaintext"
+            );
+            assert_eq!(unsafe { api::chur_object_reader_close(reader) }, 0);
+            if let Some((opened, store_id)) = unpublished {
+                let result = insert(Entry::Reader {
+                    session,
+                    root: std::fs::canonicalize(&path).unwrap(),
+                    store_id,
+                    object_id: object,
+                    reader: Mutex::new(Some(opened)),
+                });
+                assert_eq!(
+                    result.err().map(|error| error.status()),
+                    Some(ChurStatus::SessionExpired),
+                    "a prepared reader cannot publish after its owner was closed"
+                );
+            }
+            drop(retained);
+            assert_eq!(unsafe { api::chur_runtime_close(runtime) }, 0);
+            std::fs::remove_dir_all(path).unwrap();
+        }
+    }
 }

@@ -123,6 +123,13 @@ pub(crate) fn delete_object(
     crate::product::run_deletion(session, object_id, now_ms)
 }
 
+fn revoked_reader() -> Error {
+    Error::new(
+        ChurStatus::SessionExpired,
+        "the object reader has been revoked",
+    )
+}
+
 /// The largest byte length any string argument may declare.
 ///
 /// It bounds every `*const u8` plus length pair before a slice is built from
@@ -865,14 +872,24 @@ pub unsafe extern "C" fn chur_object_reader_open(
                 "the handle is of another type",
             ));
         };
-        let opened = {
-            let guard = registry::lock(guarded);
-            reader::open(&guard, &object_id, kind)?
-        };
+        let guard = registry::lock(guarded);
+        let _lifecycle = registry::reader_lifecycle();
+        let opened = reader::open(&guard, &object_id, kind)?;
         let handle = registry::insert(Entry::Reader {
             session,
-            reader: std::sync::Mutex::new(opened),
+            root: std::fs::canonicalize(guard.root_dir().base()).map_err(|_| {
+                Error::new(
+                    ChurStatus::IoFailure,
+                    "the reader storage root could not be resolved",
+                )
+            })?,
+            store_id: guard.object_store_id(),
+            object_id,
+            reader: std::sync::Mutex::new(Some(opened)),
         })?;
+        // Publish the handle while still holding the session lock. A permanent
+        // deletion cannot miss a reader between key opening and registration.
+        drop(guard);
         unsafe { write_out(out_reader, handle) }
     })
 }
@@ -899,7 +916,10 @@ pub unsafe extern "C" fn chur_object_reader_size(reader: Handle, out_size: *mut 
                 "the handle is of another type",
             ));
         };
-        let size = registry::lock(guarded).size();
+        let size = registry::lock(guarded)
+            .as_ref()
+            .ok_or_else(revoked_reader)?
+            .size();
         // SAFETY: the caller guarantees `out_size` is writable.
         unsafe { write_out(out_size, size) }
     })
@@ -930,7 +950,10 @@ pub unsafe extern "C" fn chur_object_reader_content_info(
                 "the handle is of another type",
             ));
         };
-        let info = registry::lock(guarded).content_info()?;
+        let info = registry::lock(guarded)
+            .as_ref()
+            .ok_or_else(revoked_reader)?
+            .content_info()?;
         let mut content_type = [0u8; 64];
         let bytes = info.content_type.as_bytes();
         if bytes.len() >= content_type.len() {
@@ -989,7 +1012,10 @@ pub unsafe extern "C" fn chur_object_reader_read_at(
         };
         // SAFETY: the caller guarantees `destination` covers `capacity` bytes.
         let buffer = unsafe { borrow_bytes_mut(destination, capacity)? };
-        let written = registry::lock(guarded).read_at(offset, buffer)?;
+        let written = registry::lock(guarded)
+            .as_mut()
+            .ok_or_else(revoked_reader)?
+            .read_at(offset, buffer)?;
         unsafe { write_out(bytes_written, written) }
     })
 }
@@ -1022,7 +1048,10 @@ pub unsafe extern "C" fn chur_object_reader_verify_complete(
                 "the handle is of another type",
             ));
         };
-        let summary = registry::lock(guarded).verify_complete()?;
+        let summary = registry::lock(guarded)
+            .as_mut()
+            .ok_or_else(revoked_reader)?
+            .verify_complete()?;
         // SAFETY: the caller guarantees `out_state` is writable.
         unsafe { write_out(out_state, u32::from(summary.value())) }
     })
