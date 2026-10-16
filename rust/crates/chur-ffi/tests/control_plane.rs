@@ -967,7 +967,7 @@ fn permanent_delete_invalidates_cached_and_uncached_readers_but_keeps_neighbor_o
 }
 
 #[test]
-fn deletion_serializes_with_reader_publication_from_another_session() {
+fn creation_session_excludes_second_unlock_and_serializes_reader_deletion() {
     let root = scratch();
     let runtime = open_runtime(&root);
     let request = ChurCreateRequestV1 {
@@ -990,9 +990,10 @@ fn deletion_serializes_with_reader_publication_from_another_session() {
     let object = import(first, &[73; 4096]);
     let second_runtime = open_runtime(&root);
     let (code, second) = unlock(second_runtime, PASSWORD, 1);
+    assert_eq!(status(code), ChurStatus::Conflict);
     assert_eq!(
-        code, OK,
-        "a newly created session does not yet hold the descriptor unlock lock"
+        second, 0,
+        "an existing creation session must retain exclusive custody"
     );
     let mut initial = 0;
     assert_eq!(
@@ -1033,10 +1034,7 @@ fn deletion_serializes_with_reader_publication_from_another_session() {
         start.wait();
         assert_eq!(
             unsafe {
-                chur_ffi::product::chur_object_delete(
-                    second,
-                    &ChurObjectRefV1 { object_id: object },
-                )
+                chur_ffi::product::chur_object_delete(first, &ChurObjectRefV1 { object_id: object })
             },
             OK
         );

@@ -8,6 +8,9 @@
 //! The session lives here because ADR-0004 ties it to the catalog: the catalog
 //! key exists only in an unlocked session, and lock closes the database before
 //! zeroizing the key. Nothing above this module ever holds a root secret.
+//!
+//! Native sessions require Unix file-identity validation. Other targets return
+//! `IoFailure` before a credential slot can be opened.
 
 use chur_core::limits::{GCM_NONCE_LEN, WRAPPED_KEY_LEN};
 use chur_core::{ChurStatus, Error, Id, Result, bail, ensure};
@@ -85,15 +88,13 @@ pub struct VaultCreation {
 /// the lock returns `CONFLICT` and attempts no slot unwrap. The lock lives on
 /// the open file description, so it releases when the session releases it.
 ///
-/// A descriptor install replaces the file by an atomic rename, so the lock is
-/// re-taken on the inode the entry names after every install; the window
-/// between the rename and the re-take is the one moment a second process
-/// could take the lock, and no smaller window is reachable with rename-based
-/// installs.
+/// Each replacement is locked before its atomic rename. The session then
+/// retains that already-held lock, so the installed inode is never unlocked
+/// while the session is open.
 ///
 /// The file is never read: holding the open description is the lock, and
 /// dropping it releases.
-struct DescriptorLock(#[expect(dead_code)] std::fs::File);
+struct DescriptorLock(std::fs::File);
 
 impl DescriptorLock {
     /// Takes the exclusive advisory lock on the descriptor file at `path`.
@@ -103,15 +104,71 @@ impl DescriptorLock {
             .write(true)
             .open(path)
             .map_err(|_| chur_core::err!(IoFailure, "the descriptor file could not be opened"))?;
-        file.try_lock().map_err(|error| match error {
-            std::fs::TryLockError::WouldBlock => {
-                chur_core::err!(Conflict, "the vault is open in another process")
-            }
-            std::fs::TryLockError::Error(_) => {
-                chur_core::err!(IoFailure, "the descriptor file could not be locked")
-            }
-        })?;
-        Ok(Self(file))
+        Self::lock_opened(file, path)
+    }
+
+    fn lock_opened(file: std::fs::File, path: &std::path::Path) -> Result<Self> {
+        #[cfg(not(unix))]
+        {
+            let _ = (file, path);
+            Err(chur_core::err!(
+                IoFailure,
+                "descriptor file identity cannot be verified on this platform"
+            ))
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            file.try_lock().map_err(|error| match error {
+                std::fs::TryLockError::WouldBlock => {
+                    chur_core::err!(Conflict, "the vault is open in another process")
+                }
+                std::fs::TryLockError::Error(_) => {
+                    chur_core::err!(IoFailure, "the descriptor file could not be locked")
+                }
+            })?;
+            let held = file.metadata().map_err(|_| {
+                chur_core::err!(IoFailure, "the locked descriptor could not be inspected")
+            })?;
+            let current = std::fs::metadata(path).map_err(|_| {
+                chur_core::err!(Conflict, "the descriptor changed while it was opened")
+            })?;
+            ensure!(
+                held.dev() == current.dev() && held.ino() == current.ino(),
+                Conflict,
+                "the opened descriptor was replaced before it was locked"
+            );
+            Ok(Self(file))
+        }
+    }
+
+    /// Candidate bytes are read before credential work. Bind them to the
+    /// locked file, so a completed password change cannot admit an old slot.
+    fn acquire_snapshot(path: &std::path::Path, expected: &[u8]) -> Result<Self> {
+        use std::io::Read as _;
+        let lock = Self::acquire(path)?;
+        let length = lock
+            .0
+            .metadata()
+            .map_err(|_| {
+                chur_core::err!(IoFailure, "the locked descriptor could not be inspected")
+            })?
+            .len();
+        ensure!(
+            length == expected.len() as u64,
+            Conflict,
+            "the descriptor changed before it was locked"
+        );
+        let mut bytes = vec![0; expected.len()];
+        (&lock.0)
+            .read_exact(&mut bytes)
+            .map_err(|_| chur_core::err!(IoFailure, "the locked descriptor could not be read"))?;
+        ensure!(
+            bytes == expected,
+            Conflict,
+            "the descriptor changed before it was locked"
+        );
+        Ok(lock)
     }
 }
 
@@ -144,7 +201,7 @@ pub struct Session {
     /// nothing.
     pending_recovery: Option<KeySlotDescriptor>,
     /// The §8.1 advisory lock on the descriptor file, held for the life of the
-    /// session. A creation holds none until its descriptor exists.
+    /// session, including the session returned by creation.
     descriptor_lock: Option<DescriptorLock>,
 }
 
@@ -335,6 +392,7 @@ impl VaultCreation {
         let temporary = self.root_dir.registry_temporary(&self.entry_name);
         let installed = self.root_dir.registry_entry(&self.entry_name);
         write_durably(&temporary, &bytes)?;
+        let descriptor_lock = DescriptorLock::acquire(&temporary)?;
         std::fs::rename(&temporary, &installed)
             .map_err(|_| chur_core::err!(IoFailure, "the descriptor could not be installed"))?;
         sync_directory(&self.root_dir.registry())?;
@@ -349,9 +407,7 @@ impl VaultCreation {
             catalog: Some(self.catalog),
             pending_keystore: None,
             pending_recovery: None,
-            // The creation just installed the first descriptor of a vault no
-            // other process knows; the unlock paths take the §8.1 lock.
-            descriptor_lock: None,
+            descriptor_lock: Some(descriptor_lock),
         })
     }
 
@@ -470,7 +526,10 @@ pub fn unlock_with_password(root_dir: &VaultRoot, password: &[u8], now_ms: u64) 
     let mut locks: Vec<Option<DescriptorLock>> = Vec::with_capacity(candidates.len());
     let mut conflict = false;
     for candidate in &candidates {
-        match DescriptorLock::acquire(&root_dir.registry_entry(&candidate.entry_name)) {
+        match DescriptorLock::acquire_snapshot(
+            &root_dir.registry_entry(&candidate.entry_name),
+            &candidate.bytes,
+        ) {
             Ok(lock) => locks.push(Some(lock)),
             Err(error) if error.status() == ChurStatus::Conflict => {
                 locks.push(None);
@@ -587,7 +646,7 @@ pub fn unlock_with_android_keystore(
         }
         // §8.1: the advisory lock is taken before this entry's work runs, so a
         // vault open in another process conflicts rather than double-opens.
-        let lock = match DescriptorLock::acquire(&root_dir.registry_entry(&name)) {
+        let lock = match DescriptorLock::acquire_snapshot(&root_dir.registry_entry(&name), &bytes) {
             Ok(lock) => lock,
             Err(error) if error.status() == ChurStatus::Conflict => {
                 conflict = true;
@@ -659,7 +718,7 @@ fn unlock_with_slot(
         };
         // §8.1: the advisory lock is taken before any slot unwrap, so a vault
         // open in another process conflicts rather than double-opens.
-        let lock = match DescriptorLock::acquire(&root_dir.registry_entry(&name)) {
+        let lock = match DescriptorLock::acquire_snapshot(&root_dir.registry_entry(&name), &bytes) {
             Ok(lock) => lock,
             Err(error) if error.status() == ChurStatus::Conflict => {
                 conflict = true;
@@ -708,7 +767,7 @@ fn finish_unlock(
     bytes: &[u8],
     root_secret: Key,
     now_ms: u64,
-    descriptor_lock: DescriptorLock,
+    mut descriptor_lock: DescriptorLock,
 ) -> Result<Session> {
     let mut descriptor = VaultDescriptor::authenticate(bytes, Some(&root_secret))?;
     ensure!(
@@ -774,6 +833,7 @@ fn finish_unlock(
                 &root_secret,
                 to,
                 migration_generation,
+                &mut descriptor_lock,
             )?;
         }
 
@@ -822,6 +882,7 @@ fn finish_unlock(
             &root_secret,
             commitment,
             migration.to_catalog_format_version,
+            &mut descriptor_lock,
         )?;
     }
 
@@ -851,15 +912,11 @@ fn finish_unlock(
         let mut candidate = descriptor.clone();
         candidate.descriptor_generation = next_descriptor_generation(&descriptor)?;
         candidate.catalog.catalog_generation = catalog_generation;
-        install_authenticated_descriptor(root_dir, entry_name, &candidate, &root_secret)?;
+        descriptor_lock =
+            install_locked_descriptor(root_dir, entry_name, &candidate, &root_secret)?;
         descriptor = candidate;
+        sync_directory(&root_dir.registry())?;
     }
-    // The installs above - a migration or the generation record - replaced the
-    // descriptor file by rename, so the advisory lock is re-taken on the inode
-    // the entry names now. A conflict there is another process winning the
-    // rename window, and the unlock conflicts rather than double-opens.
-    drop(descriptor_lock);
-    let descriptor_lock = DescriptorLock::acquire(&root_dir.registry_entry(entry_name))?;
     Ok(Session {
         root_dir: root_dir.clone(),
         root_secret: Some(root_secret),
@@ -879,6 +936,7 @@ fn begin_catalog_migration(
     root: &Key,
     to_catalog_format_version: u16,
     migration_generation: u64,
+    descriptor_lock: &mut DescriptorLock,
 ) -> Result<VaultDescriptor> {
     let mut candidate = descriptor.clone();
     candidate.descriptor_generation = next_descriptor_generation(descriptor)?;
@@ -891,7 +949,8 @@ fn begin_catalog_migration(
         migration_generation,
         checkpoint_id: random::id()?,
     });
-    install_authenticated_descriptor(root_dir, entry_name, &candidate, root)?;
+    *descriptor_lock = install_locked_descriptor(root_dir, entry_name, &candidate, root)?;
+    sync_directory(&root_dir.registry())?;
     Ok(candidate)
 }
 
@@ -930,6 +989,7 @@ fn finish_catalog_migration(
     root: &Key,
     catalog_header_commitment: commit::Commitment,
     catalog_format_version: u16,
+    descriptor_lock: &mut DescriptorLock,
 ) -> Result<VaultDescriptor> {
     let mut candidate = descriptor.clone();
     candidate.descriptor_generation = next_descriptor_generation(descriptor)?;
@@ -937,7 +997,8 @@ fn finish_catalog_migration(
     candidate.catalog.catalog_format_version = catalog_format_version;
     candidate.catalog.catalog_header_commitment = catalog_header_commitment;
     candidate.migration = None;
-    install_authenticated_descriptor(root_dir, entry_name, &candidate, root)?;
+    *descriptor_lock = install_locked_descriptor(root_dir, entry_name, &candidate, root)?;
+    sync_directory(&root_dir.registry())?;
     Ok(candidate)
 }
 
@@ -1419,15 +1480,11 @@ impl Session {
         // Every slot transaction is authenticated under the root, so this is
         // the funnel all of them pass and the lock is checked once here rather
         // than in each caller. §8 step 6 has already taken the key.
-        let root = self.root_secret()?;
+        self.root_secret()?;
         let mut candidate = self.descriptor.clone();
         change(&mut candidate.key_slots);
         candidate.descriptor_generation = next_descriptor_generation(&self.descriptor)?;
-        install_authenticated_descriptor(&self.root_dir, &self.entry_name, &candidate, root)?;
-        self.descriptor = candidate;
-        // The install renamed a new file over the entry, so the §8.1 advisory
-        // lock moves to the inode the entry names now.
-        self.relock_descriptor()
+        self.commit_descriptor(candidate, sync_directory)
     }
 
     /// Records a catalog generation in the descriptor.
@@ -1439,26 +1496,29 @@ impl Session {
     /// place, so the rewrite bumps the generation and is authenticated under
     /// the root.
     fn record_catalog_generation(&mut self, generation: u64) -> Result<()> {
-        let root = self.root_secret()?;
+        self.root_secret()?;
         let mut candidate = self.descriptor.clone();
         candidate.descriptor_generation = next_descriptor_generation(&self.descriptor)?;
         candidate.catalog.catalog_generation = generation;
-        install_authenticated_descriptor(&self.root_dir, &self.entry_name, &candidate, root)?;
-        self.descriptor = candidate;
-        self.relock_descriptor()
+        self.commit_descriptor(candidate, sync_directory)
     }
 
-    /// Re-takes the §8.1 advisory lock after a descriptor install.
-    ///
-    /// The install renamed a new file over the entry, so the held lock guards
-    /// an inode the entry no longer names. The new lock is taken before the
-    /// old one drops, so a conflict leaves the session holding its previous
-    /// lock and the caller sees the error.
-    fn relock_descriptor(&mut self) -> Result<()> {
-        let lock = DescriptorLock::acquire(&self.root_dir.registry_entry(&self.entry_name))?;
-        drop(self.descriptor_lock.take());
+    /// Retains the replacement's lock and authenticated state before a
+    /// directory durability error can return control to an unlocked session.
+    fn commit_descriptor(
+        &mut self,
+        candidate: VaultDescriptor,
+        sync: impl FnOnce(&std::path::Path) -> Result<()>,
+    ) -> Result<()> {
+        let lock = install_locked_descriptor(
+            &self.root_dir,
+            &self.entry_name,
+            &candidate,
+            self.root_secret()?,
+        )?;
+        self.descriptor = candidate;
         self.descriptor_lock = Some(lock);
-        Ok(())
+        sync(&self.root_dir.registry())
     }
 }
 
@@ -1618,6 +1678,7 @@ pub fn install_descriptor(
     let temporary = root_dir.registry_temporary(entry_name);
     let installed = root_dir.registry_entry(entry_name);
     write_durably(&temporary, body)?;
+    let _lock = DescriptorLock::acquire(&temporary)?;
     std::fs::rename(&temporary, &installed)
         .map_err(|_| chur_core::err!(IoFailure, "the descriptor could not be installed"))?;
     sync_directory(&root_dir.registry())
@@ -1724,12 +1785,12 @@ fn write_temporary(
     write_durably(&root_dir.registry_temporary(entry_name), &bytes)
 }
 
-fn install_authenticated_descriptor(
+fn install_locked_descriptor(
     root_dir: &VaultRoot,
     entry_name: &RegistryName,
     descriptor: &VaultDescriptor,
     root: &Key,
-) -> Result<()> {
+) -> Result<DescriptorLock> {
     write_temporary(root_dir, entry_name, descriptor, root)?;
     let temporary = root_dir.registry_temporary(entry_name);
     let written = std::fs::read(&temporary)
@@ -1740,8 +1801,20 @@ fn install_authenticated_descriptor(
         VaultCorrupt,
         "the written descriptor is not the one that was built"
     );
+    let lock = DescriptorLock::acquire(&temporary)?;
     std::fs::rename(&temporary, root_dir.registry_entry(entry_name))
         .map_err(|_| chur_core::err!(IoFailure, "the descriptor could not be installed"))?;
+    Ok(lock)
+}
+
+#[cfg(test)]
+fn install_authenticated_descriptor(
+    root_dir: &VaultRoot,
+    entry_name: &RegistryName,
+    descriptor: &VaultDescriptor,
+    root: &Key,
+) -> Result<()> {
+    let _lock = install_locked_descriptor(root_dir, entry_name, descriptor, root)?;
     sync_directory(&root_dir.registry())
 }
 
@@ -1918,6 +1991,132 @@ mod tests {
             checkpoint_id: random::id().expect("checkpoint id"),
         });
         descriptor
+    }
+
+    #[test]
+    fn descriptor_replacement_keeps_its_lock_when_directory_sync_fails() {
+        let root_dir = scratch();
+        let mut session = make(&root_dir);
+        let installed = root_dir.registry_entry(&session.entry_name);
+        let mut candidate = session.descriptor.clone();
+        candidate.descriptor_generation += 1;
+        let expected = candidate
+            .encode(session.root_secret().expect("root"))
+            .expect("descriptor");
+        let result = session.commit_descriptor(candidate.clone(), |_| {
+            assert_eq!(
+                rejection(DescriptorLock::acquire(&installed)),
+                ChurStatus::Conflict,
+                "the replacement is already locked at the directory barrier"
+            );
+            Err(chur_core::err!(
+                IoFailure,
+                "injected directory synchronization failure"
+            ))
+        });
+        assert_eq!(rejection(result), ChurStatus::IoFailure);
+        assert_eq!(
+            session.descriptor, candidate,
+            "memory follows the installed authenticated state"
+        );
+        assert_eq!(
+            std::fs::read(&installed).expect("installed descriptor"),
+            expected
+        );
+        assert_eq!(
+            rejection(DescriptorLock::acquire(&installed)),
+            ChurStatus::Conflict
+        );
+        assert_eq!(
+            rejection(unlock_with_password(&root_dir, PASSWORD, 1_700_000_001_000)),
+            ChurStatus::Conflict
+        );
+        drop(session);
+        unlock_with_password(&root_dir, PASSWORD, 1_700_000_002_000).expect("unlock after close");
+    }
+
+    #[test]
+    fn changed_descriptor_bytes_cannot_unwrap_a_prelock_slot_snapshot() {
+        let root_dir = scratch();
+        std::fs::create_dir_all(root_dir.registry()).expect("registry");
+        let name = RegistryName::random().expect("name");
+        let installed = root_dir.registry_entry(&name);
+        std::fs::write(&installed, b"old slot").expect("old snapshot");
+        let expected = std::fs::read(&installed).expect("candidate bytes");
+        std::fs::write(&installed, b"new slot").expect("updated snapshot");
+        assert_eq!(
+            rejection(DescriptorLock::acquire_snapshot(&installed, &expected)),
+            ChurStatus::Conflict
+        );
+        DescriptorLock::acquire_snapshot(&installed, b"new slot").expect("current slot snapshot");
+    }
+
+    #[test]
+    fn slot_and_password_updates_keep_the_current_descriptor_exclusive() {
+        let root_dir = scratch();
+        let mut session = make(&root_dir);
+        session.add_recovery_slot().expect("recovery slot update");
+        assert_eq!(
+            rejection(unlock_with_password(&root_dir, PASSWORD, 1_700_000_001_000)),
+            ChurStatus::Conflict
+        );
+        let replacement = b"new synthetic exclusive session password";
+        session
+            .replace_password(replacement, Argon2Params::v1_default())
+            .expect("password update");
+        assert_eq!(
+            rejection(unlock_with_password(
+                &root_dir,
+                replacement,
+                1_700_000_002_000
+            )),
+            ChurStatus::Conflict
+        );
+        drop(session);
+        assert_eq!(
+            rejection(unlock_with_password(&root_dir, PASSWORD, 1_700_000_003_000)),
+            ChurStatus::AuthenticationFailed
+        );
+        unlock_with_password(&root_dir, replacement, 1_700_000_004_000)
+            .expect("replacement password after close");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_opened_previous_descriptor_inode_cannot_bypass_its_replacement_lock() {
+        let root_dir = scratch();
+        std::fs::create_dir_all(root_dir.registry()).expect("registry");
+        let name = RegistryName::random().expect("name");
+        let installed = root_dir.registry_entry(&name);
+        let temporary = root_dir.registry_temporary(&name);
+        std::fs::write(&installed, b"previous").expect("old descriptor");
+        let old = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&installed)
+            .expect("open old inode");
+        std::fs::write(&temporary, b"replacement").expect("new descriptor");
+        let replacement_lock = DescriptorLock::acquire(&temporary).expect("lock replacement");
+        std::fs::rename(&temporary, &installed).expect("install replacement");
+        assert_eq!(
+            rejection(DescriptorLock::lock_opened(old, &installed)),
+            ChurStatus::Conflict,
+            "the old file must not grant a lock on the current descriptor"
+        );
+        drop(replacement_lock);
+    }
+
+    #[test]
+    fn a_created_session_keeps_the_installed_descriptor_exclusive() {
+        let root_dir = scratch();
+        let session = make(&root_dir);
+        assert_eq!(
+            rejection(unlock_with_password(&root_dir, PASSWORD, 1_700_000_001_000)),
+            ChurStatus::Conflict,
+            "an active creation session must hold the descriptor lock"
+        );
+        drop(session);
+        unlock_with_password(&root_dir, PASSWORD, 1_700_000_002_000).expect("unlock after close");
     }
 
     #[test]
