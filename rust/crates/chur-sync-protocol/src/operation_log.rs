@@ -342,12 +342,6 @@ impl OperationLog {
             AuthenticationFailed,
             "checkpoint belongs to another vault"
         );
-        ensure!(
-            checkpoint.membership_generation() == membership.generation()
-                && checkpoint.membership_commitment() == membership.commitment(),
-            SyncHeadRollback,
-            "checkpoint membership is not current"
-        );
         let issuer = membership
             .device(checkpoint.issuer_device_id())
             .ok_or_else(|| {
@@ -370,6 +364,20 @@ impl OperationLog {
                 "checkpoint signature did not verify under device key history",
             ));
         }
+
+        // A checkpoint already authenticated and retained by this log remains
+        // an exact replay after a signed enrollment advances membership. It
+        // contributes no new floors or authority. Unknown older checkpoints
+        // still require the current membership below.
+        if self.checkpoints.get(checkpoint.issuer_device_id()) == Some(&checkpoint.commitment()) {
+            return Ok(CheckpointOutcome::Unchanged);
+        }
+        ensure!(
+            checkpoint.membership_generation() == membership.generation()
+                && checkpoint.membership_commitment() == membership.commitment(),
+            SyncHeadRollback,
+            "checkpoint membership is not current"
+        );
 
         // One pure pass names every floor the checkpoint raises and catches
         // every conflict before any state moves. A checkpoint that fails

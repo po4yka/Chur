@@ -304,25 +304,41 @@ impl DurableOperationLog {
         // The own-checkpoint rule is checked before the protocol sees the
         // checkpoint, so a refused checkpoint leaves the log where it was and
         // the trial clone this ordering replaced is gone with it.
-        let existing_own: Option<Vec<u8>> = db
+        let existing: Option<(Vec<u8>, bool)> = db
             .connection()
             .query_row(
-                "SELECT commitment FROM sync_checkpoints
-                  WHERE issuer_device_id = ?1 AND own = 1",
+                "SELECT record, own FROM sync_checkpoints WHERE issuer_device_id = ?1",
                 [checkpoint.issuer_device_id().as_bytes().as_slice()],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
-            .map_err(|error| map_sqlite(error, "the own checkpoint could not be read"))?;
+            .map_err(|error| map_sqlite(error, "the prior checkpoint could not be read"))?;
+        let existing = existing
+            .map(|(record, own)| Checkpoint::decode(&record).map(|checkpoint| (checkpoint, own)))
+            .transpose()
+            .map_err(corrupt_log)?;
         ensure!(
-            own || existing_own
-                .as_deref()
-                .is_none_or(|stored| stored == commitment),
+            own || existing
+                .as_ref()
+                .is_none_or(|(stored, own)| !own || stored.commitment() == commitment),
             SyncHeadRollback,
             "a remote checkpoint cannot replace the latest own checkpoint"
         );
         match self.log.accept_checkpoint(checkpoint, membership) {
             Ok(outcome) => {
+                if let Some((existing, _)) = existing.as_ref()
+                    && !checkpoint_covers(checkpoint, existing)
+                {
+                    // Protocol floor comparison can accept an older replay
+                    // without raising a floor. Keep its newer signed evidence.
+                    *self = load(db, membership)?;
+                    ensure!(
+                        checkpoint_covers(existing, checkpoint),
+                        SyncHeadRollback,
+                        "checkpoint discards previously trusted head evidence"
+                    );
+                    return Ok(CheckpointOutcome::Unchanged);
+                }
                 let committed = db.transaction(|transaction| {
                     transaction
                         .execute(
@@ -400,6 +416,11 @@ impl DurableOperationLog {
                     *self = load(db, membership)?;
                     return Err(error);
                 }
+                self.log.restore_checkpoint_commitment(
+                    checkpoint.issuer_device_id(),
+                    commitment,
+                    membership,
+                )?;
                 Ok(outcome)
             }
             Err(error) if error.status() == ChurStatus::SyncChainFork => {
@@ -915,6 +936,17 @@ fn restore_and_validate_heads(
     Ok(())
 }
 
+fn checkpoint_covers(candidate: &Checkpoint, baseline: &Checkpoint) -> bool {
+    baseline.heads().iter().all(|head| {
+        candidate.heads().iter().any(|current| {
+            current.device_id() == head.device_id()
+                && (current.device_sequence() > head.device_sequence()
+                    || (current.device_sequence() == head.device_sequence()
+                        && current.operation_digest() == head.operation_digest()))
+        })
+    })
+}
+
 fn restore_checkpoints(
     db: &CatalogDb,
     membership: &MembershipState,
@@ -1213,6 +1245,43 @@ mod tests {
         )
         .expect("checkpoint")
         .sign(key)
+    }
+
+    #[test]
+    fn checkpoint_replays_preserve_the_newest_durable_and_in_memory_evidence() {
+        let (mut db, membership, key) = setup();
+        let mut log = load(&db, &membership).expect("log");
+        let first = operation(&key, 1, [0; 32], 5);
+        let second = operation(&key, 2, first.digest(), 6);
+        for record in [&first, &second] {
+            log.accept_with(&mut db, record, &membership, |_| Ok(()))
+                .expect("accepted prefix");
+        }
+        let older = checkpoint(&key, 1, first.digest(), &membership);
+        let newer = checkpoint(&key, 2, second.digest(), &membership);
+        log.accept_checkpoint(&mut db, &older, &membership, false, 9)
+            .expect("first evidence");
+        log.accept_checkpoint(&mut db, &newer, &membership, false, 10)
+            .expect("newer evidence");
+        assert_eq!(log.checkpoint_commitment(&id(3)), Some(&newer.commitment()));
+        log.accept_checkpoint(&mut db, &older, &membership, false, 11)
+            .expect("older replay");
+        let stored: Vec<u8> = db
+            .connection()
+            .query_row(
+                "SELECT record FROM sync_checkpoints WHERE issuer_device_id = ?1",
+                [id(3).as_bytes().as_slice()],
+                |row| row.get(0),
+            )
+            .expect("durable evidence");
+        assert_eq!(stored, newer.encode());
+        assert_eq!(log.checkpoint_commitment(&id(3)), Some(&newer.commitment()));
+        assert_eq!(
+            load(&db, &membership)
+                .expect("restart")
+                .checkpoint_commitment(&id(3)),
+            Some(&newer.commitment())
+        );
     }
 
     #[test]
