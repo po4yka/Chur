@@ -185,6 +185,15 @@ pub enum PayloadBody {
         /// Signed retention hint in Unix milliseconds.
         authored_at_ms: u64,
     },
+    /// Permanently removes content keys and prevents every later restore.
+    PurgeObject {
+        /// Object identifier.
+        object_id: Id,
+        /// Observed object generation.
+        object_generation: u64,
+        /// Signed deletion time in Unix milliseconds.
+        authored_at_ms: u64,
+    },
     /// Explicitly restores the currently visible tombstone.
     RestoreObject {
         /// Object identifier.
@@ -196,6 +205,13 @@ pub enum PayloadBody {
     },
     /// Carries a signed device enrollment.
     AddDevice(EnrollmentRecord),
+    /// Starts an enrolled ordinary device's own signed chain without changing content.
+    DeviceReady,
+    /// Makes one vault-owned metadata key discoverable through the root domain.
+    DeclareCollection {
+        /// Root-wrapped collection metadata key, never an object content key.
+        collection_key_envelope: CollectionKeyEnvelope,
+    },
     /// Carries a signed device revocation.
     RevokeDevice(RevocationRecord),
     /// Creates the next collection epoch.
@@ -241,6 +257,9 @@ impl PayloadBody {
             Self::RewrapObjectKey { .. } => 0x10,
             Self::ChangeCollectionMembership(_) => 0x11,
             Self::IssueCollectionGrant(_) => 0x12,
+            Self::DeviceReady => 0x13,
+            Self::PurgeObject { .. } => 0x14,
+            Self::DeclareCollection { .. } => 0x15,
         }
     }
 }
@@ -369,6 +388,7 @@ impl OperationPayload {
                     | PayloadBody::AddTag { .. }
                     | PayloadBody::RemoveTag { .. }
                     | PayloadBody::DeleteObject { .. }
+                    | PayloadBody::PurgeObject { .. }
                     | PayloadBody::RestoreObject { .. }
                     | PayloadBody::RewrapObjectKey { .. }
             ),
@@ -393,7 +413,10 @@ impl OperationPayload {
         );
         let root_domain = matches!(
             self.body,
-            PayloadBody::AddDevice(_) | PayloadBody::RevokeDevice(_)
+            PayloadBody::AddDevice(_)
+                | PayloadBody::RevokeDevice(_)
+                | PayloadBody::DeviceReady
+                | PayloadBody::DeclareCollection { .. }
         );
         if root_domain {
             ensure!(
@@ -403,6 +426,18 @@ impl OperationPayload {
             );
         }
         match &self.body {
+            PayloadBody::DeclareCollection {
+                collection_key_envelope,
+            } => ensure!(
+                collection_key_envelope.vault_id() == operation.vault_id(),
+                AuthenticationFailed,
+                "declared collection belongs to another vault"
+            ),
+            PayloadBody::DeviceReady => ensure!(
+                operation.device_sequence() == 1,
+                AuthenticationFailed,
+                "device readiness is only the first signed device operation"
+            ),
             PayloadBody::AddDevice(record) => {
                 ensure!(
                     record.vault_id() == operation.vault_id()
@@ -463,7 +498,10 @@ impl OperationPayload {
     fn validate(&self) -> Result<()> {
         let root_domain = matches!(
             self.body,
-            PayloadBody::AddDevice(_) | PayloadBody::RevokeDevice(_)
+            PayloadBody::AddDevice(_)
+                | PayloadBody::RevokeDevice(_)
+                | PayloadBody::DeviceReady
+                | PayloadBody::DeclareCollection { .. }
         );
         ensure!(
             root_domain == (self.collection_epoch == 0),
@@ -532,6 +570,9 @@ impl OperationPayload {
             }
             PayloadBody::DeleteObject {
                 object_generation, ..
+            }
+            | PayloadBody::PurgeObject {
+                object_generation, ..
             } => validate_counter(*object_generation, "object generation")?,
             PayloadBody::RestoreObject {
                 new_object_generation,
@@ -588,7 +629,9 @@ impl OperationPayload {
             ),
             PayloadBody::AddAlbumMembership { .. }
             | PayloadBody::AddDevice(_)
-            | PayloadBody::RevokeDevice(_) => {}
+            | PayloadBody::RevokeDevice(_)
+            | PayloadBody::DeviceReady
+            | PayloadBody::DeclareCollection { .. } => {}
         }
         ensure!(
             self.encode().len() <= sync_bounds::PAYLOAD_PLAINTEXT_MAX,
@@ -685,6 +728,11 @@ impl OperationPayload {
                 object_id,
                 object_generation,
                 authored_at_ms,
+            }
+            | PayloadBody::PurgeObject {
+                object_id,
+                object_generation,
+                authored_at_ms,
             } => {
                 writer
                     .id(object_id)
@@ -701,6 +749,12 @@ impl OperationPayload {
                     .id(tombstone_operation_id)
                     .u64(*new_object_generation);
             }
+            PayloadBody::DeclareCollection {
+                collection_key_envelope,
+            } => {
+                writer.fixed(&collection_key_envelope.encode());
+            }
+            PayloadBody::DeviceReady => {}
             PayloadBody::AddDevice(record) => {
                 writer.fixed(&record.encode());
             }
@@ -796,6 +850,17 @@ fn decode_body(kind: u8, reader: &mut Reader<'_>) -> Result<PayloadBody> {
             object_id: reader.id()?,
             tombstone_operation_id: reader.id()?,
             new_object_generation: reader.u64()?,
+        },
+        0x15 => PayloadBody::DeclareCollection {
+            collection_key_envelope: CollectionKeyEnvelope::decode(
+                reader.slice(CollectionKeyEnvelope::LEN)?,
+            )?,
+        },
+        0x13 => PayloadBody::DeviceReady,
+        0x14 => PayloadBody::PurgeObject {
+            object_id: reader.id()?,
+            object_generation: reader.u64()?,
+            authored_at_ms: reader.u64()?,
         },
         0x0d => PayloadBody::AddDevice(EnrollmentRecord::decode(reader.slice(ENROLLMENT_LEN)?)?),
         0x0e => PayloadBody::RevokeDevice(RevocationRecord::decode(reader.slice(REVOCATION_LEN)?)?),

@@ -166,6 +166,8 @@ internal expect object ChurNative {
 
     fun objectKeyAccept(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int
 
+    fun sharingOutbound(session: Long, afterCursor: Long, destination: ChurBuffer, outWritten: IntArray): Int
+
     fun sharingReceive(
         session: Long,
         bundle: ChurBuffer,
@@ -224,6 +226,30 @@ internal expect object ChurNative {
         outCounts: LongArray,
         outStatus: IntArray,
     ): Int
+
+    fun devicePairingPrepare(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int
+
+    fun devicePairingInspect(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int
+
+    fun devicePairingApprove(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int
+
+    fun devicePairingStart(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int
+
+    fun devicePairingFinish(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int
+
+    fun devicePairingCheckpoint(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int
+
+    fun devicePairingOverview(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int
+
+    fun devicePairingRevoke(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int
+
+    fun ownSyncCollections(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int
+
+    fun ownSyncOperations(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int
+
+    fun ownSyncPlan(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int
+
+    fun ownSyncAuthor(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int
 
     fun syncHeads(session: Long, destination: ChurBuffer, outWritten: IntArray): Int
 

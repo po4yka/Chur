@@ -1069,8 +1069,25 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
     // old public requests, grants, signed logs, retained epoch keys or root.
     chur_catalog::deletion::begin(received.catalog().expect("catalog"), &shared_object_id)
         .expect("begin recipient erasure");
-    chur_catalog::deletion::erase(received.catalog().expect("catalog"), &shared_object_id, 4)
-        .expect("erase recipient key");
+    chur_catalog::deletion::erase_with_sync(
+        received.catalog().expect("catalog"),
+        &received_root,
+        recipient_vault_id,
+        &shared_object_id,
+        4,
+    )
+    .expect("erase recipient key");
+    assert!(
+        chur_catalog::sharing_log::outbound_after(
+            received.catalog_ref().expect("catalog"),
+            &recipient_vault_id,
+            &recipient_device_id,
+            0
+        )
+        .expect("recipient outbound page")
+        .is_empty(),
+        "recipient local deletion must not publish a global purge"
+    );
     for entry in
         chur_catalog::deletion::sweep(received.catalog_ref().expect("catalog")).expect("sweep")
     {
@@ -1176,8 +1193,10 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
     );
     chur_catalog::deletion::begin(source_after.catalog().expect("catalog"), &shared_object_id)
         .expect("begin source erasure");
-    chur_catalog::deletion::erase(
+    chur_catalog::deletion::erase_with_sync(
         source_after.catalog().expect("catalog"),
+        &source_root_after,
+        source_vault_id,
         &shared_object_id,
         8,
     )

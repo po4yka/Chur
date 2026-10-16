@@ -16,7 +16,14 @@ public class SourceObjectRange(public val bytes: ByteArray, public val sha256: B
 public class SourceObjectOperations(public val createOperation: ByteArray, public val commitOperation: ByteArray)
 
 /** Publishes ciphertext before making its signed object operations visible. */
-public class SourceObjectPusher(private val client: SyncClient) {
+public class SourceObjectPusher(
+    private val client: SyncClient,
+    private val publishSharedMapping: Boolean = true,
+    private val publish: suspend (ByteArray, SourceObjectOperations) -> Unit = { vaultId, operations ->
+        client.putCollectionOperation(vaultId, operations.createOperation)
+        client.putCollectionOperation(vaultId, operations.commitOperation)
+    },
+) {
     public suspend fun push(
         vaultId: ByteArray,
         publication: SourceObjectPublication,
@@ -40,11 +47,10 @@ public class SourceObjectPusher(private val client: SyncClient) {
         }
         progress = client.finishUpload(vaultId, transferId, publication.fullSha256)
         require(progress.complete && progress.expected == publication.length && progress.received == publication.length)
-        client.publishSharedObject(vaultId, publication.collectionId, publication.storeId)
+        if (publishSharedMapping) client.publishSharedObject(vaultId, publication.collectionId, publication.storeId)
         val operations = author(publication)
         require(operations.createOperation.isNotEmpty() && operations.commitOperation.isNotEmpty())
-        client.putCollectionOperation(vaultId, operations.createOperation)
-        client.putCollectionOperation(vaultId, operations.commitOperation)
+        publish(vaultId, operations)
     }
 }
 

@@ -25,7 +25,8 @@ class SharingPullerTest {
     fun pending_key_is_requested_before_download_and_acknowledged_after_native_acceptance() = runTest {
         val collection = ByteArray(16) { 3 }
         val objectId = ByteArray(16) { 4 }
-        val grant = ByteArray(346).apply { collection.copyInto(this, 18); this[2] = 9 }
+        val source = ByteArray(16) { 8 }
+        val grant = ByteArray(346).apply { collection.copyInto(this, 18); source.copyInto(this, 50); this[2] = 9 }
         val prekey = ByteArray(226) { 7 }
         var requested = false
         var nativeAccepted = false
@@ -63,7 +64,7 @@ class SharingPullerTest {
             override suspend fun acknowledgeForks(): Boolean = false
             override suspend fun acceptSharePackage(packageBytes: ByteArray): Boolean = true
             override suspend fun receiveSharedOperations(packageBytes: ByteArray, operations: List<ByteArray>) =
-                SharedReceivePlan(ByteArray(16), collection, ByteArray(16), 0,
+                SharedReceivePlan(source, collection, ByteArray(16), 0,
                     listOf(SharedDownload(objectId, ByteArray(16), 3uL)))
             override suspend fun objectKeyRequest(collectionId: ByteArray, objectId: ByteArray): ByteArray? =
                 if (nativeAccepted) null else prekey

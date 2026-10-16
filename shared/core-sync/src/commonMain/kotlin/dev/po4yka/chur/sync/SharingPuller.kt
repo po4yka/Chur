@@ -143,9 +143,13 @@ public class SharingPuller internal constructor(
             var offset = start
             while (offset < length) {
                 val amount = minOf(1_048_576uL, length - offset)
-                val bytes = client.downloadSharedObject(
-                    recipientVaultId, plan.sourceVaultId, plan.collectionId, storeId, offset, amount,
-                )
+                val bytes = if (plan.sourceVaultId.contentEquals(recipientVaultId)) {
+                    client.download(recipientVaultId, storeId, offset, amount)
+                } else {
+                    client.downloadSharedObject(
+                        recipientVaultId, plan.sourceVaultId, plan.collectionId, storeId, offset, amount,
+                    )
+                }
                 require(bytes.size.toULong() == amount) { "shared ciphertext range is short" }
                 if (!vault.appendSharedDownload(plan.collectionId, objectId, offset, bytes)) return false
                 offset += amount

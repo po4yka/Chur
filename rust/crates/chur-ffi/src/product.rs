@@ -225,6 +225,9 @@ pub unsafe extern "C" fn chur_vault_creation_activate(
         let handle = registry::insert(Entry::Session {
             runtime: *runtime,
             session: std::sync::Mutex::new(session),
+            publication_cache: std::sync::Mutex::new(
+                crate::sharing_publish::VerificationCache::default(),
+            ),
         })?;
         // SAFETY: the caller guarantees `out_session` is writable.
         unsafe { crate::api::write_out(out_session, handle) }
@@ -1585,7 +1588,7 @@ pub(crate) fn sweep_expired_trash(session: &mut Session, now_ms: u64) -> Result<
     Ok(())
 }
 
-fn finish_pending_deletions(session: &mut Session, now_ms: u64) -> Result<()> {
+pub(crate) fn finish_pending_deletions(session: &mut Session, now_ms: u64) -> Result<()> {
     let _lifecycle = registry::reader_lifecycle();
     let store_id = session.object_store_id();
     let root = session.root_dir().clone();
@@ -1593,7 +1596,15 @@ fn finish_pending_deletions(session: &mut Session, now_ms: u64) -> Result<()> {
     for entry in pending {
         registry::invalidate_object_readers(session, &entry.object_id)?;
         if !entry.erased {
-            deletion::erase(session.catalog()?, &entry.object_id, now_ms)?;
+            let secret = session.root_secret()?.duplicate();
+            let vault_id = session.vault_id();
+            deletion::erase_with_sync(
+                session.catalog()?,
+                &secret,
+                vault_id,
+                &entry.object_id,
+                now_ms,
+            )?;
         }
         for container in &entry.containers {
             chur_media::store::unlink_container(&root, &store_id, container)?;
@@ -1601,6 +1612,7 @@ fn finish_pending_deletions(session: &mut Session, now_ms: u64) -> Result<()> {
         deletion::finish(session.catalog()?, &entry.object_id)?;
         deletion::discard_tombstone(session.catalog()?, &entry.object_id)?;
     }
+    session.catalog()?.checkpoint()?;
     Ok(())
 }
 

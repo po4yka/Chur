@@ -218,6 +218,78 @@ internal actual object ChurNative {
             status
         }
 
+    actual fun devicePairingPrepare(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        writtenCall(outWritten) { written ->
+            dev.po4yka.chur.native.chur_device_pairing_prepare(session.toULong(), input.pointer, length.toUInt(), destination.pointer, destination.size.toULong(), written)
+        }
+    }
+
+    actual fun devicePairingInspect(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        writtenCall(outWritten) { written ->
+            dev.po4yka.chur.native.chur_device_pairing_inspect(session.toULong(), input.pointer, length.toUInt(), destination.pointer, destination.size.toULong(), written)
+        }
+    }
+
+    actual fun devicePairingApprove(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        writtenCall(outWritten) { written ->
+            dev.po4yka.chur.native.chur_device_pairing_approve(session.toULong(), input.pointer, length.toUInt(), destination.pointer, destination.size.toULong(), written)
+        }
+    }
+
+    actual fun devicePairingStart(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        writtenCall(outWritten) { written ->
+            dev.po4yka.chur.native.chur_device_pairing_start(session.toULong(), input.pointer, length.toUInt(), destination.pointer, destination.size.toULong(), written)
+        }
+    }
+
+    actual fun devicePairingFinish(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        writtenCall(outWritten) { written ->
+            dev.po4yka.chur.native.chur_device_pairing_finish(session.toULong(), input.pointer, length.toUInt(), destination.pointer, destination.size.toULong(), written)
+        }
+    }
+
+    actual fun devicePairingCheckpoint(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        writtenCall(outWritten) { written ->
+            dev.po4yka.chur.native.chur_device_pairing_checkpoint(session.toULong(), input.pointer, length.toUInt(), destination.pointer, destination.size.toULong(), written)
+        }
+    }
+
+    actual fun devicePairingOverview(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        writtenCall(outWritten) { written ->
+            dev.po4yka.chur.native.chur_device_pairing_overview(session.toULong(), input.pointer, length.toUInt(), destination.pointer, destination.size.toULong(), written)
+        }
+    }
+
+    actual fun devicePairingRevoke(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        writtenCall(outWritten) { written ->
+            dev.po4yka.chur.native.chur_device_pairing_revoke(session.toULong(), input.pointer, length.toUInt(), destination.pointer, destination.size.toULong(), written)
+        }
+    }
+
+    actual fun ownSyncCollections(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        writtenCall(outWritten) { written ->
+            dev.po4yka.chur.native.chur_own_sync_collections(session.toULong(), input.pointer, length.toUInt(), destination.pointer, destination.size.toULong(), written)
+        }
+    }
+
+    actual fun ownSyncOperations(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        writtenCall(outWritten) { written ->
+            dev.po4yka.chur.native.chur_own_sync_operations(session.toULong(), input.pointer, length.toUInt(), destination.pointer, destination.size.toULong(), written)
+        }
+    }
+
+    actual fun ownSyncPlan(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        writtenCall(outWritten) { written ->
+            dev.po4yka.chur.native.chur_own_sync_plan(session.toULong(), input.pointer, length.toUInt(), destination.pointer, destination.size.toULong(), written)
+        }
+    }
+
+    actual fun ownSyncAuthor(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        writtenCall(outWritten) { written ->
+            dev.po4yka.chur.native.chur_own_sync_author(session.toULong(), input.pointer, length.toUInt(), destination.pointer, destination.size.toULong(), written)
+        }
+    }
+
     actual fun syncHeads(session: Long, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
         writtenCall(outWritten) { written ->
             dev.po4yka.chur.native.chur_sync_heads(session.toULong(), destination.pointer, destination.size.toULong(), written)
@@ -513,6 +585,13 @@ internal actual object ChurNative {
     actual fun objectKeyAccept(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
         writtenCall(outWritten) { written ->
             dev.po4yka.chur.native.chur_object_key_accept(session.toULong(), input.pointer, length.toUInt(),
+                destination.pointer, destination.size.toULong(), written)
+        }
+    }
+
+    actual fun sharingOutbound(session: Long, afterCursor: Long, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        writtenCall(outWritten) { written ->
+            dev.po4yka.chur.native.chur_sharing_outbound(session.toULong(), afterCursor.toULong(),
                 destination.pointer, destination.size.toULong(), written)
         }
     }

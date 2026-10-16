@@ -303,12 +303,13 @@ internal class DeviceControlBridge(
             length) { offset, size -> peer.readRange(offset, size) }
         val uri = DeviceImportProvider.mount(context, source)
         try {
-            val codec = AndroidMediaCodec(context.contentResolver)
+            val codec = AndroidMediaCodec(context)
             val outcome = controller.importMedia(MediaImporter(codec)) { codec.open(uri) }
             return when (outcome) {
                 is MediaImporter.Outcome.Imported -> JSONObject().put("id", outcome.objectId.hex())
                     .put("derivatives", outcome.derivatives)
                     .put("previews_skipped", outcome.previewsSkipped)
+                    .put("preview_warning", outcome.previewWarning?.name)
                 is MediaImporter.Outcome.Refused -> JSONObject().put("error", outcome.status.name)
                 is MediaImporter.Outcome.TooLarge -> JSONObject().put("error", "RESOURCE_LIMIT_EXCEEDED")
                 MediaImporter.Outcome.Unreadable -> JSONObject().put("error", "UNREADABLE_SOURCE")

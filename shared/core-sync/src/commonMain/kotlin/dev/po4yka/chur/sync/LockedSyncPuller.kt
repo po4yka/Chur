@@ -31,8 +31,12 @@ public class LockedSyncPuller internal constructor(
         }
 
         var operationCount = 0
+        var hasMoreOperations = false
         for (cursor in cursors) {
-            for (record in client.operations(vaultId, cursor.deviceId, cursor.after)) {
+            val page = client.operations(vaultId, cursor.deviceId, cursor.after)
+            // A full page cannot prove that this device history is exhausted.
+            hasMoreOperations = hasMoreOperations || page.size >= OPERATION_PAGE_MAX
+            for (record in page) {
                 stage(vaultId, SyncRecordKind.OPERATION, stagedAtMs, record)
                 operationCount++
             }
@@ -43,7 +47,7 @@ public class LockedSyncPuller internal constructor(
         }
         // Opaque staging can evict or expire records. Only unlocked native
         // signature and sequence validation can advance an accepted cursor.
-        return LockedPullReport(operationCount, checkpoints.size, cursors)
+        return LockedPullReport(operationCount, checkpoints.size, cursors, hasMoreOperations)
     }
 }
 
@@ -56,6 +60,8 @@ public data class LockedPullReport(
     public val checkpoints: Int,
     /** The unchanged accepted cursors, one per input cursor, in order. */
     public val cursors: List<DeviceCursor> = emptyList(),
+    /** Another bounded cycle is needed to prove the operation history is exhausted. */
+    public val hasMoreOperations: Boolean = false,
 )
 
 private fun ByteArray.hex(): String = buildString(size * 2) {
@@ -67,4 +73,5 @@ private fun ByteArray.hex(): String = buildString(size * 2) {
 
 private const val ID_BYTES = 16
 private const val DEVICE_MAX = 32
+private const val OPERATION_PAGE_MAX = 256
 private const val HEX = "0123456789abcdef"

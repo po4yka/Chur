@@ -34,6 +34,19 @@ pub fn request(
         collection_id,
         object_id,
     )?;
+    let membership = sync_membership::load(db)?.ok_or_else(|| {
+        Error::new(
+            ChurStatus::RecoveryRequired,
+            "recipient membership is absent",
+        )
+    })?;
+    ensure!(
+        membership.vault_id() == &local_vault_id,
+        AuthenticationFailed,
+        "recipient vault differs"
+    );
+    let (device_id, identity) = sync_keys::local_identity(db, root, &membership)?
+        .ok_or_else(|| Error::new(ChurStatus::RecoveryRequired, "recipient identity is absent"))?;
     let stored: Option<Vec<u8>> = db
         .connection()
         .query_row(
@@ -52,21 +65,34 @@ pub fn request(
             Conflict,
             "object changed after its key request"
         );
-        return Ok(prekey);
+        ensure!(
+            prekey.recipient_vault_id() == &local_vault_id,
+            CatalogCorrupt,
+            "stored prekey belongs to another vault"
+        );
+        if prekey.recipient_device_id() == &device_id {
+            return Ok(prekey);
+        }
+        match pending_envelope(db, &object_id) {
+            Ok(_) => return Ok(prekey),
+            Err(error) if error.status() == ChurStatus::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        // A restored backup can retain an unaccepted request addressed to the
+        // former device. After approved pairing, only a fresh request signed
+        // by the new ordinary identity may be sent. Keep ready envelopes.
+        db.transaction(|tx| {
+            tx.execute(
+                "DELETE FROM object_key_requests WHERE object_id = ?1",
+                [object_id.as_bytes().as_slice()],
+            )
+            .map_err(|error| {
+                map_sqlite(error, "the previous device prekey could not be retired")
+            })?;
+            Ok(())
+        })?;
+        db.checkpoint()?;
     }
-    let membership = sync_membership::load(db)?.ok_or_else(|| {
-        Error::new(
-            ChurStatus::RecoveryRequired,
-            "recipient membership is absent",
-        )
-    })?;
-    ensure!(
-        membership.vault_id() == &local_vault_id,
-        AuthenticationFailed,
-        "recipient vault differs"
-    );
-    let (device_id, identity) = sync_keys::local_identity(db, root, &membership)?
-        .ok_or_else(|| Error::new(ChurStatus::RecoveryRequired, "recipient identity is absent"))?;
     let private = random::secret::<32>()?;
     let prekey = ObjectPrekey::sign(
         random::id()?,
@@ -106,28 +132,57 @@ pub fn issue(
     prekey: &ObjectPrekey,
 ) -> Result<ObjectKeyGrant> {
     ensure_not_deleted(db, prekey.object_id())?;
-    sharing_publication::ensure_ready(db, root, source_vault_id, *prekey.collection_id())?;
-    let state = sharing::load(db, prekey.collection_id())?
-        .ok_or_else(|| Error::new(ChurStatus::NotFound, "shared collection is absent"))?;
-    ensure!(
-        state.source_vault_id() == &source_vault_id
-            && state.is_authorized(
-                prekey.recipient_vault_id(),
-                prekey.recipient_device_id(),
-                PermissionProfile::Read
-            ),
-        AuthenticationFailed,
-        "object key request recipient is not authorized"
-    );
-    let member = state
-        .member(prekey.recipient_vault_id(), prekey.recipient_device_id())
-        .ok_or_else(|| {
-            Error::new(
-                ChurStatus::AuthenticationFailed,
-                "request recipient is absent",
-            )
-        })?;
-    prekey.verify(member.signing_public_key())?;
+    if prekey.recipient_vault_id() == &source_vault_id {
+        ensure!(
+            crate::own_sync::is_local_collection(db, prekey.collection_id())?,
+            AuthenticationFailed,
+            "own device request names an external collection"
+        );
+        let membership = sync_membership::load(db)?
+            .ok_or_else(|| Error::new(ChurStatus::RecoveryRequired, "own membership is absent"))?;
+        ensure!(
+            membership.vault_id() == &source_vault_id,
+            AuthenticationFailed,
+            "own source vault differs"
+        );
+        let recipient = membership
+            .device(prekey.recipient_device_id())
+            .ok_or_else(|| {
+                Error::new(
+                    ChurStatus::AuthenticationFailed,
+                    "own request device is not enrolled",
+                )
+            })?;
+        ensure!(
+            recipient.status() == DeviceStatus::Active,
+            AuthenticationFailed,
+            "own request device is revoked"
+        );
+        prekey.verify(recipient.signing_public_key())?;
+    } else {
+        sharing_publication::ensure_ready(db, root, source_vault_id, *prekey.collection_id())?;
+        let state = sharing::load(db, prekey.collection_id())?
+            .ok_or_else(|| Error::new(ChurStatus::NotFound, "shared collection is absent"))?;
+        ensure!(
+            state.source_vault_id() == &source_vault_id
+                && state.is_authorized(
+                    prekey.recipient_vault_id(),
+                    prekey.recipient_device_id(),
+                    PermissionProfile::Read
+                ),
+            AuthenticationFailed,
+            "object key request recipient is not authorized"
+        );
+        let member = state
+            .member(prekey.recipient_vault_id(), prekey.recipient_device_id())
+            .ok_or_else(|| {
+                Error::new(
+                    ChurStatus::AuthenticationFailed,
+                    "request recipient is absent",
+                )
+            })?;
+        prekey.verify(member.signing_public_key())?;
+    }
     let candidate = sharing_publication::candidate(db, prekey.collection_id(), prekey.object_id())?;
     ensure!(
         candidate.object_generation == prekey.object_generation()
@@ -225,34 +280,51 @@ pub fn accept(
     grant: &ObjectKeyGrant,
 ) -> Result<()> {
     ensure_not_deleted(db, grant.object_id())?;
-    let state = sharing::load(db, grant.collection_id())?
-        .ok_or_else(|| Error::new(ChurStatus::NotFound, "shared collection is absent"))?;
     let membership = sync_membership::load(db)?.ok_or_else(|| {
         Error::new(
             ChurStatus::RecoveryRequired,
             "recipient membership is absent",
         )
     })?;
+    ensure!(
+        membership.vault_id() == &local_vault_id,
+        AuthenticationFailed,
+        "recipient vault differs"
+    );
     let (device_id, _) = sync_keys::local_identity(db, root, &membership)?
         .ok_or_else(|| Error::new(ChurStatus::RecoveryRequired, "recipient identity is absent"))?;
     ensure!(
-        grant.recipient_vault_id() == &local_vault_id
-            && grant.recipient_device_id() == &device_id
-            && grant.source_vault_id() == state.source_vault_id()
-            && state.is_authorized(&local_vault_id, &device_id, PermissionProfile::Read),
+        grant.recipient_vault_id() == &local_vault_id && grant.recipient_device_id() == &device_id,
         AuthenticationFailed,
-        "object grant addresses another collection member"
+        "object grant addresses another recipient"
     );
-    let (states, _) = sharing_service::authenticate_issuers(issuers)?;
-    let source = states
-        .get(grant.source_vault_id())
-        .and_then(|history| history.last_key_value().map(|(_, state)| state))
-        .ok_or_else(|| {
-            Error::new(
-                ChurStatus::AuthenticationFailed,
-                "object grant source membership is absent",
-            )
-        })?;
+    let source = if grant.source_vault_id() == &local_vault_id {
+        ensure!(
+            crate::own_sync::is_local_collection(db, grant.collection_id())?,
+            AuthenticationFailed,
+            "own grant names an external collection"
+        );
+        membership.clone()
+    } else {
+        let state = sharing::load(db, grant.collection_id())?
+            .ok_or_else(|| Error::new(ChurStatus::NotFound, "shared collection is absent"))?;
+        ensure!(
+            grant.source_vault_id() == state.source_vault_id()
+                && state.is_authorized(&local_vault_id, &device_id, PermissionProfile::Read),
+            AuthenticationFailed,
+            "object grant addresses another collection member"
+        );
+        let (states, _) = sharing_service::authenticate_issuers(issuers)?;
+        states
+            .get(grant.source_vault_id())
+            .and_then(|history| history.last_key_value().map(|(_, state)| state.clone()))
+            .ok_or_else(|| {
+                Error::new(
+                    ChurStatus::AuthenticationFailed,
+                    "object grant source membership is absent",
+                )
+            })?
+    };
     let sender = source.device(grant.source_device_id()).ok_or_else(|| {
         Error::new(
             ChurStatus::AuthenticationFailed,

@@ -12,6 +12,8 @@ import dev.po4yka.chur.ffi.SyncForkState
 import dev.po4yka.chur.ffi.SyncProcessReport
 import dev.po4yka.chur.ffi.SyncRecordKind
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,6 +37,20 @@ public interface SyncVaultBoundary {
 
     /** Authenticated native device heads, or `null` while the vault is locked. */
     public suspend fun acceptedHeads(): List<DeviceCursor>? = null
+
+    public suspend fun ownSyncCollections(): List<ByteArray>? = emptyList()
+    public suspend fun ownSyncOperations(after: ULong): List<dev.po4yka.chur.ffi.OwnSyncOperation>? = emptyList()
+    public suspend fun ownSyncPlan(collectionId: ByteArray): SharedReceivePlan? = null
+    public suspend fun ownSyncAuthor(source: SharedSourceObject): SharedSourceObject? = null
+
+    public suspend fun prepareDevicePairing(): dev.po4yka.chur.ffi.DevicePairingRequest? = null
+    public suspend fun inspectDevicePairing(request: ByteArray): dev.po4yka.chur.ffi.DevicePairingPreview? = null
+    public suspend fun approveDevicePairing(request: ByteArray, serverUrl: String, token: ByteArray, nowMs: Long): dev.po4yka.chur.ffi.PreparedDevicePairing? = null
+    public suspend fun startDevicePairing(approval: ByteArray): dev.po4yka.chur.ffi.DevicePairingCredentials? = null
+    public suspend fun finishDevicePairing(nowMs: Long): ByteArray? = null
+    public suspend fun currentDeviceCheckpoint(nowMs: Long): ByteArray? = null
+    public suspend fun pairedDevices(): List<dev.po4yka.chur.ffi.PairedDevice>? = null
+    public suspend fun prepareDeviceRevocation(deviceId: ByteArray, nowMs: Long): dev.po4yka.chur.ffi.PreparedDeviceRevocation? = null
 
     /**
      * Stages one downloaded record into the native locked inbox.
@@ -84,6 +100,8 @@ public interface SyncVaultBoundary {
     public suspend fun objectKeyIssue(prekey: ByteArray): ByteArray? = null
 
     public suspend fun objectKeyAccept(packageBytes: ByteArray, grant: ByteArray): Boolean = false
+
+    public suspend fun outboundCollectionOperations(after: ULong): List<dev.po4yka.chur.ffi.CollectionOutbound>? = emptyList()
 
     /** Reads the durable prefix of one authenticated pending shared object. */
     public suspend fun sharedDownloadOffset(collectionId: ByteArray, objectId: ByteArray): ULong?
@@ -403,30 +421,184 @@ public class SyncCoordinator(
             shown = SyncStatus(true, state.serverUrl, "Connected.", false)
         }
 
+    public suspend fun prepareDevicePairing(): dev.po4yka.chur.ffi.DevicePairingRequest = pairingLocked {
+        if (store.load() != null) throw ChurFailure(ChurStatus.AUTHENTICATION_FAILED, "saved sync state blocks device setup")
+        pairingVault().prepareDevicePairing()
+            ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "device setup needs an unlocked vault")
+    }
+
+    public suspend fun inspectDevicePairing(request: ByteArray): dev.po4yka.chur.ffi.DevicePairingPreview = pairingLocked {
+        requireMatchingIdentity(requireConfiguredState())
+        pairingVault().inspectDevicePairing(request)
+            ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "device approval needs an unlocked vault")
+    }
+
+    public suspend fun approveDevicePairing(request: ByteArray, fingerprint: String): ByteArray = pairingLocked {
+        val state = requireConfiguredState()
+        requireMatchingIdentity(state)
+        val vault = pairingVault()
+        val preview = vault.inspectDevicePairing(request)
+            ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "device approval needs an unlocked vault")
+        if (!preview.vaultId.contentEquals(state.vaultId) || preview.fingerprint != fingerprint) {
+            throw ChurFailure(ChurStatus.AUTHENTICATION_FAILED, "the approved device fingerprint changed")
+        }
+        val proposedToken = randomToken()
+        val prepared = try {
+            vault.approveDevicePairing(request, state.serverUrl, proposedToken, clock())
+                ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "device approval needs an unlocked vault")
+        } finally { proposedToken.fill(0) }
+        var client: SyncClient? = null
+        shown = SyncStatus(true, state.serverUrl, "Approving device…", true)
+        try {
+            val transport = clientFactory(state.serverUrl) { state.transportToken }.also { client = it }
+            transport.putCheckpoint(state.vaultId, prepared.checkpoint)
+            transport.enroll(state.vaultId, prepared.transportToken, prepared.enrollment, prepared.operation)
+            vault.currentDeviceCheckpoint(clock())?.let { transport.putCheckpoint(state.vaultId, it) }
+            shown = SyncStatus(true, state.serverUrl, "Device approved. Save the approval file.", false)
+            prepared.approval
+        } finally {
+            client?.close()
+            prepared.transportToken.fill(0)
+            if (shown.busy) shown = shown.copy(busy = false)
+        }
+    }
+
+    public suspend fun pairedDevices(): List<dev.po4yka.chur.ffi.PairedDevice> = pairingLocked {
+        requireMatchingIdentity(requireConfiguredState())
+        pairingVault().pairedDevices()
+            ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "device management needs an unlocked vault")
+    }
+
+    /** Native stores the signed revocation before the durable transport queue is updated. */
+    public suspend fun revokePairedDevice(deviceId: ByteArray, expectedFingerprint: String): Unit = pairingLocked {
+        val existing = requireConfiguredState()
+        requireMatchingIdentity(existing)
+        val vault = pairingVault()
+        val peer = vault.pairedDevices()?.singleOrNull { it.deviceId.contentEquals(deviceId) }
+            ?: throw ChurFailure(ChurStatus.NOT_FOUND, "the paired device is absent")
+        if (peer.current || peer.fingerprint != expectedFingerprint) {
+            throw ChurFailure(ChurStatus.AUTHENTICATION_FAILED, "the device revocation fingerprint changed")
+        }
+        val prepared = vault.prepareDeviceRevocation(deviceId, clock())
+            ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "device management needs an unlocked vault")
+        val state = existing.copy(pendingDeviceRevocations = existing.pendingDeviceRevocations +
+            if (existing.pendingDeviceRevocations.any { it.operation.contentEquals(prepared.operation) }) emptyList()
+            else listOf(prepared))
+        store.save(state)
+        shown = SyncStatus(true, state.serverUrl, "Revoking device…", true)
+        val client = clientFactory(state.serverUrl) { state.transportToken }
+        try {
+            flushPending(client, state)
+            shown = SyncStatus(true, state.serverUrl, "Device revoked.", false)
+        } finally {
+            client.close()
+            if (shown.busy) shown = shown.copy(message = "Device revocation needs upload.", busy = false)
+        }
+    }
+
+    /** Authenticates the approval before the host asks for access to its network address. */
+    public suspend fun pairingApprovalServer(approval: ByteArray): String = pairingLocked {
+        val credentials = pairingVault().startDevicePairing(approval)
+            ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "device setup needs an unlocked vault")
+        try {
+            // Endpoint validation creates no network request.
+            clientFactory(credentials.serverUrl) { credentials.transportToken }.close()
+            credentials.serverUrl
+        } finally { credentials.transportToken.fill(0) }
+    }
+
+    /** False means that signed history is still absent and the same file can be retried. */
+    public suspend fun acceptPairingApproval(approval: ByteArray): Boolean = pairingLocked {
+        val at = session
+        val vault = pairingVault()
+        val credentials = vault.startDevicePairing(approval)
+            ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "device setup needs an unlocked vault")
+        var client: SyncClient? = null
+        try {
+            val transport = clientFactory(credentials.serverUrl) { credentials.transportToken }.also { client = it }
+            val existing = store.load()
+            if (existing != null && (!existing.vaultId.contentEquals(credentials.vaultId) ||
+                    !existing.deviceId.contentEquals(credentials.deviceId) || existing.serverUrl != credentials.serverUrl ||
+                    !existing.transportToken.contentEquals(credentials.transportToken) || existing.pendingSharing.isNotEmpty() ||
+                    existing.pendingDeviceRevocations.isNotEmpty())
+            ) throw ChurFailure(ChurStatus.AUTHENTICATION_FAILED, "saved sync state blocks device setup")
+            repeat(256) {
+                val device = try { vault.finishDevicePairing(clock()) } catch (failure: ChurFailure) {
+                    if (failure.status == ChurStatus.RECOVERY_REQUIRED) null else throw failure
+                }
+                if (device != null) {
+                    if (!device.contentEquals(credentials.deviceId)) {
+                        throw ChurFailure(ChurStatus.AUTHENTICATION_FAILED, "installed device identity differs")
+                    }
+                    val heads = vault.acceptedHeads()
+                        ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "device setup was locked")
+                    val state = existing?.copy(cursors = heads) ?: SyncState(
+                        credentials.serverUrl, credentials.vaultId, credentials.deviceId,
+                        credentials.transportToken.copyOf(), heads,
+                    )
+                    store.save(state)
+                    scopeVerdict(credentials.vaultId)
+                    owner = at
+                    shown = SyncStatus(true, state.serverUrl, "Device connected.", false)
+                    return@pairingLocked true
+                }
+                val before = vault.acceptedHeads()
+                    ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "device setup was locked")
+                for (cursor in before) {
+                    for (record in transport.operations(credentials.vaultId, cursor.deviceId, cursor.after)) {
+                        vault.stage(credentials.vaultId, SyncRecordKind.OPERATION, clock(), record)
+                    }
+                }
+                // The native approval pins the exact bootstrap checkpoint.
+                // Do not replace it with a server-selected checkpoint here.
+                val report = vault.process()
+                    ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "device setup was locked")
+                if (report.firstRejection != 0) {
+                    throw ChurFailure(ChurStatus.fromValue(report.firstRejection), "device setup history was rejected")
+                }
+                val after = vault.acceptedHeads()
+                    ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "device setup was locked")
+                if (before.associate { it.deviceId.toHex() to it.after } == after.associate { it.deviceId.toHex() to it.after }) {
+                    return@pairingLocked false
+                }
+            }
+            false
+        } finally {
+            client?.close()
+            credentials.transportToken.fill(0)
+        }
+    }
+
+    private fun pairingVault(): SyncVaultBoundary = boundary
+        ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sync has no vault boundary")
+
+    private suspend fun <T> pairingLocked(body: suspend () -> T): T =
+        withContext(Dispatchers.Default) { mutex.withLock { body() } }
+
     /**
      * Runs one pull-and-apply cycle, returning whether it completed.
      *
      * A run with no configured server is a `false`, not a failure: the host
      * schedules the engine without knowing whether the user ever connected.
      */
-    public suspend fun syncNow(): Boolean =
+    public suspend fun syncNow(): Boolean = withContext(Dispatchers.Default) {
         mutex.withLock {
             var state =
                 store.load() ?: run {
                     shown = NOT_CONFIGURED
-                    return false
+                    return@withLock false
                 }
             val vault =
                 boundary ?: run {
                     shown = SyncStatus(true, state.serverUrl, "The vault is not open.", false)
-                    return false
+                    return@withLock false
                 }
             vault.identity()?.let { identity ->
                 if (!matches(state, identity)) {
                     // The periodic run reaches a decoy session too, which sees
                     // no sibling's server, as in [refresh].
                     shown = NOT_CONFIGURED
-                    return false
+                    return@withLock false
                 }
             }
             shown = SyncStatus(true, state.serverUrl, "Syncing…", true)
@@ -437,21 +609,42 @@ public class SyncCoordinator(
                     try {
                         state = flushPending(client, state)
                         acceptedCursors(state, vault)?.let { state = state.copy(cursors = it) }
+                        val ownSync = OwnDeviceSynchronizer(client, vault)
+                        var publicationFailure: ChurStatus? = null
                         if (vault.identity()?.let { matches(state, it) } == true) {
-                            publishSourceObjects(client, state, vault)
+                            state = flushOwnOperations(client, state, vault)
+                            // Previously authored tombstones must leave even if a source container is damaged.
+                            state = flushCollectionOperations(client, state, vault)
+                            try {
+                                ownSync.publishMedia(state.vaultId) {
+                                    state = flushOwnOperations(client, state, vault)
+                                }
+                            } catch (failure: ChurFailure) {
+                                if (failure.status !in SOURCE_FILE_FAILURES) throw failure
+                                // A local source failure does not invalidate independent incoming records.
+                                publicationFailure = failure.status
+                            }
+                            try {
+                                publishSourceObjects(client, state, vault)
+                            } catch (failure: ChurFailure) {
+                                if (failure.status !in SOURCE_FILE_FAILURES) throw failure
+                                publicationFailure = publicationFailure ?: failure.status
+                            }
+                            state = flushCollectionOperations(client, state, vault)
                             serviceObjectKeyRequests(client, state, vault)
                         }
                         val puller =
                             LockedSyncPuller(client) { vaultId, kind, stagedAtMs, record ->
                                 vault.stage(vaultId, kind, stagedAtMs, record)
                             }
-                        puller.pullOnce(state.vaultId, state.cursors, clock())
+                        val pullReport = puller.pullOnce(state.vaultId, state.cursors, clock())
                         val processingVault = vault.identity()?.vaultId
                         val processReport = vault.process()
                         fold(processingVault, processReport)
                         val sharingPuller = SharingPuller(client, vault)
                         val shares =
                             if (vault.identity()?.let { matches(state, it) } == true) {
+                                ownSync.receive(state.vaultId, clock())
                                 sharingPuller.pullOnce(state.vaultId, clock())
                             } else {
                                 0
@@ -470,32 +663,37 @@ public class SyncCoordinator(
                                 message =
                                     listOfNotNull(
                                         "Up to date.".takeIf {
-                                            integrityStop == null && processReport != null && sharingPuller.pendingObjectKeys + sharingPuller.unavailableObjects == 0
+                                            integrityStop == null && publicationFailure == null && !pullReport.hasMoreOperations && !ownSync.hasMoreDownloads && processReport != null && sharingPuller.pendingObjectKeys + ownSync.pendingObjectKeys + sharingPuller.unavailableObjects + ownSync.unavailableObjects == 0
                                         },
+                                        "More changes need sync. Sync will continue on the next run.".takeIf {
+                                            integrityStop == null && (pullReport.hasMoreOperations || ownSync.hasMoreDownloads)
+                                        },
+                                        "Some local files could not upload. Sync will retry.".takeIf { publicationFailure != null },
                                         "Downloaded encrypted records. Unlock to apply.".takeIf {
                                             integrityStop == null && processReport == null
                                         },
                                         "Waiting for the source device to send object keys.".takeIf {
-                                            integrityStop == null && sharingPuller.pendingObjectKeys > 0
+                                            integrityStop == null && sharingPuller.pendingObjectKeys + ownSync.pendingObjectKeys > 0
                                         },
                                         "Some encrypted files are unavailable. Sync will retry.".takeIf {
-                                            integrityStop == null && sharingPuller.unavailableObjects > 0
+                                            integrityStop == null && sharingPuller.unavailableObjects + ownSync.unavailableObjects > 0
                                         },
                                         "Received $shares share(s).".takeIf { shares > 0 },
                                     ).joinToString(" ").ifEmpty { null },
                                 busy = false,
+                                failure = publicationFailure,
                             )
-                        return true
+                        return@withLock publicationFailure == null
                     } catch (failure: SyncTransportFailure) {
                         // §10: corruption and refusals stop the run; only the
                         // network backs off, and only up to the cap.
                         if (failure.status != ChurStatus.NETWORK_FAILURE) {
                             shown = SyncStatus(true, state.serverUrl, null, false, failure.status)
-                            return false
+                            return@withLock false
                         }
                         if (attempt == MAX_ATTEMPTS - 1) {
                             shown = SyncStatus(true, state.serverUrl, null, false, failure.status)
-                            return false
+                            return@withLock false
                         }
                         shown = SyncStatus(true, state.serverUrl, "The server is unreachable; retrying.", true)
                         sleep(backoff)
@@ -508,6 +706,7 @@ public class SyncCoordinator(
                 if (shown.busy) shown = shown.copy(busy = false)
             }
         }
+    }
 
     /** Publishes an already prepared grant in server dependency order. */
     public suspend fun publishShare(share: PreparedShare): Unit =
@@ -566,6 +765,59 @@ public class SyncCoordinator(
             after = page.last().objectId
         }
     }
+
+    private suspend fun flushOwnOperations(client: SyncClient, state: SyncState, vault: SyncVaultBoundary): SyncState {
+        var latest = state
+        OwnDeviceSynchronizer(client, vault).publishOperations(state.vaultId, state.ownPushCursor) { sequence ->
+            val next = latest.copy(ownPushCursor = sequence)
+            store.save(next)
+            latest = next
+        }
+        return latest
+    }
+
+    /** Publishes the checkpoint's ordinary prefix without passing its revocation. */
+    private suspend fun flushOwnPrefixBefore(
+        client: SyncClient,
+        initial: SyncState,
+        vault: SyncVaultBoundary,
+        stop: ByteArray,
+    ): SyncState {
+        // A manual retry can reference an already acknowledged operation. Find
+        // the native boundary before sending any newer records in that case.
+        var search = initial.ownPushCursor
+        var stopSequence: ULong? = null
+        while (stopSequence == null) {
+            val page = vault.ownSyncOperations(search)
+                ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "device revocation prefix was locked")
+            if (page.isEmpty()) return initial
+            for (operation in page) {
+                require(operation.sequence > search) { "the native own operation page did not advance" }
+                search = operation.sequence
+                if (operation.record.contentEquals(stop)) { stopSequence = operation.sequence; break }
+            }
+        }
+        var state = initial
+        while (true) {
+            val page = vault.ownSyncOperations(state.ownPushCursor)
+                ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "device revocation prefix was locked")
+            check(page.isNotEmpty()) { "the native revocation prefix disappeared" }
+            for (operation in page) {
+                require(operation.sequence > state.ownPushCursor) { "the native own operation page did not advance" }
+                if (operation.sequence == stopSequence) {
+                    check(operation.record.contentEquals(stop)) { "the native revocation operation changed" }
+                    return state
+                }
+                check(operation.sequence < stopSequence) { "the native revocation operation was skipped" }
+                client.putOperation(state.vaultId, operation.record)
+                state = state.copy(ownPushCursor = operation.sequence)
+                store.save(state)
+            }
+        }
+    }
+
+    private suspend fun flushCollectionOperations(client: SyncClient, state: SyncState, vault: SyncVaultBoundary): SyncState =
+        CollectionOutboxPusher(client, store).flush(state) { vault.outboundCollectionOperations(it) }
 
     private suspend fun serviceObjectKeyRequests(client: SyncClient, state: SyncState, vault: SyncVaultBoundary): Unit =
         respondToObjectKeyRequests(client, state.vaultId, vault::objectKeyIssue)
@@ -633,9 +885,63 @@ public class SyncCoordinator(
                 left.grant.contentEquals(right.grant) && left.operation.contentEquals(right.operation)
             }
 
+    /** Restores native commits lost before the host transport queue was saved. */
+    private suspend fun recoverDeviceRevocations(initial: SyncState): SyncState {
+        val vault = boundary ?: return initial
+        if (vault.identity()?.let { matches(initial, it) } != true) return initial
+        val devices = vault.pairedDevices()?.filter { it.retryAvailable && !it.current } ?: return initial
+        if (devices.isEmpty()) return initial
+        val candidates = devices.map { device ->
+            vault.prepareDeviceRevocation(device.deviceId, clock())
+                ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "device revocation recovery needs an unlocked vault")
+        }.toMutableList()
+        val ordered = mutableListOf<dev.po4yka.chur.ffi.PreparedDeviceRevocation>()
+        var cursor = initial.ownPushCursor
+        while (candidates.isNotEmpty()) {
+            val page = vault.ownSyncOperations(cursor)
+                ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "device revocation recovery was locked")
+            if (page.isEmpty()) break
+            for (operation in page) {
+                require(operation.sequence > cursor) { "the native own operation page did not advance" }
+                cursor = operation.sequence
+                val index = candidates.indexOfFirst { it.operation.contentEquals(operation.record) }
+                if (index >= 0) ordered.add(candidates.removeAt(index))
+            }
+        }
+        if (ordered.none { recovered ->
+                initial.pendingDeviceRevocations.none { it.operation.contentEquals(recovered.operation) }
+            }
+        ) return initial
+        // Preserve ordinary-chain order if a later revocation was already queued.
+        val state = initial.copy(pendingDeviceRevocations = ordered + initial.pendingDeviceRevocations.filter { pending ->
+            ordered.none { it.operation.contentEquals(pending.operation) }
+        })
+        store.save(state)
+        return state
+    }
+
     private suspend fun flushPending(client: SyncClient, initial: SyncState): SyncState {
-        var state = initial
+        // Native preparation is durable before the separate host-state save.
+        // Recover it before HTTP and before syncNow can advance ownPushCursor.
+        var state = recoverDeviceRevocations(initial)
         val pusher = SharingPusher(client)
+        val hadDeviceRevocations = state.pendingDeviceRevocations.isNotEmpty()
+        // Retain this durable work until the final checkpoint is acknowledged.
+        // Cursor saves below must keep it retryable across a crash or HTTP loss.
+        for (pending in state.pendingDeviceRevocations) {
+            state = flushOwnPrefixBefore(client, state, pairingVault(), pending.operation)
+            client.putCheckpoint(state.vaultId, pending.checkpoint)
+            client.revoke(state.vaultId, pending.revocation, pending.operation)
+        }
+        if (hadDeviceRevocations) {
+            val vault = pairingVault()
+            state = flushOwnOperations(client, state, vault)
+            val checkpoint = vault.currentDeviceCheckpoint(clock())
+                ?: throw ChurFailure(ChurStatus.VAULT_LOCKED, "device revocation checkpoint was locked")
+            client.putCheckpoint(state.vaultId, checkpoint)
+            state = state.copy(pendingDeviceRevocations = emptyList())
+            store.save(state)
+        }
         while (state.pendingSharing.isNotEmpty()) {
             val pending = state.pendingSharing.first()
             pending.share?.let { pusher.push(state.vaultId, it) }
@@ -649,7 +955,10 @@ public class SyncCoordinator(
     /** Forgets the server entirely, which the settings entry offers. */
     public suspend fun disconnect(): Unit =
         mutex.withLock {
-            require(store.load()?.pendingSharing.isNullOrEmpty()) { "publish pending sharing changes before disconnecting" }
+            val pending = store.load()
+            require(pending?.pendingSharing.isNullOrEmpty() && pending?.pendingDeviceRevocations.isNullOrEmpty()) {
+                "publish pending access changes before disconnecting"
+            }
             store.clear()
             integrityStop = null
             integrityAcknowledged = false
@@ -787,3 +1096,13 @@ private val NOT_CONFIGURED = SyncStatus(configured = false, serverUrl = null, me
 
 /** The two security verdicts of `ROLLBACK_PROTECTION.md` §4, which only this device reaches. */
 internal val LOCAL_VERDICTS: Set<ChurStatus> = setOf(ChurStatus.SYNC_CHAIN_FORK, ChurStatus.SYNC_HEAD_ROLLBACK)
+
+// These statuses describe local source files. Session, key, catalog, and transport
+// failures keep the existing stop behavior; incoming records still need native validation.
+private val SOURCE_FILE_FAILURES = setOf(
+    ChurStatus.NOT_FOUND,
+    ChurStatus.OBJECT_INCOMPLETE,
+    ChurStatus.OBJECT_CORRUPT,
+    ChurStatus.IO_FAILURE,
+    ChurStatus.STORAGE_UNAVAILABLE,
+)

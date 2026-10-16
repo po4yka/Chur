@@ -54,6 +54,8 @@ Server transport checksums do not replace object AEAD/final-commit verification.
 
 For collection sharing, the source first uploads a complete ciphertext object, then associates its remote store identifier with one collection, and only then publishes the signed `CreateObject` and `CommitObject` collection operations. A recipient reads a source object with its own transport token only while its current collection membership and grant allow `READ`. The server checks the source-object association on every range request. The recipient takes the expected store identifier, length, and commitment from authenticated collection operations and verifies the complete container before it activates a local object. Revocation prevents further server reads; it cannot remove bytes already downloaded.
 
+Enrolled devices of one vault use the ordinary device operation log for `CreateObject` and key-free `CommitObject`. Their source upload is verified before publication. A receive plan is rebuilt from accepted operations and current local tombstones; it does not trust server object metadata. Missing originals use the same complete container verification and atomic activation as shared objects. Object-bound disposable requests are authorized against current own-vault device membership, and stable device identities do not carry content keys. Before it approves a new device, the current device publishes existing media facts into its durable log and attests that log with a checkpoint.
+
 ## 5. Operation synchronization
 
 Devices exchange:
@@ -78,6 +80,16 @@ Clients verify each device chain independently before applying operations, and a
 9. commit local vault and platform slot.
 
 Server-supplied state never sets the floor. The enrolling device's signature over the enrollment record is what makes the floor trustworthy at the one moment when the new device holds no accepted head of its own; see [`ROLLBACK_PROTECTION.md`](ROLLBACK_PROTECTION.md) §7.
+
+### 6.1 App pairing, own media, and device revocation
+
+On the new device, restore an encrypted backup and unlock it. Settings creates a durable pairing request for a fresh device identity. On a connected ordinary device, paste the request, compare its fingerprint on both screens, and explicitly approve access to the whole vault. The connected device publishes its signed checkpoint and AddDevice enrollment with a separate random transport token, then publishes a checkpoint for the new membership. It saves an encrypted approval file for the new device.
+
+The restored device authenticates that file locally before it uses the server URL or token. It downloads and verifies signed operation prefixes. Native code verifies the approval's pinned checkpoint and active membership before it replaces the recovery-only identity. It signs DeviceReady as the new ordinary device's first operation. Missing history leaves pairing retryable; failed enrollment, process restart, or a failed configuration write cannot create a different identity or token on retry. The exact trusted checkpoint can be replayed idempotently after enrollment. An unknown stale checkpoint still fails validation.
+
+An unlocked sync pass publishes ordinary operations and committed encrypted originals from local collections. It requests each missing object key through a disposable prekey. An active source device must sync to deliver that key; the recipient shows a waiting state until then. It destroys the private prekey after acceptance and verifies the downloaded complete container before it creates an active object. Own-device downloads use the same bounded streaming path as collection sharing. The server does not receive filenames, plaintext metadata, root keys, or object keys. Native work and full-container verification run off the UI thread.
+
+Settings lists authenticated device fingerprints, including approved devices that have not completed setup. The current device cannot revoke itself. An explicit confirmation revokes a peer at its latest accepted branch, or at the signed genesis position if it never authored an operation. Native state and retry records commit together. The app queues signed revocations before transport, retries queued changes on sync, and blocks disconnect while an upload is pending. It publishes the membership-compatible checkpoint after revocation. Revocation stops server and new key access; plaintext copies or keys already held by another device cannot be recalled. Keep encrypted backups separate from sync.
 
 ## 7. Background mode
 
@@ -157,3 +169,7 @@ Server routing fields are random/opaque. No plaintext filename, MIME, album, cap
 - locked background transfer;
 - account auth reset without vault access;
 - Android/iOS/CLI interoperability.
+
+Own-vault media uses a root-domain `DeclareCollection` before any new collection selector is used. This includes the first import after pairing from an empty backup. Unknown selectors from authenticated enrolled signers stay pending until the declaration is accepted. They cannot advance a head while pending. Collection metadata declarations and rotations carry no object content key.
+
+An unlocked own-vault source caches its verified operation log, materialized metadata and immutable publication index. The catalog generation and the complete root operation domain bind the cache. Every publication still checks the current ordinary identity, membership and source row. Receipt, revocation, rotation or another catalog change invalidates the cache. Successful local publication updates the cache to the committed generation. A failed publication discards it. Lock closes the catalog and drops this cache. It stores no object content key and does not replace complete source-container verification.

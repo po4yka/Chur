@@ -11,6 +11,9 @@ import dev.po4yka.chur.imports.requiredDerivatives
 import dev.po4yka.chur.imports.fileImportProbe
 import dev.po4yka.chur.vault.VaultRepository
 import kotlinx.coroutines.CancellationException
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 /**
  * The import stages of `docs/interop/MEDIA_PIPELINE.md` §2, in order.
@@ -27,7 +30,12 @@ import kotlinx.coroutines.CancellationException
  */
 class MediaImporter(
     private val codec: MediaCodec,
+    private val derivativeTimeout: Duration = 30.seconds,
+    private val derivativeTimeSource: TimeSource = TimeSource.Monotonic,
 ) {
+    /** The original is committed, but preview work did not finish. */
+    enum class PreviewWarning { STORAGE_FAILED, TIMED_OUT }
+
     /** What an import attempt ended as, §13. */
     sealed interface Outcome {
         /** The object is in the vault, with the derivatives it needed. */
@@ -36,6 +44,8 @@ class MediaImporter(
             val derivatives: Int,
             /** Cancellation after commit keeps the original and skips remaining previews. */
             val previewsSkipped: Boolean = false,
+            /** A preview failure does not change the committed original into a failed import. */
+            val previewWarning: PreviewWarning? = null,
         ) : Outcome {
             override fun equals(other: Any?): Boolean = other is Imported && objectId.contentEquals(other.objectId)
 
@@ -130,23 +140,42 @@ class MediaImporter(
             var written = 0
             for (kind in requiredDerivatives(probe)) {
                 if (cancelRequested()) return Outcome.Imported(objectId, written, previewsSkipped = true)
+                val started = derivativeTimeSource.markNow()
+                val timedOut = { started.elapsedNow() >= derivativeTimeout }
                 val derivative = try {
-                    codec.derive(media, probe, kind, cancelRequested)
+                    // The codec owns its resources until this call returns. A
+                    // timeout must not leave a decoder reading a closed source.
+                    codec.deriveBounded(media, probe, kind) { cancelRequested() || timedOut() }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
                     null
                 }
-                if (cancelRequested()) return Outcome.Imported(objectId, written, previewsSkipped = true)
+                if (cancelRequested()) {
+                    derivative?.bytes?.fill(0)
+                    return Outcome.Imported(objectId, written, previewsSkipped = true)
+                }
+                if (timedOut()) {
+                    derivative?.bytes?.fill(0)
+                    return Outcome.Imported(objectId, written, previewWarning = PreviewWarning.TIMED_OUT)
+                }
                 if (derivative == null) continue
-                repository.putDerived(
-                    objectId = objectId,
-                    kind = kind,
-                    width = derivative.width,
-                    height = derivative.height,
-                    bytes = derivative.bytes,
-                )
-                written += 1
+                try {
+                    repository.putDerived(
+                        objectId = objectId,
+                        kind = kind,
+                        width = derivative.width,
+                        height = derivative.height,
+                        bytes = derivative.bytes,
+                    )
+                    written += 1
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    return Outcome.Imported(objectId, written, previewWarning = PreviewWarning.STORAGE_FAILED)
+                } finally {
+                    derivative.bytes.fill(0)
+                }
             }
             return Outcome.Imported(objectId, written)
         } catch (failure: ChurFailure) {

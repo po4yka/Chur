@@ -442,10 +442,10 @@ impl RevocationRecord {
             "device revocation is self-issued"
         );
         ensure!(
-            self.final_accepted_device_sequence != 0
-                && self.final_accepted_operation_digest != [0; COMMITMENT_LEN],
+            (self.final_accepted_device_sequence == 0)
+                == (self.final_accepted_operation_digest == [0; COMMITMENT_LEN]),
             NonCanonicalEncoding,
-            "device revocation point is a genesis sentinel"
+            "device revocation point mixes genesis and an authored branch"
         );
         ensure!(
             self.membership_generation > 1
@@ -514,5 +514,18 @@ mod tests {
             record.encode()
         );
         assert_ne!(record.commitment(), [0; COMMITMENT_LEN]);
+    }
+    #[test]
+    fn revocation_genesis_is_exact_and_canonical() {
+        let record = RevocationRecord::new(id(1), id(2), 0, [0; 32], 2, id(4), [5; 32])
+            .expect("never-authored device revocation");
+        assert_eq!(
+            RevocationRecord::decode(&record.encode())
+                .expect("decode genesis revocation")
+                .encode(),
+            record.encode()
+        );
+        assert!(RevocationRecord::new(id(1), id(2), 0, [3; 32], 2, id(4), [5; 32]).is_err());
+        assert!(RevocationRecord::new(id(1), id(2), 1, [0; 32], 2, id(4), [5; 32]).is_err());
     }
 }

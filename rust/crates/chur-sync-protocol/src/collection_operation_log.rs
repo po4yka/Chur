@@ -224,7 +224,10 @@ impl CollectionOperationLog {
                 member.signing_public_key() == issuer.signing_public_key()
                     && (member.permissions() as u8 & PermissionProfile::Contribute as u8)
                         == PermissionProfile::Contribute as u8
-                    && !matches!(payload.body(), PayloadBody::RewrapObjectKey { .. }),
+                    && !matches!(
+                        payload.body(),
+                        PayloadBody::RewrapObjectKey { .. } | PayloadBody::PurgeObject { .. }
+                    ),
                 CatalogCorrupt,
                 "restored collection operation issuer is not authorized"
             );

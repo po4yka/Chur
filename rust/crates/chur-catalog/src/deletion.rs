@@ -182,6 +182,86 @@ pub fn erase(db: &mut CatalogDb, object_id: &Id, now_ms: u64) -> Result<()> {
     })
 }
 
+/// Removes all reachable local content keys in the transaction that accepts a
+/// signed terminal purge. The caller must complete a verified WAL barrier.
+pub(crate) fn project_purge(
+    transaction: &Transaction<'_>,
+    payload: &chur_sync_protocol::payload::OperationPayload,
+) -> Result<()> {
+    use chur_sync_protocol::payload::PayloadBody;
+    let PayloadBody::PurgeObject {
+        object_id,
+        object_generation,
+        authored_at_ms,
+    } = payload.body()
+    else {
+        return Ok(());
+    };
+    let key = object_id.as_bytes().as_slice();
+    let conflict: i64 = transaction
+        .query_row(
+            "SELECT count(*) FROM objects WHERE object_id = ?1 AND collection_id != ?2",
+            params![key, payload.collection_id().as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .map_err(|error| map_sqlite(error, "purged object scope could not be checked"))?;
+    ensure!(
+        conflict == 0,
+        AuthenticationFailed,
+        "purged object belongs to another collection"
+    );
+    for sql in [
+        "DELETE FROM object_key_requests WHERE object_id = ?1",
+        "DELETE FROM pending_object_keys WHERE object_id = ?1",
+        "DELETE FROM object_key_envelopes WHERE object_id = ?1",
+        "DELETE FROM sync_object_envelope_epochs WHERE object_id = ?1",
+        "DELETE FROM trash_entries WHERE object_id = ?1",
+    ] {
+        transaction
+            .execute(sql, [key])
+            .map_err(|error| map_sqlite(error, "purged keys could not be destroyed"))?;
+    }
+    transaction.execute("INSERT INTO tombstones (object_id, authored_ms, object_generation) VALUES (?1, ?2, ?3) ON CONFLICT(object_id) DO NOTHING",
+        params![key, as_sqlite_integer(*authored_at_ms, "purge time is too large")?, as_sqlite_integer(*object_generation, "purge generation is too large")?])
+        .map_err(|error| map_sqlite(error, "permanent purge tombstone could not be written"))?;
+    transaction
+        .execute(
+            "UPDATE objects SET state = ?2 WHERE object_id = ?1",
+            params![key, i64::from(ObjectState::Deleting.value())],
+        )
+        .map_err(|error| map_sqlite(error, "purged object could not await key erasure"))?;
+    unindex_search(transaction, object_id)
+}
+
+/// Completes key erasure after durable source and own-vault tombstone publication.
+/// Recovery repeats this service before physical collection.
+pub fn erase_with_sync(
+    db: &mut CatalogDb,
+    root: &chur_crypto::Key,
+    vault_id: Id,
+    object_id: &Id,
+    now_ms: u64,
+) -> Result<()> {
+    let object = crate::store::object(db, object_id)?;
+    if crate::store::collection(db, &object.collection_id)?.policy_type
+        == crate::model::COLLECTION_POLICY_SHARED
+    {
+        // A recipient removes only its local copy. Remote authorization and
+        // epoch projections are not prerequisites for destroying its own key.
+        return erase(db, object_id, now_ms);
+    }
+    let keys = crate::sync_keys::key_directory(db, root, vault_id)?;
+    let accepted = crate::sync_receive::load_materialized_state(db, &keys)?;
+    if !accepted.object_is_purged(object_id) {
+        crate::sharing_publication::publish_deletion(db, root, vault_id, object_id, now_ms)?;
+    }
+    // A received own-vault purge has already removed the key. Its source
+    // persisted the shared outbox event first; do not try to republish a
+    // current-epoch prefix from an erased key on this receiving device.
+    crate::own_sync::publish_deletion(db, root, vault_id, object_id, now_ms)?;
+    erase(db, object_id, now_ms)
+}
+
 /// Steps 5 and 6: the scratch entries and the object row.
 ///
 /// The tombstone survives. `docs/format/CATALOG_SCHEMA_V1.md` §14 lets a vault
@@ -271,7 +351,8 @@ pub fn discard_tombstone(db: &mut CatalogDb, object_id: &Id) -> Result<()> {
         transaction
             .execute(
                 "DELETE FROM tombstones WHERE object_id = ?1
-                   AND NOT EXISTS (SELECT 1 FROM sharing_object_operations WHERE object_id = ?1)",
+                   AND NOT EXISTS (SELECT 1 FROM sharing_object_operations WHERE object_id = ?1)
+                   AND NOT EXISTS (SELECT 1 FROM sync_operations)",
                 [object_id.as_bytes().as_slice()],
             )
             .map_err(|error| map_sqlite(error, "the tombstone could not be discarded"))?;
@@ -730,7 +811,8 @@ mod tests {
                 .any(|window| window == envelope.encode())
         );
         begin(&mut vault.db, &object_id).expect("begin published deletion");
-        erase(&mut vault.db, &object_id, 2).expect("erase published key");
+        erase_with_sync(&mut vault.db, &root, vault_id, &object_id, 2)
+            .expect("erase published key");
         finish(&mut vault.db, &object_id).expect("collect published object");
         discard_tombstone(&mut vault.db, &object_id).expect("retain required tombstone");
         assert_eq!(
@@ -765,6 +847,43 @@ mod tests {
         )
         .expect("signed chain still replays");
         assert_eq!(publication.commit_operation.encode(), retained_record);
+        let (device, _) = crate::sync_keys::local_identity(
+            &vault.db,
+            &root,
+            memberships.get(&vault_id).expect("membership"),
+        )
+        .expect("identity")
+        .expect("present");
+        let outbound = crate::sharing_log::outbound_after(&vault.db, &vault_id, &device, 0)
+            .expect("durable outbox");
+        assert_eq!(
+            outbound.len(),
+            3,
+            "create, commit and deletion survive object garbage collection"
+        );
+        let tombstone = chur_sync_protocol::collection_operation::CollectionOperation::decode(
+            &outbound[2].record,
+        )
+        .expect("signed tombstone");
+        assert!(
+            matches!(OperationPayload::open_for_collection_operation(&tombstone, &keys).expect("open tombstone").body(),
+            PayloadBody::PurgeObject { object_id: deleted, .. } if *deleted == object_id)
+        );
+        assert!(
+            crate::sharing_log::outbound_after(&vault.db, &vault_id, &device, outbound[2].cursor)
+                .expect("ack cursor")
+                .is_empty()
+        );
+        assert!(
+            crate::sharing_log::outbound_after(
+                &vault.db,
+                &vault_id,
+                &Id::new([90; 16]).expect("other device"),
+                0
+            )
+            .expect("other device cursor")
+            .is_empty()
+        );
     }
 
     #[test]

@@ -175,6 +175,9 @@ internal actual object ChurNative {
     actual fun objectKeyAccept(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int =
         ChurJni.objectKeyAccept(session, input.buffer, length, destination.buffer, outWritten)
 
+    actual fun sharingOutbound(session: Long, afterCursor: Long, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.sharingOutbound(session, afterCursor, destination.buffer, outWritten)
+
     actual fun sharingReceive(
         session: Long,
         bundle: ChurBuffer,
@@ -238,6 +241,42 @@ internal actual object ChurNative {
         outCounts: LongArray,
         outStatus: IntArray,
     ): Int = ChurJni.syncProcess(session, nowMs, outCounts, outStatus)
+
+    actual fun devicePairingPrepare(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.devicePairingPrepare(session, input.buffer, length, destination.buffer, outWritten)
+
+    actual fun devicePairingInspect(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.devicePairingInspect(session, input.buffer, length, destination.buffer, outWritten)
+
+    actual fun devicePairingApprove(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.devicePairingApprove(session, input.buffer, length, destination.buffer, outWritten)
+
+    actual fun devicePairingStart(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.devicePairingStart(session, input.buffer, length, destination.buffer, outWritten)
+
+    actual fun devicePairingFinish(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.devicePairingFinish(session, input.buffer, length, destination.buffer, outWritten)
+
+    actual fun devicePairingCheckpoint(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.devicePairingCheckpoint(session, input.buffer, length, destination.buffer, outWritten)
+
+    actual fun devicePairingOverview(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.devicePairingOverview(session, input.buffer, length, destination.buffer, outWritten)
+
+    actual fun devicePairingRevoke(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.devicePairingRevoke(session, input.buffer, length, destination.buffer, outWritten)
+
+    actual fun ownSyncCollections(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.ownSyncCollections(session, input.buffer, length, destination.buffer, outWritten)
+
+    actual fun ownSyncOperations(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.ownSyncOperations(session, input.buffer, length, destination.buffer, outWritten)
+
+    actual fun ownSyncPlan(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.ownSyncPlan(session, input.buffer, length, destination.buffer, outWritten)
+
+    actual fun ownSyncAuthor(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.ownSyncAuthor(session, input.buffer, length, destination.buffer, outWritten)
 
     actual fun syncHeads(session: Long, destination: ChurBuffer, outWritten: IntArray): Int =
         ChurJni.syncHeads(session, destination.buffer, outWritten)

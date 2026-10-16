@@ -7,6 +7,8 @@ import dev.po4yka.chur.ffi.PreparedShareRevocation
 import dev.po4yka.chur.ffi.SyncForkState
 import dev.po4yka.chur.ffi.SyncProcessReport
 import dev.po4yka.chur.ffi.SyncRecordKind
+import dev.po4yka.chur.ffi.ChurFailure
+import dev.po4yka.chur.ffi.SharedDownload
 import dev.po4yka.chur.ffi.SharedReceivePlan
 import dev.po4yka.chur.ffi.SharedSourceObject
 import dev.po4yka.chur.ffi.SharedSourceRange
@@ -58,6 +60,14 @@ class SyncCoordinatorTest {
     private class FakeBoundary : SyncVaultBoundary {
         var identity: SharingIdentity? = null
         var identityCalls = 0
+        var ownCollections: List<ByteArray> = emptyList()
+        var ownPlan: SharedReceivePlan? = null
+        var sourceFailure: ChurStatus? = null
+        var finishedDownloads = 0
+        override suspend fun ownSyncCollections(): List<ByteArray> = ownCollections
+        override suspend fun ownSyncPlan(collectionId: ByteArray): SharedReceivePlan? {
+            return ownPlan
+        }
         val staged = mutableListOf<Pair<SyncRecordKind, ByteArray>>()
         var processed = 0
         var firstRejection = 0
@@ -130,11 +140,14 @@ class SyncCoordinatorTest {
             collectionId: ByteArray,
             objectId: ByteArray,
             nowMs: Long,
-        ): Boolean = true
+        ): Boolean { finishedDownloads++; return true }
 
         override suspend fun sourceCollectionId(): ByteArray? = null
 
-        override suspend fun sourcePage(collectionId: ByteArray, afterObjectId: ByteArray): List<SharedSourceObject>? = null
+        override suspend fun sourcePage(collectionId: ByteArray, afterObjectId: ByteArray): List<SharedSourceObject>? {
+            sourceFailure?.let { throw ChurFailure(it, "local ciphertext is unavailable") }
+            return emptyList()
+        }
 
         override suspend fun sourceRange(objectId: ByteArray, offset: ULong, maxBytes: Int): SharedSourceRange? = null
 
@@ -320,6 +333,120 @@ class SyncCoordinatorTest {
             assertEquals("Up to date.", coordinator.status.value.message)
             assertNull(coordinator.status.value.integrityStop)
         }
+
+    @Test
+    fun a_full_operation_page_keeps_the_run_pending_until_the_next_page_is_exhausted() = runTest {
+        var backlog = true
+        val records = List(256) { byteArrayOf(it.toByte()) }
+        val engine = okEngine { path -> when {
+            path.contains("/operations/") -> MockAnswer.Body(if (backlog) frameRecords(records) else frame(byteArrayOf(1)))
+            path.endsWith("/checkpoints") || path.endsWith("/sharing/packages") -> MockAnswer.Body(byteArrayOf(0, 0, 0, 0))
+            else -> error(path)
+        } }
+        val store = FakeStore().apply {
+            saved = SyncState("https://sync.example", vaultId, deviceId, ByteArray(32), listOf(DeviceCursor(deviceId, 0uL)))
+        }
+        val boundary = FakeBoundary().apply {
+            identity = this@SyncCoordinatorTest.identity
+            heads = listOf(DeviceCursor(deviceId, 0uL))
+            afterProcess = { heads = listOf(DeviceCursor(deviceId, if (backlog) 256uL else 257uL)) }
+        }
+        val coordinator = coordinator(store, boundary, engine)
+        coordinator.refresh()
+        assertTrue(coordinator.syncNow())
+        assertEquals(256uL, store.saved!!.cursors.single().after)
+        assertEquals(256, boundary.staged.size)
+        assertTrue(coordinator.status.value.message.orEmpty().contains("More changes need sync"))
+        assertFalse(coordinator.status.value.message.orEmpty().contains("Up to date"))
+        backlog = false
+        assertTrue(coordinator.syncNow())
+        assertEquals(257uL, store.saved!!.cursors.single().after)
+        assertEquals("Up to date.", coordinator.status.value.message)
+    }
+
+    @Test
+    fun a_full_own_download_plan_does_not_claim_that_all_originals_arrived() = runTest {
+        val collection = ByteArray(16) { 4 }
+        val boundary = FakeBoundary().apply {
+            identity = this@SyncCoordinatorTest.identity
+            ownCollections = listOf(collection)
+            ownPlan = SharedReceivePlan(vaultId, collection, ByteArray(16), 0,
+                List(256) { index -> SharedDownload(ByteArray(16).apply { this[0] = 1; this[1] = index.toByte() }, ByteArray(16), 0uL) })
+        }
+        val engine = okEngine { path -> when {
+            path.contains("/operations/") || path.endsWith("/checkpoints") || path.endsWith("/sharing/packages") ->
+                MockAnswer.Body(byteArrayOf(0, 0, 0, 0))
+            else -> error(path)
+        } }
+        val store = FakeStore().apply {
+            saved = SyncState("https://sync.example", vaultId, deviceId, ByteArray(32), emptyList())
+        }
+        val coordinator = coordinator(store, boundary, engine)
+        coordinator.refresh()
+        assertTrue(coordinator.syncNow())
+        assertEquals(256, boundary.finishedDownloads)
+        assertTrue(coordinator.status.value.message.orEmpty().contains("More changes need sync"))
+        boundary.ownPlan = SharedReceivePlan(vaultId, collection, ByteArray(16), 0,
+            listOf(SharedDownload(ByteArray(16) { 7 }, ByteArray(16), 0uL)))
+        assertTrue(coordinator.syncNow())
+        assertEquals(257, boundary.finishedDownloads)
+        assertEquals("Up to date.", coordinator.status.value.message)
+    }
+
+    @Test
+    fun local_container_failures_remain_visible_while_independent_incoming_records_are_applied() = runTest {
+        for (status in listOf(ChurStatus.NOT_FOUND, ChurStatus.OBJECT_INCOMPLETE, ChurStatus.OBJECT_CORRUPT, ChurStatus.IO_FAILURE, ChurStatus.STORAGE_UNAVAILABLE)) {
+            val collection = ByteArray(16) { 4 }
+            val boundary = FakeBoundary().apply {
+                identity = this@SyncCoordinatorTest.identity
+                ownCollections = listOf(collection)
+                sourceFailure = status
+                ownPlan = SharedReceivePlan(vaultId, collection, ByteArray(16), 0,
+                    listOf(SharedDownload(ByteArray(16) { 7 }, ByteArray(16), 0uL)))
+            }
+            val engine = okEngine { path -> when {
+                path.contains("/operations/") -> MockAnswer.Body(frame(byteArrayOf(1)))
+                path.endsWith("/checkpoints") || path.endsWith("/sharing/packages") -> MockAnswer.Body(byteArrayOf(0, 0, 0, 0))
+                else -> error(path)
+            } }
+            val store = FakeStore().apply {
+                saved = SyncState("https://sync.example", vaultId, deviceId, ByteArray(32), listOf(DeviceCursor(deviceId, 0uL)))
+            }
+            val coordinator = coordinator(store, boundary, engine)
+            coordinator.refresh()
+            repeat(2) {
+                assertFalse(coordinator.syncNow())
+                assertEquals(status, coordinator.status.value.failure)
+                assertTrue(coordinator.status.value.message.orEmpty().contains("Some local files could not upload"))
+                assertFalse(coordinator.status.value.message.orEmpty().contains("Up to date"))
+            }
+            assertEquals(2, boundary.processed)
+            assertEquals(2, boundary.staged.size)
+            assertEquals(2, boundary.finishedDownloads)
+        }
+    }
+
+    @Test
+    fun source_session_and_integrity_failures_still_stop_before_incoming_work() = runTest {
+        for (status in listOf(ChurStatus.VAULT_LOCKED, ChurStatus.SESSION_EXPIRED, ChurStatus.CANCELLED,
+                ChurStatus.AUTHENTICATION_FAILED, ChurStatus.CATALOG_CORRUPT, ChurStatus.VAULT_CORRUPT)) {
+            val boundary = FakeBoundary().apply {
+                identity = this@SyncCoordinatorTest.identity
+                ownCollections = listOf(ByteArray(16) { 4 })
+                sourceFailure = status
+            }
+            val engine = okEngine { error("a source session or integrity failure must stop before pull") }
+            val store = FakeStore().apply {
+                saved = SyncState("https://sync.example", vaultId, deviceId, ByteArray(32), listOf(DeviceCursor(deviceId, 0uL)))
+            }
+            val coordinator = coordinator(store, boundary, engine)
+            coordinator.refresh()
+            val failure = assertFailsWith<ChurFailure> { coordinator.syncNow() }
+            assertEquals(status, failure.status)
+            assertEquals(0, boundary.processed)
+            assertEquals(0, engine.requests)
+        }
+    }
 
     @Test
     fun locked_downloads_never_advance_an_accepted_cursor() = runTest {
@@ -914,3 +1041,16 @@ private fun frame2(
 ): ByteArray =
     byteArrayOf(0, 0, 0, 2, 0, 0, 0, first.size.toByte()) + first +
         byteArrayOf(0, 0, 0, second.size.toByte()) + second
+
+private fun frameRecords(records: List<ByteArray>): ByteArray {
+    val result = ByteArray(4 + records.sumOf { 4 + it.size })
+    fun putInt(at: Int, value: Int) { repeat(4) { result[at + it] = (value ushr (24 - it * 8)).toByte() } }
+    putInt(0, records.size)
+    var at = 4
+    for (record in records) {
+        putInt(at, record.size)
+        record.copyInto(result, at + 4)
+        at += 4 + record.size
+    }
+    return result
+}

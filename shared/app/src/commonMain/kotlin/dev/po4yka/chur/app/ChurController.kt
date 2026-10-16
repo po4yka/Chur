@@ -17,6 +17,7 @@ import dev.po4yka.chur.ffi.SharingOverview
 import dev.po4yka.chur.ffi.SharingPermission
 import dev.po4yka.chur.ffi.SharingRecipient
 import dev.po4yka.chur.ffi.fromHex
+import dev.po4yka.chur.ffi.toHex
 import dev.po4yka.chur.ffi.QueryScope
 import dev.po4yka.chur.ffi.QuerySort
 import dev.po4yka.chur.sync.SyncCoordinator
@@ -163,6 +164,8 @@ class ChurController(
     private val _sharingIdentity = MutableStateFlow<SharingIdentity?>(null)
     private val _sharingOverview = MutableStateFlow<SharingOverview?>(null)
     private val _sharingRecipient = MutableStateFlow<SharingRecipient?>(null)
+    private val _devicePairing = MutableStateFlow(dev.po4yka.chur.app.vault.DevicePairingUiState())
+    private val _pairingApproval = MutableStateFlow<ByteArray?>(null)
     private var recipientEnrollment: ByteArray? = null
     private val _notice = MutableStateFlow<Notice?>(null)
     private val _formError = MutableStateFlow<String?>(null)
@@ -281,6 +284,8 @@ class ChurController(
     val sharingIdentity: StateFlow<SharingIdentity?> = _sharingIdentity.asStateFlow()
     val sharingOverview: StateFlow<SharingOverview?> = _sharingOverview.asStateFlow()
     val sharingRecipient: StateFlow<SharingRecipient?> = _sharingRecipient.asStateFlow()
+    val devicePairing: StateFlow<dev.po4yka.chur.app.vault.DevicePairingUiState> = _devicePairing.asStateFlow()
+    val pairingApproval: StateFlow<ByteArray?> = _pairingApproval.asStateFlow()
 
     /**
      * The outcome of the last action on the vault, shown once as the snackbar
@@ -1359,6 +1364,106 @@ class ChurController(
     /** Forgets the server, which the settings entry offers beside the run. */
     fun disconnectSync() = guarded {
         sync?.disconnect()
+    }
+
+    fun prepareDevicePairing() = pairingAction {
+        val engine = sync ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sync is unavailable")
+        val request = engine.prepareDevicePairing()
+        _devicePairing.value = _devicePairing.value.copy(
+            requestCode = request.request.toHex().chunked(32).joinToString("\n"),
+            requestFingerprint = request.fingerprint,
+        )
+    }
+
+    fun inspectDevicePairing(requestHex: String) = pairingAction {
+        val engine = sync ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sync is unavailable")
+        val preview = engine.inspectDevicePairing(pairingRequestBytes(requestHex))
+        _pairingApproval.value?.fill(0)
+        _pairingApproval.value = null
+        _devicePairing.value = _devicePairing.value.copy(
+            inspectedRequestCode = requestHex, inspectedFingerprint = preview.fingerprint, approvalReady = false,
+        )
+    }
+
+    fun approveDevicePairing(requestHex: String, expectedFingerprint: String) = pairingAction {
+        val engine = sync ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sync is unavailable")
+        val preview = _devicePairing.value
+        if (preview.inspectedRequestCode != requestHex || preview.inspectedFingerprint != expectedFingerprint) {
+            throw ChurFailure(ChurStatus.AUTHENTICATION_FAILED, "check the device fingerprint again")
+        }
+        underLocalNetworkAlert(engine.status.value.serverUrl) {
+            if (!engine.syncNow()) throw ChurFailure(ChurStatus.NETWORK_FAILURE, "sync the approving device first")
+            val approval = engine.approveDevicePairing(pairingRequestBytes(requestHex), expectedFingerprint)
+            _pairingApproval.value?.fill(0)
+            _pairingApproval.value = approval
+            _devicePairing.value = _devicePairing.value.copy(approvalReady = true)
+        }
+        say("Device approved. Save the encrypted approval file.")
+    }
+
+    /** The host requests local network permission only after native approval authentication. */
+    fun pairingApprovalServer(approval: ByteArray, onServer: (String) -> Unit) = guarded(context = sessionSync) {
+        val engine = sync ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sync is unavailable")
+        onServer(engine.pairingApprovalServer(approval))
+    }
+
+    fun acceptPairingApproval(approval: ByteArray) {
+        if (_devicePairing.value.busy) return
+        val captured = approval.copyOf()
+        pairingAction {
+            try {
+                val engine = sync ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sync is unavailable")
+                val server = engine.pairingApprovalServer(captured)
+                if (!syncReachable(server)) {
+                    say(LOCAL_NETWORK_REFUSED)
+                    return@pairingAction
+                }
+                underLocalNetworkAlert(server) {
+                    if (engine.acceptPairingApproval(captured)) {
+                        _devicePairing.value = dev.po4yka.chur.app.vault.DevicePairingUiState()
+                        reload()
+                        say("Device connected. Sync now to fetch new media.")
+                    } else {
+                        say("Device setup still needs signed history. Sync your connected device, then open this approval file again.")
+                    }
+                }
+            } finally { captured.fill(0) }
+        }
+    }
+
+    fun loadPairedDevices() = pairingAction {
+        val engine = sync ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sync is unavailable")
+        _devicePairing.value = _devicePairing.value.copy(devices = engine.pairedDevices())
+    }
+
+    fun revokePairedDevice(peer: dev.po4yka.chur.ffi.PairedDevice) = pairingAction {
+        val engine = sync ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sync is unavailable")
+        underLocalNetworkAlert(engine.status.value.serverUrl) {
+            if (peer.active && !engine.syncNow()) throw ChurFailure(ChurStatus.NETWORK_FAILURE, "sync before revoking the device")
+            try { engine.revokePairedDevice(peer.deviceId, peer.fingerprint) } finally {
+                _devicePairing.value = _devicePairing.value.copy(devices = engine.pairedDevices())
+            }
+        }
+        say("Device revoked. Files already exported to it cannot be recalled.")
+    }
+
+    private fun pairingAction(body: suspend () -> Unit) {
+        if (_devicePairing.value.busy) return
+        val epoch = lockEpoch
+        _devicePairing.value = _devicePairing.value.copy(busy = true)
+        guarded(context = sessionSync) {
+            try { body() } finally {
+                if (lockEpoch == epoch) _devicePairing.value = _devicePairing.value.copy(busy = false)
+            }
+        }
+    }
+
+    private fun pairingRequestBytes(requestHex: String): ByteArray {
+        val compact = requestHex.filterNot(Char::isWhitespace)
+        if (compact.length != 420) throw ChurFailure(ChurStatus.INVALID_INPUT, "device request length is invalid")
+        return try { compact.fromHex() } catch (_: IllegalArgumentException) {
+            throw ChurFailure(ChurStatus.INVALID_INPUT, "device request is not hexadecimal")
+        }
     }
 
     /** Records that the user saw the sync stop; the chain stays frozen. */
@@ -2463,6 +2568,9 @@ class ChurController(
         _sharingOverview.value = null
         _sharingRecipient.value = null
         recipientEnrollment = null
+        _devicePairing.value = dev.po4yka.chur.app.vault.DevicePairingUiState()
+        _pairingApproval.value?.fill(0)
+        _pairingApproval.value = null
         // The phrase is one of them, and the most valuable: it opens the vault
         // on its own. Both route tables draw it ahead of the route, so leaving
         // it set kept a full credential on screen after the lock had already
@@ -2796,6 +2904,14 @@ class ChurController(
             val single = outcomes.singleOrNull()
             if (requested == 1 && single != null) return when (single) {
                 is MediaImporter.Outcome.Imported -> when {
+                    single.previewWarning == MediaImporter.PreviewWarning.STORAGE_FAILED && intoAlbum ->
+                        "Imported original into album; some previews could not be saved."
+                    single.previewWarning == MediaImporter.PreviewWarning.STORAGE_FAILED ->
+                        "Imported original; some previews could not be saved."
+                    single.previewWarning == MediaImporter.PreviewWarning.TIMED_OUT && intoAlbum ->
+                        "Imported original into album; preview generation timed out."
+                    single.previewWarning == MediaImporter.PreviewWarning.TIMED_OUT ->
+                        "Imported original; preview generation timed out."
                     single.previewsSkipped && intoAlbum -> "Imported original into album; remaining previews cancelled."
                     single.previewsSkipped -> "Imported original; remaining previews cancelled."
                     intoAlbum -> "Imported into album."
@@ -2823,7 +2939,11 @@ class ChurController(
                 "$cancelled cancelled".takeIf { cancelled > 0 },
                 "$skipped skipped".takeIf { skipped > 0 },
             ).joinToString(", ")
-            val previews = if (imported.any { it.previewsSkipped }) "; remaining previews cancelled" else ""
+            val previews = listOfNotNull(
+                "some previews could not be saved".takeIf { imported.any { it.previewWarning == MediaImporter.PreviewWarning.STORAGE_FAILED } },
+                "preview generation timed out".takeIf { imported.any { it.previewWarning == MediaImporter.PreviewWarning.TIMED_OUT } },
+                "remaining previews cancelled".takeIf { imported.any { it.previewsSkipped } },
+            ).joinToString("; ").let { if (it.isEmpty()) "" else "; $it" }
             val reason = failed.firstOrNull { it.status in SECURITY_STATUSES }
                 ?: if (stopped) failed.last() else failed.firstOrNull()
             return "$counts$previews." + reason?.let { " " + userCopy(it.status) }.orEmpty()

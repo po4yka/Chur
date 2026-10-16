@@ -416,6 +416,7 @@ private fun VaultRoute(controller: ChurController) {
     val sharingIdentity by controller.sharingIdentity.collectAsState()
     val sharingOverview by controller.sharingOverview.collectAsState()
     val sharingRecipient by controller.sharingRecipient.collectAsState()
+    val vaultDevicePairing by controller.devicePairing.collectAsState()
     val deviceSlotStrict by controller.deviceSlotStrict.collectAsState()
     val appLockEnabled by controller.appLockEnabled.collectAsState()
     val autoLock by controller.autoLock.collectAsState()
@@ -523,6 +524,7 @@ private fun VaultRoute(controller: ChurController) {
     var originals by remember { mutableStateOf<List<Uri>>(emptyList()) }
     val deleteOriginals = rememberOriginalDeletion(controller)
     val localNetwork = rememberLocalNetworkAccess(controller)
+    val pairingFiles = rememberPairingApprovalFiles(controller, localNetwork)
     // A local server without the grant only times out, in the worker as in
     // the app, so Settings names the cause, `ANDROID.md` §24. Each new status,
     // and each unlock, checks again.
@@ -556,7 +558,7 @@ private fun VaultRoute(controller: ChurController) {
         if (vaultState is VaultState.Unlocked) controller.loadAlbums()
     }
 
-    val codec = remember { AndroidMediaCodec(context.contentResolver) }
+    val codec = remember { AndroidMediaCodec(context) }
     val importer = remember { MediaImporter(codec) }
     val onPicked: (List<Uri>) -> Unit = { uris ->
         // The picker is an activity of ours, so the vault stayed open while it
@@ -997,6 +999,7 @@ private fun VaultRoute(controller: ChurController) {
                 autoLock = autoLock,
                 deviceControlAvailable = true,
                 sync = if (localNetworkOff) syncStatus?.copy(message = LOCAL_NETWORK_OFF, failure = null) else syncStatus,
+                devicePairing = vaultDevicePairing,
                 sharingIdentity = sharingIdentity,
                 sharingOverview = sharingOverview,
                 sharingRecipient = sharingRecipient,
@@ -1100,6 +1103,21 @@ private fun VaultRoute(controller: ChurController) {
                 onToggleAppLock = controller::toggleAppLock,
                 onSetAutoLock = controller::setAutoLock,
                 onDeviceControl = { deviceControl.start() },
+                onPrepareDevicePairing = { controller.prepareDevicePairing() },
+                onInspectDevicePairing = { controller.inspectDevicePairing(it) },
+                onApproveDevicePairing = { request, fingerprint ->
+                    syncStatus?.serverUrl?.let { server ->
+                        localNetwork(server) { controller.approveDevicePairing(request, fingerprint) }
+                    } ?: controller.approveDevicePairing(request, fingerprint)
+                },
+                onSavePairingApproval = pairingFiles.save,
+                onOpenPairingApproval = pairingFiles.open,
+                onLoadPairedDevices = { controller.loadPairedDevices() },
+                onRevokePairedDevice = { peer ->
+                    syncStatus?.serverUrl?.let { server ->
+                        localNetwork(server) { controller.revokePairedDevice(peer) }
+                    } ?: controller.revokePairedDevice(peer)
+                },
                 onCreateBackup = controller::createBackup,
                 onImportArchive = { choosingArchiveImport = true },
                 onRestoreArchive = controller::restoreArchiveAsSeparateVault,

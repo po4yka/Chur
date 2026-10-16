@@ -263,6 +263,8 @@ struct RestoredGeneration {
 /// Deterministic visibility, generation, restore, and tombstone retention state.
 #[derive(Clone)]
 pub struct ObjectLifecycle {
+    created: CausalStamp,
+    purged: bool,
     generation: u64,
     activations: Vec<CausalStamp>,
     tombstones: ScalarRegister<Tombstone>,
@@ -280,6 +282,8 @@ impl ObjectLifecycle {
         }
         Ok(Self {
             generation,
+            created: created.clone(),
+            purged: false,
             activations: vec![created],
             tombstones: ScalarRegister::new(),
             last_restore: None,
@@ -293,6 +297,9 @@ impl ObjectLifecycle {
         authored_at_ms: u64,
         stamp: CausalStamp,
     ) -> Result<MergeOutcome> {
+        if self.purged {
+            return Ok(MergeOutcome::Obsolete);
+        }
         if generation < self.generation {
             return Ok(MergeOutcome::Obsolete);
         }
@@ -338,6 +345,9 @@ impl ObjectLifecycle {
         new_generation: u64,
         stamp: CausalStamp,
     ) -> Result<MergeOutcome> {
+        if self.purged {
+            return Ok(MergeOutcome::Obsolete);
+        }
         if new_generation < self.generation {
             return Ok(MergeOutcome::Obsolete);
         }
@@ -394,7 +404,29 @@ impl ObjectLifecycle {
     /// Visibility after delete dominance and explicit restores.
     #[must_use]
     pub fn is_visible(&self) -> bool {
-        self.tombstones.versions.is_empty()
+        !self.purged && self.tombstones.versions.is_empty()
+    }
+
+    /// Whether permanent erasure dominates this object's recoverable lifecycle.
+    #[must_use]
+    pub const fn is_purged(&self) -> bool {
+        self.purged
+    }
+
+    /// Applies a permanent deletion after its creation cause has been observed.
+    /// A concurrent or later restore cannot undo this terminal event.
+    pub fn purge(&mut self, generation: u64, stamp: CausalStamp) -> Result<MergeOutcome> {
+        if generation > self.generation {
+            return Ok(MergeOutcome::PendingCause);
+        }
+        if causal_relation(&self.created, &stamp)? != CausalRelation::Before {
+            return Err(Error::new(
+                ChurStatus::AuthenticationFailed,
+                "permanent deletion does not observe object creation",
+            ));
+        }
+        self.purged = true;
+        Ok(MergeOutcome::Applied)
     }
 
     /// Deterministically displayed tombstone identifier.

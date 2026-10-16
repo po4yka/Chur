@@ -49,6 +49,12 @@ impl KeyDirectory {
         Ok(())
     }
 
+    /// Whether a selector already has authenticated local key material.
+    #[must_use]
+    pub fn contains_selector(&self, selector: &Id) -> bool {
+        self.0.contains_key(selector)
+    }
+
     /// Resolves an operation key without revealing the selector's domain.
     pub fn operation_key(&self, selector: &Id) -> Result<&Key> {
         Ok(self.domain(selector)?.operation_key())

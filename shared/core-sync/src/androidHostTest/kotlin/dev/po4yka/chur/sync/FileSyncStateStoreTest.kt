@@ -72,6 +72,21 @@ class FileSyncStateStoreTest {
     }
 
     @Test
+    fun signed_device_revocations_and_own_push_cursor_survive_restart() = runTest {
+        val prepared = dev.po4yka.chur.ffi.PreparedDeviceRevocation(byteArrayOf(1), byteArrayOf(2), byteArrayOf(3))
+        FileSyncStateStore(path).save(SyncState(
+            "https://sync.example", ByteArray(16), ByteArray(16), ByteArray(32), emptyList(),
+            ownPushCursor = 42uL, collectionPushCursor = 73uL, pendingDeviceRevocations = listOf(prepared),
+        ))
+        val restored = FileSyncStateStore(path).load()!!
+        assertEquals(42uL, restored.ownPushCursor)
+        assertEquals(73uL, restored.collectionPushCursor)
+        assertContentEquals(prepared.checkpoint, restored.pendingDeviceRevocations.single().checkpoint)
+        assertContentEquals(prepared.revocation, restored.pendingDeviceRevocations.single().revocation)
+        assertContentEquals(prepared.operation, restored.pendingDeviceRevocations.single().operation)
+    }
+
+    @Test
     fun an_absent_file_is_no_state() =
         runTest {
             assertNull(FileSyncStateStore(path).load())

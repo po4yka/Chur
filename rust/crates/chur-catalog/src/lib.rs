@@ -19,10 +19,12 @@
 
 pub mod db;
 pub mod deletion;
+pub mod device_pairing;
 pub mod journal;
 pub mod model;
 pub mod notes;
 pub mod object_grants;
+pub mod own_sync;
 pub mod paths;
 pub mod query;
 mod receive_queue;

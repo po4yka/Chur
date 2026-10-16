@@ -5,8 +5,29 @@ use crate::{
 };
 use chur_core::{Id, Result, ensure};
 use rusqlite::params;
+use std::collections::BTreeMap;
 /// The ABI download plan limit, distinct from transport page sizes.
 pub(crate) const PAGE_MAX: usize = 256;
+pub(crate) fn tickets(db: &CatalogDb, collection: &Id) -> Result<BTreeMap<Id, u64>> {
+    let mut statement = db
+        .connection()
+        .prepare("SELECT object_id, ticket FROM object_receive_dispatch WHERE collection_id = ?1")
+        .map_err(|error| map_sqlite(error, "receive dispatch could not be prepared"))?;
+    statement
+        .query_map([collection.as_bytes().as_slice()], |row| {
+            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(|error| map_sqlite(error, "receive dispatch could not be read"))?
+        .map(|row| {
+            let (object, ticket) =
+                row.map_err(|error| map_sqlite(error, "receive dispatch row could not be read"))?;
+            Ok((
+                crate::row::id(&object, "receive dispatch object is malformed")?,
+                from_sqlite_integer(ticket, "receive dispatch ticket is negative")?,
+            ))
+        })
+        .collect()
+}
 pub(crate) fn dispatched(db: &mut CatalogDb, collection: &Id, objects: &[Id]) -> Result<()> {
     ensure!(
         objects.len() <= PAGE_MAX,

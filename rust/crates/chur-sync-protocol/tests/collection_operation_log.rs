@@ -252,3 +252,57 @@ fn read_only_and_conflicting_participant_streams_fail_closed() {
     );
     assert!(log.fork(&id(3), &id(4)).is_some());
 }
+
+#[test]
+fn contributor_cannot_purge_source_media_even_with_a_valid_signed_chain() {
+    let fixture = fixture(PermissionProfile::Contribute);
+    let payload = OperationPayload::new(
+        id(5),
+        1,
+        PayloadBody::PurgeObject {
+            object_id: id(6),
+            object_generation: 1,
+            authored_at_ms: 1,
+        },
+    )
+    .expect("purge payload");
+    let operation = CollectionOperation::seal(
+        id(41),
+        id(3),
+        id(4),
+        1,
+        [0; 32],
+        vec![],
+        fixture.selector,
+        &fixture.operation_key,
+        Nonce::new([42; 24]),
+        &payload.encode(),
+    )
+    .expect("record")
+    .sign(&fixture.recipient_key);
+    let mut log = CollectionOperationLog::new(id(5), 1, fixture.selector);
+    assert_eq!(
+        log.accept(
+            &operation,
+            &payload,
+            &fixture.recipient_membership,
+            &fixture.source_membership,
+            &fixture.collection_membership
+        )
+        .expect_err("recipient cannot purge")
+        .status(),
+        ChurStatus::AuthenticationFailed
+    );
+    assert_eq!(
+        log.restore_accepted(
+            &operation,
+            &payload,
+            &fixture.recipient_membership,
+            &fixture.source_membership,
+            &fixture.collection_membership
+        )
+        .expect_err("replay cannot elevate permissions")
+        .status(),
+        ChurStatus::CatalogCorrupt
+    );
+}

@@ -4,7 +4,7 @@
 
 This document defines the plaintext authenticated and encrypted by `OperationV1`. The server never receives these fields in plaintext. Encoding follows [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md), with fields in the listed order and no padding, compression, or trailing bytes.
 
-[`COLLECTION_OPERATION_LOG.md`](COLLECTION_OPERATION_LOG.md) reuses the same payload encoding for shared content kinds `0x01` through `0x0C` and `0x10`. It uses its own outer AAD and signature contract.
+[`COLLECTION_OPERATION_LOG.md`](COLLECTION_OPERATION_LOG.md) reuses the same payload encoding for shared content kinds `0x01` through `0x0C`, `0x10`, and `0x14`. It uses its own outer AAD and signature contract.
 
 ## 1. Common header
 
@@ -16,7 +16,7 @@ collection_epoch:u64
 kind_body:bytes[remaining]
 ```
 
-`collection_id` and `collection_epoch` must resolve to the opaque outer `key_selector`. Kinds `0x0D` and `0x0E` are root-domain operations: `collection_id` equals the outer `vault_id` and `collection_epoch` is zero. Every other kind requires a non-zero collection epoch. Unknown versions, kinds, selectors, or cross-field mismatches fail closed.
+`collection_id` and `collection_epoch` must resolve to the opaque outer `key_selector`. Kinds `0x0D`, `0x0E`, `0x13`, and `0x15` are root-domain operations: `collection_id` equals the outer `vault_id` and `collection_epoch` is zero. Every other kind requires a non-zero collection epoch. Unknown versions, kinds, selectors, or cross-field mismatches fail closed.
 
 ## 2. Kind registry and bodies
 
@@ -40,10 +40,19 @@ kind_body:bytes[remaining]
 | `0x10` | `RewrapObjectKey` | `object_id:bytes[16]`, `object_key_commitment:bytes[32]` |
 | `0x11` | `ChangeCollectionMembership` | `membership_record:bytes[292]` |
 | `0x12` | `IssueCollectionGrant` | `collection_grant:bytes[309]` |
+| `0x13` | `DeviceReady` | empty; root domain, device sequence one |
+| `0x14` | `PurgeObject` | `object_id:bytes[16]`, `object_generation:u64`, `authored_at_ms:u64` |
+| `0x15` | `DeclareCollection` | `collection_key_envelope:bytes[126]`; root domain |
 
 All identifiers are non-zero random identifiers. `stream_id` names the primary original stream and is required to derive the manifest key and AAD before its sealed manifest can be opened. Every generation and every non-root epoch is non-zero and must have a successor, so `u64::MAX` is invalid. `container_length` is non-zero; the transfer service applies its configured object-size quota before reserving storage.
 
 `CommitObject` contains only a key commitment. A disposable [object-key grant](OBJECT_KEY_GRANTS.md) supplies the content key. Activation requires the signed key commitment and complete downloaded container to verify. `CreateObject` alone never makes media presentable.
+
+`DeclareCollection` carries only a vault-root-wrapped collection metadata key. Its envelope vault equals the signed operation vault. A current enrolled device publishes this root-domain record before the first operation that uses the new collection selector. Receivers verify the signer and root binding, preserve existing collection policy and newer epochs, and reject replacement of an existing epoch key. They retain a signed operation with an unknown selector until its declaration arrives; it cannot advance a head before decryption and causal validation.
+
+`PurgeObject` is terminal. It must causally observe object creation. It dominates recoverable deletion and every concurrent or later restore, including a restore of an earlier generation. A shared collection accepts it only from an active source-vault device. Contribute and ManageMembers recipients cannot purge the source. Ordinary own-vault operations require an enrolled device. Native acceptance deletes local envelopes, pending envelopes and disposable private prekeys, writes a permanent local tombstone, and hides an existing row in the same transaction as the accepted log record. A verified WAL truncation must complete before the host reports success. Physical garbage collection then rolls forward. A recipient's local permanent deletion does not publish this global source event.
+
+`DeviceReady` establishes a fresh paired device chain and changes no content projection; see [DEVICE_PAIRING.md](DEVICE_PAIRING.md).
 
 `AddDevice` and `RevokeDevice` carry the complete signed membership records of [`DEVICE_IDENTITY.md`](DEVICE_IDENTITY.md) §4 and §9. Their `created_sequence` or issuer, membership generation, and vault binding must agree with the containing operation. `CreateCollectionEpoch` carries the complete canonical collection-key envelope; its repeated collection, epoch and vault values must agree. `RewrapObjectKey` carries only the object-key commitment. Each device rewraps its own local envelope with a fresh nonce and checks the signed commitment. No object-key envelope enters a replayable log.
 

@@ -1,5 +1,6 @@
 package dev.po4yka.chur.sync
 
+import dev.po4yka.chur.ffi.PreparedDeviceRevocation
 import dev.po4yka.chur.ffi.PreparedGrant
 import dev.po4yka.chur.ffi.PreparedShare
 import dev.po4yka.chur.ffi.PreparedShareRevocation
@@ -49,6 +50,11 @@ public class FileSyncStateStore(
                 deviceId = fromHex(file.deviceId),
                 transportToken = fromHex(file.transportToken),
                 cursors = file.cursors.map { DeviceCursor(fromHex(it.deviceId), it.after.toULong()) },
+                collectionPushCursor = file.collectionPushCursor.toULong(),
+                ownPushCursor = file.ownPushCursor.toULong(),
+                pendingDeviceRevocations = file.pendingDeviceRevocations.map {
+                    PreparedDeviceRevocation(fromHex(it.checkpoint), fromHex(it.revocation), fromHex(it.operation))
+                },
                 pendingSharing = file.pendingSharing.map { pending ->
                     val membership = fromHex(pending.membership)
                     val operation = fromHex(pending.membershipOperation)
@@ -87,6 +93,11 @@ public class FileSyncStateStore(
                         deviceId = state.deviceId.toHex(),
                         transportToken = state.transportToken.toHex(),
                         cursors = state.cursors.map { CursorV1(it.deviceId.toHex(), it.after.toString()) },
+                        collectionPushCursor = state.collectionPushCursor.toString(),
+                        ownPushCursor = state.ownPushCursor.toString(),
+                        pendingDeviceRevocations = state.pendingDeviceRevocations.map {
+                            DeviceRevocationFileV1(it.checkpoint.toHex(), it.revocation.toHex(), it.operation.toHex())
+                        },
                         pendingSharing = state.pendingSharing.map { pending ->
                             val share = pending.share
                             val revocation = pending.revocation
@@ -144,6 +155,12 @@ public data class SyncState(
     public val cursors: List<DeviceCursor>,
     /** Signed sharing batches waiting for idempotent server publication. */
     public val pendingSharing: List<PendingSharingPublication> = emptyList(),
+    /** Last locally authored collection record accepted by the relay. */
+    public val collectionPushCursor: ULong = 0uL,
+    /** Latest local ordinary operation that the server durably accepted. */
+    public val ownPushCursor: ULong = 0uL,
+    /** Device revocations remain queued until the relay accepts them. */
+    public val pendingDeviceRevocations: List<PreparedDeviceRevocation> = emptyList(),
 )
 
 /** One already prepared batch retained until its server upload succeeds. */
@@ -163,6 +180,9 @@ private data class SyncStateFileV1(
     val transportToken: String,
     val cursors: List<CursorV1> = emptyList(),
     val pendingSharing: List<PendingSharingFileV1> = emptyList(),
+    val collectionPushCursor: String = "0",
+    val ownPushCursor: String = "0",
+    val pendingDeviceRevocations: List<DeviceRevocationFileV1> = emptyList(),
 )
 
 @Serializable
@@ -208,3 +228,6 @@ internal expect fun writeSyncStateFile(
  * answers to, so a predictable source would be the whole sync identity.
  */
 internal expect fun randomToken(): ByteArray
+
+@Serializable
+private data class DeviceRevocationFileV1(val checkpoint: String, val revocation: String, val operation: String)

@@ -182,6 +182,9 @@ pub fn pending_for_collection(
     local_vault_id: Id,
     collection_id: Id,
 ) -> Result<ReceivePlan> {
+    if crate::own_sync::is_local_collection(db, &collection_id)? {
+        return crate::own_sync::pending_for_collection(db, root, local_vault_id, collection_id);
+    }
     let (state, keys, selector) = recipient_context(db, root, local_vault_id, collection_id)?;
     let objects = pending_objects(db, &keys, &state, &selector)?;
     Ok(ReceivePlan {
@@ -237,6 +240,15 @@ pub fn pending_object_for_collection(
     collection_id: Id,
     object_id: Id,
 ) -> Result<SharedObject> {
+    if crate::own_sync::is_local_collection(db, &collection_id)? {
+        return crate::own_sync::pending_object_for_collection(
+            db,
+            root,
+            local_vault_id,
+            collection_id,
+            object_id,
+        );
+    }
     crate::object_grants::ensure_not_deleted(db, &object_id)?;
     let (state, keys, selector) = recipient_context(db, root, local_vault_id, collection_id)?;
     sharing_log::ensure_object_index(db, &selector, &keys)?;
@@ -396,6 +408,7 @@ pub(crate) fn validate_lifecycle_candidate(
 ) -> Result<ApplyOutcome> {
     let object_id = match payload.body() {
         PayloadBody::DeleteObject { object_id, .. }
+        | PayloadBody::PurgeObject { object_id, .. }
         | PayloadBody::RestoreObject { object_id, .. } => *object_id,
         _ => return Ok(ApplyOutcome::Applied),
     };
@@ -435,6 +448,7 @@ pub(crate) fn validate_backfill_lifecycle(
                 payload.body(),
                 PayloadBody::CreateObject { .. }
                     | PayloadBody::DeleteObject { .. }
+                    | PayloadBody::PurgeObject { .. }
                     | PayloadBody::RestoreObject { .. }
             )
         })
@@ -672,6 +686,24 @@ fn project_drafts(
         };
         if outcome == MergeOutcome::PendingCause {
             missing_creations += 1;
+        }
+    }
+    for (stamp, payload) in payloads {
+        if let PayloadBody::PurgeObject {
+            object_id,
+            object_generation,
+            ..
+        } = payload.body()
+        {
+            let Some(draft) = drafts.get_mut(object_id) else {
+                missing_creations += 1;
+                continue;
+            };
+            if draft.lifecycle.purge(*object_generation, stamp.clone())?
+                == MergeOutcome::PendingCause
+            {
+                missing_creations += 1;
+            }
         }
     }
     Ok((drafts, missing_creations))

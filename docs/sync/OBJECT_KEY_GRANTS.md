@@ -64,9 +64,13 @@ Container activation verifies the complete container with the pending key. In on
 
 Deletion destroys all active and superseded local object envelopes, the object's pending envelope and its disposable private request key. `secure_delete=ON` overwrites deleted cells. The object remains `DELETING` until a verified WAL truncation removes the old frames. Only then can it become `TOMBSTONED` and enter physical garbage collection.
 
-A shared object's local tombstone survives physical garbage collection. It prevents a replayed commit from creating another key request, including after restart or a backup made after deletion. A source must not send unsolicited keys to unbound prekeys: that would make a deleted key reachable again through a later request. Requests bind the exact object instead.
+A local tombstone referenced by an own-vault or shared signed log survives physical garbage collection. It prevents a replayed commit from creating another key request, including after restart or a backup made after deletion. A source must not send unsolicited keys to unbound prekeys: that would make a deleted key reachable again through a later request. Requests bind the exact object instead.
 
 Retained signed operation chains, collection keys, stable device identities, public requests and grants contain no reachable content key after this sequence. The server can retain old ciphertext and old public grant records without changing that result. A recipient that still holds its own live object key, and a backup made before deletion, are independent copies. Deletion in one vault does not erase those copies.
+
+A source's permanent deletion publishes `PurgeObject` before local key erasure. Receipt removes keys and pending private prekeys in the accepted-log transaction, even if no local media row exists yet. The receive/process completion path always verifies WAL truncation. A blocked checkpoint returns failure and the next unlocked process rolls the deletion forward before reporting success. A recipient's local deletion creates no global purge operation.
+
+Collection metadata keys remain available through root-domain `DeclareCollection` and normal rotation records. These records contain no content key. A recipient can accept a key-free rewrap record for an object it has not downloaded; the accepted immutable key commitment must match. It rewraps an existing pending local envelope when present. It can then request the content key under the current metadata epoch without blocking another device's chain.
 
 ## 5. Transport
 

@@ -1,11 +1,11 @@
 {
   "manifest_version": 1,
-  "spec_commit": "956dcab60ba535c66ca39d0ed3d34979ae353475",
+  "spec_commit": "59551d548768d4cb53efdd4143642ff97ea3d8f8",
   "generator": {
     "name": "chur-cli",
     "version": "0.1.0",
-    "commit": "956dcab60ba535c66ca39d0ed3d34979ae353475",
-    "toolchain": "1.97.0-aarch64-apple-darwin"
+    "commit": "59551d548768d4cb53efdd4143642ff97ea3d8f8",
+    "toolchain": "1.99.1-aarch64-apple-darwin"
   },
   "vectors": [
     {
@@ -1320,6 +1320,34 @@
       "error_code": "UNSUPPORTED_VERSION"
     },
     {
+      "vector_id": "operation-v1-declare-collection",
+      "spec": "docs/sync/OPERATION_PAYLOAD_V1.md",
+      "spec_section": "2",
+      "purpose": "An own-vault declaration carries a root-wrapped metadata key and no content key.",
+      "outcome": "accept",
+      "inputs": {
+        "collection_metadata_key": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+        "root_key": "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0"
+      },
+      "expected": {
+        "record": "000115acacacacacacacacacacacacacacacac0000000000000000000100010001acacacacacacacacacacacacacacacaca3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a300000000000000010000000000000001b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1c8fccd2c484d59d1dbb6c18e5395d266cbdc271abbb7b4834e544a015199e850bbbc09d13eefb4f2234cd68adad30529",
+        "record_length": 153
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "operation-v1-device-ready",
+      "spec": "docs/sync/OPERATION_PAYLOAD_V1.md",
+      "spec_section": "2",
+      "purpose": "An enrolled new device starts its ordinary chain without a content mutation.",
+      "outcome": "accept",
+      "inputs": {},
+      "expected": {
+        "record": "000113acacacacacacacacacacacacacacacac0000000000000000",
+        "record_length": 27
+      }
+    },
+    {
       "vector_id": "operation-v1-hpke-suite-two",
       "spec": "docs/sync/DEVICE_IDENTITY.md",
       "spec_section": "4",
@@ -1426,6 +1454,18 @@
         "record_length": 226
       },
       "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "operation-v1-permanent-object-purge",
+      "spec": "docs/sync/OPERATION_PAYLOAD_V1.md",
+      "spec_section": "2",
+      "purpose": "A terminal purge names the committed object and contains no key.",
+      "outcome": "accept",
+      "inputs": {},
+      "expected": {
+        "record": "000114a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a30000000000000001a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a40000000000000001000001a04c885c00",
+        "record_length": 59
+      }
     },
     {
       "vector_id": "operation-v1-revocation",

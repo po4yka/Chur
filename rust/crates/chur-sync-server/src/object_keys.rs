@@ -730,8 +730,14 @@ fn request_source(server: &ReferenceServer, prekey: &ObjectPrekey) -> Result<Id>
         prekey.recipient_device_id(),
     )?;
     prekey.verify(&key)?;
-    let state =
-        sharing::collection_state(server, prekey.collection_id())?.ok_or_else(unauthorized)?;
+    let Some(state) = sharing::collection_state(server, prekey.collection_id())? else {
+        // Private collection declarations are encrypted in the ordinary vault log.
+        // Without sharing evidence, a request can name only its own vault.
+        return Ok(*prekey.recipient_vault_id());
+    };
+    if state.source_vault_id() == prekey.recipient_vault_id() {
+        return Ok(*prekey.recipient_vault_id());
+    }
     ensure!(
         state.is_authorized(
             prekey.recipient_vault_id(),
@@ -759,8 +765,18 @@ fn authorize_grant(server: &ReferenceServer, grant: &ObjectKeyGrant) -> Result<(
         grant.recipient_vault_id(),
         grant.recipient_device_id(),
     )?;
-    let state =
-        sharing::collection_state(server, grant.collection_id())?.ok_or_else(unauthorized)?;
+    let state = sharing::collection_state(server, grant.collection_id())?;
+    if grant.source_vault_id() == grant.recipient_vault_id() {
+        ensure!(
+            state
+                .as_ref()
+                .is_none_or(|state| state.source_vault_id() == grant.source_vault_id()),
+            AuthenticationFailed,
+            "own object grant cannot replace another vault's source"
+        );
+        return Ok(());
+    }
+    let state = state.ok_or_else(unauthorized)?;
     ensure!(
         state.source_vault_id() == grant.source_vault_id()
             && state.is_authorized(

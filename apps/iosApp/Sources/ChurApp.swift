@@ -56,6 +56,15 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             guard mediaScratchReady, let scene = self?.scene else { MediaPickerDelegate.answerNothing(answer); return }
             scene.presentMediaPicker(answer)
         }
+        let pairingScratchReady = ApprovalPickerDelegate.prepareScratch()
+        IosPairingFiles.shared.presentOpen = { [weak self] answer in
+            guard pairingScratchReady, let scene = self?.scene else { _ = answer(nil); return }
+            scene.presentApprovalPicker(answer)
+        }
+        IosPairingFiles.shared.presentSave = { [weak self] path, answer in
+            guard pairingScratchReady, let scene = self?.scene else { _ = answer(nil); return }
+            scene.presentApprovalExport(path, answer: answer)
+        }
         IosBackupPicker.shared.present = { [weak self] answer in
             guard let scene = self?.scene else { _ = answer(nil); return }
             scene.presentBackupPicker(answer)
@@ -89,6 +98,8 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
     private var mediaPicker: MediaPickerDelegate?
     private var backupPicker: BackupPickerDelegate?
+    private var approvalPicker: ApprovalPickerDelegate?
+    private var approvalExporter: ExportPickerDelegate?
     private var exportPicker: ExportPickerDelegate?
     private var albumExportPicker: AlbumExportPickerDelegate?
     private var documentPicker: DocumentPickerDelegate?
@@ -179,6 +190,28 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         mediaPicker = delegate
         picker.delegate = delegate
         presenter.present(picker, animated: true)
+    }
+
+    func presentApprovalPicker(_ answer: @escaping (String?) -> KotlinUnit) {
+        guard let root = window?.rootViewController, root.presentedViewController == nil else { _ = answer(nil); return }
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.data], asCopy: false)
+        let delegate = ApprovalPickerDelegate(answer: answer) { [weak self] in self?.approvalPicker = nil }
+        approvalPicker = delegate
+        picker.delegate = delegate
+        picker.allowsMultipleSelection = false
+        root.present(picker, animated: true)
+    }
+
+    func presentApprovalExport(_ path: String, answer: @escaping (String?) -> KotlinUnit) {
+        guard let root = window?.rootViewController, root.presentedViewController == nil else { _ = answer(nil); return }
+        let picker = UIDocumentPickerViewController(forExporting: [URL(fileURLWithPath: path)], asCopy: true)
+        let delegate = ExportPickerDelegate { [weak self] saved in
+            self?.approvalExporter = nil
+            _ = answer(saved ? path : nil)
+        }
+        approvalExporter = delegate
+        picker.delegate = delegate
+        root.present(picker, animated: true)
     }
 
     func presentBackupPicker(_ answer: @escaping (String?) -> KotlinUnit) {
@@ -628,6 +661,58 @@ private final class MediaPickerDelegate: NSObject, PHPickerViewControllerDelegat
             try? FileManager.default.removeItem(at: target)
             return nil
         }
+    }
+}
+
+private final class ApprovalPickerDelegate: NSObject, UIDocumentPickerDelegate {
+    private static let directory = FileManager.default.temporaryDirectory.appendingPathComponent("chur-pairing", isDirectory: true)
+    private var answer: ((String?) -> KotlinUnit)?
+    private let done: () -> Void
+
+    static func prepareScratch() -> Bool {
+        do {
+            if FileManager.default.fileExists(atPath: directory.path) { try FileManager.default.removeItem(at: directory) }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                attributes: [.protectionKey: FileProtectionType.complete])
+            try (directory as NSURL).setResourceValue(true, forKey: .isExcludedFromBackupKey)
+            return true
+        } catch { return false }
+    }
+
+    init(answer: @escaping (String?) -> KotlinUnit, done: @escaping () -> Void) {
+        self.answer = answer
+        self.done = done
+    }
+
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        guard let source = urls.first else { finish(nil); return }
+        controller.dismiss(animated: true)
+        let scoped = source.startAccessingSecurityScopedResource()
+        DispatchQueue.global(qos: .userInitiated).async {
+            defer { if scoped { source.stopAccessingSecurityScopedResource() } }
+            let target = Self.directory.appendingPathComponent(UUID().uuidString).appendingPathExtension("churpair")
+            let copied: String?
+            do {
+                let limit = try ScratchCopy.remainingBudget(in: [Self.directory], maxEntries: 4,
+                    maxTotal: 64 * 1024 * 1024, maxEntry: 16 * 1024 * 1024)
+                try ScratchCopy.copy(from: source, to: target, limit: limit, timeout: 60,
+                    attributes: [.protectionKey: FileProtectionType.complete], shouldContinue: { true })
+                copied = target.path
+            } catch { copied = nil }
+            DispatchQueue.main.async { self.finish(copied) }
+        }
+    }
+
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { finish(nil) }
+
+    private func finish(_ path: String?) {
+        guard let answer else {
+            if let path { try? FileManager.default.removeItem(atPath: path) }
+            return
+        }
+        self.answer = nil
+        _ = answer(path)
+        done()
     }
 }
 

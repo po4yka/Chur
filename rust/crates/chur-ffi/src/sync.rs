@@ -181,6 +181,7 @@ pub unsafe extern "C" fn chur_sync_process(
         let mut staging = LockedStaging::open(root_dir.sync_inbox(&vault_id))?;
         let report =
             sync_engine::process_staged(session.catalog()?, &root, vault_id, &mut staging, now_ms)?;
+        crate::product::finish_pending_deletions(&mut session, now_ms)?;
         // SAFETY: the caller guarantees the writable out-parameter above.
         unsafe { write_out(out_report, ffi_report(&report)) }
     })

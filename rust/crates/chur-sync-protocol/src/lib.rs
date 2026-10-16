@@ -21,6 +21,7 @@ pub mod collection_operation;
 pub mod collection_operation_log;
 pub mod convergence;
 pub mod deletion;
+pub mod device_pairing;
 pub mod grant;
 pub mod identity;
 mod key_domain;

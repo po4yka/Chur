@@ -31,6 +31,76 @@ thread_local! {
     static LOG_LOADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// One durable locally authored record that the transport must publish.
+pub struct OutboundRecord {
+    /// Monotonic catalog row cursor. Collection logs are append-only and are not vacuumed.
+    pub cursor: u64,
+    /// Collection route authenticated when the operation was accepted.
+    pub collection_id: Id,
+    /// Complete signed operation bytes.
+    pub record: Vec<u8>,
+}
+
+/// Returns at most 64 locally authored records, including tombstones whose
+/// objects no longer exist. The host advances the cursor only after relay ACK.
+pub fn outbound_after(
+    db: &CatalogDb,
+    local_vault_id: &Id,
+    local_device_id: &Id,
+    after_cursor: u64,
+) -> Result<Vec<OutboundRecord>> {
+    let mut statement = db.connection().prepare(
+        "SELECT s.rowid, t.collection_id, s.key_selector, s.digest, s.record
+           FROM sharing_operations s JOIN sharing_operation_streams t ON t.key_selector = s.key_selector
+          WHERE s.issuer_identity_vault_id = ?1 AND s.issuer_device_id = ?2 AND s.rowid > ?3
+          ORDER BY s.rowid LIMIT 64",
+    ).map_err(|error| map_sqlite(error, "outbound collection operations could not be prepared"))?;
+    let rows = statement
+        .query_map(
+            params![
+                local_vault_id.as_bytes().as_slice(),
+                local_device_id.as_bytes().as_slice(),
+                as_sqlite_integer(after_cursor, "outbound collection cursor is too large")?
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                ))
+            },
+        )
+        .map_err(|error| map_sqlite(error, "outbound collection operations could not be read"))?;
+    let mut result = Vec::new();
+    let mut bytes = 0usize;
+    for row in rows {
+        let (cursor, collection, selector, digest, record) = row.map_err(|error| {
+            map_sqlite(error, "outbound collection operation could not be read")
+        })?;
+        let operation = CollectionOperation::decode(&record)?;
+        ensure!(
+            operation.issuer_identity_vault_id() == local_vault_id
+                && operation.issuer_device_id() == local_device_id
+                && operation.key_selector().as_bytes().as_slice() == selector
+                && operation.digest().as_slice() == digest,
+            CatalogCorrupt,
+            "outbound collection operation differs from its projection"
+        );
+        if bytes.saturating_add(record.len()) > 16_777_216 {
+            break;
+        }
+        bytes += record.len();
+        result.push(OutboundRecord {
+            cursor: from_sqlite_integer(cursor, "outbound cursor is negative")?,
+            collection_id: crate::row::id(&collection, "outbound collection ID is malformed")?,
+            record,
+        });
+    }
+    Ok(result)
+}
+
 /// One collection operation log rebuilt from authenticated durable rows.
 pub struct DurableCollectionOperationLog {
     log: CollectionOperationLog,
@@ -108,6 +178,54 @@ impl DurableCollectionOperationLog {
         Ok(operation)
     }
 
+    /// Authors a lifecycle operation after its accepted content cause verifies.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the signed lifecycle operation binds its keys and both memberships"
+    )]
+    pub fn author_with_keys(
+        &mut self,
+        db: &mut CatalogDb,
+        keys: &KeyDirectory,
+        operation_id: Id,
+        issuer_vault_id: Id,
+        device_id: Id,
+        key: &Key,
+        nonce: Nonce,
+        payload: &OperationPayload,
+        signing_key: &DeviceSigningKey,
+        issuer_membership: &MembershipState,
+        source_membership: &MembershipState,
+        collection_membership: &CollectionMembershipState,
+    ) -> Result<CollectionOperation> {
+        let operation = self.log.author(
+            operation_id,
+            issuer_vault_id,
+            device_id,
+            key,
+            nonce,
+            payload,
+            signing_key,
+            issuer_membership,
+            source_membership,
+            collection_membership,
+        )?;
+        ensure!(
+            self.accept_with_keys(
+                db,
+                keys,
+                &operation,
+                payload,
+                issuer_membership,
+                source_membership,
+                collection_membership
+            )? == ApplyOutcome::Applied,
+            InternalFailure,
+            "fresh lifecycle operation was not accepted"
+        );
+        Ok(operation)
+    }
+
     /// Validates and stores one operation without advancing memory before SQL commits.
     pub fn accept(
         &mut self,
@@ -171,7 +289,9 @@ impl DurableCollectionOperationLog {
     ) -> Result<ApplyOutcome> {
         if matches!(
             payload.body(),
-            PayloadBody::DeleteObject { .. } | PayloadBody::RestoreObject { .. }
+            PayloadBody::DeleteObject { .. }
+                | PayloadBody::RestoreObject { .. }
+                | PayloadBody::PurgeObject { .. }
         ) {
             ensure!(
                 keys.is_some(),
@@ -223,6 +343,7 @@ impl DurableCollectionOperationLog {
                     insert_operation(transaction, operation)?;
                     insert_object_event(transaction, operation, payload)?;
                     hide_accepted_shared_delete(transaction, payload)?;
+                    crate::deletion::project_purge(transaction, payload)?;
                     bump_log_revision(transaction, self.log.key_selector())?;
                     bump_generation(transaction)
                 })?;
@@ -944,6 +1065,7 @@ fn object_event(payload: &OperationPayload) -> Option<(Id, i64)> {
         PayloadBody::DeleteObject { object_id, .. } => Some((*object_id, 3)),
         PayloadBody::RestoreObject { object_id, .. } => Some((*object_id, 4)),
         PayloadBody::RewrapObjectKey { object_id, .. } => Some((*object_id, 5)),
+        PayloadBody::PurgeObject { object_id, .. } => Some((*object_id, 6)),
         _ => None,
     }
 }

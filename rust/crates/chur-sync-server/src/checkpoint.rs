@@ -65,25 +65,63 @@ impl ReferenceServer {
                     "checkpoint lacks its issuer head",
                 )
             })?;
-        let same_sequence: Option<Vec<u8>> = self
+        // Each new issuer frontier must cover its last accepted frontier. The
+        // issuer's own sequence can stay fixed while another device advances.
+        // Exact older commitments remain stored and take the replay path above.
+        let previous: Option<Vec<u8>> = self
             .db
             .query_row(
                 "SELECT record FROM checkpoints
-                 WHERE vault_id = ?1 AND issuer_device_id = ?2 AND issuer_sequence = ?3",
+                 WHERE vault_id = ?1 AND issuer_device_id = ?2
+                 ORDER BY rowid DESC LIMIT 1",
                 params![
                     checkpoint.vault_id().as_bytes().as_slice(),
                     checkpoint.issuer_device_id().as_bytes().as_slice(),
-                    super::to_sqlite(issuer_sequence, "checkpoint issuer sequence does not fit")?,
                 ],
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|error| map_sqlite(error, "checkpoint issuer sequence lookup failed"))?;
-        ensure!(
-            same_sequence.is_none(),
-            SyncChainFork,
-            "checkpoint issuer sequence was reused"
-        );
+            .map_err(|error| map_sqlite(error, "prior checkpoint lookup failed"))?;
+        if let Some(previous) = previous {
+            let previous = Checkpoint::decode(&previous)
+                .map_err(corrupt_row("stored checkpoint is invalid"))?;
+            let mut advanced =
+                checkpoint.membership_generation() > previous.membership_generation();
+            for head in previous.heads() {
+                let current = checkpoint
+                    .heads()
+                    .iter()
+                    .find(|current| current.device_id() == head.device_id())
+                    .ok_or_else(|| {
+                        Error::new(
+                            ChurStatus::SyncHeadRollback,
+                            "checkpoint omits a previously accepted head",
+                        )
+                    })?;
+                ensure!(
+                    current.device_sequence() >= head.device_sequence(),
+                    SyncHeadRollback,
+                    "checkpoint lowers a previously accepted head"
+                );
+                if current.device_sequence() == head.device_sequence() {
+                    ensure!(
+                        current.operation_digest() == head.operation_digest(),
+                        SyncChainFork,
+                        "checkpoint changes an accepted head digest"
+                    );
+                } else {
+                    advanced = true;
+                }
+            }
+            advanced |= checkpoint.heads().len() > previous.heads().len();
+            ensure!(
+                advanced
+                    || checkpoint.collection_epoch_commitment()
+                        == previous.collection_epoch_commitment(),
+                SyncChainFork,
+                "checkpoint changes epochs without an authenticated frontier advance"
+            );
+        }
         for head in checkpoint.heads() {
             ensure!(
                 membership.device(head.device_id()).is_some(),
@@ -138,8 +176,8 @@ impl ReferenceServer {
             .prepare(
                 "SELECT current.record FROM checkpoints AS current
                  WHERE current.vault_id = ?1
-                   AND current.issuer_sequence = (
-                       SELECT MAX(candidate.issuer_sequence) FROM checkpoints AS candidate
+                   AND current.rowid = (
+                       SELECT MAX(candidate.rowid) FROM checkpoints AS candidate
                        WHERE candidate.vault_id = current.vault_id
                          AND candidate.issuer_device_id = current.issuer_device_id
                    )
@@ -301,18 +339,119 @@ mod tests {
                 .expect("checkpoint replay"),
             crate::RelayOutcome::Duplicate
         );
-        drop(server);
-
-        let server = ReferenceServer::open(&root.0, 1_024, 32_768).expect("reopen");
+        let epoch_fork = Checkpoint::new(
+            vault,
+            device,
+            1,
+            1,
+            enrollment.commitment(),
+            vec![CheckpointHead::new(device, 1, operation.digest())],
+            [10; 32],
+            [0; 32],
+        )
+        .expect("epoch fork")
+        .sign(&key);
         assert_eq!(
-            server.checkpoints(vault).expect("fetch"),
-            vec![checkpoint.encode()]
+            server
+                .accept_checkpoint(&epoch_fork)
+                .expect_err("unauthenticated epoch change")
+                .status(),
+            ChurStatus::SyncChainFork
+        );
+        let next_operation = Operation::new(
+            id(10),
+            vault,
+            device,
+            2,
+            operation.digest(),
+            Vec::new(),
+            id(6),
+            [vec![7; 24], vec![8; 16]].concat(),
+            [0; 64],
+        )
+        .expect("next operation")
+        .sign(&key);
+        server
+            .accept_operation(&next_operation)
+            .expect("next operation");
+        let next = Checkpoint::new(
+            vault,
+            device,
+            2,
+            1,
+            enrollment.commitment(),
+            vec![CheckpointHead::new(device, 2, next_operation.digest())],
+            [10; 32],
+            [0; 32],
+        )
+        .expect("next checkpoint")
+        .sign(&key);
+        assert_eq!(
+            server.accept_checkpoint(&next).expect("next checkpoint"),
+            RelayOutcome::Stored
+        );
+        let digest_fork = Checkpoint::new(
+            vault,
+            device,
+            2,
+            1,
+            enrollment.commitment(),
+            vec![CheckpointHead::new(device, 2, [99; 32])],
+            [10; 32],
+            [0; 32],
+        )
+        .expect("digest fork")
+        .sign(&key);
+        assert_eq!(
+            server
+                .accept_checkpoint(&digest_fork)
+                .expect_err("same sequence fork")
+                .status(),
+            ChurStatus::SyncChainFork
         );
         assert_eq!(
             server
-                .checkpoint(vault, checkpoint.commitment())
-                .expect("fetch by commitment"),
-            checkpoint.encode()
+                .accept_checkpoint(&epoch_fork)
+                .expect_err("new stale checkpoint")
+                .status(),
+            ChurStatus::SyncHeadRollback
+        );
+        drop(server);
+
+        let mut server = ReferenceServer::open(&root.0, 1_024, 32_768).expect("reopen");
+        assert_eq!(
+            server.checkpoints(vault).expect("fetch latest"),
+            vec![next.encode()]
+        );
+        for known in [&checkpoint, &next] {
+            assert_eq!(
+                server
+                    .checkpoint(vault, known.commitment())
+                    .expect("fetch by commitment"),
+                known.encode()
+            );
+            assert_eq!(
+                server.accept_checkpoint(known).expect("known replay"),
+                RelayOutcome::Duplicate
+            );
+        }
+        assert_eq!(
+            server
+                .accept_checkpoint(&digest_fork)
+                .expect_err("fork after restart")
+                .status(),
+            ChurStatus::SyncChainFork
+        );
+        assert_eq!(
+            server
+                .accept_checkpoint(&epoch_fork)
+                .expect_err("rollback after restart")
+                .status(),
+            ChurStatus::SyncHeadRollback
+        );
+        assert_eq!(
+            server.checkpoints(vault).expect("unchanged latest"),
+            vec![next.encode()]
         );
     }
 

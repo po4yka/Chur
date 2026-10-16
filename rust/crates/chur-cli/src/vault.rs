@@ -133,7 +133,15 @@ pub fn collect_deletions(session: &mut Session) -> Result<usize> {
     let count = pending.len();
     for entry in pending {
         if !entry.erased {
-            deletion::erase(session.catalog()?, &entry.object_id, now_ms())?;
+            let secret = session.root_secret()?.duplicate();
+            let vault_id = session.vault_id();
+            deletion::erase_with_sync(
+                session.catalog()?,
+                &secret,
+                vault_id,
+                &entry.object_id,
+                now_ms(),
+            )?;
         }
         for container in &entry.containers {
             chur_media::store::unlink_container(&root, &store_id, container)?;
@@ -141,6 +149,7 @@ pub fn collect_deletions(session: &mut Session) -> Result<usize> {
         deletion::finish(session.catalog()?, &entry.object_id)?;
         deletion::discard_tombstone(session.catalog()?, &entry.object_id)?;
     }
+    session.catalog()?.checkpoint()?;
     Ok(count)
 }
 

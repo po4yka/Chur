@@ -26,6 +26,20 @@ class RepositorySyncBoundary(
     override suspend fun acceptedHeads(): List<dev.po4yka.chur.sync.DeviceCursor>? =
         repository.syncHeads()?.map { dev.po4yka.chur.sync.DeviceCursor(it.deviceId, it.sequence) }
 
+    override suspend fun ownSyncCollections(): List<ByteArray>? = repository.ownSyncCollections()
+    override suspend fun ownSyncOperations(after: ULong): List<dev.po4yka.chur.ffi.OwnSyncOperation>? = repository.ownSyncOperations(after)
+    override suspend fun ownSyncPlan(collectionId: ByteArray): SharedReceivePlan? = repository.ownSyncPlan(collectionId)
+    override suspend fun ownSyncAuthor(source: SharedSourceObject): SharedSourceObject? = repository.ownSyncAuthor(source)
+    override suspend fun prepareDevicePairing(): dev.po4yka.chur.ffi.DevicePairingRequest? = repository.prepareDevicePairing()
+    override suspend fun inspectDevicePairing(request: ByteArray): dev.po4yka.chur.ffi.DevicePairingPreview? = repository.inspectDevicePairing(request)
+    override suspend fun approveDevicePairing(request: ByteArray, serverUrl: String, token: ByteArray, nowMs: Long): dev.po4yka.chur.ffi.PreparedDevicePairing? =
+        repository.approveDevicePairing(request, serverUrl, token, nowMs)
+    override suspend fun startDevicePairing(approval: ByteArray): dev.po4yka.chur.ffi.DevicePairingCredentials? = repository.startDevicePairing(approval)
+    override suspend fun finishDevicePairing(nowMs: Long): ByteArray? = repository.finishDevicePairing(nowMs)
+    override suspend fun currentDeviceCheckpoint(nowMs: Long): ByteArray? = repository.currentDeviceCheckpoint(nowMs)
+    override suspend fun pairedDevices(): List<dev.po4yka.chur.ffi.PairedDevice>? = repository.pairedDevices()
+    override suspend fun prepareDeviceRevocation(deviceId: ByteArray, nowMs: Long): dev.po4yka.chur.ffi.PreparedDeviceRevocation? = repository.prepareDeviceRevocation(deviceId, nowMs)
+
     override suspend fun stage(
         vaultId: ByteArray,
         kind: SyncRecordKind,
@@ -54,6 +68,9 @@ class RepositorySyncBoundary(
 
     override suspend fun objectKeyAccept(packageBytes: ByteArray, grant: ByteArray): Boolean =
         repository.objectKeyAccept(packageBytes, grant)
+
+    override suspend fun outboundCollectionOperations(after: ULong): List<dev.po4yka.chur.ffi.CollectionOutbound>? =
+        repository.outboundCollectionOperations(after)
 
     override suspend fun sharedDownloadOffset(collectionId: ByteArray, objectId: ByteArray): ULong? =
         repository.sharedDownloadOffset(collectionId, objectId)

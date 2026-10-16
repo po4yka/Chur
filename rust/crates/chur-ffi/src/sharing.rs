@@ -694,6 +694,7 @@ pub unsafe extern "C" fn chur_sharing_receive(
             &grant_operation,
             &records,
         )?;
+        crate::product::finish_pending_deletions(&mut session, crate::api::now_ms())?;
         // The ABI plan is bounded, while a whole vault can contain more
         // objects. Activated rows leave the pending projection, so the next
         // sync returns the following page without a separate cursor.
@@ -1072,7 +1073,12 @@ pub unsafe extern "C" fn chur_object_key_accept(
             0,
             |db, root, vault_id, input| {
                 let mut reader = Reader::new(input, ChurStatus::NonCanonicalEncoding);
-                let (issuers, _, _, _) = decode_accept_bundle(reader.variable(BUNDLE_BYTES_MAX)?)?;
+                let package = reader.variable(BUNDLE_BYTES_MAX)?;
+                let issuers = if package.is_empty() {
+                    Vec::new()
+                } else {
+                    decode_accept_bundle(package)?.0
+                };
                 let grant = chur_sync_protocol::object_grant::ObjectKeyGrant::decode(
                     reader.variable(1024)?,
                 )?;
@@ -1147,6 +1153,75 @@ unsafe fn object_key_call(
         );
         output[..encoded.len()].copy_from_slice(&encoded);
         // SAFETY: caller owns the writable out-parameter.
+        unsafe { write_out(bytes_written, encoded.len()) }
+    })
+}
+
+/// Lists locally authored collection operations, including permanent deletion.
+///
+/// # Safety
+/// The output buffer covers capacity bytes and bytes_written is writable.
+#[unsafe(no_mangle)]
+#[expect(unsafe_code, reason = "the C ABI writes caller-owned buffers")]
+pub unsafe extern "C" fn chur_sharing_outbound(
+    session: Handle,
+    after_cursor: u64,
+    destination: *mut u8,
+    capacity: usize,
+    bytes_written: *mut usize,
+) -> Status {
+    guard_status_for(session, || {
+        // SAFETY: caller owns the output parameter.
+        unsafe { write_out(bytes_written, 0usize)? };
+        let entry = registry::get(session, Kind::Session)?;
+        let Entry::Session { session, .. } = entry.as_ref() else {
+            return Err(Error::new(
+                ChurStatus::InvalidInput,
+                "the handle is of another type",
+            ));
+        };
+        let encoded = {
+            let session = registry::lock(session);
+            let root = Key::new(*session.root_secret()?.expose());
+            let db = session.catalog_ref()?;
+            let membership = chur_catalog::sync_membership::load(db)?.ok_or_else(|| {
+                Error::new(ChurStatus::RecoveryRequired, "outbox membership is absent")
+            })?;
+            let (device_id, _) = chur_catalog::sync_keys::local_identity(db, &root, &membership)?
+                .ok_or_else(|| {
+                Error::new(
+                    ChurStatus::RecoveryRequired,
+                    "outbox signing identity is absent",
+                )
+            })?;
+            let records = chur_catalog::sharing_log::outbound_after(
+                db,
+                &session.vault_id(),
+                &device_id,
+                after_cursor,
+            )?;
+            let mut writer = Writer::new();
+            writer.u16(1).u32(u32::try_from(records.len()).map_err(|_| {
+                Error::new(
+                    ChurStatus::ResourceLimitExceeded,
+                    "outbox page is too large",
+                )
+            })?);
+            for record in records {
+                writer.u64(record.cursor).id(&record.collection_id);
+                writer.variable(&record.record)?;
+            }
+            writer.finish()
+        };
+        // SAFETY: caller declares this range writable.
+        let output = unsafe { borrow_bytes_mut(destination, capacity)? };
+        ensure!(
+            encoded.len() <= output.len(),
+            ResourceLimitExceeded,
+            "outbox output does not fit"
+        );
+        output[..encoded.len()].copy_from_slice(&encoded);
+        // SAFETY: caller owns this output parameter.
         unsafe { write_out(bytes_written, encoded.len()) }
     })
 }

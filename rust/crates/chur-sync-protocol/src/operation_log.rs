@@ -212,6 +212,23 @@ impl OperationLog {
         self.accept_inner(operation, membership, cutoff)
     }
 
+    /// Rebuilds a row that was already committed in an authenticated protected
+    /// catalog before a later revocation arrived. This is NOT an inbound or
+    /// sharing-proof acceptance path. Signature, chain and causal checks remain;
+    /// current revocation does not rewrite authenticated prior local history.
+    #[doc(hidden)]
+    pub fn restore_protected_catalog_history(
+        &mut self,
+        operation: &Operation,
+        membership: &MembershipState,
+    ) -> Result<ApplyOutcome> {
+        let outcome = self.check_history(operation, membership, None, true)?;
+        if outcome == ApplyOutcome::Applied {
+            self.commit_inner(operation);
+        }
+        Ok(outcome)
+    }
+
     /// Restores one authenticated checkpoint floor from the protected catalog.
     pub fn restore_floor(
         &mut self,
@@ -693,6 +710,16 @@ impl OperationLog {
         membership: &MembershipState,
         cutoff: Option<(u64, Commitment)>,
     ) -> Result<ApplyOutcome> {
+        self.check_history(operation, membership, cutoff, false)
+    }
+
+    fn check_history(
+        &self,
+        operation: &Operation,
+        membership: &MembershipState,
+        cutoff: Option<(u64, Commitment)>,
+        protected_history: bool,
+    ) -> Result<ApplyOutcome> {
         ensure!(
             operation.vault_id() == membership.vault_id(),
             AuthenticationFailed,
@@ -786,7 +813,9 @@ impl OperationLog {
                     "operation observes an unknown device",
                 )
             })?;
-            if let DeviceStatus::Revoked { sequence, .. } = device.status() {
+            if let DeviceStatus::Revoked { sequence, .. } = device.status()
+                && !protected_history
+            {
                 // `OPERATION_LOG.md` §4.4: a record above the revocation point
                 // is rejected unconditionally, so an observed head above it is
                 // non-canonical. Waiting for it as a missing cause would stall
@@ -1596,6 +1625,49 @@ mod tests {
         membership
             .accept_revocation(&revocation, &id(2))
             .expect("accept revocation");
+    }
+
+    #[test]
+    fn protected_history_replay_does_not_admit_new_revoked_operations() {
+        let (mut membership, issuer, peer, enrollment) = enrolled_second_device();
+        let ready = operation_for(&peer, id(6), 1, [0; 32], 10);
+        revoke_second_device(&mut membership, &issuer, enrollment, 0, [0; 32]);
+        let mut protected = OperationLog::new();
+        assert_eq!(
+            protected
+                .restore_protected_catalog_history(&ready, &membership)
+                .expect("protected historical row"),
+            ApplyOutcome::Applied
+        );
+        assert_eq!(
+            protected
+                .accept(&ready, &membership)
+                .expect_err("untrusted delivery remains revoked")
+                .status(),
+            ChurStatus::AuthenticationFailed
+        );
+        let mut untrusted = OperationLog::new();
+        assert_eq!(
+            untrusted
+                .restore_accepted(&ready, &membership)
+                .expect_err("untrusted issuer evidence remains cutoff checked")
+                .status(),
+            ChurStatus::AuthenticationFailed
+        );
+        let invalid = operation_for(
+            &DeviceSigningKey::from_seed([99; 32]),
+            id(6),
+            1,
+            [0; 32],
+            11,
+        );
+        assert_eq!(
+            OperationLog::new()
+                .restore_protected_catalog_history(&invalid, &membership)
+                .expect_err("protected history still verifies signatures")
+                .status(),
+            ChurStatus::AuthenticationFailed
+        );
     }
 
     #[test]

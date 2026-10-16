@@ -771,6 +771,56 @@ class VaultRepository(
         if (session == 0L) null else ChurVault.syncHeads(session)
     }
 
+    suspend fun ownSyncCollections(): List<ByteArray>? = mutex.withLock {
+        if (session == 0L) null else ChurVault.ownSyncCollections(session)
+    }
+
+    suspend fun ownSyncOperations(after: ULong): List<dev.po4yka.chur.ffi.OwnSyncOperation>? = mutex.withLock {
+        if (session == 0L) null else ChurVault.ownSyncOperations(session, after)
+    }
+
+    suspend fun ownSyncPlan(collectionId: ByteArray): SharedReceivePlan? = mutex.withLock {
+        if (session == 0L) null else ChurVault.ownSyncPlan(session, collectionId)
+    }
+
+    suspend fun ownSyncAuthor(source: SharedSourceObject): SharedSourceObject? = mutex.withLock {
+        if (session == 0L) null else ChurVault.ownSyncAuthor(session, source)
+    }
+
+    suspend fun prepareDevicePairing(): dev.po4yka.chur.ffi.DevicePairingRequest? = mutex.withLock {
+        if (session == 0L) null else ChurVault.prepareDevicePairing(session)
+    }
+
+    suspend fun inspectDevicePairing(request: ByteArray): dev.po4yka.chur.ffi.DevicePairingPreview? = mutex.withLock {
+        if (session == 0L) null else ChurVault.inspectDevicePairing(session, request)
+    }
+
+    suspend fun approveDevicePairing(request: ByteArray, serverUrl: String, token: ByteArray, nowMs: Long): dev.po4yka.chur.ffi.PreparedDevicePairing? = mutex.withLock {
+        if (session == 0L) null else ChurVault.approveDevicePairing(session, request, serverUrl, token, nowMs)
+    }
+
+    suspend fun startDevicePairing(approval: ByteArray): dev.po4yka.chur.ffi.DevicePairingCredentials? = mutex.withLock {
+        if (session == 0L) null else ChurVault.startDevicePairing(session, approval)
+    }
+
+    suspend fun finishDevicePairing(nowMs: Long): ByteArray? = mutex.withLock {
+        if (session == 0L) null else ChurVault.finishDevicePairing(session, nowMs)
+    }
+
+    suspend fun currentDeviceCheckpoint(nowMs: Long): ByteArray? = mutex.withLock {
+        if (session == 0L) null else ChurVault.currentDeviceCheckpoint(session, nowMs)
+    }
+
+
+    suspend fun pairedDevices(): List<dev.po4yka.chur.ffi.PairedDevice>? = mutex.withLock {
+        if (session == 0L) null else ChurVault.pairedDevices(session)
+    }
+
+    suspend fun prepareDeviceRevocation(deviceId: ByteArray, nowMs: Long): dev.po4yka.chur.ffi.PreparedDeviceRevocation? = mutex.withLock {
+        if (session == 0L) null else ChurVault.prepareDeviceRevocation(session, deviceId, nowMs)
+    }
+
+
     /**
      * The fork state the open vault's catalog keeps, or `null` while locked.
      *
@@ -853,6 +903,10 @@ class VaultRepository(
             ChurVault.objectKeyAccept(session, packageBytes, grant)
             true
         }
+    }
+
+    suspend fun outboundCollectionOperations(after: ULong): List<dev.po4yka.chur.ffi.CollectionOutbound>? = mutex.withLock {
+        if (session == 0L) null else ChurVault.outboundCollectionOperations(session, after)
     }
 
     suspend fun receiveSharedOperations(

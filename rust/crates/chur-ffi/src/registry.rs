@@ -58,6 +58,8 @@ pub enum Entry {
         runtime: Handle,
         /// The session.
         session: Mutex<chur_catalog::vault::Session>,
+        /// Bounded public ciphertext verification results for this session only.
+        publication_cache: Mutex<crate::sharing_publish::VerificationCache>,
     },
     /// A random-access reader, and the session that opened it.
     Reader {

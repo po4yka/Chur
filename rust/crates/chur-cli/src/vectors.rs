@@ -1989,5 +1989,70 @@ fn disposable_object_keys(out: &mut Vec<Vector>) -> Result<()> {
             .input_bytes("object_key", content.expose()).expect_bytes("record", &payload.encode())
             .expect("record_length", json!(payload.encode().len())).note(TEST_ONLY).build());
     }
+    let ready = OperationPayload::new(id(0xac)?, 0, PayloadBody::DeviceReady)?;
+    out.push(
+        VectorBuilder::accept(
+            "operation",
+            "operation-v1-device-ready",
+            "docs/sync/OPERATION_PAYLOAD_V1.md",
+            "2",
+            "An enrolled new device starts its ordinary chain without a content mutation.",
+        )
+        .expect_bytes("record", &ready.encode())
+        .expect("record_length", json!(ready.encode().len()))
+        .build(),
+    );
+    let purge = OperationPayload::new(
+        collection,
+        1,
+        PayloadBody::PurgeObject {
+            object_id: object,
+            object_generation: 1,
+            authored_at_ms: 1787990400000,
+        },
+    )?;
+    out.push(
+        VectorBuilder::accept(
+            "operation",
+            "operation-v1-permanent-object-purge",
+            "docs/sync/OPERATION_PAYLOAD_V1.md",
+            "2",
+            "A terminal purge names the committed object and contains no key.",
+        )
+        .expect_bytes("record", &purge.encode())
+        .expect("record_length", json!(purge.encode().len()))
+        .build(),
+    );
+    let envelope = CollectionKeyEnvelope::seal(
+        &key(0xb0),
+        id(0xac)?,
+        collection,
+        1,
+        1,
+        Nonce::new([0xb1; 24]),
+        &key(0xb2),
+    )?;
+    let declaration = OperationPayload::new(
+        id(0xac)?,
+        0,
+        PayloadBody::DeclareCollection {
+            collection_key_envelope: envelope,
+        },
+    )?;
+    out.push(
+        VectorBuilder::accept(
+            "operation",
+            "operation-v1-declare-collection",
+            "docs/sync/OPERATION_PAYLOAD_V1.md",
+            "2",
+            "An own-vault declaration carries a root-wrapped metadata key and no content key.",
+        )
+        .input_bytes("root_key", key(0xb0).expose())
+        .input_bytes("collection_metadata_key", key(0xb2).expose())
+        .expect_bytes("record", &declaration.encode())
+        .expect("record_length", json!(declaration.encode().len()))
+        .note(TEST_ONLY)
+        .build(),
+    );
     Ok(())
 }

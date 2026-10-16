@@ -1242,7 +1242,11 @@ pub(crate) fn authenticate_issuers(
         }
         for (device_id, sequence, digest) in revoked {
             ensure!(
-                log.head(&device_id) == Some((sequence, digest)),
+                if sequence == 0 {
+                    digest == [0; 32] && log.head(&device_id).is_none()
+                } else {
+                    log.head(&device_id) == Some((sequence, digest))
+                },
                 SyncHeadRollback,
                 "revoked issuer operation chain does not reach its pinned head"
             );

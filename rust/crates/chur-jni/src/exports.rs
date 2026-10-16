@@ -2795,6 +2795,518 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectKeyAccept<'local>(
     })
 }
 
+/// Runs one bounded own-device sync control call.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_ownSyncCollections<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    input: JByteBuffer<'local>,
+    length: jint,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((input_address, input_capacity)) = direct_buffer(env, &input) else {
+            return INVALID_INPUT;
+        };
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let Ok(length) = u32::try_from(length) else {
+            return INVALID_INPUT;
+        };
+        if length as usize > input_capacity {
+            return INVALID_INPUT;
+        }
+        let mut written = 0usize;
+        // SAFETY: both live direct buffers cover their checked lengths, and the output local is writable.
+        let status = unsafe {
+            chur_ffi::own_sync::chur_own_sync_collections(
+                handle_of(session),
+                input_address,
+                length,
+                address,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Runs one bounded own-device sync control call.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_ownSyncOperations<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    input: JByteBuffer<'local>,
+    length: jint,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((input_address, input_capacity)) = direct_buffer(env, &input) else {
+            return INVALID_INPUT;
+        };
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let Ok(length) = u32::try_from(length) else {
+            return INVALID_INPUT;
+        };
+        if length as usize > input_capacity {
+            return INVALID_INPUT;
+        }
+        let mut written = 0usize;
+        // SAFETY: both live direct buffers cover their checked lengths, and the output local is writable.
+        let status = unsafe {
+            chur_ffi::own_sync::chur_own_sync_operations(
+                handle_of(session),
+                input_address,
+                length,
+                address,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Runs one bounded own-device sync control call.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_ownSyncPlan<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    input: JByteBuffer<'local>,
+    length: jint,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((input_address, input_capacity)) = direct_buffer(env, &input) else {
+            return INVALID_INPUT;
+        };
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let Ok(length) = u32::try_from(length) else {
+            return INVALID_INPUT;
+        };
+        if length as usize > input_capacity {
+            return INVALID_INPUT;
+        }
+        let mut written = 0usize;
+        // SAFETY: both live direct buffers cover their checked lengths, and the output local is writable.
+        let status = unsafe {
+            chur_ffi::own_sync::chur_own_sync_plan(
+                handle_of(session),
+                input_address,
+                length,
+                address,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Runs one bounded own-device sync control call.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_ownSyncAuthor<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    input: JByteBuffer<'local>,
+    length: jint,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((input_address, input_capacity)) = direct_buffer(env, &input) else {
+            return INVALID_INPUT;
+        };
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let Ok(length) = u32::try_from(length) else {
+            return INVALID_INPUT;
+        };
+        if length as usize > input_capacity {
+            return INVALID_INPUT;
+        }
+        let mut written = 0usize;
+        // SAFETY: both live direct buffers cover their checked lengths, and the output local is writable.
+        let status = unsafe {
+            chur_ffi::own_sync::chur_own_sync_author(
+                handle_of(session),
+                input_address,
+                length,
+                address,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Runs one bounded own-device pairing call in the unlocked native session.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_devicePairingPrepare<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    input: JByteBuffer<'local>,
+    length: jint,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((input_address, input_capacity)) = direct_buffer(env, &input) else {
+            return INVALID_INPUT;
+        };
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let Ok(length) = u32::try_from(length) else {
+            return INVALID_INPUT;
+        };
+        if length as usize > input_capacity {
+            return INVALID_INPUT;
+        }
+        let mut written = 0usize;
+        // SAFETY: both live direct buffers cover their checked lengths, and the output local is writable.
+        let status = unsafe {
+            chur_ffi::device_pairing::chur_device_pairing_prepare(
+                handle_of(session),
+                input_address,
+                length,
+                address,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Runs one bounded own-device pairing call in the unlocked native session.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_devicePairingInspect<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    input: JByteBuffer<'local>,
+    length: jint,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((input_address, input_capacity)) = direct_buffer(env, &input) else {
+            return INVALID_INPUT;
+        };
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let Ok(length) = u32::try_from(length) else {
+            return INVALID_INPUT;
+        };
+        if length as usize > input_capacity {
+            return INVALID_INPUT;
+        }
+        let mut written = 0usize;
+        // SAFETY: both live direct buffers cover their checked lengths, and the output local is writable.
+        let status = unsafe {
+            chur_ffi::device_pairing::chur_device_pairing_inspect(
+                handle_of(session),
+                input_address,
+                length,
+                address,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Runs one bounded own-device pairing call in the unlocked native session.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_devicePairingApprove<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    input: JByteBuffer<'local>,
+    length: jint,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((input_address, input_capacity)) = direct_buffer(env, &input) else {
+            return INVALID_INPUT;
+        };
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let Ok(length) = u32::try_from(length) else {
+            return INVALID_INPUT;
+        };
+        if length as usize > input_capacity {
+            return INVALID_INPUT;
+        }
+        let mut written = 0usize;
+        // SAFETY: both live direct buffers cover their checked lengths, and the output local is writable.
+        let status = unsafe {
+            chur_ffi::device_pairing::chur_device_pairing_approve(
+                handle_of(session),
+                input_address,
+                length,
+                address,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Runs one bounded own-device pairing call in the unlocked native session.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_devicePairingStart<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    input: JByteBuffer<'local>,
+    length: jint,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((input_address, input_capacity)) = direct_buffer(env, &input) else {
+            return INVALID_INPUT;
+        };
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let Ok(length) = u32::try_from(length) else {
+            return INVALID_INPUT;
+        };
+        if length as usize > input_capacity {
+            return INVALID_INPUT;
+        }
+        let mut written = 0usize;
+        // SAFETY: both live direct buffers cover their checked lengths, and the output local is writable.
+        let status = unsafe {
+            chur_ffi::device_pairing::chur_device_pairing_start(
+                handle_of(session),
+                input_address,
+                length,
+                address,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Runs one bounded own-device pairing call in the unlocked native session.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_devicePairingFinish<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    input: JByteBuffer<'local>,
+    length: jint,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((input_address, input_capacity)) = direct_buffer(env, &input) else {
+            return INVALID_INPUT;
+        };
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let Ok(length) = u32::try_from(length) else {
+            return INVALID_INPUT;
+        };
+        if length as usize > input_capacity {
+            return INVALID_INPUT;
+        }
+        let mut written = 0usize;
+        // SAFETY: both live direct buffers cover their checked lengths, and the output local is writable.
+        let status = unsafe {
+            chur_ffi::device_pairing::chur_device_pairing_finish(
+                handle_of(session),
+                input_address,
+                length,
+                address,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Reads the durable local collection-operation outbox.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_sharingOutbound<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    after_cursor: jlong,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Ok(after_cursor) = u64::try_from(after_cursor) else {
+            return INVALID_INPUT;
+        };
+        let Some((pointer, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let mut written = 0;
+        // SAFETY: validated direct output remains live during this call.
+        let status = unsafe {
+            chur_ffi::sharing::chur_sharing_outbound(
+                handle_of(session),
+                after_cursor,
+                pointer,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Runs one bounded own-device pairing call in the unlocked native session.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_devicePairingOverview<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    input: JByteBuffer<'local>,
+    length: jint,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((input_address, input_capacity)) = direct_buffer(env, &input) else {
+            return INVALID_INPUT;
+        };
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let Ok(length) = u32::try_from(length) else {
+            return INVALID_INPUT;
+        };
+        if length as usize > input_capacity {
+            return INVALID_INPUT;
+        }
+        let mut written = 0usize;
+        // SAFETY: both live direct buffers cover their checked lengths, and the output local is writable.
+        let status = unsafe {
+            chur_ffi::device_pairing::chur_device_pairing_overview(
+                handle_of(session),
+                input_address,
+                length,
+                address,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Runs one bounded own-device pairing call in the unlocked native session.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_devicePairingRevoke<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    input: JByteBuffer<'local>,
+    length: jint,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((input_address, input_capacity)) = direct_buffer(env, &input) else {
+            return INVALID_INPUT;
+        };
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let Ok(length) = u32::try_from(length) else {
+            return INVALID_INPUT;
+        };
+        if length as usize > input_capacity {
+            return INVALID_INPUT;
+        }
+        let mut written = 0usize;
+        // SAFETY: both live direct buffers cover their checked lengths, and the output local is writable.
+        let status = unsafe {
+            chur_ffi::device_pairing::chur_device_pairing_revoke(
+                handle_of(session),
+                input_address,
+                length,
+                address,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Runs one bounded own-device pairing call in the unlocked native session.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_devicePairingCheckpoint<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    input: JByteBuffer<'local>,
+    length: jint,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((input_address, input_capacity)) = direct_buffer(env, &input) else {
+            return INVALID_INPUT;
+        };
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let Ok(length) = u32::try_from(length) else {
+            return INVALID_INPUT;
+        };
+        if length as usize > input_capacity {
+            return INVALID_INPUT;
+        }
+        let mut written = 0usize;
+        // SAFETY: both live direct buffers cover their checked lengths, and the output local is writable.
+        let status = unsafe {
+            chur_ffi::device_pairing::chur_device_pairing_checkpoint(
+                handle_of(session),
+                input_address,
+                length,
+                address,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
 /// Bounded private-note control call. Payload copies are zeroed before return.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_privateNotesQuery<'local>(

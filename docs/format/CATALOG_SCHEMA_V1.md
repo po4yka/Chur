@@ -106,7 +106,7 @@ An object row carries two independent enums and this specification is the author
 
 Proven corruption is a lifecycle change, not an integrity value: a check that proves corruption sets `state` to `CORRUPT`. Quarantine is the opposite case and stays an integrity value, because an absent container is a fact about this device rather than a verdict on the object. Two names used by lower-authority documents are values of neither enum: `Incoming` is the `stage` of an `ImportTransaction` row, §11, and a purged object is the absence of the row after garbage collection, §14.1.
 
-Transitions: `ACTIVE` to `TRASHED` to `ACTIVE` is the recoverable local path; `ACTIVE` or `TRASHED` to `DELETING` to `TOMBSTONED` is irreversible. `ACTIVE` to `CORRUPT` is terminal. A received shared object can move between `ACTIVE` and `SHARED_DELETED` only by accepted collection DeleteObject and RestoreObject operations. `SHARED_DELETED` is excluded from deletion garbage collection, and its key and container remain available for restore. `integrity_summary` changes only while `state` is `ACTIVE`.
+Transitions: `ACTIVE` to `TRASHED` to `ACTIVE` is the recoverable local path; `ACTIVE`, `TRASHED`, or `CORRUPT` to `DELETING` to `TOMBSTONED` is irreversible. `ACTIVE` to `CORRUPT` is terminal except for permanent deletion. A received shared object can move between `ACTIVE` and `SHARED_DELETED` only by accepted collection DeleteObject and RestoreObject operations. `SHARED_DELETED` is excluded from deletion garbage collection, and its key and container remain available for restore. `integrity_summary` changes only while `state` is `ACTIVE`.
 
 The user-facing states of [`../../DESIGN.md`](../../DESIGN.md) §20.1 are derived from the pair and are never stored:
 
@@ -214,6 +214,8 @@ Retention: in a vault with no enrolled peer device a tombstone may be discarded 
 
 Shared content keys use [disposable object-key grants](../sync/OBJECT_KEY_GRANTS.md). `object_key_requests` stores one object-bound private prekey per authenticated pending object. `pending_object_keys` stores a local envelope until atomic activation removes it. `issued_object_key_grants` contains public request and grant bytes only. Signed commit and rewrap records contain key commitments, never object-key envelopes. Deletion also destroys the object's private request and pending envelope. A shared object's local tombstone is retained to prevent a new request after replay.
 
+Local own-device pairing uses `device_pairing_pending` for the public request, locally encrypted fresh private identity, signed approval and authenticated credential payload, plus a finalized flag. `device_pairing_approvals` stores idempotent source responses and their actual transport token. Portable snapshots exclude both tables. Finalization clears the pending private envelope atomically with ordinary identity installation. `device_pairing_revocations` stores only signed public retry artifacts. See [DEVICE_PAIRING.md](../sync/DEVICE_PAIRING.md).
+
 ### 14.1 Deletion transaction
 
 Deletion runs in this order and no other:
@@ -226,6 +228,8 @@ Deletion runs in this order and no other:
 6. delete the object row, leaving the tombstone.
 
 Steps 1 and 2 are the atomic boundary §17 requires for deletion. Steps 3 to 6 are garbage collection: each is idempotent, none is required for the crypto-erasure claim of [`../security/SECURITY_INVARIANTS.md`](../security/SECURITY_INVARIANTS.md) SEC-026, and a crash inside them loses no security property.
+
+A permanent source deletion first persists its signed `PurgeObject` in the durable outgoing log. Receipt of this terminal event removes every local object envelope, pending envelope, and disposable private prekey in the accepted-log transaction, and writes a permanent tombstone even when no object row exists. The native receive/process completion path always verifies WAL truncation before it reports success. A tombstone referenced by an own-vault or shared signed log remains after physical collection, so later epochs and replay cannot issue another key request.
 
 Garbage collection runs at the first unlock of a session and again after each deletion that session performs. It never runs while locked, because it needs the catalog key that lock has already zeroized. A run sweeps every row left in `DELETING` or `TOMBSTONED`, so an interrupted deletion always completes rather than being repaired.
 
@@ -414,7 +418,5 @@ Catalog policy bounds, enforced on insert and re-checked on restore, the search-
 - at most 512 bytes per search query.
 
 A value above any bound is `RESOURCE_LIMIT_EXCEEDED`. These are catalog policy, not encoded field widths, so raising one is a `catalog_format_version` change only when it changes a stored width.
-
-Verified corrupt objects can enter permanent deletion. The UI requires confirmation; recoverable Trash does not accept corrupt objects.
 
 Pending media uses durable dispatch tickets in `object_receive_dispatch`. A native plan holds at most 256 downloads. The ticket is the primary queue order, and the next visit rotates the first attempted item. This order survives restart and backup. A missing key or unavailable container cannot permanently hide later objects behind the 4096-row projection scan. Private prekeys remain until their grant is accepted or their exact object is permanently deleted; an unavailable neighbor never evicts them.

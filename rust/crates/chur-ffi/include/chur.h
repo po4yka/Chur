@@ -359,6 +359,36 @@ chur_status_t chur_sync_process(chur_handle_t session, uint64_t now_ms,
 chur_status_t chur_sync_heads(chur_handle_t session, uint8_t *destination,
                               size_t capacity, size_t *bytes_written);
 
+/* Own-device operation publication and verified media download plans. */
+chur_status_t chur_own_sync_collections(chur_handle_t session, const uint8_t *input,
+    uint32_t input_length, uint8_t *destination, size_t capacity, size_t *bytes_written);
+chur_status_t chur_own_sync_operations(chur_handle_t session, const uint8_t *input,
+    uint32_t input_length, uint8_t *destination, size_t capacity, size_t *bytes_written);
+chur_status_t chur_own_sync_plan(chur_handle_t session, const uint8_t *input,
+    uint32_t input_length, uint8_t *destination, size_t capacity, size_t *bytes_written);
+chur_status_t chur_own_sync_author(chur_handle_t session, const uint8_t *input,
+    uint32_t input_length, uint8_t *destination, size_t capacity, size_t *bytes_written);
+
+/* User-approved own-device pairing. Inputs and outputs are versioned bounded
+ * control records. All methods require an unlocked session; identity private
+ * keys and the root secret do not cross this boundary. */
+chur_status_t chur_device_pairing_prepare(chur_handle_t session, const uint8_t *input,
+    uint32_t input_length, uint8_t *destination, size_t capacity, size_t *bytes_written);
+chur_status_t chur_device_pairing_inspect(chur_handle_t session, const uint8_t *input,
+    uint32_t input_length, uint8_t *destination, size_t capacity, size_t *bytes_written);
+chur_status_t chur_device_pairing_approve(chur_handle_t session, const uint8_t *input,
+    uint32_t input_length, uint8_t *destination, size_t capacity, size_t *bytes_written);
+chur_status_t chur_device_pairing_start(chur_handle_t session, const uint8_t *input,
+    uint32_t input_length, uint8_t *destination, size_t capacity, size_t *bytes_written);
+chur_status_t chur_device_pairing_finish(chur_handle_t session, const uint8_t *input,
+    uint32_t input_length, uint8_t *destination, size_t capacity, size_t *bytes_written);
+chur_status_t chur_device_pairing_checkpoint(chur_handle_t session, const uint8_t *input,
+    uint32_t input_length, uint8_t *destination, size_t capacity, size_t *bytes_written);
+chur_status_t chur_device_pairing_overview(chur_handle_t session, const uint8_t *input,
+    uint32_t input_length, uint8_t *destination, size_t capacity, size_t *bytes_written);
+chur_status_t chur_device_pairing_revoke(chur_handle_t session, const uint8_t *input,
+    uint32_t input_length, uint8_t *destination, size_t capacity, size_t *bytes_written);
+
 /* ABI 2.20, FFI_CONTRACT.md section 6.24. ROLLBACK_PROTECTION.md section 4
  * keeps a fork state per device chain until it clears. State counts the chains
  * in each state; acknowledge moves every detected chain to acknowledged and
@@ -446,6 +476,8 @@ chur_status_t chur_object_key_issue(chur_handle_t session,
     uint8_t *destination, size_t capacity, size_t *bytes_written);
 chur_status_t chur_object_key_accept(chur_handle_t session,
     const uint8_t *input, uint32_t input_length,
+    uint8_t *destination, size_t capacity, size_t *bytes_written);
+chur_status_t chur_sharing_outbound(chur_handle_t session, uint64_t after_cursor,
     uint8_t *destination, size_t capacity, size_t *bytes_written);
 chur_status_t chur_sharing_receive(chur_handle_t session,
                                    const uint8_t *bundle, uint32_t bundle_length,
@@ -661,8 +693,6 @@ chur_status_t chur_object_delete(chur_handle_t session,
 chur_status_t chur_trash_set(chur_handle_t session, const uint8_t *object_ids,
                              uint32_t object_count, uint8_t restore);
 chur_status_t chur_trash_empty(chur_handle_t session);
-
-/* Permanently deletes verified corrupt objects. */
 chur_status_t chur_corrupt_empty(chur_handle_t session);
 chur_status_t chur_trash_restore_all(chur_handle_t session);
 chur_status_t chur_object_metadata(chur_handle_t session,

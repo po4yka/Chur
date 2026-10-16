@@ -677,6 +677,33 @@ Export resolves selected album subtrees and deduplicates original objects. At mo
 Import restores and verifies the complete package in isolated encrypted staging before it adds anything to the open destination. It creates new identifiers and preserves existing entries. Each committed original with its display metadata, or complete note row, remains durable if a later step fails or cancellation stops the job. Tags, previews, and final album organization may remain incomplete, including newly created empty albums. The [product contract](../product/SELECTIVE_ENCRYPTED_EXPORT.md) specifies metadata selection, names, and the two ways to open an archive.
 
 The operations belong to the open session. They use the existing poll/cancel/close surface. `processed` counts committed originals plus notes, not bytes; `total` is zero until the plan is known. Authentication and packaging do not replace item counts with byte counts. A terminal failure retains its completed-item count. Source readers use the normal deletion and lock revocation barrier. Selective catalog snapshots have a 4 GiB verification bound. SQLCipher page authentication runs as one stage, with cancellation before and after the scan; container verification and copying check cancellation between chunks. A blocked OS write has the existing descriptor-export limit. The host checks the session generation and successful completion before it publishes an export, and discards unpublished output on any refusal.
+### 6.27 Own-device pairing and media transfer
+
+These calls use the current ABI and require an unlocked session. All integers use big-endian order. A variable field is `length:u32 || bytes`; a string is a variable UTF-8 field. Structured responses start with `version:u16 = 1`. Callers own all buffers. Root and private device keys never cross the boundary. The approval input is at most 16 MiB; larger inputs fail before parsing.
+
+| Function | Input | Response after version |
+| --- | --- | --- |
+| `chur_device_pairing_prepare` | Empty | Variable request, fingerprint string |
+| `chur_device_pairing_inspect` | Exact 210-byte request | Vault ID, new device ID, fingerprint string |
+| `chur_device_pairing_approve` | Version 1, variable request, server URL string, proposed transport token (32 bytes), time `u64` | Actual cached token (32 bytes), variable checkpoint, enrollment, operation, encrypted approval |
+| `chur_device_pairing_start` | Encrypted approval | Authenticated server URL string, vault ID, token (32 bytes), device ID, variable enrollment, checkpoint |
+| `chur_device_pairing_finish` | Time `u64` | Installed device ID |
+| `chur_device_pairing_overview` | Empty | Count `u32`, then device ID, fingerprint string, active `u8`, current `u8`, retry-available `u8` per device |
+| `chur_device_pairing_revoke` | Target device ID, time `u64` | Variable checkpoint, revocation, operation |
+| `chur_device_pairing_checkpoint` | Time `u64` | Raw canonical signed checkpoint; no response version prefix |
+
+IDs are 16 bytes. Boolean bytes are exactly zero or one. Retry-available means this catalog has a locally authored cached revocation; an inactive peer without it has no retry action. Approve and revoke persist retry artifacts with their catalog changes. The host must use the returned cached token when it retries enrollment. Start authenticates the approval before it releases the server address or token. Finish installs an ordinary identity only after native verification accepts the approved membership and checkpoint ancestry. A restored recovery identity cannot sign enrollment. The host clears temporary token buffers after use. The UI transfers encrypted approval files, because membership proof histories can exceed a practical pasted-code limit.
+
+Own-vault media calls use the same bounded control-buffer signature:
+
+| Function | Input | Response |
+| --- | --- | --- |
+| `chur_own_sync_collections` | Empty | Version 1, count `u32`, local collection IDs |
+| `chur_own_sync_operations` | Last acknowledged sequence `u64` | Version 1, count `u32`, then sequence `u64` and variable signed operation |
+| `chur_own_sync_author` | Collection, object, store IDs; container length `u64`; SHA-256 (32 bytes) | Existing source-object page format |
+| `chur_own_sync_plan` | Collection ID | Existing shared-receive-plan format |
+
+Author verifies the immutable ciphertext before it creates key-free ordinary CreateObject and CommitObject operations. The host uploads the ciphertext before it publishes those operations, and persists its push cursor only after each relay acknowledgement. Receive uses the existing bounded download and full-container verification calls. Disposable object keys use authenticated current vault membership for same-vault delivery; an empty issuer bundle grants no cross-vault permission.
 
 ## 7. Buffer ownership
 
@@ -803,10 +830,6 @@ Android loads ABI-specific native libraries through the application shell/JNI ad
 - no secret values in errors/logs;
 - Android/iOS byte-equivalent behavior.
 
-### Open readers and permanent erasure
-
-Permanent deletion revokes every reader for that object in the same physical vault. It waits for an in-flight read, removes its retained stream keys and cached plaintext, and completes the durable catalog erasure barrier before it reports success. Subsequent size, information, read, and verification calls return `SESSION_EXPIRED`. Reader close stays idempotent. Readers for other objects remain usable. Reader registration and deletion take a shared lifecycle mutex after the session lock. This covers different session handles for the same physical vault, so a reader cannot escape revocation between opening its key and publishing its handle. Ordinary reads do not take the lifecycle mutex. Close and owner teardown use the same barrier and clear a retained reader even if an in-flight call still owns its Arc. Once owner teardown starts, prepared child handles cannot be registered.
-
 ### Disposable object-key delivery
 
 `chur_object_key_request`, `chur_object_key_issue`, and `chur_object_key_accept`
@@ -829,3 +852,7 @@ zero on failure. The caller checks output capacity before any key mutation.
 The JNI names are `objectKeyRequest`, `objectKeyIssue`, and `objectKeyAccept`.
 Collection-operation logs contain object-key commitments and no wrapped object
 keys. Collection keys can decrypt metadata only.
+
+### Open readers and permanent erasure
+
+Permanent deletion revokes every reader for that object in the same physical vault. It waits for an in-flight read, removes its retained stream keys and cached plaintext, and completes the durable catalog erasure barrier before it reports success. Subsequent size, information, read, and verification calls return `SESSION_EXPIRED`. Reader close stays idempotent. Readers for other objects remain usable. Reader registration and deletion take a shared lifecycle mutex after the session lock. This covers different session handles for the same physical vault, so a reader cannot escape revocation between opening its key and publishing its handle. Ordinary reads do not take the lifecycle mutex. Close and owner teardown use the same barrier and clear a retained reader even if an in-flight call still owns its Arc. Once owner teardown starts, prepared child handles cannot be registered.

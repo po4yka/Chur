@@ -5,23 +5,17 @@ import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-/**
- * What the sync setup form tells a user before they connect, `DESIGN.md` §27.
- *
- * The form used to promise "Keep this vault current on your other devices",
- * and the only statement that photos do not sync was on the sharing card,
- * which appears after connecting. A user could then treat the server as a
- * copy of their media and learn otherwise after losing the phone.
- */
+/** The setup states the media, pairing, and independent-backup boundary. */
 class SyncSetupCopyTest {
 
     @Test
-    fun the_setup_copy_states_what_sync_does_not_copy() {
+    fun the_setup_copy_states_paired_media_and_independent_backup() {
         val text = SyncSetupCopy.INTRO.lowercase()
         assertTrue(
-            "photos, videos, and audio are not copied to your other devices" in text,
-            "the copy does not say that media stays on this device",
+            "encrypted originals can sync to your paired devices" in text,
+            "the copy does not identify the encrypted media and pairing boundary",
         )
+        assertTrue("source device online" in text, "the copy does not explain pending object keys")
         assertTrue("sync is not a backup" in text, "the copy does not say that sync is not a backup")
         // ADR-0033: Chur operates no sync service, so the server is the user's.
         assertTrue("server you run" in text, "the copy does not say whose server it is")

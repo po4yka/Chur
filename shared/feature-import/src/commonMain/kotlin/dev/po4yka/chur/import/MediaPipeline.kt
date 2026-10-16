@@ -233,6 +233,21 @@ interface MediaCodec {
         kind: StreamKind,
         cancelRequested: () -> Boolean = { false },
     ): Derivative?
+
+    /**
+     * Generates one derivative and stops when [cancelRequested] becomes true.
+     *
+     * Android isolates native decoding so it can terminate an unresponsive
+     * decoder before this call returns. The default keeps source ownership
+     * until a synchronous codec returns; such codecs must check cancellation
+     * between decoding stages and inside their sample loops.
+     */
+    suspend fun deriveBounded(
+        media: PickedMedia,
+        probe: ProbedMedia,
+        kind: StreamKind,
+        cancelRequested: () -> Boolean = { false },
+    ): Derivative? = derive(media, probe, kind, cancelRequested)
 }
 
 /**

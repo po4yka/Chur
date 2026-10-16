@@ -1,8 +1,10 @@
 package dev.po4yka.chur.imports
 
 import android.content.ContentResolver
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.media.ExifInterface
 import android.media.MediaExtractor
 import android.media.MediaFormat
@@ -17,6 +19,8 @@ import android.system.OsConstants
 import dev.po4yka.chur.ffi.StreamKind
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
+import java.io.FilterInputStream
+import java.io.InterruptedIOException
 import java.time.DateTimeException
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -33,7 +37,24 @@ import java.time.format.ResolverStyle
  * probe stopped, and the descriptor belongs to the import: closing or seeking
  * it here would be reaching into another operation's resource.
  */
-class AndroidMediaCodec(private val resolver: ContentResolver) : MediaCodec {
+class AndroidMediaCodec private constructor(
+    private val resolver: ContentResolver,
+    private val decoderContext: Context?,
+    private val sourceDescriptor: ParcelFileDescriptor?,
+) : MediaCodec {
+    constructor(resolver: ContentResolver) : this(resolver, null, null)
+    constructor(context: Context) : this(context.contentResolver, context.applicationContext, null)
+    internal constructor(resolver: ContentResolver, source: ParcelFileDescriptor) : this(resolver, null, source)
+
+    override suspend fun deriveBounded(
+        media: PickedMedia,
+        probe: ProbedMedia,
+        kind: StreamKind,
+        cancelRequested: () -> Boolean,
+    ): Derivative? {
+        val context = decoderContext ?: return derive(media, probe, kind, cancelRequested)
+        return AndroidDerivativeClient(context).derive(media, probe, kind, cancelRequested)
+    }
 
     /**
      * Opens a picked content URI, §3.
@@ -147,10 +168,11 @@ class AndroidMediaCodec(private val resolver: ContentResolver) : MediaCodec {
         val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         read(uri) { stream -> BitmapFactory.decodeStream(stream, null, options) }
         if (options.outWidth <= 0 || options.outHeight <= 0) return null
+        val swapped = swapsDimensions(imageOrientation(uri))
         return ProbedMedia(
             mediaClass = MediaBounds.CLASS_IMAGE,
-            width = options.outWidth,
-            height = options.outHeight,
+            width = if (swapped) options.outHeight else options.outWidth,
+            height = if (swapped) options.outWidth else options.outHeight,
             durationMs = 0,
             contentType = normalizeType(options.outMimeType ?: type),
         )
@@ -187,24 +209,35 @@ class AndroidMediaCodec(private val resolver: ContentResolver) : MediaCodec {
         if (kind == StreamKind.AUDIO_WAVEFORM) return deriveWaveform(uri, probe, cancelRequested)
         val target = MediaBounds.targetSize(kind, probe.width, probe.height) ?: return null
         val (targetWidth, targetHeight) = target
-        val bitmap = when (probe.mediaClass) {
-            MediaBounds.CLASS_IMAGE -> decodeScaled(uri, targetWidth, targetHeight)
-            MediaBounds.CLASS_VIDEO -> withRetriever(uri) { it.frameAtTime }
-            else -> null
-        } ?: return null
-        val scaled = if (bitmap.width == targetWidth && bitmap.height == targetHeight) {
-            bitmap
-        } else {
-            Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
+        var bitmap: Bitmap? = null
+        var scaled: Bitmap? = null
+        try {
+            bitmap = when (probe.mediaClass) {
+                MediaBounds.CLASS_IMAGE -> decodeScaled(uri, targetWidth, targetHeight, cancelRequested)
+                MediaBounds.CLASS_VIDEO -> withRetriever(uri) {
+                    if (cancelRequested()) null else it.getScaledFrameAtTime(
+                        -1, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, targetWidth, targetHeight,
+                    )
+                }
+                else -> null
+            } ?: return null
+            if (cancelRequested()) return null
+            scaled = if (bitmap.width == targetWidth && bitmap.height == targetHeight) {
+                bitmap
+            } else {
+                Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
+            }
+            if (cancelRequested()) return null
+            val out = ByteArrayOutputStream()
+            // The source orientation is now in the pixels. No EXIF orientation
+            // is copied into this baseline JPEG.
+            val encoded = scaled.compress(Bitmap.CompressFormat.JPEG, MediaBounds.quality(kind), out)
+            if (!encoded || cancelRequested()) return null
+            return Derivative(kind, out.toByteArray(), targetWidth, targetHeight)
+        } finally {
+            if (scaled !== bitmap) scaled?.recycle()
+            bitmap?.recycle()
         }
-        val out = ByteArrayOutputStream()
-        // §12: baseline JPEG with 4:2:0 chroma, which this encoder produces, at
-        // the quality the kind names.
-        val encoded = scaled.compress(Bitmap.CompressFormat.JPEG, MediaBounds.quality(kind), out)
-        if (scaled !== bitmap) scaled.recycle()
-        bitmap.recycle()
-        if (!encoded) return null
-        return Derivative(kind, out.toByteArray(), targetWidth, targetHeight)
     }
 
     /**
@@ -225,7 +258,7 @@ class AndroidMediaCodec(private val resolver: ContentResolver) : MediaCodec {
         probe: ProbedMedia,
         cancelRequested: () -> Boolean,
     ): Derivative? {
-        val descriptor = resolver.openFileDescriptor(uri, "r") ?: return null
+        val descriptor = openDecodeDescriptor(uri) ?: return null
         val extractor = MediaExtractor()
         var codec: android.media.MediaCodec? = null
         try {
@@ -333,29 +366,108 @@ class AndroidMediaCodec(private val resolver: ContentResolver) : MediaCodec {
      * §12 bounds the decode buffer, and decoding a 48-megapixel photograph at
      * full size to produce a 320px thumbnail is how that bound is exceeded.
      */
-    private fun decodeScaled(uri: Uri, targetWidth: Int, targetHeight: Int): Bitmap? {
+    private fun decodeScaled(
+        uri: Uri,
+        targetWidth: Int,
+        targetHeight: Int,
+        cancelRequested: () -> Boolean,
+    ): Bitmap? {
+        val orientation = imageOrientation(uri, cancelRequested)
+        if (cancelRequested()) return null
+        val swapped = swapsDimensions(orientation)
+        val rawWidth = if (swapped) targetHeight else targetWidth
+        val rawHeight = if (swapped) targetWidth else targetHeight
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        read(uri) { BitmapFactory.decodeStream(it, null, bounds) }
+        read(uri, cancelRequested) { BitmapFactory.decodeStream(it, null, bounds) }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0 || cancelRequested()) return null
         var sample = 1
-        while (bounds.outWidth / (sample * 2) >= targetWidth &&
-            bounds.outHeight / (sample * 2) >= targetHeight
+        while (bounds.outWidth / (sample * 2) >= rawWidth &&
+            bounds.outHeight / (sample * 2) >= rawHeight
         ) {
             sample *= 2
         }
         val options = BitmapFactory.Options().apply { inSampleSize = sample }
-        return read(uri) { BitmapFactory.decodeStream(it, null, options) }
+        val decoded = read(uri, cancelRequested) { BitmapFactory.decodeStream(it, null, options) }
+            ?: return null
+        try {
+            if (cancelRequested()) return null
+            val matrix = orientationMatrix(orientation) ?: return decoded
+            val oriented = Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true)
+            if (oriented !== decoded) decoded.recycle()
+            if (cancelRequested()) { oriented.recycle(); return null }
+            return oriented
+        } catch (failure: Exception) {
+            decoded.recycle()
+            throw failure
+        } finally {
+            if (cancelRequested() && !decoded.isRecycled) decoded.recycle()
+        }
     }
 
+    private fun imageOrientation(uri: Uri, cancelRequested: () -> Boolean = { false }): Int =
+        read(uri, cancelRequested) {
+            ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+        } ?: ExifInterface.ORIENTATION_NORMAL
+
+    private fun swapsDimensions(orientation: Int): Boolean = orientation in 5..8
+
+    private fun orientationMatrix(orientation: Int): Matrix? {
+        val axes = when (orientation) {
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> floatArrayOf(-1f, 0f, 0f, 1f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> floatArrayOf(-1f, 0f, 0f, -1f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> floatArrayOf(1f, 0f, 0f, -1f)
+            ExifInterface.ORIENTATION_TRANSPOSE -> floatArrayOf(0f, 1f, 1f, 0f)
+            ExifInterface.ORIENTATION_ROTATE_90 -> floatArrayOf(0f, -1f, 1f, 0f)
+            ExifInterface.ORIENTATION_TRANSVERSE -> floatArrayOf(0f, -1f, -1f, 0f)
+            ExifInterface.ORIENTATION_ROTATE_270 -> floatArrayOf(0f, 1f, -1f, 0f)
+            else -> return null
+        }
+        return Matrix().apply {
+            setValues(floatArrayOf(axes[0], axes[1], 0f, axes[2], axes[3], 0f, 0f, 0f, 1f))
+        }
+    }
+
+    private fun <T> read(uri: Uri, cancelRequested: () -> Boolean, body: (InputStream) -> T): T? =
+        read(uri) { source ->
+            body(object : FilterInputStream(source) {
+                private fun checkCancellation() {
+                    if (cancelRequested()) throw InterruptedIOException("Derivative cancelled")
+                }
+                override fun read(): Int { checkCancellation(); return super.read() }
+                override fun read(bytes: ByteArray, offset: Int, length: Int): Int {
+                    checkCancellation()
+                    return `in`.read(bytes, offset, length)
+                }
+                override fun skip(length: Long): Long { checkCancellation(); return super.skip(length) }
+            })
+        }
+
     private fun <T> read(uri: Uri, body: (InputStream) -> T): T? = try {
-        resolver.openInputStream(uri)?.use(body)
+        if (sourceDescriptor == null) resolver.openInputStream(uri)?.use(body)
+        else openDecodeDescriptor(uri)?.let { ParcelFileDescriptor.AutoCloseInputStream(it).use(body) }
     } catch (_: Exception) {
         null
+    }
+
+    private fun openDecodeDescriptor(uri: Uri): ParcelFileDescriptor? {
+        val source = sourceDescriptor ?: return resolver.openFileDescriptor(uri, "r")
+        val copy = ParcelFileDescriptor.dup(source.fileDescriptor)
+        return try {
+            // The service owns this source independently of the import reader.
+            Os.lseek(copy.fileDescriptor, 0, OsConstants.SEEK_SET)
+            copy
+        } catch (_: ErrnoException) {
+            copy.close()
+            // A pipe must be reopened for each pass. URI grants are shared by
+            // the application's private processes.
+            resolver.openFileDescriptor(uri, "r")
+        }
     }
 
     private fun <T> withRetriever(uri: Uri, body: (MediaMetadataRetriever) -> T): T? {
         val retriever = MediaMetadataRetriever()
         return try {
-            resolver.openFileDescriptor(uri, "r")?.use { descriptor ->
+            openDecodeDescriptor(uri)?.use { descriptor ->
                 retriever.setDataSource(descriptor.fileDescriptor)
                 body(retriever)
             }

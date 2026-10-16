@@ -24,13 +24,16 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TestTimeSource
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, kotlin.time.ExperimentalTime::class)
 class MediaImporterHostTest {
     /** The clock of the controller [withVault] makes, which a case may move. */
     @Volatile
@@ -133,6 +136,125 @@ class MediaImporterHostTest {
             vault.shutdown()
             root.deleteRecursively()
         }
+    }
+
+    @Test
+    fun a_derivative_storage_failure_keeps_the_committed_object_and_reports_a_preview_warning() = withVault { controller, root ->
+        var attempts = 0
+        val codec = object : MediaCodec {
+            override fun probe(media: PickedMedia) = Previewless.probe(media)
+
+            override fun derive(
+                media: PickedMedia,
+                probe: ProbedMedia,
+                kind: StreamKind,
+                cancelRequested: () -> Boolean,
+            ): Derivative {
+                attempts += 1
+                // The original is already committed. Refuse creation of the
+                // next temporary container, without touching its original.
+                val incoming = root.walkTopDown().first { it.isDirectory && it.name == "incoming" }
+                assertTrue(incoming.renameTo(File(incoming.parentFile, "saved-incoming")))
+                incoming.writeText("the volume cannot create another container")
+                return Derivative(kind, byteArrayOf(1, 2, 3), 320, 240)
+            }
+        }
+
+        val imported = assertIs<MediaImporter.Outcome.Imported>(
+            controller.importMedia(MediaImporter(codec)) { picked(root, 0) },
+        )
+
+        assertEquals(MediaImporter.PreviewWarning.STORAGE_FAILED, imported.previewWarning)
+        assertEquals(0, imported.derivatives)
+        assertEquals(1, attempts, "do not repeat writes after storage failed")
+        assertEquals(1, controller.vault.page(ObjectQuery()).objects.size)
+        assertContentEquals(ByteArray(2_048), controller.vault.readRange(imported.objectId, 0, 2_048))
+    }
+
+    @Test
+    fun a_derivative_deadline_cancels_generation_discards_its_bytes_and_releases_the_source() = withVault { controller, root ->
+        val time = TestTimeSource()
+        var attempts = 0
+        var closed = false
+        var decoding = false
+        val bytes = byteArrayOf(1, 2, 3)
+        val codec = object : MediaCodec {
+            override fun probe(media: PickedMedia) = Previewless.probe(media)
+
+            override fun derive(
+                media: PickedMedia,
+                probe: ProbedMedia,
+                kind: StreamKind,
+                cancelRequested: () -> Boolean,
+            ): Derivative = error("the importer must use the bounded codec entry point")
+
+            override suspend fun deriveBounded(
+                media: PickedMedia,
+                probe: ProbedMedia,
+                kind: StreamKind,
+                cancelRequested: () -> Boolean,
+            ): Derivative {
+                attempts += 1
+                decoding = true
+                assertTrue(!cancelRequested())
+                time += 30.seconds
+                assertTrue(cancelRequested(), "the deadline reaches the platform decoder")
+                decoding = false
+                // A decoder can finish at its deadline. Its late output must
+                // not be saved as a completed preview.
+                return Derivative(kind, bytes, 320, 240)
+            }
+        }
+        val source = picked(root, 0)
+        val imported = assertIs<MediaImporter.Outcome.Imported>(
+            MediaImporter(codec, derivativeTimeSource = time).import(
+                controller.vault,
+                source.copy(close = {
+                    assertTrue(!decoding, "release the source only after decoding stops")
+                    source.close()
+                    closed = true
+                }),
+            ),
+        )
+
+        assertEquals(MediaImporter.PreviewWarning.TIMED_OUT, imported.previewWarning)
+        assertEquals(0, imported.derivatives)
+        assertEquals(1, attempts, "no new preview starts after the deadline")
+        assertTrue(closed)
+        assertContentEquals(ByteArray(3), bytes)
+        assertContentEquals(ByteArray(2_048), controller.vault.readRange(imported.objectId, 0, 2_048))
+    }
+
+    @Test
+    fun cancellation_during_a_derivative_keeps_the_original_and_discards_the_late_result() = withVault { controller, root ->
+        var cancelled = false
+        var attempts = 0
+        val bytes = byteArrayOf(1, 2, 3)
+        val codec = object : MediaCodec {
+            override fun probe(media: PickedMedia) = Previewless.probe(media)
+
+            override fun derive(
+                media: PickedMedia,
+                probe: ProbedMedia,
+                kind: StreamKind,
+                cancelRequested: () -> Boolean,
+            ): Derivative {
+                attempts += 1
+                cancelled = true
+                assertTrue(cancelRequested())
+                return Derivative(kind, bytes, 320, 240)
+            }
+        }
+        val imported = assertIs<MediaImporter.Outcome.Imported>(
+            MediaImporter(codec).import(controller.vault, picked(root, 0), cancelRequested = { cancelled }),
+        )
+
+        assertTrue(imported.previewsSkipped)
+        assertNull(imported.previewWarning)
+        assertEquals(0, imported.derivatives)
+        assertEquals(1, attempts)
+        assertContentEquals(ByteArray(3), bytes)
+        assertContentEquals(ByteArray(2_048), controller.vault.readRange(imported.objectId, 0, 2_048))
     }
 
     @Test

@@ -180,6 +180,7 @@ data class VaultUiState(
     val sharingIdentity: SharingIdentity? = null,
     val sharingOverview: SharingOverview? = null,
     val sharingRecipient: SharingRecipient? = null,
+    val devicePairing: DevicePairingUiState = DevicePairingUiState(),
     /**
      * The system security patch line, `ANDROID.md` §25.1, or `null` where the
      * host reads no patch level and the row is hidden.
@@ -295,6 +296,13 @@ data class VaultActions(
     val onNoticeShown: (Long) -> Unit = {},
     /** Connect the vault to the server the user named, `SYNC_PROTOCOL_V1.md` §6. */
     val onConfigureSync: (serverUrl: String, bootstrapSecret: String) -> Unit = { _, _ -> },
+    val onLoadPairedDevices: () -> Unit = {},
+    val onRevokePairedDevice: (dev.po4yka.chur.ffi.PairedDevice) -> Unit = {},
+    val onPrepareDevicePairing: () -> Unit = {},
+    val onInspectDevicePairing: (String) -> Unit = {},
+    val onApproveDevicePairing: (String, String) -> Unit = { _, _ -> },
+    val onSavePairingApproval: () -> Unit = {},
+    val onOpenPairingApproval: () -> Unit = {},
     /** Run one sync cycle now. */
     val onSyncNow: () -> Unit = {},
     /** Forget the configured server. */
@@ -1023,6 +1031,14 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
         state.sync?.let { sync ->
             item {
                 Text("Sync", style = MaterialTheme.typography.titleMedium)
+            }
+            item {
+                DevicePairingCard(
+                    state.devicePairing, sync.configured, sync.busy || state.devicePairing.busy,
+                    actions.onPrepareDevicePairing, actions.onInspectDevicePairing, actions.onApproveDevicePairing,
+                    actions.onSavePairingApproval, actions.onOpenPairingApproval,
+                    actions.onLoadPairedDevices, actions.onRevokePairedDevice,
+                )
             }
             if (!sync.configured) {
                 item {

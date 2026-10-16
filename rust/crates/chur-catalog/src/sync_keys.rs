@@ -214,6 +214,10 @@ pub fn prepare_backup_identity(
                     head.operation_digest().as_slice(), head.device_id().as_bytes().as_slice()],
             ).map_err(|error| map_sqlite(error, "the snapshot recovery floor could not be stored"))?;
         }
+        transaction.execute("DELETE FROM device_pairing_pending", [])
+            .map_err(|error| map_sqlite(error, "pending pairing state could not be excluded from backup"))?;
+        transaction.execute("DELETE FROM device_pairing_approvals", [])
+            .map_err(|error| map_sqlite(error, "pairing approvals could not be excluded from backup"))?;
         transaction.execute("DELETE FROM sync_identity_envelopes", [])
             .map_err(|error| map_sqlite(error, "snapshot identities could not be removed"))?;
         transaction.execute(
@@ -315,6 +319,11 @@ fn active_identity_envelope(
             && envelope.is_recovery_only() == recovery_only,
         CatalogCorrupt,
         "the private identity contradicts its catalog row"
+    );
+    ensure!(
+        membership.is_active(envelope.device_id()),
+        AuthenticationFailed,
+        "the local device identity has been revoked"
     );
     validate_identity_envelope(root, membership, &envelope, ChurStatus::CatalogCorrupt)?;
     Ok(Some(envelope))

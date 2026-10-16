@@ -162,9 +162,10 @@ impl ReferenceServer {
                  issuer_sequence INTEGER NOT NULL CHECK(issuer_sequence > 0),
                  commitment BLOB NOT NULL CHECK(length(commitment) = 32),
                  record BLOB NOT NULL,
-                 PRIMARY KEY(vault_id, commitment),
-                 UNIQUE(vault_id, issuer_device_id, issuer_sequence)
+                 PRIMARY KEY(vault_id, commitment)
              );
+             CREATE INDEX IF NOT EXISTS checkpoint_issuer_frontier
+                 ON checkpoints(vault_id, issuer_device_id);
              CREATE TABLE IF NOT EXISTS transport_tokens (
                  vault_id BLOB NOT NULL CHECK(length(vault_id) = 16),
                  device_id BLOB NOT NULL CHECK(length(device_id) = 16),

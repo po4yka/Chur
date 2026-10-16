@@ -141,23 +141,34 @@ impl ReferenceServer {
         }
         let mut membership = membership_state(&self.db, revocation.vault_id())?;
         let operation_outcome = validate_operation(&self.db, outer, &membership)?;
-        let pinned_digest = operation_digest_at(
-            &self.db,
-            revocation.vault_id(),
-            revocation.revoked_device_id(),
-            revocation.final_accepted_device_sequence(),
-        )?
-        .ok_or_else(|| {
-            Error::new(
-                ChurStatus::AuthenticationFailed,
-                "revocation point is not stored",
-            )
-        })?;
-        ensure!(
-            pinned_digest.as_slice() == revocation.final_accepted_operation_digest(),
-            AuthenticationFailed,
-            "revocation point digest differs"
-        );
+        if revocation.final_accepted_device_sequence() == 0 {
+            ensure!(
+                outer
+                    .observed_heads()
+                    .iter()
+                    .all(|head| head.device_id() != revocation.revoked_device_id()),
+                AuthenticationFailed,
+                "genesis revocation observes its target's authored history"
+            );
+        } else {
+            let pinned_digest = operation_digest_at(
+                &self.db,
+                revocation.vault_id(),
+                revocation.revoked_device_id(),
+                revocation.final_accepted_device_sequence(),
+            )?
+            .ok_or_else(|| {
+                Error::new(
+                    ChurStatus::AuthenticationFailed,
+                    "revocation point is not stored",
+                )
+            })?;
+            ensure!(
+                pinned_digest.as_slice() == revocation.final_accepted_operation_digest(),
+                AuthenticationFailed,
+                "revocation point digest differs"
+            );
+        }
         membership.accept_revocation(revocation, outer.device_id())?;
         self.ensure_account_capacity(
             revocation.vault_id(),
@@ -208,12 +219,20 @@ impl ReferenceServer {
         device_id: Id,
         after_sequence: u64,
     ) -> Result<Vec<Vec<u8>>> {
+        let membership = membership_state(&self.db, &vault_id)?;
+        let cutoff = match membership.device(&device_id).map(|device| device.status()) {
+            Some(DeviceStatus::Revoked { sequence, .. }) => {
+                to_sqlite(sequence, "revocation cutoff does not fit")?
+            }
+            Some(DeviceStatus::Active) => i64::MAX,
+            None => return Ok(Vec::new()),
+        };
         let after = to_sqlite(after_sequence, "operation cursor does not fit")?;
         let mut statement = self
             .db
             .prepare(
                 "SELECT record FROM operations
-                 WHERE vault_id = ?1 AND device_id = ?2 AND device_sequence > ?3
+                 WHERE vault_id = ?1 AND device_id = ?2 AND device_sequence > ?3 AND device_sequence <= ?5
                  ORDER BY device_sequence LIMIT ?4",
             )
             .map_err(|error| map_sqlite(error, "operation page prepare failed"))?;
@@ -224,6 +243,7 @@ impl ReferenceServer {
                     device_id.as_bytes().as_slice(),
                     after,
                     i64::try_from(bounds::RESPONSE_OPERATIONS_MAX).unwrap_or(i64::MAX),
+                    cutoff,
                 ],
                 |row| row.get::<_, Vec<u8>>(0),
             )
@@ -733,6 +753,280 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_cached_genesis_revocation_survives_ready_winning_the_relay_race() {
+        use chur_catalog::{
+            device_pairing, paths::VaultRoot, sync_engine, sync_membership, sync_receive,
+            sync_staging::LockedStaging, vault,
+        };
+        use chur_media::{backup, progress::Uninterrupted};
+        use std::io::Cursor;
+        let source_dir = crate::tests::TestRoot::new();
+        let target_dir = crate::tests::TestRoot::new();
+        let source_path = VaultRoot::new(source_dir.0.clone());
+        let target_path = VaultRoot::new(target_dir.0.clone());
+        let mut source = vault::create(&source_path, b"strong race test password", 1)
+            .expect("source")
+            .activate()
+            .expect("activate");
+        let secret = source.root_secret().expect("root").duplicate();
+        let vault_id = source.vault_id();
+        let (owner, _) = sync_receive::provision_local_identity(
+            source.catalog().expect("catalog"),
+            &secret,
+            vault_id,
+        )
+        .expect("ordinary source");
+        let mut bytes = Cursor::new(Vec::new());
+        backup::create(&mut source, &mut bytes, 2, &mut Uninterrupted).expect("real backup");
+        backup::restore(
+            &target_path,
+            &mut bytes,
+            b"strong race test password",
+            &mut Uninterrupted,
+        )
+        .expect("real restore");
+        let mut target = vault::unlock_with_password(&target_path, b"strong race test password", 3)
+            .expect("target");
+        let request =
+            device_pairing::prepare_request(target.catalog().expect("catalog"), &secret, vault_id)
+                .expect("fresh request");
+        let approval = device_pairing::approve(
+            source.catalog().expect("catalog"),
+            &secret,
+            vault_id,
+            &request,
+            "https://sync.example",
+            &[80; 32],
+            4,
+        )
+        .expect("approval");
+        device_pairing::accept_start(
+            target.catalog().expect("catalog"),
+            &secret,
+            vault_id,
+            &approval.approval,
+        )
+        .expect("accept approval");
+        for record in chur_catalog::sync_log::records_after(
+            source.catalog_ref().expect("catalog"),
+            owner.device_id(),
+            0,
+        )
+        .expect("proofs")
+        {
+            sync_engine::stage_inbound(
+                &target_path,
+                vault_id,
+                sync_engine::StagedKind::Operation,
+                5,
+                &record,
+            )
+            .expect("stage");
+        }
+        let mut inbox = LockedStaging::open(target_path.sync_inbox(&vault_id)).expect("inbox");
+        let report = sync_engine::process_staged(
+            target.catalog().expect("catalog"),
+            &secret,
+            vault_id,
+            &mut inbox,
+            5,
+        )
+        .expect("process");
+        assert_eq!(report.rejected, 0);
+        device_pairing::finalize(target.catalog().expect("catalog"), &secret, vault_id, 6)
+            .expect("finalize");
+        let ready = Operation::decode(
+            &chur_catalog::sync_log::record_at(
+                target.catalog_ref().expect("catalog"),
+                request.device_id(),
+                1,
+            )
+            .expect("Ready lookup")
+            .expect("Ready"),
+        )
+        .expect("Ready decode");
+        let prepared = device_pairing::prepare_revoke(
+            source.catalog().expect("catalog"),
+            &secret,
+            vault_id,
+            *request.device_id(),
+            7,
+        )
+        .expect("durable zero cutoff");
+        let revocation = RevocationRecord::decode(&prepared.revocation).expect("revocation");
+        assert_eq!(revocation.final_accepted_device_sequence(), 0);
+        let outer = Operation::decode(&prepared.operation).expect("outer");
+        let relay_dir = crate::tests::TestRoot::new();
+        let mut relay = ReferenceServer::open(&relay_dir.0, 1024, 1048576).expect("relay");
+        let initial = sync_membership::enrollment_for_device(
+            source.catalog_ref().expect("catalog"),
+            owner.device_id(),
+        )
+        .expect("initial");
+        let first = Operation::decode(
+            &chur_catalog::sync_log::record_at(
+                source.catalog_ref().expect("catalog"),
+                owner.device_id(),
+                1,
+            )
+            .expect("lookup")
+            .expect("initial operation"),
+        )
+        .expect("initial decode");
+        relay
+            .accept_initial_membership(&initial, &first)
+            .expect("relay bootstrap");
+        relay
+            .accept_checkpoint(&Checkpoint::decode(&approval.checkpoint).expect("checkpoint"))
+            .expect("relay checkpoint");
+        relay
+            .accept_enrollment(
+                &EnrollmentRecord::decode(&approval.enrollment).expect("enrollment"),
+                &Operation::decode(&approval.operation).expect("enrollment outer"),
+            )
+            .expect("relay enrollment");
+        relay
+            .set_transport_token(vault_id, *request.device_id(), &[80; 32])
+            .expect("token");
+        relay
+            .accept_operation(&ready)
+            .expect("Ready wins before revoke HTTP");
+        relay
+            .accept_revocation(&revocation, &outer)
+            .expect("issuer prefix wins independently of arrival order");
+        let retry = device_pairing::prepare_revoke(
+            source.catalog().expect("catalog"),
+            &secret,
+            vault_id,
+            *request.device_id(),
+            8,
+        )
+        .expect("native retry");
+        assert_eq!(retry.operation, prepared.operation);
+        assert_eq!(
+            relay
+                .accept_revocation(
+                    &RevocationRecord::decode(&retry.revocation).expect("retry record"),
+                    &Operation::decode(&retry.operation).expect("retry outer")
+                )
+                .expect("relay retry"),
+            RelayOutcome::Duplicate
+        );
+        drop(relay);
+        let mut relay = ReferenceServer::open(&relay_dir.0, 1024, 1048576).expect("restart");
+        assert!(
+            relay
+                .operations_after(vault_id, *request.device_id(), 0)
+                .expect("cutoff page")
+                .is_empty()
+        );
+        assert!(relay.authenticate_transport(vault_id, &[80; 32]).is_err());
+        assert!(relay.accept_operation(&ready).is_err());
+    }
+
+    #[test]
+    fn genesis_revocation_rejects_a_lost_device_first_operation() {
+        let root = crate::tests::TestRoot::new();
+        let mut server = ReferenceServer::open(&root.0, 1024, 32768).expect("server");
+        let vault = id(1);
+        let owner = id(2);
+        let peer = id(8);
+        let owner_key = DeviceSigningKey::from_seed([3; 32]);
+        let peer_key = DeviceSigningKey::from_seed([9; 32]);
+        let initial = EnrollmentRecord::initial(vault, owner, owner_key.verifying_key(), [4; 32])
+            .expect("initial")
+            .sign(&owner_key);
+        let first = operation(vault, owner, id(5), 1, [0; 32], &owner_key);
+        server
+            .accept_initial_membership(&initial, &first)
+            .expect("bootstrap");
+        let checkpoint = Checkpoint::new(
+            vault,
+            owner,
+            1,
+            1,
+            initial.commitment(),
+            vec![CheckpointHead::new(owner, 1, first.digest())],
+            [20; 32],
+            [0; 32],
+        )
+        .expect("checkpoint")
+        .sign(&owner_key);
+        server.accept_checkpoint(&checkpoint).expect("checkpoint");
+        let enrollment = EnrollmentRecord::new(
+            vault,
+            peer,
+            peer_key.verifying_key(),
+            [11; 32],
+            2,
+            owner,
+            2,
+            initial.commitment(),
+            checkpoint.commitment(),
+        )
+        .expect("peer")
+        .sign(&owner_key);
+        let second = operation(vault, owner, id(10), 2, first.digest(), &owner_key);
+        server
+            .accept_enrollment(&enrollment, &second)
+            .expect("enroll");
+        let revoke =
+            RevocationRecord::new(vault, peer, 0, [0; 32], 3, owner, enrollment.commitment())
+                .expect("never-authored revocation")
+                .sign(&owner_key);
+        let third = operation(vault, owner, id(14), 3, second.digest(), &owner_key);
+        server
+            .set_transport_token(vault, peer, &[21; 32])
+            .expect("peer token");
+        let ready = operation(vault, peer, id(15), 1, [0; 32], &peer_key);
+        server
+            .accept_operation(&ready)
+            .expect("concurrent Ready reaches relay first");
+        server
+            .accept_revocation(&revoke, &third)
+            .expect("revoke lost approval");
+        assert_eq!(
+            server
+                .accept_revocation(&revoke, &third)
+                .expect("same durable revocation retry"),
+            RelayOutcome::Duplicate
+        );
+        let retained: i64 = server
+            .db
+            .query_row(
+                "SELECT count(*) FROM operations WHERE vault_id = ?1 AND device_id = ?2",
+                params![vault.as_bytes().as_slice(), peer.as_bytes().as_slice()],
+                |row| row.get(0),
+            )
+            .expect("retained signed history");
+        assert_eq!(retained, 1);
+        server
+            .accept_operation(&operation(
+                vault,
+                owner,
+                id(25),
+                4,
+                third.digest(),
+                &owner_key,
+            ))
+            .expect("another active device continues");
+        assert!(server.authenticate_transport(vault, &[21; 32]).is_err());
+        assert!(
+            server
+                .operations_after(vault, peer, 0)
+                .expect("revoked prefix delivery")
+                .is_empty()
+        );
+        assert_eq!(
+            server
+                .accept_operation(&ready)
+                .expect_err("revoked before genesis")
+                .status(),
+            ChurStatus::AuthenticationFailed
+        );
+    }
+
+    #[test]
     fn signed_relay_survives_restart_and_rejects_forks_and_revoked_authors() {
         let root = crate::tests::TestRoot::new();
         let vault = id(1);
@@ -850,6 +1144,40 @@ mod tests {
         )
         .expect("revocation")
         .sign(&first_key);
+        let invalid_genesis = RevocationRecord::new(
+            vault,
+            second_device,
+            0,
+            [0; 32],
+            3,
+            first_device,
+            second_enrollment.commitment(),
+        )
+        .expect("genesis syntax")
+        .sign(&first_key);
+        let observing_outer = Operation::new(
+            id(24),
+            vault,
+            first_device,
+            4,
+            third.digest(),
+            vec![chur_sync_protocol::operation::ObservedHead::new(
+                second_device,
+                1,
+            )],
+            id(16),
+            [vec![17; 24], vec![18; 16]].concat(),
+            [0; 64],
+        )
+        .expect("observing outer")
+        .sign(&first_key);
+        assert_eq!(
+            server
+                .accept_revocation(&invalid_genesis, &observing_outer)
+                .expect_err("known author cannot be revoked at genesis")
+                .status(),
+            ChurStatus::AuthenticationFailed
+        );
         let wrong_revocation = RevocationRecord::new(
             vault,
             second_device,

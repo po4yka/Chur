@@ -312,6 +312,33 @@ CREATE TABLE issued_object_key_grants (
     grant_record BLOB NOT NULL CHECK (length(grant_record) = 346)
 ) STRICT;
 
+-- Local pairing state stays in the encrypted catalog and is excluded from portable snapshots.
+CREATE TABLE device_pairing_pending (
+    only_row INTEGER PRIMARY KEY CHECK(only_row = 1),
+    request BLOB NOT NULL,
+    identity_envelope BLOB,
+    approval BLOB,
+    credentials BLOB,
+    finalized INTEGER NOT NULL CHECK(finalized IN (0, 1))
+) STRICT;
+CREATE TABLE device_pairing_revocations (
+    device_id BLOB PRIMARY KEY REFERENCES sync_devices(device_id),
+    checkpoint BLOB NOT NULL,
+    revocation BLOB NOT NULL,
+    operation BLOB NOT NULL
+) STRICT;
+CREATE TABLE device_pairing_approvals (
+    request_id BLOB PRIMARY KEY,
+    request BLOB NOT NULL,
+    server_url TEXT NOT NULL,
+    transport_token BLOB NOT NULL CHECK(length(transport_token) = 32),
+    checkpoint BLOB NOT NULL,
+    enrollment BLOB NOT NULL,
+    operation BLOB NOT NULL,
+    approval BLOB NOT NULL
+) STRICT;
+
+
 -- §16.3. The five indexes that cover a scope under a sort, then the four that
 -- serve lookups which are not query scopes.
 CREATE INDEX objects_by_capture ON objects (state, capture_time_ms, object_id);
@@ -565,7 +592,7 @@ CREATE TABLE sharing_object_operations (
     key_selector  BLOB NOT NULL REFERENCES sharing_operation_streams(key_selector),
     object_id     BLOB NOT NULL CHECK (length(object_id) = 16),
     operation_id  BLOB NOT NULL CHECK (length(operation_id) = 16),
-    kind          INTEGER NOT NULL CHECK (kind BETWEEN 1 AND 5),
+    kind          INTEGER NOT NULL CHECK (kind BETWEEN 1 AND 6),
     PRIMARY KEY (key_selector, object_id, operation_id),
     UNIQUE (key_selector, operation_id),
     FOREIGN KEY (key_selector, operation_id)

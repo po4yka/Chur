@@ -80,6 +80,16 @@ pub mod tag {
     pub const SYNC_MEMBERSHIP_CHAIN: &[u8] = b"CHUR\0SYNC\0MEMBERSHIP-CHAIN\0V1";
     /// Opaque server deletion authorization signature.
     pub const SYNC_SERVER_DELETE: &[u8] = b"CHUR\0SYNC\0SERVER-DELETE\0V1";
+    /// Keyed restored-root possession proof.
+    pub const PAIRING_ROOT_PROOF: &[u8] = b"CHUR\0PAIRING\0ROOT-PROOF\0V1";
+    /// Fresh own-device request signature.
+    pub const PAIRING_REQUEST_SIGNATURE: &[u8] = b"CHUR\0PAIRING\0REQUEST-SIGNATURE\0V1";
+    /// Complete own-device request commitment.
+    pub const PAIRING_REQUEST_DIGEST: &[u8] = b"CHUR\0PAIRING\0REQUEST-DIGEST\0V1";
+    /// Authorized own-device approval signature.
+    pub const PAIRING_APPROVAL_SIGNATURE: &[u8] = b"CHUR\0PAIRING\0APPROVAL-SIGNATURE\0V1";
+    /// Own-device approval HPKE info and AAD.
+    pub const PAIRING_APPROVAL_HPKE: &[u8] = b"CHUR\0PAIRING\0APPROVAL-HPKE\0V1";
     /// Device verification fingerprint.
     pub const IDENTITY_FINGERPRINT: &[u8] = b"CHUR\0IDENTITY\0FINGERPRINT\0V1";
     /// Signing public-key identifier.
@@ -139,6 +149,11 @@ pub mod tag {
         SYNC_REVOCATION,
         SYNC_MEMBERSHIP_CHAIN,
         SYNC_SERVER_DELETE,
+        PAIRING_ROOT_PROOF,
+        PAIRING_REQUEST_SIGNATURE,
+        PAIRING_REQUEST_DIGEST,
+        PAIRING_APPROVAL_SIGNATURE,
+        PAIRING_APPROVAL_HPKE,
         IDENTITY_FINGERPRINT,
         IDENTITY_SIGNING_KEY_ID,
         IDENTITY_HPKE_KEY_ID,

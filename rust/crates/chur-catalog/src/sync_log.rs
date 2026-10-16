@@ -585,7 +585,7 @@ pub fn load(db: &CatalogDb, membership: &MembershipState) -> Result<DurableOpera
                 "an accepted operation digest is malformed"
             );
             match log
-                .restore_accepted(&operation, membership)
+                .restore_protected_catalog_history(&operation, membership)
                 .map_err(corrupt_log)?
             {
                 ApplyOutcome::Applied => {

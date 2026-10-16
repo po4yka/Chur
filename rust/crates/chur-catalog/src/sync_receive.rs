@@ -182,6 +182,8 @@ pub fn load_materialized_state(db: &CatalogDb, keys: &KeyDirectory) -> Result<Ma
             if !matches!(
                 payload.body(),
                 PayloadBody::AddDevice(_)
+                    | PayloadBody::DeviceReady
+                    | PayloadBody::DeclareCollection { .. }
                     | PayloadBody::RevokeDevice(_)
                     | PayloadBody::CreateCollectionEpoch { .. }
                     | PayloadBody::RewrapObjectKey { .. }
@@ -287,7 +289,9 @@ pub fn author_content_operation(
         "local content operation does not change the current state"
     );
     ensure!(
-        log.accept_with(db, &operation, membership, |_| Ok(()))? == ApplyOutcome::Applied,
+        log.accept_with(db, &operation, membership, |tx| {
+            crate::deletion::project_purge(tx, payload)
+        })? == ApplyOutcome::Applied,
         InternalFailure,
         "fresh local content operation was not applied"
     );
@@ -314,10 +318,11 @@ pub fn author_membership_operation(
         ),
         PayloadBody::RevokeDevice(revocation) => ensure!(
             log.head(revocation.revoked_device_id())
-                == Some((
+                .unwrap_or((0, [0; 32]))
+                == (
                     revocation.final_accepted_device_sequence(),
                     *revocation.final_accepted_operation_digest(),
-                )),
+                ),
             AuthenticationFailed,
             "local revocation does not pin the latest accepted device head"
         ),
@@ -600,8 +605,106 @@ pub fn accept_operation(
     record: &[u8],
 ) -> Result<ApplyOutcome> {
     let operation = Operation::decode(record)?;
+    // A valid new selector can precede its root-domain declaration in the
+    // shuffled inbox. Authenticate the outer identity before retaining it;
+    // only a decrypted and causally accepted operation can advance its head.
+    if !keys.contains_selector(operation.key_selector()) {
+        ensure!(
+            operation.vault_id() == membership.vault_id(),
+            AuthenticationFailed,
+            "pending operation belongs to another vault"
+        );
+        let issuer = membership.device(operation.device_id()).ok_or_else(|| {
+            Error::new(
+                ChurStatus::AuthenticationFailed,
+                "pending operation author is not enrolled",
+            )
+        })?;
+        ensure!(
+            issuer
+                .signing_public_keys()
+                .any(|key| operation.verify_signature(key).is_ok()),
+            AuthenticationFailed,
+            "pending operation signature did not verify"
+        );
+        return Ok(ApplyOutcome::PendingCause);
+    }
     let payload = OperationPayload::open_for_operation(&operation, keys)?;
     match payload.body() {
+        PayloadBody::DeclareCollection {
+            collection_key_envelope,
+        } => {
+            let envelope = collection_key_envelope;
+            ensure!(
+                envelope.vault_id() == membership.vault_id(),
+                AuthenticationFailed,
+                "declared metadata key names another vault"
+            );
+            let secret = envelope.open(root)?;
+            let domain = KeyDomain::collection(
+                &secret,
+                envelope.collection_id(),
+                envelope.collection_epoch(),
+            )?;
+            keys.check_insert(&domain)?;
+            let previous = match crate::store::collection(db, envelope.collection_id()) {
+                Ok(collection) => {
+                    ensure!(
+                        collection.policy_type != crate::model::COLLECTION_POLICY_SHARED,
+                        AuthenticationFailed,
+                        "own declaration targets an external shared collection"
+                    );
+                    Some(collection)
+                }
+                Err(error) if error.status() == ChurStatus::NotFound => None,
+                Err(error) => return Err(error),
+            };
+            let existing = match crate::store::active_collection_envelope(
+                db,
+                envelope.collection_id(),
+                envelope.collection_epoch(),
+            ) {
+                Ok(bytes) => {
+                    let stored = chur_format::envelope::CollectionKeyEnvelope::decode(&bytes)?;
+                    ensure!(
+                        stored.open(root)?.expose() == secret.expose(),
+                        AuthenticationFailed,
+                        "declared collection changes an existing metadata key"
+                    );
+                    Some(bytes)
+                }
+                Err(error) if error.status() == ChurStatus::NotFound => None,
+                Err(error) => return Err(error),
+            };
+            let outcome = log.accept_with(db, &operation, membership, |tx| {
+                if existing.is_none() {
+                    crate::store::project_collection_with_envelope(tx, &crate::model::Collection {
+                        collection_id: *envelope.collection_id(), current_epoch: envelope.collection_epoch(),
+                        policy_type: crate::model::COLLECTION_POLICY_VAULT_DEFAULT,
+                        created_revision: previous.as_ref().map_or(1, |value| value.created_revision),
+                        status: previous.as_ref().map_or(crate::model::COLLECTION_STATUS_ACTIVE, |value| value.status),
+                    }, envelope.envelope_generation(), &envelope.encode())?;
+                    if let Some(old) = &previous {
+                        tx.execute("UPDATE collections SET current_epoch = max(current_epoch, ?2) WHERE collection_id = ?1",
+                            rusqlite::params![envelope.collection_id().as_bytes().as_slice(), crate::db::as_sqlite_integer(old.current_epoch, "collection epoch is too large")?])
+                            .map_err(|error| map_sqlite(error, "declared epoch could not be preserved"))?;
+                    }
+                }
+                Ok(())
+            })?;
+            if outcome == ApplyOutcome::Applied {
+                keys.insert(domain)?;
+            }
+            Ok(outcome)
+        }
+        PayloadBody::DeviceReady => {
+            ensure!(
+                operation.device_sequence() == 1,
+                InvalidInput,
+                "device readiness is only the first device operation"
+            );
+            log.accept_with(db, &operation, membership, |_| Ok(()))
+        }
         PayloadBody::AddDevice(_) | PayloadBody::RevokeDevice(_) => {
             accept_membership_operation(db, log, membership, keys, record)
         }
@@ -694,7 +797,7 @@ pub fn accept_content_operation(
             projected_state = Some(candidate);
             Ok(true)
         },
-        |_| Ok(()),
+        |tx| crate::deletion::project_purge(tx, &payload),
     )?;
     if outcome == ApplyOutcome::Applied {
         *state = projected_state.ok_or_else(|| {
@@ -727,11 +830,11 @@ pub fn accept_membership_operation(
                 operation.device_id(),
                 operation.device_sequence(),
             )?,
-            PayloadBody::RevokeDevice(revocation) => sync_membership::project_revocation(
+            PayloadBody::RevokeDevice(revocation) => sync_membership::project_received_revocation(
                 transaction,
                 membership,
                 revocation,
-                operation.device_id(),
+                &operation,
             )?,
             _ => {
                 return Err(Error::new(

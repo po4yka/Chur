@@ -239,6 +239,8 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     val sharingOverview by controller.sharingOverview.collectAsState()
     val sharingRecipient by controller.sharingRecipient.collectAsState()
     val focusManager = LocalFocusManager.current
+    val vaultDevicePairing by controller.devicePairing.collectAsState()
+    val pairingFiles = rememberPairingFiles(controller)
     val generation = (vaultState as? VaultState.Unlocked)?.generation ?: 0L
     val archiveTransfers = remember(controller, generation) { ArchiveTransferOwner(controller, generation) }
     DisposableEffect(archiveTransfers) { onDispose { archiveTransfers.close() } }
@@ -724,6 +726,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 appLockEnabled = appLockEnabled,
                 autoLock = autoLock,
                 sync = syncStatus,
+                devicePairing = vaultDevicePairing,
                 sharingIdentity = sharingIdentity,
                 sharingOverview = sharingOverview,
                 sharingRecipient = sharingRecipient,
@@ -821,6 +824,13 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 onSetAutoLock = controller::setAutoLock,
                 onAddDeviceSlot = controller::enrollAppleDeviceSlot,
                 onToggleDeviceSlotPolicy = controller::toggleDeviceSlotPolicy,
+                onPrepareDevicePairing = { controller.prepareDevicePairing() },
+                onInspectDevicePairing = { controller.inspectDevicePairing(it) },
+                onApproveDevicePairing = { request, fingerprint -> controller.approveDevicePairing(request, fingerprint) },
+                onSavePairingApproval = pairingFiles.save,
+                onOpenPairingApproval = pairingFiles.open,
+                onLoadPairedDevices = { controller.loadPairedDevices() },
+                onRevokePairedDevice = { controller.revokePairedDevice(it) },
                 onCreateBackup = controller::createBackup,
                 onImportArchive = { choosingArchiveImport = true },
                 onRestoreArchive = controller::restoreArchiveAsSeparateVault,

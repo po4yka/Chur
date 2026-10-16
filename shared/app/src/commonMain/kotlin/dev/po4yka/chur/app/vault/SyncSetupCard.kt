@@ -23,21 +23,11 @@ import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.LocalChurColors
 import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
 
-/**
- * What the setup form says before the user connects.
- *
- * `DESIGN.md` §27 asks copy to be "precise about local versus external
- * copies", and this is the one statement a user reads before deciding. Media
- * objects leave this device only through sharing publication today, so the
- * limit and the fact that sync is not a backup are stated here, not first
- * after connecting. The server is one the user runs, ADR-0033. It is a
- * constant so a test can hold it to that; it changes when own-device object
- * sync ships.
- */
+/** States the copy boundary before the user connects, DESIGN.md §27. */
 internal object SyncSetupCopy {
     const val INTRO: String =
-        "Connect this vault to a sync server you run. Photos, videos, and audio " +
-            "are not copied to your other devices yet. Sync is not a backup."
+        "Connect this vault to a sync server you run. Encrypted originals can sync to your paired devices. " +
+            "Keep the source device online to approve new object keys. Sync is not a backup."
 }
 
 /**

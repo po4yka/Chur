@@ -430,6 +430,9 @@ pub unsafe extern "C" fn chur_vault_unlock(
         let handle = registry::insert(Entry::Session {
             runtime,
             session: std::sync::Mutex::new(session),
+            publication_cache: std::sync::Mutex::new(
+                crate::sharing_publish::VerificationCache::default(),
+            ),
         })?;
         unsafe { write_out(out_session, handle) }
     })
@@ -459,7 +462,9 @@ pub unsafe extern "C" fn chur_vault_lock(session: Handle, reason: u32) -> Status
         let owned = registry::drain_owned_by(session);
         drop(owned);
         let Entry::Session {
-            session: guarded, ..
+            session: guarded,
+            publication_cache,
+            ..
         } = entry.as_ref()
         else {
             return Err(Error::new(
@@ -469,7 +474,9 @@ pub unsafe extern "C" fn chur_vault_lock(session: Handle, reason: u32) -> Status
         };
         let mut guard = registry::lock(guarded);
         // Steps 5, 6, and 8.
-        guard.lock()
+        let result = guard.lock();
+        registry::lock(publication_cache).clear();
+        result
     })
 }
 

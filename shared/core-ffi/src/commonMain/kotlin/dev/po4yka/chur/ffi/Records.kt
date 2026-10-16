@@ -378,6 +378,143 @@ fun encodeSharingIssuerEvidence(evidence: SharingIssuerEvidence): ByteArray {
 /** One device position that native signature and sequence checks accepted. */
 data class SyncDeviceHead(val deviceId: ByteArray, val sequence: ULong)
 
+class DevicePairingRequest(val request: ByteArray, val fingerprint: String)
+
+class DevicePairingPreview(val vaultId: ByteArray, val deviceId: ByteArray, val fingerprint: String)
+
+class PreparedDevicePairing(
+    val transportToken: ByteArray,
+    val checkpoint: ByteArray,
+    val enrollment: ByteArray,
+    val operation: ByteArray,
+    val approval: ByteArray,
+)
+
+class DevicePairingCredentials(
+    val serverUrl: String,
+    val vaultId: ByteArray,
+    val transportToken: ByteArray,
+    val deviceId: ByteArray,
+    val enrollment: ByteArray,
+    val checkpoint: ByteArray,
+)
+
+class PairedDevice(
+    val deviceId: ByteArray,
+    val fingerprint: String,
+    val active: Boolean,
+    val current: Boolean,
+    val retryAvailable: Boolean = false,
+)
+
+class PreparedDeviceRevocation(val checkpoint: ByteArray, val revocation: ByteArray, val operation: ByteArray)
+
+fun decodePairedDevices(bytes: ByteArray): List<PairedDevice> {
+    val reader = pairingReader(bytes)
+    val count = reader.int()
+    if (count !in 0..4_096) throw ChurFailure(ChurStatus.RESOURCE_LIMIT_EXCEEDED, "the paired device count")
+    val result = List(count) { PairedDevice(reader.take(ID_LENGTH), reader.bounded().decodeToString(), reader.flag(), reader.flag(), reader.flag()) }
+    reader.requireExhausted()
+    return result
+}
+
+fun decodePreparedDeviceRevocation(bytes: ByteArray): PreparedDeviceRevocation {
+    val reader = pairingReader(bytes)
+    val result = PreparedDeviceRevocation(reader.bounded(), reader.bounded(), reader.bounded())
+    reader.requireExhausted()
+    return result
+}
+
+fun decodeDevicePairingRequest(bytes: ByteArray): DevicePairingRequest {
+    val reader = pairingReader(bytes)
+    val result = DevicePairingRequest(reader.bounded(), reader.bounded().decodeToString())
+    reader.requireExhausted()
+    return result
+}
+
+fun decodeDevicePairingPreview(bytes: ByteArray): DevicePairingPreview {
+    val reader = pairingReader(bytes)
+    val result = DevicePairingPreview(reader.take(ID_LENGTH), reader.take(ID_LENGTH), reader.bounded().decodeToString())
+    reader.requireExhausted()
+    return result
+}
+
+fun decodePreparedDevicePairing(bytes: ByteArray): PreparedDevicePairing {
+    val reader = pairingReader(bytes)
+    val result = PreparedDevicePairing(reader.take(32), reader.bounded(), reader.bounded(), reader.bounded(), reader.bounded())
+    reader.requireExhausted()
+    return result
+}
+
+fun decodeDevicePairingCredentials(bytes: ByteArray): DevicePairingCredentials {
+    val reader = pairingReader(bytes)
+    val result = DevicePairingCredentials(
+        reader.bounded().decodeToString(), reader.take(ID_LENGTH), reader.take(32), reader.take(ID_LENGTH), reader.bounded(), reader.bounded(),
+    )
+    reader.requireExhausted()
+    return result
+}
+
+fun decodeFinishedDevicePairing(bytes: ByteArray): ByteArray {
+    val reader = pairingReader(bytes)
+    val result = reader.take(ID_LENGTH)
+    reader.requireExhausted()
+    return result
+}
+
+fun decodeOwnSyncCollections(bytes: ByteArray): List<ByteArray> {
+    val reader = pairingReader(bytes)
+    val count = reader.int()
+    if (count !in 0..4_096) throw ChurFailure(ChurStatus.RESOURCE_LIMIT_EXCEEDED, "the own collection count")
+    val result = List(count) { reader.take(ID_LENGTH) }
+    reader.requireExhausted()
+    return result
+}
+
+class OwnSyncOperation(val sequence: ULong, val record: ByteArray)
+
+fun decodeOwnSyncOperations(bytes: ByteArray): List<OwnSyncOperation> {
+    val reader = pairingReader(bytes)
+    val count = reader.int()
+    if (count !in 0..4_096) throw ChurFailure(ChurStatus.RESOURCE_LIMIT_EXCEEDED, "the own operation count")
+    val result = List(count) { OwnSyncOperation(reader.long().toULong(), reader.bounded()) }
+    reader.requireExhausted()
+    return result
+}
+
+private fun pairingReader(bytes: ByteArray): RecordReader {
+    val reader = RecordReader(bytes, bytes.size)
+    if (reader.short() != 1) throw ChurFailure(ChurStatus.NON_CANONICAL_ENCODING, "the device pairing version")
+    return reader
+}
+
+fun encodeDevicePairingApproval(request: ByteArray, serverUrl: String, token: ByteArray, nowMs: Long): ByteArray {
+    val server = serverUrl.encodeToByteArray()
+    require(request.size <= 16_384 && server.size <= 2_048 && token.size == 32 && nowMs >= 0)
+    val encoded = ByteArray(2 + 4 + request.size + 4 + server.size + 32 + 8)
+    var offset = 0
+    fun unsigned(value: ULong, bytes: Int) {
+        repeat(bytes) { index -> encoded[offset++] = (value shr ((bytes - index - 1) * 8)).toByte() }
+    }
+    fun record(value: ByteArray) {
+        unsigned(value.size.toULong(), 4)
+        value.copyInto(encoded, offset)
+        offset += value.size
+    }
+    unsigned(1uL, 2)
+    record(request)
+    record(server)
+    token.copyInto(encoded, offset)
+    offset += token.size
+    unsigned(nowMs.toULong(), 8)
+    return encoded
+}
+
+fun encodeDevicePairingTime(nowMs: Long): ByteArray {
+    require(nowMs >= 0)
+    return ByteArray(8) { index -> (nowMs.toULong() shr ((7 - index) * 8)).toByte() }
+}
+
 fun decodeSyncHeads(bytes: ByteArray, length: Int): List<SyncDeviceHead> {
     val reader = RecordReader(bytes, length)
     if (reader.short() != 1) throw ChurFailure(ChurStatus.NON_CANONICAL_ENCODING, "the sync head version")
@@ -814,4 +951,21 @@ private class RecordReader(private val bytes: ByteArray, private val limit: Int)
             throw ChurFailure(ChurStatus.INVALID_INPUT, "the record ends inside a field")
         }
     }
+}
+
+/** One verified durable local collection-operation publication. */
+class CollectionOutbound(val cursor: ULong, val collectionId: ByteArray, val record: ByteArray)
+
+fun decodeCollectionOutbound(bytes: ByteArray, length: Int): List<CollectionOutbound> {
+    val reader = RecordReader(bytes, length)
+    require(reader.short() == 1) { "unsupported collection outbox version" }
+    val count = reader.int()
+    require(count in 0..64) { "invalid collection outbox count" }
+    val records = List(count) {
+        val cursor = reader.long()
+        require(cursor > 0) { "invalid collection outbox cursor" }
+        CollectionOutbound(cursor.toULong(), reader.take(16), reader.bounded())
+    }
+    reader.requireExhausted()
+    return records
 }

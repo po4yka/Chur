@@ -367,6 +367,47 @@ pub fn project_revocation(
     revocation: &RevocationRecord,
     outer_device_id: &Id,
 ) -> Result<MembershipState> {
+    project_revocation_state(transaction, current, revocation, outer_device_id, true)
+}
+
+/// A received signed revocation describes the issuer's accepted prefix, not
+/// the receiver's possibly later local history.
+pub(crate) fn project_received_revocation(
+    transaction: &Transaction<'_>,
+    current: &MembershipState,
+    revocation: &RevocationRecord,
+    outer: &chur_sync_protocol::operation::Operation,
+) -> Result<MembershipState> {
+    ensure!(
+        revocation.final_accepted_device_sequence() != 0
+            || outer
+                .observed_heads()
+                .iter()
+                .all(|head| head.device_id() != revocation.revoked_device_id()),
+        AuthenticationFailed,
+        "genesis revocation observes its target's authored history"
+    );
+    project_revocation_state(transaction, current, revocation, outer.device_id(), false)
+}
+
+fn project_revocation_state(
+    transaction: &Transaction<'_>,
+    current: &MembershipState,
+    revocation: &RevocationRecord,
+    outer_device_id: &Id,
+    local_author: bool,
+) -> Result<MembershipState> {
+    if local_author && revocation.final_accepted_device_sequence() == 0 {
+        let authored: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sync_heads WHERE device_id = ?1 AND (accepted_sequence > 0 OR floor_sequence > 0))",
+            [revocation.revoked_device_id().as_bytes().as_slice()], |row| row.get(0),
+        ).map_err(|error| map_sqlite(error, "revocation genesis could not be verified"))?;
+        ensure!(
+            !authored,
+            AuthenticationFailed,
+            "genesis revocation names an authored device"
+        );
+    }
     let previous_generation = current.generation();
     let previous_commitment = *current.commitment();
     let mut candidate = current.clone();

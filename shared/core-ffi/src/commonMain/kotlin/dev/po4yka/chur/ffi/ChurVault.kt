@@ -336,6 +336,15 @@ object ChurVault {
         }
     }
 
+    fun outboundCollectionOperations(session: Long, after: ULong): List<CollectionOutbound> {
+        require(after <= Long.MAX_VALUE.toULong())
+        return withChurBuffer(16 * 1024 * 1024) { output ->
+            val written = IntArray(1)
+            ChurFailure.check(ChurNative.sharingOutbound(session, after.toLong(), output, written), "collection outbox")
+            decodeCollectionOutbound(output.copyOut(written[0]), written[0])
+        }
+    }
+
     /** Authenticates one collection-operation page and returns missing objects. */
     fun receiveSharedOperations(
         session: Long,
@@ -437,6 +446,78 @@ object ChurVault {
                 "sharing revoke",
             )
             decodePreparedShareRevocation(buffer.copyOut(written[0]), written[0])
+        }
+    }
+
+    fun ownSyncCollections(session: Long): List<ByteArray> =
+        decodeOwnSyncCollections(pairingCall(session, byteArrayOf(), ChurNative::ownSyncCollections, 65_536))
+
+    fun ownSyncOperations(session: Long, after: ULong): List<OwnSyncOperation> {
+        require(after <= Long.MAX_VALUE.toULong())
+        return decodeOwnSyncOperations(pairingCall(session, encodeDevicePairingTime(after.toLong()), ChurNative::ownSyncOperations))
+    }
+
+    fun ownSyncPlan(session: Long, collectionId: ByteArray): SharedReceivePlan {
+        require(collectionId.size == 16)
+        val bytes = pairingCall(session, collectionId, ChurNative::ownSyncPlan, 65_536)
+        return decodeSharedReceivePlan(bytes, bytes.size)
+    }
+
+    fun ownSyncAuthor(session: Long, source: SharedSourceObject): SharedSourceObject {
+        require(source.collectionId.size == 16 && source.objectId.size == 16 && source.storeId.size == 16 && source.fullSha256.size == 32)
+        require(source.length <= Long.MAX_VALUE.toULong())
+        val input = source.collectionId + source.objectId + source.storeId + encodeDevicePairingTime(source.length.toLong()) + source.fullSha256
+        val bytes = pairingCall(session, input, ChurNative::ownSyncAuthor)
+        return decodeSharedSourcePage(source.collectionId, bytes, bytes.size).single()
+    }
+
+    fun prepareDevicePairing(session: Long): DevicePairingRequest =
+        decodeDevicePairingRequest(pairingCall(session, byteArrayOf(), ChurNative::devicePairingPrepare, 512))
+
+    fun inspectDevicePairing(session: Long, request: ByteArray): DevicePairingPreview =
+        decodeDevicePairingPreview(pairingCall(session, request, ChurNative::devicePairingInspect, 128))
+
+    fun approveDevicePairing(session: Long, request: ByteArray, serverUrl: String, token: ByteArray, nowMs: Long): PreparedDevicePairing {
+        val encoded = encodeDevicePairingApproval(request, serverUrl, token, nowMs)
+        return try {
+            val response = pairingCall(session, encoded, ChurNative::devicePairingApprove)
+            try { decodePreparedDevicePairing(response) } finally { response.fill(0) }
+        } finally { encoded.fill(0) }
+    }
+
+    fun startDevicePairing(session: Long, approval: ByteArray): DevicePairingCredentials {
+        val response = pairingCall(session, approval, ChurNative::devicePairingStart, 8_192)
+        return try { decodeDevicePairingCredentials(response) } finally { response.fill(0) }
+    }
+
+    fun finishDevicePairing(session: Long, nowMs: Long): ByteArray =
+        decodeFinishedDevicePairing(pairingCall(session, encodeDevicePairingTime(nowMs), ChurNative::devicePairingFinish, 18))
+
+    fun pairedDevices(session: Long): List<PairedDevice> =
+        decodePairedDevices(pairingCall(session, byteArrayOf(), ChurNative::devicePairingOverview, 1024 * 1024))
+
+    fun prepareDeviceRevocation(session: Long, deviceId: ByteArray, nowMs: Long): PreparedDeviceRevocation {
+        require(deviceId.size == 16)
+        return decodePreparedDeviceRevocation(pairingCall(session, deviceId + encodeDevicePairingTime(nowMs), ChurNative::devicePairingRevoke, 65_536))
+    }
+
+    fun currentDeviceCheckpoint(session: Long, nowMs: Long): ByteArray =
+        pairingCall(session, encodeDevicePairingTime(nowMs), ChurNative::devicePairingCheckpoint, 65_536)
+
+    private fun pairingCall(
+        session: Long,
+        input: ByteArray,
+        call: (Long, ChurBuffer, Int, ChurBuffer, IntArray) -> Int,
+        outputCapacity: Int = 16 * 1024 * 1024 + 8_192,
+    ): ByteArray {
+        require(input.size <= 16 * 1024 * 1024) { "device pairing input is too large" }
+        return withChurBuffer(maxOf(1, input.size)) { source ->
+            source.copyIn(input)
+            withChurBuffer(outputCapacity) { destination ->
+                val written = IntArray(1)
+                ChurFailure.check(call(session, source, input.size, destination, written), "device pairing")
+                destination.copyOut(written[0])
+            }
         }
     }
 

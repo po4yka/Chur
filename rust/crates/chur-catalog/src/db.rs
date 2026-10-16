@@ -119,6 +119,9 @@ pub enum CatalogLocation<'a> {
 pub struct CatalogDb {
     connection: Connection,
     pub(crate) sharing_log_cache: Option<crate::sharing_log::CachedCollectionLog>,
+    pub(crate) own_source_cache: Option<crate::own_sync::SourceCache>,
+    #[cfg(test)]
+    pub(crate) own_source_replays: usize,
 }
 
 impl fmt::Debug for CatalogDb {
@@ -144,6 +147,9 @@ impl CatalogDb {
         let db = Self {
             connection,
             sharing_log_cache: None,
+            own_source_cache: None,
+            #[cfg(test)]
+            own_source_replays: 0,
         };
         db.apply_batch(PRE_KEY_PRAGMAS, "a catalog memory pragma was refused")?;
         db.apply_key(key)?;

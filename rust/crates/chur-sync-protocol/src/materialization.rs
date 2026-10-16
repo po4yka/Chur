@@ -13,6 +13,7 @@ use crate::payload::{MetadataFieldId, OperationPayload, PayloadBody};
 
 #[derive(Clone)]
 struct MaterializedObject {
+    collection_id: Id,
     created: CausalStamp,
     store_id: Id,
     stream_id: Id,
@@ -62,7 +63,7 @@ impl CommittedObject {
         &self.container_commitment
     }
 
-    /// Object key envelope carried by the commit.
+    /// Key-free object-key commitment carried by the commit.
     #[must_use]
     pub const fn object_key_commitment(&self) -> &[u8; 32] {
         &self.object_key_commitment
@@ -117,6 +118,7 @@ impl MaterializedState {
                 self.objects.insert(
                     *object_id,
                     MaterializedObject {
+                        collection_id: *payload.collection_id(),
                         created: stamp.clone(),
                         store_id: *store_id,
                         stream_id: *stream_id,
@@ -279,6 +281,16 @@ impl MaterializedState {
                     .lifecycle
                     .delete(*object_generation, *authored_at_ms, stamp)
             }
+            PayloadBody::PurgeObject {
+                object_id,
+                object_generation,
+                ..
+            } => {
+                let Some(object) = self.objects.get_mut(object_id) else {
+                    return Ok(MergeOutcome::PendingCause);
+                };
+                object.lifecycle.purge(*object_generation, stamp)
+            }
             PayloadBody::RestoreObject {
                 object_id,
                 tombstone_operation_id,
@@ -292,6 +304,8 @@ impl MaterializedState {
                     .restore(tombstone_operation_id, *new_object_generation, stamp)
             }
             PayloadBody::AddDevice(_)
+            | PayloadBody::DeviceReady
+            | PayloadBody::DeclareCollection { .. }
             | PayloadBody::RevokeDevice(_)
             | PayloadBody::CreateCollectionEpoch { .. }
             | PayloadBody::RewrapObjectKey { .. }
@@ -301,6 +315,29 @@ impl MaterializedState {
                 "security operation is not materialized as content",
             )),
         }
+    }
+
+    /// Whether a permanent deletion has been accepted for this object.
+    #[must_use]
+    pub fn object_is_purged(&self, id: &Id) -> bool {
+        self.objects
+            .get(id)
+            .is_some_and(|object| object.lifecycle.is_purged())
+    }
+
+    /// Accepted immutable objects, including their converged visibility.
+    pub fn committed_objects(&self) -> impl Iterator<Item = (Id, Id, u64, bool, &CommittedObject)> {
+        self.objects.iter().filter_map(|(id, object)| {
+            object.committed.as_ref().map(|commit| {
+                (
+                    *id,
+                    object.collection_id,
+                    object.lifecycle.generation(),
+                    object.lifecycle.is_visible(),
+                    commit,
+                )
+            })
+        })
     }
 
     /// Displayed metadata bytes for one object field.

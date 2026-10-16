@@ -332,3 +332,55 @@ fn restore_supersedes_the_tombstones_it_finds_and_both_orders_agree() {
             == MergeOutcome::PendingCause
     );
 }
+
+#[test]
+fn permanent_purge_dominates_concurrent_and_future_restore_in_both_orders() {
+    let key = DeviceSigningKey::from_seed([2; 32]);
+    let created = operation(&key, 40, id(2), 1, [0; 32], vec![]);
+    let deleted = operation(&key, 41, id(2), 2, created.digest(), vec![]);
+    let restored = operation(&key, 42, id(2), 3, deleted.digest(), vec![]);
+    let purged = operation(
+        &key,
+        43,
+        id(3),
+        1,
+        [0; 32],
+        vec![ObservedHead::new(id(2), 1)],
+    );
+    for purge_first in [true, false] {
+        let mut state =
+            ObjectLifecycle::new(1, CausalStamp::from_operation(&created)).expect("create");
+        state
+            .delete(1, 1, CausalStamp::from_operation(&deleted))
+            .expect("recoverable delete");
+        if purge_first {
+            state
+                .purge(1, CausalStamp::from_operation(&purged))
+                .expect("purge");
+        }
+        state
+            .restore(
+                deleted.operation_id(),
+                2,
+                CausalStamp::from_operation(&restored),
+            )
+            .expect("restore");
+        if !purge_first {
+            state
+                .purge(1, CausalStamp::from_operation(&purged))
+                .expect("purge");
+        }
+        assert!(state.is_purged());
+        assert!(!state.is_visible());
+        assert_eq!(
+            state
+                .restore(
+                    deleted.operation_id(),
+                    2,
+                    CausalStamp::from_operation(&restored)
+                )
+                .expect("future restore"),
+            MergeOutcome::Obsolete
+        );
+    }
+}

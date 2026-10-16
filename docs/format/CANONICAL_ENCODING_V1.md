@@ -479,6 +479,11 @@ A domain tag is a fixed ASCII byte constant written without a length prefix, per
 | `CHUR\x00SYNC\x00REVOCATION\x00V1` | device-revocation signature | [`../sync/DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md) §9 |
 | `CHUR\x00SYNC\x00MEMBERSHIP-CHAIN\x00V1` | membership-state commitment | [`../sync/DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md) §4.1 |
 | `CHUR\x00SYNC\x00SERVER-DELETE\x00V1` | opaque server deletion authorization signature | [`../sync/SYNC_PROTOCOL_V1.md`](../sync/SYNC_PROTOCOL_V1.md) §9.1 |
+| `CHUR\x00PAIRING\x00ROOT-PROOF\x00V1` | keyed proof of the restored vault root | [`../sync/DEVICE_PAIRING.md`](../sync/DEVICE_PAIRING.md) |
+| `CHUR\x00PAIRING\x00REQUEST-SIGNATURE\x00V1` | fresh device request signature | [`../sync/DEVICE_PAIRING.md`](../sync/DEVICE_PAIRING.md) |
+| `CHUR\x00PAIRING\x00REQUEST-DIGEST\x00V1` | complete pairing request commitment | [`../sync/DEVICE_PAIRING.md`](../sync/DEVICE_PAIRING.md) |
+| `CHUR\x00PAIRING\x00APPROVAL-SIGNATURE\x00V1` | authorized device approval signature | [`../sync/DEVICE_PAIRING.md`](../sync/DEVICE_PAIRING.md) |
+| `CHUR\x00PAIRING\x00APPROVAL-HPKE\x00V1` | pairing HPKE info and AAD | [`../sync/DEVICE_PAIRING.md`](../sync/DEVICE_PAIRING.md) |
 | `CHUR\x00IDENTITY\x00FINGERPRINT\x00V1` | device verification fingerprint | [`../sync/DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md) §5 |
 | `CHUR\x00IDENTITY\x00SIGNING-KEY-ID\x00V1` | Ed25519 public-key identifier | [`../sync/COLLECTION_GRANTS.md`](../sync/COLLECTION_GRANTS.md) §4 |
 | `CHUR\x00IDENTITY\x00HPKE-KEY-ID\x00V1` | X25519 HPKE public-key identifier | [`../sync/COLLECTION_GRANTS.md`](../sync/COLLECTION_GRANTS.md) §4 |

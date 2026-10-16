@@ -86,9 +86,24 @@ pub fn candidates(
 
 /// Resolves an active original stream without accepting an arbitrary file path.
 pub fn candidate(db: &CatalogDb, collection_id: &Id, object_id: &Id) -> Result<Candidate> {
+    candidate_in(db, collection_id, object_id, false)
+}
+
+fn candidate_in(
+    db: &CatalogDb,
+    collection_id: &Id,
+    object_id: &Id,
+    deleting: bool,
+) -> Result<Candidate> {
     let object = store::object(db, object_id)?;
     ensure!(
-        object.state == ObjectState::Active && object.collection_id == *collection_id,
+        (object.state == ObjectState::Active
+            || (deleting
+                && matches!(
+                    object.state,
+                    ObjectState::Deleting | ObjectState::Trashed | ObjectState::Corrupt
+                )))
+            && object.collection_id == *collection_id,
         NotFound,
         "object is not active in this collection"
     );
@@ -168,12 +183,25 @@ pub fn publish_page(
     collection_id: Id,
     candidates: &[Candidate],
 ) -> Result<Vec<Publication>> {
+    publish_page_in(db, root, source_vault_id, collection_id, candidates, false)
+}
+
+fn publish_page_in(
+    db: &mut CatalogDb,
+    root: &Key,
+    source_vault_id: Id,
+    collection_id: Id,
+    candidates: &[Candidate],
+    deleting: bool,
+) -> Result<Vec<Publication>> {
     ensure!(
         candidates.len() == 1,
         InvalidInput,
         "authoring requires exactly one source object"
     );
-    ensure_ready(db, root, source_vault_id, collection_id)?;
+    if !deleting {
+        ensure_ready(db, root, source_vault_id, collection_id)?;
+    }
     let membership = sync_membership::load(db)?
         .ok_or_else(|| Error::new(ChurStatus::RecoveryRequired, "source membership is absent"))?;
     ensure!(
@@ -249,7 +277,10 @@ pub fn publish_page(
     let mut published = Vec::with_capacity(candidates.len());
     for item in candidates {
         ensure!(
-            same_candidate(item, &candidate(db, &collection_id, &item.object_id)?),
+            same_candidate(
+                item,
+                &candidate_in(db, &collection_id, &item.object_id, deleting)?
+            ),
             Conflict,
             "object changed during publication"
         );
@@ -359,6 +390,102 @@ pub fn publish_page(
     Ok(published)
 }
 
+/// Publishes a source tombstone before key erasure. The durable transport outbox
+/// retains it after the object row and its ciphertext are collected.
+pub fn publish_deletion(
+    db: &mut CatalogDb,
+    root: &Key,
+    vault_id: Id,
+    object_id: &Id,
+    now_ms: u64,
+) -> Result<()> {
+    let object = store::object(db, object_id)?;
+    let Some(state) = sharing::load(db, &object.collection_id)? else {
+        return Ok(());
+    };
+    if state.source_vault_id() != &vault_id {
+        return Ok(());
+    }
+    let published: i64 = db
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM sharing_object_operations WHERE object_id = ?1 AND kind = 1",
+            [object_id.as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .map_err(|error| map_sqlite(error, "published deletion cause could not be read"))?;
+    if published == 0 {
+        return Ok(());
+    }
+    let collection = object.collection_id;
+    let key = sync_keys::collection_key(db, root, vault_id, collection, state.collection_epoch())?;
+    let domain = KeyDomain::collection(&key, &collection, state.collection_epoch())?;
+    let keys = sync_keys::key_directory(db, root, vault_id)?;
+    sharing_log::ensure_object_index(db, domain.selector(), &keys)?;
+    let mut deleted = false;
+    sharing_log::visit_object_records(db, &keys, domain.selector(), object_id, |_, payload| {
+        if matches!(payload.body(), PayloadBody::PurgeObject { object_generation, .. }
+            if *object_generation == object.object_generation)
+        {
+            deleted = true;
+        }
+        Ok(())
+    })?;
+    if deleted {
+        return Ok(());
+    }
+    let item = candidate_in(db, &collection, object_id, true)?;
+    // An epoch can change after the original publication. Recreate its
+    // key-free causal prefix in the current stream before signing deletion.
+    publish_page_in(db, root, vault_id, collection, &[item], true)?;
+    let membership = sync_membership::load(db)?.ok_or_else(|| {
+        Error::new(
+            ChurStatus::RecoveryRequired,
+            "deletion source membership is absent",
+        )
+    })?;
+    let (device, identity) =
+        sync_keys::local_identity(db, root, &membership)?.ok_or_else(|| {
+            Error::new(
+                ChurStatus::RecoveryRequired,
+                "deletion source identity is absent",
+            )
+        })?;
+    let memberships = BTreeMap::from([(vault_id, membership.clone())]);
+    let mut log = sharing_log::take_cached_log(
+        db,
+        collection,
+        state.collection_epoch(),
+        *domain.selector(),
+        &keys,
+        &memberships,
+        &state,
+    )?;
+    log.author_with_keys(
+        db,
+        &keys,
+        random::id()?,
+        vault_id,
+        device,
+        domain.operation_key(),
+        Nonce::random()?,
+        &OperationPayload::new(
+            collection,
+            state.collection_epoch(),
+            PayloadBody::PurgeObject {
+                object_id: *object_id,
+                object_generation: object.object_generation,
+                authored_at_ms: now_ms,
+            },
+        )?,
+        identity.signing_key(),
+        &membership,
+        &membership,
+        &state,
+    )?;
+    sharing_log::store_cached_log(db, *domain.selector(), log)
+}
+
 fn same_candidate(left: &Candidate, right: &Candidate) -> bool {
     left.object_id == right.object_id
         && left.object_generation == right.object_generation
@@ -369,7 +496,7 @@ fn same_candidate(left: &Candidate, right: &Candidate) -> bool {
         && left.container_commitment == right.container_commitment
 }
 
-fn metadata_fields(db: &CatalogDb, object_id: &Id) -> Result<Vec<MetadataField>> {
+pub(crate) fn metadata_fields(db: &CatalogDb, object_id: &Id) -> Result<Vec<MetadataField>> {
     let metadata = store::active_metadata(db, object_id)?;
     let mut fields = Vec::new();
     if let Some(name) = metadata

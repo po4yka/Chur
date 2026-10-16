@@ -293,6 +293,23 @@ fn every_allocated_payload_kind_has_one_canonical_round_trip() {
                 new_object_generation: 2,
             },
         ),
+        OperationPayload::new(
+            collection,
+            7,
+            PayloadBody::PurgeObject {
+                object_id: object,
+                object_generation: 1,
+                authored_at_ms: 1_787_990_400_000,
+            },
+        ),
+        OperationPayload::new(vault, 0, PayloadBody::DeviceReady),
+        OperationPayload::new(
+            vault,
+            0,
+            PayloadBody::DeclareCollection {
+                collection_key_envelope: collection_envelope.clone(),
+            },
+        ),
         OperationPayload::new(vault, 0, PayloadBody::AddDevice(enrollment)),
         OperationPayload::new(vault, 0, PayloadBody::RevokeDevice(revocation)),
         OperationPayload::new(

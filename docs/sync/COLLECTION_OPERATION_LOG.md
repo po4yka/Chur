@@ -29,7 +29,7 @@ Identifiers and sequences are non-zero. An observed-head list has at most 287 en
 
 ## 2. Encryption and signature
 
-The payload is one [`OPERATION_PAYLOAD_V1.md`](OPERATION_PAYLOAD_V1.md) value encrypted with the collection operation key selected by `key_selector`. The allowed kinds are `0x01` through `0x0C` and `0x10`. Every other kind fails closed.
+The payload is one [`OPERATION_PAYLOAD_V1.md`](OPERATION_PAYLOAD_V1.md) value encrypted with the collection operation key selected by `key_selector`. The allowed kinds are `0x01` through `0x0C`, `0x10`, and `0x14`. Every other kind fails closed.
 
 The AAD is `CHUR\x00SHARING\x00COLLECTION-OPERATION-AAD\x00V1` followed by the exact record bytes from `protocol_version` through `key_selector`. The encrypted field contains a 24-byte XChaCha20-Poly1305 nonce and ciphertext with its 16-byte tag.
 
@@ -78,3 +78,9 @@ Revocation advances the collection epoch and rewraps active object keys. Remaini
 - cross-vault observed cause and deterministic convergence;
 - permission, revocation, epoch reset, restart, and malicious relay behavior;
 - Android, iOS, and CLI consumption of the same vectors.
+
+## 7. Permanent source deletion
+
+`DeleteObject` and `RestoreObject` retain the recoverable shared lifecycle. `PurgeObject` permanently removes the original. Only an active source-vault device can author it. The receiver retains its permanent local tombstone across epochs, restarts, and backups made after erasure. It must not issue another object-key request for that identifier.
+
+The source authors the terminal event before erasing its local key. If the collection epoch changed since publication, it first authors a key-free Create/Commit prefix in the current stream. The append-only catalog outbox lists only the local vault and local device's records. Its monotonic row cursor advances only after remote upload acknowledgment. A page contains at most 64 records and 16 MiB. Received peer records never enter another device's authenticated outbound stream.

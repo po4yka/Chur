@@ -169,6 +169,8 @@ internal object ChurJni {
 
     external fun objectKeyAccept(session: Long, input: ByteBuffer, length: Int, destination: ByteBuffer, outWritten: IntArray): Int
 
+    external fun sharingOutbound(session: Long, afterCursor: Long, destination: ByteBuffer, outWritten: IntArray): Int
+
     external fun sharingReceive(
         session: Long,
         bundle: ByteBuffer,
@@ -227,6 +229,30 @@ internal object ChurJni {
         outCounts: LongArray,
         outStatus: IntArray,
     ): Int
+
+    external fun devicePairingPrepare(session: Long, input: ByteBuffer, length: Int, destination: ByteBuffer, outWritten: IntArray): Int
+
+    external fun devicePairingInspect(session: Long, input: ByteBuffer, length: Int, destination: ByteBuffer, outWritten: IntArray): Int
+
+    external fun devicePairingApprove(session: Long, input: ByteBuffer, length: Int, destination: ByteBuffer, outWritten: IntArray): Int
+
+    external fun devicePairingStart(session: Long, input: ByteBuffer, length: Int, destination: ByteBuffer, outWritten: IntArray): Int
+
+    external fun devicePairingFinish(session: Long, input: ByteBuffer, length: Int, destination: ByteBuffer, outWritten: IntArray): Int
+
+    external fun devicePairingCheckpoint(session: Long, input: ByteBuffer, length: Int, destination: ByteBuffer, outWritten: IntArray): Int
+
+    external fun devicePairingOverview(session: Long, input: ByteBuffer, length: Int, destination: ByteBuffer, outWritten: IntArray): Int
+
+    external fun devicePairingRevoke(session: Long, input: ByteBuffer, length: Int, destination: ByteBuffer, outWritten: IntArray): Int
+
+    external fun ownSyncCollections(session: Long, input: ByteBuffer, length: Int, destination: ByteBuffer, outWritten: IntArray): Int
+
+    external fun ownSyncOperations(session: Long, input: ByteBuffer, length: Int, destination: ByteBuffer, outWritten: IntArray): Int
+
+    external fun ownSyncPlan(session: Long, input: ByteBuffer, length: Int, destination: ByteBuffer, outWritten: IntArray): Int
+
+    external fun ownSyncAuthor(session: Long, input: ByteBuffer, length: Int, destination: ByteBuffer, outWritten: IntArray): Int
 
     external fun syncHeads(session: Long, destination: java.nio.ByteBuffer, outWritten: IntArray): Int
 

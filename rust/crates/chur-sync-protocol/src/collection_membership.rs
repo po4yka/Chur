@@ -601,6 +601,7 @@ impl CollectionMembershipState {
                     | PayloadBody::RevokeDevice(_)
                     | PayloadBody::CreateCollectionEpoch { .. }
                     | PayloadBody::RewrapObjectKey { .. }
+                    | PayloadBody::PurgeObject { .. }
             ),
             AuthenticationFailed,
             "shared security operation requires a source-vault device"
@@ -662,7 +663,10 @@ impl CollectionMembershipState {
             return Ok(());
         }
         ensure!(
-            !matches!(payload.body(), PayloadBody::RewrapObjectKey { .. }),
+            !matches!(
+                payload.body(),
+                PayloadBody::RewrapObjectKey { .. } | PayloadBody::PurgeObject { .. }
+            ),
             AuthenticationFailed,
             "object-key rewrap requires a source-vault device"
         );

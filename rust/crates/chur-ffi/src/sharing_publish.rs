@@ -1,6 +1,7 @@
 //! Source-side collection publication and bounded ciphertext reads.
 
-use std::fs::File;
+use std::collections::BTreeMap;
+use std::fs::{File, Metadata};
 use std::io::Read;
 
 use chur_catalog::sharing_publication::{self, Candidate};
@@ -17,6 +18,219 @@ use crate::registry::{self, Entry, Handle, Kind};
 const RECORD_VERSION: u16 = 1;
 const RANGE_MAX: u32 = 1_048_576;
 const SNAPSHOT_MAX: usize = 8 * 1_024;
+
+const VERIFICATION_CACHE_MAX: usize = 1_024;
+
+/// Public ciphertext verification results owned by one unlocked session.
+#[doc(hidden)]
+pub struct VerificationCache {
+    limit: usize,
+    entries: BTreeMap<Id, VerifiedContainer>,
+}
+
+impl Default for VerificationCache {
+    fn default() -> Self {
+        Self {
+            limit: VERIFICATION_CACHE_MAX,
+            entries: BTreeMap::new(),
+        }
+    }
+}
+
+impl VerificationCache {
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
+
+/// Uses only this session handle's public verification cache. The caller holds
+/// the session lock; this helper never acquires it a second time.
+pub(crate) fn cached_sha256(
+    owner: Handle,
+    session: &chur_catalog::vault::Session,
+    item: &Candidate,
+) -> Result<[u8; 32]> {
+    let entry = registry::get(owner, Kind::Session)?;
+    let Entry::Session {
+        publication_cache, ..
+    } = entry.as_ref()
+    else {
+        return Err(Error::new(
+            ChurStatus::InvalidInput,
+            "handle is not a session",
+        ));
+    };
+    hash_with_cache(&mut registry::lock(publication_cache), session, item)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ContainerIdentity {
+    object_store_id: Id,
+    collection_id: Id,
+    object_id: Id,
+    object_generation: u64,
+    stream_id: Id,
+    stream_revision: u32,
+    store_id: Id,
+    container_length: u64,
+    container_commitment: [u8; 32],
+    key_commitment: [u8; 32],
+}
+
+impl ContainerIdentity {
+    fn new(
+        object_store_id: Id,
+        collection_id: Id,
+        item: &Candidate,
+        key_commitment: [u8; 32],
+    ) -> Self {
+        Self {
+            object_store_id,
+            collection_id,
+            object_id: item.object_id,
+            object_generation: item.object_generation,
+            stream_id: item.stream_id,
+            stream_revision: item.stream_revision,
+            store_id: item.store_id,
+            container_length: item.container_length,
+            container_commitment: item.container_commitment,
+            key_commitment,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct FileStamp {
+    device: u64,
+    inode: u64,
+    length: u64,
+    modified_and_changed: [i64; 4],
+}
+
+fn file_stamp(metadata: &Metadata) -> Option<FileStamp> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some(FileStamp {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            length: metadata.len(),
+            modified_and_changed: [
+                metadata.mtime(),
+                metadata.mtime_nsec(),
+                metadata.ctime(),
+                metadata.ctime_nsec(),
+            ],
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        None
+    }
+}
+
+struct VerifiedContainer {
+    identity: ContainerIdentity,
+    stamp: FileStamp,
+    sha256: [u8; 32],
+}
+
+fn hash_with_cache(
+    cache: &mut VerificationCache,
+    session: &chur_catalog::vault::Session,
+    item: &Candidate,
+) -> Result<[u8; 32]> {
+    let result = verified_hash(cache, session, item);
+    if result.is_err() {
+        cache.entries.remove(&item.object_id);
+    }
+    result
+}
+
+fn verified_hash(
+    cache: &mut VerificationCache,
+    session: &chur_catalog::vault::Session,
+    item: &Candidate,
+) -> Result<[u8; 32]> {
+    // Recheck protected catalog state and key availability even on a cache hit.
+    // A cached public digest must not bypass deletion or a changed envelope.
+    let db = session.catalog_ref()?;
+    let collection = chur_catalog::store::object(db, &item.object_id)?.collection_id;
+    let current = sharing_publication::candidate(db, &collection, &item.object_id)?;
+    let object_store = session.object_store_id();
+    ensure!(
+        ContainerIdentity::new(object_store, collection, item, [0; 32])
+            == ContainerIdentity::new(object_store, collection, &current, [0; 32]),
+        Conflict,
+        "source catalog identity changed during publication"
+    );
+    let key = chur_media::keys::object_key(session, &item.object_id)?;
+    let key_commitment =
+        chur_sync_protocol::object_grant::object_key_commitment(&collection, &item.object_id, &key);
+    let identity = ContainerIdentity::new(object_store, collection, item, key_commitment);
+    let path = session.root_dir().container(&object_store, &item.store_id);
+    let file = File::open(&path)
+        .map_err(|_| Error::new(ChurStatus::NotFound, "committed container is absent"))?;
+    let metadata = file.metadata().map_err(|_| {
+        Error::new(
+            ChurStatus::IoFailure,
+            "container identity could not be read",
+        )
+    })?;
+    ensure!(
+        metadata.len() == item.container_length,
+        ObjectCorrupt,
+        "container length contradicts catalog"
+    );
+    let initial_stamp = file_stamp(&metadata);
+    let hit = initial_stamp.and_then(|stamp| {
+        cache
+            .entries
+            .get(&item.object_id)
+            .filter(|entry| entry.identity == identity && entry.stamp == stamp)
+            .map(|entry| entry.sha256)
+    });
+    let sha256 = if let Some(digest) = hit {
+        digest
+    } else {
+        cache.entries.remove(&item.object_id);
+        full_sha256(session, item)?
+    };
+    if let Some(stamp) = initial_stamp {
+        let final_metadata = file.metadata().map_err(|_| {
+            Error::new(
+                ChurStatus::IoFailure,
+                "container identity could not be read",
+            )
+        })?;
+        let path_metadata = std::fs::metadata(&path)
+            .map_err(|_| Error::new(ChurStatus::NotFound, "committed container is absent"))?;
+        ensure!(
+            file_stamp(&final_metadata) == Some(stamp) && file_stamp(&path_metadata) == Some(stamp),
+            ObjectCorrupt,
+            "container changed during publication"
+        );
+        // Stable admission avoids a sequential library scan evicting every
+        // prior result when the library is larger than the bounded cache.
+        if hit.is_none() && cache.entries.len() < cache.limit {
+            cache.entries.insert(
+                item.object_id,
+                VerifiedContainer {
+                    identity,
+                    stamp,
+                    sha256,
+                },
+            );
+        }
+    }
+    Ok(sha256)
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static PUBLICATION_IO: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+}
 
 /// Returns the next 64 active source objects after `after_object_id`.
 ///
@@ -45,6 +259,7 @@ pub unsafe extern "C" fn chur_sharing_publication(
             .try_into()
             .map_err(|_| Error::new(ChurStatus::InvalidInput, "cursor is not 16 bytes"))?;
         let entry = registry::get(session, Kind::Session)?;
+        let owner = session;
         let Entry::Session { session, .. } = entry.as_ref() else {
             return Err(Error::new(
                 ChurStatus::InvalidInput,
@@ -53,17 +268,28 @@ pub unsafe extern "C" fn chur_sharing_publication(
         };
         let encoded = {
             let session = registry::lock(session);
-            sharing_publication::ensure_ready(
-                session.catalog_ref()?,
-                session.root_secret()?,
-                session.vault_id(),
-                collection_id,
-            )?;
+            if chur_catalog::sharing::load(session.catalog_ref()?, &collection_id)?.is_some() {
+                sharing_publication::ensure_ready(
+                    session.catalog_ref()?,
+                    session.root_secret()?,
+                    session.vault_id(),
+                    collection_id,
+                )?;
+            } else {
+                ensure!(
+                    chur_catalog::own_sync::is_local_collection(
+                        session.catalog_ref()?,
+                        &collection_id
+                    )?,
+                    AuthenticationFailed,
+                    "source collection does not belong to this vault"
+                );
+            }
             let candidates =
                 sharing_publication::candidates(session.catalog_ref()?, &collection_id, &after)?;
             let hashes = candidates
                 .iter()
-                .map(|item| full_sha256(&session, item))
+                .map(|item| cached_sha256(owner, &session, item))
                 .collect::<Result<Vec<_>>>()?;
             let mut writer = Writer::new();
             writer
@@ -135,6 +361,7 @@ pub unsafe extern "C" fn chur_sharing_author(
             .try_into()
             .map_err(|_| Error::new(ChurStatus::InvalidInput, "digest is not 32 bytes"))?;
         let entry = registry::get(session, Kind::Session)?;
+        let owner = session;
         let Entry::Session { session, .. } = entry.as_ref() else {
             return Err(Error::new(
                 ChurStatus::InvalidInput,
@@ -151,7 +378,7 @@ pub unsafe extern "C" fn chur_sharing_author(
                 "source object changed after upload"
             );
             ensure!(
-                full_sha256(&session, &item)? == expected_sha256,
+                cached_sha256(owner, &session, &item)? == expected_sha256,
                 Conflict,
                 "source ciphertext changed after upload"
             );
@@ -276,7 +503,15 @@ pub unsafe extern "C" fn chur_sharing_object_read(
     })
 }
 
-fn full_sha256(session: &chur_catalog::vault::Session, item: &Candidate) -> Result<[u8; 32]> {
+pub(crate) fn full_sha256(
+    session: &chur_catalog::vault::Session,
+    item: &Candidate,
+) -> Result<[u8; 32]> {
+    #[cfg(test)]
+    PUBLICATION_IO.with(|counter| {
+        let (scans, bytes) = counter.get();
+        counter.set((scans + 1, bytes));
+    });
     let mut verifier = authenticated_container(session, item)?;
     verifier.verify_complete()?;
     let path = session
@@ -302,6 +537,11 @@ fn full_sha256(session: &chur_catalog::vault::Session, item: &Candidate) -> Resu
         if n == 0 {
             break;
         }
+        #[cfg(test)]
+        PUBLICATION_IO.with(|counter| {
+            let (scans, bytes) = counter.get();
+            counter.set((scans, bytes + n as u64));
+        });
         digest.update(&buffer[..n]);
         total += n as u64;
     }
@@ -341,4 +581,171 @@ fn authenticated_container(
         "container final commitment contradicts the catalog"
     );
     Ok(reader)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+    use super::*;
+    struct Directory(std::path::PathBuf);
+    impl Drop for Directory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    struct Fixture {
+        session: chur_catalog::vault::Session,
+        _directory: Directory,
+        items: Vec<Candidate>,
+    }
+    fn fixture(count: usize) -> Fixture {
+        let directory = Directory(std::env::temp_dir().join(format!(
+            "chur-publication-cache-{}",
+            chur_crypto::random::id().unwrap().to_hex()
+        )));
+        let root = chur_catalog::paths::VaultRoot::new(&directory.0);
+        let mut session =
+            chur_catalog::vault::create(&root, b"strong publication cache password", 1)
+                .unwrap()
+                .activate()
+                .unwrap();
+        let mut items = Vec::new();
+        for _ in 0..count {
+            let plaintext = zeroize::Zeroizing::new(vec![42u8; 65536]);
+            let object = chur_media::import::import_bytes(
+                &mut session,
+                chur_media::import::SourceCapability {
+                    seekable: true,
+                    known_length: Some(plaintext.len() as u64),
+                    content_type_hint: "image/jpeg".into(),
+                    original_filename: Some("photo.jpg".into()),
+                    capture_time_ms: None,
+                },
+                chur_media::import::CanonicalMedia {
+                    media_class: chur_format::constants::MediaClass::Image,
+                    width: 64,
+                    height: 64,
+                    duration_ms: 0,
+                },
+                "image/jpeg",
+                &plaintext,
+                1,
+            )
+            .unwrap();
+            let collection = chur_catalog::store::object(session.catalog_ref().unwrap(), &object)
+                .unwrap()
+                .collection_id;
+            items.push(
+                sharing_publication::candidate(
+                    session.catalog_ref().unwrap(),
+                    &collection,
+                    &object,
+                )
+                .unwrap(),
+            );
+        }
+        Fixture {
+            session,
+            _directory: directory,
+            items,
+        }
+    }
+    #[test]
+    fn an_unchanged_original_is_fully_verified_and_read_only_once_per_session() {
+        let f = fixture(1);
+        let mut cache = VerificationCache::default();
+        PUBLICATION_IO.with(|counter| counter.set((0, 0)));
+        let first = hash_with_cache(&mut cache, &f.session, &f.items[0]).unwrap();
+        assert_eq!(
+            PUBLICATION_IO.with(std::cell::Cell::get),
+            (1, f.items[0].container_length)
+        );
+        assert_eq!(
+            hash_with_cache(&mut cache, &f.session, &f.items[0]).unwrap(),
+            first
+        );
+        assert_eq!(
+            PUBLICATION_IO.with(std::cell::Cell::get),
+            (1, f.items[0].container_length),
+            "second publication reads no ciphertext and does not rerun full MAC verification"
+        );
+    }
+    #[test]
+    fn an_erased_objects_cached_digest_cannot_bypass_current_catalog_state() {
+        let mut f = fixture(1);
+        let item = f.items[0];
+        let mut cache = VerificationCache::default();
+        hash_with_cache(&mut cache, &f.session, &item).unwrap();
+        assert!(cache.entries.contains_key(&item.object_id));
+        chur_catalog::deletion::begin(f.session.catalog().unwrap(), &item.object_id).unwrap();
+        chur_catalog::deletion::erase(f.session.catalog().unwrap(), &item.object_id, 2).unwrap();
+        assert!(chur_media::keys::object_key(&f.session, &item.object_id).is_err());
+        assert!(hash_with_cache(&mut cache, &f.session, &item).is_err());
+        assert!(!cache.entries.contains_key(&item.object_id));
+    }
+
+    #[test]
+    fn same_length_mutation_with_restored_mtime_invalidates_verification() {
+        use std::io::{Seek, SeekFrom, Write};
+        let f = fixture(1);
+        let item = &f.items[0];
+        let mut cache = VerificationCache::default();
+        hash_with_cache(&mut cache, &f.session, item).unwrap();
+        let path = f
+            .session
+            .root_dir()
+            .container(&f.session.object_store_id(), &item.store_id);
+        let mut file = File::options().read(true).write(true).open(path).unwrap();
+        let before = file.metadata().unwrap();
+        file.seek(SeekFrom::Start(item.container_length / 2))
+            .unwrap();
+        let mut byte = [0u8; 1];
+        file.read_exact(&mut byte).unwrap();
+        byte[0] ^= 1;
+        file.seek(SeekFrom::Start(item.container_length / 2))
+            .unwrap();
+        file.write_all(&byte).unwrap();
+        file.sync_all().unwrap();
+        file.set_times(std::fs::FileTimes::new().set_modified(before.modified().unwrap()))
+            .unwrap();
+        assert_eq!(file.metadata().unwrap().len(), before.len());
+        assert_eq!(
+            file.metadata().unwrap().modified().unwrap(),
+            before.modified().unwrap()
+        );
+        assert!(
+            hash_with_cache(&mut cache, &f.session, item).is_err(),
+            "modified ciphertext must fail full authentication despite restored length and mtime"
+        );
+    }
+
+    #[test]
+    fn a_scan_larger_than_the_cache_keeps_hits_instead_of_evicting_the_entire_previous_scan() {
+        let f = fixture(3);
+        let mut cache = VerificationCache {
+            limit: 2,
+            ..VerificationCache::default()
+        };
+        PUBLICATION_IO.with(|counter| counter.set((0, 0)));
+        for item in &f.items {
+            hash_with_cache(&mut cache, &f.session, item).unwrap();
+        }
+        let first_scan = PUBLICATION_IO.with(std::cell::Cell::get);
+        assert_eq!(first_scan.0, 3);
+        for item in &f.items {
+            hash_with_cache(&mut cache, &f.session, item).unwrap();
+        }
+        assert_eq!(
+            PUBLICATION_IO.with(std::cell::Cell::get),
+            (4, first_scan.1 + f.items[2].container_length),
+            "second sequential scan rereads only the original outside the admission bound"
+        );
+        cache.clear();
+        hash_with_cache(&mut cache, &f.session, &f.items[0]).unwrap();
+        assert_eq!(
+            PUBLICATION_IO.with(std::cell::Cell::get).0,
+            5,
+            "session lock clears prior verification results"
+        );
+    }
 }

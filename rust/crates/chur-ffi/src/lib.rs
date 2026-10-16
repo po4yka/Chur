@@ -23,6 +23,8 @@
 //! - `docs/security/SECURITY_INVARIANTS.md` (SEC-050, SEC-051)
 
 pub mod api;
+pub mod device_pairing;
+pub mod own_sync;
 pub mod selective;
 pub mod sharing;
 pub mod sharing_publish;

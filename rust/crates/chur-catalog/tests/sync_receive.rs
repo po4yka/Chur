@@ -1220,6 +1220,136 @@ fn inbound_sharing_membership_routes_through_accept_operation() {
 }
 
 #[test]
+fn root_declarations_discover_future_collections_and_epochs_without_key_substitution() {
+    use chur_format::envelope::CollectionKeyEnvelope;
+    let mut fixture = setup();
+    let mut log = sync_log::load(&fixture.db, &fixture.membership).expect("log");
+    let mut keys = KeyDirectory::new(&fixture.root, &id(2)).expect("root directory");
+    let mut state = MaterializedState::new();
+    let root_domain = KeyDomain::root(&fixture.root, &id(2)).expect("root domain");
+    let mut previous = [0; 32];
+    for (sequence, collection, epoch, marker) in [
+        (1, id(90), 1, 91),
+        (2, id(92), 1, 93),
+        (3, id(90), 2, 94),
+        (4, id(90), 1, 91),
+    ] {
+        let envelope = CollectionKeyEnvelope::seal(
+            &fixture.root,
+            id(2),
+            collection,
+            epoch,
+            epoch,
+            Nonce::new([marker; 24]),
+            &Key::new([marker; 32]),
+        )
+        .expect("metadata envelope");
+        let payload = OperationPayload::new(
+            id(2),
+            0,
+            PayloadBody::DeclareCollection {
+                collection_key_envelope: envelope,
+            },
+        )
+        .expect("root declaration");
+        let operation = Operation::seal(
+            id(150 + sequence as u8),
+            id(2),
+            id(4),
+            sequence,
+            previous,
+            vec![],
+            *root_domain.selector(),
+            root_domain.operation_key(),
+            Nonce::new([marker + 1; 24]),
+            &payload.encode(),
+        )
+        .expect("signed declaration")
+        .sign(&fixture.issuer);
+        assert_eq!(
+            sync_receive::accept_operation(
+                &mut fixture.db,
+                &mut log,
+                &mut fixture.membership,
+                &mut state,
+                &mut keys,
+                &fixture.root,
+                1,
+                &operation.encode()
+            )
+            .expect("declaration accepted"),
+            ApplyOutcome::Applied
+        );
+        previous = operation.digest();
+        let domain = KeyDomain::collection(&Key::new([marker; 32]), &collection, epoch)
+            .expect("declared domain");
+        assert!(keys.contains_selector(domain.selector()));
+    }
+    assert_eq!(
+        store::collection(&fixture.db, &id(90))
+            .expect("future epoch")
+            .current_epoch,
+        2
+    );
+    assert_eq!(
+        store::collection(&fixture.db, &id(92))
+            .expect("future collection")
+            .current_epoch,
+        1
+    );
+    for envelope_vault in [id(2), id(99)] {
+        let envelope = CollectionKeyEnvelope::seal(
+            &fixture.root,
+            envelope_vault,
+            id(90),
+            2,
+            2,
+            Nonce::new([98; 24]),
+            &Key::new([99; 32]),
+        )
+        .expect("substitution envelope");
+        let payload = OperationPayload::new(
+            id(2),
+            0,
+            PayloadBody::DeclareCollection {
+                collection_key_envelope: envelope,
+            },
+        )
+        .expect("declaration");
+        let operation = Operation::seal(
+            id(100),
+            id(2),
+            id(4),
+            5,
+            previous,
+            vec![],
+            *root_domain.selector(),
+            root_domain.operation_key(),
+            Nonce::new([101; 24]),
+            &payload.encode(),
+        )
+        .expect("record")
+        .sign(&fixture.issuer);
+        assert_eq!(
+            sync_receive::accept_operation(
+                &mut fixture.db,
+                &mut log,
+                &mut fixture.membership,
+                &mut state,
+                &mut keys,
+                &fixture.root,
+                2,
+                &operation.encode()
+            )
+            .expect_err("key or vault substitution rejected")
+            .status(),
+            chur_core::ChurStatus::AuthenticationFailed
+        );
+        assert_eq!(log.head(&id(4)), Some((4, previous)));
+    }
+}
+
+#[test]
 fn rotation_accepts_waiting_keys_pending_envelopes_and_permanent_tombstones() {
     use chur_format::envelope::{CollectionKeyEnvelope, ObjectKeyEnvelope};
     use chur_sync_protocol::object_grant::{ObjectKeyGrant, ObjectPrekey, object_key_commitment};
