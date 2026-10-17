@@ -4,6 +4,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Looper
 import android.os.SystemClock
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -74,6 +75,37 @@ class ViewerPhotoPresentationTest {
             assertTrue(back.boundsInRoot.bottom <= scroll.boundsInRoot.top)
         }
 
+    @Test
+    fun photo_zoom_has_adjustable_scale_pan_reset_and_a_keyboard_path() = present { f ->
+        f.main { f.hasImage.value = true; f.stillState.value = ViewerStillState.Ready }
+        assertTrue(f.await { f.nodes().any { SemanticsProperties.ProgressBarRangeInfo in it.config } })
+        fun photo() = f.nodes().first { SemanticsProperties.ProgressBarRangeInfo in it.config }
+        fun action(label: String) = f.main {
+            assertTrue(photo().config[SemanticsActions.CustomActions].first { it.label == label }.action())
+        }
+        action("Zoom in")
+        assertTrue(f.await { photo().config[SemanticsProperties.ProgressBarRangeInfo].current == 1.5f })
+        action("Pan right")
+        f.main { assertTrue(photo().config[SemanticsActions.SetProgress].action?.invoke(5f) == true) }
+        assertTrue(f.await { photo().config[SemanticsProperties.StateDescription] == "Zoom 500%" })
+        action("Reset zoom")
+        assertTrue(f.await { photo().config[SemanticsProperties.ProgressBarRangeInfo].current == 1f })
+        f.main {
+            assertTrue(photo().config[SemanticsActions.RequestFocus].action?.invoke() == true)
+            assertTrue(f.view.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_EQUALS)))
+            f.view.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_EQUALS))
+        }
+        assertTrue(f.await { photo().config[SemanticsProperties.ProgressBarRangeInfo].current == 1.5f })
+        f.main {
+            assertTrue(f.view.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT)))
+            f.view.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_RIGHT))
+            assertTrue(f.view.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_0)))
+            f.view.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_0))
+        }
+        assertTrue(f.await { photo().config[SemanticsProperties.ProgressBarRangeInfo].current == 1f })
+        assertTrue("accessible controls report user activity", f.interactions > 0)
+    }
+
     private fun present(audio: Boolean = false, info: Boolean = false, test: (Fixture) -> Unit) {
         val activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
@@ -91,7 +123,7 @@ class ViewerPhotoPresentationTest {
                         ChurTheme(dark = true) {
                             ViewerScreen(projection, listOf(projection), emptyMap(), false, {}, {}, if (info) f.detail else null,
                                 if (f.hasImage.value) f.image else null, info, true, {},
-                                onBack = {}, onLock = {}, onPanic = {}, onToggleFavorite = {}, onEditTags = {},
+                                onTouch = { f.interactions++ }, onBack = {}, onLock = {}, onPanic = {}, onToggleFavorite = {}, onEditTags = {},
                                 onExport = {}, onDelete = {}, onToggleDetail = {}, stillState = f.stillState.value,
                                 onVerifyStill = { f.verifications++ })
                         }
@@ -108,6 +140,7 @@ class ViewerPhotoPresentationTest {
 
     private inner class Fixture {
         var verifications = 0
+        var interactions = 0
         val stillState = mutableStateOf(ViewerStillState.Loading)
         val hasImage = mutableStateOf(false)
         val detail = ObjectDetail(0, 0, false, 400, 300, 0, 1_024, "image/jpeg",

@@ -6,6 +6,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -56,15 +57,25 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.center
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.setProgress
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.toSize
 import dev.po4yka.chur.app.ActiveOperation
@@ -243,7 +254,8 @@ fun ViewerScreen(
                     else DocumentFallback(page, detail, "This file has no internal preview.", Modifier.fillMaxSize(), controlsPadding)
                 } else if (settled) {
                     ViewerMedia(preview ?: thumbnails[page.id], player, controlsPadding, waveform, zoom.takeIf { photo },
-                        audio = page.mediaKind == MEDIA_CLASS_AUDIO, stillState = stillState, onVerifyStill = onVerifyStill)
+                        audio = page.mediaKind == MEDIA_CLASS_AUDIO, stillState = stillState, onVerifyStill = onVerifyStill,
+                        onInteraction = { touch() })
                 } else {
                     thumbnails[page.id]?.let { ViewerMedia(it, player = null, controlsPadding = controlsPadding, waveform = null,
                         audio = page.mediaKind == MEDIA_CLASS_AUDIO) }
@@ -364,6 +376,7 @@ private fun ViewerMedia(
     audio: Boolean = false,
     stillState: ViewerStillState = ViewerStillState.Ready,
     onVerifyStill: (() -> Unit)? = null,
+    onInteraction: () -> Unit = {},
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         if (player != null) {
@@ -387,7 +400,7 @@ private fun ViewerMedia(
         } else if (audio) {
             AudioArtwork(preview, Modifier.fillMaxSize(), controlsPadding)
         } else if (preview != null && zoom != null) {
-            ZoomableStill(preview, zoom)
+            ZoomableStill(preview, zoom, onInteraction)
         } else if (preview != null) {
             Image(
                 bitmap = preview,
@@ -421,8 +434,18 @@ private fun ViewerMedia(
  * and the pager keeps it as a swipe.
  */
 @Composable
-private fun ZoomableStill(still: ImageBitmap, zoom: MutableState<ViewerZoom>) {
+private fun ZoomableStill(still: ImageBitmap, zoom: MutableState<ViewerZoom>, onInteraction: () -> Unit) {
     var viewer by remember { mutableStateOf(Size.Zero) }
+    fun update(next: ViewerZoom): Boolean {
+        if (next == zoom.value) return false
+        zoom.value = next
+        onInteraction()
+        return true
+    }
+    fun scaleTo(scale: Float): Boolean = update(zoom.value.transformed(
+        viewer.center, scale.coerceIn(1f, MAX_ZOOM) / zoom.value.scale, Offset.Zero, still.size(), viewer))
+    fun pan(direction: Offset): Boolean = update(zoom.value.transformed(
+        viewer.center, 1f, Offset(direction.x * viewer.width / 4, direction.y * viewer.height / 4), still.size(), viewer))
     val transform = rememberTransformableState { centroid, zoomChange, pan, _ ->
         zoom.value = zoom.value.transformed(centroid, zoomChange, pan, still.size(), viewer)
     }
@@ -433,6 +456,37 @@ private fun ZoomableStill(still: ImageBitmap, zoom: MutableState<ViewerZoom>) {
         modifier = Modifier
             .fillMaxSize()
             .onSizeChanged { viewer = it.toSize() }
+            .onKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                when (event.key) {
+                    Key.Equals, Key.Plus -> scaleTo(zoom.value.scale + 0.5f)
+                    Key.Minus -> scaleTo(zoom.value.scale - 0.5f)
+                    Key.Zero, Key.Home -> update(ViewerZoom())
+                    Key.DirectionLeft -> pan(Offset(1f, 0f))
+                    Key.DirectionRight -> pan(Offset(-1f, 0f))
+                    Key.DirectionUp -> pan(Offset(0f, 1f))
+                    Key.DirectionDown -> pan(Offset(0f, -1f))
+                    else -> false
+                }
+            }
+            .focusable()
+            .semantics {
+                contentDescription = "Photo"
+                stateDescription = "Zoom ${(zoom.value.scale * 100).toInt()}%"
+                progressBarRangeInfo = ProgressBarRangeInfo(zoom.value.scale, 1f..MAX_ZOOM)
+                setProgress { scaleTo(it) }
+                customActions = buildList {
+                    if (zoom.value.scale < MAX_ZOOM) add(CustomAccessibilityAction("Zoom in") { scaleTo(zoom.value.scale + 0.5f) })
+                    if (zoom.value.zoomed) {
+                        add(CustomAccessibilityAction("Zoom out") { scaleTo(zoom.value.scale - 0.5f) })
+                        add(CustomAccessibilityAction("Reset zoom") { update(ViewerZoom()) })
+                        add(CustomAccessibilityAction("Pan left") { pan(Offset(1f, 0f)) })
+                        add(CustomAccessibilityAction("Pan right") { pan(Offset(-1f, 0f)) })
+                        add(CustomAccessibilityAction("Pan up") { pan(Offset(0f, 1f)) })
+                        add(CustomAccessibilityAction("Pan down") { pan(Offset(0f, -1f)) })
+                    }
+                }
+            }
             .transformable(transform, canPan = { zoom.value.zoomed })
             // Read in the layer, so a pinch redraws the photo and composes
             // nothing.
@@ -483,8 +537,6 @@ internal data class ViewerZoom(val scale: Float = 1f, val offset: Offset = Offse
 
 internal const val MAX_ZOOM = 5f
 internal const val DOUBLE_TAP_ZOOM = 2.5f
-
-private fun Int.dp() = androidx.compose.ui.unit.Dp(this.toFloat())
 
 /**
  * Whether the viewer shows its chrome, `DESIGN.md` §13.1: a tap on the media
