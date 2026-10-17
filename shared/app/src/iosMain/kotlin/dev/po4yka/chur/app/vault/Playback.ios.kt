@@ -32,6 +32,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.viewinterop.UIKitView
@@ -175,6 +177,8 @@ actual fun VaultPlayer(
         started = true
         if (duration > 0 && position >= duration) player.seekToTime(CMTimeMakeWithSeconds(0.0, 600))
         player.play()
+        // Acknowledge the accepted action before the next native clock sample.
+        phase = IosPlaybackPhase.BUFFERING
         onControlsVisibleChange(true)
     }
     DisposableEffect(player) {
@@ -221,6 +225,10 @@ actual fun VaultPlayer(
                     }
                 }
                 Slider(
+                    modifier = Modifier.semantics {
+                        contentDescription = "Playback position"
+                        stateDescription = iosPlaybackTimeDescription(displayedPosition, duration)
+                    },
                     value = displayedPosition.coerceIn(0f, duration.coerceAtLeast(0f)),
                     onValueChange = {
                         scrub = scrub.previewAt(it)
@@ -243,15 +251,25 @@ actual fun VaultPlayer(
                     interactionSource = scrubInteractions,
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = { if (playing) player.pause() else play() }) {
-                        Text(if (playing) "Pause" else "Play", color = Color.White)
+                    TextButton(onClick = {
+                        if (playing || buffering) {
+                            player.pause()
+                            phase = IosPlaybackPhase.PAUSED
+                            onControlsVisibleChange(true)
+                        } else play()
+                    }) {
+                        Text(if (playing || buffering) "Pause" else "Play", color = Color.White)
                     }
                     TextButton(onClick = {
                         player.seekToTime(CMTimeMakeWithSeconds(0.0, 600))
                         play()
                     }, enabled = started) { Text("Replay", color = Color.White) }
-                    Text("${displayedPosition.toInt()} / ${duration.toInt()} seconds", color = Color.White)
                 }
+                Text(
+                    iosPlaybackTimeDescription(displayedPosition, duration),
+                    color = Color.White,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
             }
         }
     }
