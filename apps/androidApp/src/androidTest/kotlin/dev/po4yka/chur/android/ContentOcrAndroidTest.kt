@@ -9,11 +9,18 @@ import android.graphics.pdf.PdfDocument
 import android.os.ParcelFileDescriptor
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import dev.po4yka.chur.app.AppRoute
+import dev.po4yka.chur.app.ChurController
+import dev.po4yka.chur.app.ExportSink
+import dev.po4yka.chur.app.ExportTarget
+import dev.po4yka.chur.app.NoPrivacyCover
 import dev.po4yka.chur.app.vault.AndroidContentTextExtractor
 import dev.po4yka.chur.app.vault.CONTENT_SOURCE_MAX_BYTES
 import dev.po4yka.chur.app.vault.ContentExtractionException
 import dev.po4yka.chur.app.vault.ContentExtractionFailure
 import dev.po4yka.chur.app.vault.ContentTextSource
+import dev.po4yka.chur.app.vault.ContentTextExtractor
+import dev.po4yka.chur.app.vault.ExtractedContent
 import dev.po4yka.chur.ffi.ImportRequest
 import dev.po4yka.chur.ffi.ObjectQuery
 import dev.po4yka.chur.ffi.QueryScope
@@ -25,13 +32,18 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -202,6 +214,158 @@ class ContentOcrAndroidTest {
         val result = extractor.extract(source(healthy), "image/png", 1, { false })
         try { assertTrue("alpha" in result.bytes.decodeToString().lowercase()); assertNoDecoder() }
         finally { result.bytes.fill(0); healthy.fill(0) }
+    }
+
+    @Test fun realControllerStopsDrainsRetriesRebuildsAndClearsOnlyRecognizedText() = runBlocking {
+        val root = File(context.cacheDir, "ocr-controller-${System.nanoTime()}").apply { mkdirs() }
+        val extractor = HeldRealExtractor(AndroidContentTextExtractor(context))
+        val controller = ChurController(File(root, "vault").path, NoPrivacyCover, NoExports,
+            clock = System::currentTimeMillis, contentExtractor = extractor)
+        val originals = listOf(image(), pdf(), (TEXT_CANARY + "\n").repeat(6_000).encodeToByteArray())
+        try {
+            withContext(Dispatchers.Main) { controller.start(); controller.create(PASSWORD.decodeToString(), false) }
+            withTimeout(30_000) { controller.route.first { it == AppRoute.Vault } }
+            // The two interrupted scans have exactly one image candidate, so
+            // both barriers follow real child-process recognition.
+            val ids = mutableListOf(importObject(controller.vault, root, originals[0], "item0.png", "image/png", 1))
+
+            // Hold an actual OCR result, not a substitute, until cancellation has
+            // reached the controller. Its reader and result remain owned meanwhile.
+            val stopped = extractor.holdNext()
+            withContext(Dispatchers.Main) { controller.indexContent() }
+            withTimeout(120_000) { stopped.ready.await() }
+            withContext(Dispatchers.Main) { controller.cancelContentIndex(); controller.clearContentIndex() }
+            assertTrue(controller.contentIndex.value.stopping)
+            assertFalse(controller.contentIndex.value.clearing)
+            stopped.release.complete(Unit)
+            withTimeout(30_000) { controller.contentIndex.first { !it.running } }
+            assertTrue(stopped.bytes.all { it == 0.toByte() })
+            assertTrue(search(controller.vault, "alpha").isEmpty())
+            assertNoDecoder()
+
+            val backgrounded = extractor.holdNext()
+            withContext(Dispatchers.Main) { controller.indexContent() }
+            withTimeout(120_000) { backgrounded.ready.await() }
+            try {
+                withContext(Dispatchers.Main) { controller.onBackground() }
+                assertTrue(controller.vaultState.value is VaultState.Locked)
+                assertFalse(controller.contentIndex.value.running)
+            } finally { backgrounded.release.complete(Unit) }
+            withTimeout(30_000) { backgrounded.drained.await() }
+            assertTrue(backgrounded.bytes.all { it == 0.toByte() })
+            withContext(Dispatchers.Main) { controller.goTo(AppRoute.Unlock); controller.unlock(PASSWORD.decodeToString()) }
+            withTimeout(30_000) { controller.route.first { it == AppRoute.Vault } }
+            assertTrue("backgrounded work must not publish late text", search(controller.vault, "alpha").isEmpty())
+            for (index in 1..2) ids += importObject(controller.vault, root, originals[index],
+                "item$index.${listOf("png", "pdf", "txt")[index]}", listOf("image/png", "application/pdf", "text/plain")[index], 4)
+
+            suspend fun scan(rebuild: Boolean = false) {
+                withContext(Dispatchers.Main) { controller.indexContent(rebuild) }
+                assertTrue(controller.contentIndex.value.running)
+                withTimeout(120_000) { controller.contentIndex.first { !it.running } }
+                assertNoDecoder()
+            }
+            suspend fun visibleSearch(terms: String, expected: Set<List<Byte>>) {
+                withContext(Dispatchers.Main) { controller.load(ObjectQuery(QueryScope.SEARCH, terms = terms)) }
+                withTimeout(30_000) { controller.page.first {
+                    it.catalogGeneration > 0 && it.objects.map { row -> row.objectId.toList() }.toSet() == expected
+                } }
+            }
+            scan()
+            assertEquals(3, controller.contentIndex.value.indexed)
+            assertEquals(1, controller.contentIndex.value.partial)
+            assertEquals(0, controller.contentIndex.value.failed)
+            visibleSearch("item0 alpha", setOf(ids[0].toList()))
+            visibleSearch("item2 orchidocr", setOf(ids[2].toList()))
+            visibleSearch("item0 orchidocr", emptySet())
+
+            // A parser failure is a real imported original and remains a retry
+            // candidate; it must not remove the other objects' successful text.
+            importObject(controller.vault, root, "not a PDF".encodeToByteArray(), "broken.pdf", "application/pdf", 4)
+            repeat(2) {
+                scan()
+                assertEquals(0, controller.contentIndex.value.indexed)
+                assertEquals(1, controller.contentIndex.value.failed)
+            }
+            // More than one native candidate batch, followed by several UI
+            // result pages, must preserve every matching ID exactly once.
+            val paginated = (0 until 27).map { index ->
+                val bytes = "Paginatedocr private document $index".encodeToByteArray()
+                try { importObject(controller.vault, root, bytes, "page$index.txt", "text/plain", 4) }
+                finally { bytes.fill(0) }
+            }.map { it.toList() }.toSet()
+            scan()
+            assertEquals(27, controller.contentIndex.value.indexed)
+            withContext(Dispatchers.Main) { controller.load(ObjectQuery(QueryScope.SEARCH, terms = "paginatedocr", limit = 5)) }
+            withTimeout(30_000) { controller.page.first { it.catalogGeneration > 0 && it.objects.size == 5 } }
+            while (controller.page.value.nextCursor != null) {
+                val previousCount = controller.page.value.objects.size
+                withContext(Dispatchers.Main) { controller.loadNextPage() }
+                withTimeout(30_000) { controller.page.first { it.objects.size > previousCount } }
+            }
+            val listed = controller.page.value.objects.map { it.objectId.toList() }
+            assertEquals(27, listed.size)
+            assertEquals(paginated, listed.toSet())
+            scan(rebuild = true)
+            assertEquals(30, controller.contentIndex.value.indexed)
+            assertEquals(1, controller.contentIndex.value.partial)
+            assertEquals(1, controller.contentIndex.value.failed)
+            withContext(Dispatchers.Main) { controller.lock() }
+            withTimeout(30_000) { controller.route.first { it == AppRoute.PublicShell } }
+            withContext(Dispatchers.Main) { controller.goTo(AppRoute.Unlock); controller.unlock(PASSWORD.decodeToString()) }
+            withTimeout(30_000) { controller.route.first { it == AppRoute.Vault } }
+            visibleSearch("alpha", setOf(ids[0].toList(), ids[1].toList()))
+            withContext(Dispatchers.Main) { controller.clearContentIndex() }
+            withTimeout(30_000) { controller.contentIndex.first { !it.running } }
+            visibleSearch("orchidocr", emptySet())
+            visibleSearch("item2", setOf(ids[2].toList()))
+            ids.forEachIndexed { index, id ->
+                val actual = controller.vault.readRange(id, 0, originals[index].size)
+                try { assertArrayEquals("clear must preserve each complete original", originals[index], actual) }
+                finally { actual.fill(0) }
+            }
+            assertNoPersistentCanary(root, TEXT_CANARY)
+        } finally {
+            extractor.releaseHeld()
+            originals.forEach { it.fill(0) }
+            controller.shutdown()
+            root.deleteRecursively()
+        }
+    }
+
+    /** Delays delivery only after the real platform extractor has drained its child. */
+    private class HeldRealExtractor(private val real: ContentTextExtractor) : ContentTextExtractor {
+        class Hold {
+            val ready = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val drained = CompletableDeferred<Unit>()
+            var bytes = byteArrayOf()
+        }
+        @Volatile private var next: Hold? = null
+        private val held = mutableListOf<Hold>()
+        fun holdNext() = Hold().also { next = it; held += it }
+        fun releaseHeld() { held.forEach { it.release.complete(Unit) } }
+        override suspend fun extract(source: ContentTextSource, contentType: String, mediaClass: Int,
+            cancelRequested: () -> Boolean, onPage: (Int, Int) -> Unit): ExtractedContent {
+            val result = real.extract(source, contentType, mediaClass, cancelRequested, onPage)
+            val hold = next.also { next = null } ?: return result
+            hold.bytes = result.bytes
+            hold.ready.complete(Unit)
+            try {
+                withContext(NonCancellable) { hold.release.await() }
+                currentCoroutineContext().ensureActive()
+                return result
+            } catch (failure: Throwable) {
+                result.bytes.fill(0)
+                throw failure
+            } finally { hold.drained.complete(Unit) }
+        }
+    }
+
+    private object NoExports : ExportSink {
+        override fun cancelPending() = Unit
+        override fun create(displayName: String, contentType: String): ExportSink.Destination? = null
+        override fun create(displayName: String, contentType: String, target: ExportTarget, uri: String?): ExportSink.Destination? = null
     }
 
     private fun repository(root: File) = VaultRepository(File(root, "vault").path, System::currentTimeMillis)
