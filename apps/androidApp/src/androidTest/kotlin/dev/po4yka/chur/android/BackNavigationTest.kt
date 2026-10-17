@@ -2547,19 +2547,52 @@ class BackNavigationTest {
      * keyboard, and [action], brought on screen, ends above it.
      */
     private fun assertFormEndsAbove(keyboardTop: Int, action: String) {
-        // The keyboard slides in, and the form follows it frame by frame.
         assertTrue("the form must end above the keyboard", await { scrollAreaBottom() <= keyboardTop })
-        // A control scrolled out of view is not in the tree, so the form is
-        // scrolled until it is, as a user would.
-        assertTrue(
-            "$action must be reachable",
-            await {
-                find(label(action)) != null ||
-                    find { it.isScrollable }?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD).let { false }
-            },
-        )
-        find(label(action))?.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.id)
-        assertTrue("$action must be above the keyboard", await { boundsOf(label(action)).bottom <= keyboardTop })
+        // Reveal the full current control once, then observe the actual scroll result.
+        var target: Pair<Int, Float>? = null
+        onScreen { nodes ->
+            val node = nodes.firstOrNull { action in it.labels }
+            assertNotNull("$action must be reachable", node)
+            val control = checkNotNull(node)
+            val scroll = generateSequence(control.parent) { it.parent }
+                .first { SemanticsActions.ScrollBy in it.config }
+            val viewport = scroll.boundsInWindow
+            val top = control.positionInWindow.y
+            val bottom = top + control.size.height
+            val delta = when {
+                top < viewport.top -> kotlin.math.floor((top - viewport.top).toDouble()).toFloat()
+                bottom > viewport.bottom -> kotlin.math.ceil((bottom - viewport.bottom).toDouble()).toFloat()
+                else -> 0f
+            }
+            val range = scroll.config[SemanticsProperties.VerticalScrollAxisRange]
+            target = scroll.id to (range.value() + delta).coerceIn(0f, range.maxValue())
+            if (delta != 0f) {
+                assertTrue(scroll.config[SemanticsActions.ScrollBy].action?.invoke(0f, delta) == true)
+            }
+        }
+        assertTrue("$action must be fully visible", await {
+            onScreen { nodes ->
+                val node = nodes.firstOrNull { action in it.labels } ?: return@onScreen false
+                val scroll = generateSequence(node.parent) { it.parent }
+                    .firstOrNull { SemanticsActions.ScrollBy in it.config } ?: return@onScreen false
+                val range = scroll.config[SemanticsProperties.VerticalScrollAxisRange]
+                val (id, wanted) = checkNotNull(target)
+                scroll.id == id && kotlin.math.abs(range.value() - wanted.coerceAtMost(range.maxValue())) <= 1f &&
+                    node.boundsInWindow.height + 2f >= node.size.height &&
+                    node.boundsInWindow.width + 2f >= node.size.width &&
+                    node.positionInWindow.y >= scroll.boundsInWindow.top &&
+                    node.positionInWindow.y + node.size.height <= scroll.boundsInWindow.bottom &&
+                    scroll.boundsInWindow.bottom <= keyboardTop
+            }
+        })
+        // Read a fresh accessibility node only after the scroll has reached its target.
+        assertTrue("$action must be above the keyboard", await {
+            val node = find(label(action))
+            val bounds = node?.let { current -> Rect().also { current.getBoundsInScreen(it) } }
+            onWindow { insets, _ -> insets.isVisible(WindowInsetsCompat.Type.ime()) } &&
+                scrollAreaBottom() <= keyboardTop && node?.isVisibleToUser == true &&
+                bounds != null && bounds.height() > 0 && bounds.bottom <= keyboardTop
+        })
     }
 
     /** The lowest edge of a vertically scrolling area on screen, in window pixels. */
