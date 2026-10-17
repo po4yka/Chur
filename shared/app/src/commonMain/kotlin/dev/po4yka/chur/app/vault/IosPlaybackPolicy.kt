@@ -16,3 +16,12 @@ internal fun iosPlaybackPhase(
     duration > 0 && position >= duration -> IosPlaybackPhase.ENDED
     else -> IosPlaybackPhase.PAUSED
 }
+
+/** An interaction holds the controls until it ends; the idle timeout starts after it. */
+internal fun iosPlaybackControlsHeld(
+    pinned: Boolean,
+    voiceOver: Boolean,
+    keyboard: Boolean,
+    focused: Boolean,
+    scrubbing: Boolean,
+): Boolean = pinned || voiceOver || keyboard || focused || scrubbing

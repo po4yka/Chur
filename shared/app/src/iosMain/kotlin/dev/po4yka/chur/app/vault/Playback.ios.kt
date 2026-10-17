@@ -2,6 +2,8 @@
 
 package dev.po4yka.chur.app.vault
 
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
@@ -22,6 +24,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -62,9 +67,13 @@ import platform.AVFoundation.pause
 import platform.AVFoundation.play
 import platform.AVFoundation.replaceCurrentItemWithPlayerItem
 import platform.CoreGraphics.CGRectMake
+import platform.Foundation.NSNotificationCenter
+import platform.Foundation.NSOperationQueue
 import platform.Foundation.NSData
 import platform.Foundation.NSURL
 import platform.Foundation.create
+import platform.UIKit.UIAccessibilityIsVoiceOverRunning
+import platform.UIKit.UIAccessibilityVoiceOverStatusDidChangeNotification
 import platform.UIKit.UIView
 import platform.darwin.NSObject
 import platform.darwin.dispatch_queue_create
@@ -95,6 +104,22 @@ actual fun VaultPlayer(
     touches: Int,
 ) {
     val audio = source.contentType.startsWith("audio/")
+    var voiceOver by remember { mutableStateOf(UIAccessibilityIsVoiceOverRunning()) }
+    DisposableEffect(Unit) {
+        val center = NSNotificationCenter.defaultCenter
+        val observer = center.addObserverForName(
+            name = UIAccessibilityVoiceOverStatusDidChangeNotification,
+            `object` = null,
+            queue = NSOperationQueue.mainQueue,
+        ) { voiceOver = UIAccessibilityIsVoiceOverRunning() }
+        voiceOver = UIAccessibilityIsVoiceOverRunning()
+        onDispose { center.removeObserver(observer) }
+    }
+    val keyboard = LocalInputModeManager.current.inputMode == InputMode.Keyboard
+    val scrubInteractions = remember { MutableInteractionSource() }
+    val dragging by scrubInteractions.collectIsDraggedAsState()
+    var controlsFocused by remember { mutableStateOf(false) }
+    val controlsHeld = iosPlaybackControlsHeld(controlsPinned, voiceOver, keyboard, controlsFocused, dragging)
     val loader = remember(source.objectId, source.plaintextSize) { ChurResourceLoader(source) }
     val player = remember(loader) {
         val asset = AVURLAsset(NSURL(string = "chur://vault/object"), options = null)
@@ -133,8 +158,8 @@ actual fun VaultPlayer(
             delay(250)
         }
     }
-    LaunchedEffect(playing, controlsPinned, touches) {
-        if (!playing || controlsPinned) onControlsVisibleChange(true)
+    LaunchedEffect(playing, controlsHeld, touches) {
+        if (!playing || controlsHeld) onControlsVisibleChange(true)
         else {
             delay(3_000)
             onControlsVisibleChange(false)
@@ -171,9 +196,9 @@ actual fun VaultPlayer(
             },
         )
         if (!audio && covered && poster != null) PlayerPoster(poster, onPlay = if (!started) play else null)
-        if (controlsVisible || controlsPinned || !started || !playing) {
+        if (controlsVisible || controlsHeld || !started || !playing) {
             Column(
-                Modifier.align(Alignment.BottomCenter).padding(controlsPadding)
+                Modifier.align(Alignment.BottomCenter).onFocusChanged { controlsFocused = it.hasFocus }.padding(controlsPadding)
                     .fillMaxWidth().background(Color.Black.copy(alpha = 0.7f)).padding(horizontal = 16.dp),
             ) {
                 if (buffering) {
@@ -193,6 +218,7 @@ actual fun VaultPlayer(
                     },
                     valueRange = 0f..duration.coerceAtLeast(1f),
                     enabled = started && duration > 0,
+                    interactionSource = scrubInteractions,
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = { if (playing) player.pause() else play() }) {
