@@ -53,7 +53,7 @@ class ViewerZoomTest {
     @Test
     fun a_new_preview_aspect_ratio_recentres_an_axis_that_no_longer_overflows() {
         val panned = ViewerZoom(2.5f, Offset(750f, 0f))
-        assertEquals(ViewerZoom(2.5f), panned.normalized(Size(1_000f, 4_000f), viewer))
+        assertEquals(ViewerZoom(2.5f), panned.normalized(Size(1_000f, 6_000f), viewer))
     }
 
     @Test

@@ -62,15 +62,19 @@ class ViewerPhotoPresentationTest {
     @Test
     fun info_scrolls_to_the_last_tag_without_covering_viewer_actions_in_landscape_at_double_font_scale() =
         present(info = true) { f ->
-            assertTrue(f.await { f.nodes().any { SemanticsActions.ScrollBy in it.config } })
+            assertTrue(f.await { f.nodes().any {
+                SemanticsActions.ScrollBy in it.config &&
+                    it.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange)?.maxValue()?.let { max -> max > 0f } == true
+            } })
             val scroll = f.nodes().first { SemanticsActions.ScrollBy in it.config }
             val range = scroll.config[SemanticsProperties.VerticalScrollAxisRange]
             assertTrue("long metadata must overflow its bounded viewport", range.maxValue() > 0f)
             f.main { assertTrue(scroll.config[SemanticsActions.ScrollBy].action?.invoke(0f, 100_000f) == true) }
             assertTrue(f.await { range.value() > 0f })
-            val lastTag = f.nodes().first { "Last public tag" in it.config.getOrNull(SemanticsProperties.Text).orEmpty().map { text -> text.text } }
-            assertTrue(lastTag.boundsInRoot.height > 0f)
-            assertTrue(lastTag.boundsInRoot.bottom <= scroll.boundsInRoot.bottom + 1f)
+            assertTrue(f.await {
+                val lastTag = f.nodes().first { "Last public tag" in it.config.getOrNull(SemanticsProperties.Text).orEmpty().map { text -> text.text } }
+                lastTag.boundsInRoot.height > 0f && lastTag.boundsInRoot.bottom <= scroll.boundsInRoot.bottom + 1f
+            })
             val back = f.nodes().first { "Back" in it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty() }
             assertTrue(back.boundsInRoot.bottom <= scroll.boundsInRoot.top)
         }
@@ -120,13 +124,13 @@ class ViewerPhotoPresentationTest {
                 f.view = ComposeView(activity).apply {
                     setContent {
                         CompositionLocalProvider(LocalDensity provides Density(density, if (info) 2f else 1f)) {
-                        ChurTheme(dark = true) {
-                            ViewerScreen(projection, listOf(projection), emptyMap(), false, {}, {}, if (info) f.detail else null,
-                                if (f.hasImage.value) f.image else null, info, true, {},
-                                onTouch = { f.interactions++ }, onBack = {}, onLock = {}, onPanic = {}, onToggleFavorite = {}, onEditTags = {},
-                                onExport = {}, onDelete = {}, onToggleDetail = {}, stillState = f.stillState.value,
-                                onVerifyStill = { f.verifications++ })
-                        }
+                            ChurTheme(dark = true) {
+                                ViewerScreen(projection, listOf(projection), emptyMap(), false, {}, {}, if (info) f.detail else null,
+                                    if (f.hasImage.value) f.image else null, info, true, {},
+                                    onTouch = { f.interactions++ }, onBack = {}, onLock = {}, onPanic = {}, onToggleFavorite = {}, onEditTags = {},
+                                    onExport = {}, onDelete = {}, onToggleDetail = {}, stillState = f.stillState.value,
+                                    onVerifyStill = { f.verifications++ })
+                            }
                         }
                     }
                 }
