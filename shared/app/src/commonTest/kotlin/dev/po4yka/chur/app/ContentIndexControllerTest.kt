@@ -9,6 +9,7 @@ import dev.po4yka.chur.vault.VaultState
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -108,9 +109,124 @@ class ContentIndexControllerTest {
         access.state.value = VaultState.Unlocked(2)
         drain.complete(Unit); advanceUntilIdle()
         assertTrue(access.saved.isEmpty())
-        assertEquals(ContentIndexState(), controller.state.value)
+        assertEquals(ContentIndexState(), controller.state.value.copy(runEpoch = 0))
         assertContentEquals(ByteArray(text.size), text)
         assertEquals(1, access.closed)
+    }
+
+    @Test
+    fun reset_between_progress_validation_and_publication_rejects_the_old_run() = runTest {
+        val access = Access(1)
+        val vault = InterleavingState(access.state)
+        val text = "old identity text".encodeToByteArray()
+        lateinit var controller: ContentIndexController
+        var resetState: ContentIndexState? = null
+        controller = ContentIndexController(vault, access,
+            Engine { _, _, _, _, onPage ->
+                vault.afterSnapshot = {
+                    controller.reset()
+                    access.state.value = VaultState.Unlocked(2)
+                    resetState = controller.state.value
+                }
+                onPage(8, 9)
+                ExtractedContent(text, false)
+            }, this, {}, StandardTestDispatcher(testScheduler))
+        controller.start(); advanceUntilIdle()
+        assertEquals(resetState, controller.state.value, "a validated old callback must not repaint a reset projection")
+        assertTrue(access.saved.isEmpty())
+        assertEquals(1, access.closed)
+        assertContentEquals(ByteArray(text.size), text)
+    }
+
+    @Test
+    fun reset_between_write_validation_and_count_publication_rejects_the_old_run() = runTest {
+        val access = Access(1)
+        val vault = InterleavingState(access.state)
+        lateinit var controller: ContentIndexController
+        var resetState: ContentIndexState? = null
+        access.afterPut = {
+            vault.afterSnapshot = {
+                controller.reset()
+                access.state.value = VaultState.Unlocked(2)
+                resetState = controller.state.value
+            }
+        }
+        controller = ContentIndexController(vault, access,
+            Engine { _, _, _, _, _ -> ExtractedContent("old result".encodeToByteArray(), true) },
+            this, {}, StandardTestDispatcher(testScheduler))
+        controller.start(); advanceUntilIdle()
+        assertEquals(resetState, controller.state.value, "saved old results must not add counts to a reset projection")
+        assertEquals(1, access.saved.size, "the completed write belongs to the old session")
+        assertEquals(1, access.closed)
+    }
+
+    @Test
+    fun replacement_run_with_the_same_visible_counts_cannot_accept_the_old_write_count() = runTest {
+        val access = Access(1)
+        val vault = InterleavingState(access.state)
+        lateinit var controller: ContentIndexController
+        access.afterPut = {
+            vault.afterSnapshot = {
+                controller.reset()
+                access.state.value = VaultState.Unlocked(2)
+                controller.start()
+                assertTrue(controller.state.value.running)
+                assertEquals(0, controller.state.value.indexed)
+            }
+        }
+        controller = ContentIndexController(vault, access,
+            Engine { _, _, _, _, _ -> ExtractedContent("old result".encodeToByteArray(), true) },
+            this, {}, StandardTestDispatcher(testScheduler))
+        controller.start(); advanceUntilIdle()
+        assertEquals(0, controller.state.value.indexed, "identical visible run states must not allow an ABA update")
+        assertEquals(0, controller.state.value.partial)
+        assertFalse(controller.state.value.running)
+        assertEquals(1, access.closed)
+    }
+
+    @Test
+    fun reset_between_failure_validation_and_count_publication_rejects_the_old_run() = runTest {
+        val access = Access(1)
+        val vault = InterleavingState(access.state)
+        lateinit var controller: ContentIndexController
+        var resetState: ContentIndexState? = null
+        controller = ContentIndexController(vault, access,
+            Engine { _, _, _, _, _ ->
+                vault.afterSnapshot = {
+                    controller.reset()
+                    access.state.value = VaultState.Unlocked(2)
+                    resetState = controller.state.value
+                }
+                error("private parser details")
+            }, this, {}, StandardTestDispatcher(testScheduler))
+        controller.start(); advanceUntilIdle()
+        assertEquals(resetState, controller.state.value, "old failures must not enter the next projection")
+        assertEquals(1, access.closed)
+    }
+
+    @Test
+    fun cancel_keeps_clear_out_until_an_in_flight_write_and_reader_have_drained() = runTest {
+        val access = Access(1)
+        val entered = CompletableDeferred<Unit>()
+        val drain = CompletableDeferred<Unit>()
+        val text = "committed before cancellation".encodeToByteArray()
+        access.beforePut = { entered.complete(Unit); drain.await() }
+        val controller = ContentIndexController(access.state, access,
+            Engine { _, _, _, _, _ -> ExtractedContent(text, false) },
+            this, {}, StandardTestDispatcher(testScheduler))
+        controller.start(); runCurrent()
+        assertTrue(entered.isCompleted)
+        controller.cancel(); controller.clear(); runCurrent()
+        assertTrue(controller.state.value.stopping)
+        assertEquals(0, access.clears)
+        assertEquals(0, access.closed)
+        drain.complete(Unit); advanceUntilIdle()
+        assertEquals(setOf(1), access.saved)
+        assertEquals(1, access.closed)
+        assertContentEquals(ByteArray(text.size), text)
+        controller.clear(); advanceUntilIdle()
+        assertEquals(1, access.clears)
+        assertTrue(access.saved.isEmpty(), "no old write may follow the completed clear")
     }
 
     @Test
@@ -151,6 +267,19 @@ class ContentIndexControllerTest {
             action(source, contentType, mediaClass, cancelRequested, onPage)
     }
 
+    /** Models a worker paused after it reads a generation while Main resets the run. */
+    private class InterleavingState(private val backing: StateFlow<VaultState>) : StateFlow<VaultState> by backing {
+        var afterSnapshot: (() -> Unit)? = null
+        override val value: VaultState
+            get() {
+                val snapshot = backing.value
+                val action = afterSnapshot
+                afterSnapshot = null
+                action?.invoke()
+                return snapshot
+            }
+    }
+
     private class Access(count: Int) : ContentIndexAccess {
         val state = MutableStateFlow<VaultState>(VaultState.Unlocked(1))
         val sources = List(count) { n -> ContentIndexCandidate(ByteArray(16) { (n + 1).toByte() },
@@ -160,6 +289,8 @@ class ContentIndexControllerTest {
         var closed = 0
         var clears = 0
         var refuseWrites = false
+        var beforePut: suspend () -> Unit = {}
+        var afterPut: () -> Unit = {}
         override suspend fun candidates(generation: Long, after: ByteArray?, rebuild: Boolean) =
             sources.filter { it.objectId[0].toInt() > (after?.get(0)?.toInt() ?: 0) &&
                 (rebuild || it.objectId[0].toInt() !in saved) }.take(1)
@@ -169,9 +300,14 @@ class ContentIndexControllerTest {
                 { (state.value as? VaultState.Unlocked)?.generation == generation })) { closed++ }
         }
         override suspend fun put(generation: Long, candidate: ContentIndexCandidate, text: ByteArray, partial: Boolean) {
-            check(!refuseWrites)
-            check((state.value as? VaultState.Unlocked)?.generation == generation)
-            saved += candidate.objectId[0].toInt()
+            // The native commit is synchronous: cancellation cannot interrupt it.
+            withContext(NonCancellable) {
+                beforePut()
+                check(!refuseWrites)
+                check((state.value as? VaultState.Unlocked)?.generation == generation)
+                saved += candidate.objectId[0].toInt()
+                afterPut()
+            }
         }
         override suspend fun clear(generation: Long) { saved.clear(); clears++ }
     }
