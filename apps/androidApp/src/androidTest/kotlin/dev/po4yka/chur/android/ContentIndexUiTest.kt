@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.Density
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.po4yka.chur.app.ContentIndexState
+import dev.po4yka.chur.app.ActiveOperation
 import dev.po4yka.chur.app.theme.ChurTheme
 import dev.po4yka.chur.app.vault.VaultActions
 import dev.po4yka.chur.app.vault.VaultDestination
@@ -139,6 +140,22 @@ class ContentIndexUiTest {
         assertFalse(f.has("Index new items and retry failures"))
     }
 
+    @Test
+    fun operation_progress_has_reserved_space_and_keeps_cancel_reachable_at_large_font() = present { f ->
+        val operation = ActiveOperation(id = 42, name = "import", processed = 40, total = 100,
+            stage = 2, item = 3, items = 12)
+        f.main { f.state.value = f.state.value.copy(operation = operation) }
+        // The production label intentionally exposes coarse spoken progress, not every byte update.
+        assertTrue("spoken progress and Cancel must be available", f.await { f.has(operation.spoken) && f.has("Cancel") })
+        f.capture("operation-progress-reserved-public-320-font2.png")
+        f.assertTextFits("Search names, captions, tags, and indexed text.")
+        f.assertAbove("Search names, captions, tags, and indexed text.", operation.spoken)
+        f.click("Cancel")
+        assertEquals(listOf("cancel operation"), f.actionsTaken)
+        assertTrue(f.await { f.has("Cancelling…") })
+        assertFalse(f.enabled("Cancelling…"))
+    }
+
     private fun present(test: (Fixture) -> Unit) {
         val activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
@@ -180,6 +197,7 @@ class ContentIndexUiTest {
             onIndexContent = { actionsTaken += "start"; state.value = state.value.copy(contentIndex = ContentIndexState(running = true, indexed = 7, partial = 2, failed = 1, page = 3, pages = 8)) },
             onCancelContentIndex = { actionsTaken += "stop"; state.value = state.value.copy(contentIndex = state.value.contentIndex.copy(stopping = true)) },
             onRebuildContentIndex = { actionsTaken += "rebuild" },
+            onCancelOperation = { actionsTaken += "cancel operation"; state.value = state.value.copy(operation = state.value.operation?.copy(cancelling = true)) },
             onClearContentIndex = { actionsTaken += "clear"; state.value = state.value.copy(contentIndex = ContentIndexState(message = "Content index cleared.")) })
         fun main(action: () -> Unit) = instrumentation.runOnMainSync(action)
         fun await(condition: () -> Boolean): Boolean {
@@ -248,7 +266,19 @@ class ContentIndexUiTest {
         fun assertSearchNotSaved() = main {
             assertFalse("search text must not enter saved state", registry.performSave().toString().contains(PUBLIC_SEARCH))
         }
-
+        fun assertAbove(content: String, progress: String) {
+            assertTrue("progress must not cover or clip content", await {
+                var separate = false
+                main {
+                    val contentNode = requireNotNull(find(content))
+                    val progressNode = requireNotNull(find(progress))
+                    separate = contentNode.boundsInWindow.height + 2f >= contentNode.size.height &&
+                        progressNode.boundsInWindow.height + 2f >= progressNode.size.height &&
+                        contentNode.boundsInWindow.bottom <= progressNode.boundsInWindow.top
+                }
+                separate
+            })
+        }
         fun frames() {
             val ready = CountDownLatch(1)
             main { val choreographer = Choreographer.getInstance(); choreographer.postFrameCallback { choreographer.postFrameCallback { ready.countDown() } } }

@@ -1,5 +1,7 @@
 package dev.po4yka.chur.app.vault
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.clickable
@@ -63,6 +65,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -87,6 +90,7 @@ import dev.po4yka.chur.app.theme.DestructiveButton
 import dev.po4yka.chur.app.theme.IntegrityGlyph
 import dev.po4yka.chur.app.theme.LibraryGlyph
 import dev.po4yka.chur.app.theme.LocalChurColors
+import dev.po4yka.chur.app.theme.LocalChurMotion
 import dev.po4yka.chur.app.theme.LockGlyph
 import dev.po4yka.chur.app.theme.PlusGlyph
 import dev.po4yka.chur.app.theme.SearchGlyph
@@ -393,8 +397,12 @@ fun VaultShell(
                 SelectionBar(state, actions)
             } else {
                 TopAppBar(
-                    title = { Text(state.openAlbum?.name ?: state.libraryScopeTitle ?: state.destination.label,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    title = {
+                        IncomingContent(false, LocalChurMotion.current.stateDurationMillis) {
+                            Text(state.openAlbum?.name ?: state.libraryScopeTitle ?: state.destination.label,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    },
                     navigationIcon = {
                         if (state.openAlbum != null || state.libraryScopeTitle != null) {
                             IconButton(onClick = {
@@ -516,32 +524,47 @@ fun VaultShell(
             }
         },
     ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            when {
-                state.openAlbum != null || state.destination == VaultDestination.LIBRARY ->
-                    androidx.compose.runtime.key(state.recentlyAdded) {
-                        LibraryBody(state, actions, state.mediaView, actions.onMediaViewChange)
+        BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(padding)) {
+            val motion = LocalChurMotion.current
+            val location = Triple(state.destination, state.openAlbum?.id, state.libraryScopeTitle)
+            val progressMaxHeight = maxHeight / 2
+            Column(Modifier.fillMaxSize()) {
+                // Only the current subtree is drawn. Never retain an old private screen for an exit animation.
+                IncomingContent(location, motion.navigationDurationMillis, Modifier.weight(1f).fillMaxWidth()) {
+                    when {
+                        state.openAlbum != null || state.destination == VaultDestination.LIBRARY ->
+                            androidx.compose.runtime.key(state.recentlyAdded) {
+                                LibraryBody(state, actions, state.mediaView, actions.onMediaViewChange)
+                            }
+                        state.destination == VaultDestination.ALBUMS ->
+                            AlbumOrganizer(state.albums, actions, state.albumView, actions.onAlbumViewChange,
+                                state.albumOrder, actions.onAlbumOrderChange,
+                                state.albumFilter, actions.onAlbumFilterChange)
+                        state.destination == VaultDestination.SEARCH ->
+                            SearchBody(state, actions, state.mediaView, actions.onMediaViewChange)
+                        else -> SettingsBody(state, actions)
                     }
-                state.destination == VaultDestination.ALBUMS ->
-                    AlbumOrganizer(state.albums, actions, state.albumView, actions.onAlbumViewChange,
-                        state.albumOrder, actions.onAlbumOrderChange,
-                        state.albumFilter, actions.onAlbumFilterChange)
-                state.destination == VaultDestination.SEARCH ->
-                    SearchBody(state, actions, state.mediaView, actions.onMediaViewChange)
-                else -> SettingsBody(state, actions)
-            }
-            state.operation?.let { operation ->
-                OperationProgressCard(
-                    operation = operation,
-                    onCancel = actions.onCancelOperation,
-                    modifier = Modifier.align(Alignment.BottomCenter).padding(
-                        horizontal = ChurSpacing.gutter,
-                        vertical = 88.dp,
-                    ),
-                )
+                }
+                state.operation?.let { operation ->
+                    IncomingContent(operation.id, motion.stateDurationMillis,
+                        Modifier.fillMaxWidth().heightIn(max = progressMaxHeight)
+                            .padding(horizontal = ChurSpacing.gutter, vertical = ChurSpacing.two)) {
+                        OperationProgressCard(operation, actions.onCancelOperation)
+                    }
+                }
             }
         }
     }
+
+}
+
+/** Scalar entrance only. Removal, including a privacy lock, is immediate. */
+@Composable
+private fun IncomingContent(identity: Any?, durationMillis: Int, modifier: Modifier = Modifier,
+    content: @Composable () -> Unit) {
+    val opacity = remember(identity) { Animatable(0f) }
+    LaunchedEffect(opacity, durationMillis) { opacity.animateTo(1f, tween(durationMillis)) }
+    Box(modifier.graphicsLayer { alpha = opacity.value }) { content() }
 }
 
 /**
@@ -602,14 +625,18 @@ internal fun OperationProgressCard(
             modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter),
             verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
         ) {
-            Text(
-                operation.description,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.clearAndSetSemantics {
-                    contentDescription = operation.spoken
-                    liveRegion = LiveRegionMode.Polite
-                },
-            )
+            IncomingContent(Triple(operation.stage, operation.item, operation.cancelling),
+                LocalChurMotion.current.stateDurationMillis,
+                Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
+                Text(
+                    operation.description,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.clearAndSetSemantics {
+                        contentDescription = operation.spoken
+                        liveRegion = LiveRegionMode.Polite
+                    },
+                )
+            }
             val fraction = operation.fraction
             if (fraction == null) {
                 LinearProgressIndicator(
@@ -696,7 +723,11 @@ internal fun LockControl(
 private fun SelectionBar(state: VaultUiState, actions: VaultActions) {
     var expanded by remember { mutableStateOf(false) }
     TopAppBar(
-        title = { Text("${state.selectedCount} selected") },
+        title = {
+            IncomingContent(true, LocalChurMotion.current.stateDurationMillis) {
+                Text("${state.selectedCount} selected")
+            }
+        },
         navigationIcon = {
             IconButton(onClick = actions.onClearSelection) {
                 Icon(dev.po4yka.chur.app.theme.BackGlyph, contentDescription = "Clear selection")
