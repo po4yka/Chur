@@ -49,9 +49,12 @@ dependencies { add(ocrBinary.name, "cz.adaptech.tesseract4android:tesseract4andr
 val verifiedOcrFiles = ocrBinary.incoming.artifactView {}.files
 val ocrModels = layout.projectDirectory.dir("src/androidMain/assets/ocr")
 val verifyOfflineOcrInputs = tasks.register("verifyOfflineOcrInputs") {
+    val binaryFiles = verifiedOcrFiles
+    val englishModel = ocrModels.file("eng.traineddata").asFile
+    val russianModel = ocrModels.file("rus.traineddata").asFile
     group = "verification"
-    inputs.files(verifiedOcrFiles)
-    inputs.files(ocrModels.file("eng.traineddata"), ocrModels.file("rus.traineddata"))
+    inputs.files(binaryFiles)
+    inputs.files(englishModel, russianModel)
     doLast {
         fun sha256(file: File): String {
             val hash = MessageDigest.getInstance("SHA-256")
@@ -61,11 +64,11 @@ val verifyOfflineOcrInputs = tasks.register("verifyOfflineOcrInputs") {
             }
             return hash.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
         }
-        check(verifiedOcrFiles.files.single().let(::sha256) == "bce5d6413a1a5ae3d7240033fbbc851ba3217d0a08d9769400e17a077f42cb2a") {
+        check(binaryFiles.files.single().let(::sha256) == "bce5d6413a1a5ae3d7240033fbbc851ba3217d0a08d9769400e17a077f42cb2a") {
             "The pinned Tesseract4Android binary changed"
         }
-        check(sha256(ocrModels.file("eng.traineddata").asFile) == "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2")
-        check(sha256(ocrModels.file("rus.traineddata").asFile) == "e16e5e036cce1d9ec2b00063cf8b54472625b9e14d893a169e2b0dedeb4df225")
+        check(sha256(englishModel) == "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2")
+        check(sha256(russianModel) == "e16e5e036cce1d9ec2b00063cf8b54472625b9e14d893a169e2b0dedeb4df225")
     }
 }
 tasks.configureEach {
