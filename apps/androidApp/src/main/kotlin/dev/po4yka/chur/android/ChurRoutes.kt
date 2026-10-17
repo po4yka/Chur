@@ -1478,6 +1478,7 @@ private fun ViewerRoute(
             objectId = projection.objectId,
             mediaKind = projection.mediaKind,
             detail = detail,
+            onVerify = controller::verifyEverything,
         )
     }
 

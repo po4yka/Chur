@@ -7,14 +7,17 @@ import android.view.accessibility.AccessibilityManager
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.platform.LocalContext
@@ -131,14 +134,15 @@ actual fun VaultPlayer(
     // before a press. It also goes on the press that starts playback: a
     // stream the device cannot decode then shows the player's own controls
     // and the chrome, not a poster that still looks playable.
+    var problem by remember(player) { mutableStateOf(player.playerError?.let(::playbackProblem)) }
+    val failed = problem != null
     var covered by remember(player) { mutableStateOf(true) }
-    val posterShown = !audio && covered && poster != null
+    val posterShown = !audio && covered && poster != null && !failed
     // Whether this page's player was asked to play: by the poster's Play, the
     // controls, or a screen reader.
     var started by remember(player) { mutableStateOf(false) }
     // Whether the player has failed, for example on a stream the device cannot
     // decode or on an integrity failure.
-    var failed by remember(player) { mutableStateOf(false) }
     // Media3 shows the controls by itself on a paused, ended or failed player,
     // first when the view gets the player. Before the first play it may do so
     // only while the chrome shows: a swipe onto this page is not a tap, and
@@ -166,7 +170,7 @@ actual fun VaultPlayer(
             }
 
             override fun onPlayerErrorChanged(error: PlaybackException?) {
-                failed = error != null
+                problem = error?.let(::playbackProblem)
             }
         }
         player.addListener(frames)
@@ -179,6 +183,9 @@ actual fun VaultPlayer(
         }
     }
     val reportControls by rememberUpdatedState(onControlsVisibleChange)
+    LaunchedEffect(problem) {
+        if (problem != null) reportControls(true)
+    }
     // Read here, not in `update`: a report changes this and the chrome in the
     // same frame, and `update` has to see both. Read there, it would run on
     // this change alone, with the chrome of the frame before.
@@ -249,8 +256,8 @@ actual fun VaultPlayer(
                 // this frame: it looks only when the player's state changes,
                 // and neither setter below makes it look again.
                 val couldShow = view.useController && view.controllerAutoShow
-                view.useController = !posterShown
-                view.importantForAccessibility = if (posterShown) {
+                view.useController = !posterShown && !failed
+                view.importantForAccessibility = if (posterShown || failed) {
                     View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
                 } else {
                     View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
@@ -294,7 +301,21 @@ actual fun VaultPlayer(
             },
         )
         if (posterShown && poster != null) PlayerPoster(poster, onPlay = { player.play() })
+        problem?.let {
+            PlaybackProblemPanel(it, source.onVerify,
+                Modifier.align(Alignment.Center).padding(controlsPadding))
+        }
     }
+}
+
+/** Preserve authenticated-reader failures through Media3's exception wrappers. */
+internal fun playbackProblem(error: PlaybackException): PlaybackProblem {
+    var cause: Throwable? = error
+    while (cause != null) {
+        if (cause is ChurFailure) return playbackProblem(cause.status)
+        cause = cause.cause
+    }
+    return if (error.errorCode in 2000..2999) PlaybackProblem.UNAVAILABLE else PlaybackProblem.UNSUPPORTED
 }
 
 /**
@@ -365,7 +386,7 @@ private class ChurDataSource(private val source: PlaybackSource) : DataSource {
             return remaining
         } catch (failure: ChurFailure) {
             release()
-            throw DataSourceException(java.io.IOException(failure.message), failure.status.value)
+            throw DataSourceException(java.io.IOException(failure), failure.status.value)
         }
     }
 
@@ -376,7 +397,7 @@ private class ChurDataSource(private val source: PlaybackSource) : DataSource {
         val bytes = try {
             vault.readLeased(reader, position, take)
         } catch (failure: ChurFailure) {
-            throw DataSourceException(java.io.IOException(failure.message), failure.status.value)
+            throw DataSourceException(java.io.IOException(failure), failure.status.value)
         }
         if (bytes.isEmpty()) return androidx.media3.common.C.RESULT_END_OF_INPUT
         bytes.copyInto(target, offset)

@@ -1112,6 +1112,7 @@ private fun IosViewerRoute(
             objectId = projection.objectId,
             mediaKind = projection.mediaKind,
             detail = detail,
+            onVerify = controller::verifyEverything,
         )
     }
 

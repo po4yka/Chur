@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,6 +38,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.viewinterop.UIKitView
+import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.vault.VaultRepository
 import kotlinx.cinterop.BetaInteropApi
@@ -45,6 +47,13 @@ import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.usePinned
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.MutableStateFlow
+import platform.AVFoundation.AVErrorDecoderNotFound
+import platform.AVFoundation.AVErrorFileFormatNotRecognized
+import platform.AVFoundation.AVFoundationErrorDomain
+import platform.AVFoundation.AVPlayerItemStatusFailed
+import platform.AVFoundation.error
+import platform.AVFoundation.status
 import platform.AVFoundation.AVAsset
 import platform.AVFoundation.AVAssetResourceLoader
 import platform.AVFoundation.AVAssetResourceLoaderDelegateProtocol
@@ -71,6 +80,8 @@ import platform.AVFoundation.replaceCurrentItemWithPlayerItem
 import platform.CoreGraphics.CGRectMake
 import platform.Foundation.NSNotificationCenter
 import platform.Foundation.NSOperationQueue
+import platform.Foundation.NSError
+import platform.Foundation.NSLocalizedDescriptionKey
 import platform.Foundation.NSData
 import platform.Foundation.NSURL
 import platform.Foundation.create
@@ -79,6 +90,7 @@ import platform.UIKit.UIAccessibilityVoiceOverStatusDidChangeNotification
 import platform.UIKit.UIView
 import platform.darwin.NSObject
 import platform.darwin.dispatch_queue_create
+import platform.darwin.dispatch_sync
 
 /**
  * The AVFoundation half of `MEDIA_PIPELINE.md` §9.
@@ -134,6 +146,9 @@ actual fun VaultPlayer(
         asset.resourceLoader.setDelegate(loader, loaderQueue)
         privatePlayer(AVPlayerItem(asset as AVAsset))
     }
+    val readerProblem by loader.problem.collectAsState()
+    var nativeProblem by remember(player) { mutableStateOf<PlaybackProblem?>(null) }
+    val problem = readerProblem ?: nativeProblem
     val layer = remember(player, audio) { if (audio) null else AVPlayerLayer.playerLayerWithPlayer(player) }
     var started by remember(player) { mutableStateOf(false) }
     var covered by remember(layer) { mutableStateOf(!audio) }
@@ -159,9 +174,20 @@ actual fun VaultPlayer(
                 position = position,
                 duration = duration,
             )
+            if (player.currentItem?.status == AVPlayerItemStatusFailed && nativeProblem == null) {
+                nativeProblem = iosNativePlaybackProblem(player.currentItem?.error)
+            }
             covered = !audio && (!started || layer?.readyForDisplay != true)
             if (playing) source.vault.noteActivity()
             delay(250)
+        }
+    }
+    LaunchedEffect(problem) {
+        if (problem != null) {
+            player.pause()
+            player.replaceCurrentItemWithPlayerItem(null)
+            loader.release()
+            onControlsVisibleChange(true)
         }
     }
     LaunchedEffect(phase, started, controlsHeld) {
@@ -205,12 +231,19 @@ actual fun VaultPlayer(
                 (view.layer.sublayers?.firstOrNull() as? AVPlayerLayer)?.setFrame(view.bounds)
             },
         )
-        val posterShown = !audio && covered && poster != null
+        val posterShown = !audio && covered && poster != null && problem == null
         val posterOffersPlay = posterShown && !started
         if (posterShown) PlayerPoster(checkNotNull(poster), onPlay = if (posterOffersPlay) play else null)
         // The poster owns the only Play until it is pressed. Hidden transport
         // controls must not remain in the keyboard or VoiceOver focus order.
-        if ((controlsVisible || controlsHeld) && !posterOffersPlay) {
+        if (problem != null) {
+            PlaybackProblemPanel(
+                problem = problem,
+                onVerify = source.onVerify,
+                modifier = Modifier.align(Alignment.Center).padding(controlsPadding),
+            )
+        }
+        if ((controlsVisible || controlsHeld) && !posterOffersPlay && problem == null) {
             Column(
                 Modifier.align(Alignment.BottomCenter).onFocusChanged { controlsFocused = it.hasFocus }.padding(controlsPadding)
                     .fillMaxWidth().background(Color.Black.copy(alpha = 0.7f)).padding(horizontal = 16.dp),
@@ -296,77 +329,85 @@ private class ChurResourceLoader(private val source: PlaybackSource) :
     NSObject(), AVAssetResourceLoaderDelegateProtocol {
 
     private val vault: VaultRepository get() = source.vault
+    val problem = MutableStateFlow<PlaybackProblem?>(null)
+    // These fields are owned by loaderQueue, including release on disposal.
     private var reader = 0L
     private var size = 0L
-    private var complete = false
+    private var released = false
 
     override fun resourceLoader(
         resourceLoader: AVAssetResourceLoader,
         shouldWaitForLoadingOfRequestedResource: AVAssetResourceLoadingRequest,
     ): Boolean {
         val request = shouldWaitForLoadingOfRequestedResource
-        if (!ensureReader()) {
-            request.finishLoadingWithError(null)
-            return false
-        }
+        try {
+            if (released) return fail(request, ChurStatus.SESSION_EXPIRED)
+            ensureReader()
 
-        // §6.1: content information before the first range request. A player
-        // given a length treats a later failure as transport trouble and
-        // retries without end, so an incomplete object publishes none.
-        request.contentInformationRequest?.let { information ->
-            if (!complete) {
-                request.finishLoadingWithError(null)
-                return false
+            // Publish a length only after the authenticated reader confirms
+            // completeness. A partial source must never reach the decoder.
+            request.contentInformationRequest?.let { information ->
+                information.setContentLength(size)
+                information.setByteRangeAccessSupported(true)
+                information.setContentType(utTypeOf(source.contentType))
             }
-            information.setContentLength(size)
-            information.setByteRangeAccessSupported(true)
-            information.setContentType(utTypeOf(source.contentType))
-        }
-
-        val data = request.dataRequest
-        if (data == null) {
+            val data = request.dataRequest
+            if (data == null) {
+                request.finishLoading()
+                return true
+            }
+            val offset = data.requestedOffset
+            if (offset < 0) return fail(request, ChurStatus.INVALID_INPUT)
+            if (offset >= size) {
+                request.finishLoading()
+                return true
+            }
+            val wanted = minOf(data.requestedLength.toLong(), size - offset)
+            val bytes = vault.readLeased(reader, offset, wanted.toInt())
+            if (bytes.isEmpty() && wanted > 0) return fail(request, ChurStatus.OBJECT_INCOMPLETE)
+            if (bytes.isNotEmpty()) data.respondWithData(bytes.toNSData())
             request.finishLoading()
             return true
+        } catch (failure: ChurFailure) {
+            return fail(request, failure.status)
         }
-        val offset = data.requestedOffset
-        if (offset >= size) {
-            request.finishLoading()
-            return true
-        }
-        val wanted = minOf(data.requestedLength.toLong(), size - offset)
-        val bytes = try {
-            vault.readLeased(reader, offset, wanted.toInt())
-        } catch (_: ChurFailure) {
-            request.finishLoadingWithError(null)
-            return false
-        }
-        if (bytes.isNotEmpty()) {
-            data.respondWithData(bytes.toNSData())
-        }
-        request.finishLoading()
-        return true
     }
 
-    /** Releases the lease, which the composable does when it leaves. */
+    /** Stops queued reads and releases the lease on its owning serial queue. */
     fun release() {
+        dispatch_sync(loaderQueue) {
+            released = true
+            releaseReader()
+        }
+    }
+
+    private fun releaseReader() {
         if (reader != 0L) {
             vault.releaseReader(reader)
             reader = 0L
         }
     }
 
-    private fun ensureReader(): Boolean {
-        if (reader != 0L) return true
-        return try {
-            reader = runBlocking { vault.leaseReader(source.objectId, source.kind) }
-            val info = vault.readerContentInfo(reader)
-            size = info.plaintextSize
-            complete = info.complete && info.byteRangeSupported
-            true
-        } catch (_: ChurFailure) {
-            false
-        }
+    private fun fail(request: AVAssetResourceLoadingRequest, status: ChurStatus): Boolean {
+        // A terminal failure prevents AVFoundation from reopening the reader.
+        released = true
+        releaseReader()
+        if (problem.value == null) problem.value = playbackProblem(status)
+        request.finishLoadingWithError(iosReaderPlaybackError(status))
+        return true // The delegate handled this request, including its error.
     }
+
+    private fun ensureReader() {
+        if (reader != 0L) return
+        reader = runBlocking { vault.leaseReader(source.objectId, source.kind) }
+        val info = vault.readerContentInfo(reader)
+        if (!info.complete) throw ChurFailure(ChurStatus.OBJECT_INCOMPLETE, "private playback")
+        if (!info.byteRangeSupported || info.plaintextSize < 0) {
+            throw ChurFailure(ChurStatus.INVALID_INPUT, "private playback ranges")
+        }
+        size = info.plaintextSize
+    }
+
 }
 
 /**
@@ -399,3 +440,16 @@ private val loaderQueue = dispatch_queue_create("dev.po4yka.chur.resource-loader
 private fun ByteArray.toNSData(): NSData = usePinned { pinned ->
     NSData.create(bytes = pinned.addressOf(0), length = size.toULong())
 }
+
+/** Native codec failures are separate from authenticated reader failures. */
+internal fun iosNativePlaybackProblem(error: NSError?): PlaybackProblem =
+    if (error?.domain == AVFoundationErrorDomain &&
+        (error.code == AVErrorDecoderNotFound || error.code == AVErrorFileFormatNotRecognized)
+    ) PlaybackProblem.UNSUPPORTED else PlaybackProblem.UNAVAILABLE
+
+/** AVFoundation receives a real, redacted error, never a successful nil error. */
+internal fun iosReaderPlaybackError(status: ChurStatus): NSError = NSError(
+    domain = "dev.po4yka.chur.playback",
+    code = status.value.toLong(),
+    userInfo = mapOf(NSLocalizedDescriptionKey to "Private playback could not read the media."),
+)

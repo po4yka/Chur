@@ -45,6 +45,8 @@ class PlaybackSource(
     val plaintextSize: Long,
     /** The stream to play. Video and audio both play their original. */
     internal val kind: StreamKind = StreamKind.ORIGINAL,
+    /** Starts the host's explicit library verification. Never retries failed media. */
+    val onVerify: (() -> Unit)? = null,
 ) {
     /** True when the type names something a player can open. */
     val playable: Boolean
@@ -146,10 +148,11 @@ fun playbackFor(
     objectId: ByteArray,
     mediaKind: Int,
     detail: ObjectDetail?,
+    onVerify: (() -> Unit)? = null,
 ): PlaybackSource? {
     if (mediaKind != MEDIA_CLASS_VIDEO && mediaKind != MEDIA_CLASS_AUDIO) return null
     val record = detail ?: return null
-    val source = PlaybackSource(vault, objectId, record.contentType, record.plaintextSize)
+    val source = PlaybackSource(vault, objectId, record.contentType, record.plaintextSize, onVerify = onVerify)
     return if (source.playable) source else null
 }
 

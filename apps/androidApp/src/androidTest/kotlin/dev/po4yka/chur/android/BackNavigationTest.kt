@@ -1570,43 +1570,18 @@ class BackNavigationTest {
     }
 
     @Test
-    fun thePosterKeepsThePlayerControlsOffUntilPlay() = inTestVault {
-        // `DESIGN.md` §6.2 and §13.2: a video opens on its poster, and the
-        // player's controls under it are off, so a tap there cannot seek or
-        // open the settings unseen, and a screen reader hears one Play. The
-        // poster also goes when the player draws a frame, and many decoders
-        // draw one while paused. No player can read this video, so the
-        // poster stays until the press on every device.
+    fun anUnplayableVideoShowsAnActionableFailure() = inTestVault {
         val imported = listOf(importUnplayableVideo("poster-test.mp4"))
         try {
             tap { it.contentDescription?.startsWith("Video, ") == true }
-            val poster = { node: AccessibilityNodeInfo -> label("Play")(node) && node.viewIdResourceName == null }
-            assertTrue("the poster shows", await { find(poster) != null })
-            assertNotNull("with the chrome", find(label("Back")))
-            for (id in listOf("exo_play_pause", "exo_rew_with_amount", "exo_ffwd_with_amount", "exo_progress", "exo_settings")) {
-                assertNull("no $id under the poster", find(playerControl(id)))
-            }
-            assertNotNull("the poster still covers the player", find(poster))
-
-            // §13.1: a tap on the poster reaches the viewer, and the chrome
-            // goes.
-            val media = boundsOf { node ->
-                node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK && it.label?.toString() == "Hide controls" }
-            }
-            shell("input tap ${media.centerX()} ${media.top + media.height() / 4}")
-            assertTrue("a tap on the poster hides the chrome", await { find(label("Back")) == null })
-
-            tap(poster)
-            // The player failed on the stream, and the press brings no new
-            // state. It then shows its own state, and the chrome with it, not
-            // a black canvas or a poster that looks playable, §13.4.
-            assertTrue("the press brings the controls", await { find(playerControl("exo_play_pause")) != null })
-            assertTrue("and the chrome", await { find(label("Back")) != null })
-            assertTrue("in place of the poster", await { find(poster) == null })
-            assertFalse(
-                "the failure holds them",
-                await(7_000) { find(playerControl("exo_play_pause")) == null || find(label("Back")) == null },
-            )
+            val message = "This device cannot play this file. You can export it to use a compatible player."
+            assertTrue("a decoder failure is explicit", await { find(label(message)) != null })
+            assertNotNull("verification is offered", find(label("Verify library")))
+            assertNotNull("Back remains reachable", find(label("Back")))
+            assertNull("failed media must not offer Play", find(label("Play")))
+            assertFalse("the error does not auto-hide", await(7_000) {
+                find(label(message)) == null || find(label("Back")) == null
+            })
             pressBack()
             assertTrue("the viewer closes", await { find(label("Info")) == null })
         } finally {
