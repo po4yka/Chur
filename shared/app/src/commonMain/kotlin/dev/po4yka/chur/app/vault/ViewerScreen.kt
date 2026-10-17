@@ -139,6 +139,8 @@ fun ViewerScreen(
     onCancelOperation: () -> Unit = {},
     notice: Notice? = null,
     onNoticeShown: (Long) -> Unit = {},
+    stillState: ViewerStillState = if (preview != null) ViewerStillState.Ready else ViewerStillState.Loading,
+    onVerifyStill: (() -> Unit)? = null,
 ) {
     // §25.5: the canvas and the scrims run edge to edge, and what is read or
     // pressed keeps clear of the system bars, the cutout, and the gesture
@@ -236,7 +238,7 @@ fun ViewerScreen(
                     else DocumentFallback(page, detail, "This file has no internal preview.", Modifier.fillMaxSize(), controlsPadding)
                 } else if (settled) {
                     ViewerMedia(preview ?: thumbnails[page.id], player, controlsPadding, waveform, zoom.takeIf { photo },
-                        audio = page.mediaKind == MEDIA_CLASS_AUDIO)
+                        audio = page.mediaKind == MEDIA_CLASS_AUDIO, stillState = stillState, onVerifyStill = onVerifyStill)
                 } else {
                     thumbnails[page.id]?.let { ViewerMedia(it, player = null, controlsPadding = controlsPadding, waveform = null,
                         audio = page.mediaKind == MEDIA_CLASS_AUDIO) }
@@ -352,6 +354,8 @@ private fun ViewerMedia(
     waveform: ByteArray?,
     zoom: MutableState<ViewerZoom>? = null,
     audio: Boolean = false,
+    stillState: ViewerStillState = ViewerStillState.Ready,
+    onVerifyStill: (() -> Unit)? = null,
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         if (player != null) {
@@ -385,11 +389,18 @@ private fun ViewerMedia(
             )
         } else {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    "Decrypting",
-                    color = ViewerColors.content,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        if (stillState == ViewerStillState.Loading) "Decrypting" else "Preview unavailable",
+                        color = ViewerColors.content,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    if (stillState == ViewerStillState.Unavailable && onVerifyStill != null) {
+                        TextButton(onClick = onVerifyStill) {
+                            Text("Verify files", color = ViewerColors.content)
+                        }
+                    }
+                }
             }
         }
     }

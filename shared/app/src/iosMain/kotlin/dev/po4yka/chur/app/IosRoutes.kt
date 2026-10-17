@@ -67,6 +67,7 @@ import dev.po4yka.chur.app.vault.albumPath
 import dev.po4yka.chur.app.vault.VaultShell
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
 import dev.po4yka.chur.app.vault.viewerPages
+import dev.po4yka.chur.app.vault.ViewerStillState
 import dev.po4yka.chur.app.vault.viewerStill
 import dev.po4yka.chur.app.vault.VaultPlayer
 import dev.po4yka.chur.app.vault.VaultDocument
@@ -1066,6 +1067,7 @@ private fun IosViewerRoute(
     var choosingTags by remember(projection.id) { mutableStateOf(false) }
     val viewerScope = rememberCoroutineScope()
     var preview by remember(projection.id, generation) { mutableStateOf<ImageBitmap?>(null) }
+    var stillState by remember(projection.id, generation) { mutableStateOf(ViewerStillState.Loading) }
     var showDetail by remember(projection.id) { mutableStateOf(false) }
     var waveform by remember(projection.id) { mutableStateOf<ByteArray?>(null) }
     var confirmingDelete by remember(projection.id) { mutableStateOf(false) }
@@ -1091,6 +1093,11 @@ private fun IosViewerRoute(
         }
         detail = controller.detailOf(projection.objectId)
         viewerStill(controller.vault, cache, generation, projection)?.let { preview = it }
+        stillState = if (preview != null || thumbnails[projection.id] != null) {
+            ViewerStillState.Ready
+        } else {
+            ViewerStillState.Unavailable
+        }
     }
 
     // DESIGN.md §20.3: a quarantined object is never silently retried in a
@@ -1117,6 +1124,8 @@ private fun IosViewerRoute(
         onSettled = onSettled,
         detail = detail,
         preview = preview,
+        stillState = stillState,
+        onVerifyStill = { controller.verifyEverything() },
         showDetail = showDetail,
         chromeVisible = chromeVisible,
         onToggleChrome = { chrome.toggle(chromePinned) },

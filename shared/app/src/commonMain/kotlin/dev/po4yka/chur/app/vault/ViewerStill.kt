@@ -9,6 +9,9 @@ import dev.po4yka.chur.vault.VaultRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+/** The still request ends even when no source can be decoded. */
+enum class ViewerStillState { Loading, Ready, Unavailable }
+
 /**
  * The streams the viewer tries for one object's still, sharpest first.
  *
