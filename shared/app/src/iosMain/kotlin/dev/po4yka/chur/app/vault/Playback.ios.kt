@@ -178,7 +178,7 @@ actual fun VaultPlayer(
                 nativeProblem = iosNativePlaybackProblem(player.currentItem?.error)
             }
             covered = !audio && (!started || layer?.readyForDisplay != true)
-            if (playing) source.vault.noteActivity()
+            if (phase == IosPlaybackPhase.PLAYING) source.vault.noteActivity()
             delay(250)
         }
     }
@@ -443,7 +443,7 @@ private fun ByteArray.toNSData(): NSData = usePinned { pinned ->
 
 /** Native codec failures are separate from authenticated reader failures. */
 internal fun iosNativePlaybackProblem(error: NSError?): PlaybackProblem =
-    if (error?.domain == AVFoundationErrorDomain &&
+    if (error != null && error.domain == AVFoundationErrorDomain &&
         (error.code == AVErrorDecoderNotFound || error.code == AVErrorFileFormatNotRecognized)
     ) PlaybackProblem.UNSUPPORTED else PlaybackProblem.UNAVAILABLE
 
