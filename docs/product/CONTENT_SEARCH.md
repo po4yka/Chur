@@ -11,7 +11,7 @@ Search can find filenames, captions, tags, and indexed words from documents or i
 3. Search for a word or several words. Results open the existing document or media viewer. A query can combine a filename word with a word from the contents.
 4. Use **Index options** to rebuild all supported items or clear recognized text. Clearing the content index preserves originals, filenames, captions, and tags.
 
-New imports become scan candidates. Recognition runs only after a foreground scan action. It stops when the app enters the background or the vault locks. Completed writes remain searchable after stop, lock, and restart. Retry processes failures again. Rebuild replaces successful records only after new extraction succeeds.
+New imports become scan candidates. Recognition runs only after a foreground scan action. It stops when the app enters the background or the vault locks. Completed writes remain searchable after stop, lock, and restart. **Index new items and retry failures** processes supported items without a saved index record. Rebuild replaces successful records only after new extraction succeeds. A failed rebuild preserves its previous complete or partial record, so ordinary retry skips that item. Select **Rebuild all supported items** again to retry failed rebuilds.
 
 ## Supported input and limits
 

@@ -156,7 +156,13 @@ internal class ContentIndexController(
                         job = null
                         if ((vaultState.value as? VaultState.Unlocked)?.generation == generation) {
                             publish(token) { it.copy(running = false, stopping = false, page = 0, pages = 0,
-                                message = it.message ?: if (cancelled) "Indexing stopped. Saved results remain searchable." else "Content indexing finished.") }
+                                message = it.message ?: when {
+                                    rebuild && it.failed > 0 ->
+                                        (if (cancelled) "Indexing stopped." else "Content indexing finished.") +
+                                            " Use Rebuild all supported items to retry failed rebuilds. Saved results remain searchable."
+                                    cancelled -> "Indexing stopped. Saved results remain searchable."
+                                    else -> "Content indexing finished."
+                                }) }
                             changed()
                         } else reset()
                     }

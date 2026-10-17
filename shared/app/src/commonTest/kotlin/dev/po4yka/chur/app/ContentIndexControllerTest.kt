@@ -297,6 +297,36 @@ class ContentIndexControllerTest {
         assertFalse(controller.state.value.running)
     }
 
+    @Test
+    fun a_failed_rebuild_keeps_saved_results_and_explains_which_action_retries_it() = runTest {
+        val access = Access(1)
+        var failExtraction = false
+        var extractions = 0
+        val controller = ContentIndexController(access.state, access,
+            Engine { _, _, _, _, _ ->
+                extractions++
+                check(!failExtraction)
+                ExtractedContent("saved original result".encodeToByteArray(), false)
+            }, this, {}, StandardTestDispatcher(testScheduler))
+        controller.start(); advanceUntilIdle()
+        assertEquals(setOf(1), access.saved)
+        failExtraction = true
+        controller.start(rebuild = true); advanceUntilIdle()
+        assertEquals(setOf(1), access.saved, "a failed rebuild must retain its saved index record")
+        assertEquals(1, controller.state.value.failed)
+        assertEquals("Content indexing finished. Use Rebuild all supported items to retry failed rebuilds. Saved results remain searchable.",
+            controller.state.value.message)
+        controller.start(); advanceUntilIdle()
+        assertEquals(2, extractions, "the normal retry skips items that still have a saved index record")
+        assertEquals(setOf(1), access.saved)
+        failExtraction = false
+        controller.start(rebuild = true); advanceUntilIdle()
+        assertEquals(3, extractions)
+        assertEquals(1, controller.state.value.indexed)
+        assertEquals(0, controller.state.value.failed)
+        assertEquals(setOf(1), access.saved)
+    }
+
     private class Engine(
         val action: suspend (ContentTextSource, String, Int, () -> Boolean, (Int, Int) -> Unit) -> ExtractedContent,
     ) : ContentTextExtractor {
