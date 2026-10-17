@@ -1,8 +1,25 @@
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, kotlinx.cinterop.BetaInteropApi::class)
+
 package dev.po4yka.chur.app.vault
 
 import kotlin.io.encoding.Base64
 import kotlin.test.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import platform.Vision.VNErrorRequestCancelled
+import kotlinx.cinterop.*
+import platform.Foundation.*
+import platform.CoreGraphics.*
+import platform.CoreFoundation.*
+import platform.ImageIO.*
+import platform.UIKit.*
+import platform.posix.memcpy
+import kotlin.math.PI
 import kotlinx.coroutines.test.runTest
 
 /** Real Vision requests over an image and a rasterized PDF. No mocked recognizer is used. */
@@ -53,19 +70,145 @@ class ContentTextExtractorIosTest {
         }
     }
 
+    @Test fun exif_orientation_is_applied_before_real_image_recognition() = runTest {
+        val original = Base64.decode(IMAGE)
+        val rotated = orientedJpeg(original)
+        try {
+            val result = IosContentTextExtractor().extract(source(rotated), "image/jpeg", 1, { false })
+            try {
+                val text = result.bytes.decodeToString().lowercase()
+                assertTrue("alpha" in text && "4827" in text)
+                assertTrue("приватный" in text && "документ" in text)
+                assertFalse(result.partial)
+            } finally { result.bytes.fill(0) }
+        } finally { original.fill(0); rotated.fill(0) }
+    }
+
+    @Test fun password_protected_pdf_does_not_return_index_text() = runTest {
+        val bytes = Base64.decode(PROTECTED_PDF)
+        try {
+            assertEquals(ContentExtractionFailure.UNAVAILABLE, assertFailsWith<ContentExtractionException> {
+                IosContentTextExtractor().extract(source(bytes), "application/pdf", 4, { false })
+            }.reason)
+        } finally { bytes.fill(0) }
+    }
+
+    @Test fun coroutine_cancel_during_real_vision_progress_cancels_the_native_request_before_return() = runBlocking {
+        val bytes = Base64.decode(IMAGE)
+        val ranges = mutableListOf<ByteArray>()
+        val entered = MutableStateFlow(false)
+        val completed = MutableStateFlow(false)
+        val nativeError = MutableStateFlow<Long?>(null)
+        lateinit var running: Job
+        val extractor = IosContentTextExtractor(object : IosVisionObserver {
+            override fun progress(fraction: Double) {
+                if (fraction < 1.0 && entered.compareAndSet(false, true)) running.cancel()
+            }
+            override fun finished(errorCode: Long?) { nativeError.value = errorCode; completed.value = true }
+        })
+        try {
+            running = launch(start = CoroutineStart.LAZY) {
+                extractor.extract(source(bytes, ranges), "image/png", 1, { false }).bytes.fill(0)
+                fail("a cancelled native request must not return OCR text")
+            }
+            running.start()
+            withTimeout(30_000) { running.join() }
+            assertTrue(entered.value, "cancel must follow a real native progress callback")
+            assertTrue(running.isCancelled)
+            assertTrue(completed.value, "native completion must drain before extraction ends")
+            assertEquals(VNErrorRequestCancelled, nativeError.value, "Vision itself must acknowledge cancellation")
+            assertTrue(ranges.isNotEmpty() && ranges.all { it.all { byte -> byte == 0.toByte() } })
+        } finally { running.cancel(); running.join(); bytes.fill(0) }
+        val healthyBytes = Base64.decode(IMAGE)
+        val healthy = IosContentTextExtractor().extract(source(healthyBytes), "image/png", 1, { false })
+        try { assertTrue("alpha" in healthy.bytes.decodeToString().lowercase()) }
+        finally { healthy.bytes.fill(0); healthyBytes.fill(0) }
+    }
+
+    @Test fun external_revocation_during_real_vision_progress_cancels_and_drains_native_recognition() = runTest {
+        val bytes = Base64.decode(IMAGE)
+        val revoked = MutableStateFlow(false)
+        val completed = MutableStateFlow(false)
+        val nativeError = MutableStateFlow<Long?>(null)
+        val extractor = IosContentTextExtractor(object : IosVisionObserver {
+            override fun progress(fraction: Double) { if (fraction < 1.0) revoked.value = true }
+            override fun finished(errorCode: Long?) { nativeError.value = errorCode; completed.value = true }
+        })
+        try {
+            assertFailsWith<CancellationException> {
+                extractor.extract(source(bytes).copy(canRead = { !revoked.value }), "image/png", 1, { false })
+            }
+            assertTrue(revoked.value, "revocation must happen inside the real request")
+            assertTrue(completed.value)
+            assertEquals(VNErrorRequestCancelled, nativeError.value)
+        } finally { bytes.fill(0) }
+    }
+
+    @Test fun page_limit_is_partial_and_extreme_page_bounds_stay_bounded() = runTest {
+        val bytes = pdf(List(CONTENT_PDF_MAX_PAGES + 1) { "" })
+        val progress = mutableListOf<Int>()
+        val result = IosContentTextExtractor().extract(source(bytes), "application/pdf", 4, { false }) { page, _ -> progress += page }
+        try {
+            assertTrue(result.partial)
+            assertEquals(CONTENT_PDF_MAX_PAGES, result.pages)
+            assertEquals((1..CONTENT_PDF_MAX_PAGES).toList(), progress)
+            assertTrue(result.bytes.size <= CONTENT_TEXT_MAX_BYTES)
+        } finally { result.bytes.fill(0); bytes.fill(0) }
+        val huge = pdf(listOf(""), "1000000000 1000000000")
+        val bounded = IosContentTextExtractor().extract(source(huge), "application/pdf", 4, { false })
+        try { assertEquals(1, bounded.pages); assertTrue(bounded.bytes.isEmpty() || bounded.bytes.all { it == '\n'.code.toByte() }) }
+        finally { bounded.bytes.fill(0); huge.fill(0) }
+    }
+
+    /** Counterclockwise stored pixels plus EXIF Right must recover the original upright text. */
+    private fun orientedJpeg(original: ByteArray): ByteArray = autoreleasepool {
+        val data = original.usePinned { NSData.create(bytes = it.addressOf(0), length = original.size.toULong()) }
+        val image = assertNotNull(UIImage.imageWithData(data))
+        val (width, height) = image.size.useContents { width to height }
+        UIGraphicsBeginImageContextWithOptions(CGSizeMake(height, width), true, 1.0)
+        val rotated = try {
+            val context = assertNotNull(UIGraphicsGetCurrentContext())
+            CGContextTranslateCTM(context, 0.0, width)
+            CGContextRotateCTM(context, -PI / 2)
+            image.drawInRect(CGRectMake(0.0, 0.0, width, height))
+            assertNotNull(UIGraphicsGetImageFromCurrentImageContext())
+        } finally { UIGraphicsEndImageContext() }
+        val output = assertNotNull(CFDataCreateMutable(null, 0))
+        val type = assertNotNull(CFStringCreateWithCString(null, "public.jpeg", kCFStringEncodingUTF8))
+        val destination = try { assertNotNull(CGImageDestinationCreateWithData(output, type, 1u, null)) }
+        finally { CFRelease(type) }
+        try {
+            val properties = memScoped {
+                val value = alloc<IntVar> { this.value = 6 }
+                val orientation = assertNotNull(CFNumberCreate(null, kCFNumberIntType, value.ptr))
+                val dictionary = assertNotNull(CFDictionaryCreateMutable(null, 1, kCFTypeDictionaryKeyCallBacks.ptr, kCFTypeDictionaryValueCallBacks.ptr))
+                CFDictionarySetValue(dictionary, kCGImagePropertyOrientation, orientation)
+                CFRelease(orientation)
+                dictionary
+            }
+            try { CGImageDestinationAddImage(destination, assertNotNull(rotated.CGImage), properties) }
+            finally { CFRelease(properties) }
+            assertTrue(CGImageDestinationFinalize(destination))
+            ByteArray(CFDataGetLength(output).toInt()).also { result ->
+                result.usePinned { memcpy(it.addressOf(0), CFDataGetBytePtr(output), result.size.toULong()) }
+            }
+        } finally { CFRelease(destination); CFRelease(output) }
+    }
+
     private fun source(bytes: ByteArray, ranges: MutableList<ByteArray> = mutableListOf()) =
         ContentTextSource(bytes.size.toLong(), { offset, length -> bytes.copyOfRange(offset.toInt(), offset.toInt() + length).also { ranges += it } }, { true })
 
-    private fun pdf(): ByteArray {
-        val objects = listOf(
-            "<< /Type /Catalog /Pages 2 0 R >>",
-            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 700 250] /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>",
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 700 250] /Resources << /Font << /F1 5 0 R >> >> /Contents 7 0 R >>",
-            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-            stream("BT /F1 44 Tf 35 135 Td (Invoice Alpha 4827) Tj ET"),
-            stream("BT /F1 44 Tf 35 135 Td (Invoice Beta 4827) Tj ET"),
-        )
+    private fun pdf(texts: List<String> = listOf("Invoice Alpha 4827", "Invoice Beta 4827"), box: String = "700 250"): ByteArray {
+        val font = texts.size + 3
+        val objects = buildList {
+            add("<< /Type /Catalog /Pages 2 0 R >>")
+            add("<< /Type /Pages /Kids [${texts.indices.joinToString(" ") { "${it + 3} 0 R" }}] /Count ${texts.size} >>")
+            texts.indices.forEach { index ->
+                add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 $box] /Resources << /Font << /F1 $font 0 R >> >> /Contents ${font + 1 + index} 0 R >>")
+            }
+            add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+            texts.forEach { add(stream(if (it.isEmpty()) "" else "BT /F1 44 Tf 35 135 Td ($it) Tj ET")) }
+        }
         val out = StringBuilder("%PDF-1.4\n")
         val offsets = mutableListOf(0)
         objects.forEachIndexed { index, value -> offsets += out.length; out.append("${index + 1} 0 obj\n$value\nendobj\n") }
@@ -78,6 +221,21 @@ class ContentTextExtractorIosTest {
     private fun stream(text: String) = "<< /Length ${text.length} >>\nstream\n$text\nendstream"
 
     companion object {
+        private const val PROTECTED_PDF =
+            "JVBERi0xLjcKJb/3ov4KMSAwIG9iago8PCAvRXh0ZW5zaW9ucyA8PCAvQURCRSA8PCAvQmFzZVZlcnNpb24gLzEuNyAvRXh0ZW5zaW9uTGV2ZWwgOCA+PiA+" +
+            "PiAvUGFnZXMgMiAwIFIgL1R5cGUgL0NhdGFsb2cgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL0NvdW50IDEgL0tpZHMgWyAzIDAgUiBdIC9UeXBlIC9QYWdlcyA+" +
+            "PgplbmRvYmoKMyAwIG9iago8PCAvQ29udGVudHMgNCAwIFIgL01lZGlhQm94IFsgMCAwIDYxMiA3OTIgXSAvUGFyZW50IDIgMCBSIC9SZXNvdXJjZXMgPDwg" +
+            "Pj4gL1R5cGUgL1BhZ2UgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCAzMiA+PgpzdHJlYW0Kv3Q4iQKiRWaqkA8iaV01/I3uneDqtlt4vFOTvFUXQvJl" +
+            "bmRzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL0NGIDw8IC9TdGRDRiA8PCAvQXV0aEV2ZW50IC9Eb2NPcGVuIC9DRk0gL0FFU1YzIC9MZW5ndGggMzIgPj4g" +
+            "Pj4gL0ZpbHRlciAvU3RhbmRhcmQgL0xlbmd0aCAyNTYgL08gPDI3ZTE4YjUyNjJjMmY3N2RlMmE1NzkyZWY3ODI3MWEwNWI2NTlmYjk4MzY1MjFiOTViZjA1" +
+            "OGQ4MWViZDA5M2RiM2NmOWJmYTFkYTYzZTRlNGQzOTY5NGE5YmI4ZWFkND4gL09FIDwyMmM0NzE2MmRmMWRmOTVmODU3OGQ0M2U4OGY1NjRmNjEwMTVjZjk2" +
+            "ZGJkYjRhN2NmZjYxOTE5NzhkY2VjNDYyPiAvUCAtNCAvUGVybXMgPDc4ZDQ3ZGYxNzUyYjg4MDg0MDczYzNjZTVmYTliMWRlPiAvUiA2IC9TdG1GIC9TdGRD" +
+            "RiAvU3RyRiAvU3RkQ0YgL1UgPDE4OGU0ZGI2ODFhNjY1NzgyMGIzZDQ2ZDdkMjJiYTUyMGEyYWEyYjJlN2NiYzRiY2IyZjc0ZDg1NWRlMWEyNjdmNjhmNjcw" +
+            "MTllMTE5ZjU3ZjAwZWJjNDUwYWIzN2ZhND4gL1VFIDxlOWNlNThiNDlmNjE5MTE4MDE0MjY1ZDM3YzEzY2I3NGM4ZTAxMjY2MzYxOWEwYzRiYWFjZGE5NTA2" +
+            "ZWY1NWM0PiAvViA1ID4+CmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMTUgMDAwMDAgbiAKMDAwMDAwMDEzMCAwMDAwMCBu" +
+            "IAowMDAwMDAwMTg5IDAwMDAwIG4gCjAwMDAwMDAyOTUgMDAwMDAgbiAKMDAwMDAwMDM3NiAwMDAwMCBuIAp0cmFpbGVyIDw8IC9Sb290IDEgMCBSIC9TaXpl" +
+            "IDYgL0lEIFs8MjQ0NTM5MGJhYjM0NDEyZjBlMWJhN2QzZmY0YWRjNmQ+PDI0NDUzOTBiYWIzNDQxMmYwZTFiYTdkM2ZmNGFkYzZkPl0gL0VuY3J5cHQgNSAw" +
+            "IFIgPj4Kc3RhcnR4cmVmCjkyMwolJUVPRgo="
         private val IMAGE =
             "iVBORw0KGgoAAAANSUhEUgAABEwAAAEOCAIAAAAcyxUtAABFVklEQVR4nO3deVxU1f/48RkWRVHccEXJ3Ml9CUTNHRJxR81EtLJS01LLUrOP6cfMtNwyQ01z" +
             "RVMwcsMF11IRF9Rcw31DBQFB9m1+j2/ze8z3fO/AcGcB5PJ6/jXnzrnn3pm58Ljve855H7VGo1EBAAAAgFJYFfUJAAAAAIAlEeQAAAAAUBSCHAAAAACKQpAD" +

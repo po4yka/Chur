@@ -5,9 +5,15 @@ package dev.po4yka.chur.app.vault
 import dev.po4yka.chur.ffi.ChurBuffer
 import dev.po4yka.chur.ffi.withChurBuffer
 import kotlinx.cinterop.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import platform.CoreFoundation.*
 import platform.CoreGraphics.*
@@ -15,8 +21,18 @@ import platform.ImageIO.*
 import platform.Vision.*
 import platform.posix.memcpy
 
-/** Vision and Core Graphics receive memory only. A synchronous request drains before its image is freed. */
-class IosContentTextExtractor : ContentTextExtractor {
+/** Observes the real native request; it cannot supply results or replace Vision execution. */
+internal interface IosVisionObserver {
+    fun progress(fraction: Double)
+    fun finished(errorCode: Long?)
+}
+
+/**
+ * Vision receives cancellation while its synchronous request drains before image release.
+ * Core Graphics decode and page rendering have no cancellation API and drain before release.
+ */
+class IosContentTextExtractor internal constructor(private val observer: IosVisionObserver?) : ContentTextExtractor {
+    constructor() : this(null)
     override suspend fun extract(
         source: ContentTextSource,
         contentType: String,
@@ -28,7 +44,7 @@ class IosContentTextExtractor : ContentTextExtractor {
         try {
             val result = withContext(Dispatchers.Default) {
                 val coroutine = currentCoroutineContext()
-                val stopped = { coroutine.ensureActive(); cancelRequested() }
+                val stopped = { !coroutine.isActive || cancelRequested() }
                 checkContentSource(source, stopped)
                 val extracted = when {
                     documentPreviewKind(contentType) == DocumentPreviewKind.TEXT -> extractPlainContent(source, stopped)
@@ -41,7 +57,7 @@ class IosContentTextExtractor : ContentTextExtractor {
                                 val image = decodeImage(original) ?: throw ContentExtractionException(ContentExtractionFailure.UNAVAILABLE)
                                 try {
                                     checkContentSource(source, stopped)
-                                    val text = recognize(image)
+                                    val text = recognize(image, cancelled = { stopped() || !source.canRead() })
                                     checkContentSource(source, stopped)
                                     val bytes = boundedContentText(text)
                                     try {
@@ -80,7 +96,7 @@ class IosContentTextExtractor : ContentTextExtractor {
         checkContentSource(source, stopped)
     }
 
-    private fun extractPdf(original: ChurBuffer, source: ContentTextSource, stopped: () -> Boolean, onPage: (Int, Int) -> Unit): ExtractedContent {
+    private suspend fun extractPdf(original: ChurBuffer, source: ContentTextSource, stopped: () -> Boolean, onPage: (Int, Int) -> Unit): ExtractedContent {
         val first = renderPdfPage(original, 1) ?: throw ContentExtractionException(ContentExtractionFailure.UNAVAILABLE)
         val count = first.pages
         val pages = minOf(count, CONTENT_PDF_MAX_PAGES)
@@ -93,7 +109,7 @@ class IosContentTextExtractor : ContentTextExtractor {
                 checkContentSource(source, stopped)
                 val raster = if (number == 1) first else renderPdfPage(original, number)
                     ?: throw ContentExtractionException(ContentExtractionFailure.UNAVAILABLE)
-                val text = try { recognizeRaster(raster) } finally { raster.close() }
+                val text = try { recognizeRaster(raster, cancelled = { stopped() || !source.canRead() }) } finally { raster.close() }
                 checkContentSource(source, stopped)
                 val bytes = boundedContentText(text, CONTENT_TEXT_MAX_BYTES - used)
                 partial = partial || contentTextTruncated(text, bytes.size)
@@ -110,7 +126,7 @@ class IosContentTextExtractor : ContentTextExtractor {
         } finally { first.close(); output.fill(0) }
     }
 
-    private fun recognizeRaster(raster: PdfPageRaster): String {
+    private suspend fun recognizeRaster(raster: PdfPageRaster, cancelled: () -> Boolean): String {
         val bitmap = raster.bitmap
         val pixels = bitmap.peekPixels() ?: throw ContentExtractionException(ContentExtractionFailure.UNAVAILABLE)
         val space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB)
@@ -123,12 +139,16 @@ class IosContentTextExtractor : ContentTextExtractor {
             val image = CGBitmapContextCreateImage(context) ?: throw ContentExtractionException(ContentExtractionFailure.UNAVAILABLE)
             // The viewer raster is in Skia's top-left coordinates. Tell Vision about
             // its vertical mirror instead of changing the shared preview pixels.
-            try { return recognize(image, kCGImagePropertyOrientationDownMirrored) } finally { CGImageRelease(image) }
+            try { return recognize(image, kCGImagePropertyOrientationDownMirrored, cancelled) } finally { CGImageRelease(image) }
         } finally { if (context != null) CGContextRelease(context); pixels.close() }
     }
 
-    private fun recognize(image: CGImageRef, orientation: CGImagePropertyOrientation = kCGImagePropertyOrientationUp): String = autoreleasepool {
-        val request = VNRecognizeTextRequest(completionHandler = null)
+    private suspend fun recognize(
+        image: CGImageRef,
+        orientation: CGImagePropertyOrientation = kCGImagePropertyOrientationUp,
+        cancelled: () -> Boolean,
+    ): String = coroutineScope {
+        val request = VNRecognizeTextRequest { _, error -> observer?.finished(error?.code) }
         request.revision = VNRecognizeTextRequestRevision3
         request.recognitionLevel = VNRequestTextRecognitionLevelAccurate
         request.usesLanguageCorrection = true
@@ -137,10 +157,31 @@ class IosContentTextExtractor : ContentTextExtractor {
         val languages = listOf("en-US", "ru-RU").filter { it in supported }
         if (languages.isEmpty()) throw ContentExtractionException(ContentExtractionFailure.UNAVAILABLE)
         request.recognitionLanguages = languages
-        val handler = VNImageRequestHandler(cGImage = image, orientation = orientation, options = emptyMap<Any?, Any?>())
-        if (!handler.performRequests(listOf(request), null)) throw ContentExtractionException(ContentExtractionFailure.UNAVAILABLE)
-        request.results.orEmpty().filterIsInstance<VNRecognizedTextObservation>().joinToString("\n") {
-            (it.topCandidates(1u).firstOrNull() as? VNRecognizedText)?.string.orEmpty()
+        // Vision may deliver progress on another queue. No Kotlin exception may cross this callback.
+        request.progressHandler = { _, fraction, _ ->
+            if (runCatching { observer?.progress(fraction); cancelled() }.getOrDefault(true)) request.cancel()
+        }
+        // A child starts its cancellation wait before performRequests enters native code.
+        // Job cancellation resumes it even while this worker is inside synchronous Vision.
+        val cancellation = launch(start = CoroutineStart.UNDISPATCHED) {
+            try { awaitCancellation() } finally { request.cancel() }
+        }
+        try {
+            autoreleasepool {
+                if (cancelled()) throw CancellationException("Content extraction ended")
+                val handler = VNImageRequestHandler(cGImage = image, orientation = orientation, options = emptyMap<Any?, Any?>())
+                val succeeded = handler.performRequests(listOf(request), null)
+                if (cancelled()) throw CancellationException("Content extraction ended")
+                if (!succeeded) throw ContentExtractionException(ContentExtractionFailure.UNAVAILABLE)
+                request.results.orEmpty().filterIsInstance<VNRecognizedTextObservation>().joinToString("\n") {
+                    (it.topCandidates(1u).firstOrNull() as? VNRecognizedText)?.string.orEmpty()
+                }
+            }
+        } finally {
+            // Keep the request and image alive until both native execution and cancellation drain.
+            cancellation.cancel()
+            withContext(NonCancellable) { cancellation.join() }
+            request.progressHandler = null
         }
     }
 
