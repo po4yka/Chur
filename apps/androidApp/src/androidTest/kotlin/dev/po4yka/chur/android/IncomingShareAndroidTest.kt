@@ -12,7 +12,9 @@ import dev.po4yka.chur.imports.AndroidMediaCodec
 import dev.po4yka.chur.vault.VaultRepository
 import java.io.File
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
@@ -177,6 +179,9 @@ class IncomingShareAndroidTest {
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            runBlocking {
+                withTimeout(5_000) { host.incomingShares.state.first { it?.count == 1 } }
+            }
             scenario.onActivity { activity ->
                 assertEquals(1, host.incomingShares.state.value!!.count)
                 assertNull(activity.intent.extras)
