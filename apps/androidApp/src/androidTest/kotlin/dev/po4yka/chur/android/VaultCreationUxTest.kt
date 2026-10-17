@@ -134,6 +134,12 @@ class VaultCreationUxTest {
             present { f ->
                 f.assertMotion(reduced = false)
                 setMotionScale(animator, "0")
+                setMotionScale(transition, "0")
+                f.assertMotion(reduced = true)
+                setMotionScale(animator, null)
+                setMotionScale(transition, null)
+                f.assertMotion(reduced = false)
+                setMotionScale(animator, "0")
                 f.assertMotion(reduced = true)
                 f.capture("vault-creation-reduced-motion-public-320-font2.png")
                 setMotionScale(animator, "1")

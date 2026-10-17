@@ -50,7 +50,10 @@ private fun readReducedMotion(resolver: ContentResolver?): Boolean =
     runCatching {
         if (resolver == null) return@runCatching true
         motionSettings.any { setting ->
-            val scale = Settings.Global.getFloat(resolver, setting, 0f)
+            // An unset scale uses Android's normal 1x default. A stored value
+            // that cannot be parsed remains a conservative reduced-motion case.
+            val stored = Settings.Global.getString(resolver, setting)
+            val scale = if (stored == null) 1f else stored.toFloatOrNull() ?: 0f
             !scale.isFinite() || scale <= 0f
         }
     }.getOrDefault(true)
