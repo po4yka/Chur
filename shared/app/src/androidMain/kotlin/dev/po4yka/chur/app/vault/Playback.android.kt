@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.background
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -18,6 +20,10 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.platform.LocalContext
@@ -41,6 +47,7 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerControlView
 import androidx.media3.ui.PlayerView
 import dev.po4yka.chur.app.R
+import dev.po4yka.chur.app.theme.ViewerColors
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.vault.VaultRepository
 import kotlinx.coroutines.runBlocking
@@ -136,6 +143,9 @@ actual fun VaultPlayer(
     // and the chrome, not a poster that still looks playable.
     var problem by remember(player) { mutableStateOf(player.playerError?.let(::playbackProblem)) }
     val failed = problem != null
+    var buffering by remember(player) { mutableStateOf(player.playbackState == Player.STATE_BUFFERING) }
+    var requested by remember(player) { mutableStateOf(player.playWhenReady) }
+    val waiting = buffering && requested && !failed
     var covered by remember(player) { mutableStateOf(true) }
     val posterShown = !audio && covered && poster != null && !failed
     // Whether this page's player was asked to play: by the poster's Play, the
@@ -162,7 +172,12 @@ actual fun VaultPlayer(
                 covered = false
             }
 
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                buffering = playbackState == Player.STATE_BUFFERING
+            }
+
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                requested = playWhenReady
                 if (playWhenReady) {
                     covered = false
                     started = true
@@ -183,8 +198,8 @@ actual fun VaultPlayer(
         }
     }
     val reportControls by rememberUpdatedState(onControlsVisibleChange)
-    LaunchedEffect(problem) {
-        if (problem != null) reportControls(true)
+    LaunchedEffect(problem, waiting) {
+        if (problem != null || waiting) reportControls(true)
     }
     // Read here, not in `update`: a report changes this and the chrome in the
     // same frame, and `update` has to see both. Read there, it would run on
@@ -212,6 +227,7 @@ actual fun VaultPlayer(
                     }
                     // The viewer plays one object, so there is no previous or
                     // next item for these buttons to reach.
+                    setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                     setShowPreviousButton(false)
                     setShowNextButton(false)
                     controllerAutoShow = autoShow
@@ -270,11 +286,12 @@ actual fun VaultPlayer(
                 // again. A touch on the viewer outside this view, as on a
                 // chrome control, also starts it again: Media3 counts only
                 // the touches that reach this view.
-                val changed = view.controllerAutoShow != autoShow || view.controllerShowTimeoutMs != showTimeoutMs
+                val timeout = if (waiting) 0 else showTimeoutMs
+                val changed = view.controllerAutoShow != autoShow || view.controllerShowTimeoutMs != timeout
                 val touched = seenTouches[0] != touches
                 seenTouches[0] = touches
                 view.controllerAutoShow = autoShow
-                if (view.controllerShowTimeoutMs != showTimeoutMs) view.controllerShowTimeoutMs = showTimeoutMs
+                if (view.controllerShowTimeoutMs != timeout) view.controllerShowTimeoutMs = timeout
                 val stopped = player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED
                 if (controlsVisible && (changed || !shown || touched)) {
                     view.showController()
@@ -301,6 +318,11 @@ actual fun VaultPlayer(
             },
         )
         if (posterShown && poster != null) PlayerPoster(poster, onPlay = { player.play() })
+        if (waiting) {
+            Text("Loading playback…", color = ViewerColors.content,
+                modifier = Modifier.align(Alignment.TopCenter).padding(controlsPadding).padding(16.dp)
+                    .background(ViewerColors.chromeScrim).semantics { liveRegion = LiveRegionMode.Polite })
+        }
         problem?.let {
             PlaybackProblemPanel(it, source.onVerify,
                 Modifier.align(Alignment.Center).padding(controlsPadding))
