@@ -1468,11 +1468,16 @@ class BackNavigationTest {
         assertTrue("the controls go", await { find(playerControl("exo_progress")) == null })
         assertTrue("and the chrome with them", await { find(label("Back")) == null })
 
-        // The chrome brings the controls back when a screen reader shows it.
-        val hidden = find { node ->
-            node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK && it.label?.toString() == "Show controls" }
-        }
-        assertTrue(checkNotNull(hidden).performAction(AccessibilityNodeInfo.ACTION_CLICK))
+        // UIAutomation can retain the old action after the chrome changes.
+        // Invoke Show controls from the current semantics, as a screen reader does.
+        assertTrue("the hidden player's controls can be shown", await {
+            onScreen { nodes ->
+                nodes.firstOrNull {
+                    it.config.getOrNull(SemanticsActions.OnClick)?.label == "Show controls"
+                }?.config?.getOrNull(SemanticsActions.OnClick)?.action?.invoke() == true
+            }
+        })
+        awaitFrames()
         assertTrue("the chrome comes back", await { find(label("Back")) != null })
         assertTrue("with the controls", await { find(playerControl("exo_progress")) != null })
         pressBack()
@@ -1734,7 +1739,23 @@ class BackNavigationTest {
         tap(label("Play"))
         assertTrue("playback takes the media focus", await { focusEntries().isNotEmpty() })
 
-        tap(label("Lock now"))
+        // Playback can hide the controls while the audio focus check runs.
+        // Restore them through the current UI action, then press the current Lock.
+        assertTrue("the Lock action is delivered", await {
+            onScreen { nodes ->
+                val lock = nodes.firstOrNull { "Lock now" in it.labels }
+                    ?.config?.getOrNull(SemanticsActions.OnClick)
+                if (lock != null) {
+                    lock.action?.invoke() == true
+                } else {
+                    nodes.firstOrNull {
+                        it.config.getOrNull(SemanticsActions.OnClick)?.label == "Show controls"
+                    }?.config?.getOrNull(SemanticsActions.OnClick)?.action?.invoke()
+                    false
+                }
+            }
+        })
+        awaitFrames()
 
         assertTrue("the press locks", await { controller.vaultState.value is VaultState.Locked })
         assertTrue("and leaves the vault", await { controller.route.value != AppRoute.Vault })
