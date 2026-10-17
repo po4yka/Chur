@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.background
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -24,6 +25,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.viewinterop.UIKitView
 import dev.po4yka.chur.ffi.ChurFailure
@@ -40,7 +44,8 @@ import platform.AVFoundation.AVAssetResourceLoaderDelegateProtocol
 import platform.AVFoundation.AVAssetResourceLoadingRequest
 import platform.AVFoundation.AVPlayer
 import platform.AVFoundation.AVPlayerItem
-import platform.AVFoundation.AVPlayerTimeControlStatusPaused
+import platform.AVFoundation.AVPlayerTimeControlStatusPlaying
+import platform.AVFoundation.AVPlayerTimeControlStatusWaitingToPlayAtSpecifiedRate
 import platform.AVFoundation.AVPlayerLayer
 import platform.AVFoundation.AVURLAsset
 import platform.AVFoundation.currentItem
@@ -106,15 +111,23 @@ actual fun VaultPlayer(
     val layer = remember(player, audio) { if (audio) null else AVPlayerLayer.playerLayerWithPlayer(player) }
     var started by remember(player) { mutableStateOf(false) }
     var covered by remember(layer) { mutableStateOf(!audio) }
-    var playing by remember(player) { mutableStateOf(false) }
+    var phase by remember(player) { mutableStateOf(IosPlaybackPhase.INITIAL) }
+    val playing = phase == IosPlaybackPhase.PLAYING
+    val buffering = phase == IosPlaybackPhase.BUFFERING
     var position by remember(player) { mutableStateOf(0f) }
     var duration by remember(player) { mutableStateOf(0f) }
     LaunchedEffect(player) {
         while (true) {
-            playing = player.timeControlStatus != AVPlayerTimeControlStatusPaused
             position = CMTimeGetSeconds(player.currentTime()).takeIf { it.isFinite() }?.toFloat() ?: 0f
             duration = player.currentItem?.let { CMTimeGetSeconds(it.duration) }
                 ?.takeIf { it.isFinite() && it > 0 }?.toFloat() ?: 0f
+            phase = iosPlaybackPhase(
+                started = started,
+                advancing = player.timeControlStatus == AVPlayerTimeControlStatusPlaying,
+                waiting = player.timeControlStatus == AVPlayerTimeControlStatusWaitingToPlayAtSpecifiedRate,
+                position = position,
+                duration = duration,
+            )
             covered = !audio && (!started || layer?.readyForDisplay != true)
             if (playing) source.vault.noteActivity()
             delay(250)
@@ -163,6 +176,15 @@ actual fun VaultPlayer(
                 Modifier.align(Alignment.BottomCenter).padding(controlsPadding)
                     .fillMaxWidth().background(Color.Black.copy(alpha = 0.7f)).padding(horizontal = 16.dp),
             ) {
+                if (buffering) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                    ) {
+                        CircularProgressIndicator(Modifier.padding(8.dp), color = Color.White)
+                        Text("Loading playback…", color = Color.White)
+                    }
+                }
                 Slider(
                     value = position.coerceIn(0f, duration.coerceAtLeast(0f)),
                     onValueChange = {
