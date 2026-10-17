@@ -201,8 +201,12 @@ actual fun VaultPlayer(
                 (view.layer.sublayers?.firstOrNull() as? AVPlayerLayer)?.setFrame(view.bounds)
             },
         )
-        if (!audio && covered && poster != null) PlayerPoster(poster, onPlay = if (!started) play else null)
-        if (controlsVisible || controlsHeld) {
+        val posterShown = !audio && covered && poster != null
+        val posterOffersPlay = posterShown && !started
+        if (posterShown) PlayerPoster(checkNotNull(poster), onPlay = if (posterOffersPlay) play else null)
+        // The poster owns the only Play until it is pressed. Hidden transport
+        // controls must not remain in the keyboard or VoiceOver focus order.
+        if ((controlsVisible || controlsHeld) && !posterOffersPlay) {
             Column(
                 Modifier.align(Alignment.BottomCenter).onFocusChanged { controlsFocused = it.hasFocus }.padding(controlsPadding)
                     .fillMaxWidth().background(Color.Black.copy(alpha = 0.7f)).padding(horizontal = 16.dp),
