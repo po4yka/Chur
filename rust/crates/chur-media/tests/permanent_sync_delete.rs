@@ -93,6 +93,94 @@ fn import(session: &mut Session, value: &[u8]) -> Id {
     )
     .unwrap()
 }
+fn import_ocr_text(session: &mut Session, value: &[u8]) -> Id {
+    import::import_bytes(
+        session,
+        SourceCapability {
+            seekable: true,
+            known_length: Some(value.len() as u64),
+            content_type_hint: "text/plain".into(),
+            original_filename: Some("private.bin".into()),
+            capture_time_ms: None,
+        },
+        CanonicalMedia::opaque(),
+        "text/plain",
+        &Zeroizing::new(value.to_vec()),
+        NOW + 8,
+    )
+    .unwrap()
+}
+
+fn index_ocr(session: &mut Session, object: Id, text: &str) -> Id {
+    let stream = chur_catalog::store::object(session.catalog_ref().unwrap(), &object)
+        .unwrap()
+        .primary_stream_id;
+    chur_catalog::content_index::put(session.catalog().unwrap(), &object, &stream, 1, 1, text)
+        .unwrap();
+    stream
+}
+
+fn assert_purged_ocr_and_healthy_neighbor(
+    session: &mut Session,
+    removed: Id,
+    neighbor: Id,
+    old_stream: Id,
+) {
+    session
+        .catalog()
+        .unwrap()
+        .transaction(|tx| {
+            let rows: i64 = tx
+                .query_row(
+                    "SELECT count(*) FROM content_index WHERE object_id = ?1",
+                    [removed.as_bytes().as_slice()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(rows, 0);
+            tx.execute_batch(
+                "CREATE VIRTUAL TABLE temp.ocr_vocab USING fts5vocab(main, object_search, row)",
+            )
+            .unwrap();
+            let terms: i64 = tx
+                .query_row(
+                    "SELECT count(*) FROM temp.ocr_vocab WHERE term = 'remotepurgedocrcanary'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                terms, 0,
+                "remote purge must remove OCR from the actual FTS vocabulary"
+            );
+            tx.execute_batch("DROP TABLE temp.ocr_vocab").unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        chur_catalog::content_index::put(
+            session.catalog().unwrap(),
+            &removed,
+            &old_stream,
+            1,
+            1,
+            "remotepurgedocrcanary"
+        )
+        .unwrap_err()
+        .status(),
+        ChurStatus::NotFound
+    );
+    let query = chur_catalog::query::ObjectQuery {
+        scope: chur_catalog::query::Scope::Search("remotepreservedocrneighbor".into()),
+        ..chur_catalog::query::ObjectQuery::timeline()
+    };
+    let hits = chur_catalog::query::page(session.catalog_ref().unwrap(), &query)
+        .unwrap()
+        .objects;
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].object_id, neighbor);
+}
+
 fn rotate(source: &mut Session, secret: &Key, collection: Id, objects: &[Id]) {
     use chur_sync_protocol::{
         KeyDomain,
@@ -469,8 +557,10 @@ fn source_purge_relay_erases_sibling_after_restart_and_backup_without_damaging_n
     relay(&source, &mut target, &secret, source_enrollment.device_id());
     let target_device =
         device_pairing::finalize(target.catalog().unwrap(), &secret, vault, NOW + 4).unwrap();
-    let removed = import(&mut source, b"removed private original");
-    let neighbor = import(&mut source, b"neighbor remains readable");
+    let removed = import_ocr_text(&mut source, b"removed private original");
+    let neighbor = import_ocr_text(&mut source, b"neighbor remains readable");
+    let source_ocr_stream = index_ocr(&mut source, removed, "remotepurgedocrcanary");
+    index_ocr(&mut source, neighbor, "remotepreservedocrneighbor");
     let pending_removed = import(&mut source, b"pending original never activated");
     let pending_sealed = import(&mut source, b"accepted pending key without container");
     let collection = chur_catalog::store::object(source.catalog_ref().unwrap(), &removed)
@@ -610,6 +700,9 @@ fn source_purge_relay_erases_sibling_after_restart_and_backup_without_damaging_n
         .unwrap();
         sync_download::activate_shared(&mut target, &object, NOW + 11).unwrap();
     }
+    // Recognition is local: the receiver indexes its own authenticated source.
+    let target_ocr_stream = index_ocr(&mut target, removed, "remotepurgedocrcanary");
+    index_ocr(&mut target, neighbor, "remotepreservedocrneighbor");
     let active_before =
         chur_catalog::store::object(target.catalog_ref().unwrap(), &neighbor).unwrap();
     let committed_before =
@@ -738,6 +831,7 @@ fn source_purge_relay_erases_sibling_after_restart_and_backup_without_damaging_n
     deletion::begin(source.catalog().unwrap(), &pending_removed).unwrap();
     deletion::begin(source.catalog().unwrap(), &pending_sealed).unwrap();
     finish(&mut source, &secret);
+    assert_purged_ocr_and_healthy_neighbor(&mut source, removed, neighbor, source_ocr_stream);
     assert!(keys::object_key(&source, &removed).is_err());
     relay(&source, &mut target, &secret, source_enrollment.device_id());
     // The native acceptance transaction removes keys before it advances the head.
@@ -753,6 +847,7 @@ fn source_purge_relay_erases_sibling_after_restart_and_backup_without_damaging_n
     finish(&mut target, &secret);
     drop(target);
     let mut target = vault::unlock_with_password(&target_root, PASSWORD, NOW + 30).unwrap();
+    assert_purged_ocr_and_healthy_neighbor(&mut target, removed, neighbor, target_ocr_stream);
     assert!(keys::object_key(&target, &removed).is_err());
     assert_eq!(
         chur_catalog::object_grants::request(
@@ -809,7 +904,8 @@ fn source_purge_relay_erases_sibling_after_restart_and_backup_without_damaging_n
     backup::create(&mut target, &mut package, NOW + 31, &mut Uninterrupted).unwrap();
     let restored_root = root();
     backup::restore(&restored_root, &mut package, PASSWORD, &mut Uninterrupted).unwrap();
-    let restored = vault::unlock_with_password(&restored_root, PASSWORD, NOW + 32).unwrap();
+    let mut restored = vault::unlock_with_password(&restored_root, PASSWORD, NOW + 32).unwrap();
+    assert_purged_ocr_and_healthy_neighbor(&mut restored, removed, neighbor, target_ocr_stream);
     assert!(keys::object_key(&restored, &removed).is_err());
     let mut bytes = Vec::new();
     export::export_stream(

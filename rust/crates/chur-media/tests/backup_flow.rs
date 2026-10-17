@@ -903,3 +903,176 @@ fn encrypted_backup_restores_content_only_cyrillic_search_and_its_source_identit
     std::fs::remove_dir_all(root.base()).unwrap();
     std::fs::remove_dir_all(destination.base()).unwrap();
 }
+
+// Read the storage tables directly: the normal query's Active join can hide
+// residual content belonging to an already deleted object.
+fn assert_content_absent(session: &mut Session, object: &Id, term: &str) {
+    session
+        .catalog()
+        .unwrap()
+        .transaction(|tx| {
+            let rows: i64 = tx
+                .query_row(
+                    "SELECT count(*) FROM content_index WHERE object_id = ?1",
+                    [object.as_bytes().as_slice()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(rows, 0);
+            tx.execute_batch(
+                "CREATE VIRTUAL TABLE temp.ocr_vocab USING fts5vocab(main, object_search, row)",
+            )
+            .unwrap();
+            let terms: i64 = tx
+                .query_row(
+                    "SELECT count(*) FROM temp.ocr_vocab WHERE term = ?1",
+                    [term],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                terms, 0,
+                "deleted OCR must not remain in the FTS vocabulary"
+            );
+            tx.execute_batch("DROP TABLE temp.ocr_vocab").unwrap();
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn permanently_deleted_ocr_stays_absent_after_restart_and_full_backup_restore() {
+    use chur_catalog::{content_index, deletion, query::Scope, store};
+    let (root, mut source) = new_vault();
+    let (removed, _) = import_one(&mut source, 4096, "removed.jpg", 512);
+    let (neighbor, original) = import_one(&mut source, 4096, "neighbor.jpg", 513);
+    let stream = store::object(source.catalog_ref().unwrap(), &removed)
+        .unwrap()
+        .primary_stream_id;
+    let neighbor_stream = store::object(source.catalog_ref().unwrap(), &neighbor)
+        .unwrap()
+        .primary_stream_id;
+    content_index::put(
+        source.catalog().unwrap(),
+        &removed,
+        &stream,
+        1,
+        1,
+        "erasedocrsecretcanary",
+    )
+    .unwrap();
+    content_index::put(
+        source.catalog().unwrap(),
+        &neighbor,
+        &neighbor_stream,
+        1,
+        1,
+        "healthyocrneighbor",
+    )
+    .unwrap();
+    deletion::begin(source.catalog().unwrap(), &removed).unwrap();
+    deletion::erase(source.catalog().unwrap(), &removed, NOW + 1).unwrap();
+    assert_content_absent(&mut source, &removed, "erasedocrsecretcanary");
+    let store_id = source.object_store_id();
+    for pending in deletion::sweep(source.catalog_ref().unwrap()).unwrap() {
+        for container in pending.containers {
+            chur_media::store::unlink_container(source.root_dir(), &store_id, &container).unwrap();
+        }
+        deletion::finish(source.catalog().unwrap(), &pending.object_id).unwrap();
+    }
+    source.lock().unwrap();
+    let mut source = vault::unlock_with_password(&root, PASSWORD, NOW + 2).unwrap();
+    assert_content_absent(&mut source, &removed, "erasedocrsecretcanary");
+    assert_eq!(
+        rejection(content_index::put(
+            source.catalog().unwrap(),
+            &removed,
+            &stream,
+            1,
+            1,
+            "erasedocrsecretcanary"
+        )),
+        ChurStatus::NotFound
+    );
+    let mut package = Cursor::new(Vec::new());
+    backup::create(&mut source, &mut package, NOW + 3, &mut Uninterrupted).unwrap();
+    let destination = scratch_root();
+    backup::restore(&destination, &mut package, PASSWORD, &mut Uninterrupted).unwrap();
+    let mut restored = vault::unlock_with_password(&destination, PASSWORD, NOW + 4).unwrap();
+    assert_content_absent(&mut restored, &removed, "erasedocrsecretcanary");
+    assert_eq!(
+        rejection(content_index::put(
+            restored.catalog().unwrap(),
+            &removed,
+            &stream,
+            1,
+            1,
+            "erasedocrsecretcanary"
+        )),
+        ChurStatus::NotFound
+    );
+    let query = ObjectQuery {
+        scope: Scope::Search("healthyocrneighbor".into()),
+        ..ObjectQuery::timeline()
+    };
+    let hits = page(restored.catalog_ref().unwrap(), &query)
+        .unwrap()
+        .objects;
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].object_id, neighbor);
+    assert_eq!(exported(&restored, &neighbor), original);
+    drop(restored);
+    drop(source);
+    std::fs::remove_dir_all(root.base()).unwrap();
+    std::fs::remove_dir_all(destination.base()).unwrap();
+}
+
+#[test]
+fn clearing_ocr_while_trashed_does_not_resurrect_text_on_restore_or_backup() {
+    use chur_catalog::{content_index, query::Scope, store, trash};
+    let (root, mut source) = new_vault();
+    let (object, original) = import_one(&mut source, 4096, "retainedmetadata.jpg", 514);
+    let stream = store::object(source.catalog_ref().unwrap(), &object)
+        .unwrap()
+        .primary_stream_id;
+    content_index::put(
+        source.catalog().unwrap(),
+        &object,
+        &stream,
+        1,
+        1,
+        "clearedtrashcanary",
+    )
+    .unwrap();
+    trash::set(source.catalog().unwrap(), &[object], false, NOW + 1).unwrap();
+    content_index::clear(source.catalog().unwrap()).unwrap();
+    assert_content_absent(&mut source, &object, "clearedtrashcanary");
+    trash::set(source.catalog().unwrap(), &[object], true, NOW + 2).unwrap();
+    assert_content_absent(&mut source, &object, "clearedtrashcanary");
+    source.lock().unwrap();
+    let mut source = vault::unlock_with_password(&root, PASSWORD, NOW + 3).unwrap();
+    let mut package = Cursor::new(Vec::new());
+    backup::create(&mut source, &mut package, NOW + 4, &mut Uninterrupted).unwrap();
+    let destination = scratch_root();
+    backup::restore(&destination, &mut package, PASSWORD, &mut Uninterrupted).unwrap();
+    let mut restored = vault::unlock_with_password(&destination, PASSWORD, NOW + 5).unwrap();
+    assert_content_absent(&mut restored, &object, "clearedtrashcanary");
+    let query = ObjectQuery {
+        scope: Scope::Search("retainedmetadata".into()),
+        ..ObjectQuery::timeline()
+    };
+    let hits = page(restored.catalog_ref().unwrap(), &query)
+        .unwrap()
+        .objects;
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].object_id, object);
+    assert_eq!(exported(&restored, &object), original);
+    let candidates =
+        content_index::candidates(restored.catalog_ref().unwrap(), None, 100, false).unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].object_id, object);
+    drop(restored);
+    drop(source);
+    std::fs::remove_dir_all(root.base()).unwrap();
+    std::fs::remove_dir_all(destination.base()).unwrap();
+}

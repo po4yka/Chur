@@ -1385,3 +1385,257 @@ fn content_index_records_validate_bounds_source_and_output_before_mutation() {
     assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn malformed_content_controls_preserve_the_existing_index_and_authenticated_original() {
+    use chur_ffi::content_index::*;
+    let root = scratch();
+    let runtime = open_runtime(&root);
+    let mut creation = 0;
+    let mut session = 0;
+    assert_eq!(
+        unsafe { chur_vault_create_begin(runtime, &create_request(PASSWORD), &mut creation) },
+        OK
+    );
+    assert_eq!(
+        unsafe { chur_vault_creation_activate(creation, &mut session) },
+        OK
+    );
+    let original = b"authenticated original survives malformed OCR records";
+    let object = import(session, original, b"scan.jpg");
+    let mut request = vec![1, 0];
+    request.extend_from_slice(&[0; 16]);
+    request.extend_from_slice(&100u32.to_be_bytes());
+    let mut out = vec![0u8; 1_048_576];
+    let mut written = 0;
+    assert_eq!(
+        unsafe {
+            chur_content_index_candidates(
+                session,
+                request.as_ptr(),
+                request.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                &mut written,
+            )
+        },
+        OK
+    );
+    let mut put = vec![1];
+    put.extend_from_slice(&object);
+    put.extend_from_slice(&out[21..37]);
+    put.push(1);
+    put.extend_from_slice(&1u32.to_be_bytes());
+    let text = b"preservedocrboundarycanary";
+    put.extend_from_slice(&(text.len() as u32).to_be_bytes());
+    put.extend_from_slice(text);
+    assert_eq!(
+        unsafe {
+            chur_content_index_put(
+                session,
+                put.as_ptr(),
+                put.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                &mut written,
+            )
+        },
+        OK
+    );
+    // Close the C session before reading the encrypted storage through native
+    // APIs. Search hits alone cannot detect a bad write of the same text, a
+    // changed source/status, or a hidden row belonging to another object.
+    let persisted = |session: &mut u64| {
+        assert_eq!(unsafe { chur_session_close(*session) }, OK);
+        let mut native = chur_catalog::vault::unlock_with_password(
+            &chur_catalog::paths::VaultRoot::new(&root),
+            PASSWORD,
+            1_700_000_000_000,
+        )
+        .unwrap();
+        let generation = chur_catalog::schema::generation(native.catalog_ref().unwrap()).unwrap();
+        let contents = native.catalog().unwrap().transaction(|tx| {
+            let rows = tx.prepare("SELECT object_id,primary_stream_id,engine_version,status,body FROM content_index ORDER BY object_id").unwrap()
+                .query_map([], |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?, row.get::<_, u32>(2)?, row.get::<_, u8>(3)?, row.get::<_, String>(4)?))).unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>().unwrap();
+            tx.execute_batch("CREATE VIRTUAL TABLE temp.ocr_vocab USING fts5vocab(main, object_search, row)").unwrap();
+            let terms = tx.prepare("SELECT term,doc,cnt FROM temp.ocr_vocab ORDER BY term").unwrap()
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))).unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>().unwrap();
+            tx.execute_batch("DROP TABLE temp.ocr_vocab").unwrap();
+            Ok((rows, terms))
+        }).unwrap();
+        native.lock().unwrap();
+        drop(native);
+        let unlock = ChurUnlockRequestV1 {
+            factor: 1,
+            reserved: [0; 3],
+            secret: PASSWORD.as_ptr(),
+            secret_length: PASSWORD.len() as u32,
+        };
+        assert_eq!(unsafe { chur_vault_unlock(runtime, &unlock, session) }, OK);
+        (generation, contents)
+    };
+    let before = persisted(&mut session);
+    assert_eq!(before.1.0.len(), 1);
+    let mut malformed = Vec::new();
+    for length in [0, 1, 16, 32, 33, 34, 37, 38, 41, put.len() - 1] {
+        malformed.push(put[..length].to_vec());
+    }
+    for (offset, value) in [
+        (0, 2),
+        (33, 0),
+        (33, 3),
+        (37, 0),
+        (37, 2),
+        (42, 0xff),
+        (42, 0),
+    ] {
+        let mut invalid = put.clone();
+        invalid[offset] = value;
+        malformed.push(invalid);
+    }
+    for invalid in &malformed {
+        written = 999;
+        assert_eq!(
+            status(unsafe {
+                chur_content_index_put(
+                    session,
+                    invalid.as_ptr(),
+                    invalid.len(),
+                    out.as_mut_ptr(),
+                    out.len(),
+                    &mut written,
+                )
+            }),
+            ChurStatus::InvalidInput
+        );
+        assert_eq!(written, 0);
+        assert_eq!(persisted(&mut session), before);
+        let hits = page(session, 5, [0; 16], text).objects;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].object_id.as_bytes(), &object);
+    }
+    let mut oversized = put.clone();
+    oversized.resize(chur_catalog::content_index::TEXT_MAX + 65, 0);
+    written = 999;
+    assert_eq!(
+        status(unsafe {
+            chur_content_index_put(
+                session,
+                oversized.as_ptr(),
+                oversized.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                &mut written,
+            )
+        }),
+        ChurStatus::ResourceLimitExceeded
+    );
+    assert_eq!(written, 0);
+    assert_eq!(persisted(&mut session), before);
+    for (offset, value) in [(1, 2), (21, 0), (21, 101)] {
+        let mut invalid = request.clone();
+        invalid[offset] = value;
+        written = 999;
+        assert_eq!(
+            status(unsafe {
+                chur_content_index_candidates(
+                    session,
+                    invalid.as_ptr(),
+                    invalid.len(),
+                    out.as_mut_ptr(),
+                    out.len(),
+                    &mut written,
+                )
+            }),
+            ChurStatus::InvalidInput
+        );
+        assert_eq!(written, 0);
+        assert_eq!(persisted(&mut session), before);
+    }
+    written = 999;
+    assert_eq!(
+        status(unsafe {
+            chur_content_index_clear(
+                session,
+                [1u8, 0].as_ptr(),
+                2,
+                out.as_mut_ptr(),
+                out.len(),
+                &mut written,
+            )
+        }),
+        ChurStatus::InvalidInput
+    );
+    assert_eq!(written, 0);
+    assert_eq!(persisted(&mut session), before);
+    // A null count/output must be refused before the otherwise valid mutation.
+    assert_eq!(
+        status(unsafe {
+            chur_content_index_clear(
+                session,
+                [1u8].as_ptr(),
+                1,
+                out.as_mut_ptr(),
+                out.len(),
+                std::ptr::null_mut(),
+            )
+        }),
+        ChurStatus::InvalidInput
+    );
+    assert_eq!(persisted(&mut session), before);
+    written = 999;
+    assert_eq!(
+        status(unsafe {
+            chur_content_index_clear(
+                session,
+                [1u8].as_ptr(),
+                1,
+                std::ptr::null_mut(),
+                out.len(),
+                &mut written,
+            )
+        }),
+        ChurStatus::InvalidInput
+    );
+    assert_eq!(written, 0);
+    assert_eq!(persisted(&mut session), before);
+    let hits = page(session, 5, [0; 16], text).objects;
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].object_id.as_bytes(), &object);
+    let mut reader = 0;
+    assert_eq!(
+        unsafe {
+            chur_object_reader_open(
+                session,
+                &ChurObjectRefV1 { object_id: object },
+                1,
+                &mut reader,
+            )
+        },
+        OK
+    );
+    let mut size = 0;
+    assert_eq!(unsafe { chur_object_reader_size(reader, &mut size) }, OK);
+    assert_eq!(size, original.len() as u64);
+    let mut bytes = vec![0; original.len()];
+    assert_eq!(
+        unsafe {
+            chur_object_reader_read_at(reader, 0, bytes.as_mut_ptr(), bytes.len(), &mut written)
+        },
+        OK
+    );
+    assert_eq!(written, original.len());
+    assert_eq!(bytes, original);
+    assert_eq!(unsafe { chur_object_reader_close(reader) }, OK);
+    assert_eq!(unsafe { chur_session_close(session) }, OK);
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+    out.fill(0);
+    put.fill(0);
+    oversized.fill(0);
+    for invalid in &mut malformed {
+        invalid.fill(0);
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
