@@ -1,5 +1,7 @@
 package dev.po4yka.chur.app.vault
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -48,6 +50,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInWindow
@@ -70,6 +73,7 @@ import dev.po4yka.chur.app.theme.IntegrityGlyph
 import dev.po4yka.chur.app.theme.FileGlyph
 import dev.po4yka.chur.app.theme.AudioGlyph
 import dev.po4yka.chur.app.theme.LocalChurColors
+import dev.po4yka.chur.app.theme.LocalChurMotion
 import dev.po4yka.chur.app.theme.PrivateBoundaryMark
 import dev.po4yka.chur.app.theme.gridGeometry
 import dev.po4yka.chur.ffi.AlbumSummary
@@ -465,11 +469,16 @@ private fun MediaRow(tile: LibraryTile, selecting: Boolean, onOpen: () -> Unit, 
     val colors = LocalChurColors.current
     val projection = tile.projection
     val state = PresentedState.of(projection)
+    val selectionProgress by animateFloatAsState(
+        targetValue = if (tile.selected) 1f else 0f,
+        animationSpec = tween(LocalChurMotion.current.stateDurationMillis),
+        label = "Row selection",
+    )
     Row(
         modifier = modifier.fillMaxWidth()
             .clip(RoundedCornerShape(ChurSpacing.one))
-            .background(if (tile.selected) colors.accentSoft else colors.surfaceSunken)
-            .border(if (dropHint != null) 2.dp else if (tile.selected) ChurSpacing.hairline else 0.dp, colors.accent,
+            .background(lerp(colors.surfaceSunken, colors.accentSoft, selectionProgress))
+            .border(2.dp, colors.accent.copy(alpha = if (dropHint != null) 1f else selectionProgress),
                 RoundedCornerShape(ChurSpacing.one))
             .then(selectionSemantics(tile, listOfNotNull(rowLabel(projection), dropHint).joinToString(", "),
                 onToggleSelection))
@@ -504,7 +513,9 @@ private fun MediaRow(tile: LibraryTile, selecting: Boolean, onOpen: () -> Unit, 
             if (dropHint != null) Text(dropHint, color = colors.accent,
                 style = MaterialTheme.typography.labelSmall)
         }
-        if (tile.selected) SelectionCheck(modifier = Modifier, onClick = onToggleSelection)
+        // A fixed slot keeps the metadata still while selection changes.
+        SelectionCheck(selected = tile.selected, progress = selectionProgress,
+            modifier = Modifier, onClick = onToggleSelection)
     }
 }
 
@@ -587,14 +598,19 @@ private fun MediaTile(
     val colors = LocalChurColors.current
     val state = PresentedState.of(tile.projection)
     val severity = severityOf(state)
+    val selectionProgress by animateFloatAsState(
+        targetValue = if (tile.selected) 1f else 0f,
+        animationSpec = tween(LocalChurMotion.current.stateDurationMillis),
+        label = "Tile selection",
+    )
     // §11.4: selection is a 2dp outline plus a checkmark, never colour alone.
-    val selectionBorder = if (dropHint != null) 2.dp else if (tile.selected) ChurSpacing.hairline else 0.dp
     Box(
         modifier = modifier
             .aspectRatio(1f)
             .clip(RoundedCornerShape(ChurSpacing.one))
             .background(colors.surfaceSunken)
-            .border(selectionBorder, colors.accent, RoundedCornerShape(ChurSpacing.one))
+            .border(2.dp, colors.accent.copy(alpha = if (dropHint != null) 1f else selectionProgress),
+                RoundedCornerShape(ChurSpacing.one))
             .then(selectionSemantics(tile, tileLabel(tile.projection), onToggleSelection))
             .clickable(onClickLabel = clickLabel(tile, selecting), onClick = onOpen),
     ) {
@@ -622,6 +638,8 @@ private fun MediaTile(
                 )
             }
         }
+        // Only the overlay animates. The thumbnail and the grid retain their geometry.
+        Box(modifier = Modifier.fillMaxSize().background(colors.accent.copy(alpha = 0.08f * selectionProgress)))
         if (severity != StateSeverity.NONE) {
             StateBadge(severity = severity, modifier = Modifier.align(Alignment.TopStart))
         }
@@ -642,9 +660,8 @@ private fun MediaTile(
                 style = MaterialTheme.typography.labelSmall,
             )
         }
-        if (tile.selected) {
-            SelectionCheck(modifier = Modifier.align(Alignment.TopEnd), onClick = onToggleSelection)
-        }
+        SelectionCheck(selected = tile.selected, progress = selectionProgress,
+            modifier = Modifier.align(Alignment.TopEnd), onClick = onToggleSelection)
         if (dropHint != null) {
             Text(dropHint, modifier = Modifier.align(Alignment.BottomStart).padding(ChurSpacing.one)
                 .clip(RoundedCornerShape(ChurSpacing.one)).background(colors.surface)
@@ -699,17 +716,25 @@ private fun StateBadge(severity: StateSeverity, modifier: Modifier) {
 }
 
 @Composable
-private fun SelectionCheck(modifier: Modifier, onClick: () -> Unit) {
+private fun SelectionCheck(selected: Boolean, progress: Float, modifier: Modifier, onClick: () -> Unit) {
     val colors = LocalChurColors.current
+    val reducedMotion = LocalChurMotion.current.reducedMotion
     Box(
         // The tile already speaks its selected state and offers Deselect, so
         // a screen reader does not meet the mark as a second control, §23.2.
         modifier = modifier
             .clearAndSetSemantics {}
+            .graphicsLayer {
+                alpha = progress
+                val scale = if (reducedMotion) 1f else 0.86f + 0.14f * progress
+                scaleX = scale
+                scaleY = scale
+            }
             .padding(ChurSpacing.one)
             .clip(RoundedCornerShape(50))
             .background(colors.accent)
-            .clickable(onClick = onClick)
+            // Remove the hit target immediately, even while its decoration fades.
+            .then(if (selected) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(ChurSpacing.one),
     ) {
         Text("✓", color = colors.onInk, style = MaterialTheme.typography.labelSmall)

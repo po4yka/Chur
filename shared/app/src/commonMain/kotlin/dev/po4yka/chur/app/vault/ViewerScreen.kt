@@ -1,6 +1,7 @@
 package dev.po4yka.chur.app.vault
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -34,6 +35,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.derivedStateOf
@@ -69,6 +71,7 @@ import dev.po4yka.chur.app.theme.DiagnosticTextStyle
 import dev.po4yka.chur.app.theme.ExportGlyph
 import dev.po4yka.chur.app.theme.FavoriteGlyph
 import dev.po4yka.chur.app.theme.FavoriteFilledGlyph
+import dev.po4yka.chur.app.theme.LocalChurMotion
 import dev.po4yka.chur.app.theme.ViewerColors
 import dev.po4yka.chur.ffi.ObjectDetail
 import dev.po4yka.chur.ffi.ObjectProjection
@@ -162,6 +165,14 @@ fun ViewerScreen(
     val photo = projection.mediaKind == MEDIA_CLASS_IMAGE
     val documentMode = projection.mediaKind == MEDIA_CLASS_FILE
     val visibleChrome = chromeVisible || documentMode
+    val chromeFadeMillis = LocalChurMotion.current.stateDurationMillis
+    val mediaDurationMillis = LocalChurMotion.current.mediaDurationMillis
+    // One incoming opacity for this viewer. Page settlement and sharper previews
+    // never restart it, and no outgoing bitmap or player is kept for a transition.
+    val mediaOpacity = remember { Animatable(0f) }
+    LaunchedEffect(mediaDurationMillis) {
+        mediaOpacity.animateTo(1f, tween(mediaDurationMillis))
+    }
     val still by rememberUpdatedState(preview ?: thumbnails[projection.id])
     // §13.2 and §25.5: a player's controls sit between the chrome rows and
     // clear of the cutout, so its time and its settings are not under the
@@ -198,7 +209,8 @@ fun ViewerScreen(
         // The same toggle for TalkBack and VoiceOver, which activate the
         // focused element rather than tap where a finger is.
         Box(
-            modifier = Modifier.fillMaxSize().then(if (documentMode) Modifier else Modifier.semantics {
+            modifier = Modifier.fillMaxSize().graphicsLayer { alpha = mediaOpacity.value }
+                .then(if (documentMode) Modifier else Modifier.semantics {
                 contentDescription = tileLabel(projection)
                 onClick(label = if (chromeVisible) "Hide controls" else "Show controls") {
                     toggleChrome()
@@ -239,8 +251,8 @@ fun ViewerScreen(
         AnimatedVisibility(
             visible = visibleChrome,
             modifier = Modifier.align(Alignment.TopStart),
-            enter = fadeIn(tween(CHROME_FADE_MS)),
-            exit = fadeOut(tween(CHROME_FADE_MS)),
+            enter = fadeIn(tween(chromeFadeMillis)),
+            exit = fadeOut(tween(chromeFadeMillis)),
         ) {
             Row(
                 modifier = Modifier
@@ -268,8 +280,8 @@ fun ViewerScreen(
         AnimatedVisibility(
             visible = visibleChrome,
             modifier = Modifier.align(Alignment.BottomStart),
-            enter = fadeIn(tween(CHROME_FADE_MS)),
-            exit = fadeOut(tween(CHROME_FADE_MS)),
+            enter = fadeIn(tween(chromeFadeMillis)),
+            exit = fadeOut(tween(chromeFadeMillis)),
         ) {
             Row(
                 modifier = Modifier
@@ -454,8 +466,6 @@ internal const val MAX_ZOOM = 5f
 internal const val DOUBLE_TAP_ZOOM = 2.5f
 
 private fun Int.dp() = androidx.compose.ui.unit.Dp(this.toFloat())
-
-private const val CHROME_FADE_MS = 150
 
 /**
  * Whether the viewer shows its chrome, `DESIGN.md` §13.1: a tap on the media
