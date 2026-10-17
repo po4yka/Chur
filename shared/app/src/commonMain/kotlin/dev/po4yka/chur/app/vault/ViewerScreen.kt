@@ -7,6 +7,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -15,6 +17,7 @@ import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -24,6 +27,7 @@ import androidx.compose.foundation.layout.add
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -56,6 +60,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
@@ -185,7 +190,7 @@ fun ViewerScreen(
     val controlsPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
         .add(WindowInsets(top = chromeTop, bottom = chromeBottom))
         .asPaddingValues()
-    Box(
+    BoxWithConstraints(
         modifier = Modifier.fillMaxSize().background(ViewerColors.canvas)
             .pointerInput(Unit) {
                 // §13.4: the chrome hides after inactivity, and a touch
@@ -323,8 +328,11 @@ fun ViewerScreen(
             DetailSheet(
                 detail = detail,
                 projection = projection,
-                modifier = Modifier.align(Alignment.BottomCenter).windowInsetsPadding(bottomInsets)
-                    .padding(bottom = 72.dp()),
+                modifier = Modifier.align(Alignment.BottomCenter)
+                    .padding(top = with(LocalDensity.current) { chromeTop.toDp() },
+                        bottom = with(LocalDensity.current) { chromeBottom.toDp() })
+                    .heightIn(max = (maxHeight - with(LocalDensity.current) { (chromeTop + chromeBottom).toDp() })
+                        .coerceAtLeast(0.dp)),
             )
         }
         // `DESIGN.md` §26: an outcome is the shell's snackbar, drawn above
@@ -539,6 +547,7 @@ private fun DetailSheet(
         modifier = modifier
             .fillMaxWidth()
             .background(ViewerColors.chromeScrim)
+            .verticalScroll(rememberScrollState())
             .padding(ChurSpacing.gutter),
         verticalArrangement = Arrangement.spacedBy(ChurSpacing.one),
     ) {
@@ -546,8 +555,6 @@ private fun DetailSheet(
             text = detail.filename.ifBlank { "No filename" },
             color = ViewerColors.content,
             style = MaterialTheme.typography.titleMedium,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
         )
         if (detail.caption.isNotBlank()) {
             Text(

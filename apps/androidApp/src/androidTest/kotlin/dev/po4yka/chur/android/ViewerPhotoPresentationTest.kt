@@ -2,24 +2,29 @@ package dev.po4yka.chur.android
 
 import android.content.Intent
 import android.graphics.Bitmap
+import android.os.Looper
 import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.unit.Density
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.po4yka.chur.app.theme.ChurTheme
 import dev.po4yka.chur.app.vault.ViewerScreen
 import dev.po4yka.chur.app.vault.ViewerStillState
+import dev.po4yka.chur.ffi.ObjectDetail
 import dev.po4yka.chur.ffi.ObjectProjection
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -53,7 +58,23 @@ class ViewerPhotoPresentationTest {
         assertFalse("Preview unavailable" in f.labels())
     }
 
-    private fun present(audio: Boolean = false, test: (Fixture) -> Unit) {
+    @Test
+    fun info_scrolls_to_the_last_tag_without_covering_viewer_actions_in_landscape_at_double_font_scale() =
+        present(info = true) { f ->
+            assertTrue(f.await { f.nodes().any { SemanticsActions.ScrollBy in it.config } })
+            val scroll = f.nodes().first { SemanticsActions.ScrollBy in it.config }
+            val range = scroll.config[SemanticsProperties.VerticalScrollAxisRange]
+            assertTrue("long metadata must overflow its bounded viewport", range.maxValue() > 0f)
+            f.main { assertTrue(scroll.config[SemanticsActions.ScrollBy].action?.invoke(0f, 100_000f) == true) }
+            assertTrue(f.await { range.value() > 0f })
+            val lastTag = f.nodes().first { "Last public tag" in it.config.getOrNull(SemanticsProperties.Text).orEmpty().map { text -> text.text } }
+            assertTrue(lastTag.boundsInRoot.height > 0f)
+            assertTrue(lastTag.boundsInRoot.bottom <= scroll.boundsInRoot.bottom + 1f)
+            val back = f.nodes().first { "Back" in it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty() }
+            assertTrue(back.boundsInRoot.bottom <= scroll.boundsInRoot.top)
+        }
+
+    private fun present(audio: Boolean = false, info: Boolean = false, test: (Fixture) -> Unit) {
         val activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         try {
@@ -66,17 +87,19 @@ class ViewerPhotoPresentationTest {
                     durationMs = if (audio) 65_000 else 0, favorite = false, state = 1, integritySummary = 4, thumbnailReady = false)
                 f.view = ComposeView(activity).apply {
                     setContent {
+                        CompositionLocalProvider(LocalDensity provides Density(density, if (info) 2f else 1f)) {
                         ChurTheme(dark = true) {
-                            ViewerScreen(projection, listOf(projection), emptyMap(), false, {}, {}, null,
-                                if (f.hasImage.value) f.image else null, false, true, {},
+                            ViewerScreen(projection, listOf(projection), emptyMap(), false, {}, {}, if (info) f.detail else null,
+                                if (f.hasImage.value) f.image else null, info, true, {},
                                 onBack = {}, onLock = {}, onPanic = {}, onToggleFavorite = {}, onEditTags = {},
                                 onExport = {}, onDelete = {}, onToggleDetail = {}, stillState = f.stillState.value,
                                 onVerifyStill = { f.verifications++ })
                         }
+                        }
                     }
                 }
                 activity.setContentView(FrameLayout(activity).apply {
-                    addView(f.view, FrameLayout.LayoutParams((320 * density).toInt(), (640 * density).toInt()))
+                    addView(f.view, FrameLayout.LayoutParams(((if (info) 640 else 320) * density).toInt(), ((if (info) 320 else 640) * density).toInt()))
                 })
             }
             test(f)
@@ -87,9 +110,13 @@ class ViewerPhotoPresentationTest {
         var verifications = 0
         val stillState = mutableStateOf(ViewerStillState.Loading)
         val hasImage = mutableStateOf(false)
+        val detail = ObjectDetail(0, 0, false, 400, 300, 0, 1_024, "image/jpeg",
+            "Public filename ".repeat(20), "Public caption. ".repeat(100), listOf(ByteArray(16) to "Last public tag"))
         val image = Bitmap.createBitmap(400, 300, Bitmap.Config.ARGB_8888).apply { eraseColor(0xFF2453A6.toInt()) }.asImageBitmap()
         lateinit var view: ComposeView
-        fun main(action: () -> Unit) = instrumentation.runOnMainSync(action)
+        fun main(action: () -> Unit) {
+            if (Looper.myLooper() == Looper.getMainLooper()) action() else instrumentation.runOnMainSync(action)
+        }
         fun nodes(): List<SemanticsNode> {
             var result = emptyList<SemanticsNode>()
             main { result = view.roots().flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = true) } }
