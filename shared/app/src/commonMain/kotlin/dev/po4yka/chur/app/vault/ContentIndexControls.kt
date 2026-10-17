@@ -1,5 +1,9 @@
 package dev.po4yka.chur.app.vault
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
@@ -17,21 +21,27 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import dev.po4yka.chur.app.ContentIndexState
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.LocalChurColors
+import dev.po4yka.chur.app.theme.LocalChurMotion
 
 /** Local index controls contain no source names or extracted text. */
 @Composable
 internal fun ContentIndexControls(state: ContentIndexState, actions: VaultActions) {
     if (!state.available) return
+    var expanded by remember { mutableStateOf(false) }
     var options by remember { mutableStateOf(false) }
     var clear by remember { mutableStateOf(false) }
     val colors = LocalChurColors.current
+    val motion = LocalChurMotion.current
     Column(Modifier.fillMaxWidth().padding(horizontal = ChurSpacing.gutter)) {
-        Text("Local content search", style = MaterialTheme.typography.titleSmall, color = colors.ink)
-        Text("Local OCR for photos, PDFs, and UTF-8 text. The index stays encrypted. OCR can miss words.",
-            style = MaterialTheme.typography.bodySmall, color = colors.inkMuted)
+        TextButton(onClick = { expanded = !expanded }, modifier = Modifier.testTag("content-index-details")
+            .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }) {
+            Text("Local content search")
+        }
         if (state.running) {
             LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = ChurSpacing.two))
             if (state.clearing) Text("Clearing content index…", style = MaterialTheme.typography.bodySmall,
@@ -46,14 +56,25 @@ internal fun ContentIndexControls(state: ContentIndexState, actions: VaultAction
         } else {
             state.message?.let { message ->
                 Text(message, style = MaterialTheme.typography.bodySmall, color = colors.inkMuted)
+            }
+            if (state.message != null || state.partial > 0 || state.failed > 0) {
                 Text("${state.indexed} indexed · ${state.partial} partial · ${state.failed} need retry",
                     style = MaterialTheme.typography.bodySmall, color = colors.inkMuted)
             }
-            TextButton(onClick = actions.onIndexContent, modifier = Modifier.testTag("content-index-start")) {
-                Text("Index new items and retry failures")
-            }
-            TextButton(onClick = { options = true }, modifier = Modifier.testTag("content-index-options")) {
-                Text("Index options")
+        }
+        AnimatedVisibility(visible = expanded,
+            enter = fadeIn(tween(motion.stateDurationMillis)), exit = fadeOut(tween(motion.stateDurationMillis))) {
+            Column {
+                Text("Local OCR for photos, PDFs, and UTF-8 text. The index stays encrypted. OCR can miss words.",
+                    style = MaterialTheme.typography.bodySmall, color = colors.inkMuted)
+                if (!state.running) {
+                    TextButton(onClick = actions.onIndexContent, modifier = Modifier.testTag("content-index-start")) {
+                        Text("Index new items and retry failures")
+                    }
+                    TextButton(onClick = { options = true }, modifier = Modifier.testTag("content-index-options")) {
+                        Text("Index options")
+                    }
+                }
             }
         }
     }

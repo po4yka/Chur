@@ -476,7 +476,7 @@ fun VaultShell(
                         selected = state.destination == destination && state.openAlbum == null,
                         onClick = { actions.onDestination(destination) },
                         icon = { Icon(glyphFor(destination), contentDescription = null) },
-                        label = { Text(destination.label) },
+                        label = { Text(destination.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = colors.accent,
                             selectedTextColor = colors.accent,
@@ -497,6 +497,7 @@ fun VaultShell(
             // nowhere. §11.4 replaces the ordinary actions while a selection
             // runs, and the floating action is one of them.
             if (state.operation == null && state.selectedCount == 0 &&
+                state.tiles.isNotEmpty() &&
                 ((state.destination == VaultDestination.LIBRARY &&
                     (state.libraryScopeTitle == null || state.recentlyAdded)) ||
                     state.openAlbum != null)
@@ -797,15 +798,24 @@ private fun LibraryBody(state: VaultUiState, actions: VaultActions,
                     onImport = actions.onImport.takeIf { state.operation == null },
                     modifier = Modifier.weight(1f),
                 )
-                else Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Text(when {
+                else EmptyBrowseResult(
+                    message = when {
                         state.kinds != 0 -> "No media matches these filters"
                         state.recentlyAdded -> "No recently added media. Import files to see them here."
                         else -> "No media in ${state.libraryScopeTitle}"
                     },
-                        color = LocalChurColors.current.inkMuted,
-                        style = MaterialTheme.typography.bodyMedium)
-                }
+                    actionLabel = when {
+                        state.kinds != 0 -> "Clear filters"
+                        state.recentlyAdded -> "Import"
+                        else -> "Show all media"
+                    },
+                    onAction = when {
+                        state.kinds != 0 -> ({ actions.onKindsChange(0) })
+                        state.recentlyAdded -> actions.onImport.takeIf { state.operation == null }
+                        else -> actions.onShowAllMedia
+                    },
+                    modifier = Modifier.weight(1f),
+                )
             } else {
                 MediaBrowser(
                     tiles = state.tiles,
@@ -840,7 +850,8 @@ private fun SearchBody(state: VaultUiState, actions: VaultActions,
                     value = state.searchTerms,
                     onValueChange = actions.onSearch,
                     singleLine = true,
-                    label = { Text("Search names, tags, and indexed content") },
+                    label = { Text("Search") },
+                    placeholder = { Text("Names, tags, or indexed text", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     keyboardOptions = privateKeyboardOptions(),
                     modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter),
                     colors = churOutlinedTextFieldColors(),
@@ -864,13 +875,12 @@ private fun SearchBody(state: VaultUiState, actions: VaultActions,
                         color = colors.inkMuted,
                     )
                 }
-                state.tiles.isEmpty() -> Box(
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("No matching items. Try another word or remove a filter.",
-                        style = MaterialTheme.typography.bodyMedium, color = colors.inkMuted)
-                }
+                state.tiles.isEmpty() -> EmptyBrowseResult(
+                    message = "No matching items. Try another word or remove a filter.",
+                    actionLabel = if (state.kinds != 0) "Clear filters" else "Clear search",
+                    onAction = if (state.kinds != 0) ({ actions.onKindsChange(0) }) else ({ actions.onSearch("") }),
+                    modifier = Modifier.weight(1f),
+                )
                 else -> MediaBrowser(
                     tiles = state.tiles,
                     view = view,
@@ -884,6 +894,19 @@ private fun SearchBody(state: VaultUiState, actions: VaultActions,
                 )
             }
         }
+    }
+}
+
+/** One relevant way out of an empty scope; the caller keeps its sort and location. */
+@Composable
+private fun EmptyBrowseResult(message: String, actionLabel: String, onAction: (() -> Unit)?, modifier: Modifier) {
+    Column(modifier.fillMaxWidth().padding(ChurSpacing.gutter),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(ChurSpacing.two, Alignment.CenterVertically)) {
+        Box(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
+            Text(message, style = MaterialTheme.typography.bodyMedium, color = LocalChurColors.current.inkMuted)
+        }
+        if (onAction != null) Button(onClick = onAction) { Text(actionLabel) }
     }
 }
 

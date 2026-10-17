@@ -53,14 +53,21 @@ class RecentlyAddedPresentationTest {
         assertTrue(f.await { f.has("Order: Recently added") })
         assertTrue(f.state.value.recentlyAdded)
         assertTrue(f.has("No recently added media. Import files to see them here."))
+        assertEquals("the empty state must offer one Import action", 1, f.clickableCount("Import"))
         assertFalse(f.has("Sort: Oldest capture ▾"))
         f.assertTextFits("Order: Recently added")
         f.capture("recently-added-empty-public-320-font2.png")
         f.click("Photos")
         assertEquals(1, f.state.value.kinds)
         assertTrue(f.await { f.has("No media matches these filters") })
-        f.click("All")
+        f.assertTextFits("Clear filters")
+        f.click("Clear filters")
         assertEquals(0, f.state.value.kinds)
+        assertTrue(f.state.value.recentlyAdded)
+        assertEquals("Recently added", f.state.value.libraryScopeTitle)
+        assertEquals(QuerySort.CAPTURE_ASC, f.state.value.sort)
+        assertFalse(f.has("Clear filters"))
+        assertEquals(1, f.clickableCount("Import"))
         f.click("Import")
         assertEquals(1, f.imports)
         f.click("Back")
@@ -142,6 +149,11 @@ class RecentlyAddedPresentationTest {
         private fun nodes(merged: Boolean = true) = WindowInspector.getGlobalWindowViews().flatMap { it.roots() }
             .flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = merged) }
         fun has(label: String): Boolean { var found = false; main { found = nodes().any { label in it.labels } }; return found }
+        fun clickableCount(label: String): Int {
+            var count = 0
+            main { count = nodes().count { label in it.labels && SemanticsActions.OnClick in it.config } }
+            return count
+        }
         fun click(label: String) {
             assertTrue("control must exist: $label", await { has(label) })
             main {

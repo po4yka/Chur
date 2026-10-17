@@ -52,7 +52,12 @@ class ContentIndexUiTest {
     @Test
     fun search_starts_local_index_shows_partial_retry_progress_and_stops_once() = present { f ->
         assertTrue(f.await { f.has("Local content search") })
-        assertTrue(f.has("Search names, tags, and indexed content"))
+        assertTrue(f.has("Search"))
+        assertFalse(f.has(INDEX_DESCRIPTION))
+        assertFalse(f.has("Index new items and retry failures"))
+        f.capture("content-index-collapsed-public-320-font2.png")
+        f.click("Local content search")
+        assertTrue(f.await { f.has(INDEX_DESCRIPTION) })
         f.reveal("Index new items and retry failures")
         f.assertTextFits("Index new items and retry failures")
         f.capture("content-index-search-public-320-font2.png")
@@ -74,6 +79,7 @@ class ContentIndexUiTest {
 
     @Test
     fun options_rebuild_all_and_clear_requires_explicit_confirmation_and_cancel_keeps_index() = present { f ->
+        f.click("Local content search")
         f.click("Index options")
         assertTrue(f.await { f.has("Content index") })
         f.click("Rebuild all supported items")
@@ -107,6 +113,30 @@ class ContentIndexUiTest {
         assertTrue(f.has("No matching items. Try another word or remove a filter."))
         f.assertTextFits("No matching items. Try another word or remove a filter.")
         f.assertSearchNotSaved()
+        f.assertTextFits("Clear search")
+        f.capture("search-empty-clear-public-320-font2.png")
+        f.click("Hide thumbnails")
+        assertFalse(f.state.value.thumbnailsConcealed)
+        f.click("Hide thumbnails")
+        assertTrue(f.state.value.thumbnailsConcealed)
+        f.capture("search-privacy-control-public-320-font2.png")
+        f.click("Clear search")
+        assertTrue(f.await { f.state.value.searchTerms.isEmpty() })
+        assertTrue(f.has("Search names, captions, tags, and indexed text."))
+        assertFalse(f.has("Clear search"))
+    }
+
+    @Test
+    fun running_index_and_idle_retry_counts_remain_visible_without_expanding_details() = present { f ->
+        f.main { f.state.value = f.state.value.copy(contentIndex = ContentIndexState(running = true, indexed = 7, partial = 2, failed = 1)) }
+        assertTrue(f.await { f.has("Stop indexing") })
+        assertFalse(f.has(INDEX_DESCRIPTION))
+        assertTrue(f.has("7 indexed · 2 partial · 1 need retry"))
+        f.main { f.state.value = f.state.value.copy(contentIndex = ContentIndexState(indexed = 7, partial = 2, failed = 1)) }
+        assertTrue(f.await { !f.has("Stop indexing") })
+        assertTrue(f.has("7 indexed · 2 partial · 1 need retry"))
+        assertFalse(f.has(INDEX_DESCRIPTION))
+        assertFalse(f.has("Index new items and retry failures"))
     }
 
     private fun present(test: (Fixture) -> Unit) {
@@ -146,6 +176,7 @@ class ContentIndexUiTest {
         val actions = VaultActions(onDestination = { state.value = state.value.copy(destination = it) },
             onOpen = {}, onToggleSelection = {}, onImport = {}, onSearch = { state.value = state.value.copy(searchTerms = it) },
             onOpenAlbum = {}, onCloseAlbum = {}, onCreateAlbum = {}, onLock = {}, onVerifyAll = {}, onAddRecoverySlot = {}, onChangePassword = {},
+            onThumbnailsConcealedChange = { state.value = state.value.copy(thumbnailsConcealed = it) },
             onIndexContent = { actionsTaken += "start"; state.value = state.value.copy(contentIndex = ContentIndexState(running = true, indexed = 7, partial = 2, failed = 1, page = 3, pages = 8)) },
             onCancelContentIndex = { actionsTaken += "stop"; state.value = state.value.copy(contentIndex = state.value.contentIndex.copy(stopping = true)) },
             onRebuildContentIndex = { actionsTaken += "rebuild" },
@@ -217,6 +248,7 @@ class ContentIndexUiTest {
         fun assertSearchNotSaved() = main {
             assertFalse("search text must not enter saved state", registry.performSave().toString().contains(PUBLIC_SEARCH))
         }
+
         fun frames() {
             val ready = CountDownLatch(1)
             main { val choreographer = Choreographer.getInstance(); choreographer.postFrameCallback { choreographer.postFrameCallback { ready.countDown() } } }
@@ -249,5 +281,8 @@ class ContentIndexUiTest {
         if (this@roots is ViewRootForTest) add(this@roots)
         if (this@roots is ViewGroup) for (index in 0 until childCount) addAll(getChildAt(index).roots())
     }
-    private companion object { const val PUBLIC_SEARCH = "public-search-saved-state-canary" }
+    private companion object {
+        const val PUBLIC_SEARCH = "public-search-saved-state-canary"
+        const val INDEX_DESCRIPTION = "Local OCR for photos, PDFs, and UTF-8 text. The index stays encrypted. OCR can miss words."
+    }
 }
