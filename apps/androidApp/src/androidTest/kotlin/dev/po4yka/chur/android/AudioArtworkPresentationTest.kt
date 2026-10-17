@@ -71,9 +71,12 @@ class AudioArtworkPresentationTest {
     @Test
     fun audio_cover_and_no_cover_tiles_render_in_grid_and_list_and_concealment_stays_explicit() = present(gallery = true) { f ->
         assertTrue(f.await { f.labels().any { it.startsWith("Audio") } })
+        assertTrue("cover art keeps a visible audio marker", f.await { f.unmergedTagCount("audio-tile-kind") == 1 })
+        assertTrue("the tile still names the kind once", f.audioTiles().all { it.labels.single().startsWith("Audio,") })
         f.capture("audio-artwork-gallery-grid-public.png")
         f.main { f.concealed.value = true }
         assertTrue(f.await { f.states().any { "Thumbnail hidden" in it } })
+        assertEquals("concealment keeps the audio marker", 1, f.unmergedTagCount("audio-tile-kind"))
         f.capture("audio-artwork-gallery-concealed-public.png")
         f.main { f.contentView.value = ContentView.LIST }
         assertTrue("both audio items must occupy full-width list rows", f.await { f.hasAudioListRows() })
@@ -196,6 +199,14 @@ class AudioArtworkPresentationTest {
             var result: SemanticsNode? = null
             main { result = nodes().firstOrNull { it.config.getOrNull(SemanticsProperties.TestTag) == value } }
             return result
+        }
+        fun unmergedTagCount(value: String): Int {
+            var count = 0
+            main {
+                count = view.roots().flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false) }
+                    .count { it.config.getOrNull(SemanticsProperties.TestTag) == value }
+            }
+            return count
         }
         fun button(value: String): SemanticsNode? {
             var result: SemanticsNode? = null

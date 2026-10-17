@@ -57,6 +57,7 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.CustomAccessibilityAction
@@ -646,6 +647,15 @@ private fun MediaTile(
         Box(modifier = Modifier.fillMaxSize().background(colors.accent.copy(alpha = 0.08f * selectionProgress)))
         if (severity != StateSeverity.NONE) {
             StateBadge(severity = severity, modifier = Modifier.align(Alignment.TopStart))
+        }
+        // Cover art can look like a video thumbnail. Keep audio identifiable
+        // after its placeholder is replaced; the tile label already says Audio.
+        if (tile.projection.mediaKind == MEDIA_CLASS_AUDIO && bitmap != null) {
+            Icon(AudioGlyph, contentDescription = null,
+                modifier = Modifier.align(Alignment.BottomStart).padding(ChurSpacing.one)
+                    .testTag("audio-tile-kind")
+                    .clip(RoundedCornerShape(ChurSpacing.one)).background(colors.surface)
+                    .size(24.dp).padding(ChurSpacing.one), tint = colors.ink)
         }
         if (tile.projection.mediaKind == MEDIA_CLASS_FILE) {
             Text("File", modifier = Modifier.align(Alignment.BottomStart).padding(ChurSpacing.one)
