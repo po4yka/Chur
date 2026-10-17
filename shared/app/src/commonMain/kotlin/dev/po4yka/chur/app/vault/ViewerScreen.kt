@@ -467,7 +467,7 @@ private fun ZoomableStill(still: ImageBitmap, zoom: MutableState<ViewerZoom>, on
                 when (event.key) {
                     Key.Equals, Key.Plus -> scaleTo(zoom.value.scale + 0.5f)
                     Key.Minus -> scaleTo(zoom.value.scale - 0.5f)
-                    Key.Zero, Key.Home -> update(ViewerZoom())
+                    Key.Zero, Key.MoveHome -> update(ViewerZoom())
                     Key.DirectionLeft -> pan(Offset(1f, 0f))
                     Key.DirectionRight -> pan(Offset(-1f, 0f))
                     Key.DirectionUp -> pan(Offset(0f, 1f))
