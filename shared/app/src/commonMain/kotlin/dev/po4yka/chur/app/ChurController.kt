@@ -3253,4 +3253,15 @@ data class Notice(
      * both.
      */
     val pointsToSettings: Boolean = false,
-)
+) {
+    // A security notice can move between the shell and the viewer. Keep its
+    // acknowledgement on the event so a new host does not repeat it.
+    private var securityHapticDelivered = false
+
+    /** Called on the UI thread when a host presents this notice. */
+    internal fun consumeSecurityHaptic(): Boolean {
+        if (!security || securityHapticDelivered) return false
+        securityHapticDelivered = true
+        return true
+    }
+}

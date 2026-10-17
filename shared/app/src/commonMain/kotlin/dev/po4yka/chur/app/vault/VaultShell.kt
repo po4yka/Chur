@@ -66,6 +66,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -587,8 +589,10 @@ private fun IncomingContent(identity: Any?, durationMillis: Int, modifier: Modif
 @Composable
 internal fun NoticeHost(notice: Notice?, onShown: (Long) -> Unit, modifier: Modifier = Modifier) {
     val host = remember { SnackbarHostState() }
+    val haptics = LocalHapticFeedback.current
     LaunchedEffect(notice?.id) {
         val shown = notice ?: return@LaunchedEffect
+        if (shown.consumeSecurityHaptic()) haptics.performHapticFeedback(HapticFeedbackType.Reject)
         var ended = false
         try {
             val result = host.showSnackbar(
