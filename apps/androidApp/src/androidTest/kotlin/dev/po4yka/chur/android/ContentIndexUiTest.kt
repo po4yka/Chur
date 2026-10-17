@@ -82,6 +82,9 @@ class ContentIndexUiTest {
         f.click("Index options")
         f.click("Clear content index")
         assertTrue(f.await { f.has("Clear content index?") })
+        val warning = "This removes recognized text from content search. Your files, filenames, captions, and tags remain available. You can rebuild the index later."
+        f.reveal(warning)
+        f.assertTextFits(warning)
         f.reveal("Cancel")
         f.assertTextFits("Clear content index?")
         f.capture("content-index-clear-public-320-font2.png")
@@ -221,6 +224,7 @@ class ContentIndexUiTest {
         }
         fun capture(name: String) {
             frames()
+            instrumentation.uiAutomation.waitForIdle(500, 5_000)
             val bounds = Rect()
             main {
                 val target = WindowInspector.getGlobalWindowViews().lastOrNull { it.roots().isNotEmpty() } ?: view
