@@ -162,9 +162,11 @@ actual fun VaultPlayer(
             delay(250)
         }
     }
-    LaunchedEffect(playing, controlsHeld, touches) {
-        if (!playing || controlsHeld) onControlsVisibleChange(true)
-        else {
+    LaunchedEffect(phase, started, controlsHeld) {
+        if (iosPlaybackShouldReveal(started, phase, controlsHeld)) onControlsVisibleChange(true)
+    }
+    LaunchedEffect(playing, controlsHeld, controlsVisible, touches) {
+        if (playing && !controlsHeld && controlsVisible) {
             delay(3_000)
             onControlsVisibleChange(false)
         }
@@ -200,7 +202,7 @@ actual fun VaultPlayer(
             },
         )
         if (!audio && covered && poster != null) PlayerPoster(poster, onPlay = if (!started) play else null)
-        if (controlsVisible || controlsHeld || !started || !playing) {
+        if (controlsVisible || controlsHeld) {
             Column(
                 Modifier.align(Alignment.BottomCenter).onFocusChanged { controlsFocused = it.hasFocus }.padding(controlsPadding)
                     .fillMaxWidth().background(Color.Black.copy(alpha = 0.7f)).padding(horizontal = 16.dp),

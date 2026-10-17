@@ -22,6 +22,16 @@ class IosPlaybackPolicyTest {
     }
 
     @Test
+    fun opening_a_paused_page_preserves_hidden_chrome_but_stopping_playback_recovers_controls() {
+        assertFalse(iosPlaybackShouldReveal(false, IosPlaybackPhase.INITIAL, false))
+        assertFalse(iosPlaybackShouldReveal(true, IosPlaybackPhase.PLAYING, false))
+        for (phase in listOf(IosPlaybackPhase.PAUSED, IosPlaybackPhase.ENDED, IosPlaybackPhase.BUFFERING)) {
+            assertTrue(iosPlaybackShouldReveal(true, phase, false))
+        }
+        assertTrue(iosPlaybackShouldReveal(false, IosPlaybackPhase.INITIAL, true))
+    }
+
+    @Test
     fun initial_pause_and_end_have_distinct_recovery_states() {
         assertEquals(IosPlaybackPhase.INITIAL, iosPlaybackPhase(false, false, false, 0f, 0f))
         assertEquals(IosPlaybackPhase.PAUSED, iosPlaybackPhase(true, false, false, 10f, 60f))

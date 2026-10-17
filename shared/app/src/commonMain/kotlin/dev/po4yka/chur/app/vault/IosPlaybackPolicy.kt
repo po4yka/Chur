@@ -25,3 +25,10 @@ internal fun iosPlaybackControlsHeld(
     focused: Boolean,
     scrubbing: Boolean,
 ): Boolean = pinned || voiceOver || keyboard || focused || scrubbing
+
+/** Opening an untouched paused page preserves the viewer's hidden chrome. */
+internal fun iosPlaybackShouldReveal(
+    started: Boolean,
+    phase: IosPlaybackPhase,
+    held: Boolean,
+): Boolean = held || (started && phase != IosPlaybackPhase.PLAYING)
