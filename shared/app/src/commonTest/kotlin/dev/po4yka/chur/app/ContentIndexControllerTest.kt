@@ -7,6 +7,7 @@ import dev.po4yka.chur.ffi.ContentIndexCandidate
 import dev.po4yka.chur.imports.DecoderCleanupException
 import dev.po4yka.chur.vault.VaultState
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -90,6 +91,7 @@ class ContentIndexControllerTest {
         assertEquals(1, access.closed)
         assertContentEquals(ByteArray(text.size), text)
         assertFalse(controller.state.value.running)
+        assertEquals("Indexing stopped. Saved results remain searchable.", controller.state.value.message)
     }
 
     @Test
@@ -240,7 +242,43 @@ class ContentIndexControllerTest {
         assertEquals(1, access.closed)
         assertTrue(access.saved.isEmpty())
         assertFalse(controller.state.value.running)
-        assertEquals("Content indexing could not finish. Try again.", controller.state.value.message)
+        val recovery = "Content indexing could not stop safely. Restart Chur before indexing more files."
+        assertEquals(recovery, controller.state.value.message)
+        controller.start(); advanceUntilIdle()
+        assertEquals(listOf(1, 1), access.opened, "the persistent decoder refusal must stop each attempt at its first source")
+        assertEquals(2, access.closed)
+        assertTrue(access.saved.isEmpty())
+        assertEquals(recovery, controller.state.value.message)
+    }
+
+    @Test
+    fun cancellation_with_suppressed_decoder_shutdown_failure_requires_restart() = runTest {
+        val access = Access(3)
+        val fatal = DecoderCleanupException("private child diagnostics")
+        val cancellation = CancellationException("private cancellation details").apply { addSuppressed(fatal) }
+        var attempts = 0
+        // The real withContext boundary in the controller also exercises JVM
+        // stack-trace recovery, which can wrap this cancellation as its cause.
+        val controller = ContentIndexController(access.state, access,
+            Engine { _, _, _, _, _ ->
+                attempts++
+                // Android retains cancellation and attaches its unconfirmed
+                // shutdown as a direct suppressed failure at the boundary.
+                if (attempts == 1) throw cancellation else throw fatal
+            }, this, {}, StandardTestDispatcher(testScheduler))
+        controller.start(); advanceUntilIdle()
+        val recovery = "Content indexing could not stop safely. Restart Chur before indexing more files."
+        assertEquals(recovery, controller.state.value.message)
+        assertEquals(listOf(1), access.opened)
+        assertEquals(1, access.closed)
+        assertTrue(access.saved.isEmpty())
+        assertFalse(controller.state.value.running)
+        assertEquals(listOf(fatal), cancellation.suppressedExceptions, "reporting must preserve the original failure")
+        controller.start(); advanceUntilIdle()
+        assertEquals(recovery, controller.state.value.message)
+        assertEquals(listOf(1, 1), access.opened, "the persistent refusal must not open another candidate")
+        assertEquals(2, access.closed)
+        assertTrue(access.saved.isEmpty())
     }
 
     @Test

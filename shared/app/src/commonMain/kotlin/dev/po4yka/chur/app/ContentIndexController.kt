@@ -141,8 +141,13 @@ internal class ContentIndexController(
                         }
                     }
                 }
-            } catch (_: CancellationException) {
+            } catch (failure: CancellationException) {
                 cancelled = true
+                if (failure.hasDecoderCleanupFailure()) {
+                    publish(token) { it.copy(message = "Content indexing could not stop safely. Restart Chur before indexing more files.") }
+                }
+            } catch (_: DecoderCleanupException) {
+                publish(token) { it.copy(message = "Content indexing could not stop safely. Restart Chur before indexing more files.") }
             } catch (_: Exception) {
                 publish(token) { it.copy(message = "Content indexing could not finish. Try again.") }
             } finally {
@@ -204,6 +209,19 @@ internal class ContentIndexController(
     private inline fun publish(token: Long, projection: (ContentIndexState) -> ContentIndexState) {
         _state.update { state ->
             if (state.runEpoch == token) projection(state).copy(runEpoch = token) else state
+        }
+    }
+
+    /** Stack-trace recovery can copy cancellation and keep the original as its cause. */
+    private fun CancellationException.hasDecoderCleanupFailure(): Boolean {
+        val visited = mutableListOf<CancellationException>()
+        var current: CancellationException? = this
+        while (true) {
+            val failure = current ?: return false
+            if (visited.any { it === failure }) return false
+            visited += failure
+            if (failure.suppressedExceptions.any { it is DecoderCleanupException }) return true
+            current = failure.cause as? CancellationException
         }
     }
 }
