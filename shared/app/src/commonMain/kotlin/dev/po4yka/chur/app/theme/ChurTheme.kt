@@ -302,6 +302,7 @@ fun ChurTheme(
     )
     CompositionLocalProvider(
         LocalChurColors provides colors,
+        LocalChurMotion provides ChurMotion(reducedMotion = rememberReducedMotion()),
         LocalTextSelectionColors provides selectionColors,
     ) {
         MaterialTheme(colorScheme = scheme, typography = churTypography, content = content)
