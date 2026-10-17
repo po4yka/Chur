@@ -73,14 +73,14 @@ class AudioArtworkPresentationTest {
         assertTrue(f.await { f.labels().any { it.startsWith("Audio") } })
         assertTrue("cover art keeps a visible audio marker", f.await { f.unmergedTagCount("audio-tile-kind") == 1 })
         assertTrue("the tile still names the kind once", f.audioTiles().all { it.labels.single().startsWith("Audio,") })
-        f.capture("audio-artwork-gallery-grid-public.png")
+        f.capture("audio-artwork-gallery-grid-public.png", artworkConcealed = false)
         f.main { f.concealed.value = true }
         assertTrue(f.await { f.states().any { "Thumbnail hidden" in it } })
         assertEquals("concealment keeps the audio marker", 1, f.unmergedTagCount("audio-tile-kind"))
-        f.capture("audio-artwork-gallery-concealed-public.png")
+        f.capture("audio-artwork-gallery-concealed-public.png", artworkConcealed = true)
         f.main { f.contentView.value = ContentView.LIST }
         assertTrue("both audio items must occupy full-width list rows", f.await { f.hasAudioListRows() })
-        f.capture("audio-artwork-gallery-list-public.png")
+        f.capture("audio-artwork-gallery-list-public.png", artworkConcealed = true)
     }
 
     @Test
@@ -253,7 +253,8 @@ class AudioArtworkPresentationTest {
             val button = nodes().first { value in it.labels && SemanticsActions.OnClick in it.config }
             assertTrue(button.config[SemanticsActions.OnClick].action?.invoke() == true)
         }
-        fun capture(name: String) {
+        fun capture(name: String, artworkConcealed: Boolean? = null) {
+            val deadline = SystemClock.uptimeMillis() + 5_000
             val ready = CountDownLatch(1)
             val bounds = Rect()
             main {
@@ -264,21 +265,61 @@ class AudioArtworkPresentationTest {
                     ready.countDown()
                 } }
             }
-            assertTrue(ready.await(5, TimeUnit.SECONDS))
-            instrumentation.waitForIdleSync()
-            val screen = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
-            try {
-                assertTrue(bounds.intersect(0, 0, screen.width, screen.height))
-                val crop = Bitmap.createBitmap(screen, bounds.left, bounds.top, bounds.width(), bounds.height())
+            assertTrue("the fixture must draw within five seconds",
+                ready.await((deadline - SystemClock.uptimeMillis()).coerceAtLeast(0), TimeUnit.MILLISECONDS))
+            var lastPixels = "no screenshot"
+            do {
+                instrumentation.waitForIdleSync()
+                val screen = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
                 try {
-                    val colors = mutableSetOf<Int>()
-                    for (y in 0 until crop.height step 4) for (x in 0 until crop.width step 4) colors += crop.getPixel(x, y)
-                    assertTrue("the public fixture must render", colors.size > 16)
-                    File(requireNotNull(activity.getExternalFilesDir(null)), name).outputStream().use {
-                        assertTrue(crop.compress(Bitmap.CompressFormat.PNG, 100, it))
-                    }
-                } finally { if (crop !== screen) crop.recycle() }
-            } finally { screen.recycle() }
+                    val cropBounds = Rect(bounds)
+                    assertTrue(cropBounds.intersect(0, 0, screen.width, screen.height))
+                    val crop = Bitmap.createBitmap(screen, cropBounds.left, cropBounds.top, cropBounds.width(), cropBounds.height())
+                    try {
+                        val colors = mutableSetOf<Int>()
+                        for (y in 0 until crop.height step 4) for (x in 0 until crop.width step 4) colors += crop.getPixel(x, y)
+                        val counts = if (artworkConcealed == null) null else artworkPixels(crop)
+                        lastPixels = "colors=${colors.size}, blue=${counts?.first}, yellow=${counts?.second}, gray=${counts?.third}"
+                        val artworkReady = when (artworkConcealed) {
+                            false -> requireNotNull(counts).first >= 1_024 && counts.second >= 1_024
+                            true -> requireNotNull(counts).third >= 1_024 && counts.first == 0 && counts.second == 0
+                            null -> true
+                        }
+                        if (colors.size > 16 && artworkReady) {
+                            File(requireNotNull(activity.getExternalFilesDir(null)), name).outputStream().use {
+                                assertTrue(crop.compress(Bitmap.CompressFormat.PNG, 100, it))
+                            }
+                            return
+                        }
+                    } finally { if (crop !== screen) crop.recycle() }
+                } finally { screen.recycle() }
+                val remaining = deadline - SystemClock.uptimeMillis()
+                if (remaining <= 0) break
+                main { view.invalidateTree() }
+                SystemClock.sleep(minOf(60, remaining))
+            } while (SystemClock.uptimeMillis() < deadline)
+            throw AssertionError("public pixels did not reach the requested artwork state within five seconds: $lastPixels")
+        }
+
+        /** Count actual compositor pixels, allowing small device color conversion differences. */
+        private fun artworkPixels(bitmap: Bitmap): Triple<Int, Int, Int> {
+            val pixels = IntArray(bitmap.width * bitmap.height)
+            bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+            fun near(pixel: Int, target: Int): Boolean =
+                kotlin.math.abs((pixel shr 16 and 255) - (target shr 16 and 255)) <= 8 &&
+                    kotlin.math.abs((pixel shr 8 and 255) - (target shr 8 and 255)) <= 8 &&
+                    kotlin.math.abs((pixel and 255) - (target and 255)) <= 8
+            var blue = 0
+            var yellow = 0
+            var gray = 0
+            for (pixel in pixels) {
+                when {
+                    near(pixel, 0x2453A6) -> blue++
+                    near(pixel, 0xE19E36) -> yellow++
+                    near(pixel, 0x808080) -> gray++
+                }
+            }
+            return Triple(blue, yellow, gray)
         }
     }
     private val SemanticsNode.labels get() = config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text } +
