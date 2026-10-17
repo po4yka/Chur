@@ -90,7 +90,8 @@ import platform.UIKit.UIAccessibilityVoiceOverStatusDidChangeNotification
 import platform.UIKit.UIView
 import platform.darwin.NSObject
 import platform.darwin.dispatch_queue_create
-import platform.darwin.dispatch_sync
+import platform.darwin.dispatch_async
+import platform.darwin.dispatch_queue_t
 
 /**
  * The AVFoundation half of `MEDIA_PIPELINE.md` §9.
@@ -330,10 +331,10 @@ private class ChurResourceLoader(private val source: PlaybackSource) :
 
     private val vault: VaultRepository get() = source.vault
     val problem = MutableStateFlow<PlaybackProblem?>(null)
-    // These fields are owned by loaderQueue, including release on disposal.
+    // The terminal flag crosses threads; the reader and size stay on loaderQueue.
     private var reader = 0L
     private var size = 0L
-    private var released = false
+    private val retirement = IosPlaybackReaderRetirement(loaderQueue) { releaseReader() }
 
     override fun resourceLoader(
         resourceLoader: AVAssetResourceLoader,
@@ -341,8 +342,9 @@ private class ChurResourceLoader(private val source: PlaybackSource) :
     ): Boolean {
         val request = shouldWaitForLoadingOfRequestedResource
         try {
-            if (released) return fail(request, ChurStatus.SESSION_EXPIRED)
+            if (retirement.terminal) return finishRetired(request)
             ensureReader()
+            if (retirement.terminal) return finishRetired(request)
 
             // Publish a length only after the authenticated reader confirms
             // completeness. A partial source must never reach the decoder.
@@ -363,22 +365,28 @@ private class ChurResourceLoader(private val source: PlaybackSource) :
                 return true
             }
             val wanted = minOf(data.requestedLength.toLong(), size - offset)
+            if (retirement.terminal) return finishRetired(request)
             val bytes = vault.readLeased(reader, offset, wanted.toInt())
+            // A read already in progress can finish after disposal. Its bytes
+            // must not be sent to the detached player.
+            if (retirement.terminal) return finishRetired(request)
             if (bytes.isEmpty() && wanted > 0) return fail(request, ChurStatus.OBJECT_INCOMPLETE)
             if (bytes.isNotEmpty()) data.respondWithData(bytes.toNSData())
             request.finishLoading()
             return true
         } catch (failure: ChurFailure) {
-            return fail(request, failure.status)
+            return if (retirement.terminal) finishRetired(request) else fail(request, failure.status)
         }
     }
 
-    /** Stops queued reads and releases the lease on its owning serial queue. */
-    fun release() {
-        dispatch_sync(loaderQueue) {
-            released = true
-            releaseReader()
-        }
+    /** Marks disposal now; queued close never makes the UI wait for IO. */
+    fun release() = retirement.retire()
+
+    private fun finishRetired(request: AVAssetResourceLoadingRequest): Boolean {
+        // Disposal must not replace a known codec/integrity problem with a
+        // synthetic session error from a callback that was already queued.
+        request.finishLoadingWithError(iosReaderPlaybackError(ChurStatus.SESSION_EXPIRED))
+        return true
     }
 
     private fun releaseReader() {
@@ -390,14 +398,14 @@ private class ChurResourceLoader(private val source: PlaybackSource) :
 
     private fun fail(request: AVAssetResourceLoadingRequest, status: ChurStatus): Boolean {
         // A terminal failure prevents AVFoundation from reopening the reader.
-        released = true
-        releaseReader()
+        retirement.retire()
         if (problem.value == null) problem.value = playbackProblem(status)
         request.finishLoadingWithError(iosReaderPlaybackError(status))
         return true // The delegate handled this request, including its error.
     }
 
     private fun ensureReader() {
+        if (retirement.terminal) throw ChurFailure(ChurStatus.SESSION_EXPIRED, "private playback retired")
         if (reader != 0L) return
         reader = runBlocking { vault.leaseReader(source.objectId, source.kind) }
         val info = vault.readerContentInfo(reader)
@@ -408,6 +416,21 @@ private class ChurResourceLoader(private val source: PlaybackSource) :
         size = info.plaintextSize
     }
 
+}
+
+/** Retires immediately, then closes after the owning queue's in-flight read. */
+internal class IosPlaybackReaderRetirement(
+    private val queue: dispatch_queue_t,
+    private val closeReader: () -> Unit,
+) {
+    private val retired = MutableStateFlow(false)
+    val terminal: Boolean get() = retired.value
+
+    fun retire() {
+        if (retired.compareAndSet(expect = false, update = true)) {
+            dispatch_async(queue) { closeReader() }
+        }
+    }
 }
 
 /**
