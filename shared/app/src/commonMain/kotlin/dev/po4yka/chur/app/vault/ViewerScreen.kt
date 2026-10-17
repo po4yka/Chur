@@ -614,7 +614,7 @@ private fun DetailSheet(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(ViewerColors.chromeScrim)
+            .background(ViewerColors.canvas)
             .verticalScroll(rememberScrollState())
             .padding(ChurSpacing.gutter),
         verticalArrangement = Arrangement.spacedBy(ChurSpacing.one),
