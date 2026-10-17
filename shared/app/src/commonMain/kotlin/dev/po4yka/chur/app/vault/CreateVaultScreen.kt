@@ -6,10 +6,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -31,7 +33,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
@@ -84,9 +88,18 @@ fun CreateVaultScreen(
     var confirmation by remember { mutableStateOf("") }
     var usePin by remember { mutableStateOf(false) }
     var offerRecovery by remember { mutableStateOf(true) }
+    var confirmationFocused by remember { mutableStateOf(false) }
+    var confirmationChecked by remember { mutableStateOf(false) }
     val colors = LocalChurColors.current
     val matching = password.isNotEmpty() && password == confirmation &&
         (!usePin || isValidVaultPin(password))
+    val confirmationMismatch = confirmationChecked && confirmation.isNotEmpty() && password != confirmation
+    val confirmationHint = when {
+        confirmationMismatch -> if (usePin) "PINs do not match." else "Passwords do not match."
+        matching -> if (usePin) "PINs match. Ready to create vault." else "Passwords match. Ready to create vault."
+        usePin -> "Enter the same 12–20 digit PIN in both fields to enable Create vault."
+        else -> "Enter the same password in both fields to enable Create vault."
+    }
     Surface(color = colors.canvas, modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState())
@@ -113,6 +126,7 @@ fun CreateVaultScreen(
                         usePin = !usePin
                         password = ""
                         confirmation = ""
+                        confirmationChecked = false
                     },
                     enabled = !busy,
                 ) {
@@ -146,6 +160,7 @@ fun CreateVaultScreen(
                     onValueChange = {
                         if (!usePin || (it.length <= 20 && it.all { digit -> digit in '0'..'9' })) {
                             confirmation = it
+                            confirmationChecked = false
                         }
                     },
                     singleLine = true,
@@ -153,17 +168,28 @@ fun CreateVaultScreen(
                     label = { Text(if (usePin) "Repeat PIN" else "Repeat password") },
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = secretKeyboardOptions(pin = usePin),
-                    isError = confirmation.isNotEmpty() && !matching,
-                    modifier = Modifier.fillMaxWidth(),
+                    isError = confirmationMismatch,
+                    supportingText = { Text(confirmationHint) },
+                    modifier = Modifier.fillMaxWidth().onFocusChanged { focus ->
+                        if (confirmationFocused && !focus.isFocused) confirmationChecked = true
+                        confirmationFocused = focus.isFocused
+                    },
                 )
                 // §4: the offer, and the consequence of declining it.
                 Column(verticalArrangement = Arrangement.spacedBy(ChurSpacing.one)) {
-                    androidx.compose.foundation.layout.Row(
+                    Row(
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                            .toggleable(
+                                value = offerRecovery,
+                                enabled = !busy,
+                                role = Role.Checkbox,
+                                onValueChange = { offerRecovery = it },
+                            ),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Checkbox(
                             checked = offerRecovery,
-                            onCheckedChange = { offerRecovery = it },
+                            onCheckedChange = null,
                             enabled = !busy,
                             colors = CheckboxDefaults.colors(
                                 checkedColor = colors.accent,
