@@ -2,6 +2,7 @@ package dev.po4yka.chur.android
 
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Rect
 import android.os.Looper
 import android.os.SystemClock
 import android.view.KeyEvent
@@ -27,6 +28,9 @@ import dev.po4yka.chur.app.vault.ViewerScreen
 import dev.po4yka.chur.app.vault.ViewerStillState
 import dev.po4yka.chur.ffi.ObjectDetail
 import dev.po4yka.chur.ffi.ObjectProjection
+import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -49,6 +53,7 @@ class ViewerPhotoPresentationTest {
             assertTrue(verify.config[SemanticsActions.OnClick].action?.invoke() == true)
         }
         assertTrue(f.verifications == 1)
+        f.capture("viewer-photo-unavailable-public.png")
     }
 
     @Test
@@ -60,7 +65,7 @@ class ViewerPhotoPresentationTest {
     }
 
     @Test
-    fun info_scrolls_to_the_last_tag_without_covering_viewer_actions_in_landscape_at_double_font_scale() =
+    fun info_scrolls_to_the_last_tag_without_covering_viewer_actions_in_a_short_viewport_at_double_font_scale() =
         present(info = true) { f ->
             assertTrue(f.await { f.nodes().any {
                 SemanticsActions.ScrollBy in it.config &&
@@ -77,6 +82,7 @@ class ViewerPhotoPresentationTest {
             })
             val back = f.nodes().first { "Back" in it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty() }
             assertTrue(back.boundsInRoot.bottom <= scroll.boundsInRoot.top)
+            f.capture("viewer-photo-info-short-font2-public.png")
         }
 
     @Test
@@ -92,6 +98,7 @@ class ViewerPhotoPresentationTest {
         action("Pan right")
         f.main { assertTrue(photo().config[SemanticsActions.SetProgress].action?.invoke(5f) == true) }
         assertTrue(f.await { photo().config[SemanticsProperties.StateDescription] == "Zoom 500%" })
+        f.capture("viewer-photo-zoom500-public.png")
         action("Reset zoom")
         assertTrue(f.await { photo().config[SemanticsProperties.ProgressBarRangeInfo].current == 1f })
         f.main {
@@ -114,7 +121,7 @@ class ViewerPhotoPresentationTest {
         val activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         try {
-            val f = Fixture()
+            val f = Fixture(activity)
             f.main {
                 val density = activity.resources.displayMetrics.density
                 val projection = ObjectProjection(objectId = ByteArray(16) { 1 }, primaryStreamId = ByteArray(16) { 2 },
@@ -135,14 +142,17 @@ class ViewerPhotoPresentationTest {
                     }
                 }
                 activity.setContentView(FrameLayout(activity).apply {
-                    addView(f.view, FrameLayout.LayoutParams(((if (info) 640 else 320) * density).toInt(), ((if (info) 320 else 640) * density).toInt()))
+                    // This is a short viewport in the actual window, not a simulated landscape display.
+                    val height = if (info) minOf((320 * density).toInt(), activity.windowManager.currentWindowMetrics.bounds.height())
+                        else FrameLayout.LayoutParams.MATCH_PARENT
+                    addView(f.view, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, height))
                 })
             }
             test(f)
         } finally { instrumentation.runOnMainSync { activity.finish() } }
     }
 
-    private inner class Fixture {
+    private inner class Fixture(val activity: MainActivity) {
         var verifications = 0
         var interactions = 0
         val stillState = mutableStateOf(ViewerStillState.Loading)
@@ -163,6 +173,43 @@ class ViewerPhotoPresentationTest {
             it.config.getOrNull(SemanticsProperties.Text).orEmpty().map { text -> text.text } +
                 it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty()
         }
+        fun capture(name: String) {
+            val ready = CountDownLatch(1)
+            val bounds = Rect()
+            main {
+                view.invalidateTree()
+                view.postOnAnimation {
+                    view.invalidateTree()
+                    view.postOnAnimation {
+                        val point = IntArray(2)
+                        view.getLocationOnScreen(point)
+                        bounds.set(point[0], point[1], point[0] + view.width, point[1] + view.height)
+                        ready.countDown()
+                    }
+                }
+            }
+            assertTrue("the public fixture must draw before capture", ready.await(5, TimeUnit.SECONDS))
+            instrumentation.waitForIdleSync()
+            val visible = Rect()
+            main { assertTrue("the public fixture must be visible", view.getGlobalVisibleRect(visible)) }
+            assertTrue("the fixture must fit inside its actual window", visible == bounds)
+            val screen = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
+            try {
+                assertTrue("capture bounds must fit inside the screenshot",
+                    bounds.width() > 0 && bounds.height() > 0 && bounds.left >= 0 && bounds.top >= 0 &&
+                        bounds.right <= screen.width && bounds.bottom <= screen.height)
+                val crop = Bitmap.createBitmap(screen, bounds.left, bounds.top, bounds.width(), bounds.height())
+                try {
+                    val colors = mutableSetOf<Int>()
+                    for (y in 0 until crop.height step 4) for (x in 0 until crop.width step 4) colors += crop.getPixel(x, y)
+                    assertTrue("the public fixture must render visible content", colors.size > 16)
+                    File(requireNotNull(activity.getExternalFilesDir(null)), name).outputStream().use {
+                        assertTrue(crop.compress(Bitmap.CompressFormat.PNG, 100, it))
+                    }
+                } finally { if (crop !== screen) crop.recycle() }
+            } finally { screen.recycle() }
+        }
+
         fun await(condition: () -> Boolean): Boolean {
             val deadline = SystemClock.uptimeMillis() + 5_000
             while (SystemClock.uptimeMillis() < deadline) {
@@ -172,6 +219,11 @@ class ViewerPhotoPresentationTest {
             }
             return condition()
         }
+    }
+
+    private fun View.invalidateTree() {
+        invalidate()
+        if (this is ViewGroup) for (i in 0 until childCount) getChildAt(i).invalidateTree()
     }
 
     private fun View.roots(): List<ViewRootForTest> = buildList {
