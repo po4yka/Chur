@@ -93,6 +93,14 @@ class AudioArtworkPlaybackTest {
             assertTrue("the actual player starts and offers Pause", await {
                 onMain { control(content)?.let { it.isShown && it.isEnabled && it.contentDescription?.contains("Pause") == true } == true }
             })
+            assertTrue("private audio must advance beyond its loading state", await {
+                onMain {
+                    val native = content.views().single { it.javaClass.name == "androidx.media3.ui.PlayerView" }
+                    val player = native.javaClass.getMethod("getPlayer").invoke(native)
+                    player != null && player.javaClass.getMethod("isPlaying").invoke(player) == true &&
+                        (player.javaClass.getMethod("getCurrentPosition").invoke(player) as Long) >= 200L
+                }
+            })
             assertNativeArtworkOff(content)
             captureAndAssertCover(content, host, "audio-art-native-playing.png")
             assertTrue("Pause remains clickable above the cover", onMain { requireNotNull(control(content)).performClick() })
