@@ -94,6 +94,10 @@ Original bytes are preserved whenever feasible. Transforming import requires an 
 
 ## 6. Derived assets
 
+An original committed before a derivative failure remains imported. If Android cannot confirm that its decoder child stopped, retain that committed object ID, stop the batch before opening another source, and count the remaining inputs as skipped. Saved objects still receive their selected album membership. The notice asks the user to restart Chur before another media import; it does not report the saved originals as failed or bypass the decoder's retained ownership.
+
+The iOS video poster path releases every owned `CGImage` returned by a Copy API after the `UIImage` has retained it, including failure paths. The image remains usable for bounded derivative rendering; no extra Core Foundation ownership survives the extraction.
+
 Implemented picture/waveform kinds and reserved later kinds:
 
 ```text

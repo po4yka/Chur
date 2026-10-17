@@ -13,6 +13,7 @@ import dev.po4yka.chur.imports.MediaCodec
 import dev.po4yka.chur.imports.PickedMedia
 import dev.po4yka.chur.imports.ProbedMedia
 import dev.po4yka.chur.imports.Waveform
+import dev.po4yka.chur.app.vault.importedOriginals
 import dev.po4yka.chur.notes.InMemoryNoteStore
 import dev.po4yka.chur.vault.VaultRepository
 import dev.po4yka.chur.vault.VaultState
@@ -33,9 +34,6 @@ import kotlin.test.assertContentEquals
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TestTimeSource
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
-import kotlin.test.assertSame
-import kotlin.test.assertContentEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -179,7 +177,7 @@ class MediaImporterHostTest {
     }
 
     @Test
-    fun unconfirmed_decoder_cleanup_propagates_and_preserves_the_committed_original() = runBlocking {
+    fun unconfirmed_decoder_cleanup_preserves_the_committed_identity_with_a_stop_warning() = runBlocking {
         val root = File(System.getProperty("java.io.tmpdir"), "chur-decoder-cleanup-${System.nanoTime()}").apply { mkdirs() }
         val bytes = ByteArray(2_048) { 37 }
         val source = File(root, "picked.jpg").apply { writeBytes(bytes) }
@@ -208,8 +206,11 @@ class MediaImporterHostTest {
                         throw failure
                     }
                 }
-                val caught = assertFailsWith<DecoderCleanupException> { MediaImporter(codec).import(vault, picked) }
-                assertSame(failure, caught, "failed cleanup must not become Imported with a missing preview")
+                val imported = assertIs<MediaImporter.Outcome.Imported>(MediaImporter(codec).import(vault, picked))
+                assertEquals(MediaImporter.PreviewWarning.DECODER_CLEANUP_FAILED, imported.previewWarning)
+                assertEquals(0, imported.derivatives)
+                assertEquals(false, imported.previewsSkipped, "failed shutdown is not user cancellation")
+                assertContentEquals(vault.page(ObjectQuery()).objects.single().objectId, imported.objectId)
                 assertEquals(1, closes, "the importer releases its source once on failure")
                 assertTrue(!file.fd.valid())
             }
@@ -224,6 +225,81 @@ class MediaImporterHostTest {
             password.fill(0)
             root.deleteRecursively()
         }
+    }
+
+    @Test
+    fun a_decoder_cleanup_failure_stops_the_pick_and_places_every_committed_original_in_the_album() = withVault { controller, root ->
+        val album = controller.vault.createAlbum("Destination")
+        val opened = mutableListOf<Int>()
+        val closed = mutableListOf<Int>()
+        val decoded = mutableListOf<String?>()
+        val codec = object : MediaCodec {
+            override fun probe(media: PickedMedia) = ProbedMedia(MediaBounds.CLASS_IMAGE, 80, 40, 0, "image/jpeg")
+            override fun derive(media: PickedMedia, probe: ProbedMedia, kind: StreamKind,
+                cancelRequested: () -> Boolean): Derivative? = error("the bounded decoder owns cleanup")
+            override suspend fun deriveBounded(media: PickedMedia, probe: ProbedMedia, kind: StreamKind,
+                cancelRequested: () -> Boolean): Derivative? {
+                decoded += media.originalFilename
+                assertTrue(opened.last() !in closed, "source ownership lasts through decoder shutdown")
+                if (media.originalFilename == "IMG_0001.jpg") {
+                    throw DecoderCleanupException("private decoder diagnostic must not reach the notice")
+                }
+                return null
+            }
+        }
+        val outcomes = controller.importAll(MediaImporter(codec), 3, album) { index, _ ->
+            opened += index
+            val source = picked(root, index)
+            source.copy(close = { source.close(); closed += index })
+        }
+
+        assertEquals(listOf(0, 1), opened, "do not even open the rest after decoder custody fails")
+        assertEquals(opened, closed, "each consumed source is released once")
+        assertEquals(listOf<String?>("IMG_0000.jpg", "IMG_0001.jpg"), decoded)
+        val imported = outcomes.map { assertIs<MediaImporter.Outcome.Imported>(it) }
+        assertEquals(listOf(null, MediaImporter.PreviewWarning.DECODER_CLEANUP_FAILED), imported.map { it.previewWarning })
+        assertEquals(listOf(0, 1), importedOriginals(listOf(0, 1, 2), outcomes))
+        assertEquals(
+            "2 imported, 1 skipped. Preview processing could not stop safely. Restart Chur before importing more media.",
+            withTimeout(10_000) { controller.notice.filterNotNull().first { "2 imported" in it.text } }.text,
+        )
+        assertEquals(null, controller.activeOperation.value)
+        val members = controller.vault.page(ObjectQuery(QueryScope.ALBUM, scopeId = album)).objects
+        assertEquals(2, members.size)
+        assertEquals(imported.map { it.objectId.toList() }.toSet(), members.map { it.objectId.toList() }.toSet())
+        imported.forEachIndexed { index, original ->
+            assertContentEquals(ByteArray(2_048) { index.toByte() }, controller.vault.readRange(original.objectId, 0, 2_048))
+        }
+        controller.vault.lock(LockReason.USER)
+        controller.vault.unlock("Batch-import-password".encodeToByteArray())
+        assertEquals(2L, controller.vault.page(ObjectQuery()).totalCount)
+        assertEquals(2L, controller.vault.page(ObjectQuery(QueryScope.ALBUM, scopeId = album)).totalCount)
+    }
+
+    @Test
+    fun a_single_committed_import_reports_decoder_shutdown_failure_without_a_refusal_or_cancellation() = withVault { controller, root ->
+        var attempts = 0
+        var closed = 0
+        val codec = object : MediaCodec by Previewless {
+            override suspend fun deriveBounded(media: PickedMedia, probe: ProbedMedia, kind: StreamKind,
+                cancelRequested: () -> Boolean): Derivative? {
+                attempts++
+                throw DecoderCleanupException("private decoder diagnostic must not reach the notice")
+            }
+        }
+        val outcomes = controller.importAll(MediaImporter(codec), 1, null) { index, _ ->
+            val source = picked(root, index)
+            source.copy(close = { source.close(); closed++ })
+        }
+        val imported = assertIs<MediaImporter.Outcome.Imported>(outcomes.single())
+        assertEquals(MediaImporter.PreviewWarning.DECODER_CLEANUP_FAILED, imported.previewWarning)
+        assertEquals(1, attempts)
+        assertEquals(1, closed)
+        assertEquals(
+            "Imported original; preview processing could not stop safely. Restart Chur before importing more media.",
+            withTimeout(10_000) { controller.notice.filterNotNull().first { "Imported original" in it.text } }.text,
+        )
+        assertContentEquals(ByteArray(2_048), controller.vault.readRange(imported.objectId, 0, 2_048))
     }
 
     @Test

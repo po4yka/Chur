@@ -2436,10 +2436,14 @@ class ChurController(
 
     /** Requests cancellation; the worker sends it to Rust before its next poll. */
     fun cancelActiveOperation() {
+        val cancelDirectory = _activeOperation.value?.let { it.name == "album-export" && it.cancellable } == true
         if (_activeOperation.value?.name == "external-archive") clearExternalArchiveSecret()
         _activeOperation.update { current ->
             current?.takeIf { it.cancellable }?.copy(cancelling = true) ?: current
         }
+        // A provider can be waiting before native polling starts. Signal its
+        // directory owner without revoking unrelated export scratch or inputs.
+        if (cancelDirectory) exports.cancelDirectoryOperations()
     }
 
     /**
@@ -2520,6 +2524,8 @@ class ChurController(
                 val outcome = importItem(importer, token, generation) { open(index, prepare) }
                 outcomes += outcome
                 if (outcome is MediaImporter.Outcome.Refused && outcome.status in PICK_STOPPING_STATUSES) break
+                if (outcome is MediaImporter.Outcome.Imported &&
+                    outcome.previewWarning == MediaImporter.PreviewWarning.DECODER_CLEANUP_FAILED) break
             }
         } ?: return outcomes
         if (outcomes.isEmpty() || (repository.state.value as? VaultState.Unlocked)?.generation != generation) return outcomes
@@ -3101,6 +3107,10 @@ class ChurController(
             val single = outcomes.singleOrNull()
             if (requested == 1 && single != null) return when (single) {
                 is MediaImporter.Outcome.Imported -> when {
+                    single.previewWarning == MediaImporter.PreviewWarning.DECODER_CLEANUP_FAILED && intoAlbum ->
+                        "Imported original into album; preview processing could not stop safely. Restart Chur before importing more media."
+                    single.previewWarning == MediaImporter.PreviewWarning.DECODER_CLEANUP_FAILED ->
+                        "Imported original; preview processing could not stop safely. Restart Chur before importing more media."
                     single.previewWarning == MediaImporter.PreviewWarning.STORAGE_FAILED && intoAlbum ->
                         "Imported original into album; some previews could not be saved."
                     single.previewWarning == MediaImporter.PreviewWarning.STORAGE_FAILED ->
@@ -3123,8 +3133,10 @@ class ChurController(
             val tooLarge = outcomes.count { it is MediaImporter.Outcome.TooLarge }
             val refused = outcomes.filterIsInstance<MediaImporter.Outcome.Refused>()
             val failed = refused.filter { it.status != ChurStatus.CANCELLED }
-            // A stopping refusal ends the loop, so it is always the last one.
-            val stopped = failed.lastOrNull()?.status in PICK_STOPPING_STATUSES
+            // A stopped decoder keeps its committed original, but no later
+            // source may open while the process still owns uncertain resources.
+            val decoderStopped = imported.any { it.previewWarning == MediaImporter.PreviewWarning.DECODER_CLEANUP_FAILED }
+            val stopped = decoderStopped || failed.lastOrNull()?.status in PICK_STOPPING_STATUSES
             val unopened = requested - outcomes.size
             val skipped = if (stopped) unopened else 0
             val cancelled = refused.size - failed.size + unopened - skipped
@@ -3142,8 +3154,10 @@ class ChurController(
                 "remaining previews cancelled".takeIf { imported.any { it.previewsSkipped } },
             ).joinToString("; ").let { if (it.isEmpty()) "" else "; $it" }
             val reason = failed.firstOrNull { it.status in SECURITY_STATUSES }
-                ?: if (stopped) failed.last() else failed.firstOrNull()
-            return "$counts$previews." + reason?.let { " " + userCopy(it.status) }.orEmpty()
+                ?: if (stopped) failed.lastOrNull() else failed.firstOrNull()
+            val decoderWarning = if (decoderStopped)
+                " Preview processing could not stop safely. Restart Chur before importing more media." else ""
+            return "$counts$previews." + reason?.let { " " + userCopy(it.status) }.orEmpty() + decoderWarning
         }
 
         /**
@@ -3172,6 +3186,9 @@ interface ExportSink {
 
     /** Revokes and deletes temporary results still owned by this application. Safe to repeat. */
     fun cancelPending()
+
+    /** Signals directory-provider waits; teardown must not block the caller. */
+    fun cancelDirectoryOperations() = Unit
 
     /** One open destination. */
     interface Destination {

@@ -345,11 +345,7 @@ pub unsafe extern "C" fn chur_private_note_export_begin(
         let bytes = with_catalog(session, |db| {
             notes::purge_expired(db, api::now_ms())?;
             let n = notes::get(db, &id)?;
-            ensure!(
-                n.revision == expected && n.deleted_ms.is_none(),
-                Conflict,
-                "the private note changed"
-            );
+            ensure!(n.revision == expected, Conflict, "the private note changed");
             let mut b = Zeroizing::new(Vec::with_capacity(n.export_size() as usize));
             b.extend_from_slice(n.title.as_bytes());
             b.extend_from_slice(b"\n\n");
@@ -400,6 +396,121 @@ pub unsafe extern "C" fn chur_private_note_export_begin(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
+    use crate::records::{ChurCreateRequestV1, ChurRuntimeConfigV1};
+    use std::os::fd::AsRawFd;
+
+    #[test]
+    fn trashed_note_exports_exact_utf8_but_stale_expired_and_purged_notes_do_not() {
+        let root = std::env::temp_dir().join(format!(
+            "chur-note-export-{}",
+            chur_crypto::random::id().unwrap().to_hex()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.to_str().unwrap().as_bytes();
+        let config = ChurRuntimeConfigV1 {
+            root_path: path.as_ptr(),
+            root_path_length: path.len() as u32,
+        };
+        let password = b"private note export fixture password";
+        let request = ChurCreateRequestV1 {
+            password: password.as_ptr(),
+            password_length: password.len() as u32,
+            memory_kib: 0,
+            iterations: 0,
+            parallelism: 0,
+        };
+        let mut runtime = 0;
+        let mut creation = 0;
+        let mut session = 0;
+        unsafe {
+            assert_eq!(api::chur_runtime_open(&config, &mut runtime), 0);
+            assert_eq!(
+                crate::product::chur_vault_create_begin(runtime, &request, &mut creation),
+                0
+            );
+            assert_eq!(
+                crate::product::chur_vault_creation_activate(creation, &mut session),
+                0
+            );
+        }
+        let now = api::now_ms();
+        let note = with_catalog(session, |db| {
+            let note = notes::save(db, None, 0, "Заметка", "Текст\nwith emoji 🗒", false, now)?;
+            Ok(notes::change(db, &note.id, note.revision, 3, now)?.unwrap())
+        })
+        .unwrap();
+        let destination = root.join("note.txt");
+        let output = std::fs::File::create(&destination).unwrap();
+        let mut operation = 0;
+        assert_eq!(
+            unsafe {
+                chur_private_note_export_begin(
+                    session,
+                    note.id.as_bytes().as_ptr(),
+                    note.revision,
+                    output.as_raw_fd(),
+                    &mut operation,
+                )
+            },
+            0
+        );
+        let entry = registry::get(operation, Kind::Operation).unwrap();
+        let Entry::Operation {
+            operation: worker, ..
+        } = entry.as_ref()
+        else {
+            panic!("operation")
+        };
+        worker.join();
+        assert_eq!(worker.poll().status, 0);
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            "Заметка\n\nТекст\nwith emoji 🗒".as_bytes()
+        );
+        assert_eq!(unsafe { api::chur_operation_close(operation) }, 0);
+        drop(entry);
+        drop(output);
+
+        let expired = with_catalog(session, |db| {
+            let old = now - chur_catalog::trash::RETENTION_MS - 1;
+            let note = notes::save(db, None, 0, "expired", "body", false, old)?;
+            Ok(notes::change(db, &note.id, note.revision, 3, old)?.unwrap())
+        })
+        .unwrap();
+        let purged = with_catalog(session, |db| {
+            let note = notes::save(db, None, 0, "purged", "body", false, now)?;
+            let note = notes::change(db, &note.id, note.revision, 3, now)?.unwrap();
+            notes::change(db, &note.id, note.revision, 5, now)?;
+            Ok(note)
+        })
+        .unwrap();
+        for (note, revision, status) in [
+            (&note, note.revision - 1, chur_core::ChurStatus::Conflict),
+            (&expired, expired.revision, chur_core::ChurStatus::NotFound),
+            (&purged, purged.revision, chur_core::ChurStatus::NotFound),
+        ] {
+            let output = std::fs::File::create(&destination).unwrap();
+            let mut operation = 99;
+            assert_eq!(
+                unsafe {
+                    chur_private_note_export_begin(
+                        session,
+                        note.id.as_bytes().as_ptr(),
+                        revision,
+                        output.as_raw_fd(),
+                        &mut operation,
+                    )
+                },
+                status as i32
+            );
+            assert_eq!(operation, 0);
+            assert_eq!(output.metadata().unwrap().len(), 0);
+        }
+        assert_eq!(unsafe { api::chur_session_close(session) }, 0);
+        assert_eq!(unsafe { api::chur_runtime_close(runtime) }, 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn undersized_or_null_output_never_reaches_a_mutation() {
         let mut written = 999usize;

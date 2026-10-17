@@ -36,7 +36,7 @@ class MediaImporter(
     private val derivativeTimeSource: TimeSource = TimeSource.Monotonic,
 ) {
     /** The original is committed, but preview work did not finish. */
-    enum class PreviewWarning { STORAGE_FAILED, TIMED_OUT }
+    enum class PreviewWarning { STORAGE_FAILED, TIMED_OUT, DECODER_CLEANUP_FAILED }
 
     /** What an import attempt ended as, §13. */
     sealed interface Outcome {
@@ -157,8 +157,11 @@ class MediaImporter(
                     codec.deriveBounded(media, probe, kind) { cancelRequested() || timedOut() }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
-                } catch (failure: DecoderCleanupException) {
-                    throw failure
+                } catch (_: DecoderCleanupException) {
+                    // The decoder retains its uncertain owner and forbids reuse.
+                    // Keep the committed identity so the host can place this
+                    // original and stop the batch without opening another source.
+                    return Outcome.Imported(objectId, written, previewWarning = PreviewWarning.DECODER_CLEANUP_FAILED)
                 } catch (_: Exception) {
                     null
                 }

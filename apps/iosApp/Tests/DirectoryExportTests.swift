@@ -65,6 +65,38 @@ final class DirectoryExportTests: XCTestCase {
         XCTAssertNil(directory.createDirectory(displayName: "after-close"))
     }
 
+    func testCancellingBeforeFileProviderGrantsFileCreationReturnsWithoutWaitingForProvider() throws {
+        try assertCancellationBeforeCoordination(file: true)
+    }
+
+    func testCancellingBeforeFileProviderGrantsDirectoryCreationReturnsWithoutWaitingForProvider() throws {
+        try assertCancellationBeforeCoordination(file: false)
+    }
+
+    private func assertCancellationBeforeCoordination(file: Bool) throws {
+        let released = expectation(description: "scope drained")
+        let grant = try session { released.fulfill() }
+        let directory = try XCTUnwrap(grant.directory)
+        let presenter = HeldDirectoryPresenter(root)
+        NSFileCoordinator.addFilePresenter(presenter)
+        defer { presenter.resume.signal(); NSFileCoordinator.removeFilePresenter(presenter) }
+        let returned = expectation(description: "cancelled creation returned")
+        DispatchQueue.global(qos: .userInitiated).async {
+            if file { XCTAssertNil(directory.createFile(displayName: "fixture.txt", plaintextSize: 3)) }
+            else { XCTAssertNil(directory.createDirectory(displayName: "Album")) }
+            returned.fulfill()
+        }
+        XCTAssertEqual(presenter.requested.wait(timeout: .now() + 3), .success)
+        // The provider still withholds its coordinated accessor. Closing the
+        // session must return the application worker before it cooperates.
+        grant.close()
+        wait(for: [returned], timeout: 1)
+        presenter.resume.signal()
+        wait(for: [released], timeout: 3)
+        directory.close()
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), [])
+    }
+
     func testUntrustedNamesStayInsideTheSelectedDirectory() throws {
         let grant = try session()
         let directory = try XCTUnwrap(grant.directory)
@@ -110,5 +142,23 @@ final class DirectoryExportTests: XCTestCase {
         var stops = 0
         XCTAssertNil(DirectoryExportSession(url: file, startAccess: { true }, stopAccess: { stops += 1 }))
         XCTAssertEqual(stops, 1)
+    }
+}
+
+/// A real Foundation coordination gate, independent of filesystem speed.
+private final class HeldDirectoryPresenter: NSObject, NSFilePresenter, @unchecked Sendable {
+    let presentedItemURL: URL?
+    let presentedItemOperationQueue = OperationQueue()
+    let requested = DispatchSemaphore(value: 0)
+    let resume = DispatchSemaphore(value: 0)
+    init(_ url: URL) {
+        presentedItemURL = url
+        super.init()
+        presentedItemOperationQueue.maxConcurrentOperationCount = 1
+    }
+    func relinquishPresentedItem(toWriter writer: @escaping @Sendable ((@Sendable () -> Void)?) -> Void) {
+        requested.signal()
+        _ = resume.wait(timeout: .now() + 5)
+        writer(nil)
     }
 }

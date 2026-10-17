@@ -6,6 +6,8 @@ import dev.po4yka.chur.ffi.QueryScope
 import dev.po4yka.chur.imports.MediaBounds
 import java.io.File
 import java.io.RandomAccessFile
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -13,6 +15,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -36,7 +39,13 @@ class AlbumExportHostTest {
     @Test
     fun a_root_cleanup_failure_keeps_the_exported_counts_and_reports_the_cleanup_problem() = scenario(Mode.ROOT_CLOSE_FAILURE)
 
-    private enum class Mode { SUCCESS, BAD_DESCRIPTOR, PUBLISH_FAILURE, CANCEL_ON_PUBLISH, ROOT_CLOSE_FAILURE }
+    @Test
+    fun cancellation_releases_a_provider_waiting_before_directory_creation() = scenario(Mode.CANCEL_BEFORE_DIRECTORY)
+
+    @Test
+    fun cancellation_releases_a_provider_waiting_before_file_creation() = scenario(Mode.CANCEL_BEFORE_FILE)
+
+    private enum class Mode { SUCCESS, BAD_DESCRIPTOR, PUBLISH_FAILURE, CANCEL_ON_PUBLISH, ROOT_CLOSE_FAILURE, CANCEL_BEFORE_DIRECTORY, CANCEL_BEFORE_FILE }
 
     private fun scenario(mode: Mode) = runBlocking {
         Dispatchers.setMain(Dispatchers.Unconfined)
@@ -46,11 +55,19 @@ class AlbumExportHostTest {
         var closed = 0
         var rootClosed = false
         var childClosed = false
+        val providerWaiting = CountDownLatch(1)
+        val cancelProvider = CountDownLatch(1)
+        var directoryCancellations = 0
         lateinit var controller: ChurController
         val child = object : ExportDirectory {
             override fun createDirectory(displayName: String): ExportDirectory? = null
             override fun close() { childClosed = true }
-            override fun createFile(displayName: String, contentType: String, plaintextSize: Long): ExportSink.Destination {
+            override fun createFile(displayName: String, contentType: String, plaintextSize: Long): ExportSink.Destination? {
+                if (mode == Mode.CANCEL_BEFORE_FILE) {
+                    providerWaiting.countDown()
+                    check(cancelProvider.await(5, TimeUnit.SECONDS))
+                    return null
+                }
                 val file = File(root, "export-${files.size}").also { files += it }
                 val output = RandomAccessFile(file, "rw")
                 return object : ExportSink.Destination {
@@ -67,10 +84,21 @@ class AlbumExportHostTest {
         }
         val exports = object : ExportSink {
             override fun cancelPending() = Unit
+            override fun cancelDirectoryOperations() {
+                directoryCancellations++
+                cancelProvider.countDown()
+            }
             override fun create(displayName: String, contentType: String): ExportSink.Destination? = null
             override fun create(displayName: String, contentType: String, target: ExportTarget, uri: String?): ExportSink.Destination? = null
             override fun openDirectory(uri: String): ExportDirectory = object : ExportDirectory {
-                override fun createDirectory(displayName: String): ExportDirectory = child
+                override fun createDirectory(displayName: String): ExportDirectory? {
+                    if (mode == Mode.CANCEL_BEFORE_DIRECTORY) {
+                        providerWaiting.countDown()
+                        check(cancelProvider.await(5, TimeUnit.SECONDS))
+                        return null
+                    }
+                    return child
+                }
                 override fun createFile(displayName: String, contentType: String, plaintextSize: Long): ExportSink.Destination? = null
                 override fun close() {
                     rootClosed = true
@@ -107,12 +135,16 @@ class AlbumExportHostTest {
             val beforeExport = controller.vault.page(query)
             assertTrue(beforeExport.nextCursor != null)
             controller.exportAlbum(albumId, "transient-token")
+            if (mode == Mode.CANCEL_BEFORE_DIRECTORY || mode == Mode.CANCEL_BEFORE_FILE) {
+                withContext(Dispatchers.IO) { assertTrue(providerWaiting.await(5, TimeUnit.SECONDS)) }
+                controller.cancelActiveOperation()
+            }
             val notice = withTimeout(10_000) { controller.notice.first { it?.text?.contains(" exported") == true } }!!
             val afterExport = controller.vault.page(query.copy(cursor = beforeExport.nextCursor))
             assertEquals(beforeExport.catalogGeneration, afterExport.catalogGeneration)
             assertEquals(1, afterExport.objects.size)
             assertTrue(rootClosed)
-            assertTrue(childClosed)
+            assertEquals(mode != Mode.CANCEL_BEFORE_DIRECTORY, childClosed)
             assertEquals(files.size, closed)
             when (mode) {
                 Mode.SUCCESS, Mode.ROOT_CLOSE_FAILURE -> {
@@ -128,6 +160,13 @@ class AlbumExportHostTest {
                     assertFalse(files.single().exists())
                     assertTrue(notice.text.startsWith("0 exported, 2 cancelled."), notice.text)
                 }
+                Mode.CANCEL_BEFORE_DIRECTORY, Mode.CANCEL_BEFORE_FILE -> {
+                    assertEquals(1, directoryCancellations)
+                    assertTrue(files.isEmpty())
+                    assertEquals(0, discarded)
+                    assertTrue(notice.text.startsWith("0 exported, 2 cancelled."), notice.text)
+                    assertEquals(null, controller.activeOperation.value)
+                }
                 else -> {
                     assertEquals(1, files.size)
                     assertEquals(1, discarded)
@@ -136,6 +175,7 @@ class AlbumExportHostTest {
                 }
             }
         } finally {
+            cancelProvider.countDown()
             controller.vault.shutdown()
             Dispatchers.resetMain()
             root.deleteRecursively()

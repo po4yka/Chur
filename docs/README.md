@@ -151,6 +151,7 @@ The complete platform documents are [`ANDROID.md`](ANDROID.md) and [`IOS.md`](IO
 - [`assurance/ANDROID_SECURITY_EMULATOR_2026-09-26.md`](assurance/ANDROID_SECURITY_EMULATOR_2026-09-26.md) — dated emulator security inspection.
 - [`assurance/PIXELATE_GALLERY_2026-10-16.md`](assurance/PIXELATE_GALLERY_2026-10-16.md) — dated gallery privacy and accessibility evidence.
 - [`assurance/SECURITY_FIXES_2026-10-16.md`](assurance/SECURITY_FIXES_2026-10-16.md) — dated security correction evidence.
+- [`assurance/P2_CORRECTIONS_2026-10-17.md`](assurance/P2_CORRECTIONS_2026-10-17.md) — five feature-review corrections and regression coverage.
 
 ## Sync and sharing
 

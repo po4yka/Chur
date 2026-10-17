@@ -92,53 +92,105 @@ final class DirectoryExportNode: @unchecked Sendable {
 
     func createDirectory(displayName: String) -> DirectoryExportNode? {
         guard let url, session.acquire() else { return nil }
-        defer { session.release() }
-        var coordinationError: NSError?
-        var created: URL?
-        NSFileCoordinator().coordinate(writingItemAt: url, options: .forMerging, error: &coordinationError) { parent in
-            guard session.isActive else { return }
-            for index in 0..<1000 {
-                let child = parent.appendingPathComponent(Self.candidate(Self.safeName(displayName), number: index, file: false), isDirectory: true)
-                if Darwin.mkdir(child.path, S_IRWXU) == 0 { created = child; return }
-                if errno != EEXIST { return }
+        let request = DirectoryExportCreation<URL> { _ = Darwin.rmdir($0.path) }
+        let coordinator = DirectoryExportCoordinator()
+        DispatchQueue.global(qos: .userInitiated).async {
+            defer { self.session.release(); request.complete(nil) }
+            coordinator.coordinate(at: url) { parent in
+                guard self.session.isActive else { return }
+                for index in 0..<1000 {
+                    let child = parent.appendingPathComponent(Self.candidate(Self.safeName(displayName), number: index, file: false), isDirectory: true)
+                    if Darwin.mkdir(child.path, S_IRWXU) == 0 { request.complete(child); return }
+                    if errno != EEXIST { return }
+                }
             }
         }
-        guard coordinationError == nil, let created, session.isActive else { return nil }
+        guard let created = request.wait(while: { session.isActive }) else {
+            DispatchQueue.global(qos: .utility).async { coordinator.cancel() }
+            return nil
+        }
         return DirectoryExportNode(url: created, session: session)
     }
 
     func createFile(displayName: String, plaintextSize: Int64) -> DirectoryExportFile? {
         guard plaintextSize >= 0, let url, session.acquire() else { return nil }
-        // The accessor stays alive while Rust writes its duplicated descriptor.
-        // It closes only after publish/discard and descriptor close, so provider
-        // writes remain coordinated without an intermediate plaintext copy.
+        // Cancellation ends the caller's wait, but the provider worker keeps
+        // its scope until coordination drains. Only an undelivered file can
+        // be abandoned here; a native writer keeps its fd until close().
         let result = DirectoryExportFile(session: session, displayName: Self.safeName(displayName))
-        let acquired = DispatchSemaphore(value: 0)
+        let request = DirectoryExportCreation<DirectoryExportFile> { $0.abandonBeforeDelivery() }
+        let coordinator = DirectoryExportCoordinator()
         DispatchQueue.global(qos: .userInitiated).async {
-            var error: NSError?
-            NSFileCoordinator().coordinate(writingItemAt: url, options: .forMerging, error: &error) { parent in
-                guard self.session.isActive else { acquired.signal(); return }
+            defer { result.coordinationFinished(); request.complete(nil) }
+            coordinator.coordinate(at: url) { parent in
+                guard self.session.isActive else { return }
                 let child = parent.appendingPathComponent(".chur-partial-\(UUID().uuidString)")
                 let fd = Darwin.open(child.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, S_IRUSR | S_IWUSR)
-                if fd >= 0 {
-                    if result.open(url: child, descriptor: fd) { acquired.signal(); result.awaitCompletion() }
-                    else { Darwin.close(fd); try? FileManager.default.removeItem(at: child); acquired.signal() }
-                    return
+                guard fd >= 0 else { return }
+                if result.open(url: child, descriptor: fd) {
+                    request.complete(result)
+                    result.awaitCompletion()
+                } else {
+                    Darwin.close(fd)
+                    try? FileManager.default.removeItem(at: child)
                 }
-                acquired.signal()
             }
-            // Coordination can fail without invoking the accessor.
-            if error != nil { acquired.signal() }
-            result.coordinationFinished()
         }
-        acquired.wait()
-        guard result.descriptor >= 0 else { return nil }
-        return result
+        guard let delivered = request.wait(while: { session.isActive }) else {
+            DispatchQueue.global(qos: .utility).async { coordinator.cancel() }
+            return nil
+        }
+        return delivered
     }
 
     func close() {
         url = nil
         if ownsSession { session.close() }
+    }
+}
+
+/// One worker owns coordination. Foundation explicitly permits cancel()
+/// from another thread; no other coordinator operation crosses that boundary.
+private final class DirectoryExportCoordinator: @unchecked Sendable {
+    private let value = NSFileCoordinator()
+    func coordinate(at url: URL, accessor: (URL) -> Void) {
+        var error: NSError?
+        value.coordinate(writingItemAt: url, options: .forMerging, error: &error, byAccessor: accessor)
+    }
+    func cancel() { value.cancel() }
+}
+
+/// Transfers a creation once. Cancellation can discard only an unclaimed result.
+private final class DirectoryExportCreation<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private let ready = DispatchSemaphore(value: 0)
+    private let discard: (Value) -> Void
+    private var value: Value?
+    private var completed = false
+    private var cancelled = false
+    init(discard: @escaping (Value) -> Void) { self.discard = discard }
+
+    func complete(_ value: Value?) {
+        lock.lock()
+        if cancelled {
+            lock.unlock()
+            if let value { discard(value) }
+        } else if !completed {
+            self.value = value; completed = true
+            lock.unlock(); ready.signal()
+        } else { lock.unlock() }
+    }
+
+    func wait(while active: () -> Bool) -> Value? {
+        while active() {
+            if ready.wait(timeout: .now() + .milliseconds(50)) == .success {
+                lock.lock(); let result = value; value = nil; lock.unlock()
+                return result
+            }
+        }
+        lock.lock(); cancelled = true; let abandoned = value; value = nil; lock.unlock()
+        if let abandoned { discard(abandoned) }
+        return nil
     }
 }
 
@@ -192,13 +244,20 @@ final class DirectoryExportFile: @unchecked Sendable {
     func discard() { lock.lock(); published = false; lock.unlock() }
 
     func close() {
+        guard closeDescriptor() else { return }
+        coordinated.wait()
+    }
+
+    fileprivate func abandonBeforeDelivery() { _ = closeDescriptor() }
+
+    private func closeDescriptor() -> Bool {
         lock.lock()
-        guard !closed else { lock.unlock(); return }
+        guard !closed else { lock.unlock(); return false }
         closed = true
         if fd >= 0 { Darwin.close(fd); fd = -1 }
         lock.unlock()
         completion.signal()
-        coordinated.wait()
+        return true
     }
 
     fileprivate func awaitCompletion() {

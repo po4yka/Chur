@@ -116,7 +116,13 @@ fn decode(bytes: &[u8]) -> Result<Request> {
                     .all(|b| b.is_ascii_alphanumeric() || b"!#$&^_.+-".contains(&b))
         };
         let mime = match raw.split_once('/') {
-            Some((a, b)) if token(a) && token(b) => raw.to_ascii_lowercase(),
+            Some((a, b))
+                if raw.len() <= chur_core::limits::media::CONTENT_TYPE_MAX
+                    && token(a)
+                    && token(b) =>
+            {
+                raw.to_ascii_lowercase()
+            }
             _ => "application/octet-stream".to_owned(),
         };
         let length = match d.take(1)?[0] {
@@ -607,6 +613,20 @@ mod tests {
         );
     }
     #[test]
+    fn request_normalizes_media_types_to_the_catalog_bound() {
+        let maximum = chur_core::limits::media::CONTENT_TYPE_MAX;
+        let accepted = format!("application/{}", "x".repeat(maximum - 12));
+        let oversized = format!("{accepted}x");
+        for (hint, expected) in [
+            (accepted.to_uppercase(), accepted.as_str()),
+            (oversized, "application/octet-stream"),
+            ("not a MIME".into(), "application/octet-stream"),
+        ] {
+            let request = decode(&wire(&[("document", &hint, Some(0))], 1)).unwrap();
+            assert_eq!(request.sources[0].mime, expected);
+        }
+    }
+    #[test]
     fn restart_sweep_keeps_live_work_and_removes_only_abandoned_encrypted_stages() {
         let root = scratch();
         let stage = Staging::new(Claim::take(&root, true).unwrap().unwrap()).unwrap();
@@ -665,8 +685,9 @@ mod tests {
             Vec::new(),
             b"arbitrary\0document\xff".to_vec(),
             vec![17; 1_100_000],
+            b"PK\x03\x04DOCX original bytes\0\xff".to_vec(),
         ];
-        let names = ["empty.txt", "данные.bin", "duplicate.bin"];
+        let names = ["empty.txt", "данные.bin", "duplicate.bin", "document.docx"];
         let mut files = Vec::new();
         for (i, bytes) in contents.iter().enumerate() {
             let path = root.join(format!("input{i}"));
@@ -679,6 +700,11 @@ mod tests {
                 (names[0], "text/plain", Some(0)),
                 (names[1], "", None),
                 (names[2], "not a MIME", Some(contents[2].len() as u64)),
+                (
+                    names[3],
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    Some(contents[3].len() as u64),
+                ),
             ],
             16 * 1024 * 1024,
         );
@@ -719,7 +745,7 @@ mod tests {
         .unwrap();
         let mut session = vault::unlock_with_password(&restore, PASSWORD, 20).unwrap();
         let plan = chur_catalog::transfer::all(session.catalog_ref().unwrap()).unwrap();
-        assert_eq!(plan.objects.len(), 3);
+        assert_eq!(plan.objects.len(), contents.len());
         for id in &plan.objects {
             let metadata =
                 chur_catalog::store::active_metadata(session.catalog_ref().unwrap(), id).unwrap();
@@ -741,6 +767,12 @@ mod tests {
             if i > 0 {
                 assert_eq!(metadata.content_type, "application/octet-stream");
             }
+        }
+        for (index, original) in contents.iter().enumerate() {
+            assert_eq!(
+                std::fs::read(root.join(format!("input{index}"))).unwrap(),
+                *original
+            );
         }
         session.lock().unwrap();
         assert_eq!(unsafe { api::chur_operation_close(handle) }, 0);

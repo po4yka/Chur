@@ -378,7 +378,13 @@ class IosMediaCodec : MediaCodec {
         val generator = AVAssetImageGenerator(asset)
         generator.appliesPreferredTrackTransform = true
         val frame = generator.copyCGImageAtTime(CMTimeMake(0, 1), null, null) ?: return null
-        return UIImage.imageWithCGImage(frame)
+        return try {
+            UIImage.imageWithCGImage(frame)
+        } finally {
+            // AVAssetImageGenerator returns a +1 Core Foundation reference.
+            // UIImage retains its own reference; Kotlin does not own the pointer.
+            CGImageRelease(frame)
+        }
     }
 
     private fun urlOf(media: PickedMedia): NSURL? = media.platformHandle as? NSURL

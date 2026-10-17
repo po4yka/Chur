@@ -52,6 +52,8 @@ Use a native document picker for a folder without copying the folder into the ap
 
 Coordinate access to file-provider destinations while the native writer owns the descriptor. Create files exclusively and keep them incomplete until publication. Do not move the export to an internal plaintext staging directory to avoid provider coordination.
 
+Cancel and lock also end a caller's wait before a provider grants folder or file creation. Teardown signals cancellation without waiting on the UI thread. A late coordinated accessor must create no published output. Its owner retains the security-scoped access until coordination and any descriptor custody drain; cancellation must not close a descriptor while Rust can still duplicate or write it. A blocked operating-system write retains the existing cooperative-cancellation limitation.
+
 ## Required evidence
 
 Tests cover pagination beyond the visible page, nested and empty albums, repeated memberships, changed catalog generations, cancellation between and during files, native/export/publication failure, partial-result counts, and directory lease cleanup.

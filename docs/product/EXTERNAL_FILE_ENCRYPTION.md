@@ -8,7 +8,7 @@ Choose files through the system document picker. Enter a new archive password an
 
 ## Format and contents
 
-The result is an ordinary [CHURBAK1 backup](../format/BACKUP_FORMAT_V1.md). Rust creates an isolated temporary vault with new keys and identifiers, streams the chosen bytes into encrypted opaque file objects, and creates a backup. No media decoder is required. Original bytes, file names, and MIME hints are retained inside encrypted metadata. Chosen images and audio are file objects; the tool does not generate previews, tags, albums, or notes.
+The result is an ordinary [CHURBAK1 backup](../format/BACKUP_FORMAT_V1.md). Rust creates an isolated temporary vault with new keys and identifiers, streams the chosen bytes into encrypted opaque file objects, and creates a backup. No media decoder is required. Original bytes and file names are retained inside encrypted metadata. A valid MIME hint is lowercased and retained only within the catalog's 63-byte limit; an invalid or longer hint uses `application/octet-stream`. This includes long Office MIME types and does not change the original bytes. Chosen images and audio are file objects; the tool does not generate previews, tags, albums, or notes.
 
 The existing **Restore a backup or archive** path opens the result as a separate vault under its archive password. **Import encrypted archive** adds fresh copies to an existing unlocked vault. Neither path needs a new archive format or the source vault's credentials.
 

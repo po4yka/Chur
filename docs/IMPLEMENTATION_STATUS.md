@@ -1,7 +1,7 @@
 # Implementation status
 
 > **Status:** Accepted implementation inventory; not release approval\
-> **Checked against:** feature code at `32419678a325283a5ba52f2e581d4332f209e2e2`, 2026-10-16
+> **Checked against:** feature code at `32419678a325283a5ba52f2e581d4332f209e2e2`, 2026-10-16; five P2 corrections on the `27a0a36d` baseline, 2026-10-17
 
 This inventory describes the current pre-release code. Product contracts own behavior and limits. [Roadmap](../ROADMAP.md) owns phase scope; [release gates](assurance/RELEASE_GATES.md) own approval. Code, a local test pass, CI, device acceptance, and an independent audit are separate evidence.
 
@@ -48,6 +48,8 @@ This inventory describes the current pre-release code. Product contracts own beh
 The repository manifests, lockfiles, and wrapper own dependency versions. [Development](../DEVELOPMENT.md) gives the current module layout and checks. No public release or backward downgrade guarantee follows from this table.
 
 ## Evidence and remaining acceptance
+
+The [five P2 corrections](assurance/P2_CORRECTIONS_2026-10-17.md) cover external MIME bounds, private-note Trash export, committed imports after decoder shutdown failure, iOS provider cancellation, and video frame ownership. The dated record lists their regression coverage and acceptance limits.
 
 The implementation work ran Rust workspace tests, clippy, and formatting; Android host tests, APK/lint checks, and focused emulator tests; Kotlin/Native tests and framework/device compilation; Swift helper tests; and a whole iOS app/extension build. The incoming-share flow also ran through Safari's real simulator Share sheet, encrypted staging, normal unlock, confirmation, and text viewing. These observations apply to the tested feature checkout, not to every provider or physical device.
 

@@ -38,7 +38,7 @@ The catalog and FTS use secure-delete settings to reduce deleted-cell retention.
 
 Export acts on a selected saved revision. A dirty editor first offers Save and Export. The existing destination dialog warns that the copy is unencrypted and can be retained by its recipient. Android offers Files, Downloads, and Share; iOS offers Files and Share.
 
-Rust formats UTF-8 as `title + "\n\n" + body`, including two LF bytes when the title is empty. The exact byte count reserves the platform scratch budget. A session-bound request retains only an identifier, revision, safe filename, size, and generation while a picker is open. The host does not fetch body text solely to export it.
+Rust formats UTF-8 as `title + "\n\n" + body`, including two LF bytes when the title is empty. An unexpired note in Trash can use this TXT export without being restored; its current saved revision is still required. An expired, purged, or changed note refuses export. This does not enable selective encrypted export of Trash. The exact byte count reserves the platform scratch budget. A session-bound request retains only an identifier, revision, safe filename, size, and generation while a picker is open. The host does not fetch body text solely to export it.
 
 The normal native Export operation owns a duplicate destination descriptor, reports progress, and accepts cancellation. Rust copies a bounded saved revision into a zeroizing buffer and releases catalog access before provider writes. The host publishes only a complete successful operation under the same session and removes incomplete copies where the provider permits it. A blocked operating-system write has the same cancellation limit as existing media export.
 

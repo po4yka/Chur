@@ -876,13 +876,17 @@ private final class ShareExportSink: NSObject, ExportSink {
         return ScopedExportDirectory(directory: directory)
     }
 
-    func cancelPending() {
+    func cancelDirectoryOperations() {
         directoryLock.lock()
         let sessions = Array(pickedDirectories.values) + activeDirectories.allObjects
         pickedDirectories.removeAll()
         activeDirectories.removeAllObjects()
         directoryLock.unlock()
         sessions.forEach { $0.close() }
+    }
+
+    func cancelPending() {
+        cancelDirectoryOperations()
         generation += 1
         cancel()
         ready = resetDirectory()
