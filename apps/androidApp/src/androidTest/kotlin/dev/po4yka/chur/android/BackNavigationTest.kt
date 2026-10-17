@@ -848,6 +848,8 @@ class BackNavigationTest {
             assertFalse("the old slot is gone", first in replaced)
             tap(label("Settings"))
             assertTrue("the row still offers a replace", await { find(label("Replace recovery phrase")) != null })
+            assertTrue("the Recovery row is reachable", scrollUntil(label("Recovery"), AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD))
+            assertTrue("the Recovery row settles", await { findAll(label("Recovery")).size == 1 })
             assertEquals("the Access list shows one Recovery row", 1, findAll(label("Recovery")).size)
 
             lockIfOpen()
