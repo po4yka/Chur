@@ -119,7 +119,6 @@ actual fun VaultPlayer(
     val scrubInteractions = remember { MutableInteractionSource() }
     val dragging by scrubInteractions.collectIsDraggedAsState()
     var controlsFocused by remember { mutableStateOf(false) }
-    val controlsHeld = iosPlaybackControlsHeld(controlsPinned, voiceOver, keyboard, controlsFocused, dragging)
     val loader = remember(source.objectId, source.plaintextSize) { ChurResourceLoader(source) }
     val player = remember(loader) {
         val asset = AVURLAsset(NSURL(string = "chur://vault/object"), options = null)
@@ -141,6 +140,11 @@ actual fun VaultPlayer(
     val buffering = phase == IosPlaybackPhase.BUFFERING
     var position by remember(player) { mutableStateOf(0f) }
     var duration by remember(player) { mutableStateOf(0f) }
+    var scrub by remember(player) { mutableStateOf(IosPlaybackScrub()) }
+    val controlsHeld = iosPlaybackControlsHeld(
+        controlsPinned, voiceOver, keyboard, controlsFocused, dragging || scrub.active,
+    )
+    val displayedPosition = scrub.displayedPosition(position)
     LaunchedEffect(player) {
         while (true) {
             position = CMTimeGetSeconds(player.currentTime()).takeIf { it.isFinite() }?.toFloat() ?: 0f
@@ -211,10 +215,22 @@ actual fun VaultPlayer(
                     }
                 }
                 Slider(
-                    value = position.coerceIn(0f, duration.coerceAtLeast(0f)),
+                    value = displayedPosition.coerceIn(0f, duration.coerceAtLeast(0f)),
                     onValueChange = {
-                        position = it
-                        player.seekToTime(CMTimeMakeWithSeconds(it.toDouble(), 600))
+                        scrub = scrub.previewAt(it)
+                        onControlsVisibleChange(true)
+                    },
+                    onValueChangeFinished = {
+                        scrub = scrub.commit()
+                        scrub.target?.let { target ->
+                            val revision = scrub.revision
+                            player.seekToTime(CMTimeMakeWithSeconds(target.toDouble(), 600)) { _ ->
+                                // Read the confirmed time before releasing the optimistic thumb.
+                                position = CMTimeGetSeconds(player.currentTime())
+                                    .takeIf { it.isFinite() }?.toFloat() ?: position
+                                scrub = scrub.complete(revision)
+                            }
+                        }
                     },
                     valueRange = 0f..duration.coerceAtLeast(1f),
                     enabled = started && duration > 0,
@@ -228,7 +244,7 @@ actual fun VaultPlayer(
                         player.seekToTime(CMTimeMakeWithSeconds(0.0, 600))
                         play()
                     }, enabled = started) { Text("Replay", color = Color.White) }
-                    Text("${position.toInt()} / ${duration.toInt()} seconds", color = Color.White)
+                    Text("${displayedPosition.toInt()} / ${duration.toInt()} seconds", color = Color.White)
                 }
             }
         }
