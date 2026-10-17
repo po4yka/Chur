@@ -116,6 +116,9 @@ class AudioArtworkPresentationTest {
         f.main { assertTrue(f.audioTiles().first().config[SemanticsActions.OnLongClick].action?.invoke() == true) }
         assertTrue(f.await { f.selections == 1 })
         assertEquals(listOf(HapticFeedbackType.LongPress), f.hapticEvents.toList())
+        assertTrue("selection mode must be presented before the next action", f.await {
+            f.audioTiles().any { it.config.getOrNull(SemanticsProperties.Selected) == true }
+        })
         f.main { assertTrue(f.audioTiles().last().config[SemanticsActions.OnLongClick].action?.invoke() == true) }
         assertTrue(f.await { f.selections == 2 })
         assertEquals("selection changes do not vibrate again", 1, f.hapticEvents.size)
