@@ -67,11 +67,14 @@ class ViewerPhotoPresentationTest {
     @Test
     fun info_scrolls_to_the_last_tag_without_covering_viewer_actions_in_a_short_viewport_at_double_font_scale() =
         present(info = true) { f ->
-            assertTrue(f.await { f.nodes().any {
-                SemanticsActions.ScrollBy in it.config &&
-                    it.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange)?.maxValue()?.let { max -> max > 0f } == true
-            } })
-            val scroll = f.nodes().first { SemanticsActions.ScrollBy in it.config }
+            // The viewer pager also exposes ScrollBy, but only Info has a vertical range.
+            fun infoScroll() = f.nodes().singleOrNull {
+                SemanticsActions.ScrollBy in it.config && SemanticsProperties.VerticalScrollAxisRange in it.config
+            }
+            assertTrue(f.await {
+                infoScroll()?.config?.getOrNull(SemanticsProperties.VerticalScrollAxisRange)?.maxValue()?.let { it > 0f } == true
+            })
+            val scroll = requireNotNull(infoScroll())
             val range = scroll.config[SemanticsProperties.VerticalScrollAxisRange]
             assertTrue("long metadata must overflow its bounded viewport", range.maxValue() > 0f)
             f.main { assertTrue(scroll.config[SemanticsActions.ScrollBy].action?.invoke(0f, 100_000f) == true) }
