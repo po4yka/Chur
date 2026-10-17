@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.SystemClock
 import android.view.ContextThemeWrapper
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -13,9 +14,12 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.hapticfeedback.HapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
@@ -76,6 +80,44 @@ class AudioArtworkPresentationTest {
         f.capture("audio-artwork-gallery-list-public.png")
     }
 
+    @Test
+    fun a_long_press_acknowledges_recognition_before_release_without_a_second_haptic() = present(gallery = true) { f ->
+        assertTrue(f.await { f.audioTiles().size == 2 })
+        f.pressAudio { _, _, _ ->
+            assertTrue("the press is acknowledged before release", f.await { f.hapticEvents.size == 1 })
+            assertEquals(listOf(HapticFeedbackType.LongPress), f.hapticEvents.toList())
+        }
+        assertTrue(f.await { f.selections == 1 })
+        assertEquals("release must not acknowledge the press again", 1, f.hapticEvents.size)
+        assertEquals(0, f.opens)
+    }
+
+    @Test
+    fun a_drag_acknowledges_recognition_and_cancellation_has_no_success_haptic() = present(gallery = true) { f ->
+        assertTrue(f.await { f.audioTiles().size == 2 })
+        f.pressAudio(endAction = MotionEvent.ACTION_CANCEL) { at, x, y ->
+            assertTrue(f.await { f.hapticEvents.size == 1 })
+            f.pointer(at, MotionEvent.ACTION_MOVE, x + 60f, y + 60f)
+        }
+        assertEquals(listOf(HapticFeedbackType.LongPress), f.hapticEvents.toList())
+        assertEquals(0, f.selections)
+        assertEquals(0, f.opens)
+    }
+
+    @Test
+    fun an_accessibility_selection_acknowledges_entry_and_an_ordinary_click_stays_silent() = present(gallery = true) { f ->
+        assertTrue(f.await { f.audioTiles().size == 2 })
+        f.main { assertTrue(f.audioTiles().first().config[SemanticsActions.OnClick].action?.invoke() == true) }
+        assertEquals(1, f.opens)
+        assertTrue(f.hapticEvents.isEmpty())
+        f.main { assertTrue(f.audioTiles().first().config[SemanticsActions.OnLongClick].action?.invoke() == true) }
+        assertTrue(f.await { f.selections == 1 })
+        assertEquals(listOf(HapticFeedbackType.LongPress), f.hapticEvents.toList())
+        f.main { assertTrue(f.audioTiles().last().config[SemanticsActions.OnLongClick].action?.invoke() == true) }
+        assertTrue(f.await { f.selections == 2 })
+        assertEquals("selection changes do not vibrate again", 1, f.hapticEvents.size)
+    }
+
     private fun present(fontScale: Float = 1f, gallery: Boolean = false, test: (Fixture) -> Unit) {
         val activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
@@ -90,12 +132,14 @@ class AudioArtworkPresentationTest {
                 f.view = ComposeView(context).apply {
                     setLayerType(View.LAYER_TYPE_SOFTWARE, null)
                     setContent {
-                        CompositionLocalProvider(LocalDensity provides Density(density, fontScale), LocalConfiguration provides configuration) {
+                        CompositionLocalProvider(LocalDensity provides Density(density, fontScale), LocalConfiguration provides configuration,
+                            LocalHapticFeedback provides f.haptics) {
                             ChurTheme(dark = false) {
                                 if (gallery) MediaBrowser(tiles = listOf(
-                                    LibraryTile(f.audio, if (f.concealed.value) f.mosaic else f.image, thumbnailConcealed = f.concealed.value),
+                                    LibraryTile(f.audio, if (f.concealed.value) f.mosaic else f.image, thumbnailConcealed = f.concealed.value, selected = f.selected.value),
                                     LibraryTile(f.audio.copy(objectId = ByteArray(16) { 2 }, thumbnailReady = false), null)),
-                                    view = f.contentView.value, onOpen = {}, onToggleSelection = {})
+                                    view = f.contentView.value, onOpen = { f.opens++ },
+                                    onToggleSelection = { f.selections++; f.selected.value = true })
                                 else ViewerScreen(projection = f.audio, pages = listOf(f.audio), thumbnails = emptyMap(),
                                     canLoadMore = false, onLoadMore = {}, onSettled = {}, detail = null,
                                     preview = if (f.art.value) f.image else null, showDetail = false, chromeVisible = true,
@@ -125,9 +169,19 @@ class AudioArtworkPresentationTest {
         val art = mutableStateOf(true)
         val concealed = mutableStateOf(false)
         val contentView = mutableStateOf(ContentView.GRID)
+        val selected = mutableStateOf(false)
+        val hapticEvents = java.util.concurrent.CopyOnWriteArrayList<HapticFeedbackType>()
+        val haptics = object : HapticFeedback {
+            override fun performHapticFeedback(hapticFeedbackType: HapticFeedbackType) { hapticEvents += hapticFeedbackType }
+        }
+        var selections = 0
+        var opens = 0
         var exports = 0
         lateinit var view: ComposeView
-        fun main(action: () -> Unit) = instrumentation.runOnMainSync(action)
+        fun main(action: () -> Unit) {
+            if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) action()
+            else instrumentation.runOnMainSync(action)
+        }
         fun await(condition: () -> Boolean): Boolean {
             val deadline = SystemClock.uptimeMillis() + 5_000
             while (SystemClock.uptimeMillis() < deadline) {
@@ -150,6 +204,26 @@ class AudioArtworkPresentationTest {
         }
         fun labels(): List<String> { var values = emptyList<String>(); main { values = nodes().flatMap { it.labels } }; return values }
         fun states(): List<String> { var values = emptyList<String>(); main { values = nodes().mapNotNull { it.config.getOrNull(SemanticsProperties.StateDescription) } }; return values }
+        fun audioTiles(): List<SemanticsNode> {
+            var result = emptyList<SemanticsNode>()
+            main { result = nodes().filter { SemanticsActions.OnClick in it.config && it.labels.any { label -> label.startsWith("Audio") } } }
+            return result
+        }
+        fun pressAudio(endAction: Int = MotionEvent.ACTION_UP, whileHeld: (Long, Float, Float) -> Unit) {
+            val tile = audioTiles().first().boundsInRoot
+            val location = IntArray(2)
+            main { view.getLocationOnScreen(location) }
+            val x = location[0] + tile.center.x
+            val y = location[1] + tile.center.y
+            val at = SystemClock.uptimeMillis()
+            pointer(at, MotionEvent.ACTION_DOWN, x, y)
+            try { whileHeld(at, x, y) } finally { pointer(at, endAction, x, y) }
+        }
+        fun pointer(at: Long, action: Int, x: Float, y: Float) {
+            val event = MotionEvent.obtain(at, SystemClock.uptimeMillis(), action, x, y, 0)
+            try { instrumentation.sendPointerSync(event) } finally { event.recycle() }
+            instrumentation.waitForIdleSync()
+        }
         fun hasAudioListRows(): Boolean {
             var result = false
             main {

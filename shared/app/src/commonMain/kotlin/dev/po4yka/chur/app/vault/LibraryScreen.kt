@@ -285,10 +285,12 @@ fun MediaBrowser(
         if (dragged != null) albumDropBounds else null)
     DragEdgeScroll(dragged != null && travelled && onDropIntoAlbum != null, dropPoint,
         albumTrayViewport, albumTrayState)
-    // §22.4: entering selection mode is one of the few moments with a haptic.
-    // It follows the gesture alone, so a decoy vault feels like a real one.
+    // §22.4: accessibility selection acknowledges entry into selection mode.
+    // A pointer long press already acknowledged recognition before its release.
     fun toggleSelection(projection: ObjectProjection) {
-        if (currentTiles.none { it.selected }) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        if (dragged == null && currentTiles.none { it.selected }) {
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        }
         currentToggle(projection)
     }
     // While a long press runs on this tile, its click is the release of that
@@ -328,6 +330,8 @@ fun MediaBrowser(
                         bounds[it.projection.id]?.contains(point) == true
                     }
                     if (source != null) {
+                        // Acknowledge recognition now, including a press that becomes a drag.
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                         dragged = source.projection.id
                         dropPoint = point
                         start = point
