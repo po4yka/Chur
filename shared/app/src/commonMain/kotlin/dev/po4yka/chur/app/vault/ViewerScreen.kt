@@ -436,6 +436,9 @@ private fun ViewerMedia(
 @Composable
 private fun ZoomableStill(still: ImageBitmap, zoom: MutableState<ViewerZoom>, onInteraction: () -> Unit) {
     var viewer by remember { mutableStateOf(Size.Zero) }
+    LaunchedEffect(still) {
+        zoom.value = zoom.value.normalized(still.size(), viewer)
+    }
     fun update(next: ViewerZoom): Boolean {
         if (next == zoom.value) return false
         zoom.value = next
@@ -455,7 +458,10 @@ private fun ZoomableStill(still: ImageBitmap, zoom: MutableState<ViewerZoom>, on
         contentScale = ContentScale.Fit,
         modifier = Modifier
             .fillMaxSize()
-            .onSizeChanged { viewer = it.toSize() }
+            .onSizeChanged {
+                viewer = it.toSize()
+                zoom.value = zoom.value.normalized(still.size(), viewer)
+            }
             .onKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
                 when (event.key) {
@@ -525,10 +531,20 @@ internal data class ViewerZoom(val scale: Float = 1f, val offset: Offset = Offse
         // The point of the photo under the fingers stays under them.
         val focus = centroid - viewer.center
         val moved = (offset - focus) * (next / scale) + focus + pan
+        return ViewerZoom(next, moved).normalized(still, viewer)
+    }
+
+    /** Clamp again when the viewport or the decoded preview changes. */
+    fun normalized(still: Size, viewer: Size): ViewerZoom {
+        if (still.width <= 0f || still.height <= 0f || viewer.width <= 0f || viewer.height <= 0f ||
+            !scale.isFinite() || !offset.x.isFinite() || !offset.y.isFinite()
+        ) return ViewerZoom()
+        val next = scale.coerceIn(1f, MAX_ZOOM)
+        if (next == 1f) return ViewerZoom()
         val fit = min(viewer.width / still.width, viewer.height / still.height)
         val slackX = ((still.width * fit * next - viewer.width) / 2).coerceAtLeast(0f)
         val slackY = ((still.height * fit * next - viewer.height) / 2).coerceAtLeast(0f)
-        return ViewerZoom(next, Offset(moved.x.coerceIn(-slackX, slackX), moved.y.coerceIn(-slackY, slackY)))
+        return ViewerZoom(next, Offset(offset.x.coerceIn(-slackX, slackX), offset.y.coerceIn(-slackY, slackY)))
     }
 
     fun doubleTapped(tap: Offset, still: Size, viewer: Size): ViewerZoom =

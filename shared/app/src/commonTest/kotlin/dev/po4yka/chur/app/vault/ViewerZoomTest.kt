@@ -41,6 +41,28 @@ class ViewerZoomTest {
     }
 
     @Test
+    fun a_viewport_resize_clamps_the_existing_pan_without_resetting_its_scale() {
+        val panned = ViewerZoom(2.5f, Offset(750f, 0f))
+        val resized = panned.normalized(still, Size(2_000f, 1_000f))
+        assertEquals(2.5f, resized.scale)
+        assertEquals(2_000f / 3, resized.offset.x, absoluteTolerance = 0.001f)
+        assertEquals(0f, resized.offset.y)
+        assertEquals(resized, resized.normalized(still, Size(2_000f, 1_000f)))
+    }
+
+    @Test
+    fun a_new_preview_aspect_ratio_recentres_an_axis_that_no_longer_overflows() {
+        val panned = ViewerZoom(2.5f, Offset(750f, 0f))
+        assertEquals(ViewerZoom(2.5f), panned.normalized(Size(1_000f, 4_000f), viewer))
+    }
+
+    @Test
+    fun an_unmeasured_viewport_or_a_return_to_fit_never_keeps_stale_offsets() {
+        assertEquals(ViewerZoom(), ViewerZoom(2.5f, Offset(750f, 0f)).normalized(still, Size.Zero))
+        assertEquals(ViewerZoom(), ViewerZoom(1f, Offset(750f, 0f)).normalized(still, viewer))
+    }
+
+    @Test
     fun only_a_zoomed_photo_stops_the_pager() {
         assertFalse(ViewerZoom().zoomed, "at 1x one finger swipes to the next item")
         assertTrue(ViewerZoom().doubleTapped(centre, still, viewer).zoomed, "zoomed, one finger pans the photo")
