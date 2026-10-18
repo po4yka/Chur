@@ -44,6 +44,32 @@ positive eyes. `android-foreground.png` and `android-monochrome.png` retain the
 full-size composites. A 72% scene scale keeps meaningful alpha within a 31dp
 radius on Android’s 108dp canvas. The launcher background is `#0A0A0A`.
 
+The exporter discards alpha values at or below 8/255 after resampling, removing
+near-transparent generation speckles. Every remaining pixel in every exported
+density fits within the central 33dp safe radius (the largest measured radius
+is 31.42dp). Keep one adaptive composition for all launcher shapes; there is no
+pre-applied square or circular mask and no separate round-icon artwork.
+
+`play-store-512.png` is the separate 512 × 512 opaque, sRGB, full-square store
+asset. It uses the authored color layers on charcoal, without native Apple
+tile effects, outer shadow, or rounded corners.
+
+On Android 12+, `values-v31/themes.xml` explicitly uses `ic_splash` for the
+system splash, charcoal behind the icon, and the theme's canvas behind the
+window. It is an adaptive drawable with the same geometry and a 1024px `nodpi`
+foreground, avoiding enlargement of the smaller launcher density bitmaps.
+Android's own adaptive-icon scaling supplies the splash padding.
+The existing day/night canvases match `ChurTheme`; day/night system-bar icon
+polarity is defined separately. No splash delay or new dependency is added.
+
+`LauncherIconPresentationTest` loads the packaged resources through Android.
+It checks the safe circle at all five densities, the native device mask plus
+circle, square, rounded-square, squircle, and teardrop masks, and four sample
+themed palettes at 32, 48, and 192px. It also verifies the native window/splash
+theme attributes in light and dark configurations. Its PNGs in the test app's
+external `files/icon-qa/` directory are native resource renders, not launcher
+screenshots; actual launcher and cold-start capture are separate checks.
+
 ## Visual checks
 
 Default, Dark, and Mono were inspected in Icon Composer with effects 26 and 27.
@@ -55,7 +81,17 @@ acceptance still require the normal application release checks.
 
 XcodeGen regeneration, plist/project syntax, PNG dimensions, transparency,
 single-color Android mask, and `git diff --check` passed on 2026-10-18.
-The iOS Simulator build and Android `:apps:androidApp:processDebugResources`
-were attempted through `build-gate`; each exited 75 after waiting 600 seconds
-for a slot. Neither compiler ran. Repeat those checks when a slot is available;
-the artwork previews do not establish application-build or store acceptance.
+The Android debug APK was assembled with both configured native ABIs and
+installed on a Pixel 6 Android 15 (API 35) emulator. The color launcher icon,
+system Themed icons in light and dark modes, and recorded launcher cold starts
+in both modes were inspected. The splash preserves the complete artwork and
+transitions into Notes on the matching day/night canvas.
+
+`:apps:androidApp:assembleDebug`, `:apps:androidApp:assembleDebugAndroidTest`,
+and `:apps:androidApp:lintDebug` passed through `build-gate` on 2026-10-18.
+All three `LauncherIconPresentationTest` tests passed on that API 35 emulator,
+including 90 native renders across six masks, five palettes, and three sizes.
+
+The earlier iOS Simulator build attempt exited 75 after waiting 600 seconds
+for a `build-gate` slot; that compiler did not run. These Android checks do not
+establish other OEM launcher behavior, release signing, or store acceptance.

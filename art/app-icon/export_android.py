@@ -16,6 +16,13 @@ SOURCES = ROOT / "apps/iosApp/ChurMirror.icon/Assets"
 SRGB = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
 
 
+def save_png(image, path):
+    # Remove near-transparent generation/resampling speckles, retaining edge AA.
+    image = image.copy()
+    image.putalpha(image.getchannel("A").point(lambda value: value if value > 8 else 0))
+    image.save(path, icc_profile=SRGB)
+
+
 def monochrome(source):
     """Map the authored grayscale regions to a single-color alpha mask."""
     gray = source.convert("L")
@@ -67,10 +74,19 @@ if __name__ == "__main__":
         foreground.alpha_composite(Image.open(SOURCES / f"{name}.png").convert("RGBA"))
     mono = monochrome(Image.open(SOURCES / "04-mono.png").convert("RGBA"))
     for name, source in (("foreground", foreground), ("monochrome", mono)):
-        source.save(ART / f"android-{name}.png", icc_profile=SRGB)
+        save_png(source, ART / f"android-{name}.png")
         adaptive = adaptive_canvas(source)
         for density, size in (("mdpi", 108), ("hdpi", 162), ("xhdpi", 216),
                               ("xxhdpi", 324), ("xxxhdpi", 432)):
             path = ROOT / f"apps/androidApp/src/main/res/mipmap-{density}/ic_launcher_{name}.png"
-            adaptive.resize((size, size), Image.Resampling.LANCZOS).save(path, icc_profile=SRGB)
-    print("Exported 10 adaptive PNG resources and 2 full-size source composites.")
+            save_png(adaptive.resize((size, size), Image.Resampling.LANCZOS), path)
+    # Store artwork has a full-bleed square background, without a launcher mask.
+    store = Image.new("RGBA", foreground.size, "#0A0A0A")
+    store.alpha_composite(foreground)
+    store.resize((512, 512), Image.Resampling.LANCZOS).save(ART / "play-store-512.png", icc_profile=SRGB)
+    # Splash is much larger than a launcher icon. Preserve the 1024px master
+    # instead of enlarging a density-specific launcher bitmap.
+    splash = ROOT / "apps/androidApp/src/main/res/drawable-nodpi/ic_splash_foreground.png"
+    splash.parent.mkdir(parents=True, exist_ok=True)
+    save_png(adaptive_canvas(foreground), splash)
+    print("Exported launcher PNGs, source composites, high-resolution splash, and Play icon.")

@@ -8,9 +8,15 @@
   would flash a different colour.
 -->
 <resources>
-    <style name="Theme.Chur" parent="android:Theme.Material.Light.NoActionBar">
+    <bool name="window_light_bars">true</bool>
+
+    <style name="Theme.Chur.Base" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/canvas</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">@bool/window_light_bars</item>
+        <item name="android:windowLightNavigationBar">@bool/window_light_bars</item>
     </style>
+
+    <style name="Theme.Chur" parent="Theme.Chur.Base" />
 </resources>
