@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. The current library reports 3.0: §6.25 changes the private-note record and save layout to carry an explicit format; §6.19 changes the album-list record, §6.20 adds atomic album placement, §6.21 adds tag and favourite selection controls, §6.22 adds recoverable trash, §6.23 stages the recovery slot until its phrase is confirmed, §6.24 reads and acknowledges the sync fork state, §6.25 adds local private notes, §6.26 adds selective archives, §6.26.1 adds external-file encryption, §6.28 adds the encrypted content index, and §6.29 adds atomic album removal. Incoming OS sharing reuses the existing import surface. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
+- native API version is the (major, minor) pair. The current library reports 4.0: §6.25 changes the private-note record and save layout to carry an explicit format, and §6.30 retains the caller-persisted import and album identities introduced in published ABI 3.0; §6.19 changes the album-list record, §6.20 adds atomic album placement, §6.21 adds tag and favourite selection controls, §6.22 adds recoverable trash, §6.23 stages the recovery slot until its phrase is confirmed, §6.24 reads and acknowledges the sync fork state, §6.25 adds local private notes, §6.26 adds selective archives, §6.26.1 adds external-file encryption, §6.28 adds the encrypted content index, and §6.29 adds atomic album removal. Incoming OS sharing reuses the existing import surface. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -175,7 +175,7 @@ chur_status_t chur_catalog_query(chur_handle_t session, const ChurQueryV1 *query
 
 /* operations */
 chur_status_t chur_import_begin(chur_handle_t session, int32_t source_fd,
-                                const ChurImportRequestV1 *request, chur_handle_t *out_import);
+                                const ChurImportRequestV2 *request, chur_handle_t *out_import);
 chur_status_t chur_export_begin(chur_handle_t session, const ChurObjectRefV1 *object,
                                 int32_t destination_fd, chur_handle_t *out_export);
 chur_status_t chur_integrity_scan_begin(chur_handle_t session, const ChurScanRequestV1 *request,
@@ -296,7 +296,8 @@ chur_status_t chur_object_metadata(chur_handle_t session,
                                    uint8_t *destination, size_t capacity,
                                    size_t *bytes_written);
 chur_status_t chur_album_create(chur_handle_t session, const uint8_t *name,
-                                uint32_t name_length, uint8_t *out_album_id);
+                                uint32_t name_length, const uint8_t *requested_album_id,
+                                uint8_t *out_album_id);
 chur_status_t chur_album_set_membership(chur_handle_t session,
                                         const uint8_t *album_id,
                                         const ChurObjectRefV1 *object,
@@ -649,7 +650,7 @@ chur_status_t chur_sync_fork_acknowledge(chur_handle_t session);
 
 [`../sync/ROLLBACK_PROTECTION.md`](../sync/ROLLBACK_PROTECTION.md) §4 keeps a fork state per (vault, device) in the encrypted catalog until reconciliation or an accepted revocation clears it, and has the user told. `chur_sync_process` reports a fork only in the pass that found it (§6.8), so a host that restarted could not read the state again. `chur_sync_fork_state` writes how many device chains are `detected` and how many are `acknowledged`. `chur_sync_fork_acknowledge` moves every `detected` chain to `acknowledged` in one transaction, and changes nothing when none is detected. Neither call unfreezes a chain, returns evidence, or names a device, and both return `VAULT_LOCKED` on a locked session. A later record of a frozen chain is still refused as `SYNC_CHAIN_FORK` and leaves the state as it is, so a host tells a new fork from an acknowledged one by reading the state. A head rollback leaves no state here: the engine refuses the checkpoint and freezes no chain.
 
-### 6.25 Local private notes, ABI 3.0
+### 6.25 Local private notes, ABI 4.0
 
 `chur_private_notes_query`, `chur_private_note_get`, `chur_private_note_save`, and `chur_private_note_change` take a session, a bounded request byte range, a writable destination, its capacity, and a `bytes_written` pointer. The destination capacity must be at least 1048576 bytes before any catalog mutation can begin. Requests are at most 1048576 bytes. Request and destination ranges must not overlap. Native temporary output is zeroized; the host must clear its output buffer after decoding.
 
@@ -662,7 +663,7 @@ All integers below are big endian. A string is a u32 byte count followed by UTF-
 | Save | Identifier (all zero means create), expected revision u64, pinned u8, format u8, title string, body string | Committed note record |
 | Change | Identifier, expected revision u64, action u8 | Committed note record, or zero bytes for purge |
 
-ABI 3.0 replaces the private-note record and save layout. This is an incompatible major-version change; every earlier-major host must refuse during the initial handshake, before exchanging payloads. Current hosts likewise reject earlier native majors. Hosts and native libraries must be released together. Unknown format values fail before any mutation. The discriminator is preserved by get/query/save/change, backups, restore, and selective encrypted archives.
+ABI 4.0 replaces the private-note record and save layout relative to published ABI 3.0, retaining its caller-persisted transfer identities. This is an incompatible major-version change; every earlier-major host must refuse during the initial handshake, before exchanging payloads. Current hosts likewise reject earlier native majors. Hosts and native libraries must be released together. Unknown format values fail before any mutation. The discriminator is preserved by get/query/save/change, backups, restore, and selective encrypted archives.
 
 Booleans are 0 or 1. Actions are 1 pin, 2 unpin, 3 trash, 4 restore, and 5 purge. Creation requires expected revision zero; updates require the current revision. Purge requires a trashed note. A stale revision fails without changing the note. See [catalog v9](../format/CATALOG_SCHEMA_V9.md) for input bounds, expiry, search, cursor bytes, and atomic index updates. These records do not enter media or sync/sharing operations.
 
@@ -884,3 +885,12 @@ keys. Collection keys can decrypt metadata only.
 ### Open readers and permanent erasure
 
 Permanent deletion revokes every reader for that object in the same physical vault. It waits for an in-flight read, removes its retained stream keys and cached plaintext, and completes the durable catalog erasure barrier before it reports success. Subsequent size, information, read, and verification calls return `SESSION_EXPIRED`. Reader close stays idempotent. Readers for other objects remain usable. Reader registration and deletion take a shared lifecycle mutex after the session lock. This covers different session handles for the same physical vault, so a reader cannot escape revocation between opening its key and publishing its handle. Ordinary reads do not take the lifecycle mutex. Close and owner teardown use the same barrier and clear a retained reader even if an in-flight call still owns its Arc. Once owner teardown starts, prepared child handles cannot be registered.
+
+
+### 6.30 Caller-persisted transfer identities, ABI 3.0
+
+`chur_import_begin` receives `ChurImportRequestV2`, whose first field is an optional pointer to 16 readable bytes naming a caller-generated random object ID. The ID is copied synchronously; it never borrows caller memory on the worker. A null pointer requests ordinary random allocation. A committed object, retained tombstone, or live journal reservation refuses reuse before any object key is created. Abandoned imports may be retried with the same ID and fresh keys/nonces. The committed catalog ID itself is the durable outcome record, so a desktop can resolve a lost response after reconnecting without creating another object.
+
+`chur_album_create(session, name, name_length, requested_album_id, out_album_id)` similarly accepts an optional random ID. Replaying an existing matching ID/name returns the existing ID without resetting its placement or membership; conflicting metadata is `INVALID_INPUT`. The desktop records folder IDs before creation and reapplies parent placement on resume.
+
+This is an incompatible native ABI change: the caller-persisted identity layout was introduced in ABI 3.0. Current bundled C/JNI/Kotlin/iOS callers use ABI 4.0, which retains this layout and adds private-note format; the host rejects every earlier major. The encrypted container, catalog and key-slot formats do not change. Desktop protocol version 2 requires these transfer identities and identifies the open vault during pairing; no version-1 control compatibility path is retained.

@@ -313,6 +313,7 @@ internal actual object ChurNative {
         captureTimeMs: Long,
         contentType: String,
         originalFilename: String?,
+        requestedObjectId: ByteArray?,
         outImport: LongArray,
     ): Int =
         ChurJni.importBegin(
@@ -327,6 +328,7 @@ internal actual object ChurNative {
             captureTimeMs,
             contentType,
             originalFilename,
+            requestedObjectId,
             outImport,
         )
 
@@ -499,8 +501,9 @@ internal actual object ChurNative {
     actual fun albumCreate(
         session: Long,
         name: String,
+        requestedId: ByteArray?,
         outAlbumId: ByteArray,
-    ): Int = ChurJni.albumCreate(session, name, outAlbumId)
+    ): Int = ChurJni.albumCreate(session, name, requestedId, outAlbumId)
 
     actual fun albumRename(session: Long, albumId: ByteArray, name: String): Int =
         ChurJni.albumRename(session, albumId, name)

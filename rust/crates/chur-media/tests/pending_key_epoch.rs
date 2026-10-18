@@ -47,6 +47,7 @@ fn shared_pending_key_accepted_before_metadata_rotation_activates_under_current_
     let object = import::import_bytes(
         &mut source,
         SourceCapability {
+            requested_object_id: None,
             seekable: true,
             known_length: Some(bytes.len() as u64),
             content_type_hint: "application/octet-stream".into(),

@@ -16,4 +16,4 @@ Fresh catalogs install v12. A v11 vault first installs an authenticated `MIGRATI
 
 Full backup includes the encrypted catalog, preserving the discriminator. Restore migrates historical v9–v11 note rows to plain text before publishing the new descriptor. Selective encrypted archives and import copy the saved discriminator and exact source to fresh note identities and revisions. No media container, sync, sharing, or backup envelope format changes. Earlier clients reject unsupported v12 catalogs; no downgrade is attempted.
 
-The private-note control record and save request require [ABI 3.0](../interop/FFI_CONTRACT.md#625-local-private-notes-abi-30). Unknown discriminators are rejected. The native library and Kotlin host are shipped together.
+The private-note control record and save request require [ABI 4.0](../interop/FFI_CONTRACT.md#625-local-private-notes-abi-40). Unknown discriminators are rejected. The native library and Kotlin host are shipped together.

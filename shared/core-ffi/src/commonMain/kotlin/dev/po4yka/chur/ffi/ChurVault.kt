@@ -798,9 +798,11 @@ object ChurVault {
     fun createAlbum(
         session: Long,
         name: String,
+        requestedId: ByteArray? = null,
     ): ByteArray {
+        require(requestedId == null || requestedId.size == ID_LENGTH)
         val out = ByteArray(ID_LENGTH)
-        ChurFailure.check(ChurNative.albumCreate(session, name, out), "create album")
+        ChurFailure.check(ChurNative.albumCreate(session, name, requestedId, out), "create album")
         return out
     }
 
@@ -1018,8 +1020,8 @@ object ChurVault {
     }
 
     private fun requireCurrentAbi() {
-        if (ChurNative.abiVersionMajor() != 3) {
-            throw ChurFailure(ChurStatus.ABI_INCOMPATIBLE, "native ABI 3 is required")
+        if (ChurNative.abiVersionMajor() != 4) {
+            throw ChurFailure(ChurStatus.ABI_INCOMPATIBLE, "native ABI 4 is required")
         }
     }
 
@@ -1268,8 +1270,9 @@ object ChurVault {
         session: Long,
         sourceFd: Int,
         request: ImportRequest,
-    ): Long =
-        handleOf("import begin") { out ->
+    ): Long {
+        require(request.requestedObjectId == null || request.requestedObjectId.size == ID_LENGTH)
+        return handleOf("import begin") { out ->
             ChurNative.importBegin(
                 session,
                 sourceFd,
@@ -1282,9 +1285,11 @@ object ChurVault {
                 request.captureTimeMs ?: -1L,
                 request.contentType,
                 request.originalFilename,
+                request.requestedObjectId,
                 out,
             )
         }
+    }
 
     /** Starts an export to a file descriptor the platform opened. */
     fun beginExport(
@@ -1663,4 +1668,5 @@ data class ImportRequest(
     val knownLength: Long? = null,
     val captureTimeMs: Long? = null,
     val originalFilename: String? = null,
+    val requestedObjectId: ByteArray? = null,
 )

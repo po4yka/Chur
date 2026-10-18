@@ -262,6 +262,7 @@ async fn private_original_uses_own_http_storage_and_keys_without_sharing_members
     let running = import::begin(
         &mut source,
         import::SourceCapability {
+            requested_object_id: None,
             seekable: true,
             known_length: Some(original.len() as u64),
             content_type_hint: "application/octet-stream".into(),
@@ -640,6 +641,7 @@ fn append_offline_own_edit(session: &mut vault::Session, root: &Key, now: u64) {
     let running = import::begin(
         session,
         import::SourceCapability {
+            requested_object_id: None,
             seekable: true,
             known_length: Some(plaintext.len() as u64),
             content_type_hint: "application/octet-stream".into(),

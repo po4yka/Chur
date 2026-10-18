@@ -24,4 +24,4 @@ Public cache state advances only after persistence succeeds. Failed writes retai
 
 Private Save remains explicit. Lock, panic, identity change, disposal or process loss clears unsaved session state. Rendering, undo, find/replace and outline use neither saved-instance state nor public persistence. Copy/Cut remain disabled. Undo is route-owned and bounded, not durable version history. Managed strings and platform layout/input copies do not provide secure erasure.
 
-Storage contracts: public JSON v2 and [private catalog v12](../format/CATALOG_SCHEMA_V12.md). Private notes require breaking native ABI 3.0. Catalog upgrades use authenticated migration; old clients reject the newer catalog/ABI.
+Storage contracts: public JSON v2 and [private catalog v12](../format/CATALOG_SCHEMA_V12.md). Private notes require breaking native ABI 4.0. Catalog upgrades use authenticated migration; old clients reject the newer catalog/ABI.

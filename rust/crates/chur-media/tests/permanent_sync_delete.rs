@@ -80,6 +80,7 @@ fn import(session: &mut Session, value: &[u8]) -> Id {
     import::import_bytes(
         session,
         SourceCapability {
+            requested_object_id: None,
             seekable: true,
             known_length: Some(value.len() as u64),
             content_type_hint: "application/octet-stream".into(),
@@ -97,6 +98,7 @@ fn import_ocr_text(session: &mut Session, value: &[u8]) -> Id {
     import::import_bytes(
         session,
         SourceCapability {
+            requested_object_id: None,
             seekable: true,
             known_length: Some(value.len() as u64),
             content_type_hint: "text/plain".into(),

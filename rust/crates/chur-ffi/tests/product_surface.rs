@@ -98,11 +98,23 @@ fn drain(operation: u64) -> i32 {
 }
 
 fn import(session: u64, bytes: &[u8], filename: &[u8]) -> [u8; 16] {
+    import_with_id(session, bytes, filename, None)
+}
+
+fn import_with_id(
+    session: u64,
+    bytes: &[u8],
+    filename: &[u8],
+    requested: Option<[u8; 16]>,
+) -> [u8; 16] {
     let mut file = tempfile();
     file.write_all(bytes).unwrap();
     file.rewind().unwrap();
     let content_type = b"image/jpeg";
-    let request = ChurImportRequestV1 {
+    let request = ChurImportRequestV2 {
+        requested_object_id: requested
+            .as_ref()
+            .map_or(core::ptr::null(), |id| id.as_ptr()),
         seekable: 1,
         known_length_present: 1,
         media_class: 1,
@@ -154,7 +166,8 @@ fn an_unknown_length_pipe_imports_without_seeking() {
     writer.write_all(&[0x5a; 4_096]).unwrap();
     writer.shutdown(Shutdown::Write).unwrap();
     let content_type = b"audio/wav";
-    let request = ChurImportRequestV1 {
+    let request = ChurImportRequestV2 {
+        requested_object_id: core::ptr::null(),
         seekable: 0,
         known_length_present: 0,
         media_class: 3,
@@ -283,6 +296,7 @@ fn the_whole_product_flow_runs_through_the_boundary() {
                 session,
                 name.as_ptr(),
                 name.len() as u32,
+                core::ptr::null(),
                 album_id.as_mut_ptr(),
             )
         },
@@ -326,7 +340,15 @@ fn the_whole_product_flow_runs_through_the_boundary() {
     );
     let mut child_id = [0u8; 16];
     assert_eq!(
-        unsafe { chur_album_create(session, b"Child".as_ptr(), 5, child_id.as_mut_ptr()) },
+        unsafe {
+            chur_album_create(
+                session,
+                b"Child".as_ptr(),
+                5,
+                core::ptr::null(),
+                child_id.as_mut_ptr(),
+            )
+        },
         OK
     );
     let none = [0u8; 16];
@@ -1654,5 +1676,65 @@ fn malformed_content_controls_preserve_the_existing_index_and_authenticated_orig
     for invalid in &mut malformed {
         invalid.fill(0);
     }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn caller_persisted_import_and_album_identities_survive_retry() {
+    let root = scratch();
+    let runtime = open_runtime(&root);
+    let mut creation = 0;
+    let mut session = 0;
+    assert_eq!(
+        unsafe { chur_vault_create_begin(runtime, &create_request(PASSWORD), &mut creation) },
+        OK
+    );
+    assert_eq!(
+        unsafe { chur_vault_creation_activate(creation, &mut session) },
+        OK
+    );
+    let requested = [0x81; 16];
+    assert_eq!(
+        import_with_id(session, b"original", b"source.jpg", Some(requested)),
+        requested
+    );
+    let mut output = [0; 16];
+    let album_id = [0x82; 16];
+    for _ in 0..2 {
+        assert_eq!(
+            unsafe {
+                chur_album_create(
+                    session,
+                    b"Folder".as_ptr(),
+                    6,
+                    album_id.as_ptr(),
+                    output.as_mut_ptr(),
+                )
+            },
+            OK
+        );
+        assert_eq!(output, album_id);
+    }
+    assert_eq!(
+        status(unsafe {
+            chur_album_create(
+                session,
+                b"Other".as_ptr(),
+                5,
+                album_id.as_ptr(),
+                output.as_mut_ptr(),
+            )
+        }),
+        ChurStatus::InvalidInput
+    );
+    let mut encoded = vec![0; 16_384];
+    let mut written = 0;
+    assert_eq!(
+        unsafe { chur_album_list(session, encoded.as_mut_ptr(), encoded.len(), &mut written) },
+        OK
+    );
+    assert_eq!(u32::from_be_bytes(encoded[..4].try_into().unwrap()), 1);
+    assert_eq!(unsafe { chur_session_close(session) }, OK);
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
     std::fs::remove_dir_all(root).unwrap();
 }

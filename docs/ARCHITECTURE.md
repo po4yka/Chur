@@ -19,7 +19,7 @@ The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT**, 
 
 Individual statements are classified as **Decision**, **Invariant**, **Proposal**, **Deferred**, or **Non-goal**, defined once in [`README.md`](README.md#statement-classification). The status of this document as a whole is in its header and uses the document-status vocabulary of the same file.
 
-This document defines the system model and required properties. The versioned [format specifications](README.md#formats), accepted ADRs, and canonical vectors own byte-exact layouts. Schema extensions through v12 and ABI 3.0 are implemented; that fact does not close the security release gates.
+This document defines the system model and required properties. The versioned [format specifications](README.md#formats), accepted ADRs, and canonical vectors own byte-exact layouts. Schema extensions through v12 and ABI 4.0 are implemented; that fact does not close the security release gates.
 
 ---
 
@@ -347,7 +347,7 @@ Module boundaries MUST prevent feature modules from importing platform-native ke
 | Private persistence | Rust-owned SQLCipher, schema v10 |
 | Images | authenticated derivatives, platform decoders, bounded session cache |
 | Local OCR | bundled English/Russian Tesseract on Android; Vision on iOS |
-| Interop | hand-written C ABI 3.0, JNI/cinterop, direct Swift media reads |
+| Interop | hand-written C ABI 4.0, JNI/cinterop, direct Swift media reads |
 | Build | root Gradle scripts and version catalog; Cargo and Xcode host builds |
 
 Exact pins are in the manifests and lockfiles; [Development](../DEVELOPMENT.md) owns the commands. The interfaces below explain ownership; they are not a list of generated classes or dependencies. Room, Koin, Navigation 3, Coil, and Kermit are not used in the current build.

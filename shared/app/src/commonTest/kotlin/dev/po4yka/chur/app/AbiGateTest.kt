@@ -16,7 +16,7 @@ import kotlin.test.assertTrue
  */
 class AbiGateTest {
     private fun handshake(
-        major: UInt = 3u,
+        major: UInt = 4u,
         minor: UInt = 0u,
         capabilities: ULong = 0u,
         objectMin: UInt = 1u,
@@ -35,7 +35,7 @@ class AbiGateTest {
 
     @Test
     fun another_major_version_is_refused_terminally() {
-        for (major in listOf(0u, 1u, 2u, UInt.MAX_VALUE)) {
+        for (major in listOf(0u, 1u, 2u, 3u, UInt.MAX_VALUE)) {
             val result = gate(handshake(major = major), releaseApplication = true)
             assertIs<GateResult.Incompatible>(result)
             assertEquals(ChurStatus.ABI_INCOMPATIBLE, result.status)

@@ -836,6 +836,19 @@ pub fn object_present(db: &CatalogDb, object_id: &Id) -> Result<bool> {
     Ok(present.is_some())
 }
 
+/// Whether an import identity is committed, permanently deleted, or reserved by a live import.
+pub fn object_id_reserved(db: &CatalogDb, object_id: &Id) -> Result<bool> {
+    db.connection()
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM objects WHERE object_id = ?1)
+                 OR EXISTS(SELECT 1 FROM tombstones WHERE object_id = ?1)
+                 OR EXISTS(SELECT 1 FROM import_transactions WHERE object_id = ?1 AND stage <> 4)",
+            [object_id.as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .map_err(|error| map_sqlite(error, "the import identity could not be checked"))
+}
+
 /// Reads one object row.
 pub fn object(db: &CatalogDb, object_id: &Id) -> Result<Object> {
     db.connection()
@@ -1005,6 +1018,18 @@ pub struct AlbumListing {
     pub parent_id: Option<Id>,
     /// Order among siblings.
     pub position: u64,
+}
+
+/// The name of one existing album, without enumerating the entire library.
+pub fn album_name(db: &CatalogDb, album_id: &Id) -> Result<Option<String>> {
+    db.connection()
+        .query_row(
+            "SELECT name FROM albums WHERE album_id = ?1",
+            [album_id.as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| map_sqlite(error, "the album name could not be read"))
 }
 
 /// Every album, with its membership count and tree position, §9.

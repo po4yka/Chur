@@ -86,7 +86,9 @@ pub struct ChurObjectRefV1 {
 
 /// What `chur_import_begin` is told about its source.
 #[repr(C)]
-pub struct ChurImportRequestV1 {
+pub struct ChurImportRequestV2 {
+    /// Optional 16-byte caller-persisted random object identity, or null.
+    pub requested_object_id: *const u8,
     /// `1` seekable, `0` not.
     pub seekable: u8,
     /// Whether `known_length` carries a value.

@@ -391,7 +391,8 @@ class VaultRepository(
     suspend fun albums(): List<AlbumSummary> = withSession { ChurVault.albums(it) }
 
     /** Creates an album. */
-    suspend fun createAlbum(name: String): ByteArray = withSession { ChurVault.createAlbum(it, name) }
+    suspend fun createAlbum(name: String, requestedId: ByteArray? = null): ByteArray =
+        withSession { ChurVault.createAlbum(it, name, requestedId) }
 
     suspend fun renameAlbum(albumId: ByteArray, name: String) =
         withSession { ChurVault.renameAlbum(it, albumId, name) }
