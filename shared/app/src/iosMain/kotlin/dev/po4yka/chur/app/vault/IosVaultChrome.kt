@@ -125,7 +125,13 @@ internal class IosVaultChrome : NSObject(), UITabBarDelegateProtocol {
         val tint = UIColor(red = accent.red.toDouble(), green = accent.green.toDouble(), blue = accent.blue.toDouble(), alpha = 1.0)
         navigationBar.tintColor = tint
         tabBar.tintColor = tint
-        if (key == next) return
+        if (key == next) {
+            // UIKit selects before its delegate runs; shared state is authoritative
+            // even when a navigation request was rejected while becoming busy.
+            tabBar.selectedItem = tabBar.items?.filterIsInstance<UITabBarItem>()
+                ?.getOrNull(state.destination.ordinal)
+            return
+        }
         retireMenu()
         key = next
         navigationItem.title = if (state.selectedCount > 0) "${state.selectedCount} selected" else next.title

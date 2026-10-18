@@ -66,7 +66,10 @@ class IosVaultChromeTest {
         assertEquals(VaultDestination.entries.map { it.label }, tabs.map { it.title })
         tabs.forEach { chrome.tabBar(chrome.tabBar, didSelectItem = it) }
         assertEquals(VaultDestination.entries.toList(), destinations)
+        // A native selection can precede an asynchronously rejected shared request.
+        chrome.tabBar.selectedItem = tabs.last()
         chrome.update(VaultUiState(), actions().copy(onDestination = { destinations += it }), Color.Blue, true)
+        assertEquals(tabs.first(), chrome.tabBar.selectedItem)
         assertFalse(chrome.tabBar.userInteractionEnabled)
         assertTrue(chrome.tabBar.items!!.filterIsInstance<platform.UIKit.UITabBarItem>().all { !it.enabled })
         val prior = destinations.toList()
