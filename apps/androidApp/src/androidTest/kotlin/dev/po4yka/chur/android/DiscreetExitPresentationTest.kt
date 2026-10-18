@@ -73,6 +73,7 @@ class DiscreetExitPresentationTest {
         val note = Note("public", "Public note", "**Public text**", 1)
         present({ NoteEditorScreen(OpenNote(note, false), {}, {}, {},
             onOpenSettings = {}, savedNote = note) }) { f ->
+            assertTrue(f.await { f.nodes().any { it.config.getOrNull(SemanticsProperties.HorizontalScrollAxisRange)?.maxValue()?.let { max -> max > 0f } == true } })
             f.main {
                 val toolbar = f.nodes().first { it.config.getOrNull(SemanticsProperties.HorizontalScrollAxisRange)
                     ?.maxValue()?.let { maximum -> maximum > 0f } == true }
@@ -98,14 +99,16 @@ class DiscreetExitPresentationTest {
         var settings = 0
         present({ NoteEditorScreen(OpenNote(note, false), { submitted = it }, {}, {},
             onOpenSettings = { settings++ }, savedNote = saved.value, writeFailed = failed.value) }) { f ->
+            assertTrue(f.await { f.nodes().any { it.config.getOrNull(SemanticsProperties.TestTag) == "note-body" } })
             f.main {
                 val title = f.nodes().first { it.config.getOrNull(SemanticsProperties.EditableText)?.text == note.title }
+                val body = f.nodes().first { it.config.getOrNull(SemanticsProperties.TestTag) == "note-body" }
+                val settingsAction = f.buttons("Settings").single().config[SemanticsActions.OnClick].action
+                // All callbacks come from one composition, as batched input can.
                 assertTrue(title.config[SemanticsActions.SetText].action?.invoke(AnnotatedString("Changed public title")) == true)
+                assertTrue(body.config[SemanticsActions.SetText].action?.invoke(AnnotatedString("Changed public source")) == true)
+                assertTrue(settingsAction?.invoke() == true)
             }
-            assertTrue(f.await { f.nodes().any {
-                it.config.getOrNull(SemanticsProperties.EditableText)?.text == "Changed public title"
-            } })
-            f.click("Settings")
             assertTrue(f.await { f.has("Save failed") })
             assertEquals(0, settings)
             f.click("Keep editing")
@@ -116,6 +119,7 @@ class DiscreetExitPresentationTest {
             f.click("Settings")
             f.main {
                 assertEquals("Changed public title", submitted?.title)
+                assertEquals("Changed public source", submitted?.body)
                 failed.value = false
                 saved.value = requireNotNull(submitted)
             }

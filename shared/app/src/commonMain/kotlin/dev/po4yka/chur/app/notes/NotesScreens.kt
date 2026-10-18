@@ -271,7 +271,7 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
     var pinned by rememberSaveable(open.note.id) { mutableStateOf(open.note.pinned) }
     var formatName by rememberSaveable(open.note.id) { mutableStateOf(open.note.format.name) }
     val format = NoteFormat.valueOf(formatName)
-    val saveWithMetadata: (Note) -> Unit = { onSave(it.copy(pinned = pinned, format = format)) }
+    val saveWithMetadata: (Note) -> Unit = { onSave(it.copy(pinned = pinned, format = NoteFormat.valueOf(formatName))) }
     var draft by rememberNoteDraft(open, saveWithMetadata, onRemove)
     val (title, body) = draft ?: run {
         LaunchedEffect(Unit) { onBack() }
@@ -279,21 +279,26 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
     }
     var exportFailed by remember { mutableStateOf(false) }
     val exit = remember(open.note.id) { PublicNoteExitGuard() }
-    val current = open.note.copy(title = title, body = body, pinned = pinned, format = format)
+    fun currentDraftNote(): Note? = draft?.let { (currentTitle, currentBody) ->
+        open.note.copy(title = currentTitle, body = currentBody, pinned = pinned,
+            format = NoteFormat.valueOf(formatName))
+    }
+    val current = requireNotNull(currentDraftNote())
     var leavingForSettings by remember(open.note.id) { mutableStateOf(false) }
     val closeWithoutSave = { draft = null; if (leavingForSettings) onOpenSettings() else onBack() }
-    val requestLeave: (Boolean) -> Unit = { settings ->
+    fun requestLeave(settings: Boolean) {
+        val latest = currentDraftNote() ?: return
         leavingForSettings = settings
-        if (open.isNew && title.isBlank() && body.isBlank()) {
+        if (open.isNew && latest.title.isBlank() && latest.body.isBlank()) {
             draft = null
             onRemove(open.note.id)
             closeWithoutSave()
-        } else exit.request(current, savedNote, onSave, closeWithoutSave)
+        } else exit.request(latest, savedNote, onSave, closeWithoutSave)
     }
     val requestBack = { requestLeave(false) }
     systemBack(requestBack)
-    LaunchedEffect(exit.requested, current, savedNote) { exit.acknowledge(current, savedNote, closeWithoutSave) }
-    LaunchedEffect(pinned, format) { saveWithMetadata(open.note.copy(title = title, body = body)) }
+    LaunchedEffect(exit.requested, current, savedNote) { currentDraftNote()?.let { exit.acknowledge(it, savedNote, closeWithoutSave) } }
+    LaunchedEffect(pinned, format) { currentDraftNote()?.let(onSave) }
     if (exit.requested) {
         AlertDialog(
             onDismissRequest = exit::keepEditing,
@@ -301,7 +306,7 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
             text = { Text(if (writeFailed) "Your draft is still here. Retry saving before leaving, or discard unsaved changes."
                 else "The editor will close after this note has been saved.") },
             confirmButton = { TextButton(enabled = writeFailed, onClick = {
-                exit.request(current, savedNote, onSave, closeWithoutSave)
+                currentDraftNote()?.let { exit.request(it, savedNote, onSave, closeWithoutSave) }
             }) { Text(if (writeFailed) "Retry" else "Saving…") } },
             dismissButton = { Row {
                 TextButton(onClick = exit::keepEditing) { Text("Keep editing") }
@@ -353,7 +358,7 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
         ) {
             OutlinedTextField(
                 value = title,
-                onValueChange = { draft = it to body },
+                onValueChange = { changed -> draft?.let { draft = changed to it.second } },
                 enabled = !exit.requested,
                 singleLine = true,
                 label = { Text("Title") },
@@ -365,10 +370,10 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
                 Text("Pinned")
                 val saved = samePublicNoteContent(current, savedNote)
                 Text(if (writeFailed) "Save failed" else if (saved) "Saved" else "Unsaved", modifier = Modifier.weight(1f))
-                if (writeFailed) TextButton(onClick = { saveWithMetadata(open.note.copy(title = title, body = body)) }) { Text("Retry") }
+                if (writeFailed) TextButton(onClick = { currentDraftNote()?.let(onSave) }) { Text("Retry") }
             }
             if (exportFailed) Text("The file could not be exported. Try again.", color = colors.error)
-            MarkdownEditor(body, { draft = title to it }, format == NoteFormat.MARKDOWN,
+            MarkdownEditor(body, { changed -> draft?.let { draft = it.first to changed } }, format == NoteFormat.MARKDOWN,
                 { formatName = if (it) NoteFormat.MARKDOWN.name else NoteFormat.PLAIN_TEXT.name }, Modifier.fillMaxWidth().weight(1f), enabled = !exit.requested)
         }
     }
