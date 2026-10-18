@@ -10,11 +10,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.background
 import androidx.compose.material3.Text
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -24,6 +26,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.platform.LocalContext
@@ -37,6 +41,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSourceException
@@ -45,6 +50,7 @@ import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerControlView
+import androidx.media3.ui.DefaultTrackNameProvider
 import androidx.media3.ui.PlayerView
 import dev.po4yka.chur.app.R
 import dev.po4yka.chur.app.theme.ViewerColors
@@ -198,6 +204,11 @@ actual fun VaultPlayer(
         }
     }
     val reportControls by rememberUpdatedState(onControlsVisibleChange)
+    var options by remember(player) { mutableStateOf<PlaybackOptions?>(null) }
+    val openOptions by rememberUpdatedState<(PlaybackOptions) -> Unit> { menu ->
+        options = menu
+        onControlsVisibleChange(true)
+    }
     LaunchedEffect(problem, waiting) {
         if (problem != null || waiting) reportControls(true)
     }
@@ -230,6 +241,7 @@ actual fun VaultPlayer(
                     setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                     setShowPreviousButton(false)
                     setShowNextButton(false)
+                    setShowSubtitleButton(true)
                     controllerAutoShow = autoShow
                     // Media3 does not restart its timeout for controls that
                     // are still sliding in, so a rule that changes then, as a
@@ -249,6 +261,16 @@ actual fun VaultPlayer(
                         },
                     )
                     this.player = player
+                    // Native settings use focusable PopupWindows that cover the viewer's
+                    // lock. Keep the real controller, replacing only popup entry points.
+                    listOf(
+                        androidx.media3.ui.R.id.exo_settings to PlaybackOptions.SETTINGS,
+                        androidx.media3.ui.R.id.exo_playback_speed to PlaybackOptions.SPEED,
+                        androidx.media3.ui.R.id.exo_audio_track to PlaybackOptions.AUDIO,
+                        androidx.media3.ui.R.id.exo_subtitle to PlaybackOptions.TEXT,
+                    ).forEach { (id, menu) ->
+                        findViewById<View>(id)?.setOnClickListener { openOptions(menu) }
+                    }
                 }
             },
             update = { view ->
@@ -286,7 +308,7 @@ actual fun VaultPlayer(
                 // again. A touch on the viewer outside this view, as on a
                 // chrome control, also starts it again: Media3 counts only
                 // the touches that reach this view.
-                val timeout = if (waiting) 0 else showTimeoutMs
+                val timeout = if (waiting || options != null) 0 else showTimeoutMs
                 val changed = view.controllerAutoShow != autoShow || view.controllerShowTimeoutMs != timeout
                 val touched = seenTouches[0] != touches
                 seenTouches[0] = touches
@@ -317,6 +339,11 @@ actual fun VaultPlayer(
                 it.player = null
             },
         )
+        options?.let { menu ->
+            Box(Modifier.align(Alignment.BottomEnd).padding(controlsPadding)) {
+                PlaybackOptionsMenu(player, menu, onMenu = { options = it }, onDismiss = { options = null })
+            }
+        }
         if (posterShown && poster != null) PlayerPoster(poster, onPlay = { player.play() })
         if (waiting) {
             Text("Loading playback…", color = ViewerColors.content,
@@ -326,6 +353,85 @@ actual fun VaultPlayer(
         problem?.let {
             PlaybackProblemPanel(it, source.onVerify,
                 Modifier.align(Alignment.Center).padding(controlsPadding))
+        }
+    }
+}
+
+private enum class PlaybackOptions { SETTINGS, SPEED, AUDIO, TEXT }
+
+/** Same Media3 choices and track parameters, inside menus with an independent privacy exit. */
+@androidx.annotation.OptIn(UnstableApi::class)
+@Composable
+private fun PlaybackOptionsMenu(player: Player, menu: PlaybackOptions, onMenu: (PlaybackOptions) -> Unit, onDismiss: () -> Unit) {
+    var revision by remember(player) { mutableIntStateOf(0) }
+    DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onEvents(player: Player, events: Player.Events) { revision++ }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
+    }
+    val resources = LocalContext.current.resources
+    val names = remember(resources) { DefaultTrackNameProvider(resources) }
+    val tracks = remember(player, revision) { player.currentTracks }
+    val parameters = remember(player, revision) { player.trackSelectionParameters }
+    fun choices(type: Int) = tracks.groups.filter { it.type == type }.flatMap { group ->
+        (0 until group.length).filter { index -> group.isTrackSupported(index) &&
+            group.getTrackFormat(index).selectionFlags and C.SELECTION_FLAG_FORCED == 0 }
+            .map { index -> Triple(group, index, names.getTrackName(group.getTrackFormat(index))) }
+    }
+    androidx.compose.runtime.key(menu) {
+        PrivateDropdownMenu(expanded = true, onDismissRequest = onDismiss) {
+            when (menu) {
+                PlaybackOptions.SETTINGS -> {
+                    DropdownMenuItem(text = { Text("Playback speed") }, onClick = { onMenu(PlaybackOptions.SPEED) })
+                    DropdownMenuItem(text = { Text("Audio tracks") }, onClick = { onMenu(PlaybackOptions.AUDIO) })
+                    DropdownMenuItem(text = { Text("Subtitles") }, onClick = { onMenu(PlaybackOptions.TEXT) })
+                }
+                PlaybackOptions.SPEED -> {
+                    val labels = resources.getStringArray(androidx.media3.ui.R.array.exo_controls_playback_speeds)
+                    val speeds = listOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
+                    speeds.forEachIndexed { index, speed ->
+                        DropdownMenuItem(text = { Text(labels[index]) },
+                            modifier = Modifier.testTag("playback-speed-${(speed * 100).toInt()}")
+                                .semantics { selected = player.playbackParameters.speed == speed },
+                            onClick = { player.setPlaybackSpeed(speed); onDismiss() })
+                    }
+                }
+                PlaybackOptions.AUDIO, PlaybackOptions.TEXT -> {
+                    val type = if (menu == PlaybackOptions.AUDIO) C.TRACK_TYPE_AUDIO else C.TRACK_TYPE_TEXT
+                    val choices = choices(type)
+                    val automatic = resources.getString(if (type == C.TRACK_TYPE_AUDIO)
+                        androidx.media3.ui.R.string.exo_track_selection_auto else androidx.media3.ui.R.string.exo_track_selection_none)
+                    DropdownMenuItem(text = { Text(automatic) },
+                        modifier = Modifier.testTag(if (type == C.TRACK_TYPE_AUDIO) "playback-audio-auto" else "playback-text-none")
+                            .semantics { selected = if (type == C.TRACK_TYPE_AUDIO)
+                                choices.none { parameters.overrides.containsKey(it.first.mediaTrackGroup) }
+                                else choices.none { it.first.isTrackSelected(it.second) } },
+                        onClick = {
+                            val builder = parameters.buildUpon().clearOverridesOfType(type)
+                            if (type == C.TRACK_TYPE_AUDIO) builder.setTrackTypeDisabled(type, false)
+                            else builder.setIgnoredTextSelectionFlags(C.SELECTION_FLAG_FORCED.inv())
+                                .setPreferredTextLanguage(null).setPreferredTextRoleFlags(0)
+                            player.trackSelectionParameters = builder.build()
+                            onDismiss()
+                        })
+                    choices.forEachIndexed { index, (group, track, label) ->
+                        DropdownMenuItem(text = { Text(label) },
+                            modifier = Modifier.testTag("playback-${if (type == C.TRACK_TYPE_AUDIO) "audio" else "text"}-track-$index")
+                                .semantics { selected = parameters.overrides.containsKey(group.mediaTrackGroup) && group.isTrackSelected(track) },
+                            onClick = {
+                                player.trackSelectionParameters = parameters.buildUpon()
+                                    .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, track))
+                                    .setTrackTypeDisabled(type, false).build()
+                                onDismiss()
+                            })
+                    }
+                }
+            }
+            if (menu != PlaybackOptions.SETTINGS) {
+                DropdownMenuItem(text = { Text("Back to playback settings") }, onClick = { onMenu(PlaybackOptions.SETTINGS) })
+            }
         }
     }
 }

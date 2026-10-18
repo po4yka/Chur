@@ -149,6 +149,8 @@ It must not:
 
 ## 8. Lock sequence
 
+Conceal the private UI and invalidate pending UI results synchronously when a lock is requested, before waiting for native operations or the repository mutex. The sequence below describes native cleanup, not permission to keep private pixels visible until it finishes. Creation, recovery phrase issuance and confirmation, and private metadata loads must reject results from an ended session epoch. Concealing the screen does not by itself complete native cleanup.
+
 1. transition session to cancelling;
 2. prevent new private operations;
 3. stop players/decoders;

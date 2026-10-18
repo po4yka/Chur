@@ -114,6 +114,13 @@ fun PublicSettingsScreen(
                     )
                 }
             }
+            Text(
+                "In the vault, tap the lock to hide private content immediately. " +
+                    "You can also hold the lock or choose Lock and hide in a dialog or menu. " +
+                    "Chur returns to your public screen, or the app lock when Lock whole app is on.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.inkMuted,
+            )
             onEncryptExternalFiles?.let { encrypt ->
                 Card(onClick = encrypt, modifier = Modifier.fillMaxWidth()) {
                     Column(

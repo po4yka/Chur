@@ -59,7 +59,6 @@ internal class IosVaultChrome : NSObject(), UITabBarDelegateProtocol {
     private var backCommand: ((VaultActions) -> Unit)? = null
     private var menuEpoch = 0L
     private val menuCommands = mutableListOf<Command>()
-    private val menuActions = mutableListOf<UIAction>()
 
     init {
         navigationBar.translucent = true
@@ -105,6 +104,7 @@ internal class IosVaultChrome : NSObject(), UITabBarDelegateProtocol {
         if (lockRequested) return
         navigationBlocked = covered || navigationBusy
         if (navigationBlocked) dismissMenus(navigationBar)
+        navigationItem.leftBarButtonItem?.enabled = !navigationBlocked
         back.enabled = !navigationBlocked
         primary.enabled = !navigationBlocked && (state.operation == null ||
             (state.destination == VaultDestination.ALBUMS && state.openAlbum == null && state.selectedCount == 0))
@@ -142,7 +142,9 @@ internal class IosVaultChrome : NSObject(), UITabBarDelegateProtocol {
             else -> null
         }
         back.accessibilityLabel = if (state.selectedCount > 0) "Clear selection" else "Back"
-        navigationItem.leftBarButtonItem = if (backCommand != null) UIBarButtonItem(customView = back) else null
+        navigationItem.leftBarButtonItem = if (backCommand != null) {
+            UIBarButtonItem(customView = back).also { it.enabled = !navigationBlocked }
+        } else null
         primary.menu = null
         secondary.menu = null
         primaryCommand = null
@@ -244,19 +246,24 @@ internal class IosVaultChrome : NSObject(), UITabBarDelegateProtocol {
     }
 
     private fun retireMenu() {
-        // System menu presentations may outlive dismissal. Their callbacks keep
-        // only an index/epoch; dropping this list releases album projections now.
+        // UIKit keeps immutable menu/action copies, including after dismissal.
+        // Their labels must stay generic; private projections live only here.
+        // Copies retain only a weak owner and index/epoch, so retiring the epoch
+        // and commands releases private data and fences every retained callback.
         menuEpoch++
         menuCommands.clear()
-        menuActions.forEach { it.title = ""; it.attributes = UIMenuElementAttributesDisabled }
-        menuActions.clear()
     }
 
     private fun nativeMenu(commands: List<Command>): UIMenu {
         menuCommands.addAll(commands)
         val epoch = menuEpoch
         val owner = WeakReference(this)
-        val native = commands.mapIndexed { index, command ->
+        val escape = UIAction.actionWithTitle("Lock and hide", image = null, identifier = null) { _ ->
+            val presenter = owner.get()
+            // Privacy remains available while ordinary navigation is blocked.
+            if (presenter != null && epoch == presenter.menuEpoch) presenter.panicNow()
+        }
+        val native = listOf(escape) + commands.mapIndexed { index, command ->
             UIAction.actionWithTitle(command.title, image = null, identifier = null) { _ ->
                 val presenter = owner.get()
                 if (presenter != null && epoch == presenter.menuEpoch && !presenter.navigationBlocked) {
@@ -265,7 +272,6 @@ internal class IosVaultChrome : NSObject(), UITabBarDelegateProtocol {
                 }
             }.also { if (!command.enabled) it.attributes = UIMenuElementAttributesDisabled }
         }
-        menuActions.addAll(native)
         return UIMenu.menuWithTitle("", children = native)
     }
 

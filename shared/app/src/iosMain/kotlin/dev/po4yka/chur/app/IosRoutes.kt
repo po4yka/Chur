@@ -6,7 +6,6 @@ import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.CompositionLocalProvider
@@ -60,6 +59,8 @@ import dev.po4yka.chur.app.vault.rememberGalleryThumbnails
 import dev.po4yka.chur.app.vault.rememberViewerThumbnails
 import dev.po4yka.chur.app.vault.thumbnailRendition
 import dev.po4yka.chur.app.vault.UnlockScreen
+import dev.po4yka.chur.app.vault.LocalPrivatePanic
+import dev.po4yka.chur.app.vault.PrivateAlertDialog
 import dev.po4yka.chur.app.vault.VaultActions
 import dev.po4yka.chur.app.vault.VaultDestination
 import dev.po4yka.chur.app.vault.ContentView
@@ -118,6 +119,17 @@ import platform.posix.unlink
 @Composable
 internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: VaultState) {
     val phrase by controller.recoveryPhrase.collectAsState()
+    val panic: (() -> Unit)? = if (route == AppRoute.Vault || vaultState is VaultState.Unlocked || phrase != null) {
+        { controller.panic() }
+    } else null
+    CompositionLocalProvider(LocalPrivatePanic provides panic) {
+        IosRoutesContent(controller, route, vaultState)
+    }
+}
+
+@Composable
+private fun IosRoutesContent(controller: ChurController, route: AppRoute, vaultState: VaultState) {
+    val phrase by controller.recoveryPhrase.collectAsState()
     val formError by controller.formError.collectAsState()
     val unlocking by controller.unlocking.collectAsState()
     val maskRequest by IosLauncherActions.maskRequest.collectAsState()
@@ -160,6 +172,7 @@ internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: 
             busy = vaultState is VaultState.Creating,
             error = formError,
             onCreate = controller::create,
+            onHide = { controller.panic() },
             // A second vault is set up over an open session, and the public
             // shell is the last step of a lock, `PLAINTEXT_LIFECYCLE.md` §8.
             // The route check keeps a lock that already moved the route from
@@ -182,6 +195,7 @@ internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: 
             error = formError,
             onUnlock = controller::unlock,
             onUseRecovery = { controller.goTo(AppRoute.Recover) },
+            onReturnToPublic = { controller.panic() },
             deviceUnlockOffered = controller.deviceUnlockOffered.collectAsState().value,
             onUseDevice = controller::unlockWithAppleDevice,
         )
@@ -199,12 +213,13 @@ internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: 
             error = formError,
             onRecover = controller::recover,
             onBack = { controller.goTo(AppRoute.Unlock) },
+            onReturnToPublic = { controller.panic() },
         )
         AppRoute.AppRecover -> RecoveryScreen(
             busy = unlocking,
             error = formError,
             onRecover = controller::recover,
-            onBack = { controller.goTo(AppRoute.AppUnlock) },
+            onBack = { controller.panic() },
         )
         AppRoute.Vault -> VaultRoute(controller, vaultState)
     }
@@ -242,6 +257,7 @@ private fun PublicShellRoute(controller: ChurController, route: AppRoute) {
 
 @Composable
 private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> Unit) {
+    val focus = LocalFocusManager.current
     val notes by controller.notesState.collectAsState()
     val disclosureDue by controller.disclosureDue.collectAsState()
     var query by remember { mutableStateOf("") }
@@ -260,6 +276,10 @@ private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> U
             onSave = controller::putNote,
             onRemove = controller::removeNote,
             onBack = { editing = null },
+            onOpenSettings = {
+                focus.clearFocus(force = true)
+                onOpenSettings()
+            },
         )
         return
     }
@@ -797,7 +817,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         }
     }
     if (choosingImportSource) {
-        AlertDialog(
+        PrivateAlertDialog(
             onDismissRequest = { choosingImportSource = false },
             title = { Text("Import") },
             text = {

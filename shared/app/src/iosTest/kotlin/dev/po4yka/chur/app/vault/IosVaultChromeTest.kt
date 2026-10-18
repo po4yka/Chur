@@ -19,6 +19,39 @@ import kotlin.test.assertTrue
 
 class IosVaultChromeTest {
     @Test
+    fun native_menu_panic_works_while_busy_and_retired_callback_cannot_lock_a_new_session() {
+        var panics = 0
+        val chrome = IosVaultChrome()
+        val callbacks = actions().copy(onPanic = {
+            assertTrue(chrome.navigationBar.hidden)
+            assertTrue(chrome.tabBar.hidden)
+            assertNull(chrome.navigationBar.topItem)
+            panics++
+        })
+        chrome.update(VaultUiState(), callbacks, Color.Blue, true)
+        val menu = chrome.navigationBar.topItem!!.rightBarButtonItems!!
+            .filterIsInstance<platform.UIKit.UIBarButtonItem>().mapNotNull { it.menu }.single()
+        val escape = menu.children.filterIsInstance<platform.UIKit.UIAction>().first()
+        assertEquals("Lock and hide", escape.title)
+        val sender = platform.UIKit.UIButton.buttonWithType(platform.UIKit.UIButtonTypeSystem)
+        sender.addAction(escape, forControlEvents = platform.UIKit.UIControlEventTouchUpInside)
+        sender.sendActionsForControlEvents(platform.UIKit.UIControlEventTouchUpInside)
+        assertEquals(1, panics)
+        assertNull(chrome.navigationBar.topItem)
+        assertTrue(chrome.tabBar.items.isNullOrEmpty())
+        sender.sendAction(escape)
+        assertEquals(1, panics)
+        chrome.beginSession()
+        chrome.update(VaultUiState(), callbacks, Color.Blue, false)
+        // UIKit retains an immutable copy; retirement must fence its real block.
+        sender.sendAction(escape)
+        assertEquals(1, panics)
+        assertFalse(chrome.navigationBar.hidden)
+        chrome.performPrimary()
+        chrome.clear()
+    }
+
+    @Test
     fun disposed_presenter_is_not_retained_by_native_host_menu_or_accessibility_blocks() {
         val retained = retiredNativeControls()
         // Drain both sides of the documented Kotlin/Objective-C collection chain.
@@ -26,7 +59,12 @@ class IosVaultChromeTest {
         GC.collect()
         assertNull(retained.owner.get())
         assertFalse(retained.panic.actionHandler!!.invoke(retained.panic))
-        assertTrue(retained.menuAction.title.isEmpty())
+        val navigation = retained.host.subviews.filterIsInstance<platform.UIKit.UINavigationBar>().single()
+        val tabs = retained.host.subviews.filterIsInstance<platform.UIKit.UITabBar>().single()
+        assertNull(navigation.topItem)
+        assertTrue(tabs.items.isNullOrEmpty())
+        assertTrue(navigation.hidden && tabs.hidden)
+        platform.UIKit.UIButton.buttonWithType(platform.UIKit.UIButtonTypeSystem).sendAction(retained.menuAction)
         assertEquals(2, retained.host.subviews.size)
     }
 
@@ -81,11 +119,17 @@ class IosVaultChromeTest {
     @Test
     fun lock_clears_native_private_title_menu_and_callbacks_before_controller_transition() {
         var imports = 0
+        var exports = 0
+        var encryptedExports = 0
+        var panics = 0
         var locked = false
         val chrome = IosVaultChrome()
         val album = AlbumSummary(ByteArray(16) { 7 }, 1, "Private album title")
-        chrome.update(VaultUiState(openAlbum = album), actions().copy(
+        val callbacks = actions().copy(
             onImport = { imports++ },
+            onExportAlbum = { exports++ },
+            onEncryptedExportAlbum = { encryptedExports++ },
+            onPanic = { panics++ },
             onLock = {
                 assertTrue(chrome.navigationBar.hidden)
                 assertTrue(chrome.tabBar.hidden)
@@ -93,15 +137,26 @@ class IosVaultChromeTest {
                 assertTrue(chrome.tabBar.items.isNullOrEmpty())
                 locked = true
             },
-        ), Color.Blue, false)
+        )
+        chrome.update(VaultUiState(openAlbum = album), callbacks, Color.Blue, false)
         assertEquals(album.name, chrome.navigationBar.topItem?.title)
         val menu = chrome.navigationBar.topItem!!.rightBarButtonItems!!
             .filterIsInstance<platform.UIKit.UIBarButtonItem>()
             .mapNotNull { it.menu }.single()
         val retiredActions = menu.children.filterIsInstance<platform.UIKit.UIAction>()
+        assertTrue(retiredActions.none { it.title.contains(album.name) })
+        assertEquals(listOf("Lock and hide", "Unencrypted folder", "Encrypted archive…"), retiredActions.map { it.title })
+        val sender = platform.UIKit.UIButton.buttonWithType(platform.UIKit.UIButtonTypeSystem)
+        // Prove this exact unregistered dispatch path executes both real handlers.
+        retiredActions.drop(1).forEach { sender.sendAction(it) }
+        assertEquals(1, exports)
+        assertEquals(1, encryptedExports)
         chrome.lockNow()
-        assertTrue(retiredActions.all { it.title.isEmpty() })
         assertTrue(locked)
+        retiredActions.forEach { sender.sendAction(it) }
+        assertEquals(1, exports)
+        assertEquals(1, encryptedExports)
+        assertEquals(0, panics)
         // The backend lock can suspend while the old shared shell recomposes.
         chrome.update(VaultUiState(openAlbum = album), actions(), Color.Blue, false)
         assertTrue(chrome.navigationBar.hidden)
@@ -111,8 +166,14 @@ class IosVaultChromeTest {
         assertTrue(chrome.navigationBar.accessibilityElementsHidden)
         assertTrue(chrome.tabBar.accessibilityElementsHidden)
         chrome.beginSession()
-        chrome.update(VaultUiState(), actions(), Color.Blue, false)
+        val freshAlbum = AlbumSummary(ByteArray(16) { 9 }, 1, "Fresh private album")
+        chrome.update(VaultUiState(openAlbum = freshAlbum), callbacks, Color.Blue, false)
+        retiredActions.forEach { sender.sendAction(it) }
+        assertEquals(1, exports)
+        assertEquals(1, encryptedExports)
+        assertEquals(0, panics)
         assertFalse(chrome.navigationBar.hidden)
+        assertEquals(freshAlbum.name, chrome.navigationBar.topItem?.title)
         chrome.clear()
     }
 
@@ -181,6 +242,7 @@ class IosVaultChromeTest {
             onExportSelection = { exports++ }, onClearSelection = { backs++ }, onLock = { locks++ },
         ), Color.Blue, true)
         val back = chrome.navigationBar.topItem!!.leftBarButtonItem!!.customView as platform.UIKit.UIButton
+        assertFalse(chrome.navigationBar.topItem!!.leftBarButtonItem!!.enabled)
         assertFalse(back.enabled)
         chrome.performPrimary()
         chrome.goBack()

@@ -8,8 +8,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -34,7 +32,7 @@ import dev.po4yka.chur.ffi.TagSummary
 @Composable
 fun NewAlbumDialog(onCreate: (String) -> Unit, onDismiss: () -> Unit) {
     var name by remember { mutableStateOf("") }
-    AlertDialog(
+    PrivateAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("New album") },
         text = {
@@ -68,7 +66,7 @@ fun MoveAlbumDialog(
     val matches = remember(destinations, filter) {
         destinations.filter { it.path.contains(filter.trim(), ignoreCase = true) }
     }
-    AlertDialog(
+    PrivateAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Move album") },
         text = {
@@ -118,7 +116,7 @@ fun AlbumPickerDialog(
     var parentExpanded by remember { mutableStateOf(false) }
     val destinations = remember(albums) { albumDestinations(albums) }
     val verb = if (move) "Move" else "Add"
-    AlertDialog(
+    PrivateAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("$verb to album") },
         text = {
@@ -150,7 +148,7 @@ fun AlbumPickerDialog(
                     TextButton(onClick = { parentExpanded = true }) {
                         Text("Inside: ${destinations.firstOrNull { it.album.id == parent?.id }?.path ?: "Top level"}")
                     }
-                    DropdownMenu(expanded = parentExpanded, onDismissRequest = { parentExpanded = false }) {
+                    PrivateDropdownMenu(expanded = parentExpanded, onDismissRequest = { parentExpanded = false }) {
                         DropdownMenuItem(text = { Text("Top level") }, onClick = {
                             parent = null; parentExpanded = false
                         })
@@ -183,7 +181,7 @@ fun TagPickerDialog(
     var name by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf("") }
     val existing = tags.firstOrNull { it.name.equals(name.trim(), ignoreCase = true) }
-    AlertDialog(
+    PrivateAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Tags") },
         text = {
@@ -234,7 +232,7 @@ fun TagBrowserDialog(
     var name by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf<TagSummary?>(null) }
     var deleting by remember { mutableStateOf<TagSummary?>(null) }
-    AlertDialog(
+    PrivateAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Tags") },
         text = {
@@ -270,7 +268,7 @@ fun TagBrowserDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
     )
     deleting?.let { tag ->
-        AlertDialog(onDismissRequest = { deleting = null }, title = { Text("Delete ${tag.name}?") },
+        PrivateAlertDialog(onDismissRequest = { deleting = null }, title = { Text("Delete ${tag.name}?") },
             text = { Text("This removes the tag from its media. The media stays in the vault.") },
             confirmButton = { DestructiveButton(onClick = {
                 deleting = null
@@ -290,7 +288,7 @@ fun TagBrowserDialog(
 @Composable
 fun DeleteSelectionDialog(count: Int, onDelete: () -> Unit, onDismiss: () -> Unit,
     permanent: Boolean = false, emptyTrash: Boolean = false) {
-    AlertDialog(
+    PrivateAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (permanent) "Delete permanently?" else "Move to Trash?") },
         text = { Text(when {

@@ -291,8 +291,7 @@ fun ViewerScreen(
                     Icon(BackGlyph, contentDescription = "Back", tint = ViewerColors.content)
                 }
                 Box(modifier = Modifier.weight(1f))
-                LockControl(onLock = onLock, onPanic = onPanic, tint = ViewerColors.content)
-                TextButton(onClick = onToggleDetail) {
+                TextButton(onClick = onToggleDetail, modifier = Modifier.padding(end = 48.dp)) {
                     Text(
                         if (showDetail) "Hide info" else "Info",
                         color = ViewerColors.content,
@@ -300,6 +299,14 @@ fun ViewerScreen(
                     )
                 }
             }
+        }
+        // Privacy controls do not participate in chrome auto-hide or its fade.
+        // A single tap must work even while video/photo controls are hidden.
+        Box(
+            Modifier.align(Alignment.TopEnd).windowInsetsPadding(topInsets)
+                .padding(ChurSpacing.two).background(ViewerColors.chromeScrim),
+        ) {
+            LockControl(onLock = onLock, onPanic = onPanic, tint = ViewerColors.content)
         }
         AnimatedVisibility(
             visible = visibleChrome,

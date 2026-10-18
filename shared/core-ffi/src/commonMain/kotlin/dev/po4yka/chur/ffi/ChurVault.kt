@@ -374,8 +374,6 @@ object ChurVault {
     /** Returns the durable ciphertext prefix for a signed shared object. */
     fun sharedDownloadOffset(session: Long, collectionId: ByteArray, objectId: ByteArray): ULong {
         require(collectionId.size == 16 && objectId.size == 16) { "invalid shared download ID" }
-        // ABI 1.12 can receive shared objects but has no resume export.
-        if (ChurNative.abiVersionMinor() < 13) return 0uL
         val out = LongArray(1)
         ChurFailure.check(
             ChurNative.sharingDownloadOffset(session, collectionId, objectId, out),
@@ -687,9 +685,6 @@ object ChurVault {
     /** Public Keychain item ID or Keystore alias for a slot in this session. */
     fun platformSlotIdentifier(session: Long, slotId: ByteArray): ByteArray {
         require(slotId.size == 16) { "invalid slot ID" }
-        if (ChurNative.abiVersionMinor() < 14) {
-            throw ChurFailure(ChurStatus.UNSUPPORTED_VERSION, "platform slot identifier")
-        }
         return withChurBuffer(64) { buffer ->
             val written = IntArray(1)
             ChurFailure.check(
@@ -801,9 +796,11 @@ object ChurVault {
     fun createAlbum(
         session: Long,
         name: String,
+        requestedId: ByteArray? = null,
     ): ByteArray {
+        require(requestedId == null || requestedId.size == ID_LENGTH)
         val out = ByteArray(ID_LENGTH)
-        ChurFailure.check(ChurNative.albumCreate(session, name, out), "create album")
+        ChurFailure.check(ChurNative.albumCreate(session, name, requestedId, out), "create album")
         return out
     }
 
@@ -911,9 +908,6 @@ object ChurVault {
         destinationFd: Int,
         maxOutputBytes: Long = Long.MAX_VALUE,
     ): Long {
-        if (ChurNative.abiVersionMajor() != 2 || ChurNative.abiVersionMinor() < 23) {
-            throw ChurFailure(ChurStatus.ABI_INCOMPATIBLE, "external archive")
-        }
         require(destinationFd >= 0) { "invalid archive destination" }
         val request = encodeExternalArchiveRequest(files, password, maxOutputBytes)
         return try {
@@ -1266,8 +1260,9 @@ object ChurVault {
         session: Long,
         sourceFd: Int,
         request: ImportRequest,
-    ): Long =
-        handleOf("import begin") { out ->
+    ): Long {
+        require(request.requestedObjectId == null || request.requestedObjectId.size == ID_LENGTH)
+        return handleOf("import begin") { out ->
             ChurNative.importBegin(
                 session,
                 sourceFd,
@@ -1280,9 +1275,11 @@ object ChurVault {
                 request.captureTimeMs ?: -1L,
                 request.contentType,
                 request.originalFilename,
+                request.requestedObjectId,
                 out,
             )
         }
+    }
 
     /** Starts an export to a file descriptor the platform opened. */
     fun beginExport(
@@ -1661,4 +1658,5 @@ data class ImportRequest(
     val knownLength: Long? = null,
     val captureTimeMs: Long? = null,
     val originalFilename: String? = null,
+    val requestedObjectId: ByteArray? = null,
 )

@@ -87,7 +87,7 @@ class GlassChromeIntegrationTest {
         click("Recently added")
         assertTrue(await { has("Order: Recently added") })
         click("Back")
-        importPhoto()
+        val importedId = importPhoto()
         assertTrue("the imported photo has an accessible selection action", await {
             var selected = false
             main {
@@ -97,6 +97,21 @@ class GlassChromeIntegrationTest {
             selected
         })
         assertTrue(await { has("1 selected") && has("More") && has("Lock now") })
+        val previousGeneration = (controller.vaultState.value as VaultState.Unlocked).generation
+        main {
+            assertEquals(AppRoute.Vault, controller.route.value)
+            // A controller caller may replace a session without leaving this route.
+            controller.unlock(PASSWORD)
+        }
+        assertTrue("a fresh JNI session reloads the imported object on the same route", await(60_000) {
+            val opened = controller.vaultState.value as? VaultState.Unlocked
+            opened != null && opened.generation != previousGeneration && controller.route.value == AppRoute.Vault &&
+                controller.page.value.objects.any { it.objectId.contentEquals(importedId) }
+        })
+        assertTrue("the new session has its own header and drops the old selection", await {
+            has("Library") && has("Browse") && has("Lock now") && !has("1 selected") && !has("More")
+        })
+        assertSecure()
         click("Lock now")
         assertPrivateChromeGone()
         main {
@@ -150,7 +165,7 @@ class GlassChromeIntegrationTest {
             activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
     }
 
-    private fun importPhoto() {
+    private fun importPhoto(): ByteArray {
         val context = instrumentation.targetContext
         val file = File(context.cacheDir, "export-scratch/glass-chrome-synthetic.png")
         file.parentFile?.mkdirs()
@@ -168,6 +183,7 @@ class GlassChromeIntegrationTest {
             assertTrue("generated pixels import through the real native vault: $outcome", outcome is MediaImporter.Outcome.Imported)
             main { controller.reportImport(null) }
             assertTrue(await { controller.page.value.objects.isNotEmpty() })
+            return (outcome as MediaImporter.Outcome.Imported).objectId.copyOf()
         } finally { file.delete() }
     }
 

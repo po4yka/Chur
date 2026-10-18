@@ -320,6 +320,7 @@ fn run(
         for (source, mut input) in request.sources.into_iter().zip(inputs) {
             check(shared)?;
             let capability = import::SourceCapability {
+                requested_object_id: None,
                 seekable: false,
                 known_length: source.length,
                 content_type_hint: source.mime.clone(),

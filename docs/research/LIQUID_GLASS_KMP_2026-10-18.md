@@ -1,6 +1,6 @@
 # Native Liquid Glass and Android glass rendering in Chur
 
-> **Status:** Research snapshot. The recommended UIKit / Haze 2 approach was selected for implementation; this research alone does not establish runtime or device acceptance.
+> **Status:** The original research snapshot is preserved below. The implementation follow-up records the selected UIKit / Haze 2 integration and its acceptance evidence; research alone is not runtime or device acceptance.
 
 Date: 2026-10-18. Local snapshot: `main`, `560e185`; working tree initially clean. Two research sub-agents investigated iOS and Android independently. Primary platform documentation, upstream implementation sources, release metadata, and Context7 documentation were consulted. Repository artifacts remain in English.
 
@@ -91,7 +91,7 @@ The most important Calf caveat is source-confirmed: its [native navigation bar](
 
 Backdrop distinguishes installability from effect availability: its Android checks require 31 for RenderEffect and 33 for runtime shaders; lens optics are unavailable without runtime shaders. [Capability checks](https://github.com/Kyant0/AndroidLiquidGlass/blob/kmp/backdrop/src/androidMain/kotlin/com/kyant/backdrop/Platform.kt), [lens implementation](https://github.com/Kyant0/AndroidLiquidGlass/blob/kmp/backdrop/src/commonMain/kotlin/com/kyant/backdrop/effects/Lens.kt). Other floors and constraints are documented in [Cloudy](https://github.com/skydoves/Cloudy) and [Liquid limitations](https://fletchmckee.github.io/liquid/limitations/).
 
-No production dependency was added. Adoption must preserve notices and follow Chur's [dependency policy](../DEPENDENCY_POLICY.md), including transitive/native footprint, target compatibility, privacy, binary size, and measured cost. Do not ship multiple glass engines without a demonstrated need.
+During the research phase, no production dependency was added. Adoption must preserve notices and follow Chur's [dependency policy](../DEPENDENCY_POLICY.md), including transitive/native footprint, target compatibility, privacy, binary size, and measured cost. Do not ship multiple glass engines without a demonstrated need.
 
 ## Privacy, media, accessibility, and performance
 
@@ -116,8 +116,29 @@ This is a proposed follow-up, not work performed by this research.
 
 The first useful deliverable is a working native iOS navigation slice plus the corresponding Android material, with observed interaction and lock behavior. A dependency declaration or screenshot alone is insufficient.
 
-## Evidence boundaries
+## Research snapshot evidence boundaries
 
 This task produced research and an architecture recommendation. Only this report was added to the repository. No app source, design contract, dependency pins, minimum OS targets, or release settings were changed; no builds, tests, installations, simulator sessions, performance measurements, commits, or external writes were performed.
 
 Context7 resolved Compose/KMP documentation and returned the native-shell and overlay integration guidance; agents additionally checked Apple and Android APIs and upstream source. Exact library compatibility, Kotlin availability handling, optical fidelity over Chur's media paths, and private-frame disposal remain implementation acceptance items. Upstream release/main documentation conflicts are called out above rather than resolved by assumption.
+
+
+## Implementation follow-up — 2026-10-19
+
+The application keeps its shared controller, navigation state, commands, and Compose screen bodies. `PlatformVaultScaffold` selects platform chrome without introducing another navigation history. Scrollable content reserves trailing space while extending beneath the bottom bar; empty states, drag targets, progress controls, and snackbars reserve the same occupied area.
+
+### UIKit
+
+`IosVaultChrome` owns real `UINavigationBar` and `UITabBar` siblings above the shared Compose controller. UIKit owns their appearance on the running OS, including iOS 26 Liquid Glass and the earlier native presentation. No SwiftUI shell, Compose glass imitation, or new minimum iOS target is introduced. Shared state remains authoritative, including when UIKit changes selection before a shared request is rejected.
+
+The presenter forwards four destinations, contextual menus, selection/export commands, Back, and Lock. Modal navigation disables both native controls and their command paths, while Lock remains available. Viewer coverage hides the native bars and their accessibility elements. This overlay does not add native scroll-driven minimization or a native interactive-back stack.
+
+Normal lock and native panic clear private titles, native items, commands, and accessibility exposure before calling the controller. A lock latch rejects late updates from the old shell until a fresh session mounts. Menu handlers retain only a weak presenter and an index/epoch; retiring commands releases album projections and makes retained UIKit callbacks inert. UIKit makes immutable menu/action copies, so their labels are deliberately generic. The implementation does not promise to erase UIKit snapshots or OS/GPU memory. Objective-C blocks do not strongly retain the presenter.
+
+### Haze 2 and the Android privacy boundary
+
+Android uses exact Haze **2.0.1** modules `haze`, `haze-blur`, and `haze-glass`, only in the Android source set. Source-backed glass uses AGSL on API 33+, blur on API 31–32, and an opaque surface on API 29–30. Public contrast preferences select the opaque presentation. The experimental full-SDK 37.2 native-window backdrop path remains disabled so the selected private source and its retention policy stay authoritative.
+
+Only shared content is a Haze source; bars do not capture each other, and separate native video surfaces are never copied. The entire private Android subtree is keyed by the unlocked session generation, so a permitted controller re-unlock on the same `Vault` route also creates a fresh Haze graph. The graph uses `ClearWhenUnavailable` input retention and source-node disposal on navigation. Navigation labels use the normal ink color for legibility over bright content. Upstream Apache licensing and resolved transitive versions are recorded in the application assets, dependency policy, and lockfiles.
+
+The integrated background test exposed a privacy regression in the newer main-branch asynchronous lock cleanup: it could clear `FLAG_SECURE` while the Activity was backgrounded. `AndroidPrivacyCover` now preserves the flag outside `RESUMED`; the existing resumed collector reapplies public-window state on return. The test assertion remains strict. Shared lock cleanup also fences sync publication before cancelling session work, so cancellation cannot republish the old server projection.

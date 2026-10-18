@@ -26,7 +26,7 @@ use chur_media::{export, import, integrity, reader};
 use crate::operation::{Operation, OperationKind, Stage};
 use crate::panic::{guard_status, guard_status_for};
 use crate::records::{
-    ChurContentInfoV1, ChurImportRequestV1, ChurObjectRefV1, ChurProgressV1, ChurQueryV1,
+    ChurContentInfoV1, ChurImportRequestV2, ChurObjectRefV1, ChurProgressV1, ChurQueryV1,
     ChurRuntimeConfigV1, ChurScanRequestV1, ChurUnlockRequestV1, encode_page, query_from,
 };
 use crate::registry::{self, Entry, Handle, Kind};
@@ -596,7 +596,8 @@ pub unsafe extern "C" fn chur_catalog_query(
 /// # Safety
 ///
 /// `source_fd` is an open readable descriptor, `request` points to a valid
-/// `ChurImportRequestV1`, and `out_import` points to a writable handle.
+/// `ChurImportRequestV2`, its optional requested_object_id covers 16 readable bytes,
+/// and `out_import` points to a writable handle.
 #[unsafe(no_mangle)]
 #[expect(
     unsafe_code,
@@ -605,7 +606,7 @@ pub unsafe extern "C" fn chur_catalog_query(
 pub unsafe extern "C" fn chur_import_begin(
     session: Handle,
     source_fd: c_int,
-    request: *const ChurImportRequestV1,
+    request: *const ChurImportRequestV2,
     out_import: *mut Handle,
 ) -> Status {
     guard_status_for(session, || {
@@ -635,7 +636,16 @@ pub unsafe extern "C" fn chur_import_begin(
                 "the import names an unallocated media class",
             )
         })?;
+        let requested_object_id = if request.requested_object_id.is_null() {
+            None
+        } else {
+            // SAFETY: a non-null optional identity covers 16 readable bytes for this call.
+            Some(Id::from_slice(unsafe {
+                borrow_bytes(request.requested_object_id, 16)?
+            })?)
+        };
         let capability = SourceCapability {
+            requested_object_id,
             seekable: request.seekable == 1,
             known_length: (request.known_length_present == 1).then_some(request.known_length),
             content_type_hint: content_type.clone(),

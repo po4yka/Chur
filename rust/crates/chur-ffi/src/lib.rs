@@ -59,16 +59,15 @@ use crate::panic::guard;
 ///
 /// A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the
 /// library is not called again in that process.
-pub const ABI_VERSION_MAJOR: u32 = 2;
+pub const ABI_VERSION_MAJOR: u32 = 3;
 
 /// Minor component of the native API version.
 ///
 /// A minor difference is negotiated only within explicitly compatible
 /// behaviour; it never selects a cryptographic suite from untrusted input.
 ///
-/// ABI 2 breaks the album list record to carry hierarchy and manual order.
-/// Minor 25 adds atomic removal of an album selection.
-pub const ABI_VERSION_MINOR: u32 = 25;
+/// ABI 3 adds caller-persisted import and album identities for safe desktop retries.
+pub const ABI_VERSION_MINOR: u32 = 0;
 
 /// Capability bit: independent decoy identity supported.
 pub const CHUR_CAP_DECOY_VAULT: u64 = 1 << 0;
@@ -298,8 +297,8 @@ mod tests {
 
     #[test]
     fn the_handshake_answers_every_documented_fact() {
-        assert_eq!(chur_abi_version_major(), 2);
-        assert_eq!(chur_abi_version_minor(), 25);
+        assert_eq!(chur_abi_version_major(), 3);
+        assert_eq!(chur_abi_version_minor(), 0);
         assert_eq!(chur_object_format_min(), 1);
         assert_eq!(chur_object_format_max(), 1);
         assert_eq!(chur_key_slot_format_min(), 1);

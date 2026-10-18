@@ -2,6 +2,8 @@ package dev.po4yka.chur.app
 
 import android.app.Activity
 import android.view.WindowManager
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
 
 /**
  * The Android cover: `FLAG_SECURE`.
@@ -27,7 +29,11 @@ class AndroidPrivacyCover(private val activity: () -> Activity?) : PrivacyCover 
     override fun setEnabled(enabled: Boolean) {
         val current = activity() ?: return
         current.runOnUiThread {
-            if (enabled) {
+            // Async native lock completion may request a public window after
+            // onPause covered it. Keep recents protected until this window is
+            // resumed; MainActivity's RESUMED collector reapplies public state.
+            val resumed = (current as? LifecycleOwner)?.lifecycle?.currentState == Lifecycle.State.RESUMED
+            if (enabled || !resumed) {
                 current.window.setFlags(
                     WindowManager.LayoutParams.FLAG_SECURE,
                     WindowManager.LayoutParams.FLAG_SECURE,

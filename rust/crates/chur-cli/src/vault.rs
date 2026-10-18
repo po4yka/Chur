@@ -162,6 +162,7 @@ pub fn import_file(session: &mut Session, path: &Path, content_type: &str) -> Re
         .map(|metadata| metadata.len())
         .map_err(|_| chur_core::err!(IoFailure, "the source length could not be read"))?;
     let capability = SourceCapability {
+        requested_object_id: None,
         seekable: true,
         known_length: Some(length),
         content_type_hint: content_type.to_owned(),

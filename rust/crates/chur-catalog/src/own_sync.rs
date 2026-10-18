@@ -734,6 +734,24 @@ fn album_transaction(
         let mut member_filter = mutation.as_ref().map(|_| Vec::new());
         match mutation {
             Some(AlbumMutation::Create(album)) => {
+                // Accepted creation history reserves the identity even after a local
+                // subtree deletion. A retried desktop transfer must not revive it.
+                if author.state.album_name(&album.album_id).is_some() {
+                    let present: bool = tx
+                        .query_row(
+                            "SELECT EXISTS(SELECT 1 FROM albums WHERE album_id = ?1)",
+                            [album.album_id.as_bytes().as_slice()],
+                            |row| row.get(0),
+                        )
+                        .map_err(|error| {
+                            map_sqlite(error, "the requested album identity could not be checked")
+                        })?;
+                    ensure!(
+                        present,
+                        InvalidInput,
+                        "the requested album identity was deleted"
+                    );
+                }
                 store::put_album_in(tx, album)?;
                 result = Some(album.album_id);
                 album_filter.push(album.album_id);
@@ -2364,6 +2382,33 @@ mod album_sync_tests {
         pair.restart();
         reconcile_albums(&mut pair.peer, &pair.root, pair.vault).unwrap();
         assert!(store::albums(&pair.peer).unwrap().is_empty());
+    }
+
+    #[test]
+    fn caller_persisted_album_identity_cannot_revive_a_deleted_folder() {
+        let mut pair = Pair::new();
+        let album_id = pair.album(40, "Desktop folder");
+        store::delete_album(&mut pair.source, &album_id).unwrap();
+        let album = Album {
+            album_id,
+            name: "Desktop folder".into(),
+            created_ms: 1,
+            revision: 1,
+        };
+        for reopening in [false, true] {
+            if reopening {
+                pair.restart();
+            }
+            let error = mutate_album(
+                &mut pair.source,
+                &pair.root,
+                pair.vault,
+                AlbumMutation::Create(&album),
+            )
+            .unwrap_err();
+            assert_eq!(error.status(), ChurStatus::InvalidInput);
+            assert!(store::albums(&pair.source).unwrap().is_empty());
+        }
     }
 
     #[test]

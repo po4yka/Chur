@@ -60,6 +60,7 @@ fn import_one(session: &mut Session, length: usize, name: &str, seed: u64) -> (I
     let object_id = import::import_bytes(
         session,
         SourceCapability {
+            requested_object_id: None,
             seekable: true,
             known_length: Some(length as u64),
             content_type_hint: String::from("image/jpeg"),

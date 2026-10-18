@@ -120,6 +120,21 @@ class ViewerPhotoPresentationTest {
         assertTrue("accessible controls report user activity", f.interactions > 0)
     }
 
+    @Test
+    fun fullscreen_keeps_one_action_lock_and_accessible_panic_when_chrome_is_hidden() = present { f ->
+        f.main { f.chromeVisible.value = false }
+        assertTrue(f.await { "Info" !in f.labels() && "Back" !in f.labels() })
+        fun lock() = f.nodes().single { "Lock now" in it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty() }
+        f.main {
+            assertTrue(lock().boundsInWindow.width > 0f && lock().boundsInWindow.height > 0f)
+            assertTrue(lock().config[SemanticsActions.OnClick].action?.invoke() == true)
+        }
+        assertTrue(f.locks == 1)
+        assertTrue("locking must not first reveal the chrome", !f.chromeVisible.value)
+        f.main { assertTrue(lock().config[SemanticsActions.CustomActions].single { it.label == "Lock immediately" }.action()) }
+        assertTrue(f.panics == 1)
+    }
+
     private fun present(audio: Boolean = false, info: Boolean = false, test: (Fixture) -> Unit) {
         val activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
@@ -136,8 +151,8 @@ class ViewerPhotoPresentationTest {
                         CompositionLocalProvider(LocalDensity provides Density(density, if (info) 2f else 1f)) {
                             ChurTheme(dark = true) {
                                 ViewerScreen(projection, listOf(projection), emptyMap(), false, {}, {}, if (info) f.detail else null,
-                                    if (f.hasImage.value) f.image else null, info, true, {},
-                                    onTouch = { f.interactions++ }, onBack = {}, onLock = {}, onPanic = {}, onToggleFavorite = {}, onEditTags = {},
+                                    if (f.hasImage.value) f.image else null, info, f.chromeVisible.value, { f.chromeVisible.value = !f.chromeVisible.value },
+                                    onTouch = { f.interactions++ }, onBack = {}, onLock = { f.locks++ }, onPanic = { f.panics++ }, onToggleFavorite = {}, onEditTags = {},
                                     onExport = {}, onDelete = {}, onToggleDetail = {}, stillState = f.stillState.value,
                                     onVerifyStill = { f.verifications++ })
                             }
@@ -156,6 +171,9 @@ class ViewerPhotoPresentationTest {
     }
 
     private inner class Fixture(val activity: MainActivity) {
+        var locks = 0
+        var panics = 0
+        val chromeVisible = mutableStateOf(true)
         var verifications = 0
         var interactions = 0
         val stillState = mutableStateOf(ViewerStillState.Loading)

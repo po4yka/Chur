@@ -114,6 +114,7 @@ fn new_vault() -> (VaultRoot, Session) {
 
 fn source(length: usize) -> SourceCapability {
     SourceCapability {
+        requested_object_id: None,
         seekable: true,
         known_length: Some(length as u64),
         // The final content type, rather than this untrusted hint, controls validation.

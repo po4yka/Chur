@@ -20,9 +20,7 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -226,7 +224,7 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
                 }
                 Box {
                     TextButton(onClick = { menuId = album.id }) { Text("More") }
-                    DropdownMenu(expanded = menuId == album.id, onDismissRequest = { menuId = null }) {
+                    PrivateDropdownMenu(expanded = menuId == album.id, onDismissRequest = { menuId = null }) {
                         DropdownMenuItem(text = { Text("Rename") }, onClick = {
                             menuId = null; renameText = album.name; renaming = album
                         })
@@ -261,7 +259,7 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
                 TextButton(onClick = { sortExpanded = true }, modifier = Modifier.heightIn(min = 48.dp)) {
                     Text("Sort: ${order.label} ▾")
                 }
-                DropdownMenu(expanded = sortExpanded, onDismissRequest = { sortExpanded = false }) {
+                PrivateDropdownMenu(expanded = sortExpanded, onDismissRequest = { sortExpanded = false }) {
                     AlbumOrder.entries.forEach { choice ->
                         DropdownMenuItem(text = { Text("${if (choice == order) "✓ " else ""}${choice.label}") },
                             onClick = { sortExpanded = false; onOrderChange(choice) })
@@ -339,7 +337,7 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
     }
 
     renaming?.let { album ->
-        AlertDialog(
+        PrivateAlertDialog(
             onDismissRequest = { renaming = null },
             title = { Text("Rename album") },
             text = {
@@ -371,7 +369,7 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
 
     deleting?.let { album ->
         val descendants = albums.count { descendantOf(it, album, albums) }
-        AlertDialog(
+        PrivateAlertDialog(
             onDismissRequest = { deleting = null },
             title = { Text("Delete album?") },
             text = {
