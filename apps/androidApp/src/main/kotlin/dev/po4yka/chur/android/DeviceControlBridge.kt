@@ -5,11 +5,13 @@ import android.os.SystemClock
 import android.util.Base64
 import dev.po4yka.chur.app.ChurController
 import dev.po4yka.chur.app.MediaImporter
+import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.ObjectQuery
 import dev.po4yka.chur.ffi.QueryScope
 import dev.po4yka.chur.ffi.QuerySort
-import dev.po4yka.chur.ffi.StreamKind
+import dev.po4yka.chur.ffi.PrivateNote
+import dev.po4yka.chur.ffi.PrivateNoteAction
 import dev.po4yka.chur.imports.AndroidMediaCodec
 import dev.po4yka.chur.vault.VaultState
 import java.io.DataInputStream
@@ -22,7 +24,11 @@ import java.net.SocketTimeoutException
 import java.security.MessageDigest
 import java.security.SecureRandom
 import kotlin.concurrent.thread
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.runBlocking
@@ -34,88 +40,145 @@ import org.json.JSONObject
 internal class DeviceControlBridge(
     private val context: Context,
     private val controller: ChurController,
+    private val idleTimeoutMs: Long = IDLE_TIMEOUT_MS,
+    private val handshakeTimeoutMs: Long = HANDSHAKE_TIMEOUT_MS,
+    private val frameTimeoutMs: Long = FRAME_TIMEOUT_MS,
 ) {
     data class Pairing(val port: Int, val code: String)
+
+    init { require(idleTimeoutMs > 0 && handshakeTimeoutMs > 0 && frameTimeoutMs > 0) }
 
     private val random = SecureRandom()
     private val _pairing = MutableStateFlow<Pairing?>(null)
     val pairing = _pairing.asStateFlow()
     private val _connected = MutableStateFlow(false)
     val connected = _connected.asStateFlow()
-    @Volatile private var lastActivityAt = 0L
-    @Volatile private var server: ServerSocket? = null
-    @Volatile private var client: Socket? = null
+    private class Session(val listener: ServerSocket, val pairing: Pairing, val generation: Long) {
+        val job = SupervisorJob()
+        @Volatile var lastActivityAt = SystemClock.elapsedRealtime()
+        @Volatile var client: Socket? = null
+        @Volatile var peer: Peer? = null
+    }
+
+    @Volatile private var session: Session? = null
 
     @Synchronized fun start(): Pairing {
-        check(controller.vaultState.value is VaultState.Unlocked)
-        _pairing.value?.let { return it }
+        val unlocked = controller.vaultState.value as? VaultState.Unlocked
+            ?: error("VAULT_LOCKED")
+        session?.let {
+            if (it.generation == unlocked.generation) return it.pairing
+            stop(it)
+        }
         val listener = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
-        listener.soTimeout = 5_000
-        val code = ByteArray(16).also(random::nextBytes).hex()
-        val current = Pairing(listener.localPort, code)
-        server = listener
-        lastActivityAt = SystemClock.elapsedRealtime()
-        _pairing.value = current
-        thread(name = "chur-device-control", isDaemon = true) {
-            while (server === listener) {
-                if (SystemClock.elapsedRealtime() - lastActivityAt >= IDLE_TIMEOUT_MS) {
-                    stop()
+        listener.soTimeout = 1_000
+        val current = Session(listener,
+            Pairing(listener.localPort, ByteArray(16).also(random::nextBytes).hex()),
+            unlocked.generation)
+        session = current
+        _pairing.value = current.pairing
+        thread(name = "chur-device-control-expiry", isDaemon = true) {
+            while (session === current) {
+                val now = SystemClock.elapsedRealtime()
+                if (now - current.lastActivityAt >= idleTimeoutMs ||
+                    (controller.vaultState.value as? VaultState.Unlocked)?.generation != current.generation
+                ) {
+                    stop(current)
                     break
                 }
+                current.peer?.expire(now)
+                Thread.sleep(100)
+            }
+        }
+        thread(name = "chur-device-control", isDaemon = true) {
+            while (session === current) {
+                var socket: Socket? = null
                 try {
-                    val socket = listener.accept()
-                    client = socket
-                    socket.use { serve(it, current) }
+                    val accepted = listener.accept()
+                    socket = accepted
+                    synchronized(this) {
+                        if (session !== current) { accepted.close(); return@thread }
+                        current.client = accepted
+                    }
+                    accepted.use { serve(it, current) }
                 } catch (_: SocketTimeoutException) {
                     continue
                 } catch (_: IOException) {
-                    if (server !== listener) break
+                    if (session !== current) break
                 } finally {
-                    client = null
-                    _connected.value = false
+                    synchronized(this) {
+                        if (current.client === socket) {
+                            current.client = null
+                            current.peer = null
+                            if (session === current) _connected.value = false
+                        }
+                    }
                 }
             }
         }
-        return current
+        return current.pairing
     }
 
-    @Synchronized fun stop() {
-        if (_pairing.value != null) controller.cancelActiveOperation()
+    @Synchronized fun stop() { session?.let(::stop) }
+
+    @Synchronized private fun stop(current: Session) {
+        if (session !== current) return
+        session = null
         _pairing.value = null
         _connected.value = false
-        server?.close()
-        server = null
-        client?.close()
-        client = null
+        current.job.cancel()
+        runCatching { current.listener.close() }
+        runCatching { current.client?.close() }
     }
 
-    private fun serve(socket: Socket, current: Pairing) {
-        socket.soTimeout = 10_000
-        val peer = Peer(socket)
+    private fun requireCurrent(current: Session) {
+        current.job.ensureActive()
+        check(session === current &&
+            (controller.vaultState.value as? VaultState.Unlocked)?.generation == current.generation)
+    }
+
+    private fun serve(socket: Socket, current: Session) {
+        val connectionJob = Job(current.job)
+        try { serveConnected(socket, current, connectionJob) }
+        finally { connectionJob.cancel() }
+    }
+
+    private fun serveConnected(socket: Socket, current: Session, connectionJob: Job) {
+        val peer = Peer(socket, frameTimeoutMs, handshakeTimeoutMs,
+            expired = { connectionJob.cancel() },
+            activity = { current.lastActivityAt = SystemClock.elapsedRealtime() })
+        current.peer = peer
         var export: ExportSession? = null
-        val hello = try { peer.receive() } catch (_: Exception) { return }
+        val hello = try { peer.receive(handshakeTimeoutMs) } catch (_: Exception) { return }
         val supplied = hello.optString("code").toByteArray(Charsets.UTF_8)
-        val expected = current.code.toByteArray(Charsets.UTF_8)
-        if (hello.optString("op") != "pair" || hello.optInt("version") != 1 ||
+        val expected = current.pairing.code.toByteArray(Charsets.UTF_8)
+        if (hello.optString("op") != "pair" || hello.optInt("version") != 2 ||
             !MessageDigest.isEqual(supplied, expected)
         ) {
-            peer.send(JSONObject().put("error", "PAIRING_REJECTED"))
+            runCatching { peer.send(JSONObject().put("error", "PAIRING_REJECTED")) }
             return
         }
-        peer.send(JSONObject().put("ok", true).put("version", 1))
-        lastActivityAt = SystemClock.elapsedRealtime()
-        _connected.value = true
-        socket.soTimeout = 60_000
-        try { while (server != null && controller.vaultState.value is VaultState.Unlocked) {
+        try {
+            val identity = runBlocking(connectionJob + Dispatchers.Default) {
+                requireCurrent(current)
+                requireNotNull(controller.vault.syncIdentity())
+            }
+            peer.send(JSONObject().put("ok", true).put("version", 2)
+                .put("vault_id", identity.vaultId.hex()))
+        } catch (_: Exception) { return }
+        peer.authenticated = true
+        current.lastActivityAt = SystemClock.elapsedRealtime()
+        synchronized(this) {
+            if (session !== current) return
+            _connected.value = true
+        }
+        try { while (session === current) {
             val request = try { peer.receive() } catch (_: Exception) { break }
-            lastActivityAt = SystemClock.elapsedRealtime()
             val response = try {
-                if (controller.vaultState.value !is VaultState.Unlocked) {
-                    throw IllegalStateException("VAULT_LOCKED")
-                }
-                runBlocking(Dispatchers.Main) {
-                    if (request.optString("op") == "import") execute(peer, request)
+                runBlocking(connectionJob + Dispatchers.Main) {
+                    requireCurrent(current)
+                    if (request.optString("op") == "import") execute(peer, request, current)
                     else withContext(Dispatchers.Default) {
+                        requireCurrent(current)
                         when (request.optString("op")) {
                             "export_begin" -> {
                                 export?.close()
@@ -140,21 +203,25 @@ internal class DeviceControlBridge(
                                 export = null
                                 result
                             }
-                            else -> execute(peer, request)
+                            else -> execute(peer, request, current)
                         }
                     }
                 }
+            } catch (_: CancellationException) { break
             } catch (failure: ChurFailure) {
                 JSONObject().put("error", failure.status.name)
+            } catch (failure: CursorStale) {
+                JSONObject().put("error", "CURSOR_STALE")
             } catch (_: Exception) {
                 JSONObject().put("error", "INVALID_REQUEST_OR_OPERATION_FAILED")
             }
+            if (session !== current) break
             try { peer.send(response) } catch (_: IOException) { break }
-            lastActivityAt = SystemClock.elapsedRealtime()
         } } finally { export?.close() }
     }
 
-    private suspend fun execute(peer: Peer, request: JSONObject): JSONObject {
+    private suspend fun execute(peer: Peer, request: JSONObject, current: Session): JSONObject {
+        requireCurrent(current)
         val vault = controller.vault
         return when (request.getString("op")) {
             "list" -> {
@@ -181,32 +248,108 @@ internal class DeviceControlBridge(
                         }
                     })
             }
-            "albums" -> JSONObject().put("albums", JSONArray().also { rows ->
-                vault.albums().forEach { rows.put(JSONObject().put("id", it.id)
-                    .put("name", it.name).put("count", it.memberCount)
-                    .put("parent", it.parentId?.hex()).put("position", it.position)) }
+            "albums" -> paged(request, "albums", vault.albums().map {
+                JSONObject().put("id", it.id).put("name", it.name).put("count", it.memberCount)
+                    .put("parent", it.parentId?.hex()).put("position", it.position)
             })
-            "tags" -> JSONObject().put("tags", JSONArray().also { rows ->
-                vault.tags().forEach { rows.put(JSONObject().put("id", it.id).put("name", it.name)) }
+            "tags" -> paged(request, "tags", vault.tags().map {
+                JSONObject().put("id", it.id).put("name", it.name)
             })
-            "show" -> {
+            "show", "import_status" -> {
                 val detail = vault.detail(request.getString("object").idBytes())
-                JSONObject().put("filename", detail.filename)
-                    .put("caption", detail.caption)
-                    .put("content_type", detail.contentType)
-                    .put("size", detail.plaintextSize)
-                    .put("capture_time_ms", detail.captureTimeMs)
-                    .put("width", detail.width)
-                    .put("height", detail.height)
-                    .put("duration_ms", detail.durationMs)
-                    .put("tags", JSONArray().also { rows ->
-                        detail.tags.forEach { (id, name) ->
-                            rows.put(JSONObject().put("id", id.hex()).put("name", name))
-                        }
-                    })
+                val metadata = JSONObject().put("id", request.getString("object"))
+                    .put("filename", detail.filename).put("caption", detail.caption)
+                    .put("content_type", detail.contentType).put("size", detail.plaintextSize)
+                    .put("capture_time_ms", detail.captureTimeMs).put("width", detail.width)
+                    .put("height", detail.height).put("duration_ms", detail.durationMs)
+                if (request.getString("op") == "import_status") metadata
+                else paged(request, "tags", detail.tags.map { (id, name) ->
+                    JSONObject().put("id", id.hex()).put("name", name)
+                }, metadata)
+            }
+            "object_trash", "object_restore", "object_delete", "trash_empty", "trash_restore", "damaged_delete" -> {
+                when (request.getString("op")) {
+                    "object_trash" -> vault.delete(request.getString("object").idBytes())
+                    "object_restore" -> vault.restoreAll(listOf(request.getString("object").idBytes()))
+                    "object_delete" -> vault.permanentlyDelete(request.getString("object").idBytes())
+                    "trash_empty" -> vault.emptyTrash()
+                    "trash_restore" -> vault.restoreTrash()
+                    "damaged_delete" -> vault.deleteDamagedFiles()
+                }
+                controller.refreshExternalChanges(albums = true)
+                JSONObject().put("ok", true)
+            }
+            "tag_rename", "tag_delete" -> {
+                val id = request.getString("tag").idBytes()
+                if (request.getString("op") == "tag_rename") vault.renameTag(id, request.boundedLabel())
+                else vault.deleteTag(id)
+                controller.refreshExternalChanges(tags = true)
+                JSONObject().put("ok", true)
+            }
+            "notes" -> {
+                val scope = request.optString("scope", "active")
+                require(scope in setOf("active", "trash"))
+                val page = vault.privateNotes(current.generation, request.optString("terms"),
+                    scope == "trash", request.optInt("limit", 50).also { require(it in 1..100) }.coerceAtMost(80),
+                    request.optString("cursor").takeIf { it.isNotEmpty() }?.hexBytes(65))
+                JSONObject().put("cursor", page.nextCursor?.hex()).put("notes", JSONArray().also { rows ->
+                    page.notes.forEach { note ->
+                        rows.put(JSONObject().put("id", note.id).put("revision", note.revision)
+                            .put("title", note.title).put("preview", note.preview)
+                            .put("pinned", note.pinned).put("created_ms", note.createdMs)
+                            .put("updated_ms", note.updatedMs).put("trashed_at_ms", note.trashedAtMs))
+                    }
+                })
+            }
+            "note_show", "note_read" -> {
+                val note = vault.privateNote(current.generation, request.getString("note").idBytes())
+                if (request.getString("op") == "note_show") note.metadata()
+                else {
+                    require(note.revision == request.getLong("revision"))
+                    val body = note.body.toByteArray(Charsets.UTF_8)
+                    try {
+                        val offset = request.getInt("offset")
+                        val size = request.getInt("size")
+                        require(offset >= 0 && size in 1..65_536 && offset <= body.size && size <= body.size - offset)
+                        val bytes = body.copyOfRange(offset, offset + size)
+                        try { JSONObject().put("offset", offset)
+                            .put("bytes", Base64.encodeToString(bytes, Base64.NO_WRAP)) }
+                        finally { bytes.fill(0) }
+                    } finally { body.fill(0) }
+                }
+            }
+            "note_create", "note_update" -> {
+                val length = request.getInt("length")
+                require(length in 0..262_144)
+                val title = request.getString("title")
+                require(title.toByteArray(Charsets.UTF_8).size <= 256)
+                val body = ByteArray(length)
+                try {
+                    var at = 0
+                    while (at < length) {
+                        requireCurrent(current)
+                        val bytes = peer.readRange(at.toLong(), minOf(length - at, 65_536))
+                        try { bytes.copyInto(body, at); at += bytes.size } finally { bytes.fill(0) }
+                    }
+                    requireCurrent(current)
+                    vault.savePrivateNote(current.generation,
+                        if (request.getString("op") == "note_update") request.getString("note").idBytes() else null,
+                        if (request.getString("op") == "note_update") request.getLong("revision") else 0,
+                        title, body.decodeToString(throwOnInvalidSequence = true), request.getBoolean("pinned")).metadata()
+                } finally { body.fill(0) }
+            }
+            "note_pin", "note_trash", "note_restore", "note_delete" -> {
+                val action = when (request.getString("op")) {
+                    "note_pin" -> if (request.getBoolean("pinned")) PrivateNoteAction.PIN else PrivateNoteAction.UNPIN
+                    "note_trash" -> PrivateNoteAction.TRASH
+                    "note_restore" -> PrivateNoteAction.RESTORE
+                    else -> PrivateNoteAction.PURGE
+                }
+                vault.changePrivateNote(current.generation, request.getString("note").idBytes(),
+                    request.getLong("revision"), action)?.metadata() ?: JSONObject().put("ok", true)
             }
             "album_create" -> {
-                val id = vault.createAlbum(request.boundedLabel())
+                val id = vault.createAlbum(request.boundedLabel(), requestedId = request.getString("id").idBytes())
                 controller.refreshExternalChanges(albums = true)
                 JSONObject().put("id", id.hex())
             }
@@ -259,7 +402,7 @@ internal class DeviceControlBridge(
             "batch" -> {
                 val action = request.getString("action")
                 require(action in setOf("album-add", "album-remove", "tag-add", "tag-remove",
-                    "favorite", "unfavorite"))
+                    "favorite", "unfavorite", "trash", "restore", "delete"))
                 val target = if (action.startsWith("album-") || action.startsWith("tag-")) {
                     request.getString("target").idBytes()
                 } else null
@@ -268,6 +411,7 @@ internal class DeviceControlBridge(
                 val ids = (0 until objects.length()).map { objects.getString(it).idBytes() }
                 val rows = JSONArray()
                 ids.forEach { id ->
+                    requireCurrent(current)
                     val row = JSONObject().put("id", id.hex())
                     try {
                         when (action) {
@@ -276,8 +420,12 @@ internal class DeviceControlBridge(
                             "tag-add", "tag-remove" ->
                                 vault.setObjectTag(requireNotNull(target), id, action == "tag-add")
                             "favorite", "unfavorite" -> vault.setFavorite(id, action == "favorite")
+                            "trash" -> vault.delete(id)
+                            "restore" -> vault.restoreAll(listOf(id))
+                            "delete" -> vault.permanentlyDelete(id)
                         }
                         row.put("ok", true)
+                    } catch (cancelled: CancellationException) { throw cancelled
                     } catch (failure: ChurFailure) {
                         row.put("error", failure.status.name)
                     } catch (_: Exception) {
@@ -294,17 +442,28 @@ internal class DeviceControlBridge(
     }
 
     private suspend fun importFile(peer: Peer, request: JSONObject): JSONObject {
+        val requestedId = request.getString("object_id").idBytes()
         val name = request.boundedFilename()
         val length = request.getLong("length")
         require(length >= 0)
         val contentType = request.getString("content_type")
         require(contentType.length in 1..127 && !contentType.contains('\n'))
+        val existing = try {
+            withContext(Dispatchers.Default) { controller.vault.detail(requestedId) }
+        } catch (failure: ChurFailure) {
+            if (failure.status != ChurStatus.NOT_FOUND) throw failure
+            null
+        }
+        if (existing != null) {
+            require(existing.filename == name && existing.plaintextSize == length)
+            return JSONObject().put("id", requestedId.hex()).put("reused", true)
+        }
         val source = RemoteSource(ByteArray(16).also(random::nextBytes).hex(), name, contentType,
             length) { offset, size -> peer.readRange(offset, size) }
         val uri = DeviceImportProvider.mount(context, source)
         try {
             val codec = AndroidMediaCodec(context)
-            val outcome = controller.importMedia(MediaImporter(codec)) { codec.open(uri) }
+            val outcome = controller.importMedia(MediaImporter(codec), requestedObjectId = requestedId) { codec.open(uri) }
             return when (outcome) {
                 is MediaImporter.Outcome.Imported -> JSONObject().put("id", outcome.objectId.hex())
                     .put("derivatives", outcome.derivatives)
@@ -319,6 +478,43 @@ internal class DeviceControlBridge(
             DeviceImportProvider.unmount(source)
             controller.refreshExternalChanges()
         }
+    }
+
+    private fun PrivateNote.metadata(): JSONObject {
+        val titleBytes = title.toByteArray(Charsets.UTF_8)
+        val bodySize = try { exportSize - titleBytes.size - 2 } finally { titleBytes.fill(0) }
+        return JSONObject().put("id", id).put("revision", revision).put("title", title).put("pinned", pinned)
+            .put("created_ms", createdMs).put("updated_ms", updatedMs)
+            .put("trashed_at_ms", trashedAtMs).put("body_size", bodySize)
+    }
+
+    private class CursorStale : IllegalArgumentException()
+
+    /** Offset pages are bound to the complete ordered snapshot, so edits cannot silently skip rows. */
+    private fun paged(request: JSONObject, key: String, items: List<JSONObject>,
+        response: JSONObject = JSONObject()): JSONObject {
+        val digest = MessageDigest.getInstance("SHA-256")
+        items.forEach { item -> digest.update(item.toString().toByteArray(Charsets.UTF_8)); digest.update(0.toByte()) }
+        val fingerprint = digest.digest().hex()
+        val cursor = request.optString("cursor")
+        val start = if (cursor.isEmpty()) 0 else {
+            val parts = cursor.split(':')
+            require(parts.size == 2)
+            if (parts[0] != fingerprint) throw CursorStale()
+            parts[1].toInt().also { require(it in 0..items.size) }
+        }
+        val limit = request.optInt("limit", 100).also { require(it in 1..500) }
+        val rows = JSONArray()
+        response.put("total", items.size).put(key, rows)
+        var size = response.toString().toByteArray(Charsets.UTF_8).size + 128
+        var at = start
+        while (at < items.size && at - start < limit) {
+            val itemSize = items[at].toString().toByteArray(Charsets.UTF_8).size + 1
+            if (size + itemSize > 240_000) break
+            rows.put(items[at++]); size += itemSize
+        }
+        require(at > start || start == items.size)
+        return response.put("cursor", if (at < items.size) "$fingerprint:$at" else JSONObject.NULL)
     }
 
     private fun JSONObject.boundedLabel(): String = getString("name").also {
@@ -368,26 +564,65 @@ internal class DeviceControlBridge(
 
     private companion object {
         const val IDLE_TIMEOUT_MS = 10 * 60 * 1_000L
+        const val HANDSHAKE_TIMEOUT_MS = 10_000L
+        const val FRAME_TIMEOUT_MS = 60_000L
     }
 
-    private class Peer(socket: Socket) {
+    /** Both reads and writes have an absolute deadline; slow trickles cannot renew it. */
+    private class Peer(private val socket: Socket, private val frameTimeoutMs: Long,
+        handshakeTimeoutMs: Long, private val expired: () -> Unit, private val activity: () -> Unit) {
         private val input = DataInputStream(socket.getInputStream())
         private val output = DataOutputStream(socket.getOutputStream())
+        private val handshakeDeadline = SystemClock.elapsedRealtime() + handshakeTimeoutMs
+        @Volatile private var deadline = Long.MAX_VALUE
+        @Volatile var authenticated = false
 
-        fun receive(): JSONObject {
-            val length = input.readInt()
-            if (length !in 1..262_144) throw IOException("invalid frame")
-            val body = ByteArray(length)
-            input.readFully(body)
-            return JSONObject(String(body, Charsets.UTF_8))
+        fun expire(now: Long) {
+            if (now >= deadline || (!authenticated && now >= handshakeDeadline)) {
+                expired()
+                runCatching { socket.close() }
+            }
+        }
+
+        private fun readFully(bytes: ByteArray) {
+            var at = 0
+            while (at < bytes.size) {
+                val remaining = deadline - SystemClock.elapsedRealtime()
+                if (remaining <= 0) throw SocketTimeoutException("frame deadline")
+                socket.soTimeout = remaining.coerceAtMost(Int.MAX_VALUE.toLong()).toInt().coerceAtLeast(1)
+                val count = input.read(bytes, at, bytes.size - at)
+                if (count < 0) throw IOException("unexpected end of frame")
+                at += count
+            }
+        }
+
+        fun receive(timeout: Long = frameTimeoutMs): JSONObject {
+            deadline = SystemClock.elapsedRealtime() + timeout
+            try {
+                val header = ByteArray(4)
+                readFully(header)
+                val length = header.fold(0) { value, byte -> (value shl 8) or (byte.toInt() and 255) }
+                if (length !in 1..262_144) throw IOException("invalid frame")
+                val body = ByteArray(length)
+                try {
+                    readFully(body)
+                    return JSONObject(body.decodeToString(throwOnInvalidSequence = true)).also {
+                        if (authenticated) activity()
+                    }
+                } finally { body.fill(0) }
+            } finally { deadline = Long.MAX_VALUE }
         }
 
         @Synchronized fun send(message: JSONObject) {
             val bytes = message.toString().toByteArray(Charsets.UTF_8)
             if (bytes.size > 262_144) throw IOException("oversized frame")
-            output.writeInt(bytes.size)
-            output.write(bytes)
-            output.flush()
+            deadline = SystemClock.elapsedRealtime() + frameTimeoutMs
+            try {
+                output.writeInt(bytes.size)
+                output.write(bytes)
+                output.flush()
+                if (authenticated) activity()
+            } finally { bytes.fill(0); deadline = Long.MAX_VALUE }
         }
 
         @Synchronized fun readRange(offset: Long, size: Int): ByteArray {

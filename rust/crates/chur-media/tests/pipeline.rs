@@ -42,6 +42,7 @@ fn new_vault() -> (VaultRoot, Session) {
 
 fn source(name: &str, length: u64) -> SourceCapability {
     SourceCapability {
+        requested_object_id: None,
         seekable: true,
         known_length: Some(length),
         content_type_hint: String::from("image/jpeg"),
@@ -873,6 +874,7 @@ fn empty_opaque_files_authenticate_and_export_without_chunks() {
     let (_root, mut session) = new_vault();
     for streamed in [false, true] {
         let capability = SourceCapability {
+            requested_object_id: None,
             seekable: !streamed,
             known_length: if streamed { None } else { Some(0) },
             content_type_hint: String::from("application/octet-stream"),
@@ -1319,6 +1321,7 @@ fn audio_artwork_round_trips_encrypted_without_changing_the_audio_original() {
     let object_id = import::import_bytes(
         &mut session,
         SourceCapability {
+            requested_object_id: None,
             seekable: true,
             known_length: Some(original.len() as u64),
             content_type_hint: String::from("audio/mpeg"),
@@ -1486,4 +1489,77 @@ fn a_poster_frame_is_stored_and_read_like_any_image_derivative() {
         )),
         ChurStatus::ResourceLimitExceeded
     );
+}
+
+#[test]
+fn a_persisted_transfer_identity_commits_once_and_cannot_overwrite() {
+    let (root, mut session) = new_vault();
+    let id = random::id().unwrap();
+    let mut capability = source("source.bin", 8);
+    capability.requested_object_id = Some(id);
+    let imported = import::import_bytes(
+        &mut session,
+        capability.clone(),
+        CanonicalMedia::opaque(),
+        "application/octet-stream",
+        &Zeroizing::new(b"original".to_vec()),
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(imported, id);
+    assert_eq!(
+        rejection(import::begin(
+            &mut session,
+            capability,
+            CanonicalMedia::opaque(),
+            NOW
+        )),
+        ChurStatus::InvalidInput
+    );
+    let object = store::object(session.catalog_ref().unwrap(), &id).unwrap();
+    assert_eq!(object.plaintext_size, 8);
+    assert!(store::object_id_reserved(session.catalog_ref().unwrap(), &id).unwrap());
+    drop(session);
+    std::fs::remove_dir_all(root.base()).unwrap();
+}
+
+#[test]
+fn a_transfer_identity_is_exclusive_until_abandonment_and_reusable_afterwards() {
+    let (root, mut session) = new_vault();
+    let mut capability = source("retry.bin", 8);
+    let id = random::id().unwrap();
+    capability.requested_object_id = Some(id);
+    let pending = import::begin(
+        &mut session,
+        capability.clone(),
+        CanonicalMedia::opaque(),
+        NOW,
+    )
+    .unwrap();
+    assert!(store::object_id_reserved(session.catalog_ref().unwrap(), &id).unwrap());
+    assert_eq!(
+        rejection(import::begin(
+            &mut session,
+            capability.clone(),
+            CanonicalMedia::opaque(),
+            NOW
+        )),
+        ChurStatus::InvalidInput
+    );
+    pending.abandon(&mut session).unwrap();
+    assert!(!store::object_id_reserved(session.catalog_ref().unwrap(), &id).unwrap());
+    assert_eq!(
+        import::import_bytes(
+            &mut session,
+            capability,
+            CanonicalMedia::opaque(),
+            "application/octet-stream",
+            &Zeroizing::new(b"original".to_vec()),
+            NOW
+        )
+        .unwrap(),
+        id
+    );
+    drop(session);
+    std::fs::remove_dir_all(root.base()).unwrap();
 }

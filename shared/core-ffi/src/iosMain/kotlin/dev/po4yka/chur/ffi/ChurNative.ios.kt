@@ -4,7 +4,7 @@ package dev.po4yka.chur.ffi
 
 import dev.po4yka.chur.native.ChurContentInfoV1
 import dev.po4yka.chur.native.ChurCreateRequestV1
-import dev.po4yka.chur.native.ChurImportRequestV1
+import dev.po4yka.chur.native.ChurImportRequestV2
 import dev.po4yka.chur.native.ChurObjectRefV1
 import dev.po4yka.chur.native.ChurProgressV1
 import dev.po4yka.chur.native.ChurQueryV1
@@ -751,6 +751,7 @@ internal actual object ChurNative {
         captureTimeMs: Long,
         contentType: String,
         originalFilename: String?,
+        requestedObjectId: ByteArray?,
         outImport: LongArray,
     ): Int =
         memScoped {
@@ -758,22 +759,27 @@ internal actual object ChurNative {
             val nameBytes = originalFilename?.encodeToByteArray()
             typeBytes.pinnedPointer { typePointer ->
                 (nameBytes ?: ByteArray(0)).pinnedPointer { namePointer ->
-                    val request = alloc<ChurImportRequestV1>()
-                    request.seekable = if (seekable) 1u else 0u
-                    request.known_length_present = if (knownLength >= 0) 1u else 0u
-                    request.media_class = mediaClass.toUByte()
-                    request.width = width.toUInt()
-                    request.height = height.toUInt()
-                    request.duration_ms = maxOf(durationMs, 0L).toULong()
-                    request.known_length = maxOf(knownLength, 0L).toULong()
-                    request.capture_time_ms = maxOf(captureTimeMs, 0L).toULong()
-                    request.capture_time_present = if (captureTimeMs >= 0) 1u else 0u
-                    request.content_type = typePointer
-                    request.content_type_length = typeBytes.size.toUInt()
-                    request.original_filename = if (nameBytes == null) null else namePointer
-                    request.original_filename_length = (nameBytes?.size ?: 0).toUInt()
-                    handleCall(outImport) { out ->
-                        chur_import_begin(session.toULong(), sourceFd, request.ptr, out)
+                    (requestedObjectId ?: ByteArray(0)).pinnedPointer { identityPointer ->
+                        val request = alloc<ChurImportRequestV2>()
+                        request.requested_object_id = if (requestedObjectId == null) null else identityPointer
+                        request.reserved = 0u
+                        repeat(7) { request.reserved_two[it] = 0u }
+                        request.seekable = if (seekable) 1u else 0u
+                        request.known_length_present = if (knownLength >= 0) 1u else 0u
+                        request.media_class = mediaClass.toUByte()
+                        request.width = width.toUInt()
+                        request.height = height.toUInt()
+                        request.duration_ms = maxOf(durationMs, 0L).toULong()
+                        request.known_length = maxOf(knownLength, 0L).toULong()
+                        request.capture_time_ms = maxOf(captureTimeMs, 0L).toULong()
+                        request.capture_time_present = if (captureTimeMs >= 0) 1u else 0u
+                        request.content_type = typePointer
+                        request.content_type_length = typeBytes.size.toUInt()
+                        request.original_filename = if (nameBytes == null) null else namePointer
+                        request.original_filename_length = (nameBytes?.size ?: 0).toUInt()
+                        handleCall(outImport) { out ->
+                            chur_import_begin(session.toULong(), sourceFd, request.ptr, out)
+                        }
                     }
                 }
             }
@@ -1158,12 +1164,16 @@ internal actual object ChurNative {
     actual fun albumCreate(
         session: Long,
         name: String,
+        requestedId: ByteArray?,
         outAlbumId: ByteArray,
     ): Int {
         val bytes = name.encodeToByteArray()
         return bytes.pinnedPointer { pointer ->
-            identifierCall(outAlbumId) { out ->
-                chur_album_create(session.toULong(), pointer, bytes.size.toUInt(), out)
+            (requestedId ?: ByteArray(0)).pinnedPointer { identity ->
+                identifierCall(outAlbumId) { out ->
+                    chur_album_create(session.toULong(), pointer, bytes.size.toUInt(),
+                        if (requestedId == null) null else identity, out)
+                }
             }
         }
     }

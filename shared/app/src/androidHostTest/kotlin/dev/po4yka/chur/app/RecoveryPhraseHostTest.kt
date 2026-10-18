@@ -103,6 +103,7 @@ class RecoveryPhraseHostTest {
         withTimeout(10_000) { controller.route.first { it == AppRoute.PublicShell } }
 
         assertEquals(null, controller.recoveryPhrase.value)
+        withTimeout(10_000) { controller.vaultState.first { it is VaultState.NoVault } }
         assertIs<VaultState.NoVault>(controller.vaultState.value)
     }
 

@@ -75,6 +75,8 @@ pub const fn chunk_size_for(media_class: MediaClass) -> u32 {
 /// type is validated for shape before it is stored.
 #[derive(Debug, Clone)]
 pub struct SourceCapability {
+    /// A random caller-persisted transfer identity; never overwrites an existing object.
+    pub requested_object_id: Option<Id>,
     /// Whether the source can be re-read from an offset.
     pub seekable: bool,
     /// The length the provider reported, when it reported one.
@@ -231,7 +233,17 @@ pub fn begin(
     let collection_id = keys::ensure_default_collection(session)?;
     let collection = store::collection(session.catalog_ref()?, &collection_id)?;
     let collection_key = keys::collection_key(session, &collection_id, collection.current_epoch)?;
-    let object_id = random::id()?;
+    let object_id = match source.requested_object_id {
+        Some(id) => {
+            ensure!(
+                !store::object_id_reserved(session.catalog_ref()?, &id)?,
+                InvalidInput,
+                "the requested import identity is already reserved"
+            );
+            id
+        }
+        None => random::id()?,
+    };
     let stream_id = random::id()?;
     let (object_key, envelope) = keys::seal_object_key(
         &session.vault_id(),

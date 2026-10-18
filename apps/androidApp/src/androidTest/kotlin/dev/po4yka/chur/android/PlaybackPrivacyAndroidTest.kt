@@ -32,6 +32,7 @@ import dev.po4yka.chur.app.vault.VaultPlayer
 import dev.po4yka.chur.imports.AndroidMediaCodec
 import dev.po4yka.chur.vault.VaultRepository
 import java.io.File
+import java.util.Locale
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -73,7 +74,10 @@ class PlaybackPrivacyAndroidTest {
         f.nativeClick("exo_settings")
         f.click("Audio tracks")
         f.clickTag("playback-audio-track-1")
-        assertTrue("manual audio choice must reach the actual player", f.await { f.overrideLanguages() == listOf("fra") })
+        val frenchSelected = f.await {
+            f.overrideLanguages() == listOf("fra") && f.selectedLanguages("TRACK_TYPE_AUDIO") == listOf("fra")
+        }
+        assertTrue("manual audio choice must select French in the actual player: ${f.selectionDiagnostic()}", frenchSelected)
         f.nativeClick("exo_settings")
         f.click("Audio tracks")
         f.clickTag("playback-audio-auto")
@@ -81,10 +85,13 @@ class PlaybackPrivacyAndroidTest {
 
         f.nativeClick("exo_subtitle")
         f.clickTag("playback-text-track-0")
-        assertTrue("subtitle choice must reach the actual player", f.await { f.overrideLanguages() == listOf("eng") })
+        val englishSelected = f.await {
+            f.overrideLanguages() == listOf("eng") && f.selectedLanguages("TRACK_TYPE_TEXT") == listOf("eng")
+        }
+        assertTrue("subtitle choice must select English in the actual player: ${f.selectionDiagnostic()}", englishSelected)
         f.nativeClick("exo_subtitle")
         f.clickTag("playback-text-none")
-        assertTrue(f.await { f.overrideLanguages().isEmpty() })
+        assertTrue(f.await { f.overrideLanguages().isEmpty() && f.selectedLanguages("TRACK_TYPE_TEXT").isEmpty() })
         assertTrue("None must preserve Media3's forced-subtitle policy", f.main {
             val parameters = f.player().javaClass.getMethod("getTrackSelectionParameters").invoke(f.player())
             parameters.javaClass.getField("ignoredTextSelectionFlags").getInt(parameters) != 0
@@ -169,13 +176,42 @@ class PlaybackPrivacyAndroidTest {
             })
             main { assertTrue(requireNotNull(control()).performClick()) }
         }
-        fun overrideLanguages(): List<String?> = main {
+        private fun overrides(): Map<*, *> {
             val parameters = player().javaClass.getMethod("getTrackSelectionParameters").invoke(player())
-            val overrides = parameters.javaClass.getField("overrides").get(parameters) as Map<*, *>
-            overrides.keys.map { group ->
-                val format = requireNotNull(group).javaClass.getMethod("getFormat", Int::class.javaPrimitiveType).invoke(group, 0)
-                format.javaClass.getField("language").get(format) as String?
+            return parameters.javaClass.getField("overrides").get(parameters) as Map<*, *>
+        }
+        private fun rawOverrideLanguages(): List<Pair<Int, String?>> = overrides().values.flatMap { value ->
+            val selection = requireNotNull(value)
+            val group = selection.javaClass.getField("mediaTrackGroup").get(selection)
+            val indices = selection.javaClass.getField("trackIndices").get(selection) as List<*>
+            indices.map { value ->
+                val index = (value as Number).toInt()
+                val format = group.javaClass.getMethod("getFormat", Int::class.javaPrimitiveType).invoke(group, index)
+                index to (format.javaClass.getField("language").get(format) as String?)
             }
+        }
+        // Media3 Format normalizes ISO639-2/T (fra/eng) to ISO639-1 (fr/en).
+        // Compare the language identity, while retaining the exact overridden track indices.
+        private fun canonicalLanguage(value: String?): String? = value?.let { Locale.forLanguageTag(it).getISO3Language() }
+        fun overrideLanguages(): List<String?> = main { rawOverrideLanguages().map { canonicalLanguage(it.second) } }
+        fun selectedLanguages(typeName: String): List<String?> = main {
+            val type = Class.forName("androidx.media3.common.C").getField(typeName).getInt(null)
+            val tracks = player().javaClass.getMethod("getCurrentTracks").invoke(player())
+            val groups = tracks.javaClass.getMethod("getGroups").invoke(tracks) as List<*>
+            groups.flatMap { value ->
+                val group = requireNotNull(value)
+                if (group.javaClass.getMethod("getType").invoke(group) != type) emptyList()
+                else (0 until group.javaClass.getField("length").getInt(group)).filter { index ->
+                    group.javaClass.getMethod("isTrackSelected", Int::class.javaPrimitiveType).invoke(group, index) == true
+                }.map { index ->
+                    val format = group.javaClass.getMethod("getTrackFormat", Int::class.javaPrimitiveType).invoke(group, index)
+                    canonicalLanguage(format.javaClass.getField("language").get(format) as String?)
+                }
+            }
+        }
+        fun selectionDiagnostic(): String = main {
+            "raw overridden (index, language)=${rawOverrideLanguages()}, " +
+                "selected audio=${selectedLanguages("TRACK_TYPE_AUDIO")}, selected text=${selectedLanguages("TRACK_TYPE_TEXT")}"
         }
         fun nodes(): List<SemanticsNode> = main { WindowInspector.getGlobalWindowViews().flatMap { it.roots() }
             .flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = true) } }

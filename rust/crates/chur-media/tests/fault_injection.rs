@@ -45,6 +45,7 @@ fn rejection<T>(outcome: Result<T>) -> ChurStatus {
 
 fn source(length: u64) -> SourceCapability {
     SourceCapability {
+        requested_object_id: None,
         seekable: true,
         known_length: Some(length),
         content_type_hint: String::from("image/jpeg"),

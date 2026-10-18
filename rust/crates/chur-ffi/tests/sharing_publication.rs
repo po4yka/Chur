@@ -31,6 +31,7 @@ fn preexisting_object_publication_is_complete_and_stable_after_reopen() {
     let object_id = import_bytes(
         &mut direct,
         SourceCapability {
+            requested_object_id: None,
             seekable: true,
             known_length: Some(4_096),
             content_type_hint: String::from("image/jpeg"),

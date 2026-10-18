@@ -615,6 +615,7 @@ mod tests {
             let object = chur_media::import::import_bytes(
                 &mut session,
                 chur_media::import::SourceCapability {
+                    requested_object_id: None,
                     seekable: true,
                     known_length: Some(plaintext.len() as u64),
                     content_type_hint: "image/jpeg".into(),

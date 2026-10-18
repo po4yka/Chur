@@ -347,6 +347,7 @@ fn copy(
         let mut lease = source.open(id, StreamKind::Original)?;
         lease.verify(shared)?;
         let capability = import::SourceCapability {
+            requested_object_id: None,
             seekable: true,
             known_length: Some(object.plaintext_size),
             content_type_hint: metadata.content_type.clone(),
@@ -731,6 +732,7 @@ mod tests {
         import::import_bytes(
             s,
             import::SourceCapability {
+                requested_object_id: None,
                 seekable: true,
                 known_length: Some(4),
                 content_type_hint: "image/jpeg".into(),
@@ -893,6 +895,7 @@ mod tests {
         let mut writing = import::begin(
             &mut s,
             import::SourceCapability {
+                requested_object_id: None,
                 seekable: true,
                 known_length: Some(4),
                 content_type_hint: "application/octet-stream".into(),
@@ -995,6 +998,7 @@ mod tests {
         let id = import::import_bytes(
             &mut source,
             import::SourceCapability {
+                requested_object_id: None,
                 seekable: true,
                 known_length: Some(bytes.len() as u64),
                 content_type_hint: "application/octet-stream".into(),

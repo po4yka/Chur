@@ -937,7 +937,7 @@ private fun VaultRoute(controller: ChurController) {
 
     devicePairing?.let { pairing ->
         var copied by remember(pairing) { mutableStateOf(false) }
-        val sessionLink = "chur://device-control/v1?port=${pairing.port}#${pairing.code}"
+        val sessionLink = "chur://device-control/v2?port=${pairing.port}#${pairing.code}"
         PrivateAlertDialog(
             onDismissRequest = deviceControl::stop,
             title = { Text("Control from computer") },

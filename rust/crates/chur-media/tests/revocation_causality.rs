@@ -124,6 +124,7 @@ fn original(source: &mut Session, secret: &Key, bytes: &[u8]) -> (Id, Operation)
     let object = chur_media::import::import_bytes(
         source,
         chur_media::import::SourceCapability {
+            requested_object_id: None,
             seekable: true,
             known_length: Some(bytes.len() as u64),
             content_type_hint: "application/octet-stream".into(),

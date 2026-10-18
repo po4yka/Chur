@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. The current library reports 2.25: §6.19 changes the album-list record, §6.20 adds atomic album placement, §6.21 adds tag and favourite selection controls, §6.22 adds recoverable trash, §6.23 stages the recovery slot until its phrase is confirmed, §6.24 reads and acknowledges the sync fork state, §6.25 adds local private notes, §6.26 adds selective archives, §6.26.1 adds external-file encryption, §6.28 adds the encrypted content index, and §6.29 adds atomic album removal. Incoming OS sharing reuses the existing import surface. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
+- native API version is the (major, minor) pair. The current library reports 3.0: caller-persisted import and album identities change the import request and album-create signature (§6.30); §6.19 changes the album-list record, §6.20 adds atomic album placement, §6.21 adds tag and favourite selection controls, §6.22 adds recoverable trash, §6.23 stages the recovery slot until its phrase is confirmed, §6.24 reads and acknowledges the sync fork state, §6.25 adds local private notes, §6.26 adds selective archives, §6.26.1 adds external-file encryption, §6.28 adds the encrypted content index, and §6.29 adds atomic album removal. Incoming OS sharing reuses the existing import surface. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -175,7 +175,7 @@ chur_status_t chur_catalog_query(chur_handle_t session, const ChurQueryV1 *query
 
 /* operations */
 chur_status_t chur_import_begin(chur_handle_t session, int32_t source_fd,
-                                const ChurImportRequestV1 *request, chur_handle_t *out_import);
+                                const ChurImportRequestV2 *request, chur_handle_t *out_import);
 chur_status_t chur_export_begin(chur_handle_t session, const ChurObjectRefV1 *object,
                                 int32_t destination_fd, chur_handle_t *out_export);
 chur_status_t chur_integrity_scan_begin(chur_handle_t session, const ChurScanRequestV1 *request,
@@ -296,7 +296,8 @@ chur_status_t chur_object_metadata(chur_handle_t session,
                                    uint8_t *destination, size_t capacity,
                                    size_t *bytes_written);
 chur_status_t chur_album_create(chur_handle_t session, const uint8_t *name,
-                                uint32_t name_length, uint8_t *out_album_id);
+                                uint32_t name_length, const uint8_t *requested_album_id,
+                                uint8_t *out_album_id);
 chur_status_t chur_album_set_membership(chur_handle_t session,
                                         const uint8_t *album_id,
                                         const ChurObjectRefV1 *object,
@@ -882,3 +883,12 @@ keys. Collection keys can decrypt metadata only.
 ### Open readers and permanent erasure
 
 Permanent deletion revokes every reader for that object in the same physical vault. It waits for an in-flight read, removes its retained stream keys and cached plaintext, and completes the durable catalog erasure barrier before it reports success. Subsequent size, information, read, and verification calls return `SESSION_EXPIRED`. Reader close stays idempotent. Readers for other objects remain usable. Reader registration and deletion take a shared lifecycle mutex after the session lock. This covers different session handles for the same physical vault, so a reader cannot escape revocation between opening its key and publishing its handle. Ordinary reads do not take the lifecycle mutex. Close and owner teardown use the same barrier and clear a retained reader even if an in-flight call still owns its Arc. Once owner teardown starts, prepared child handles cannot be registered.
+
+
+### 6.30 Caller-persisted transfer identities, ABI 3.0
+
+`chur_import_begin` receives `ChurImportRequestV2`, whose first field is an optional pointer to 16 readable bytes naming a caller-generated random object ID. The ID is copied synchronously; it never borrows caller memory on the worker. A null pointer requests ordinary random allocation. A committed object, retained tombstone, or live journal reservation refuses reuse before any object key is created. Abandoned imports may be retried with the same ID and fresh keys/nonces. The committed catalog ID itself is the durable outcome record, so a desktop can resolve a lost response after reconnecting without creating another object.
+
+`chur_album_create(session, name, name_length, requested_album_id, out_album_id)` similarly accepts an optional random ID. Replaying an existing matching ID/name returns the existing ID without resetting its placement or membership; conflicting metadata is `INVALID_INPUT`. The desktop records folder IDs before creation and reapplies parent placement on resume.
+
+This is an incompatible native ABI change: all bundled C/JNI/Kotlin/iOS callers use ABI 3.0; the host rejects ABI 2. The encrypted container, catalog and key-slot formats do not change. Desktop protocol version 2 requires these transfer identities and identifies the open vault during pairing; no version-1 control compatibility path is retained.

@@ -280,7 +280,9 @@ typedef struct ChurObjectRefV1 {
   uint8_t object_id[16];
 } ChurObjectRefV1;
 
-typedef struct ChurImportRequestV1 {
+typedef struct ChurImportRequestV2 {
+  /* Optional 16-byte caller-persisted random object identity, or NULL. */
+  const uint8_t *requested_object_id;
   uint8_t seekable;
   uint8_t known_length_present;
   uint8_t media_class;
@@ -296,7 +298,7 @@ typedef struct ChurImportRequestV1 {
   uint32_t content_type_length;
   const uint8_t *original_filename;
   uint32_t original_filename_length;
-} ChurImportRequestV1;
+} ChurImportRequestV2;
 
 typedef struct ChurScanRequestV1 {
   uint8_t single_object;
@@ -533,7 +535,7 @@ chur_status_t chur_catalog_query(chur_handle_t session, const ChurQueryV1 *query
  * ---------------------------------------------------------------------- */
 
 chur_status_t chur_import_begin(chur_handle_t session, int32_t source_fd,
-                                const ChurImportRequestV1 *request,
+                                const ChurImportRequestV2 *request,
                                 chur_handle_t *out_import);
 chur_status_t chur_export_begin(chur_handle_t session,
                                 const ChurObjectRefV1 *object,
@@ -700,7 +702,8 @@ chur_status_t chur_object_metadata(chur_handle_t session,
                                    uint8_t *destination, size_t capacity,
                                    size_t *bytes_written);
 chur_status_t chur_album_create(chur_handle_t session, const uint8_t *name,
-                                uint32_t name_length, uint8_t *out_album_id);
+                                uint32_t name_length, const uint8_t *requested_album_id,
+                                uint8_t *out_album_id);
 chur_status_t chur_album_rename(chur_handle_t session, const uint8_t *album_id,
                                 const uint8_t *name, uint32_t name_length);
 chur_status_t chur_album_delete(chur_handle_t session, const uint8_t *album_id);

@@ -112,7 +112,8 @@ fn import_at(session: u64, bytes: &[u8], capture_time_ms: u64) -> [u8; 16] {
 
     let content_type = b"image/jpeg";
     let filename = b"holiday.jpg";
-    let request = ChurImportRequestV1 {
+    let request = ChurImportRequestV2 {
+        requested_object_id: core::ptr::null(),
         seekable: 1,
         known_length_present: 1,
         media_class: 1,
@@ -478,7 +479,8 @@ fn polling_after_the_terminal_result_returns_the_same_result() {
     file.write_all(&[9u8; 4_096]).unwrap();
     file.rewind().unwrap();
     let content_type = b"image/jpeg";
-    let request = ChurImportRequestV1 {
+    let request = ChurImportRequestV2 {
+        requested_object_id: core::ptr::null(),
         seekable: 1,
         known_length_present: 1,
         media_class: 1,
@@ -527,7 +529,8 @@ fn an_import_from_a_closed_descriptor_fails_without_committing() {
     let runtime = open_runtime(&root);
     let (_, session) = unlock(runtime, PASSWORD, 1);
     let content_type = b"image/jpeg";
-    let request = ChurImportRequestV1 {
+    let request = ChurImportRequestV2 {
+        requested_object_id: core::ptr::null(),
         seekable: 0,
         known_length_present: 0,
         media_class: 1,
@@ -882,6 +885,7 @@ fn unlocking_reconciles_the_import_journal() {
     let running = chur_media::import::begin(
         &mut session,
         chur_media::import::SourceCapability {
+            requested_object_id: None,
             seekable: true,
             known_length: Some(4_096),
             content_type_hint: String::from("image/jpeg"),

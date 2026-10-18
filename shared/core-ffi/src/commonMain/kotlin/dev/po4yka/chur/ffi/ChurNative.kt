@@ -285,6 +285,7 @@ internal expect object ChurNative {
         captureTimeMs: Long,
         contentType: String,
         originalFilename: String?,
+        requestedObjectId: ByteArray?,
         outImport: LongArray,
     ): Int
 
@@ -454,6 +455,7 @@ internal expect object ChurNative {
     fun albumCreate(
         session: Long,
         name: String,
+        requestedId: ByteArray?,
         outAlbumId: ByteArray,
     ): Int
 

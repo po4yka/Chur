@@ -35,6 +35,7 @@ import dev.po4yka.chur.vault.VaultRepository
 import dev.po4yka.chur.vault.VaultState
 import dev.po4yka.chur.imports.PickedMedia
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -50,6 +51,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
@@ -170,6 +173,9 @@ class ChurController(
     private var launcherLocking = false
     /** New credential attempts must not overtake an earlier native lock. */
     private var pendingLock: Job? = null
+    private var cleanupToken = 0L
+    /** The Apple adapter owns one LAContext; password/create never acquire this mutex. */
+    private val appleEntryMutex = Mutex()
     private val _launcherRequest = MutableStateFlow<LauncherRequest?>(null)
     val launcherRequest: StateFlow<LauncherRequest?> = _launcherRequest.asStateFlow()
     private val _notes = MutableStateFlow<List<Note>>(emptyList())
@@ -572,17 +578,21 @@ class ChurController(
      * `Creating` only once the work has reached the repository.
      */
     private var phraseRequested = false
+    /** Only the newest entry request may change busy state. Lock revokes it synchronously. */
+    private var entryRequestToken = 0L
+    private val nativeEntries = MutableStateFlow<Set<CompletableDeferred<Unit>>>(emptySet())
 
     private fun requestPhrase(body: suspend () -> Unit) {
         if (phraseRequested || _unlocking.value || _recoveryPhrase.value != null) return
         phraseRequested = true
+        val token = ++entryRequestToken
         val epoch = lockEpoch
         guarded {
             try {
-                if (!awaitLockCleanup(epoch)) return@guarded
+                if (token != entryRequestToken || !awaitLockCleanup(epoch)) return@guarded
                 body()
             } finally {
-                phraseRequested = false
+                if (token == entryRequestToken) phraseRequested = false
             }
         }
     }
@@ -599,7 +609,7 @@ class ChurController(
         val target = _route.value
         val bytes = password.encodeToByteArray()
         val phrase = try {
-            withContext(Dispatchers.Default) { repository.create(bytes, offerRecovery) }
+            nativeEntry(epoch) { repository.create(bytes, offerRecovery) }
         } catch (failure: ChurFailure) {
             // One sentence for every reason a creation is refused.
             // `DECOY_VAULT.md` §10 forbids a surface that differs by whether a
@@ -652,10 +662,11 @@ class ChurController(
         val creating = vaultState.value is VaultState.Creating
         val epoch = lockEpoch
         phraseRequested = true
+        val token = ++entryRequestToken
         guarded {
             try {
-                if (epoch != lockEpoch) return@guarded
-                val confirmed = withContext(Dispatchers.Default) { repository.confirmRecoveryPhrase() }
+                if (token != entryRequestToken || epoch != lockEpoch) return@guarded
+                val confirmed = nativeEntry(epoch) { repository.confirmRecoveryPhrase() }
                 if (epoch != lockEpoch) {
                     closeStaleSession()
                     return@guarded
@@ -666,7 +677,7 @@ class ChurController(
                     say("This recovery phrase was not saved.")
                 }
             } finally {
-                phraseRequested = false
+                if (token == entryRequestToken) phraseRequested = false
             }
         }
     }
@@ -678,7 +689,7 @@ class ChurController(
         val target = _route.value
         val bytes = password.encodeToByteArray()
         try {
-            withContext(Dispatchers.Default) { repository.unlock(bytes) }
+            nativeEntry(epoch) { repository.unlock(bytes) }
         } finally {
             bytes.fill(0)
         }
@@ -690,7 +701,7 @@ class ChurController(
         val epoch = endOpenSession()
         if (epoch != lockEpoch) return@attempt
         val target = _route.value
-        withContext(Dispatchers.Default) { repository.unlockWithRecovery(phrase.trim()) }
+        nativeEntry(epoch) { repository.unlockWithRecovery(phrase.trim()) }
         completeUnlock(target, epoch)
     }
 
@@ -709,6 +720,7 @@ class ChurController(
         // Not `firstNotNullOfOrNull`: the unwrap suspends now, because the
         // platform asks the user to authorize it first.
         var root: ByteArray? = null
+        val hostEpoch = promptEpoch
         beginHostActivity()
         try {
             withContext(Dispatchers.Default) {
@@ -723,10 +735,15 @@ class ChurController(
                 }
             }
         } finally {
-            endHostActivity()
+            if (hostEpoch == promptEpoch) endHostActivity()
         }
         val opened = root ?: throw ChurFailure(ChurStatus.AUTHENTICATION_FAILED, "no device slot opened")
-        withContext(Dispatchers.Default) { repository.unlockWithKeystoreRoot(opened) }
+        try {
+            if (epoch != lockEpoch || _route.value != target) return@attempt
+            nativeEntry(epoch) { repository.unlockWithKeystoreRoot(opened) }
+        } finally {
+            opened.fill(0)
+        }
         completeUnlock(target, epoch)
     }
 
@@ -735,17 +752,21 @@ class ChurController(
         val epoch = endOpenSession()
         if (epoch != lockEpoch) return@attempt
         val target = _route.value
-        beginHostActivity()
-        try {
-            withContext(Dispatchers.Default) {
-                appleDeviceUnlock.beginUnlock()
+        appleEntryMutex.withLock {
+            if (epoch != lockEpoch || _route.value != target) return@attempt
+            val hostEpoch = promptEpoch
+            var hostActivityHeld = true
+            beginHostActivity()
+            try {
+                withContext(Dispatchers.Default) { appleDeviceUnlock.beginUnlock() }
                 try {
                     var opened = false
-                    for (itemId in appleDeviceUnlock.itemIds()) {
-                        val secret = appleDeviceUnlock.releaseSecret(itemId)
+                    for (itemId in withContext(Dispatchers.Default) { appleDeviceUnlock.itemIds() }) {
+                        val secret = withContext(Dispatchers.Default) { appleDeviceUnlock.releaseSecret(itemId) }
                         try {
+                            if (epoch != lockEpoch || _route.value != target) return@attempt
                             try {
-                                repository.unlockWithDeviceSecret(secret)
+                                nativeEntry(epoch) { repository.unlockWithDeviceSecret(secret) }
                                 opened = true
                                 break
                             } catch (failure: ChurFailure) {
@@ -755,17 +776,22 @@ class ChurController(
                             secret.fill(0)
                         }
                     }
-                    if (!opened) {
-                        throw ChurFailure(ChurStatus.AUTHENTICATION_FAILED, "no device slot opened")
-                    }
+                    if (!opened) throw ChurFailure(ChurStatus.AUTHENTICATION_FAILED, "no device slot opened")
+                    // The OS prompt is over; platform context disposal must
+                    // not suppress background locking of the opened screen.
+                    if (hostEpoch == promptEpoch) endHostActivity()
+                    hostActivityHeld = false
+                    // Authorize/publish on this Main turn before platform
+                    // teardown suspends. A late endUnlock must never perform
+                    // stale native cleanup against a newer password session.
+                    completeUnlock(target, epoch)
                 } finally {
-                    appleDeviceUnlock.endUnlock()
+                    withContext(NonCancellable + Dispatchers.Default) { appleDeviceUnlock.endUnlock() }
                 }
+            } finally {
+                if (hostActivityHeld && hostEpoch == promptEpoch) endHostActivity()
             }
-        } finally {
-            endHostActivity()
         }
-        completeUnlock(target, epoch)
     }
 
     /**
@@ -973,6 +999,9 @@ class ChurController(
 
     private fun concealPrivateSession() {
         lockEpoch += 1
+        entryRequestToken += 1
+        phraseRequested = false
+        _unlocking.value = false
         clearPrivateProjections()
         launcherLocking = true
         setRoute(if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell)
@@ -981,8 +1010,13 @@ class ChurController(
     private fun queueNativeLock(reason: LockReason) {
         val previous = pendingLock
         val epoch = lockEpoch
+        val token = ++cleanupToken
+        val entriesBeforeLock = nativeEntries.value
         pendingLock = scope.launch {
             previous?.join()
+            // Native calls are synchronous and cannot be cancelled. Their
+            // tickets end before teardown; public masking already happened.
+            entriesBeforeLock.forEach { it.await() }
             // Provider or filesystem revocation can fail. The native session
             // must still close; a failure keeps the cover enabled and is
             // reported by the controller's exception handler.
@@ -994,10 +1028,31 @@ class ChurController(
             // An earlier cleanup may finish after another lock, but must
             // never remove the newer transition's privacy cover. A failed
             // native cleanup keeps the cover enabled and projections closed.
-            if (epoch == lockEpoch) {
+            if (epoch == lockEpoch && token == cleanupToken) {
                 privacy.setEnabled(needsPrivacyCover(repository.state.value, _route.value, _recoveryPhrase.value != null))
                 launcherLocking = false
             }
+        }
+    }
+
+    /** Track native opens independently of slow OS prompts and Main result delivery. */
+    private suspend fun <T> nativeEntry(expectedEpoch: Long, body: suspend () -> T): T {
+        val completed = CompletableDeferred<Unit>()
+        nativeEntries.update { it + completed }
+        try {
+            if (expectedEpoch != lockEpoch) throw CancellationException("entry authorization expired")
+            val result = withContext(Dispatchers.Default) { body() }
+            if (expectedEpoch != lockEpoch) {
+                // Register stale-result teardown before releasing this ticket.
+                // It may wait for this ticket, so never join it from here.
+                launcherLocking = true
+                queueNativeLock(LockReason.BACKGROUND)
+                throw CancellationException("entry authorization expired")
+            }
+            return result
+        } finally {
+            completed.complete(Unit)
+            nativeEntries.update { it - completed }
         }
     }
 
@@ -1006,19 +1061,30 @@ class ChurController(
      * attempt; credentials never open native state behind failed cleanup.
      */
     private suspend fun awaitLockCleanup(expectedEpoch: Long): Boolean {
-        val previous = pendingLock
-        previous?.join()
+        val previous = awaitPendingLockTail(expectedEpoch)
         if (expectedEpoch != lockEpoch) return false
-        if (launcherLocking || previous?.isCancelled == true) {
+        if (previous?.isCancelled == true) {
+            // One fresh teardown for this explicit user attempt. Waiting for
+            // a changing tail above is serialization, not another retry.
             queueNativeLock(LockReason.USER)
-            val retry = pendingLock
-            retry?.join()
+            val retry = awaitPendingLockTail(expectedEpoch)
             if (expectedEpoch != lockEpoch) return false
-            if (launcherLocking || retry?.isCancelled == true) {
+            if (retry?.isCancelled == true || launcherLocking) {
                 throw ChurFailure(ChurStatus.INTERNAL_FAILURE, "the previous lock could not finish")
             }
         }
+        if (launcherLocking) throw ChurFailure(ChurStatus.INTERNAL_FAILURE, "the lock is still completing")
         return true
+    }
+
+    private suspend fun awaitPendingLockTail(expectedEpoch: Long): Job? {
+        var joined: Job?
+        do {
+            joined = pendingLock
+            joined?.join()
+            if (expectedEpoch != lockEpoch) return null
+        } while (joined !== pendingLock)
+        return joined
     }
 
     /**
@@ -1880,7 +1946,7 @@ class ChurController(
                 return@requestPhrase
             }
         }
-        val phrase = withContext(Dispatchers.Default) { repository.beginRecoverySlot() }
+        val phrase = nativeEntry(session.epoch) { repository.beginRecoverySlot() }
         if (session.isCurrent()) _recoveryPhrase.value = phrase
     }
 
@@ -2698,13 +2764,13 @@ class ChurController(
      * work. It is a pick of one, so its card reads in the `DESIGN.md` §15.2
      * phases, as [importAll] does, and not in bytes.
      */
-    suspend fun importMedia(importer: MediaImporter, open: () -> PickedMedia?): MediaImporter.Outcome? {
+    suspend fun importMedia(importer: MediaImporter, requestedObjectId: ByteArray? = null, open: () -> PickedMedia?): MediaImporter.Outcome? {
         val generation = (repository.state.value as? VaultState.Unlocked)?.generation ?: return null
         return tracked("import") { token ->
             _activeOperation.update { current ->
                 current?.takeIf { it.id == token }?.copy(item = 1, items = 1) ?: current
             }
-            importItem(importer, token, generation) { open() }
+            importItem(importer, token, generation, requestedObjectId) { open() }
         }
     }
 
@@ -2812,6 +2878,7 @@ class ChurController(
         importer: MediaImporter,
         token: Long,
         generation: Long,
+        requestedObjectId: ByteArray? = null,
         open: suspend () -> PickedMedia?,
     ): MediaImporter.Outcome = try {
         withContext(Dispatchers.Default) {
@@ -2819,6 +2886,7 @@ class ChurController(
                 repository = repository,
                 source = open(),
                 expectedGeneration = generation,
+                requestedObjectId = requestedObjectId,
                 onProgress = { updateOperation(token, it, keepCancellableOnSuccess = true) },
                 cancelRequested = { cancellationRequested(token) },
             )
@@ -3223,13 +3291,14 @@ class ChurController(
     private fun attempt(copy: (ChurStatus) -> String = ::userCopy, body: suspend () -> Unit) {
         if (_unlocking.value || phraseRequested) return
         _unlocking.value = true
+        val token = ++entryRequestToken
         val epoch = lockEpoch
         guarded(copy = copy) {
             try {
-                if (!awaitLockCleanup(epoch)) return@guarded
+                if (token != entryRequestToken || !awaitLockCleanup(epoch)) return@guarded
                 body()
             } finally {
-                _unlocking.value = false
+                if (token == entryRequestToken) _unlocking.value = false
             }
         }
     }
