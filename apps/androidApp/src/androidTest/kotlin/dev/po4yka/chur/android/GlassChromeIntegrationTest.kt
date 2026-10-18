@@ -15,6 +15,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
 import androidx.core.content.FileProvider
+import androidx.lifecycle.Lifecycle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.po4yka.chur.app.AppRoute
@@ -121,8 +122,17 @@ class GlassChromeIntegrationTest {
         main { assertTrue(activity.moveTaskToBack(true)) }
         assertTrue(await { controller.vaultState.value !is VaultState.Unlocked && controller.route.value != AppRoute.Vault })
         assertSecure()
-        instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+        // singleTask resumes this instance through onNewIntent; there is no new
+        // Activity creation for startActivitySync's launch monitor to observe.
+        main {
+            activity.startActivity(Intent(instrumentation.targetContext, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+        }
+        assertTrue("the existing task resumes", await {
+            var resumed = false
+            main { resumed = activity.lifecycle.currentState == Lifecycle.State.RESUMED }
+            resumed
+        })
         assertPrivateChromeGone()
         assertEquals(AppRoute.PublicShell, controller.route.value)
     }

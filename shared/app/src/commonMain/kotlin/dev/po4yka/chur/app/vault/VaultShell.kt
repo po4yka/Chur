@@ -502,10 +502,10 @@ fun VaultShell(
                         label = { Text(destination.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = colors.accent,
-                            selectedTextColor = colors.accent,
+                            selectedTextColor = colors.ink,
                             indicatorColor = colors.accentSoft,
                             unselectedIconColor = colors.inkMuted,
-                            unselectedTextColor = colors.inkMuted,
+                            unselectedTextColor = colors.ink,
                         ),
                     )
                 }

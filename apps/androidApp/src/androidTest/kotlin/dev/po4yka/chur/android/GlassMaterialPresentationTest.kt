@@ -4,6 +4,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.SystemClock
+import android.view.View
 import android.view.WindowManager
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.asImageBitmap
@@ -21,6 +22,7 @@ import dev.po4yka.chur.vault.VaultState
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -96,6 +98,9 @@ class GlassMaterialPresentationTest {
             try {
                 // Sample within the bottom bar, above its labels and the system navigation area.
                 val density = activity.resources.displayMetrics.density
+                assertEquals("changing thumbnails must preserve the fixed header",
+                    first.getPixel(first.width / 2, (60 * density).toInt()),
+                    second.getPixel(second.width / 2, (60 * density).toInt()))
                 val bottomInset = activity.window.decorView.rootWindowInsets.getInsets(android.view.WindowInsets.Type.navigationBars()).bottom
                 val barTop = first.height - bottomInset - (80 * density).toInt()
                 var changed = 0
@@ -110,8 +115,17 @@ class GlassMaterialPresentationTest {
                 assertTrue("glass must sample live content behind the bar, not an opaque tint: changed=$changed", changed > first.width)
             } finally { first.recycle(); second.recycle() }
         } finally {
-            main { if (attached) view.disposeComposition(); activity.finish() }
-            red.recycle(); blue.recycle()
+            main {
+                if (attached) {
+                    // Detach before disposal: an attached ComposeView may
+                    // recreate its composition during the next measure.
+                    activity.setContentView(View(activity))
+                    view.disposeComposition()
+                }
+                activity.finish()
+            }
+            // Compose/RenderThread can retain these ImageBitmaps after the
+            // Activity finish request. Let their backing bitmaps be collected.
         }
     }
 }
