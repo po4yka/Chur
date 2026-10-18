@@ -83,6 +83,7 @@ fun CreateVaultScreen(
     onCreate: (password: String, offerRecovery: Boolean) -> Unit,
     onCancel: () -> Unit,
     onRestore: (() -> Unit)? = null,
+    onHide: (() -> Unit)? = null,
 ) {
     var password by remember { mutableStateOf("") }
     var confirmation by remember { mutableStateOf("") }
@@ -111,6 +112,9 @@ fun CreateVaultScreen(
                 modifier = Modifier.widthIn(max = 420.dp),
                 verticalArrangement = Arrangement.spacedBy(ChurSpacing.three),
             ) {
+                onHide?.let { hide ->
+                    TextButton(onClick = hide) { Text("Lock and hide") }
+                }
                 // §3 step 1.
                 Text("Create a vault", style = MaterialTheme.typography.headlineSmall)
                 Text(

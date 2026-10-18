@@ -255,7 +255,13 @@ private fun EmptyNotes(hasQuery: Boolean, onCreate: (() -> Unit)? = null) {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) -> Unit, onBack: () -> Unit) {
+fun NoteEditorScreen(
+    open: OpenNote,
+    onSave: (Note) -> Unit,
+    onRemove: (String) -> Unit,
+    onBack: () -> Unit,
+    onOpenSettings: () -> Unit,
+) {
     var draft by rememberNoteDraft(open, onSave, onRemove)
     val (title, body) = draft ?: run {
         LaunchedEffect(Unit) { onBack() }
@@ -293,6 +299,7 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
                     }
                 },
                 actions = {
+                    IconButton(onClick = onOpenSettings) { Icon(SettingsGlyph, contentDescription = "Settings") }
                     TextButton(onClick = { confirmingDelete = true }) { Text("Delete") }
                 },
             )

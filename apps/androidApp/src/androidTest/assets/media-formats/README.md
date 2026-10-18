@@ -19,6 +19,9 @@ The files contain generated pixels and tones, except for the public AndroidX DNG
 - `rotated.mp4`: a white circle on a red 192 × 96 H.264 video, 0.4 seconds at 10 fps. FFmpeg
   copied it into MP4 with a 90-degree display matrix. Its display size is 96 × 192.
 - `clip.mkv` and `clip.webm`: the same unrotated clip, with H.264 and VP9 respectively.
+- `playback-options.mkv`: the H.264 clip looped and muxed with two AAC copies of
+  `stereo.wav` labeled English/French and a non-forced English SubRip subtitle.
+  FFmpeg generated this 22 KB fixture for real Media3 speed/audio/subtitle and privacy-menu tests.
 - `stereo.wav`, `stereo-8bit.wav`, `stereo.flac`, and `stereo.opus`: one second
   of 48 kHz stereo audio. The first half is silent. The second half has a 440 Hz
   left channel at amplitude 24000 and a 660 Hz right channel at amplitude 8000.

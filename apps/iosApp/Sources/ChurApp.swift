@@ -325,10 +325,9 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         // An action still waiting for the inbox/scene belongs to this visit.
         quickActions.cancel()
         host.cancelPublicCamera()
-        // UIKit takes the switcher picture after this returns, and a session
-        // can have opened since the scene resigned active: a vault creation
-        // finishes its key derivation without the lock epoch check an unlock
-        // has. `attach` does nothing when the cover is already up.
+        // Recheck before UIKit takes the switcher picture: native work can
+        // finish between lifecycle callbacks even when its stale UI result
+        // is rejected by the controller. Attaching an existing cover is safe.
         if host.controller.privacyCoverNeeded { host.privacy.attach() }
         // A system prompt the app asked for (the owner check, a Photos alert,
         // the local network alert) holds the lock off but only makes the

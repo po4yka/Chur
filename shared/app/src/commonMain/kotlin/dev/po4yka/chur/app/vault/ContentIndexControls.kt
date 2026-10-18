@@ -9,7 +9,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -78,7 +77,7 @@ internal fun ContentIndexControls(state: ContentIndexState, actions: VaultAction
             }
         }
     }
-    if (options) AlertDialog(
+    if (options) PrivateAlertDialog(
         onDismissRequest = { options = false },
         title = { Text("Content index") },
         text = {
@@ -90,7 +89,7 @@ internal fun ContentIndexControls(state: ContentIndexState, actions: VaultAction
         },
         confirmButton = { TextButton(onClick = { options = false }) { Text("Close") } },
     )
-    if (clear) AlertDialog(
+    if (clear) PrivateAlertDialog(
         onDismissRequest = { clear = false },
         title = { Text("Clear content index?") },
         text = { Text("This removes recognized text from content search. Your files, filenames, captions, and tags remain available. You can rebuild the index later.") },

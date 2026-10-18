@@ -73,6 +73,7 @@ class IncomingShareUiTest {
         val copy = "2 shared items are ready. Open your vault to choose where to import. Originals stay in the source app."
         f.assertTextFits(copy)
         assertFalse(f.has(ALBUM_LAST))
+        assertFalse(f.has("Lock and hide"))
         assertFalse(f.has("public-shared-source.bin"))
         assertEquals(0, f.source.opened)
         f.capture("incoming-share-public-320-font2.png")
@@ -83,6 +84,16 @@ class IncomingShareUiTest {
         assertTrue(f.await { f.inbox.state.value == null })
         assertEquals(1, f.source.closed)
         assertEquals(0, f.source.opened)
+    }
+
+    @Test
+    fun private_confirmation_hides_without_an_outer_route_provider_or_dismissing_first() = present { f ->
+        assertTrue(f.await { f.has("Import shared items") && f.has("Lock and hide") })
+        f.click("Lock and hide")
+        assertEquals("the callback must mask on its click turn", AppRoute.PublicShell, f.controller.route.value)
+        assertTrue(f.await { !f.has("Import shared items") && !f.has(ALBUM_LAST) && !f.has("Lock and hide") })
+        assertEquals(0, f.source.opened)
+        assertEquals(0, f.source.closed)
     }
 
     @Test

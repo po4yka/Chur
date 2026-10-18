@@ -26,7 +26,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ListItem
@@ -100,6 +99,8 @@ import dev.po4yka.chur.app.vault.rememberGalleryThumbnails
 import dev.po4yka.chur.app.vault.rememberViewerThumbnails
 import dev.po4yka.chur.app.vault.thumbnailRendition
 import dev.po4yka.chur.app.vault.UnlockScreen
+import dev.po4yka.chur.app.vault.LocalPrivatePanic
+import dev.po4yka.chur.app.vault.PrivateAlertDialog
 import dev.po4yka.chur.app.vault.VaultActions
 import dev.po4yka.chur.app.vault.VaultDestination
 import dev.po4yka.chur.app.vault.ContentView
@@ -166,6 +167,17 @@ import kotlinx.coroutines.withContext
 @Composable
 fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultState) {
     val phrase by controller.recoveryPhrase.collectAsState()
+    val panic: (() -> Unit)? = if (route == AppRoute.Vault || vaultState is VaultState.Unlocked || phrase != null) {
+        { controller.panic() }
+    } else null
+    CompositionLocalProvider(LocalPrivatePanic provides panic) {
+        ChurRoutesContent(controller, route, vaultState)
+    }
+}
+
+@Composable
+private fun ChurRoutesContent(controller: ChurController, route: AppRoute, vaultState: VaultState) {
+    val phrase by controller.recoveryPhrase.collectAsState()
     val formError by controller.formError.collectAsState()
     val unlocking by controller.unlocking.collectAsState()
 
@@ -199,11 +211,11 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
             // A second identity is created from an open session, `DECOY_VAULT.md`
             // §3, so leaving returns to that vault and never shows the public
             // shell over it: a vault entry from there would open a second
-            // session beside the first. Nothing leaves while the vault is being
-            // created, as 'Not now' is disabled then.
+            // session beside the first. During creation, Back hides immediately
+            // and invalidates the pending result instead of waiting for key derivation.
             val leave = {
                 when (controller.vaultState.value) {
-                    is VaultState.Creating -> Unit
+                    is VaultState.Creating -> controller.panic()
                     is VaultState.Unlocked -> controller.goTo(AppRoute.Vault)
                     else -> controller.goTo(AppRoute.PublicShell)
                 }
@@ -213,6 +225,7 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
                 busy = vaultState is VaultState.Creating,
                 error = formError,
                 onCreate = controller::create,
+                onHide = { controller.panic() },
                 onCancel = leave,
                 // The offer exists only where no identity does. `DECOY_VAULT.md`
                 // §8 and §10: this screen is also where a second identity is
@@ -228,15 +241,14 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
         AppRoute.RestoreBackup -> RestoreRoute(controller)
         AppRoute.EncryptFiles -> ExternalArchiveRoute(controller)
         AppRoute.Unlock -> {
-            // The screen has no way back of its own. It is entered from the
-            // vault entry of the public settings, or after a restore, and Back
-            // returns to that entry either way.
-            BackHandler { controller.goTo(AppRoute.PublicSettings) }
+            // Cancel invalidates pending credentials before returning to the public shell.
+            BackHandler { controller.panic() }
             UnlockScreen(
                 busy = unlocking,
                 error = formError,
                 onUnlock = controller::unlock,
                 onUseRecovery = { controller.goTo(AppRoute.Recover) },
+                onReturnToPublic = { controller.panic() },
                 deviceUnlockOffered = controller.deviceUnlockOffered.collectAsState().value,
                 onUseDevice = controller::unlockWithDevice,
             )
@@ -258,10 +270,11 @@ fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultSta
                 error = formError,
                 onRecover = controller::recover,
                 onBack = back,
+                onReturnToPublic = { controller.panic() },
             )
         }
         AppRoute.AppRecover -> {
-            val back = { controller.goTo(AppRoute.AppUnlock) }
+            val back = { controller.panic() }
             BackHandler(onBack = back)
             RecoveryScreen(
                 busy = unlocking,
@@ -308,6 +321,7 @@ private fun PublicShellRoute(controller: ChurController, route: AppRoute) {
 
 @Composable
 private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> Unit) {
+    val focus = LocalFocusManager.current
     val notes by controller.notesState.collectAsState()
     val disclosureDue by controller.disclosureDue.collectAsState()
     var query by remember { mutableStateOf("") }
@@ -330,6 +344,10 @@ private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> U
             onSave = controller::putNote,
             onRemove = controller::removeNote,
             onBack = { editing = null },
+            onOpenSettings = {
+                focus.clearFocus(force = true)
+                onOpenSettings()
+            },
         )
         return
     }
@@ -839,6 +857,9 @@ private fun VaultRoute(controller: ChurController) {
         // dialog it replaces put "Audio files" in the dismiss slot, so no
         // button only closed it.
         ModalBottomSheet(onDismissRequest = { choosingImport = false }) {
+            TextButton(onClick = { controller.panic() }, modifier = Modifier.fillMaxWidth()) {
+                Text("Lock and hide")
+            }
             Text(
                 "Import",
                 style = MaterialTheme.typography.titleMedium,
@@ -917,7 +938,7 @@ private fun VaultRoute(controller: ChurController) {
     devicePairing?.let { pairing ->
         var copied by remember(pairing) { mutableStateOf(false) }
         val sessionLink = "chur://device-control/v1?port=${pairing.port}#${pairing.code}"
-        AlertDialog(
+        PrivateAlertDialog(
             onDismissRequest = deviceControl::stop,
             title = { Text("Control from computer") },
             text = {

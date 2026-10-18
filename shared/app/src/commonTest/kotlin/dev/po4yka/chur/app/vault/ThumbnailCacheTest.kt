@@ -14,6 +14,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -92,6 +93,56 @@ class ThumbnailCacheTest {
         clearDuringRender = false
         cache.load(1, "photo") { byteArrayOf(2) }
         assertEquals(2, renders)
+    }
+
+    @Test
+    fun synchronous_invalidation_rejects_old_cache_hits_before_suspending_cleanup() = runTest {
+        var renders = 0
+        val cache = ThumbnailCache(256, StandardTestDispatcher(testScheduler)) { _, _ ->
+            renders += 1
+            CacheImage()
+        }
+        val previous = cache.load(1, "photo") { byteArrayOf(1) }
+        cache.invalidate()
+        val current = cache.load(1, "photo") { byteArrayOf(2) }
+        assertNotSame(previous, current)
+        assertEquals(2, renders)
+        cache.clear()
+        assertNotSame(current, cache.load(1, "photo") { byteArrayOf(3) })
+        assertEquals(3, renders)
+    }
+
+    @Test
+    fun synchronous_invalidation_during_read_discards_bytes_before_any_decode() = runTest {
+        var renders = 0
+        val cache = ThumbnailCache(256, StandardTestDispatcher(testScheduler)) { _, _ ->
+            renders += 1
+            CacheImage()
+        }
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val bytes = byteArrayOf(1, 2, 3)
+        val old = async {
+            cache.load(1, "photo") { entered.complete(Unit); release.await(); bytes }
+        }
+        entered.await()
+        cache.invalidate()
+        release.complete(Unit)
+        assertNull(old.await())
+        assertEquals(0, renders)
+        assertTrue(bytes.all { it == 0.toByte() })
+        cache.clear()
+    }
+
+    @Test
+    fun synchronous_invalidation_during_render_rejects_the_completed_image() = runTest {
+        lateinit var cache: ThumbnailCache
+        cache = ThumbnailCache(256, StandardTestDispatcher(testScheduler)) { _, _ ->
+            cache.invalidate()
+            CacheImage()
+        }
+        assertNull(cache.load(1, "photo") { byteArrayOf(1) })
+        cache.clear()
     }
 
     @Test

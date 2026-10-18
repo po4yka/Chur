@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.background
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -349,7 +348,7 @@ private fun MediaTrackMenu(
         TextButton(onClick = { expanded = true }) {
             Text("$label: ${selected?.displayName ?: if (allowOff) "Off" else "Automatic"}", color = Color.White)
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        PrivateDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             if (allowOff) DropdownMenuItem(
                 text = { Text("Off") },
                 onClick = { selectMediaTrack(item, group, null); expanded = false },
