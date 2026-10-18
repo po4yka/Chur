@@ -1,9 +1,13 @@
-@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, kotlin.experimental.ExperimentalNativeApi::class,
+    kotlin.native.runtime.NativeRuntimeApi::class)
 
 package dev.po4yka.chur.app.vault
 
 import androidx.compose.ui.graphics.Color
 import dev.po4yka.chur.ffi.AlbumSummary
+import kotlinx.cinterop.autoreleasepool
+import kotlin.native.ref.WeakReference
+import kotlin.native.runtime.GC
 import platform.UIKit.accessibilityCustomActions
 import platform.UIKit.accessibilityElementsHidden
 import platform.UIKit.accessibilityLabel
@@ -14,6 +18,41 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class IosVaultChromeTest {
+    @Test
+    fun disposed_presenter_is_not_retained_by_native_host_menu_or_accessibility_blocks() {
+        val retained = retiredNativeControls()
+        // Drain both sides of the documented Kotlin/Objective-C collection chain.
+        GC.collect()
+        GC.collect()
+        assertNull(retained.owner.get())
+        assertFalse(retained.panic.actionHandler!!.invoke(retained.panic))
+        assertTrue(retained.menuAction.title.isEmpty())
+        assertEquals(2, retained.host.subviews.size)
+    }
+
+    private fun retiredNativeControls(): RetainedNativeControls = autoreleasepool {
+        val chrome = IosVaultChrome()
+        val host = platform.UIKit.UIView()
+        chrome.attach(host)
+        chrome.update(VaultUiState(), actions(), Color.Blue, false)
+        val items = chrome.navigationBar.topItem!!.rightBarButtonItems!!
+            .filterIsInstance<platform.UIKit.UIBarButtonItem>()
+        val lock = items.mapNotNull { it.customView as? platform.UIKit.UIButton }.single()
+        val panic = lock.accessibilityCustomActions!!
+            .filterIsInstance<platform.UIKit.UIAccessibilityCustomAction>().single()
+        val menuAction = items.mapNotNull { it.menu }.single().children
+            .filterIsInstance<platform.UIKit.UIAction>().first()
+        chrome.clear()
+        RetainedNativeControls(WeakReference(chrome), host, panic, menuAction)
+    }
+
+    private data class RetainedNativeControls(
+        val owner: WeakReference<IosVaultChrome>,
+        val host: platform.UIKit.UIView,
+        val panic: platform.UIKit.UIAccessibilityCustomAction,
+        val menuAction: platform.UIKit.UIAction,
+    )
+
     @Test
     fun native_tabs_forward_to_the_existing_navigation_owner_and_modal_blocks_touches() {
         val destinations = mutableListOf<VaultDestination>()

@@ -1,10 +1,11 @@
-@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, kotlin.experimental.ExperimentalNativeApi::class)
 
 package dev.po4yka.chur.app.vault
 
 import androidx.compose.ui.graphics.Color
 import kotlinx.cinterop.ObjCAction
 import kotlinx.cinterop.useContents
+import kotlin.native.ref.WeakReference
 import platform.CoreGraphics.CGRectMake
 import platform.darwin.NSObject
 import platform.Foundation.NSSelectorFromString
@@ -49,7 +50,6 @@ internal class IosVaultChrome : NSObject(), UITabBarDelegateProtocol {
     private var key: ChromeKey? = null
     private var navigationBlocked = true
     private var lockRequested = false
-    private var parent: UIView? = null
     private val lock = button("Lock now", "lock")
     private val primary = UIBarButtonItem(title = "", style = UIBarButtonItemStylePlain,
         target = this, action = NSSelectorFromString("performPrimary"))
@@ -67,22 +67,25 @@ internal class IosVaultChrome : NSObject(), UITabBarDelegateProtocol {
         tabBar.delegate = this
         lock.addTarget(this, NSSelectorFromString("lockNow"), UIControlEventTouchUpInside)
         lock.addGestureRecognizer(UILongPressGestureRecognizer(this, NSSelectorFromString("panic:")))
+        // Objective-C blocks must not retain the Kotlin presenter that owns them.
+        val owner = WeakReference(this)
         lock.accessibilityCustomActions = listOf(
-            UIAccessibilityCustomAction(name = "Lock immediately", actionHandler = { panicNow(); true }),
+            UIAccessibilityCustomAction(name = "Lock immediately", actionHandler = {
+                owner.get()?.let { it.panicNow(); true } ?: false
+            }),
         )
         back.addTarget(this, NSSelectorFromString("goBack"), UIControlEventTouchUpInside)
         clear()
     }
 
     fun attach(view: UIView) {
-        parent = view
         view.addSubview(navigationBar)
         view.addSubview(tabBar)
         layout()
     }
 
     fun layout() {
-        val view = parent ?: return
+        val view = navigationBar.superview ?: return
         val width = view.bounds.useContents { size.width }
         val height = view.bounds.useContents { size.height }
         val top = view.safeAreaInsets.useContents { top }
@@ -246,11 +249,13 @@ internal class IosVaultChrome : NSObject(), UITabBarDelegateProtocol {
     private fun nativeMenu(commands: List<Command>): UIMenu {
         menuCommands.addAll(commands)
         val epoch = menuEpoch
+        val owner = WeakReference(this)
         val native = commands.mapIndexed { index, command ->
             UIAction.actionWithTitle(command.title, image = null, identifier = null) { _ ->
-                if (epoch == menuEpoch && !navigationBlocked) {
-                    val current = menuCommands.getOrNull(index)
-                    if (current?.enabled == true) actions?.let(current.run)
+                val presenter = owner.get()
+                if (presenter != null && epoch == presenter.menuEpoch && !presenter.navigationBlocked) {
+                    val current = presenter.menuCommands.getOrNull(index)
+                    if (current?.enabled == true) presenter.actions?.let(current.run)
                 }
             }.also { if (!command.enabled) it.attributes = UIMenuElementAttributesDisabled }
         }
