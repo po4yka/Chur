@@ -19,6 +19,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import androidx.annotation.RequiresApi
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsActions
@@ -146,6 +147,11 @@ class BackNavigationTest {
 
     @Before
     fun start() {
+        val automation = instrumentation.uiAutomation
+        automation.serviceInfo = automation.serviceInfo.apply {
+            flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+                AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+        }
         // Each case starts as a finger leaves the screen. A key press, from an
         // earlier case or run, leaves touch mode for the whole display, and
         // the player holds its controls while the keyboard moves the focus.
@@ -165,24 +171,6 @@ class BackNavigationTest {
     // -----------------------------------------------------------------------
     // Routes
     // -----------------------------------------------------------------------
-
-    @Test
-    fun damagedFileCleanupRequiresConfirmationAndKeepsHealthyMedia() = inTestVault {
-        withMedia()
-        val healthy = nativeHealthyContents()
-        tap(label("Settings"))
-        assertTrue("the cleanup action must be reachable", scrollUntil(label("Delete damaged files")))
-        tap(label("Delete damaged files"))
-        assertTrue("permanent cleanup asks first", await { find(label("Delete damaged files permanently?")) != null })
-        tap(label("Cancel"))
-        assertTrue("Cancel dismisses the question", await { find(label("Delete damaged files permanently?")) == null })
-        assertHealthyUnchanged(healthy, "Cancel")
-        tap(label("Delete damaged files"))
-        tap(label("Delete permanently"))
-        assertTrue("native cleanup completes", await { find(label("Damaged files deleted permanently.")) != null })
-        assertHealthyUnchanged(healthy, "Confirmed cleanup")
-    }
-
 
     @Test
     fun theNotesRootLetsBackThrough() {
@@ -832,8 +820,7 @@ class BackNavigationTest {
             tap(label("Replace recovery phrase"))
             tap(label("Replace"))
             awaitOwnerPromptReady()
-            shell("input keyevent KEYCODE_BACK")
-            assertTrue("Back cancels the prompt", await { !ownerPromptShown() })
+            cancelOwnerCheckWithBack()
             awaitFrames()
             assertNull("a cancelled prompt shows no phrase", controller.recoveryPhrase.value)
             assertNull("and says nothing", controller.notice.value)
@@ -1193,7 +1180,12 @@ class BackNavigationTest {
             assertTrue("the unlock announces the stop", await { find(label(notice)) != null })
             // The pull the unlock started backs off against an address that
             // never answers; the list is searched once it stops changing.
-            assertTrue("the pull ends", await(120_000) { !sync.status.value.busy })
+            // Idle can precede the queued pull. Its terminal failure proves
+            // that the pull ran and released the acknowledgement mutex.
+            assertTrue("the pull ends", await(120_000) {
+                val status = sync.status.value
+                !status.busy && status.failure == ChurStatus.NETWORK_FAILURE
+            })
             // `DESIGN.md` §26: the notice stays until dismissed. Opening an
             // item cleared it, and so did the viewer's close.
             var tile: AccessibilityNodeInfo? = null
@@ -1213,7 +1205,12 @@ class BackNavigationTest {
             assertTrue("the banner offers the acknowledgement", scrollUntil(label("Acknowledge")))
 
             tap(label("Acknowledge"))
-            assertTrue("the catalog records it", await { acknowledged && sync.status.value.integrityAcknowledged })
+            val recorded = await { acknowledged && sync.status.value.integrityAcknowledged }
+            assertTrue(
+                "the catalog records it: acknowledged=$acknowledged, busy=${sync.status.value.busy}, " +
+                    "failure=${sync.status.value.failure}, integrityStop=${sync.status.value.integrityStop}",
+                recorded,
+            )
             assertEquals("the chain stays stopped", ChurStatus.SYNC_CHAIN_FORK, sync.status.value.integrityStop)
             assertTrue(
                 "the banner stays and says so",
@@ -1254,7 +1251,7 @@ class BackNavigationTest {
             setText(fields[1], "ab".repeat(32))
             tap(label("Connect"))
 
-            assertTrue("the system asks for local network access", await { ownerPromptShown() })
+            assertTrue("the system asks for local network access", await { systemPromptShown() })
             assertTrue("the vault stays open under the request", controller.vaultState.value is VaultState.Unlocked)
             tap { it.viewIdResourceName?.endsWith(":id/permission_deny_button") == true }
             assertTrue("a refusal says how to allow it", await { find(label(LOCAL_NETWORK_OFF)) != null })
@@ -1289,7 +1286,7 @@ class BackNavigationTest {
                         find { it.isScrollable }?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD).let { false }
                 },
             )
-            assertFalse("nothing asks until the user syncs", ownerPromptShown())
+            assertFalse("nothing asks until the user syncs", systemPromptShown())
         } finally {
             // The case began with no state, so it leaves none.
             runBlocking { sync.disconnect() }
@@ -1858,11 +1855,21 @@ class BackNavigationTest {
     fun aLongPressThatMovesStillDropsIntoAnAlbum() = inTestVault {
         withMedia()
         val photos = controller.page.value.objects.filter { it.mediaKind == MEDIA_CLASS_IMAGE }.map { it.objectId }
+        assertTrue("the library has photos", photos.isNotEmpty())
         tap(label("Albums"))
         if (!await(3_000) { find(label(ALBUM)) != null }) {
             instrumentation.runOnMainSync { controller.createAlbum(ALBUM) }
         }
         assertTrue("the album", await { controller.albums.value.any { it.name == ALBUM } })
+        // Batch removal requires each membership to exist. Other cases can
+        // leave this album without photos, so establish that precondition.
+        val placed = CountDownLatch(1)
+        instrumentation.runOnMainSync {
+            val album = controller.albums.value.first { it.name == ALBUM }
+            controller.placeObjectsInAlbum(album.albumId, photos) { placed.countDown() }
+        }
+        assertTrue("the photos enter the album", placed.await(30, TimeUnit.SECONDS))
+        val populatedCount = albumMembers()
         // The photos start outside the album, so the drop is what adds one.
         val cleared = CountDownLatch(1)
         instrumentation.runOnMainSync {
@@ -1870,6 +1877,7 @@ class BackNavigationTest {
             controller.removeAllFromAlbum(album.albumId, photos) { cleared.countDown() }
         }
         assertTrue("the photos leave the album", cleared.await(30, TimeUnit.SECONDS))
+        assertEquals("the album no longer contains the photos", populatedCount - photos.size, albumMembers())
         val count = albumMembers()
         // Back leaves the Albums tab for the Library.
         pressBack()
@@ -1963,6 +1971,23 @@ class BackNavigationTest {
             instrumentation.runOnMainSync { controller.restoreTrash { restored.countDown() } }
             restored.await(30, TimeUnit.SECONDS)
         }
+    }
+
+    @Test
+    fun damagedFileCleanupRequiresConfirmationAndKeepsHealthyMedia() = inTestVault {
+        withMedia()
+        val healthy = nativeHealthyContents()
+        tap(label("Settings"))
+        assertTrue("the cleanup action must be reachable", scrollUntil(label("Delete damaged files")))
+        tap(label("Delete damaged files"))
+        assertTrue("permanent cleanup asks first", await { find(label("Delete damaged files permanently?")) != null })
+        tap(label("Cancel"))
+        assertTrue("Cancel dismisses the question", await { find(label("Delete damaged files permanently?")) == null })
+        assertHealthyUnchanged(healthy, "Cancel")
+        tap(label("Delete damaged files"))
+        tap(label("Delete permanently"))
+        assertTrue("native cleanup completes", await { find(label("Damaged files deleted permanently.")) != null })
+        assertHealthyUnchanged(healthy, "Confirmed cleanup")
     }
 
     @Test
@@ -2338,28 +2363,67 @@ class BackNavigationTest {
         return checkNotNull(pin)
     }
 
-    /** Whether a system window, the device authentication prompt, is in front of the application. */
-    private fun ownerPromptShown(): Boolean =
+    /** A credential field or the complete PIN pad identifies authentication, not any foreign dialog. */
+    private fun ownerPromptShown(): Boolean = ownerPromptRoot() != null
+
+    /** Permission dialogs need no credential control. */
+    private fun systemPromptShown(): Boolean =
         instrumentation.uiAutomation.rootInActiveWindow?.packageName?.let { it != activity.packageName } == true
+
+    private fun ownerPromptRoot(): AccessibilityNodeInfo? {
+        val automation = instrumentation.uiAutomation
+        val roots = automation.windows.mapNotNull { it.root }
+            .ifEmpty { listOfNotNull(automation.rootInActiveWindow) }
+        return roots.firstOrNull { root ->
+            root.packageName?.toString() == "com.android.systemui" &&
+                (find(root) { it.isEditable && it.isPassword } != null || hasOwnerPinPad(root))
+        }
+    }
+
+    private fun hasOwnerPinPad(root: AccessibilityNodeInfo): Boolean =
+        find(root, label("Enter")) != null && (0..9).all { find(root, label(it.toString())) != null }
+
+    private fun cancelOwnerCheckWithBack() {
+        fun keyboardShown(): Boolean = instrumentation.uiAutomation.windows.any {
+            it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD
+        }
+        // The EditText credential UI has a separate IME Back layer. The
+        // native PIN pad has none, so its first Back cancels authentication.
+        if (keyboardShown()) {
+            shell("input keyevent KEYCODE_BACK")
+            assertTrue("Back hides the credential keyboard", await { !keyboardShown() })
+        }
+        if (ownerPromptShown()) shell("input keyevent KEYCODE_BACK")
+        assertTrue("Back cancels the prompt", await { !ownerPromptShown() })
+    }
 
     /**
      * Waits for the device authentication prompt to finish its entrance.
      *
-     * The system draws the PIN entry as a pad of its own, which takes no typed
-     * keys, so the digits are pressed through the accessibility tree. A PIN
-     * entered while the dialog still animates in is verified and then never
-     * answered, so both PIN input and Back wait for the animation to end.
+     * A PIN entered while the dialog still animates in is verified and then
+     * never answered, so both PIN input and Back wait for the animation to end.
      */
     private fun awaitOwnerPromptReady() {
         assertTrue("the device asks who it is", await { ownerPromptShown() })
         SystemClock.sleep(1_000)
     }
 
-    /** Enters [pin] through the system prompt's accessible PIN pad. */
+    /** Uses the actual credential field/IME on older SDKs, or the system's own PIN pad. */
     private fun passOwnerCheck(pin: String) {
         awaitOwnerPromptReady()
-        pin.forEach { digit -> tap(label(digit.toString())) }
-        tap(label("Enter"))
+        val root = checkNotNull(ownerPromptRoot())
+        val field = find(root) { it.isEditable && it.isPassword }
+        if (!hasOwnerPinPad(root) && field != null) {
+            if (!field.isFocused) assertTrue("the credential field takes focus", field.performAction(AccessibilityNodeInfo.ACTION_FOCUS))
+            val input = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, pin) }
+            try {
+                assertTrue("the real credential field accepts input", field.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, input))
+            } finally { input.clear() }
+            shell("input keyevent KEYCODE_ENTER")
+        } else {
+            pin.forEach { digit -> tap(label(digit.toString())) }
+            tap(label("Enter"))
+        }
         assertTrue("the prompt closes", await { !ownerPromptShown() })
     }
 

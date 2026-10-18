@@ -713,6 +713,11 @@ chur_status_t chur_album_set_membership(chur_handle_t session,
                                         const uint8_t *album_id,
                                         const ChurObjectRefV1 *object,
                                         uint8_t member);
+/* Removes 1..100000 distinct packed 16-byte object IDs in one transaction.
+ * Each ID must be a current member. Media objects remain in the library. */
+chur_status_t chur_album_remove_objects(chur_handle_t session,
+                                       const uint8_t *album_id,
+                                       const uint8_t *object_ids, uint32_t object_count);
 /* Zero target creates an album named by name under parent_id. Zero source means
  * add; move_members=1 requires a nonzero source. object_ids is count packed
  * 16-byte identifiers. The transaction returns the destination identifier. */

@@ -1,15 +1,19 @@
-@file:OptIn(ExperimentalForeignApi::class)
+@file:OptIn(ExperimentalForeignApi::class, kotlinx.cinterop.BetaInteropApi::class)
 
 package dev.po4yka.chur.imports
 
 import dev.po4yka.chur.ffi.StreamKind
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.ByteVar
+import kotlinx.cinterop.allocArray
+import kotlinx.cinterop.toKString
 import kotlinx.cinterop.LongVar
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.autoreleasepool
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
+import kotlinx.cinterop.pointed
 import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.useContents
 import kotlinx.cinterop.usePinned
@@ -25,9 +29,15 @@ import platform.AVFoundation.AVAssetReader
 import platform.AVFoundation.AVAssetReaderTrackOutput
 import platform.AVFoundation.AVAssetTrack
 import platform.AVFoundation.AVMediaTypeAudio
+import platform.AVFoundation.AVMediaTypeVideo
+import platform.AVFoundation.AVAssetReaderStatusCompleted
+import platform.AVFoundation.naturalSize
+import platform.AVFoundation.preferredTransform
 import platform.AVFoundation.AVMetadataCommonKeyArtwork
 import platform.AVFoundation.AVMetadataItem
 import platform.AVFoundation.AVURLAsset
+import platform.AVFoundation.AVURLAssetReferenceRestrictionsKey
+import platform.AVFoundation.AVAssetReferenceRestrictionForbidAll
 import platform.AVFoundation.cancelLoading
 import platform.AVFoundation.commonKey
 import platform.AVFoundation.commonMetadata
@@ -38,6 +48,10 @@ import platform.AVFoundation.duration
 import platform.AVFoundation.tracksWithMediaType
 import platform.CoreAudioTypes.kAudioFormatLinearPCM
 import platform.CoreFoundation.CFRelease
+import platform.Foundation.CFBridgingRetain
+import platform.CoreFoundation.CFArrayGetCount
+import platform.CoreFoundation.CFArrayGetTypeID
+import platform.CoreFoundation.CFArrayGetValueAtIndex
 import platform.CoreFoundation.CFDataCreate
 import platform.CoreFoundation.CFDictionaryCreateMutable
 import platform.CoreFoundation.CFDictionaryGetValue
@@ -48,6 +62,11 @@ import platform.CoreFoundation.CFNumberCreate
 import platform.CoreFoundation.CFNumberGetTypeID
 import platform.CoreFoundation.CFNumberGetValue
 import platform.CoreFoundation.CFStringRef
+import platform.CoreFoundation.CFStringGetCString
+import platform.CoreFoundation.CFStringGetLength
+import platform.CoreFoundation.CFStringGetTypeID
+import platform.CoreFoundation.CFDictionaryGetTypeID
+import platform.CoreFoundation.kCFStringEncodingUTF8
 import platform.CoreFoundation.kCFBooleanFalse
 import platform.CoreFoundation.kCFBooleanTrue
 import platform.CoreFoundation.kCFNumberSInt64Type
@@ -56,12 +75,14 @@ import platform.CoreFoundation.kCFTypeDictionaryValueCallBacks
 import platform.CoreMedia.CMBlockBufferCopyDataBytes
 import platform.CoreMedia.CMBlockBufferGetDataLength
 import platform.CoreMedia.CMSampleBufferGetDataBuffer
+import platform.CoreMedia.CMSampleBufferGetFormatDescription
+import platform.CoreMedia.CMAudioFormatDescriptionGetStreamBasicDescription
 import platform.CoreGraphics.CGRectMake
+import platform.CoreGraphics.CGRectApplyAffineTransform
 import platform.CoreGraphics.CGSizeMake
 import platform.CoreGraphics.CGImageGetHeight
 import platform.CoreGraphics.CGImageGetWidth
 import platform.CoreGraphics.CGImageRelease
-import platform.CoreImage.CIImage
 import platform.CoreMedia.CMTimeGetSeconds
 import platform.CoreMedia.CMTimeMake
 import platform.Foundation.NSData
@@ -75,9 +96,17 @@ import platform.Foundation.NSURL
 import platform.Foundation.localTimeZone
 import platform.Foundation.timeIntervalSince1970
 import platform.ImageIO.CGImageSourceCopyPropertiesAtIndex
+import platform.ImageIO.CGImageSourceCreateWithURL
+import platform.ImageIO.CGImageSourceGetType
+import platform.UniformTypeIdentifiers.UTType
 import platform.ImageIO.CGImageSourceCreateThumbnailAtIndex
 import platform.ImageIO.CGImageSourceCreateWithData
 import platform.ImageIO.CGImageSourceRef
+import platform.ImageIO.kCGImagePropertyDNGDictionary
+import platform.ImageIO.kCGImagePropertyDNGDefaultCropSize
+import platform.ImageIO.kCGImagePropertyExifDictionary
+import platform.ImageIO.kCGImagePropertyExifDateTimeOriginal
+import platform.ImageIO.kCGImagePropertyExifOffsetTimeOriginal
 import platform.ImageIO.kCGImagePropertyOrientation
 import platform.ImageIO.kCGImagePropertyPixelHeight
 import platform.ImageIO.kCGImagePropertyPixelWidth
@@ -123,14 +152,16 @@ class IosMediaCodec : MediaCodec {
         if (descriptor < 0) return null
         val attributes = NSFileManager.defaultManager.attributesOfItemAtPath(path, null)
         val size = (attributes?.get(NSFileSize) as? NSNumber)?.longLongValue
-        val type = typeOf(path)
+        val bundle = try { readLivePhotoBundle(descriptor, size, validatePayloads = false) } catch (failure: Exception) { platform.posix.close(descriptor); throw failure }
+        val type = if (bundle != null) LivePhotoBundle.CONTENT_TYPE else detectedType(url, name)
         return PickedMedia(
             descriptor = descriptor,
             seekable = true,
             knownLength = size,
             contentTypeHint = type,
             originalFilename = name,
-            captureTimeMs = embeddedCaptureTime(url, type),
+            captureTimeMs = bundle?.captureTimeMs ?: embeddedCaptureTime(url, type),
+            livePhoto = bundle,
             platformHandle = url,
             close = { platform.posix.close(descriptor) },
         )
@@ -158,6 +189,32 @@ class IosMediaCodec : MediaCodec {
         )
     }
 
+    /** Keeps the host's security-scoped URL valid until import releases its lease. */
+    fun openMediaDocument(
+        url: NSURL,
+        descriptor: Int,
+        name: String?,
+        contentType: String?,
+        knownLength: Long,
+        release: () -> Unit,
+    ): PickedMedia? {
+        if (descriptor < 0 || knownLength < 0) { release(); return null }
+        val bundle = try { readLivePhotoBundle(descriptor, knownLength, validatePayloads = false) } catch (failure: Exception) { release(); throw failure }
+        val type = if (bundle != null) LivePhotoBundle.CONTENT_TYPE else detectedType(url, name).takeUnless { it == "application/octet-stream" }
+            ?: normalizedFileContentType(contentType.orEmpty())
+        return PickedMedia(
+            descriptor = descriptor,
+            seekable = true,
+            knownLength = knownLength,
+            contentTypeHint = type,
+            originalFilename = name,
+            captureTimeMs = bundle?.captureTimeMs ?: embeddedCaptureTime(url, type),
+            livePhoto = bundle,
+            platformHandle = url,
+            close = release,
+        )
+    }
+
     /**
      * The capture time the file records, `MEDIA_PIPELINE.md` §4.
      *
@@ -171,22 +228,19 @@ class IosMediaCodec : MediaCodec {
     private fun embeddedCaptureTime(url: NSURL, type: String): Long? = when {
         // The ImageIO names are kCGImagePropertyExifDictionary and its
         // DateTimeOriginal and OffsetTimeOriginal keys.
-        type.startsWith("image/") ->
-            (CIImage.imageWithContentsOfURL(url)?.properties?.get("{Exif}") as? Map<*, *>)?.let { exif ->
-                exifCaptureTimeMs(
-                    exif["DateTimeOriginal"] as? String,
-                    exif["OffsetTimeOriginal"] as? String,
-                    NSTimeZone.localTimeZone,
-                )
-            }
+        type.startsWith("image/") -> imageCaptureTime(url)
         // A container with no date stores zero seconds since 1904.
-        type.startsWith("video/") -> AVURLAsset(url, options = null).creationDate?.dateValue
+        type.startsWith("video/") -> mediaAsset(url).creationDate?.dateValue
             ?.let { (it.timeIntervalSince1970 * 1_000).toLong() }
             ?.takeIf { it >= 0 }
         else -> null
     }
 
     override fun probe(media: PickedMedia): ProbedMedia? {
+        if (media.livePhoto != null) {
+            val dimensions = withLivePhotoImage(media) { imageDimensions(it) }
+            return ProbedMedia(MediaBounds.CLASS_IMAGE, dimensions?.first ?: 0, dimensions?.second ?: 0, 0, LivePhotoBundle.CONTENT_TYPE)
+        }
         val url = urlOf(media)
             ?: return ProbedMedia(MediaBounds.CLASS_OPAQUE, 0, 0, 0, media.contentTypeHint)
         val type = media.contentTypeHint
@@ -199,47 +253,35 @@ class IosMediaCodec : MediaCodec {
     }
 
     private fun probeImage(url: NSURL, type: String): ProbedMedia? {
-        val image = loadImage(url) ?: return null
-        val width = image.size.useContents { width }
-        val height = image.size.useContents { height }
-        if (width <= 0.0 || height <= 0.0) return null
-        return ProbedMedia(
-            mediaClass = MediaBounds.CLASS_IMAGE,
-            width = width.toInt(),
-            height = height.toInt(),
-            durationMs = 0,
-            contentType = type,
-        )
+        val dimensions = withImageSource(url) { imageDimensions(it) } ?: return null
+        return ProbedMedia(MediaBounds.CLASS_IMAGE, dimensions.first, dimensions.second, 0, type)
     }
 
-    /**
-     * A video's duration and normalized dimensions.
-     *
-     * The dimensions come from the poster frame rather than from the track's
-     * natural size, and deliberately: §11 requires orientation normalization,
-     * the poster generator already applies the preferred track transform, and a
-     * portrait recording's natural size is landscape. Taking both from the same
-     * transform is what keeps the probe and the derivative agreeing.
-     */
+    /** Read track metadata before any frame decode; preserve full upright dimensions. */
     private fun probeVideo(url: NSURL, type: String): ProbedMedia {
-        val seconds = CMTimeGetSeconds(AVURLAsset(url, options = null).duration)
-        val poster = posterFrame(url)
+        val asset = mediaAsset(url)
+        val seconds = CMTimeGetSeconds(asset.duration)
+        val track = asset.tracksWithMediaType(AVMediaTypeVideo).firstOrNull() as? AVAssetTrack
+        val dimensions = track?.naturalSize?.useContents {
+            CGRectApplyAffineTransform(CGRectMake(0.0, 0.0, width, height), track.preferredTransform)
+                .useContents { size.width.toInt() to size.height.toInt() }
+        }
         return ProbedMedia(
             mediaClass = MediaBounds.CLASS_VIDEO,
-            width = poster?.size?.useContents { width.toInt() } ?: 0,
-            height = poster?.size?.useContents { height.toInt() } ?: 0,
-            durationMs = if (seconds.isNaN()) 0 else (seconds * 1000).toLong(),
+            width = dimensions?.first ?: 0,
+            height = dimensions?.second ?: 0,
+            durationMs = durationMillis(seconds),
             contentType = type,
         )
     }
 
     private fun probeAudio(url: NSURL, type: String): ProbedMedia {
-        val seconds = CMTimeGetSeconds(AVURLAsset(url, options = null).duration)
+        val seconds = CMTimeGetSeconds(mediaAsset(url).duration)
         return ProbedMedia(
             mediaClass = MediaBounds.CLASS_AUDIO,
             width = 0,
             height = 0,
-            durationMs = if (seconds.isNaN()) 0 else (seconds * 1000).toLong(),
+            durationMs = durationMillis(seconds),
             contentType = type,
         )
     }
@@ -255,12 +297,23 @@ class IosMediaCodec : MediaCodec {
         if (kind == StreamKind.AUDIO_WAVEFORM) return deriveWaveform(url, probe, cancelRequested)
         if (probe.mediaClass == MediaBounds.CLASS_AUDIO) return deriveAudioArtwork(url, kind, cancelRequested)
         val target = MediaBounds.targetSize(kind, probe.width, probe.height) ?: return null
-        val (width, height) = target
+        var (width, height) = target
         val image = when (probe.mediaClass) {
-            MediaBounds.CLASS_IMAGE -> loadImage(url)
-            MediaBounds.CLASS_VIDEO -> posterFrame(url)
+            MediaBounds.CLASS_IMAGE -> if (media.livePhoto == null) loadImage(url, maxOf(width, height)) else withLivePhotoImage(media) { source ->
+                val frame = boundedThumbnail(source, maxOf(width, height)) ?: return@withLivePhotoImage null
+                try { UIImage.imageWithCGImage(frame) } finally { CGImageRelease(frame) }
+            }
+            MediaBounds.CLASS_VIDEO -> posterFrame(url, maxOf(width, height))
             else -> null
         } ?: return null
+        val decoded = image.size.useContents { this.width.toInt() to this.height.toInt() }
+        // Some RAW decoders expose only an embedded preview. Keep its actual
+        // pixels; a preview must not be enlarged to the RAW image dimensions.
+        if (decoded.first < width || decoded.second < height) {
+            val bounded = MediaBounds.targetSize(kind, decoded.first, decoded.second) ?: return null
+            width = bounded.first
+            height = bounded.second
+        }
 
         // A scale of 1.0 keeps the pixel size the target names rather than
         // multiplying it by the screen scale: §11 makes the derivative's size a
@@ -274,15 +327,18 @@ class IosMediaCodec : MediaCodec {
         val scaled = UIGraphicsGetImageFromCurrentImageContext()
         UIGraphicsEndImageContext()
         // §12: baseline JPEG, at the quality the kind names.
+        if (cancelRequested()) return null
         val data = scaled?.let { UIImageJPEGRepresentation(it, MediaBounds.quality(kind) / 100.0) }
             ?: return null
-        return Derivative(kind, data.toByteArray(), width, height)
+        val bytes = data.toByteArray()
+        if (cancelRequested()) { bytes.fill(0); return null }
+        return Derivative(kind, bytes, width, height)
     }
 
     /** Native tags are optional: an absent, oversized, or invalid image adds no visual asset. */
     private fun deriveAudioArtwork(url: NSURL, kind: StreamKind, cancelRequested: () -> Boolean): Derivative? = autoreleasepool {
         if (MediaBounds.longEdge(kind) == null || kind == StreamKind.VIDEO_POSTER || cancelRequested()) return@autoreleasepool null
-        val asset = AVURLAsset(url, options = null)
+        val asset = mediaAsset(url)
         try {
             // commonMetadata normalizes supported ID3 APIC and iTunes covr tags.
             // AVFoundation owns its initial NSData allocation; app checks happen before image decode.
@@ -316,7 +372,7 @@ class IosMediaCodec : MediaCodec {
         probe: ProbedMedia,
         cancelRequested: () -> Boolean,
     ): Derivative? {
-        val asset = AVURLAsset(url, options = null)
+        val asset = mediaAsset(url)
         val track = asset.tracksWithMediaType(AVMediaTypeAudio).firstOrNull() as? AVAssetTrack
             ?: return null
         val settings = mapOf<Any?, Any?>(
@@ -326,104 +382,181 @@ class IosMediaCodec : MediaCodec {
             AVLinearPCMIsFloatKey to NSNumber(bool = false),
             AVLinearPCMIsNonInterleaved to NSNumber(bool = false),
         )
-        val reader = AVAssetReader(asset, null) ?: return null
+        val reader = AVAssetReader(asset, null)
         val output = AVAssetReaderTrackOutput(track, settings)
         if (!reader.canAddOutput(output)) return null
         reader.addOutput(output)
-        if (!reader.startReading()) return null
+        try {
+            if (!reader.startReading()) return null
 
-        // Two bytes per sample; the frame count is only used to spread buckets,
-        // and the accumulator clamps an index a decoder's own count contradicts.
-        val samples = probe.durationMs * SAMPLE_RATE_HINT / 1_000L
-        val accumulator = Waveform.Accumulator(samples)
-        while (true) {
-            if (cancelRequested()) {
-                reader.cancelReading()
-                return null
-            }
-            val buffer = output.copyNextSampleBuffer() ?: break
-            val block = CMSampleBufferGetDataBuffer(buffer)
-            if (block != null) {
-                val length = CMBlockBufferGetDataLength(block).toInt()
-                if (length > 0) {
-                    val pcm = ByteArray(length)
-                    pcm.usePinned { pinned ->
-                        CMBlockBufferCopyDataBytes(block, 0u, length.toULong(), pinned.addressOf(0))
+            // The reader preserves the track rate and channel count. Count interleaved
+            // samples, since the common accumulator advances once per channel sample.
+            var accumulator: Waveform.Accumulator? = null
+            while (true) {
+                if (cancelRequested()) { reader.cancelReading(); return null }
+                val buffer = output.copyNextSampleBuffer() ?: break
+                try {
+                    if (accumulator == null) {
+                        val description = CMSampleBufferGetFormatDescription(buffer) ?: return null
+                        val format = CMAudioFormatDescriptionGetStreamBasicDescription(description) ?: return null
+                        val expected = format.pointed.let {
+                            waveformExpectedSamples(probe.durationMs, it.mSampleRate, it.mChannelsPerFrame.toInt())
+                        } ?: return null
+                    accumulator = Waveform.Accumulator(expected)
                     }
-                    accumulator.addAll(pcm)
-                }
+                    val block = CMSampleBufferGetDataBuffer(buffer) ?: return null
+                    val length = CMBlockBufferGetDataLength(block)
+                    if (length > 16uL * 1024uL * 1024uL || length % 2uL != 0uL) return null
+                    if (length > 0uL) {
+                        val pcm = ByteArray(length.toInt())
+                        try {
+                            val status = pcm.usePinned { pinned ->
+                                CMBlockBufferCopyDataBytes(block, 0u, length, pinned.addressOf(0))
+                            }
+                            if (status != 0) return null
+                            accumulator.addAll(pcm)
+                        } finally { pcm.fill(0) }
+                    }
+                } finally { CFRelease(buffer) }
             }
-            CFRelease(buffer)
+            val complete = accumulator ?: return null
+            if (reader.status != AVAssetReaderStatusCompleted || cancelRequested() || complete.sampleCount == 0L) return null
+            return Derivative(
+                kind = StreamKind.AUDIO_WAVEFORM,
+                bytes = complete.encode(probe.durationMs),
+                width = 0,
+                height = 0,
+            )
+        } finally {
+            if (reader.status != AVAssetReaderStatusCompleted) reader.cancelReading()
+            asset.cancelLoading()
         }
-        if (accumulator.sampleCount == 0L) return null
-        return Derivative(
-            kind = StreamKind.AUDIO_WAVEFORM,
-            bytes = accumulator.encode(probe.durationMs),
-            width = 0,
-            height = 0,
-        )
     }
 
-    private fun loadImage(url: NSURL): UIImage? = url.path?.let { UIImage.imageWithContentsOfFile(it) }
+    private fun loadImage(url: NSURL, maxEdge: Int): UIImage? = withImageSource(url) { source ->
+        // ImageIO applies orientation and can use native RAW thumbnails. Unsupported
+        // RAW files remain original files with no invented preview.
+        val frame = boundedThumbnail(source, maxEdge) ?: return@withImageSource null
+        try { UIImage.imageWithCGImage(frame) } finally { CGImageRelease(frame) }
+    }
 
-    /**
-     * The first frame of a video, §6's poster frame.
-     *
-     * `appliesPreferredTrackTransform` is what §11 calls orientation
-     * normalization: without it a portrait recording produces a landscape
-     * poster with the picture on its side.
-     */
-    private fun posterFrame(url: NSURL): UIImage? {
-        val asset: AVAsset = AVURLAsset(url, options = null)
+    private fun posterFrame(url: NSURL, maxEdge: Int): UIImage? {
+        val asset: AVAsset = mediaAsset(url)
         val generator = AVAssetImageGenerator(asset)
         generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSizeMake(maxEdge.toDouble(), maxEdge.toDouble())
         val frame = generator.copyCGImageAtTime(CMTimeMake(0, 1), null, null) ?: return null
-        return try {
-            UIImage.imageWithCGImage(frame)
-        } finally {
-            // AVAssetImageGenerator returns a +1 Core Foundation reference.
-            // UIImage retains its own reference; Kotlin does not own the pointer.
-            CGImageRelease(frame)
-        }
+        return try { UIImage.imageWithCGImage(frame) } finally { CGImageRelease(frame) }
     }
 
     private fun urlOf(media: PickedMedia): NSURL? = media.platformHandle as? NSURL
 
-    /**
-     * The IANA type a path's extension implies.
-     *
-     * §3 calls the type a hint, so a coarse mapping is enough: Rust validates
-     * the shape and the catalog stores what it was told, and no cryptographic
-     * decision depends on it.
-     */
-    private companion object {
-        /**
-         * The sample rate a waveform's bucket spread assumes.
-         *
-         * The value only decides how frames map onto buckets, and the
-         * accumulator clamps an index the decoder's own count contradicts, so a
-         * recording at another rate draws correctly either way. 44100 is the
-         * rate the platform resamples most inputs to.
-         */
-        const val SAMPLE_RATE_HINT = 44_100L
+    /** Prefer decoded image type, then the platform's registered extension type. */
+    private fun detectedType(url: NSURL, name: String?): String {
+        val imageType = withImageSource(url) { source ->
+            CGImageSourceGetType(source)?.let(::cfStringValue)
+        }
+        if (imageType != null) {
+            UTType.typeWithIdentifier(imageType)?.preferredMIMEType?.let { return it }
+        }
+        val extension = (name ?: url.path.orEmpty()).substringAfterLast('.', "").lowercase()
+        val native = UTType.typeWithFilenameExtension(extension)
+        return native?.preferredMIMEType ?: "application/octet-stream"
     }
 
-    private fun typeOf(path: String): String = when (path.substringAfterLast('.').lowercase()) {
-        "jpg", "jpeg" -> "image/jpeg"
-        "png" -> "image/png"
-        "heic", "heif" -> "image/heic"
-        "gif" -> "image/gif"
-        "webp" -> "image/webp"
-        "mp4", "m4v" -> "video/mp4"
-        "mov" -> "video/quicktime"
-        "m4a" -> "audio/mp4"
-        "mp3" -> "audio/mpeg"
-        "aac" -> "audio/aac"
-        "flac" -> "audio/flac"
-        "aif", "aiff" -> "audio/aiff"
-        "wav" -> "audio/wav"
-        else -> "application/octet-stream"
+}
+
+/** Read CF strings through UTF-8 rather than an untyped Foundation bridge cast. */
+private fun cfStringValue(value: CFStringRef): String? = memScoped {
+    val length = CFStringGetLength(value)
+    if (length !in 0..1024) return@memScoped null
+    val capacity = length * 4 + 1
+    val bytes = allocArray<ByteVar>(capacity.toInt())
+    if (CFStringGetCString(value, bytes, capacity, kCFStringEncodingUTF8)) bytes.toKString() else null
+}
+
+internal fun waveformExpectedSamples(durationMs: Long, sampleRate: Double, channels: Int): Long? {
+    if (!sampleRate.isFinite() || sampleRate <= 0 || channels !in 1..64) return null
+    val samples = durationMs.coerceAtLeast(0).toDouble() * sampleRate * channels / 1000.0
+    return if (samples < Long.MAX_VALUE.toDouble()) samples.toLong() else null
+}
+
+/** Import must not follow media references to files or network resources. */
+private fun mediaAsset(url: NSURL): AVURLAsset = AVURLAsset(
+    url,
+    options = mapOf(AVURLAssetReferenceRestrictionsKey to NSNumber(unsignedLongLong = AVAssetReferenceRestrictionForbidAll)),
+)
+
+private fun durationMillis(seconds: Double): Long =
+    if (seconds.isFinite() && seconds > 0 && seconds < Long.MAX_VALUE / 1000.0) (seconds * 1000).toLong() else 0
+
+private inline fun <T> withImageSource(url: NSURL, block: (CGImageSourceRef) -> T): T? {
+    val retained = CFBridgingRetain(url) ?: return null
+    try {
+        val options = CFDictionaryCreateMutable(null, 1, kCFTypeDictionaryKeyCallBacks.ptr, kCFTypeDictionaryValueCallBacks.ptr)
+            ?: return null
+        val source = try {
+            CFDictionarySetValue(options, kCGImageSourceShouldCache, kCFBooleanFalse)
+            CGImageSourceCreateWithURL(retained.reinterpret(), options)
+        } finally { CFRelease(options) } ?: return null
+        try { return block(source) } finally { CFRelease(source) }
+    } finally { CFRelease(retained) }
+}
+
+private fun imageCaptureTime(url: NSURL): Long? = withImageSource(url) { source ->
+    val properties = CGImageSourceCopyPropertiesAtIndex(source, 0u, null) ?: return@withImageSource null
+    try {
+        val exif = CFDictionaryGetValue(properties, kCGImagePropertyExifDictionary) ?: return@withImageSource null
+        if (CFGetTypeID(exif) != CFDictionaryGetTypeID()) return@withImageSource null
+        fun text(key: CFStringRef?): String? {
+            val value = CFDictionaryGetValue(exif.reinterpret(), key) ?: return null
+            if (CFGetTypeID(value) != CFStringGetTypeID()) return null
+            return cfStringValue(value.reinterpret())
+        }
+        exifCaptureTimeMs(text(kCGImagePropertyExifDateTimeOriginal), text(kCGImagePropertyExifOffsetTimeOriginal), NSTimeZone.localTimeZone)
+    } finally { CFRelease(properties) }
+}
+
+private fun imageDimensions(source: CGImageSourceRef): Pair<Int, Int>? {
+    val properties = CGImageSourceCopyPropertiesAtIndex(source, 0u, null) ?: return null
+    try {
+        // iOS may report an embedded preview as PixelWidth/Height for RAW.
+        // DNG DefaultCropSize names the actual image, even in that fallback.
+        val rawCrop = if (CGImageSourceGetType(source)?.let(::cfStringValue) == "com.adobe.raw-image") dngCropDimensions(properties) else null
+        val width = rawCrop?.first ?: imageInteger(properties, kCGImagePropertyPixelWidth) ?: return null
+        val height = rawCrop?.second ?: imageInteger(properties, kCGImagePropertyPixelHeight) ?: return null
+        val orientation = imageInteger(properties, kCGImagePropertyOrientation) ?: 1L
+        if (width !in 1..Int.MAX_VALUE.toLong() || height !in 1..Int.MAX_VALUE.toLong() || orientation !in 1..8) return null
+        return if (orientation in 5..8) height.toInt() to width.toInt() else width.toInt() to height.toInt()
+    } finally { CFRelease(properties) }
+}
+
+private fun dngCropDimensions(properties: CFDictionaryRef): Pair<Long, Long>? {
+    val dng = CFDictionaryGetValue(properties, kCGImagePropertyDNGDictionary) ?: return null
+    if (CFGetTypeID(dng) != CFDictionaryGetTypeID()) return null
+    val crop = CFDictionaryGetValue(dng.reinterpret(), kCGImagePropertyDNGDefaultCropSize) ?: return null
+    if (CFGetTypeID(crop) != CFArrayGetTypeID() || CFArrayGetCount(crop.reinterpret()) != 2L) return null
+    fun dimension(index: Long): Long? = memScoped {
+        val number = CFArrayGetValueAtIndex(crop.reinterpret(), index) ?: return@memScoped null
+        if (CFGetTypeID(number) != CFNumberGetTypeID()) return@memScoped null
+        val value = alloc<LongVar>()
+        if (CFNumberGetValue(number.reinterpret(), kCFNumberSInt64Type, value.ptr) && value.value in 1..Int.MAX_VALUE.toLong()) value.value else null
     }
+    return (dimension(0) ?: return null) to (dimension(1) ?: return null)
+}
+
+private fun boundedThumbnail(source: CGImageSourceRef, maxEdge: Int) = memScoped {
+    val edge = alloc<LongVar> { value = maxEdge.toLong() }
+    val number = CFNumberCreate(null, kCFNumberSInt64Type, edge.ptr) ?: return@memScoped null
+    val options = CFDictionaryCreateMutable(null, 5, kCFTypeDictionaryKeyCallBacks.ptr, kCFTypeDictionaryValueCallBacks.ptr)
+    if (options == null) { CFRelease(number); return@memScoped null }
+    try {
+        CFDictionarySetValue(options, kCGImageSourceCreateThumbnailFromImageAlways, kCFBooleanTrue)
+        CFDictionarySetValue(options, kCGImageSourceCreateThumbnailWithTransform, kCFBooleanTrue)
+        CFDictionarySetValue(options, kCGImageSourceShouldCacheImmediately, kCFBooleanTrue)
+        CFDictionarySetValue(options, kCGImageSourceThumbnailMaxPixelSize, number)
+        CGImageSourceCreateThumbnailAtIndex(source, 0u, options)
+    } finally { CFRelease(options); CFRelease(number) }
 }
 
 /** Decode only a bounded upright thumbnail, then write a new metadata-free JPEG. */

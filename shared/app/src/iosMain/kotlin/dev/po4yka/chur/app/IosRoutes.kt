@@ -33,6 +33,7 @@ import dev.po4yka.chur.app.publicshell.CalculatorScreen
 import androidx.compose.runtime.key
 import dev.po4yka.chur.app.notes.rememberOpenNote
 import dev.po4yka.chur.app.vault.CreateVaultScreen
+import dev.po4yka.chur.app.vault.loadedObjectSelection
 import dev.po4yka.chur.app.vault.LibraryTile
 import dev.po4yka.chur.app.vault.AlbumExportDialog
 import dev.po4yka.chur.app.vault.AlbumPickerDialog
@@ -69,6 +70,7 @@ import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
 import dev.po4yka.chur.app.vault.viewerPages
 import dev.po4yka.chur.app.vault.ViewerStillState
 import dev.po4yka.chur.app.vault.viewerStill
+import dev.po4yka.chur.app.vault.rememberViewerAnimation
 import dev.po4yka.chur.app.vault.VaultPlayer
 import dev.po4yka.chur.app.vault.VaultDocument
 import dev.po4yka.chur.app.vault.VaultUiState
@@ -270,7 +272,11 @@ private fun IosExternalArchiveRoute(controller: ChurController) {
             val pickerWasOpen = pending != null
             pending = null
             // Once handed over, only the operation owner may close source grants.
-            if (pickerWasOpen) IosDocumentPicker.cancel?.invoke()
+            if (pickerWasOpen) {
+                IosDocumentPicker.cancel?.invoke()
+                IosAudioPicker.cancel?.invoke()
+                IosLivePhotoFilesPicker.cancel?.invoke()
+            }
         }
     }
     ExternalArchiveScreen(
@@ -363,6 +369,8 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     DisposableEffect(controller, generation) {
         onDispose {
             IosDocumentPicker.cancel?.invoke()
+            IosAudioPicker.cancel?.invoke()
+            IosLivePhotoFilesPicker.cancel?.invoke()
             if (documentPickerPending) {
                 documentPickerPending = false
                 val current = controller.vaultState.value as? VaultState.Unlocked
@@ -484,7 +492,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                     // Leaving or a lock ended the prompt with the session, and
                     // the outcome belongs to no screen of a later one.
                     if (controller.endPrompt(prompt) && controller.vaultState.value == session) {
-                        controller.report(SourceDeletionCopy.outcome(picked.count, found, deleted, "the Photos app"))
+                        controller.report(SourceDeletionCopy.verifiedOutcome(picked.count, found, deleted))
                     }
                 }
             },
@@ -619,14 +627,58 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             }
         }
     }
-    val importMedia: () -> Unit = {
-        val present = IosMediaPicker.present
+    val importMediaFiles: (Boolean) -> Unit = { livePhotoPackages ->
+        val present = if (livePhotoPackages) IosLivePhotoFilesPicker.present else IosAudioPicker.present
+        if (present == null) {
+            controller.report("This build cannot open the media file picker.")
+        } else {
+            val albumId = openAlbum?.albumId
+            documentPickerPending = true
+            controller.beginHostActivity()
+            present { count, load, releaseSelection ->
+                val currentSession = (controller.vaultState.value as? VaultState.Unlocked)?.generation == generation
+                val accepted = documentPickerPending && currentSession
+                if (documentPickerPending) {
+                    documentPickerPending = false
+                    if (currentSession) controller.endHostActivity()
+                }
+                if (!accepted || count <= 0) {
+                    releaseSelection()
+                } else {
+                    scope.launch {
+                        try {
+                            controller.importAll(importer, count, albumId) { index, prepare ->
+                                suspendCancellableCoroutine { continuation ->
+                                    load(index, prepare) { fd, name, type, size, path, release ->
+                                        try {
+                                            val picked = path?.let {
+                                                codec.openMediaDocument(NSURL.fileURLWithPath(it), fd, name, type, size, release)
+                                            }
+                                            if (path == null) release()
+                                            continuation.resume(picked) { _, item, _ -> item?.close?.invoke() }
+                                        } catch (failure: Exception) {
+                                            release()
+                                            continuation.resumeWith(Result.failure(failure))
+                                        }
+                                    }
+                                }
+                            }
+                        } finally {
+                            releaseSelection()
+                        }
+                    }
+                }
+            }
+        }
+    }
+    val importMedia: (Boolean) -> Unit = { fullLivePhoto ->
+        val present = if (fullLivePhoto) IosLivePhotoPicker.present else IosMediaPicker.present
         if (present == null) {
             controller.report("This build cannot open the photo picker.")
         } else {
             val albumId = openAlbum?.albumId
             controller.beginHostActivity()
-            present { count, load, review ->
+            present { count, load, review, canDeleteOriginal ->
                 controller.endHostActivity()
                 if (count > 0) {
                     scope.launch {
@@ -654,8 +706,16 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                             }
                         }
                         val imported = importedOriginals(List(count) { it }, outcomes)
-                        if (imported.isNotEmpty() && controller.vaultState.value is VaultState.Unlocked) {
-                            originals = PickedOriginals(imported.size) { done -> review(imported, done) }
+                        val deletable = imported.filter(canDeleteOriginal)
+                        if ((controller.vaultState.value as? VaultState.Unlocked)?.generation == generation) {
+                            if (!fullLivePhoto && imported.size > deletable.size) {
+                                val summary = controller.notice.value?.text.orEmpty()
+                                controller.report("$summary Some Photos originals may contain additional media or edits. " +
+                                    "Keep them in Photos; Chur has not verified a complete copy.")
+                            }
+                            if (deletable.isNotEmpty()) {
+                                originals = PickedOriginals(deletable.size) { done -> review(deletable, done) }
+                            }
                         }
                     }
                 }
@@ -668,7 +728,10 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             title = { Text("Import") },
             text = {
                 Column {
-                    TextButton(onClick = { choosingImportSource = false; importMedia() }, modifier = Modifier.fillMaxWidth()) { Text("Photos and videos") }
+                    TextButton(onClick = { choosingImportSource = false; importMedia(false) }, modifier = Modifier.fillMaxWidth()) { Text("Photos and videos") }
+                    TextButton(onClick = { choosingImportSource = false; importMedia(true) }, modifier = Modifier.fillMaxWidth()) { Text("Full Live Photos (Photos access)") }
+                    TextButton(onClick = { choosingImportSource = false; importMediaFiles(false) }, modifier = Modifier.fillMaxWidth()) { Text("Audio files") }
+                    TextButton(onClick = { choosingImportSource = false; importMediaFiles(true) }, modifier = Modifier.fillMaxWidth()) { Text("Live Photo packages") }
                     TextButton(onClick = { choosingImportSource = false; importFiles() }, modifier = Modifier.fillMaxWidth()) { Text("Documents and files") }
                     TextButton(onClick = { choosingImportSource = false; choosingArchiveImport = true }, modifier = Modifier.fillMaxWidth()) { Text("Encrypted archive") }
                 }
@@ -955,7 +1018,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 onImportArchive = { choosingArchiveImport = true },
                 onRestoreArchive = controller::restoreArchiveAsSeparateVault,
                 onCreateSecondIdentity = controller::createSecondIdentity,
-                onSelectAll = { selection = page.objects.map { it.id }.toSet() },
+                onSelectLoadedItems = { selection = loadedObjectSelection(page) },
                 onClearSelection = { selection = emptySet() },
                 onExportSelection = { choosingExport = true },
                 onEncryptedExportSelection = {
@@ -1066,6 +1129,7 @@ private fun IosViewerRoute(
     val tags by controller.tags.collectAsState()
     var choosingTags by remember(projection.id) { mutableStateOf(false) }
     val viewerScope = rememberCoroutineScope()
+    var livePlayback by remember(projection.id, generation) { mutableStateOf<dev.po4yka.chur.app.vault.PlaybackSource?>(null) }
     var preview by remember(projection.id, generation) { mutableStateOf<ImageBitmap?>(null) }
     var stillState by remember(projection.id, generation) { mutableStateOf(ViewerStillState.Loading) }
     var showDetail by remember(projection.id) { mutableStateOf(false) }
@@ -1083,7 +1147,9 @@ private fun IosViewerRoute(
         onDispose { root?.viewerChrome = null }
     }
 
-    LaunchedEffect(projection.id, generation) {
+    var zoomedPhoto by remember(projection.id, generation) { mutableStateOf(false) }
+    val animation = rememberViewerAnimation(controller.vault, projection, generation, detail?.contentType)
+    LaunchedEffect(projection.id, generation, zoomedPhoto) {
         // `IOS.md` §18: a preview before full-resolution ranges. The cached
         // thumbnail shows at once, and the sharper still comes last so the
         // detail does not wait for an original to decode.
@@ -1092,7 +1158,12 @@ private fun IosViewerRoute(
             waveform = controller.derivativeOf(projection.objectId, StreamKind.AUDIO_WAVEFORM)
         }
         detail = controller.detailOf(projection.objectId)
-        viewerStill(controller.vault, cache, generation, projection)?.let { preview = it }
+        if (detail?.contentType == dev.po4yka.chur.imports.LivePhotoBundle.CONTENT_TYPE) {
+            livePlayback = dev.po4yka.chur.app.vault.livePhotoPlaybackFor(
+                controller.vault, projection.objectId, onVerify = controller::verifyEverything)
+        }
+        viewerStill(controller.vault, cache, generation, projection,
+            highResolution = zoomedPhoto && animation == null)?.let { preview = it }
         stillState = if (preview != null || thumbnails[projection.id] != null) {
             ViewerStillState.Ready
         } else {
@@ -1107,7 +1178,7 @@ private fun IosViewerRoute(
     val playback = if (PresentedState.of(projection) == PresentedState.QUARANTINED) {
         null
     } else {
-        playbackFor(
+        livePlayback ?: playbackFor(
             vault = controller.vault,
             objectId = projection.objectId,
             mediaKind = projection.mediaKind,
@@ -1127,6 +1198,8 @@ private fun IosViewerRoute(
         preview = preview,
         stillState = stillState,
         onVerifyStill = { controller.verifyEverything() },
+        onZoomChanged = { zoomedPhoto = it },
+        animation = animation,
         showDetail = showDetail,
         chromeVisible = chromeVisible,
         onToggleChrome = { chrome.toggle(chromePinned) },
@@ -1194,7 +1267,7 @@ private fun IosViewerRoute(
     }
     if (choosingExport) {
         ExportOptionsDialog(
-            media = canSaveToPhotos(projection.mediaKind),
+            media = canSaveToPhotos(projection.mediaKind) || detail?.contentType == dev.po4yka.chur.imports.LivePhotoBundle.CONTENT_TYPE,
             files = true,
             share = true,
             onChoose = { target ->
@@ -1245,6 +1318,25 @@ public object IosMediaPicker {
                     loaded: (path: String?, name: String?) -> Unit,
                 ) -> Unit,
                 review: (indices: List<Int>, done: (found: Int, deleted: Int) -> Unit) -> Unit,
+                canDeleteOriginal: (index: Int) -> Boolean,
+            ) -> Unit,
+        ) -> Unit
+    )? = null
+}
+
+/** Full resource capture uses the same protected-file bridge and never offers source deletion. */
+public object IosLivePhotoPicker {
+    public var present: (
+        (
+            answer: (
+                count: Int,
+                load: (
+                    index: Int,
+                    prepare: (processed: Long, total: Long) -> Boolean,
+                    loaded: (path: String?, name: String?) -> Unit,
+                ) -> Unit,
+                review: (indices: List<Int>, done: (found: Int, deleted: Int) -> Unit) -> Unit,
+                canDeleteOriginal: (index: Int) -> Boolean,
             ) -> Unit,
         ) -> Unit
     )? = null
@@ -1356,6 +1448,28 @@ public object IosDocumentPicker {
     public var present: ((answer: (
         count: Int,
         load: (index: Int, prepare: (processed: Long, total: Long) -> Boolean, loaded: (descriptor: Int, name: String?, contentType: String, size: Long, release: () -> Unit) -> Unit) -> Unit,
+        releaseSelection: () -> Unit,
+    ) -> Unit) -> Unit)? = null
+    public var cancel: (() -> Unit)? = null
+}
+
+/** Audio files use a coordinated readable URL until the import releases the source. */
+public object IosAudioPicker {
+    public var present: ((answer: (
+        count: Int,
+        load: (index: Int, prepare: (processed: Long, total: Long) -> Boolean,
+            loaded: (descriptor: Int, name: String?, contentType: String, size: Long, path: String?, release: () -> Unit) -> Unit) -> Unit,
+        releaseSelection: () -> Unit,
+    ) -> Unit) -> Unit)? = null
+    public var cancel: (() -> Unit)? = null
+}
+
+/** Portable Live Photo packages use the media pipeline and keep their scoped source lease. */
+public object IosLivePhotoFilesPicker {
+    public var present: ((answer: (
+        count: Int,
+        load: (index: Int, prepare: (processed: Long, total: Long) -> Boolean,
+            loaded: (descriptor: Int, name: String?, contentType: String, size: Long, path: String?, release: () -> Unit) -> Unit) -> Unit,
         releaseSelection: () -> Unit,
     ) -> Unit) -> Unit)? = null
     public var cancel: (() -> Unit)? = null

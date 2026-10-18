@@ -408,6 +408,12 @@ class VaultRepository(
     suspend fun setAlbumMembership(albumId: ByteArray, objectId: ByteArray, member: Boolean) =
         withSession { ChurVault.setAlbumMembership(it, albumId, objectId, member) }
 
+    suspend fun removeAlbumObjects(
+        albumId: ByteArray,
+        objectIds: List<ByteArray>,
+        expectedGeneration: Long? = null,
+    ) = withSession(expectedGeneration) { ChurVault.removeAlbumObjects(it, albumId, objectIds) }
+
     suspend fun placeAlbumObjects(
         targetId: ByteArray?,
         newName: String,
@@ -674,8 +680,8 @@ class VaultRepository(
      * For a small object a platform decoder needs whole: the bytes go straight
      * into the caller's native buffer, never a Kotlin array, [ChurVault.readInto].
      */
-    fun readLeasedInto(reader: Long, destination: ChurBuffer) =
-        ChurVault.readInto(reader, destination)
+    fun readLeasedInto(reader: Long, destination: ChurBuffer, sourceOffset: Long = 0) =
+        ChurVault.readInto(reader, destination, sourceOffset)
 
     /**
      * Closes one lease.

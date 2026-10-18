@@ -381,3 +381,99 @@ fn committed_object_keeps_the_stream_identity_needed_for_download() {
         &id(42)
     );
 }
+
+#[test]
+fn concurrent_matching_album_creations_share_one_initial_value_in_every_order() {
+    let key = DeviceSigningKey::from_seed([2; 32]);
+    let create = OperationPayload::new(
+        id(10),
+        1,
+        PayloadBody::CreateAlbum {
+            album_id: id(13),
+            name: "Legacy".into(),
+        },
+    )
+    .expect("create payload");
+    let first = operation(&key, 40, id(2), 1, [0; 32], vec![], &create);
+    let second = operation(&key, 41, id(3), 1, [0; 32], vec![], &create);
+    let rename = OperationPayload::new(
+        id(10),
+        1,
+        PayloadBody::RenameAlbum {
+            album_id: id(13),
+            name: "Explicit rename".into(),
+        },
+    )
+    .expect("rename payload");
+    let renamed = operation(&key, 42, id(2), 2, first.digest(), vec![], &rename);
+    let records = [(&first, &create), (&second, &create), (&renamed, &rename)];
+    for order in [[0, 1, 2], [1, 0, 2], [0, 2, 1], [1, 2, 0]] {
+        let mut state = MaterializedState::new();
+        for index in order {
+            let (op, payload) = records[index];
+            assert_eq!(
+                state
+                    .apply(op, payload)
+                    .expect("concurrent creation or rename"),
+                MergeOutcome::Applied
+            );
+        }
+        assert_eq!(state.album_name(&id(13)), Some("Explicit rename"));
+        assert_eq!(
+            state.apply(&first, &create).expect("exact replay"),
+            MergeOutcome::Duplicate
+        );
+    }
+}
+
+#[test]
+fn album_creation_rejects_conflicting_name_collection_and_causal_identifier_reuse() {
+    let key = DeviceSigningKey::from_seed([2; 32]);
+    let create = OperationPayload::new(
+        id(10),
+        1,
+        PayloadBody::CreateAlbum {
+            album_id: id(13),
+            name: "Legacy".into(),
+        },
+    )
+    .expect("create payload");
+    let first = operation(&key, 40, id(2), 1, [0; 32], vec![], &create);
+    let mut state = MaterializedState::new();
+    state.apply(&first, &create).expect("initial creation");
+    let different_name = OperationPayload::new(
+        id(10),
+        1,
+        PayloadBody::CreateAlbum {
+            album_id: id(13),
+            name: "Different".into(),
+        },
+    )
+    .expect("different name payload");
+    let different_collection = OperationPayload::new(
+        id(14),
+        1,
+        PayloadBody::CreateAlbum {
+            album_id: id(13),
+            name: "Legacy".into(),
+        },
+    )
+    .expect("different collection payload");
+    let name_reuse = operation(&key, 41, id(3), 1, [0; 32], vec![], &different_name);
+    let collection_reuse = operation(&key, 42, id(3), 1, [0; 32], vec![], &different_collection);
+    let causal_reuse = operation(&key, 43, id(2), 2, first.digest(), vec![], &create);
+    for (op, payload) in [
+        (&name_reuse, &different_name),
+        (&collection_reuse, &different_collection),
+        (&causal_reuse, &create),
+    ] {
+        assert_eq!(
+            state
+                .apply(op, payload)
+                .expect_err("reused ID rejected")
+                .status(),
+            chur_core::ChurStatus::AuthenticationFailed
+        );
+    }
+    assert_eq!(state.album_name(&id(13)), Some("Legacy"));
+}

@@ -32,6 +32,7 @@ import dev.po4yka.chur.native.chur_album_move
 import dev.po4yka.chur.native.chur_album_move_member
 import dev.po4yka.chur.native.chur_album_list
 import dev.po4yka.chur.native.chur_album_set_membership
+import dev.po4yka.chur.native.chur_album_remove_objects
 import dev.po4yka.chur.native.chur_album_place_objects
 import dev.po4yka.chur.native.chur_favorites_set
 import dev.po4yka.chur.native.chur_tag_apply_selection
@@ -1212,6 +1213,13 @@ internal actual object ChurNative {
                     reference.ptr,
                     if (member) 1u else 0u,
                 )
+            }
+        }
+
+    actual fun albumRemoveObjects(session: Long, albumId: ByteArray, objectIds: ByteArray): Int =
+        albumId.pinnedPointer { album ->
+            objectIds.pinnedPointer { objects ->
+                chur_album_remove_objects(session.toULong(), album, objects, (objectIds.size / ID_LENGTH).toUInt())
             }
         }
 

@@ -469,6 +469,8 @@ internal expect object ChurNative {
         member: Boolean,
     ): Int
 
+    fun albumRemoveObjects(session: Long, albumId: ByteArray, objectIds: ByteArray): Int
+
     fun albumPlaceObjects(
         session: Long,
         targetId: ByteArray,

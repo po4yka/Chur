@@ -521,6 +521,9 @@ internal actual object ChurNative {
         member: Boolean,
     ): Int = ChurJni.albumSetMembership(session, albumId, objectId, member)
 
+    actual fun albumRemoveObjects(session: Long, albumId: ByteArray, objectIds: ByteArray): Int =
+        ChurJni.albumRemoveObjects(session, albumId, objectIds)
+
     actual fun albumPlaceObjects(
         session: Long,
         targetId: ByteArray,

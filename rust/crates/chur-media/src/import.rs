@@ -131,8 +131,8 @@ impl CanonicalMedia {
             }
             MediaClass::Video => {
                 ensure!(
-                    self.width <= media_bounds::VIDEO_WIDTH_MAX
-                        && self.height <= media_bounds::VIDEO_HEIGHT_MAX,
+                    self.width.max(self.height) <= media_bounds::VIDEO_WIDTH_MAX
+                        && self.width.min(self.height) <= media_bounds::VIDEO_HEIGHT_MAX,
                     ResourceLimitExceeded,
                     "the video exceeds the §12 track bound"
                 );
@@ -169,6 +169,7 @@ pub struct Import {
     chunk_size: u32,
     source: SourceCapability,
     media: CanonicalMedia,
+    live_photo: Option<crate::live_photo::Validator>,
 }
 
 /// A read view on a temporary container whose length is already known.
@@ -311,6 +312,8 @@ pub fn begin(
         chunk_size,
         source,
         media,
+        live_photo: (media.media_class == MediaClass::Image)
+            .then(crate::live_photo::Validator::new),
     })
 }
 
@@ -355,6 +358,9 @@ impl Import {
     /// A short chunk ends the stream, and the writer refuses one after it
     /// rather than producing a container no reader accepts.
     pub fn write(&mut self, session: &mut Session, plaintext: &[u8]) -> Result<()> {
+        if let Some(validator) = &mut self.live_photo {
+            validator.update(plaintext)?;
+        }
         let index = self.writer.chunk_count();
         // Steps 1 and 2. The call returns only after its catalog transaction has
         // committed under `synchronous = FULL`, so the index is durably reserved
@@ -411,6 +417,25 @@ impl Import {
         display: CopiedDisplay,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Id> {
+        if content_type != crate::live_photo::MIME
+            && self
+                .live_photo
+                .as_ref()
+                .is_some_and(crate::live_photo::Validator::has_bundle_magic)
+        {
+            self.abandon(session)?;
+            bail!(
+                InvalidInput,
+                "a Live Photo image needs the Live Photo MIME type"
+            );
+        }
+        if content_type == crate::live_photo::MIME
+            && let Some(validator) = &self.live_photo
+            && let Err(error) = validator.finish()
+        {
+            self.abandon(session)?;
+            return Err(error);
+        }
         let CopiedDisplay {
             caption,
             favorite,
@@ -668,7 +693,10 @@ pub fn import_bytes(
         bail!(InvalidInput, "an object carries at least one byte");
     }
     for piece in plaintext.chunks(chunk) {
-        import.write(session, piece)?;
+        if let Err(error) = import.write(session, piece) {
+            import.abandon(session)?;
+            return Err(error);
+        }
     }
     import.commit(session, content_type, now_ms)
 }
@@ -720,7 +748,10 @@ pub fn stream_into(
         if filled == 0 {
             break;
         }
-        import.write(session, &buffer[..filled])?;
+        if let Err(error) = import.write(session, &buffer[..filled]) {
+            import.abandon(session)?;
+            return Err(error);
+        }
         processed += filled as u64;
         progress.advance(processed);
         if filled < chunk {

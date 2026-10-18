@@ -51,7 +51,7 @@ Recorded as ADRs:
 - Rust is the canonical owner of all private-vault formats and cryptographic state transitions — [`ADR-0001`](adr/0001-rust-owns-private-vault.md).
 - Large media uses independent XChaCha20-Poly1305 chunks and an authenticated final commit — [`ADR-0002`](adr/0002-independent-aead-chunks.md), with the public container layout frozen by [`ADR-0008`](adr/0008-freeze-object-container-v1-layout.md).
 - The immutable encrypted media container is separate from the mutable object-key envelope — [`ADR-0003`](adr/0003-separate-object-key-envelope.md).
-- Rust owns the SQLCipher catalog — accepted [`ADR-0004`](adr/0004-rust-owned-private-catalog.md) and [`ADR-0038`](adr/0038-adopt-sqlcipher-as-the-v1-catalog-engine.md). The current physical schema is [v10](format/CATALOG_SCHEMA_V10.md), built on the earlier versioned schemas. Device and audit acceptance remain separate.
+- Rust owns the SQLCipher catalog — accepted [`ADR-0004`](adr/0004-rust-owned-private-catalog.md) and [`ADR-0038`](adr/0038-adopt-sqlcipher-as-the-v1-catalog-engine.md). The current physical schema is [v11](format/CATALOG_SCHEMA_V11.md), built on the earlier versioned schemas. Device and audit acceptance remain separate.
 - Real and decoy vaults have independent roots, catalogs, object namespaces, caches, and sessions — [`ADR-0005`](adr/0005-real-and-decoy-vault-isolation.md).
 - FFI is split into a structured control plane and a bounded streaming data plane — [`ADR-0006`](adr/0006-control-and-data-plane-ffi.md). Both planes use the hand-written C ABI frozen by [`ADR-0016`](adr/0016-freeze-the-v1-c-abi.md); v1 has no generated binding layer.
 - The initial product is a local recoverable vault without cloud sharing — [`ADR-0007`](adr/0007-local-first-before-sync.md).

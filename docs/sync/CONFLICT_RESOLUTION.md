@@ -49,7 +49,9 @@ A resolver emits a new signed operation observing both conflicting versions.
 
 ## 4. Albums
 
-Album creation uses random album ID, so same-name concurrent albums remain separate. Rename follows scalar-field rules.
+Album creation uses a random album ID, so concurrent albums with the same name and different IDs remain separate. A legacy backup can contain an album that has no signed creation operation yet. Two devices can publish that same ID before they exchange operations. Such creation records describe one album only when they have the same initial name and collection and are concurrent with every accepted creation for that ID. The materialized state retains all of these creation stamps. A different initial name, a different collection, or a causal reuse of the ID is rejected.
+
+The initial album name is a shared default value. Explicit rename operations use scalar-field rules among themselves. A rename after one equivalent legacy creation takes precedence over the shared initial value, including when another concurrent creation arrives later. A rename that precedes an accepted creation is rejected. The accepted operation set therefore gives the same name in every arrival order.
 
 ## 5. Membership, tags, favorites
 

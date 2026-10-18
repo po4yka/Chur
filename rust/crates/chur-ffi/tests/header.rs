@@ -356,6 +356,7 @@ fn every_declared_function_is_exported() {
         "chur_album_move",
         "chur_album_move_member",
         "chur_album_set_membership",
+        "chur_album_remove_objects",
         "chur_album_place_objects",
         "chur_album_list",
         "chur_external_archive_begin",
@@ -437,7 +438,7 @@ fn every_declared_function_is_exported() {
 
     // Calling each one proves the list above is not a stale copy.
     assert_eq!(chur_ffi::chur_abi_version_major(), 2);
-    assert_eq!(chur_ffi::chur_abi_version_minor(), 24);
+    assert_eq!(chur_ffi::chur_abi_version_minor(), 25);
     assert_eq!(
         chur_ffi::chur_capabilities(),
         chur_ffi::CHUR_CAP_DECOY_VAULT

@@ -34,6 +34,31 @@ final class DocumentImportTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), ["Original report.pdf"])
     }
 
+    func testAudioLeaseProvidesReadableURLAndOriginalTypeUntilRelease() throws {
+        // Two PCM16 mono samples in a valid 8 kHz WAV container.
+        let bytes = Data([
+            82, 73, 70, 70, 40, 0, 0, 0, 87, 65, 86, 69,
+            102, 109, 116, 32, 16, 0, 0, 0, 1, 0, 1, 0,
+            64, 31, 0, 0, 128, 62, 0, 0, 2, 0, 16, 0,
+            100, 97, 116, 97, 4, 0, 0, 0, 0, 0, 0, 0,
+        ])
+        let url = root.appendingPathComponent("Recording.wav")
+        try bytes.write(to: url)
+        let stopped = expectation(description: "audio scope released")
+        let selected = DocumentImportSelection(urls: [url], startAccess: { _ in true }, stopAccess: { _ in stopped.fulfill() })
+        selected.load(index: 0) { source in
+            guard let source else { XCTFail("Audio source not opened"); return }
+            XCTAssertEqual(source.name, "Recording.wav")
+            XCTAssertEqual(source.readablePath, url.path)
+            XCTAssertEqual(source.contentType, UTType.wav.preferredMIMEType)
+            XCTAssertEqual(try? Data(contentsOf: URL(fileURLWithPath: source.readablePath)), bytes)
+            selected.close()
+            XCTAssertEqual(try? Data(contentsOf: URL(fileURLWithPath: source.readablePath)), bytes)
+            source.close()
+        }
+        wait(for: [stopped], timeout: 5)
+    }
+
     func testAnActiveDescriptorStaysValidUntilNativeImportReleasesIt() throws {
         let url = root.appendingPathComponent("document.txt")
         try Data([1]).write(to: url)

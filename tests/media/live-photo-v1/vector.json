@@ -1,0 +1,34 @@
+{
+  "captureTimeMs": 1700000123456,
+  "headerLength": 305,
+  "totalLength": 358,
+  "resources": [
+    {
+      "type": 1,
+      "originalFilename": "снимок.JPG",
+      "uniformTypeIdentifier": "public.jpeg",
+      "contentType": "image/jpeg",
+      "length": 14,
+      "sha256": "0ed3201a74ee9cd46438fd6d5630c12e388eb9f555b04cdafe20a840c67cd11f",
+      "payloadHex": "666f726d61742d70686f746f00ff"
+    },
+    {
+      "type": 9,
+      "originalFilename": "MOV_01.MOV",
+      "uniformTypeIdentifier": "com.apple.quicktime-movie",
+      "contentType": "video/quicktime",
+      "length": 24,
+      "sha256": "3ba09e089f4ab0d420436cb32cb13391edb6f349633ba70619f8097cf1226a26",
+      "payloadHex": "666f726d61742d766964656f2d616e642d617564696f0100"
+    },
+    {
+      "type": 42,
+      "originalFilename": "extra.bin",
+      "uniformTypeIdentifier": "public.data",
+      "contentType": "application/octet-stream",
+      "length": 15,
+      "sha256": "076e668494ca4b4aba8c139d4b342cabe4ed80160008115dd1945db875bd2606",
+      "payloadHex": "6675747572652d7265736f75726365"
+    }
+  ]
+}

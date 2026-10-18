@@ -167,6 +167,7 @@ class MediaImporterHostTest {
                 val outcome = MediaImporter(codec).import(vault, picked)
                 assertIs<MediaImporter.Outcome.Imported>(outcome)
                 assertEquals(0, outcome.derivatives)
+                assertEquals(MediaImporter.PreviewWarning.DECODING_FAILED, outcome.previewWarning)
                 assertEquals(1, vault.page(ObjectQuery()).objects.size)
             }
             assertTrue(closed)
@@ -257,10 +258,10 @@ class MediaImporterHostTest {
         assertEquals(opened, closed, "each consumed source is released once")
         assertEquals(listOf<String?>("IMG_0000.jpg", "IMG_0001.jpg"), decoded)
         val imported = outcomes.map { assertIs<MediaImporter.Outcome.Imported>(it) }
-        assertEquals(listOf(null, MediaImporter.PreviewWarning.DECODER_CLEANUP_FAILED), imported.map { it.previewWarning })
+        assertEquals(listOf(MediaImporter.PreviewWarning.DECODING_FAILED, MediaImporter.PreviewWarning.DECODER_CLEANUP_FAILED), imported.map { it.previewWarning })
         assertEquals(listOf(0, 1), importedOriginals(listOf(0, 1, 2), outcomes))
         assertEquals(
-            "2 imported, 1 skipped. Preview processing could not stop safely. Restart Chur before importing more media.",
+            "2 imported, 1 skipped; some previews could not be decoded. Preview processing could not stop safely. Restart Chur before importing more media.",
             withTimeout(10_000) { controller.notice.filterNotNull().first { "2 imported" in it.text } }.text,
         )
         assertEquals(null, controller.activeOperation.value)
@@ -492,10 +493,13 @@ class MediaImporterHostTest {
             MediaImporter.Outcome.Refused(ChurStatus.CANCELLED),
             MediaImporter(unidentified).import(controller.vault, picked(root, 0), cancelRequested = { true }),
         )
-        assertEquals(
-            MediaImporter.Outcome.Refused(ChurStatus.UNSUPPORTED_VERSION),
+        val stored = assertIs<MediaImporter.Outcome.Imported>(
             MediaImporter(unidentified).import(controller.vault, picked(root, 0)),
         )
+        assertTrue(stored.storedAsFile)
+        assertEquals(MediaImporter.PreviewWarning.DECODING_FAILED, stored.previewWarning)
+        assertEquals(MediaBounds.CLASS_OPAQUE, controller.vault.page(ObjectQuery()).objects.single().mediaKind)
+        assertContentEquals(ByteArray(2_048), controller.vault.readRange(stored.objectId, 0, 2_048))
     }
 
     @Test
@@ -520,14 +524,14 @@ class MediaImporterHostTest {
         assertEquals(listOf(1, 2, 3), seen.map { it?.item })
         assertEquals(listOf(3), seen.map { it?.items }.distinct())
         assertEquals(
-            "2 imported, 1 could not be opened.",
+            "2 imported, 1 could not be opened; some previews could not be decoded.",
             withTimeout(10_000) { controller.notice.filterNotNull().first { "imported" in it.text } }.text,
         )
         assertEquals(2, controller.vault.page(ObjectQuery(QueryScope.ALBUM, scopeId = album.albumId)).objects.size)
     }
 
     @Test
-    fun a_refused_item_in_a_pick_gives_its_reason_and_the_rest_go_on() = withVault { controller, root ->
+    fun an_unsupported_item_in_a_pick_remains_exportable_and_the_rest_go_on() = withVault { controller, root ->
         // No codec identifies the second item, as with audio whose probe
         // finds no decoder.
         val codec = object : MediaCodec by Previewless {
@@ -537,12 +541,27 @@ class MediaImporterHostTest {
 
         val outcomes = controller.importAll(MediaImporter(codec), 3, null) { index, _ -> picked(root, index) }
 
-        assertEquals(MediaImporter.Outcome.Refused(ChurStatus.UNSUPPORTED_VERSION), outcomes[1])
-        assertEquals(listOf(true, false, true), outcomes.map { it is MediaImporter.Outcome.Imported })
+        assertTrue(assertIs<MediaImporter.Outcome.Imported>(outcomes[1]).storedAsFile)
+        assertEquals(listOf(true, true, true), outcomes.map { it is MediaImporter.Outcome.Imported })
         assertEquals(
-            "2 imported, 1 could not be imported. ${userCopy(ChurStatus.UNSUPPORTED_VERSION)}",
+            "3 imported; some originals were saved as files without media previews; some previews could not be decoded.",
             withTimeout(10_000) { controller.notice.filterNotNull().first { "imported" in it.text } }.text,
         )
+    }
+
+    @Test
+    fun a_native_probe_exception_preserves_the_original_with_an_explicit_file_notice() = withVault { controller, root ->
+        val codec = object : MediaCodec by Previewless {
+            override fun probe(media: PickedMedia): ProbedMedia = throw IllegalArgumentException("no decoder")
+        }
+        val imported = assertIs<MediaImporter.Outcome.Imported>(
+            controller.importAll(MediaImporter(codec), 1, null) { _, _ -> picked(root, 0) }.single(),
+        )
+        assertTrue(imported.storedAsFile)
+        assertEquals(MediaBounds.CLASS_OPAQUE, controller.vault.page(ObjectQuery()).objects.single().mediaKind)
+        assertContentEquals(ByteArray(2_048), controller.vault.readRange(imported.objectId, 0, 2_048))
+        assertEquals("Saved original as a file; a media preview is unavailable on this device.",
+            withTimeout(10_000) { controller.notice.filterNotNull().first { "Saved original" in it.text } }.text)
     }
 
     @Test
@@ -565,7 +584,7 @@ class MediaImporterHostTest {
         assertEquals(listOf(0, 1), opened)
         assertEquals(MediaImporter.Outcome.Refused(ChurStatus.STORAGE_UNAVAILABLE), outcomes.last())
         assertEquals(
-            "1 imported, 1 could not be imported, 2 skipped. ${userCopy(ChurStatus.STORAGE_UNAVAILABLE)}",
+            "1 imported, 1 could not be imported, 2 skipped; some previews could not be decoded. ${userCopy(ChurStatus.STORAGE_UNAVAILABLE)}",
             withTimeout(10_000) { controller.notice.filterNotNull().first { "imported" in it.text } }.text,
         )
         assertEquals(1, controller.vault.page(ObjectQuery()).objects.size)
@@ -595,7 +614,7 @@ class MediaImporterHostTest {
         assertEquals(MediaImporter.Outcome.Refused(ChurStatus.IO_FAILURE), outcomes[1])
         assertEquals(listOf(true, false, true), outcomes.map { it is MediaImporter.Outcome.Imported })
         assertEquals(
-            "2 imported, 1 could not be imported. ${userCopy(ChurStatus.IO_FAILURE)}",
+            "2 imported, 1 could not be imported; some previews could not be decoded. ${userCopy(ChurStatus.IO_FAILURE)}",
             withTimeout(10_000) { controller.notice.filterNotNull().first { "imported" in it.text } }.text,
         )
         assertEquals(2, controller.vault.page(ObjectQuery()).objects.size)
@@ -630,7 +649,7 @@ class MediaImporterHostTest {
         assertIs<MediaImporter.Outcome.Imported>(outcomes[0])
         assertEquals(listOf(outcomes[0], MediaImporter.Outcome.Refused(ChurStatus.CANCELLED)), outcomes)
         assertEquals(
-            "1 imported, 2 cancelled.",
+            "1 imported, 2 cancelled; some previews could not be decoded.",
             withTimeout(10_000) { controller.notice.filterNotNull().first { "imported" in it.text } }.text,
         )
         assertEquals(1, controller.vault.page(ObjectQuery()).objects.size)
@@ -666,7 +685,7 @@ class MediaImporterHostTest {
         // The first item's copy was released, and the second was never opened.
         assertEquals(listOf(0), closed)
         assertEquals(
-            "1 imported, 2 cancelled.",
+            "1 imported, 2 cancelled; some previews could not be decoded.",
             withTimeout(10_000) { controller.notice.filterNotNull().first { "imported" in it.text } }.text,
         )
         assertEquals(1, controller.vault.page(ObjectQuery()).objects.size)

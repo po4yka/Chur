@@ -26,6 +26,68 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class DocumentExportDirectoryTest {
     @Test
+    fun livePhotoResourcesRestoreThroughRealSafAndCleanAllOutputsOnCancelOrLock() = withProvider { provider, resolver ->
+        kotlinx.coroutines.runBlocking {
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            val source = File(context.cacheDir, "export-scratch/live-saf-${System.nanoTime()}.churlive")
+            source.parentFile!!.mkdirs()
+            InstrumentationRegistry.getInstrumentation().context.assets.open("live-photo-native/native.churlive").use { input ->
+                source.outputStream().use { input.copyTo(it) }
+            }
+            val vaultRoot = File(context.cacheDir, "live-saf-vault-${System.nanoTime()}")
+            val vault = dev.po4yka.chur.vault.VaultRepository(vaultRoot.path, System::currentTimeMillis)
+            try {
+                vault.start()
+                vault.create("live photo SAF test password".encodeToByteArray(), false)
+                val codec = dev.po4yka.chur.imports.AndroidMediaCodec(context)
+                val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.exports", source)
+                val picked = requireNotNull(codec.open(uri))
+                val table = requireNotNull(picked.livePhoto)
+                val result = dev.po4yka.chur.app.MediaImporter(codec).import(vault, picked)
+                assertTrue(result is dev.po4yka.chur.app.MediaImporter.Outcome.Imported)
+                val objectId = (result as dev.po4yka.chur.app.MediaImporter.Outcome.Imported).objectId
+                val directory = DocumentExportDirectory.open(resolver, provider.tree)
+                try {
+                    val count = dev.po4yka.chur.app.restoreLivePhotoResources(vault, objectId, directory)
+                    assertEquals(table.resources.size, count)
+                } finally { directory.close() }
+                val files = provider.root.listFiles()!!.filter { it.isFile }
+                assertEquals(table.resources.size + 1, files.size)
+                assertTrue(files.any { it.readBytes().contentEquals(source.readBytes()) })
+                val original = source.readBytes()
+                for (resource in table.resources) {
+                    val bytes = original.copyOfRange(resource.offset.toInt(), (resource.offset + resource.byteLength).toInt())
+                    assertTrue(files.any { it.readBytes().contentEquals(bytes) })
+                }
+                files.forEach { assertTrue(it.delete()) }
+                File(provider.root, "keep.bin").writeText("keep")
+                var cancelled = false
+                val cancelledDirectory = DocumentExportDirectory.open(resolver, provider.tree)
+                try {
+                    try {
+                        dev.po4yka.chur.app.restoreLivePhotoResources(vault, objectId, cancelledDirectory,
+                            cancelled = { cancelled }, onProgress = { _, _ -> cancelled = true })
+                        fail("cancelled restoration succeeded")
+                    } catch (failure: ChurFailure) {
+                        assertEquals(dev.po4yka.chur.core.model.ChurStatus.CANCELLED, failure.status)
+                    }
+                } finally { cancelledDirectory.close() }
+                assertEquals(listOf("keep.bin"), provider.root.list()!!.toList())
+                val lockedDirectory = DocumentExportDirectory.open(resolver, provider.tree)
+                try {
+                    try {
+                        dev.po4yka.chur.app.restoreLivePhotoResources(vault, objectId, lockedDirectory,
+                            onProgress = { _, _ -> kotlinx.coroutines.runBlocking { vault.lock(dev.po4yka.chur.ffi.LockReason.USER) } })
+                        fail("locked restoration succeeded")
+                    } catch (_: ChurFailure) { }
+                } finally { lockedDirectory.close() }
+                assertEquals("keep", File(provider.root, "keep.bin").readText())
+                assertEquals(listOf("keep.bin"), provider.root.list()!!.toList())
+            } finally { vault.shutdown(); source.delete(); vaultRoot.deleteRecursively() }
+        }
+    }
+
+    @Test
     fun nestedExportsKeepExistingFilesAndResolveDuplicateAndUnsafeNames() = withProvider { provider, resolver ->
         provider.addDirectory("Album")
         File(provider.root, "keep.bin").writeText("keep")

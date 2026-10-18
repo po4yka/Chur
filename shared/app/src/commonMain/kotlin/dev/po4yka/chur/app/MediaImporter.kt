@@ -4,6 +4,10 @@ import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.ImportRequest
 import dev.po4yka.chur.ffi.OperationProgress
+import dev.po4yka.chur.ffi.StreamKind
+import dev.po4yka.chur.imports.LivePhotoBundle
+import dev.po4yka.chur.imports.LivePhotoBundleException
+import dev.po4yka.chur.imports.readLivePhotoBundle
 import dev.po4yka.chur.imports.DecoderCleanupException
 import dev.po4yka.chur.imports.MediaCodec
 import dev.po4yka.chur.imports.PickedMedia
@@ -36,7 +40,7 @@ class MediaImporter(
     private val derivativeTimeSource: TimeSource = TimeSource.Monotonic,
 ) {
     /** The original is committed, but preview work did not finish. */
-    enum class PreviewWarning { STORAGE_FAILED, TIMED_OUT, DECODER_CLEANUP_FAILED }
+    enum class PreviewWarning { STORAGE_FAILED, TIMED_OUT, DECODER_CLEANUP_FAILED, DECODING_FAILED }
 
     /** What an import attempt ended as, §13. */
     sealed interface Outcome {
@@ -48,6 +52,8 @@ class MediaImporter(
             val previewsSkipped: Boolean = false,
             /** A preview failure does not change the committed original into a failed import. */
             val previewWarning: PreviewWarning? = null,
+            /** A media source with no usable decoder remains exportable as a file. */
+            val storedAsFile: Boolean = false,
         ) : Outcome {
             override fun equals(other: Any?): Boolean = other is Imported && objectId.contentEquals(other.objectId)
 
@@ -88,7 +94,7 @@ class MediaImporter(
         onProgress: (OperationProgress) -> Unit = {},
         cancelRequested: () -> Boolean = { false },
     ): Outcome {
-        val media = source
+        var media = source
             ?: return if (cancelRequested()) Outcome.Refused(ChurStatus.CANCELLED) else Outcome.Unreadable
         try {
             if (cancelRequested()) return Outcome.Refused(ChurStatus.CANCELLED)
@@ -97,11 +103,44 @@ class MediaImporter(
             if ((repository.state.value as? VaultState.Unlocked)?.generation != generation) {
                 return Outcome.Refused(ChurStatus.VAULT_LOCKED)
             }
+            val livePhoto = try {
+                if (media.livePhoto == null && media.contentTypeHint != LivePhotoBundle.CONTENT_TYPE &&
+                    media.originalFilename?.endsWith(".churlive", ignoreCase = true) != true) null
+                else readLivePhotoBundle(media.descriptor, media.knownLength, cancelRequested = {
+                    cancelRequested() || (repository.state.value as? VaultState.Unlocked)?.generation != generation
+                })
+            } catch (_: LivePhotoBundleException) {
+                return Outcome.Refused(ChurStatus.OBJECT_CORRUPT)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                return Outcome.Refused(when {
+                    cancelRequested() -> ChurStatus.CANCELLED
+                    (repository.state.value as? VaultState.Unlocked)?.generation != generation -> ChurStatus.VAULT_LOCKED
+                    else -> ChurStatus.IO_FAILURE
+                })
+            }
+            if (livePhoto == null && (media.livePhoto != null || media.contentTypeHint == LivePhotoBundle.CONTENT_TYPE ||
+                    media.originalFilename?.endsWith(".churlive", ignoreCase = true) == true)) {
+                return Outcome.Refused(ChurStatus.OBJECT_CORRUPT)
+            }
+            if (livePhoto != null) media = media.copy(livePhoto = livePhoto, importAsFile = false,
+                contentTypeHint = LivePhotoBundle.CONTENT_TYPE, knownLength = livePhoto.totalLength,
+                captureTimeMs = livePhoto.captureTimeMs)
             // §2 stage 3, before stage 4: an over-large source is refused
             // before an object key exists.
-            val probe =
-                if (media.importAsFile) fileImportProbe(media) else codec.probe(media)
-                    ?: return Outcome.Refused(ChurStatus.UNSUPPORTED_VERSION)
+            val detected = if (media.importAsFile) null else try {
+                codec.probe(media)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: ChurFailure) {
+                throw failure
+            } catch (_: Exception) {
+                null
+            }
+            val probe = if (livePhoto != null) (detected ?: fileImportProbe(media)).copy(contentType = LivePhotoBundle.CONTENT_TYPE)
+                else detected ?: fileImportProbe(media)
+            val storedAsFile = !media.importAsFile && probe.mediaClass == MediaBounds.CLASS_OPAQUE
             MediaBounds.check(probe)?.let { return Outcome.TooLarge(it) }
             if (cancelRequested()) return Outcome.Refused(ChurStatus.CANCELLED)
 
@@ -147,8 +186,12 @@ class MediaImporter(
             // imported with fewer derivatives rather than failing the import,
             // and the catalog never claims a derivative that does not exist.
             var written = 0
-            for (kind in requiredDerivatives(probe)) {
-                if (cancelRequested()) return Outcome.Imported(objectId, written, previewsSkipped = true)
+            var decodingFailed = false
+            val derivatives = requiredDerivatives(probe).let {
+                if (livePhoto != null && probe.mediaClass == MediaBounds.CLASS_IMAGE) (it + StreamKind.SCREEN_PREVIEW).distinct() else it
+            }
+            for (kind in derivatives) {
+                if (cancelRequested()) return Outcome.Imported(objectId, written, previewsSkipped = true, storedAsFile = storedAsFile)
                 val started = derivativeTimeSource.markNow()
                 val timedOut = { started.elapsedNow() >= derivativeTimeout }
                 val derivative = try {
@@ -161,19 +204,24 @@ class MediaImporter(
                     // The decoder retains its uncertain owner and forbids reuse.
                     // Keep the committed identity so the host can place this
                     // original and stop the batch without opening another source.
-                    return Outcome.Imported(objectId, written, previewWarning = PreviewWarning.DECODER_CLEANUP_FAILED)
+                    return Outcome.Imported(objectId, written, previewWarning = PreviewWarning.DECODER_CLEANUP_FAILED, storedAsFile = storedAsFile)
                 } catch (_: Exception) {
                     null
                 }
                 if (cancelRequested()) {
                     derivative?.bytes?.fill(0)
-                    return Outcome.Imported(objectId, written, previewsSkipped = true)
+                    return Outcome.Imported(objectId, written, previewsSkipped = true, storedAsFile = storedAsFile)
                 }
                 if (timedOut()) {
                     derivative?.bytes?.fill(0)
-                    return Outcome.Imported(objectId, written, previewWarning = PreviewWarning.TIMED_OUT)
+                    return Outcome.Imported(objectId, written, previewWarning = PreviewWarning.TIMED_OUT, storedAsFile = storedAsFile)
                 }
-                if (derivative == null) continue
+                if (derivative == null) {
+                    if (probe.mediaClass != MediaBounds.CLASS_AUDIO || kind == StreamKind.AUDIO_WAVEFORM) {
+                        decodingFailed = true
+                    }
+                    continue
+                }
                 try {
                     repository.putDerived(
                         objectId = objectId,
@@ -187,12 +235,14 @@ class MediaImporter(
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
-                    return Outcome.Imported(objectId, written, previewWarning = PreviewWarning.STORAGE_FAILED)
+                    return Outcome.Imported(objectId, written, previewWarning = PreviewWarning.STORAGE_FAILED, storedAsFile = storedAsFile)
                 } finally {
                     derivative.bytes.fill(0)
                 }
             }
-            return Outcome.Imported(objectId, written)
+            return Outcome.Imported(objectId, written,
+                previewWarning = if (decodingFailed || storedAsFile) PreviewWarning.DECODING_FAILED else null,
+                storedAsFile = storedAsFile)
         } catch (failure: ChurFailure) {
             return Outcome.Refused(failure.status)
         } finally {

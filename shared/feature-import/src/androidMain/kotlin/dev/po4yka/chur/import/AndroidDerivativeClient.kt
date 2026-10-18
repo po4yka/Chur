@@ -99,6 +99,9 @@ class AndroidDerivativeClient(private val context: Context) {
                                 request.writeLong(probe.durationMs)
                                 request.writeString(probe.contentType)
                                 request.writeInt(kind.code)
+                                val photo = media.livePhoto?.displayPhoto
+                                request.writeLong(photo?.offset ?: 0)
+                                request.writeLong(photo?.byteLength ?: -1)
                                 if (!service.transact(operation, request, null, IBinder.FLAG_ONEWAY)) {
                                     return@withLock null
                                 }

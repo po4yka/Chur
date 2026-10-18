@@ -16,7 +16,7 @@ use chur_format::{
         CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V3,
         CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V5, CATALOG_FORMAT_VERSION_V6,
         CATALOG_FORMAT_VERSION_V7, CATALOG_FORMAT_VERSION_V8, CATALOG_FORMAT_VERSION_V9,
-        CATALOG_FORMAT_VERSION_V10,
+        CATALOG_FORMAT_VERSION_V10, CATALOG_FORMAT_VERSION_V11,
     },
     envelope::ObjectKeyEnvelope,
 };
@@ -62,6 +62,9 @@ const STEPS: &[Step] = &[
     },
     Step {
         version: CATALOG_FORMAT_VERSION_V10,
+    },
+    Step {
+        version: CATALOG_FORMAT_VERSION_V11,
     },
 ];
 
@@ -694,6 +697,48 @@ INSERT INTO object_search(rowid,filename,caption,tag_names,content_body)
  FROM objects o JOIN metadata_revisions m ON m.object_id=o.object_id AND m.active=1 WHERE o.state=1;
 "#;
 
+/// Durable local additions that have not yet entered the signed operation log.
+const V11_DDL: &str = r#"
+CREATE TABLE own_sync_pending_album_memberships (
+    album_id BLOB NOT NULL REFERENCES albums(album_id) ON DELETE CASCADE
+        CHECK(length(album_id) = 16),
+    object_id BLOB NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE
+        CHECK(length(object_id) = 16),
+    PRIMARY KEY (album_id, object_id)
+) STRICT;
+CREATE INDEX own_sync_pending_album_memberships_object
+    ON own_sync_pending_album_memberships(object_id, album_id);
+INSERT INTO own_sync_pending_album_memberships(album_id, object_id)
+    SELECT album_id, object_id FROM album_memberships;
+"#;
+
+/// Retains the existing album snapshot after an authenticated v10 transition.
+///
+/// # Errors
+///
+/// Returns `MigrationRequired` if the catalog is not v10. Database errors roll
+/// back the table, pending additions, and recorded version together.
+pub fn migrate_v10_to_v11(db: &mut CatalogDb) -> Result<()> {
+    ensure!(
+        recorded_version(db.connection())? == Some(CATALOG_FORMAT_VERSION_V10),
+        MigrationRequired,
+        "the catalog is not version ten"
+    );
+    db.transaction(|transaction| {
+        transaction.execute(
+            "UPDATE vault_state SET active_migration_target = ?1 WHERE only_row = 1",
+            [i64::from(CATALOG_FORMAT_VERSION_V11)],
+        ).map_err(|error| map_sqlite(error, "the album intent migration target could not be written"))?;
+        transaction.execute_batch(V11_DDL)
+            .map_err(|error| map_sqlite(error, "the album intent migration failed"))?;
+        transaction.execute(
+            "UPDATE vault_state SET catalog_format_version = ?1, active_migration_target = NULL WHERE only_row = 1",
+            [i64::from(CATALOG_FORMAT_VERSION_V11)],
+        ).map_err(|error| map_sqlite(error, "the album intent catalog version could not be written"))?;
+        Ok(())
+    })
+}
+
 /// Adds encrypted local content search after the authenticated v9 transition.
 pub fn migrate_v9_to_v10(db: &mut CatalogDb) -> Result<()> {
     ensure!(
@@ -723,15 +768,15 @@ pub fn open_at_current_version(db: &mut CatalogDb, now_ms: u64) -> Result<u16> {
     let present = recorded_version(db.connection())?;
     let Some(present) = present else {
         install(db, now_ms)?;
-        return Ok(CATALOG_FORMAT_VERSION_V10);
+        return Ok(CATALOG_FORMAT_VERSION_V11);
     };
-    if present != CATALOG_FORMAT_VERSION_V10 {
+    if present != CATALOG_FORMAT_VERSION_V11 {
         bail!(
             MigrationRequired,
             "the catalog requires an authenticated schema migration"
         );
     }
-    Ok(CATALOG_FORMAT_VERSION_V10)
+    Ok(CATALOG_FORMAT_VERSION_V11)
 }
 
 /// The version the database records, or `None` when the schema is absent.
@@ -796,13 +841,16 @@ fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
             .execute_batch(V10_DDL)
             .map_err(|e| map_sqlite(e, "the content index schema could not be created"))?;
         transaction
+            .execute_batch(V11_DDL)
+            .map_err(|error| map_sqlite(error, "the album intent schema could not be created"))?;
+        transaction
             .execute(
                 "INSERT INTO vault_state (
                      only_row, catalog_format_version, catalog_generation,
                      active_migration_target, object_store_checkpoint,
                      integrity_checkpoint_ms, capability_flags
                  ) VALUES (1, ?1, 1, NULL, 0, ?2, 0)",
-                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V10), checkpoint],
+                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V11), checkpoint],
             )
             .map_err(|error| map_sqlite(error, "the catalog state row could not be written"))?;
         Ok(())
@@ -827,6 +875,7 @@ pub fn migrate_v8_to_v9(db: &mut CatalogDb) -> Result<()> {
 
 #[cfg(test)]
 const RESET_V7_DDL: &str = "
+DROP TABLE IF EXISTS own_sync_pending_album_memberships;
 DROP TABLE IF EXISTS content_index;
 DROP TABLE IF EXISTS private_note_search;
 DROP TABLE IF EXISTS private_notes;
@@ -1269,12 +1318,115 @@ mod tests {
         .expect("install v1");
     }
 
+    fn v10_with_album_memberships() -> CatalogDb {
+        let mut db = open();
+        open_at_current_version(&mut db, 1).expect("current schema");
+        db.connection().execute_batch(
+            "DROP TABLE own_sync_pending_album_memberships;
+             UPDATE vault_state SET catalog_format_version = 10;
+             INSERT INTO collections VALUES (zeroblob(16), 1, 1, 1, 1);
+             INSERT INTO albums (album_id,name,created_ms,revision) VALUES
+                 (x'01010101010101010101010101010101','First',1,1),
+                 (x'02020202020202020202020202020202','Second',1,1);
+             INSERT INTO objects VALUES
+                 (x'03030303030303030303030303030303',1,zeroblob(16),zeroblob(16),1,1,1,0,1,1,1,0,0,1,0,0,1,1),
+                 (x'04040404040404040404040404040404',1,zeroblob(16),zeroblob(16),1,1,1,0,1,1,1,0,0,1,0,0,1,2);
+             INSERT INTO album_memberships (album_id,object_id,capture_time_ms,added_ms,revision)
+                 VALUES (x'01010101010101010101010101010101',x'03030303030303030303030303030303',1,1,1),
+                        (x'02020202020202020202020202020202',x'04040404040404040404040404040404',1,1,1);"
+        ).expect("real v10 fixture");
+        db
+    }
+
     #[test]
-    fn a_new_catalog_installs_version_ten() {
+    fn v10_migration_retains_membership_snapshot_and_cascades_only_pending_intents() {
+        let mut db = v10_with_album_memberships();
+        let before_generation = generation(&db).expect("generation");
+        migrate_v10_to_v11(&mut db).expect("migrate");
+        assert_eq!(
+            recorded_version(db.connection()).expect("version"),
+            Some(CATALOG_FORMAT_VERSION_V11)
+        );
+        assert_eq!(generation(&db).expect("generation"), before_generation);
+        let counts: (i64, i64) = db
+            .connection()
+            .query_row(
+                "SELECT (SELECT count(*) FROM album_memberships),
+                    (SELECT count(*) FROM own_sync_pending_album_memberships)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("memberships and pending additions");
+        assert_eq!(counts, (2, 2));
+        assert!(db.connection().execute(
+            "INSERT INTO own_sync_pending_album_memberships VALUES (zeroblob(16),zeroblob(16))", [],
+        ).is_err(), "foreign keys must reject absent albums and objects");
+        assert!(
+            db.connection()
+                .execute(
+                    "INSERT INTO own_sync_pending_album_memberships VALUES (x'01',x'03')",
+                    [],
+                )
+                .is_err(),
+            "pending identifiers must have exactly sixteen bytes"
+        );
+        db.connection()
+            .execute_batch(
+                "DELETE FROM album_memberships;
+             DELETE FROM albums WHERE name = 'First';
+             DELETE FROM objects WHERE search_key = 2;",
+            )
+            .expect("remove parents after their ordinary memberships");
+        let pending: i64 = db
+            .connection()
+            .query_row(
+                "SELECT count(*) FROM own_sync_pending_album_memberships",
+                [],
+                |row| row.get(0),
+            )
+            .expect("cascaded additions");
+        assert_eq!(pending, 0);
+        assert_eq!(
+            crate::store::albums(&db).expect("remaining album")[0]
+                .album
+                .name,
+            "Second"
+        );
+    }
+
+    #[test]
+    fn v10_migration_rolls_back_ddl_and_seed_when_version_commit_fails() {
+        let mut db = v10_with_album_memberships();
+        db.connection()
+            .execute_batch(
+                "CREATE TEMP TRIGGER refuse_v11_version BEFORE UPDATE ON vault_state
+             WHEN NEW.catalog_format_version = 11
+             BEGIN SELECT RAISE(ABORT, 'version commit refused'); END;",
+            )
+            .expect("database write failure");
+        migrate_v10_to_v11(&mut db).expect_err("the final version write must fail");
+        assert_eq!(
+            recorded_version(db.connection()).expect("version"),
+            Some(CATALOG_FORMAT_VERSION_V10)
+        );
+        let state: (i64, Option<i64>) = db.connection().query_row(
+            "SELECT (SELECT count(*) FROM sqlite_schema WHERE name = 'own_sync_pending_album_memberships'),
+                    active_migration_target FROM vault_state WHERE only_row = 1",
+            [], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).expect("rolled back schema and marker");
+        assert_eq!(state, (0, None));
+        db.connection()
+            .execute_batch("DROP TRIGGER refuse_v11_version")
+            .expect("clear failure");
+        migrate_v10_to_v11(&mut db).expect("retry complete migration");
+    }
+
+    #[test]
+    fn a_new_catalog_installs_version_eleven() {
         let mut db = open();
         assert_eq!(
             open_at_current_version(&mut db, 1_700_000_000_000).expect("install"),
-            CATALOG_FORMAT_VERSION_V10
+            CATALOG_FORMAT_VERSION_V11
         );
         let sharing_tables: i64 = db
             .connection()
@@ -1346,7 +1498,7 @@ mod tests {
         }
         assert_eq!(
             STEPS.last().map(|step| step.version),
-            Some(CATALOG_FORMAT_VERSION_V10)
+            Some(CATALOG_FORMAT_VERSION_V11)
         );
     }
 

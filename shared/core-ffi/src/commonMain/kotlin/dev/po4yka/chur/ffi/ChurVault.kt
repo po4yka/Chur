@@ -842,6 +842,16 @@ object ChurVault {
         )
     }
 
+    /** Removes a nonempty selection from one album in one transaction, retaining the files. */
+    fun removeAlbumObjects(session: Long, albumId: ByteArray, objectIds: List<ByteArray>) {
+        require(albumId.size == ID_LENGTH)
+        require(objectIds.isNotEmpty() && objectIds.size <= 100_000)
+        require(objectIds.all { it.size == ID_LENGTH })
+        val packed = ByteArray(objectIds.size * ID_LENGTH)
+        objectIds.forEachIndexed { index, id -> id.copyInto(packed, index * ID_LENGTH) }
+        ChurFailure.check(ChurNative.albumRemoveObjects(session, albumId, packed), "remove album objects")
+    }
+
     /** Places a nonempty selection in one transaction, optionally creating its destination. */
     fun placeAlbumObjects(
         session: Long,
@@ -1216,13 +1226,15 @@ object ChurVault {
     fun readInto(
         reader: Long,
         destination: ChurBuffer,
+        sourceOffset: Long = 0,
     ) {
+        require(sourceOffset >= 0 && sourceOffset <= Long.MAX_VALUE - destination.capacityBytes)
         val length = destination.capacityBytes
         val written = IntArray(1)
         var at = 0
         while (at < length) {
             ChurFailure.check(
-                ChurNative.objectReaderReadAt(reader, at.toLong(), destination, at, written),
+                ChurNative.objectReaderReadAt(reader, sourceOffset + at, destination, at, written),
                 "read at",
             )
             if (written[0] == 0) break

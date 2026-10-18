@@ -48,6 +48,8 @@ data class PickedMedia(
     val close: () -> Unit,
     /** Explicit file import bypasses media codecs, including misleading type/extension hints. */
     val importAsFile: Boolean = false,
+    /** The complete resource package. The descriptor still points at its first byte. */
+    val livePhoto: LivePhotoBundle? = null,
 )
 
 /** The canonical media facts a probe produced, §4. */
@@ -168,7 +170,7 @@ object MediaBounds {
             probe.width.toLong() * probe.height.toLong() > IMAGE_AREA_MAX ->
             "The image has more pixels than Chur can import."
         probe.mediaClass == CLASS_VIDEO &&
-            (probe.width > VIDEO_WIDTH_MAX || probe.height > VIDEO_HEIGHT_MAX) ->
+            (maxOf(probe.width, probe.height) > VIDEO_WIDTH_MAX || minOf(probe.width, probe.height) > VIDEO_HEIGHT_MAX) ->
             "The video is larger than Chur can import."
         probe.durationMs > DURATION_MS_MAX ->
             "The recording is longer than four hours."

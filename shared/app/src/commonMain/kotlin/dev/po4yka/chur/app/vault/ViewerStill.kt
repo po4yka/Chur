@@ -1,6 +1,7 @@
 package dev.po4yka.chur.app.vault
 
 import androidx.compose.ui.graphics.ImageBitmap
+import dev.po4yka.chur.imports.LivePhotoBundle
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.ObjectProjection
 import dev.po4yka.chur.ffi.StreamKind
@@ -32,20 +33,22 @@ enum class ViewerStillState { Loading, Ready, Unavailable }
  * [PresentedState.of] maps a trashed row to `CORRUPT` and the trash viewer
  * still shows the original.
  */
-internal fun stillSources(projection: ObjectProjection): List<StreamKind> = when (projection.mediaKind) {
+internal fun stillSources(projection: ObjectProjection, highResolution: Boolean = false): List<StreamKind> = when (projection.mediaKind) {
     MEDIA_CLASS_VIDEO -> listOf(StreamKind.VIDEO_POSTER, StreamKind.THUMBNAIL)
     // Never ask an image decoder to open an audio original. Existing recordings
     // without stored artwork simply exhaust these optional derivatives.
     MEDIA_CLASS_AUDIO -> listOf(StreamKind.SCREEN_PREVIEW, StreamKind.GRID_PREVIEW, StreamKind.THUMBNAIL)
     MEDIA_CLASS_IMAGE -> buildList {
-        add(StreamKind.SCREEN_PREVIEW)
+        if (!highResolution) add(StreamKind.SCREEN_PREVIEW)
         val edge = maxOf(projection.width, projection.height)
-        if (edge in 1..ORIGINAL_EDGE_MAX &&
+        if (edge in 1..(if (highResolution) dev.po4yka.chur.imports.MediaBounds.IMAGE_EDGE_MAX else ORIGINAL_EDGE_MAX) &&
+            projection.width.toLong() * projection.height <= dev.po4yka.chur.imports.MediaBounds.IMAGE_AREA_MAX &&
             projection.plaintextSize in 1..ORIGINAL_BYTES_MAX &&
             PresentedState.of(projection) != PresentedState.QUARANTINED
         ) {
             add(StreamKind.ORIGINAL)
         }
+        if (highResolution) add(StreamKind.SCREEN_PREVIEW)
         add(StreamKind.GRID_PREVIEW)
         add(StreamKind.THUMBNAIL)
     }
@@ -67,10 +70,16 @@ suspend fun viewerStill(
     cache: ThumbnailCache,
     generation: Long,
     projection: ObjectProjection,
+    highResolution: Boolean = false,
 ): ImageBitmap? {
-    for (kind in stillSources(projection)) {
+    val sources = stillSources(projection, highResolution)
+    if (highResolution && projection.mediaKind == MEDIA_CLASS_IMAGE && StreamKind.ORIGINAL !in sources &&
+        PresentedState.of(projection) != PresentedState.QUARANTINED) {
+        decodeOriginal(vault, projection.objectId, ZOOM_EDGE_MAX)?.let { return it }
+    }
+    for (kind in sources) {
         val image = if (kind == StreamKind.ORIGINAL) {
-            decodeOriginal(vault, projection.objectId)
+            decodeOriginal(vault, projection.objectId, if (highResolution) ZOOM_EDGE_MAX else ORIGINAL_EDGE_MAX)
         } else {
             cache.load(vault, generation, projection.objectId, projection.id, kind)
         }
@@ -97,7 +106,7 @@ suspend fun viewerStill(
  * clears it after the decode; the decoder's own buffers are not cleared,
  * `PLAINTEXT_LIFECYCLE.md` §9. Nothing reaches the disk, `MEDIA_PIPELINE.md` §8.
  */
-private suspend fun decodeOriginal(vault: VaultRepository, objectId: ByteArray): ImageBitmap? =
+private suspend fun decodeOriginal(vault: VaultRepository, objectId: ByteArray, maxEdgePx: Int): ImageBitmap? =
     withContext(Dispatchers.Default) {
         val reader = try {
             vault.leaseReader(objectId)
@@ -106,11 +115,21 @@ private suspend fun decodeOriginal(vault: VaultRepository, objectId: ByteArray):
         }
         try {
             val info = vault.readerContentInfo(reader)
-            if (!info.complete || info.plaintextSize !in 1..ORIGINAL_BYTES_MAX) return@withContext null
-            withChurBuffer(info.plaintextSize.toInt()) { original ->
-                vault.readLeasedInto(reader, original)
-                decodeForDisplay(original, ORIGINAL_EDGE_MAX)
+            if (!info.complete) return@withContext null
+            var offset = 0L
+            var length = info.plaintextSize
+            if (info.contentType == LivePhotoBundle.CONTENT_TYPE) {
+                val bundle = readVaultLivePhoto(vault, objectId) ?: return@withContext null
+                offset = bundle.displayPhoto.offset
+                length = bundle.displayPhoto.byteLength
             }
+            if (length !in 1..ORIGINAL_BYTES_MAX) return@withContext null
+            withChurBuffer(length.toInt()) { original ->
+                vault.readLeasedInto(reader, original, offset)
+                decodeForDisplay(original, maxEdgePx)
+            }
+        } catch (_: dev.po4yka.chur.imports.LivePhotoBundleException) {
+            null
         } catch (_: ChurFailure) {
             // A lock during the read closes the lease, which is SESSION_EXPIRED.
             null
@@ -121,6 +140,9 @@ private suspend fun decodeOriginal(vault: VaultRepository, objectId: ByteArray):
 
 /** The screen-preview long edge of `MEDIA_PIPELINE.md` §12. */
 private const val ORIGINAL_EDGE_MAX = 2_048
+
+/** A zoom reads at most 32 MiB encoded and decodes at most 64 MiB of RGBA pixels. */
+private const val ZOOM_EDGE_MAX = 4_096
 
 /**
  * The largest original the viewer reads whole, 32 MiB.

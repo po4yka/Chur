@@ -76,6 +76,7 @@ import dev.po4yka.chur.app.PublicShell as PublicShellKind
 import dev.po4yka.chur.app.publicshell.CalculatorScreen
 import dev.po4yka.chur.app.notes.rememberOpenNote
 import dev.po4yka.chur.app.vault.CreateVaultScreen
+import dev.po4yka.chur.app.vault.loadedObjectSelection
 import dev.po4yka.chur.app.vault.LibraryTile
 import dev.po4yka.chur.app.vault.AlbumPickerDialog
 import dev.po4yka.chur.app.vault.AlbumExportDialog
@@ -118,6 +119,7 @@ import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
 import dev.po4yka.chur.app.vault.viewerPages
 import dev.po4yka.chur.app.vault.ViewerStillState
 import dev.po4yka.chur.app.vault.viewerStill
+import dev.po4yka.chur.app.vault.rememberViewerAnimation
 import dev.po4yka.chur.app.vault.VaultPlayer
 import dev.po4yka.chur.app.vault.VaultDocument
 import dev.po4yka.chur.app.vault.ViewerChrome
@@ -669,7 +671,8 @@ private fun VaultRoute(controller: ChurController) {
 
     val codec = remember { AndroidMediaCodec(context) }
     val importer = remember { MediaImporter(codec) }
-    val onPicked: (List<Uri>) -> Unit = { uris ->
+    val onPicked: (List<Uri>) -> Unit = fun(uris: List<Uri>) {
+        if ((controller.vaultState.value as? VaultState.Unlocked)?.generation != generation) return
         // The picker is an activity of ours, so the vault stayed open while it
         // ran. It ends here whether the user chose something or dismissed it.
         controller.endHostActivity()
@@ -689,6 +692,7 @@ private fun VaultRoute(controller: ChurController) {
     // back to a document picker that allows multiple selection (§14.1).
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(), onPicked)
     val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments(), onPicked)
+    val livePhotoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments(), onPicked)
     val documentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         val pending = pendingDocumentImport
         pendingDocumentImport = null
@@ -790,6 +794,20 @@ private fun VaultRoute(controller: ChurController) {
                     importAlbumId = openAlbum?.albumId
                     controller.beginHostActivity()
                     audioPicker.launch(arrayOf("audio/*"))
+                },
+            )
+            ListItem(
+                headlineContent = { Text("Live Photo packages") },
+                modifier = Modifier.clickable(role = Role.Button) {
+                    choosingImport = false
+                    importAlbumId = openAlbum?.albumId
+                    controller.beginHostActivity()
+                    try {
+                        livePhotoPicker.launch(arrayOf("application/vnd.chur.live-photo", "application/octet-stream"))
+                    } catch (_: Exception) {
+                        controller.endHostActivity()
+                        controller.report("The Live Photo file picker could not be opened.")
+                    }
                 },
             )
             ListItem(
@@ -1265,7 +1283,7 @@ private fun VaultRoute(controller: ChurController) {
                 onImportArchive = { choosingArchiveImport = true },
                 onRestoreArchive = controller::restoreArchiveAsSeparateVault,
                 onCreateSecondIdentity = controller::createSecondIdentity,
-                onSelectAll = { selection = page.objects.map { it.id }.toSet() },
+                onSelectLoadedItems = { selection = loadedObjectSelection(page) },
                 onClearSelection = { selection = emptySet() },
                 onExportSelection = { choosingExport = true },
                 onEncryptedExportSelection = {
@@ -1390,6 +1408,10 @@ private fun ViewerRoute(
     var waveform by remember(projection.id) { mutableStateOf<ByteArray?>(null) }
     var confirmingDelete by remember(projection.id) { mutableStateOf(false) }
     var choosingExport by remember(projection.id) { mutableStateOf(false) }
+    var livePlayback by remember(projection.id, generation) {
+        mutableStateOf<dev.po4yka.chur.app.vault.PlaybackSource?>(null)
+    }
+    var pendingLiveRestore by remember(projection.id, generation) { mutableStateOf<ByteArray?>(null) }
     // The viewer is drawn over the shell, not a back-stack entry, so Back is
     // routed to its own Back here; a press that reached the shell would act
     // on the screen under it, and one that reached the platform would go
@@ -1438,6 +1460,23 @@ private fun ViewerRoute(
         onDispose { bars?.show(WindowInsetsCompat.Type.systemBars()) }
     }
     val context = LocalContext.current
+    val liveRestorePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        val selected = pendingLiveRestore
+        pendingLiveRestore = null
+        if (selected != null && (controller.vaultState.value as? VaultState.Unlocked)?.generation == generation) {
+            controller.endHostActivity()
+            if (uri != null) controller.restoreLivePhoto(selected, uri.toString())
+        }
+    }
+    DisposableEffect(projection.id, generation) {
+        onDispose {
+            if (pendingLiveRestore != null &&
+                (controller.vaultState.value as? VaultState.Unlocked)?.generation == generation) {
+                controller.endHostActivity()
+            }
+            pendingLiveRestore = null
+        }
+    }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         controller.endHostActivity()
         result.data?.data?.let { uri ->
@@ -1449,7 +1488,9 @@ private fun ViewerRoute(
         }
     }
 
-    LaunchedEffect(projection.id, generation) {
+    var zoomedPhoto by remember(projection.id, generation) { mutableStateOf(false) }
+    val animation = rememberViewerAnimation(controller.vault, projection, generation, detail?.contentType)
+    LaunchedEffect(projection.id, generation, zoomedPhoto) {
         // `ANDROID.md` §16: a preview before full-resolution ranges. The
         // cached thumbnail shows at once, and the sharper still comes last so
         // the detail does not wait for an original to decode.
@@ -1458,7 +1499,15 @@ private fun ViewerRoute(
             waveform = controller.derivativeOf(projection.objectId, StreamKind.AUDIO_WAVEFORM)
         }
         detail = controller.detailOf(projection.objectId)
-        viewerStill(controller.vault, cache, generation, projection)?.let { preview = it }
+        if (detail?.contentType == dev.po4yka.chur.imports.LivePhotoBundle.CONTENT_TYPE) {
+            livePlayback = try {
+                dev.po4yka.chur.app.vault.livePhotoPlaybackFor(
+                    controller.vault, projection.objectId, onVerify = controller::verifyEverything)
+            } catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel
+            } catch (_: Exception) { null }
+        }
+        viewerStill(controller.vault, cache, generation, projection,
+            highResolution = zoomedPhoto && animation == null)?.let { preview = it }
         stillState = if (preview != null || thumbnails[projection.id] != null) {
             ViewerStillState.Ready
         } else {
@@ -1473,7 +1522,7 @@ private fun ViewerRoute(
     val playback = if (PresentedState.of(projection) == PresentedState.QUARANTINED) {
         null
     } else {
-        playbackFor(
+        livePlayback ?: playbackFor(
             vault = controller.vault,
             objectId = projection.objectId,
             mediaKind = projection.mediaKind,
@@ -1493,6 +1542,8 @@ private fun ViewerRoute(
         preview = preview,
         stillState = stillState,
         onVerifyStill = { controller.verifyEverything() },
+        onZoomChanged = { zoomedPhoto = it },
+        animation = animation,
         showDetail = showDetail,
         chromeVisible = chromeVisible,
         onToggleChrome = { chrome.toggle(chromePinned) },
@@ -1560,7 +1611,8 @@ private fun ViewerRoute(
     }
     if (choosingExport) {
         ExportOptionsDialog(
-            media = canSaveToPhotos(projection.mediaKind),
+            media = canSaveToPhotos(projection.mediaKind) &&
+                detail?.contentType != dev.po4yka.chur.imports.LivePhotoBundle.CONTENT_TYPE,
             files = true,
             share = true,
             downloads = true,
@@ -1578,6 +1630,18 @@ private fun ViewerRoute(
                 }
             },
             onDismiss = { choosingExport = false },
+            onRestoreLivePhoto = if (detail?.contentType == dev.po4yka.chur.imports.LivePhotoBundle.CONTENT_TYPE) {
+                {
+                    choosingExport = false
+                    pendingLiveRestore = projection.objectId.copyOf()
+                    controller.beginHostActivity()
+                    try { liveRestorePicker.launch(null) } catch (_: Exception) {
+                        pendingLiveRestore = null
+                        controller.endHostActivity()
+                        controller.report("The destination folder picker could not be opened.")
+                    }
+                }
+            } else null,
         )
     }
 }

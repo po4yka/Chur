@@ -89,6 +89,14 @@ class MediaPipelineTest {
     }
 
     @Test
+    fun video_limits_allow_both_orientations_and_keep_the_same_pixel_bound() {
+        assertNull(MediaBounds.check(probe(mediaClass = MediaBounds.CLASS_VIDEO, width = 7_680, height = 4_320)))
+        assertNull(MediaBounds.check(probe(mediaClass = MediaBounds.CLASS_VIDEO, width = 4_320, height = 7_680)))
+        assertNotNull(MediaBounds.check(probe(mediaClass = MediaBounds.CLASS_VIDEO, width = 4_321, height = 7_680)))
+        assertNotNull(MediaBounds.check(probe(mediaClass = MediaBounds.CLASS_VIDEO, width = 4_320, height = 7_681)))
+    }
+
+    @Test
     fun a_still_always_gets_a_thumbnail_and_a_preview_only_when_it_is_larger() {
         assertEquals(listOf(StreamKind.THUMBNAIL), requiredDerivatives(probe(width = 400, height = 300)))
         assertEquals(

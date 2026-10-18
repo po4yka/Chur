@@ -61,7 +61,7 @@ A crash at any step must reopen into old valid state, resumable migration, or ex
 
 ### Current catalog and ABI
 
-Fresh catalogs use schema v10 (`0x000a`). Versioned extensions cover [v6 sharing indexes](../format/CATALOG_SCHEMA_V6.md), [v7 album hierarchy](../format/CATALOG_SCHEMA_V7.md), [v8 Trash](../format/CATALOG_SCHEMA_V8.md), [v9 local notes](../format/CATALOG_SCHEMA_V9.md), and [v10 content search](../format/CATALOG_SCHEMA_V10.md). Unlock and backup restore run authenticated sequential migrations; interrupted migrations must resume safely. An older writer must refuse a newer catalog.
+Fresh catalogs use schema v11 (`0x000b`). Versioned extensions cover [v6 sharing indexes](../format/CATALOG_SCHEMA_V6.md), [v7 album hierarchy](../format/CATALOG_SCHEMA_V7.md), [v8 Trash](../format/CATALOG_SCHEMA_V8.md), [v9 local notes](../format/CATALOG_SCHEMA_V9.md), [v10 content search](../format/CATALOG_SCHEMA_V10.md), and [v11 pending album additions](../format/CATALOG_SCHEMA_V11.md). Unlock and backup restore run authenticated sequential migrations; interrupted migrations must resume safely. An older writer must refuse a newer catalog.
 
 Native ABI 2.24 is separate from the catalog version. Documents, audio artwork, Recently added, album breadcrumbs, and incoming shares reuse existing object/container fields; they do not allocate a new container version. Selective and external archives use existing CHURBAK1 framing and independent vault identities.
 

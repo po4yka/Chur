@@ -1198,7 +1198,7 @@ class ChurController(
         onSuccess: () -> Unit = {},
     ) = guarded {
         withContext(Dispatchers.Default) {
-            objectIds.forEach { repository.setAlbumMembership(albumId, it, false) }
+            repository.removeAlbumObjects(albumId, objectIds)
         }
         reload()
         refreshAlbums()
@@ -1381,12 +1381,24 @@ class ChurController(
      */
     fun syncNow() = guarded(context = sessionSync) {
         val engine = sync ?: return@guarded
-        underLocalNetworkAlert(engine.status.value.serverUrl) { local ->
-            if (!engine.syncNow() && local && engine.status.value.failure == ChurStatus.NETWORK_FAILURE) {
-                say(LOCAL_NETWORK_REFUSED)
+        val generation = (repository.state.value as? VaultState.Unlocked)?.generation ?: return@guarded
+        withSyncCatalogRefresh(generation) {
+            underLocalNetworkAlert(engine.status.value.serverUrl) { local ->
+                if (!engine.syncNow() && local && engine.status.value.failure == ChurStatus.NETWORK_FAILURE) {
+                    say(LOCAL_NETWORK_REFUSED)
+                }
             }
         }
     }
+
+    /** A failed run can already have committed incoming records. Publish them only in its session. */
+    internal suspend fun <T> withSyncCatalogRefresh(generation: Long, operation: suspend () -> T): T =
+        try {
+            operation()
+        } finally {
+            refreshAlbums(generation)
+            reload(generation)
+        }
 
     /**
      * Runs [run], a connection to [serverUrl], inside a [beginPrompt] bracket
@@ -1800,6 +1812,43 @@ class ChurController(
         // A lock or cancellation while a provider publishes still owns this file.
         if (cancellationRequested(token) || repository.state.value !is VaultState.Unlocked) {
             throw ChurFailure(ChurStatus.CANCELLED, "the export")
+        }
+    }
+
+    /** Restores one complete Live Photo into a new folder in the selected directory. */
+    fun restoreLivePhoto(objectId: ByteArray, uri: String) {
+        val requestedGeneration = (repository.state.value as? VaultState.Unlocked)?.generation
+        val requestedObject = objectId.copyOf()
+        guarded {
+            var root: ExportDirectory? = null
+            var child: ExportDirectory? = null
+            try {
+                tracked("live-photo-export") { token ->
+                    withContext(Dispatchers.Default) {
+                        // Own the selected grant even if the session changed while
+                        // the system folder picker was open.
+                        root = exports.openDirectory(uri)
+                            ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the Live Photo directory")
+                        fun cancelled() = cancellationRequested(token) || requestedGeneration == null ||
+                            (repository.state.value as? VaultState.Unlocked)?.generation != requestedGeneration
+                        if (cancelled()) throw ChurFailure(ChurStatus.CANCELLED, "the Live Photo export")
+                        child = root?.createDirectory("Live Photo")
+                            ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the Live Photo directory")
+                        val count = restoreLivePhotoResources(repository, requestedObject, requireNotNull(child),
+                            cancelled = ::cancelled,
+                            onProgress = { item, total ->
+                                _activeOperation.update { current -> current?.takeIf { it.id == token }?.copy(
+                                    item = item, items = total, processed = 0, total = 0, stage = 1, cancellable = true,
+                                ) ?: current }
+                            })
+                        say("Live Photo restored: $count resources and a portable original. Exported copies are unencrypted.")
+                    }
+                }
+            } finally {
+                withContext(NonCancellable + Dispatchers.Default) {
+                    try { child?.close() } finally { root?.close() }
+                }
+            }
         }
     }
 
@@ -2579,6 +2628,8 @@ class ChurController(
         throw cancelled
     } catch (failure: ChurFailure) {
         MediaImporter.Outcome.Refused(failure.status)
+    } catch (_: dev.po4yka.chur.imports.LivePhotoBundleException) {
+        MediaImporter.Outcome.Refused(ChurStatus.OBJECT_CORRUPT)
     } catch (_: Exception) {
         MediaImporter.Outcome.Refused(ChurStatus.INTERNAL_FAILURE)
     }
@@ -2685,14 +2736,16 @@ class ChurController(
      * that page the grid lost its place, and the viewer lost the item on
      * screen from its pages, so a swipe did nothing (`DESIGN.md` §13.1).
      */
-    private suspend fun reload() {
-        if (repository.state.value is VaultState.Unlocked) {
+    private suspend fun reload(expectedGeneration: Long? = null) {
+        val generation = (repository.state.value as? VaultState.Unlocked)?.generation ?: return
+        if (expectedGeneration == null || expectedGeneration == generation) {
             val query = currentQuery
             val revision = queryRevision
             val result = if (query.scope == QueryScope.SEARCH && query.terms.isNullOrBlank()) {
                 ObjectPage(emptyList(), 0, 0, null)
             } else pageThrough(query, _page.value.objects.size)
-            if (revision == queryRevision) _page.value = result
+            if (revision == queryRevision &&
+                (repository.state.value as? VaultState.Unlocked)?.generation == generation) _page.value = result
         }
     }
 
@@ -2724,8 +2777,11 @@ class ChurController(
             result
         }
 
-    private suspend fun refreshAlbums() {
-        _albums.value = withContext(Dispatchers.Default) { repository.albums() }
+    private suspend fun refreshAlbums(expectedGeneration: Long? = null) {
+        val generation = (repository.state.value as? VaultState.Unlocked)?.generation ?: return
+        if (expectedGeneration != null && expectedGeneration != generation) return
+        val result = withContext(Dispatchers.Default) { repository.albums() }
+        if ((repository.state.value as? VaultState.Unlocked)?.generation == generation) _albums.value = result
     }
 
     /**
@@ -2833,10 +2889,13 @@ class ChurController(
      * so the sync below does not clear again and leaves [notice] standing.
      */
     private suspend fun enterVault(notice: String? = null) {
+        val generation = (repository.state.value as? VaultState.Unlocked)?.generation ?: return
         privacy.setEnabled(true)
         setRoute(AppRoute.Vault)
         post(notice)
-        _page.value = withContext(Dispatchers.Default) { repository.page(ObjectQuery()) }
+        val initialPage = withContext(Dispatchers.Default) { repository.page(ObjectQuery()) }
+        if ((repository.state.value as? VaultState.Unlocked)?.generation != generation) return
+        _page.value = initialPage
         // `SYNC_PROTOCOL_V1.md` §7: "Decrypted application occurs after
         // explicit unlock". Whatever the locked puller staged while the vault
         // was closed is validated and applied here, off the first frame, and
@@ -2860,7 +2919,9 @@ class ChurController(
                         false
                     }
                 if (configured) {
-                    withContext(Dispatchers.Default) { engine.applyStaged() }
+                    withSyncCatalogRefresh(generation) {
+                        withContext(Dispatchers.Default) { engine.applyStaged() }
+                    }
                     // §4 has the user told, and the catalog keeps the fork
                     // across restarts, so each unlock says so until the user
                     // acknowledges it in Settings. It is a security notice,
@@ -2884,7 +2945,9 @@ class ChurController(
                     // run's line.
                     val serverUrl = engine.status.value.serverUrl
                     if (serverUrl?.let { syncReachable(it) } != false) {
-                        underLocalNetworkAlert(serverUrl) { engine.syncNow() }
+                        withSyncCatalogRefresh(generation) {
+                            underLocalNetworkAlert(serverUrl) { engine.syncNow() }
+                        }
                     }
                 }
             }
@@ -3107,6 +3170,11 @@ class ChurController(
             val single = outcomes.singleOrNull()
             if (requested == 1 && single != null) return when (single) {
                 is MediaImporter.Outcome.Imported -> when {
+                    single.storedAsFile -> "Saved original as a file; a media preview is unavailable on this device."
+                    single.previewWarning == MediaImporter.PreviewWarning.DECODING_FAILED && intoAlbum ->
+                        "Imported original into album; some previews could not be decoded."
+                    single.previewWarning == MediaImporter.PreviewWarning.DECODING_FAILED ->
+                        "Imported original; some previews could not be decoded."
                     single.previewWarning == MediaImporter.PreviewWarning.DECODER_CLEANUP_FAILED && intoAlbum ->
                         "Imported original into album; preview processing could not stop safely. Restart Chur before importing more media."
                     single.previewWarning == MediaImporter.PreviewWarning.DECODER_CLEANUP_FAILED ->
@@ -3149,6 +3217,10 @@ class ChurController(
                 "$skipped skipped".takeIf { skipped > 0 },
             ).joinToString(", ")
             val previews = listOfNotNull(
+                "some originals were saved as files without media previews".takeIf { imported.any { it.storedAsFile } },
+                "some previews could not be decoded".takeIf { imported.any {
+                    it.previewWarning == MediaImporter.PreviewWarning.DECODING_FAILED && !it.storedAsFile
+                } },
                 "some previews could not be saved".takeIf { imported.any { it.previewWarning == MediaImporter.PreviewWarning.STORAGE_FAILED } },
                 "preview generation timed out".takeIf { imported.any { it.previewWarning == MediaImporter.PreviewWarning.TIMED_OUT } },
                 "remaining previews cancelled".takeIf { imported.any { it.previewsSkipped } },

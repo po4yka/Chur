@@ -77,6 +77,20 @@ pub unsafe extern "C" fn chur_own_sync_operations(
                 let mut reader = Reader::new(bytes, ChurStatus::NonCanonicalEncoding);
                 let after = reader.u64()?;
                 reader.finish()?;
+                // Bootstrap existing albums and retry memberships after media publication.
+                if chur_catalog::own_sync::has_albums(session.catalog_ref()?)? {
+                    chur_media::keys::ensure_default_collection(session)?;
+                    let root = session.root_secret()?.duplicate();
+                    let vault = session.vault_id();
+                    if chur_catalog::sync_membership::load(session.catalog_ref()?)?.is_none() {
+                        chur_catalog::sync_receive::provision_local_identity(
+                            session.catalog()?,
+                            &root,
+                            vault,
+                        )?;
+                    }
+                    chur_catalog::own_sync::reconcile_albums(session.catalog()?, &root, vault)?;
+                }
                 let root = session.root_secret()?;
                 let membership = chur_catalog::sync_membership::load(session.catalog_ref()?)?
                     .ok_or_else(|| {

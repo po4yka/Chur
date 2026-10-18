@@ -952,43 +952,46 @@ pub fn active_metadata(db: &CatalogDb, object_id: &Id) -> Result<MetadataRevisio
 
 /// Creates an album, §9.
 pub fn put_album(db: &mut CatalogDb, album: &Album) -> Result<()> {
+    crate::own_sync::mark_albums_dirty(db);
+    db.transaction(|transaction| put_album_in(transaction, album))
+}
+
+pub(crate) fn put_album_in(transaction: &Transaction<'_>, album: &Album) -> Result<()> {
     album.check()?;
     let created = as_sqlite_integer(album.created_ms, "the time is out of range")?;
     let revision = as_sqlite_integer(album.revision, "the revision is too large")?;
-    db.transaction(|transaction| {
-        let present = count(transaction, "SELECT count(*) FROM albums")?;
-        let already: i64 = transaction
-            .query_row(
-                "SELECT count(*) FROM albums WHERE album_id = ?1",
-                [album.album_id.as_bytes().as_slice()],
-                |row| row.get(0),
-            )
-            .map_err(|error| map_sqlite(error, "the album could not be read"))?;
-        if already == 0 {
-            ensure!(
-                present < limits::ALBUMS_MAX,
-                ResourceLimitExceeded,
-                "the vault holds the §21 maximum of albums"
-            );
-        }
-        transaction
-            .execute(
-                "INSERT INTO albums (album_id, name, created_ms, revision, sort_position)
-                 VALUES (?1, ?2, ?3, ?4,
-                     (SELECT coalesce(max(sort_position) + 1, 0) FROM albums
-                       WHERE parent_album_id IS NULL))
-                 ON CONFLICT(album_id) DO UPDATE SET
-                     name = excluded.name, revision = excluded.revision",
-                params![
-                    album.album_id.as_bytes().as_slice(),
-                    album.name.as_str(),
-                    created,
-                    revision,
-                ],
-            )
-            .map_err(|error| map_sqlite(error, "the album could not be written"))?;
-        bump_generation(transaction)
-    })
+    let present = count(transaction, "SELECT count(*) FROM albums")?;
+    let already: i64 = transaction
+        .query_row(
+            "SELECT count(*) FROM albums WHERE album_id = ?1",
+            [album.album_id.as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .map_err(|error| map_sqlite(error, "the album could not be read"))?;
+    if already == 0 {
+        ensure!(
+            present < limits::ALBUMS_MAX,
+            ResourceLimitExceeded,
+            "the vault holds the §21 maximum of albums"
+        );
+    }
+    transaction
+        .execute(
+            "INSERT INTO albums (album_id, name, created_ms, revision, sort_position)
+             VALUES (?1, ?2, ?3, ?4,
+                 (SELECT coalesce(max(sort_position) + 1, 0) FROM albums
+                   WHERE parent_album_id IS NULL))
+             ON CONFLICT(album_id) DO UPDATE SET
+                 name = excluded.name, revision = excluded.revision",
+            params![
+                album.album_id.as_bytes().as_slice(),
+                album.name.as_str(),
+                created,
+                revision,
+            ],
+        )
+        .map_err(|error| map_sqlite(error, "the album could not be written"))?;
+    bump_generation(transaction)
 }
 
 /// One logical album with its user-controlled place in the tree.
@@ -1012,13 +1015,14 @@ pub fn albums(db: &CatalogDb) -> Result<Vec<AlbumListing>> {
             "SELECT a.album_id, a.name, a.created_ms, a.revision,
                     (SELECT count(*) FROM album_memberships m
                       JOIN objects o ON o.object_id = m.object_id
-                     WHERE m.album_id = a.album_id AND o.state = 1)
+                     WHERE m.album_id = a.album_id AND o.state = 1
+                       AND o.integrity_summary <> ?1)
                     , a.parent_album_id, a.sort_position
                FROM albums a ORDER BY a.parent_album_id, a.sort_position, a.album_id",
         )
         .map_err(|error| map_sqlite(error, "the album query could not be prepared"))?;
     let rows = statement
-        .query_map([], |row| {
+        .query_map([i64::from(IntegritySummary::Quarantined.value())], |row| {
             Ok((
                 row.get::<_, Vec<u8>>(0)?,
                 row.get::<_, String>(1)?,
@@ -1111,6 +1115,31 @@ pub fn object_tags(db: &CatalogDb, object_id: &Id) -> Result<Vec<Tag>> {
     Ok(tags)
 }
 
+fn mark_pending_album_add(transaction: &Transaction<'_>, album: &Id, object: &Id) -> Result<()> {
+    transaction
+        .execute(
+            "INSERT INTO own_sync_pending_album_memberships (album_id, object_id)
+        VALUES (?1, ?2) ON CONFLICT(album_id, object_id) DO NOTHING",
+            params![album.as_bytes().as_slice(), object.as_bytes().as_slice()],
+        )
+        .map_err(|error| map_sqlite(error, "pending album membership could not be written"))?;
+    Ok(())
+}
+
+pub(crate) fn clear_pending_album_add(
+    transaction: &Transaction<'_>,
+    album: &Id,
+    object: &Id,
+) -> Result<()> {
+    transaction
+        .execute(
+            "DELETE FROM own_sync_pending_album_memberships WHERE album_id = ?1 AND object_id = ?2",
+            params![album.as_bytes().as_slice(), object.as_bytes().as_slice()],
+        )
+        .map_err(|error| map_sqlite(error, "pending album membership could not be cleared"))?;
+    Ok(())
+}
+
 /// Adds or removes an album membership, §9.
 pub fn set_album_membership(
     db: &mut CatalogDb,
@@ -1119,64 +1148,154 @@ pub fn set_album_membership(
     member: bool,
     now_ms: u64,
 ) -> Result<()> {
-    let added = as_sqlite_integer(now_ms, "the time is out of range")?;
+    crate::own_sync::mark_albums_dirty(db);
     db.transaction(|transaction| {
-        if member {
-            let present: u64 = count_with(
-                transaction,
-                "SELECT count(*) FROM album_memberships WHERE album_id = ?1",
-                [album_id.as_bytes().as_slice()],
-            )?;
-            ensure!(
-                present < limits::ALBUM_MEMBERSHIPS_MAX,
-                ResourceLimitExceeded,
-                "the album holds the §21 maximum of memberships"
-            );
-            let changed = transaction
-                .execute(
-                    "INSERT INTO album_memberships
-                         (album_id, object_id, capture_time_ms, added_ms, revision, sort_position)
-                     SELECT ?1, object_id, capture_time_ms, ?3, 1,
-                         (SELECT coalesce(max(sort_position) + 1, 0)
-                            FROM album_memberships WHERE album_id = ?1)
-                       FROM objects WHERE object_id = ?2 AND state = 1
-                     ON CONFLICT(album_id, object_id) DO NOTHING",
-                    params![
-                        album_id.as_bytes().as_slice(),
-                        object_id.as_bytes().as_slice(),
-                        added,
-                    ],
-                )
-                .map_err(|error| map_sqlite(error, "the membership could not be written"))?;
-            ensure!(
-                changed == 1
-                    || count_with::<_, [&[u8]; 2]>(
-                        transaction,
-                        "SELECT count(*) FROM album_memberships WHERE album_id = ?1 AND object_id = ?2",
-                        [album_id.as_bytes().as_slice(), object_id.as_bytes().as_slice()],
-                    )? == 1,
-                NotFound,
-                "no listable object carries that id"
-            );
-        } else {
-            transaction
-                .execute(
-                    "DELETE FROM album_memberships WHERE album_id = ?1 AND object_id = ?2",
-                    params![
+        set_album_membership_in(transaction, album_id, object_id, member, now_ms)
+    })
+}
+
+pub(crate) fn set_album_membership_in(
+    transaction: &Transaction<'_>,
+    album_id: &Id,
+    object_id: &Id,
+    member: bool,
+    now_ms: u64,
+) -> Result<()> {
+    let added = as_sqlite_integer(now_ms, "the time is out of range")?;
+    if member {
+        let present: u64 = count_with(
+            transaction,
+            "SELECT count(*) FROM album_memberships WHERE album_id = ?1",
+            [album_id.as_bytes().as_slice()],
+        )?;
+        let already = count_with(
+            transaction,
+            "SELECT count(*) FROM album_memberships WHERE album_id = ?1 AND object_id = ?2",
+            [
+                album_id.as_bytes().as_slice(),
+                object_id.as_bytes().as_slice(),
+            ],
+        )?;
+        ensure!(
+            already == 1 || present < limits::ALBUM_MEMBERSHIPS_MAX,
+            ResourceLimitExceeded,
+            "the album holds the §21 maximum of memberships"
+        );
+        let changed = transaction
+            .execute(
+                "INSERT INTO album_memberships
+                     (album_id, object_id, capture_time_ms, added_ms, revision, sort_position)
+                 SELECT ?1, object_id, capture_time_ms, ?3, 1,
+                     (SELECT coalesce(max(sort_position) + 1, 0)
+                        FROM album_memberships WHERE album_id = ?1)
+                   FROM objects WHERE object_id = ?2 AND state = 1
+                 ON CONFLICT(album_id, object_id) DO NOTHING",
+                params![
+                    album_id.as_bytes().as_slice(),
+                    object_id.as_bytes().as_slice(),
+                    added,
+                ],
+            )
+            .map_err(|error| map_sqlite(error, "the membership could not be written"))?;
+        if changed == 1 {
+            mark_pending_album_add(transaction, album_id, object_id)?;
+        }
+        ensure!(
+            changed == 1
+                || count_with::<_, [&[u8]; 2]>(
+                    transaction,
+                    "SELECT count(*) FROM album_memberships WHERE album_id = ?1 AND object_id = ?2",
+                    [
                         album_id.as_bytes().as_slice(),
                         object_id.as_bytes().as_slice()
                     ],
-                )
-                .map_err(|error| map_sqlite(error, "the membership could not be removed"))?;
-        }
+                )? == 1,
+            NotFound,
+            "no listable object carries that id"
+        );
+    } else {
+        clear_pending_album_add(transaction, album_id, object_id)?;
         transaction
             .execute(
-                "UPDATE albums SET revision = revision + 1 WHERE album_id = ?1",
-                [album_id.as_bytes().as_slice()],
+                "DELETE FROM album_memberships WHERE album_id = ?1 AND object_id = ?2",
+                params![
+                    album_id.as_bytes().as_slice(),
+                    object_id.as_bytes().as_slice()
+                ],
             )
-            .map_err(|error| map_sqlite(error, "the album revision could not advance"))?;
-        bump_generation(transaction)
-    })
+            .map_err(|error| map_sqlite(error, "the membership could not be removed"))?;
+    }
+    transaction
+        .execute(
+            "UPDATE albums SET revision = revision + 1 WHERE album_id = ?1",
+            [album_id.as_bytes().as_slice()],
+        )
+        .map_err(|error| map_sqlite(error, "the album revision could not advance"))?;
+    bump_generation(transaction)
+}
+
+/// Removes a selection from one album in one catalog transaction.
+/// The objects and their other album memberships stay in the catalog.
+///
+/// # Errors
+///
+/// Returns `InvalidInput` for an empty, repeated, or oversized selection,
+/// `NotFound` for an absent album, or `Conflict` for a stale membership.
+/// Database failures roll back the complete selection.
+pub fn remove_album_members(db: &mut CatalogDb, album_id: &Id, object_ids: &[Id]) -> Result<()> {
+    crate::own_sync::mark_albums_dirty(db);
+    db.transaction(|transaction| remove_album_members_in(transaction, album_id, object_ids))
+}
+
+pub(crate) fn remove_album_members_in(
+    transaction: &Transaction<'_>,
+    album_id: &Id,
+    object_ids: &[Id],
+) -> Result<()> {
+    ensure!(
+        !object_ids.is_empty() && object_ids.len() as u64 <= limits::ALBUM_MEMBERSHIPS_MAX,
+        InvalidInput,
+        "the selection size is outside the album bound"
+    );
+    let mut distinct = HashSet::with_capacity(object_ids.len());
+    ensure!(
+        object_ids.iter().all(|id| distinct.insert(*id)),
+        InvalidInput,
+        "the selection repeats an object"
+    );
+    ensure!(
+        count_with(
+            transaction,
+            "SELECT count(*) FROM albums WHERE album_id = ?1",
+            [album_id.as_bytes().as_slice()]
+        )? == 1,
+        NotFound,
+        "the source album does not exist"
+    );
+    for object_id in object_ids {
+        clear_pending_album_add(transaction, album_id, object_id)?;
+        let changed = transaction
+            .execute(
+                "DELETE FROM album_memberships WHERE album_id = ?1 AND object_id = ?2",
+                params![
+                    album_id.as_bytes().as_slice(),
+                    object_id.as_bytes().as_slice()
+                ],
+            )
+            .map_err(|error| map_sqlite(error, "the selected membership could not be removed"))?;
+        ensure!(
+            changed == 1,
+            Conflict,
+            "the selection is no longer in the source album"
+        );
+    }
+    transaction
+        .execute(
+            "UPDATE albums SET revision = revision + 1 WHERE album_id = ?1",
+            [album_id.as_bytes().as_slice()],
+        )
+        .map_err(|error| map_sqlite(error, "the source album revision could not advance"))?;
+    bump_generation(transaction)
 }
 
 /// Destination for one atomic selection placement.
@@ -1191,6 +1310,27 @@ pub enum AlbumDestination<'a> {
 /// Creating the destination is part of the same transaction.
 pub fn place_album_members(
     db: &mut CatalogDb,
+    destination: AlbumDestination<'_>,
+    source: Option<&Id>,
+    object_ids: &[Id],
+    move_members: bool,
+    now_ms: u64,
+) -> Result<Id> {
+    crate::own_sync::mark_albums_dirty(db);
+    db.transaction(|transaction| {
+        place_album_members_in(
+            transaction,
+            destination,
+            source,
+            object_ids,
+            move_members,
+            now_ms,
+        )
+    })
+}
+
+pub(crate) fn place_album_members_in(
+    transaction: &Transaction<'_>,
     destination: AlbumDestination<'_>,
     source: Option<&Id>,
     object_ids: &[Id],
@@ -1218,117 +1358,163 @@ pub fn place_album_members(
         album.check()?;
     }
     let added = as_sqlite_integer(now_ms, "the time is out of range")?;
-    db.transaction(|transaction| {
-        let target = match destination {
-            AlbumDestination::Existing(id) => {
+    let target = match destination {
+        AlbumDestination::Existing(id) => {
+            ensure!(
+                count_with(
+                    transaction,
+                    "SELECT count(*) FROM albums WHERE album_id = ?1",
+                    [id.as_bytes().as_slice()]
+                )? == 1,
+                NotFound,
+                "the target album does not exist"
+            );
+            *id
+        }
+        AlbumDestination::New(album, parent) => {
+            ensure!(
+                count(transaction, "SELECT count(*) FROM albums")? < limits::ALBUMS_MAX,
+                ResourceLimitExceeded,
+                "the vault holds the maximum of albums"
+            );
+            if let Some(parent) = parent {
                 ensure!(
-                    count_with(transaction, "SELECT count(*) FROM albums WHERE album_id = ?1", [id.as_bytes().as_slice()])? == 1,
+                    count_with(
+                        transaction,
+                        "SELECT count(*) FROM albums WHERE album_id = ?1",
+                        [parent.as_bytes().as_slice()]
+                    )? == 1,
                     NotFound,
-                    "the target album does not exist"
+                    "the parent album does not exist"
                 );
-                *id
             }
-            AlbumDestination::New(album, parent) => {
-                ensure!(
-                    count(transaction, "SELECT count(*) FROM albums")? < limits::ALBUMS_MAX,
-                    ResourceLimitExceeded,
-                    "the vault holds the maximum of albums"
-                );
-                if let Some(parent) = parent {
-                    ensure!(
-                        count_with(transaction, "SELECT count(*) FROM albums WHERE album_id = ?1", [parent.as_bytes().as_slice()])? == 1,
-                        NotFound,
-                        "the parent album does not exist"
-                    );
-                }
-                transaction.execute(
-                    "INSERT INTO albums (album_id, name, created_ms, revision, parent_album_id, sort_position)
-                     VALUES (?1, ?2, ?3, ?4, ?5,
-                       (SELECT coalesce(max(sort_position) + 1, 0) FROM albums WHERE parent_album_id IS ?5))",
-                    params![
-                        album.album_id.as_bytes().as_slice(), album.name.as_str(),
-                        as_sqlite_integer(album.created_ms, "the creation time is out of range")?,
-                        as_sqlite_integer(album.revision, "the revision is out of range")?,
-                        parent.map(|id| id.as_bytes().as_slice()),
-                    ],
-                ).map_err(|error| map_sqlite(error, "the target album could not be created"))?;
-                album.album_id
-            }
-        };
+            transaction.execute(
+                "INSERT INTO albums (album_id, name, created_ms, revision, parent_album_id, sort_position)
+                 VALUES (?1, ?2, ?3, ?4, ?5,
+                   (SELECT coalesce(max(sort_position) + 1, 0) FROM albums WHERE parent_album_id IS ?5))",
+                params![
+                    album.album_id.as_bytes().as_slice(), album.name.as_str(),
+                    as_sqlite_integer(album.created_ms, "the creation time is out of range")?,
+                    as_sqlite_integer(album.revision, "the revision is out of range")?,
+                    parent.map(|id| id.as_bytes().as_slice()),
+                ],
+            ).map_err(|error| map_sqlite(error, "the target album could not be created"))?;
+            album.album_id
+        }
+    };
+    if let Some(source) = moving_source {
+        ensure!(
+            count_with(
+                transaction,
+                "SELECT count(*) FROM albums WHERE album_id = ?1",
+                [source.as_bytes().as_slice()]
+            )? == 1,
+            NotFound,
+            "the source album does not exist"
+        );
+    }
+    let mut missing = 0u64;
+    for id in object_ids {
+        ensure!(
+            count_with(
+                transaction,
+                "SELECT count(*) FROM objects WHERE object_id = ?1 AND state = 1",
+                [id.as_bytes().as_slice()]
+            )? == 1,
+            NotFound,
+            "the selection contains no listable object"
+        );
         if let Some(source) = moving_source {
             ensure!(
-                count_with(transaction, "SELECT count(*) FROM albums WHERE album_id = ?1", [source.as_bytes().as_slice()])? == 1,
-                NotFound,
-                "the source album does not exist"
+                count_with(
+                    transaction,
+                    "SELECT count(*) FROM album_memberships WHERE album_id = ?1 AND object_id = ?2",
+                    [source.as_bytes().as_slice(), id.as_bytes().as_slice()]
+                )? == 1,
+                Conflict,
+                "the selection is no longer in the source album"
             );
         }
-        let mut missing = 0u64;
-        for id in object_ids {
-            ensure!(
-                count_with(transaction, "SELECT count(*) FROM objects WHERE object_id = ?1 AND state = 1", [id.as_bytes().as_slice()])? == 1,
-                NotFound,
-                "the selection contains no listable object"
-            );
-            if let Some(source) = moving_source {
-                ensure!(
-                    count_with(transaction,
-                        "SELECT count(*) FROM album_memberships WHERE album_id = ?1 AND object_id = ?2",
-                        [source.as_bytes().as_slice(), id.as_bytes().as_slice()])? == 1,
-                    Conflict,
-                    "the selection is no longer in the source album"
-                );
-            }
-            if count_with(transaction,
-                "SELECT count(*) FROM album_memberships WHERE album_id = ?1 AND object_id = ?2",
-                [target.as_bytes().as_slice(), id.as_bytes().as_slice()])? == 0 {
-                missing += 1;
-            }
-        }
-        let present = count_with(transaction,
-            "SELECT count(*) FROM album_memberships WHERE album_id = ?1",
-            [target.as_bytes().as_slice()])?;
-        ensure!(
-            present + missing <= limits::ALBUM_MEMBERSHIPS_MAX,
-            ResourceLimitExceeded,
-            "the target album would exceed its membership bound"
-        );
-        for id in object_ids {
-            transaction.execute(
-                "INSERT INTO album_memberships
-                    (album_id, object_id, capture_time_ms, added_ms, revision, sort_position)
-                 SELECT ?1, object_id, capture_time_ms, ?3, 1,
-                    (SELECT coalesce(max(sort_position) + 1, 0)
-                     FROM album_memberships WHERE album_id = ?1)
-                   FROM objects WHERE object_id = ?2 AND state = 1
-                 ON CONFLICT(album_id, object_id) DO NOTHING",
-                params![target.as_bytes().as_slice(), id.as_bytes().as_slice(), added],
-            ).map_err(|error| map_sqlite(error, "the selected object could not be placed"))?;
-        }
-        if let Some(source) = moving_source
-            && *source != target
+        if count_with(
+            transaction,
+            "SELECT count(*) FROM album_memberships WHERE album_id = ?1 AND object_id = ?2",
+            [target.as_bytes().as_slice(), id.as_bytes().as_slice()],
+        )? == 0
         {
-            for id in object_ids {
-                transaction.execute(
+            missing += 1;
+        }
+    }
+    let present = count_with(
+        transaction,
+        "SELECT count(*) FROM album_memberships WHERE album_id = ?1",
+        [target.as_bytes().as_slice()],
+    )?;
+    ensure!(
+        present + missing <= limits::ALBUM_MEMBERSHIPS_MAX,
+        ResourceLimitExceeded,
+        "the target album would exceed its membership bound"
+    );
+    for id in object_ids {
+        let changed = transaction
+            .execute(
+                "INSERT INTO album_memberships
+                (album_id, object_id, capture_time_ms, added_ms, revision, sort_position)
+             SELECT ?1, object_id, capture_time_ms, ?3, 1,
+                (SELECT coalesce(max(sort_position) + 1, 0)
+                 FROM album_memberships WHERE album_id = ?1)
+               FROM objects WHERE object_id = ?2 AND state = 1
+             ON CONFLICT(album_id, object_id) DO NOTHING",
+                params![
+                    target.as_bytes().as_slice(),
+                    id.as_bytes().as_slice(),
+                    added
+                ],
+            )
+            .map_err(|error| map_sqlite(error, "the selected object could not be placed"))?;
+        if changed == 1 {
+            mark_pending_album_add(transaction, &target, id)?;
+        }
+    }
+    if let Some(source) = moving_source
+        && *source != target
+    {
+        for id in object_ids {
+            clear_pending_album_add(transaction, source, id)?;
+            transaction
+                .execute(
                     "DELETE FROM album_memberships WHERE album_id = ?1 AND object_id = ?2",
                     params![source.as_bytes().as_slice(), id.as_bytes().as_slice()],
-                ).map_err(|error| map_sqlite(error, "the source membership could not be removed"))?;
-            }
-            transaction.execute(
+                )
+                .map_err(|error| map_sqlite(error, "the source membership could not be removed"))?;
+        }
+        transaction
+            .execute(
                 "UPDATE albums SET revision = revision + 1 WHERE album_id = ?1",
                 [source.as_bytes().as_slice()],
-            ).map_err(|error| map_sqlite(error, "the source album revision could not advance"))?;
-        }
-        transaction.execute(
+            )
+            .map_err(|error| map_sqlite(error, "the source album revision could not advance"))?;
+    }
+    transaction
+        .execute(
             "UPDATE albums SET revision = revision + 1 WHERE album_id = ?1",
             [target.as_bytes().as_slice()],
-        ).map_err(|error| map_sqlite(error, "the target album revision could not advance"))?;
-        bump_generation(transaction)?;
-        Ok(target)
-    })
+        )
+        .map_err(|error| map_sqlite(error, "the target album revision could not advance"))?;
+    bump_generation(transaction)?;
+    Ok(target)
 }
 
 /// Changes only an album's label; its identifier, descendants, and members stay put.
 pub fn rename_album(db: &mut CatalogDb, album_id: &Id, name: &str) -> Result<()> {
+    crate::own_sync::mark_albums_dirty(db);
+    db.transaction(|transaction| rename_album_in(transaction, album_id, name))
+}
+
+pub(crate) fn rename_album_in(
+    transaction: &Transaction<'_>,
+    album_id: &Id,
+    name: &str,
+) -> Result<()> {
     Album {
         album_id: *album_id,
         name: name.to_owned(),
@@ -1336,16 +1522,14 @@ pub fn rename_album(db: &mut CatalogDb, album_id: &Id, name: &str) -> Result<()>
         revision: 1,
     }
     .check()?;
-    db.transaction(|transaction| {
-        let changed = transaction
-            .execute(
-                "UPDATE albums SET name = ?2, revision = revision + 1 WHERE album_id = ?1",
-                params![album_id.as_bytes().as_slice(), name],
-            )
-            .map_err(|error| map_sqlite(error, "the album could not be renamed"))?;
-        ensure!(changed == 1, NotFound, "no album carries that id");
-        bump_generation(transaction)
-    })
+    let changed = transaction
+        .execute(
+            "UPDATE albums SET name = ?2, revision = revision + 1 WHERE album_id = ?1",
+            params![album_id.as_bytes().as_slice(), name],
+        )
+        .map_err(|error| map_sqlite(error, "the album could not be renamed"))?;
+    ensure!(changed == 1, NotFound, "no album carries that id");
+    bump_generation(transaction)
 }
 
 /// Deletes a subtree of logical albums, retaining every media object.
@@ -2056,6 +2240,228 @@ mod tests {
         assert_eq!(listed[0].album.album_id, second);
         assert_eq!(listed[0].album.name, "Renamed");
         assert_eq!(listed[1].album.album_id, first);
+    }
+
+    #[test]
+    fn album_member_count_matches_visible_album_page_after_quarantine() {
+        let mut fixture = fixture();
+        let first = activation(&fixture, 10, "first.jpg");
+        let held = activation(&fixture, 11, "held.jpg");
+        activate_object(&mut fixture.db, &first).expect("first");
+        activate_object(&mut fixture.db, &held).expect("held");
+        let album = Album {
+            album_id: random::id().expect("album id"),
+            name: "Visible".into(),
+            created_ms: 1,
+            revision: 1,
+        };
+        put_album(&mut fixture.db, &album).expect("album");
+        for id in [first.object.object_id, held.object.object_id] {
+            set_album_membership(&mut fixture.db, &album.album_id, &id, true, 1)
+                .expect("membership");
+        }
+        set_integrity_summary(
+            &mut fixture.db,
+            &held.object.object_id,
+            IntegritySummary::Quarantined,
+            2,
+        )
+        .expect("quarantine");
+        let page = crate::query::page(
+            &fixture.db,
+            &crate::query::ObjectQuery {
+                scope: crate::query::Scope::Album(album.album_id),
+                ..crate::query::ObjectQuery::timeline()
+            },
+        )
+        .expect("album page");
+        assert_eq!(page.objects.len(), 1);
+        assert_eq!(albums(&fixture.db).expect("albums")[0].member_count, 1);
+    }
+
+    #[test]
+    fn existing_album_membership_is_idempotent_at_the_membership_limit() {
+        let mut fixture = fixture();
+        let first = activation(&fixture, 10, "first.jpg");
+        activate_object(&mut fixture.db, &first).expect("first");
+        let album = Album {
+            album_id: random::id().expect("album id"),
+            name: "Full".into(),
+            created_ms: 1,
+            revision: 1,
+        };
+        put_album(&mut fixture.db, &album).expect("album");
+        // Populate the real SQLCipher schema in one transaction. Foreign key
+        // checks stay enabled; the calls under test enforce the production bound.
+        fixture
+            .db
+            .transaction(|tx| {
+                tx.execute(
+                    "WITH RECURSIVE sequence(n) AS (
+                    VALUES(1) UNION ALL SELECT n+1 FROM sequence WHERE n < ?1
+                 ) INSERT INTO objects SELECT randomblob(16), object_generation,
+                    collection_id, randomblob(16), media_kind, capture_time_ms,
+                    import_time_ms, capture_time_substituted, plaintext_size, width,
+                    height, duration_ms, favorite, state, integrity_summary,
+                    thumbnail_ready, active_metadata_revision, n
+                   FROM sequence CROSS JOIN objects WHERE object_id = ?2",
+                    params![
+                        i64::try_from(limits::ALBUM_MEMBERSHIPS_MAX - 1).expect("limit"),
+                        first.object.object_id.as_bytes().as_slice()
+                    ],
+                )
+                .expect("populate objects");
+                tx.execute(
+                    "INSERT INTO album_memberships
+                    (album_id, object_id, capture_time_ms, added_ms, revision, sort_position)
+                 SELECT ?1, object_id, capture_time_ms, 1, 1, row_number() OVER ()
+                   FROM objects",
+                    [album.album_id.as_bytes().as_slice()],
+                )
+                .expect("fill album");
+                Ok(())
+            })
+            .expect("fixture transaction");
+        assert_eq!(
+            albums(&fixture.db).expect("full album")[0].member_count,
+            limits::ALBUM_MEMBERSHIPS_MAX
+        );
+        set_album_membership(
+            &mut fixture.db,
+            &album.album_id,
+            &first.object.object_id,
+            true,
+            2,
+        )
+        .expect("existing member at limit");
+        let extra = activation(&fixture, 12, "extra.jpg");
+        activate_object(&mut fixture.db, &extra).expect("extra object");
+        assert_eq!(
+            rejection(set_album_membership(
+                &mut fixture.db,
+                &album.album_id,
+                &extra.object.object_id,
+                true,
+                2
+            )),
+            ChurStatus::ResourceLimitExceeded
+        );
+        assert_eq!(
+            albums(&fixture.db).expect("album remains full")[0].member_count,
+            limits::ALBUM_MEMBERSHIPS_MAX
+        );
+    }
+
+    fn album_with_two_members(fixture: &mut Fixture) -> (Id, [Id; 2]) {
+        let first = activation(fixture, 10, "first.jpg");
+        let second = activation(fixture, 11, "second.jpg");
+        let ids = [first.object.object_id, second.object.object_id];
+        activate_object(&mut fixture.db, &first).expect("first");
+        activate_object(&mut fixture.db, &second).expect("second");
+        let album = Album {
+            album_id: random::id().expect("album id"),
+            name: "Selection".into(),
+            created_ms: 1,
+            revision: 1,
+        };
+        put_album(&mut fixture.db, &album).expect("album");
+        place_album_members(
+            &mut fixture.db,
+            AlbumDestination::Existing(&album.album_id),
+            None,
+            &ids,
+            false,
+            1,
+        )
+        .expect("selection");
+        (album.album_id, ids)
+    }
+
+    #[test]
+    fn removing_album_selection_advances_revision_and_generation_once() {
+        let mut fixture = fixture();
+        let (album, ids) = album_with_two_members(&mut fixture);
+        let before = albums(&fixture.db).expect("before")[0].clone();
+        let generation = crate::schema::generation(&fixture.db).expect("generation");
+        remove_album_members(&mut fixture.db, &album, &ids).expect("remove selection");
+        let after = albums(&fixture.db).expect("after")[0].clone();
+        assert_eq!(after.member_count, 0);
+        assert_eq!(after.album.revision, before.album.revision + 1);
+        assert_eq!(
+            crate::schema::generation(&fixture.db).expect("generation"),
+            generation + 1
+        );
+        for id in ids {
+            assert_eq!(
+                object(&fixture.db, &id).expect("object query").object_id,
+                id
+            );
+        }
+    }
+
+    #[test]
+    fn removing_album_selection_rolls_back_on_a_stale_membership() {
+        let mut fixture = fixture();
+        let (album, ids) = album_with_two_members(&mut fixture);
+        let before = albums(&fixture.db).expect("before");
+        let generation = crate::schema::generation(&fixture.db).expect("generation");
+        let absent = random::id().expect("absent id");
+        assert_eq!(
+            rejection(remove_album_members(
+                &mut fixture.db,
+                &album,
+                &[ids[0], absent]
+            )),
+            ChurStatus::Conflict
+        );
+        assert_eq!(albums(&fixture.db).expect("unchanged"), before);
+        assert_eq!(
+            crate::schema::generation(&fixture.db).expect("generation"),
+            generation
+        );
+        for selection in [vec![], vec![ids[0], ids[0]]] {
+            assert_eq!(
+                rejection(remove_album_members(&mut fixture.db, &album, &selection)),
+                ChurStatus::InvalidInput
+            );
+        }
+        assert_eq!(
+            rejection(remove_album_members(&mut fixture.db, &absent, &ids)),
+            ChurStatus::NotFound
+        );
+    }
+
+    #[test]
+    fn removing_album_selection_rolls_back_after_a_database_write_failure() {
+        let mut fixture = fixture();
+        let (album, ids) = album_with_two_members(&mut fixture);
+        let before = albums(&fixture.db).expect("before");
+        let generation = crate::schema::generation(&fixture.db).expect("generation");
+        fixture
+            .db
+            .connection()
+            .execute_batch(
+                "CREATE TEMP TRIGGER reject_second_membership_delete
+             BEFORE DELETE ON album_memberships
+             WHEN OLD.object_id = (SELECT object_id FROM objects WHERE capture_time_ms = 11)
+             BEGIN SELECT RAISE(ABORT, 'membership write failed'); END;",
+            )
+            .expect("inject real database failure");
+        remove_album_members(&mut fixture.db, &album, &ids)
+            .expect_err("second delete must fail after first delete");
+        assert_eq!(albums(&fixture.db).expect("unchanged"), before);
+        assert_eq!(
+            crate::schema::generation(&fixture.db).expect("generation"),
+            generation
+        );
+        fixture
+            .db
+            .connection()
+            .execute_batch("DROP TRIGGER reject_second_membership_delete")
+            .expect("clear database failure");
+        remove_album_members(&mut fixture.db, &album, &ids)
+            .expect("both memberships survived rollback");
+        assert_eq!(albums(&fixture.db).expect("removed")[0].member_count, 0);
     }
 
     #[test]

@@ -20,6 +20,7 @@ fun ExportOptionsDialog(
     downloads: Boolean = false,
     onChoose: (ExportTarget) -> Unit,
     onDismiss: () -> Unit,
+    onRestoreLivePhoto: (() -> Unit)? = null,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -27,6 +28,9 @@ fun ExportOptionsDialog(
         text = {
             Column {
                 Text("The destination or recipient may keep an unencrypted copy.")
+                if (onRestoreLivePhoto != null) TextButton(onClick = onRestoreLivePhoto) {
+                    Text("Restore Live Photo resources")
+                }
                 if (media) TextButton(onClick = { onChoose(ExportTarget.MEDIA_LIBRARY) }) {
                     Text("Save to Photos")
                 }

@@ -56,9 +56,20 @@ each item and stops it on a cancel, and Kotlin deletes the copy after its
 import, before it loads the next item. Export uses a protected
 temporary file for the Files picker, the share sheet, or Photos. Completion and
 the next launch remove abandoned plaintext copies. The host requests add-only
-Photos access when the user saves an export there; PhotosUI import needs no
+Photos access when the user saves an export there. The default PhotosUI import needs no
 photo-library permission because it grants access only to selected items.
-After an import, the host requests read-write Photos access only if the user
+The separate **Full Live Photos (Photos access)** action requests read-write access,
+then saves every resource of each accessible selected Live Photo in one `.churlive`
+object. The **Live Photo packages** action opens a portable `.churlive` file
+through a coordinated Files source lease and the same media pipeline. This lets
+you restore a package from Android without first adding it to Photos.
+Full import preserves original resource bytes, audio in the paired movie, filenames,
+UTIs, and resource roles. Limited access must include the selected asset. Denied
+access or any missing resource fails the full import. This path never offers
+source deletion. Export to Photos restores all roles in one request and reports
+unsupported combinations. Export to Files retains all resources inside the
+complete portable bundle. It does not create separate resource files on iOS. See [`LIVE_PHOTO_BUNDLE_V1.md`](../../docs/format/LIVE_PHOTO_BUNDLE_V1.md).
+After a default import, the host requests read-write Photos access if the user
 chooses to review the deletion of the originals, `IOS.md` §15.4. iOS asks for
 local network access by itself when sync first connects to a server on the
 local network, usually at setup, and `NSLocalNetworkUsageDescription` is the
@@ -134,3 +145,22 @@ state, diagnostics, or notifications. Flash deletion and managed text buffers
 do not provide a physical-erasure guarantee. An App Group peer belongs to the
 same trusted signing team; this design does not defend against a malicious
 replacement extension signed with that authority.
+
+## Native Live Photo verification
+
+`LivePhotoNativeTests.xcodeproj` has a small UIKit host for Photos permissions. It
+has no vault or shared-framework build dependency. Grant Photos on a dedicated
+simulator to `dev.po4yka.chur.livephototesthost`, then run:
+
+```sh
+xcodebuild -project apps/iosApp/LivePhotoNativeTests.xcodeproj \
+  -scheme LivePhotoNativeTests -destination 'platform=iOS Simulator,id=SIMULATOR_ID' \
+  -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO test
+```
+
+The tests verify native pairing, motion, an audio track, the timed still marker,
+all-resource capture, Photos restoration, exact resource hashes, cancellation
+cleanup, and rejection of an unsupported sidecar role. They use only the
+procedural media in `tests/media/live-photo-native`. They leave test-created
+Photos assets in that disposable simulator. They do not access the Mac library.
+Real camera, edited, HDR, and cloud-backed assets need separate acceptance.

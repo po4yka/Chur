@@ -281,8 +281,8 @@ data class VaultActions(
     val onDeviceControl: () -> Unit = {},
     /** Ask Android to add its lock tile, or show the manual steps on older versions. */
     val onAddQuickSettingsLock: () -> Unit = {},
-    /** Select every tile the current scope shows. */
-    val onSelectAll: () -> Unit = {},
+    /** Select the fetched tiles in the current scope; do not fetch more pages. */
+    val onSelectLoadedItems: () -> Unit = {},
     /** Leave selection mode without acting. */
     val onClearSelection: () -> Unit = {},
     /** Export every selected object. */
@@ -744,8 +744,8 @@ private fun SelectionBar(state: VaultUiState, actions: VaultActions) {
                 TextButton(onClick = { expanded = true }) { Text("More") }
                 DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                     DropdownMenuItem(
-                        text = { Text("Select all") },
-                        onClick = { expanded = false; actions.onSelectAll() },
+                        text = { Text("Select loaded items") },
+                        onClick = { expanded = false; actions.onSelectLoadedItems() },
                     )
                     if (!state.trashOpen) DropdownMenuItem(
                         text = { Text("Encrypted archive…") },

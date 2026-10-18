@@ -613,6 +613,11 @@ impl<E: Clone + Ord> ObservedRemoveSet<E> {
         })
     }
 
+    /// Elements that still have an observed live add token.
+    pub fn elements(&self) -> impl Iterator<Item = &E> {
+        self.adds.keys().filter(|element| self.contains(element))
+    }
+
     /// Sorted current tokens to place in a remove operation.
     #[must_use]
     pub fn add_tokens(&self, element: &E) -> Vec<Id> {

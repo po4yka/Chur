@@ -57,7 +57,7 @@ final class DocumentImportSelection: @unchecked Sendable {
                       status.st_size >= 0, status.st_size <= 1 << 40, self.isActive else {
                     _ = answer.opened(nil); return
                 }
-                let leased = DocumentImportSource(descriptor: fd, name: originalName, contentType: originalType, size: status.st_size)
+                let leased = DocumentImportSource(descriptor: fd, readablePath: readable.path, name: originalName, contentType: originalType, size: status.st_size)
                 monitor.stop()
                 let delivered = answer.opened(leased)
                 // Rust consumes its duplicate while this accessor and the
@@ -124,6 +124,8 @@ private final class DocumentImportCancellation: @unchecked Sendable {
 /// The caller closes this only after native import releases its source fd.
 final class DocumentImportSource: @unchecked Sendable {
     let descriptor: Int32
+    /// Valid while the coordinated source lease is open.
+    let readablePath: String
     let name: String
     let contentType: String
     let size: Int64
@@ -131,8 +133,8 @@ final class DocumentImportSource: @unchecked Sendable {
     private let closed = DispatchSemaphore(value: 0)
     private var didClose = false
 
-    fileprivate init(descriptor: Int32, name: String, contentType: String, size: Int64) {
-        self.descriptor = descriptor; self.name = name; self.contentType = contentType; self.size = size
+    fileprivate init(descriptor: Int32, readablePath: String, name: String, contentType: String, size: Int64) {
+        self.descriptor = descriptor; self.readablePath = readablePath; self.name = name; self.contentType = contentType; self.size = size
     }
     func close() {
         lock.lock()

@@ -58,7 +58,7 @@ Use `./gradlew --version`, `rustup show` from `rust/`, and `xcodebuild -version`
 
 ## Build commands
 
-The `:shared:app` iOS tests include real Apple Vision OCR. They need a fully booted simulator. A standalone simulator process can return no text without an API error. CI creates, boots, and removes its own compatible iPhone simulator. For a local run, boot a simulator that you own and set `CHUR_IOS_TEST_DEVICE` to its UDID. The build does not change the state of existing devices. Without this variable, Gradle uses its normal Xcode-selected device, which must already be booted.
+The `:shared:app` and `:shared:feature-import` iOS tests use Apple Vision, ImageIO, and the system type registry. They need a fully booted simulator. A standalone simulator process can return no text or fail to resolve a registered media type without an API error. CI creates, boots, and removes its own compatible iPhone simulator. For a local run, boot a simulator that you own and set `CHUR_IOS_TEST_DEVICE` to its UDID. The build does not change the state of existing devices. Without this variable, Gradle uses its normal Xcode-selected device, which must already be booted.
 
 The workflow named in [`docs/assurance/RELEASE_GATES.md`](docs/assurance/RELEASE_GATES.md#enforcement) is the CI source of truth. The following are local equivalents for its main checks; release signing and job-specific setup remain in the workflow:
 
@@ -100,10 +100,23 @@ cc -Wall -Wextra -Werror -I crates/chur-ffi/include \
 Android instrumentation requires a selected emulator or device. Build and run with:
 
 ```sh
-./gradlew :apps:androidApp:connectedDebugAndroidTest
+./gradlew :apps:androidApp:connectedDebugAndroidTest --no-watch-fs
 ```
 
 Use a test device with synthetic data. These tests include lifecycle, files, notes, archives, OCR, incoming shares, and public-shell flows. CI assembles the test APK but does not run it.
+
+Use `--no-watch-fs` for local test builds when external tools edit the checkout. It makes Gradle scan the source files again. Check that the test APK contains the changed code before installing it; an unchanged APK does not validate a source change.
+
+For the local API 37, 16 KiB AVD `ChurMediaFormatsApi3720261017`, use this startup command:
+
+```sh
+"$ANDROID_HOME/emulator/emulator" -avd ChurMediaFormatsApi3720261017 \
+  -data "$HOME/.android/avd/ChurMediaFormatsApi3720261017.avd/userdata-qemu.img" \
+  -port 5554 -no-snapshot -no-audio -no-boot-anim -no-window -gpu host \
+  -feature -Vulkan -feature -HardwareDecoder -cores 4 -memory 4096
+```
+
+The installed API 37 image's Goldfish H.264 host decoder fails to transfer a `MessageQueue` memfd under SELinux Enforcing. The emulator's documented [`HardwareDecoder` feature](https://android.googlesource.com/platform/external/qemu/+/emu-master-dev/android/data/advancedFeatures.ini) controls this host decoder. Disable it only for this AVD launch. The same APK and native Live Photo fixture then pass all three Live Photo tests through the production Media3 player, with the platform selecting `c2.android.avc.decoder` and `c2.android.aac.decoder`. Keep SELinux Enforcing, authentication, and secure windows enabled. Do not change the SDK's global feature files. After boot, unlock the synthetic device before instrumentation starts.
 
 On macOS, run the host helpers and compile the full iOS app and embedded extension:
 

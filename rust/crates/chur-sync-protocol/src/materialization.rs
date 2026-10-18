@@ -24,7 +24,9 @@ struct MaterializedObject {
 
 #[derive(Clone)]
 struct MaterializedAlbum {
-    created: CausalStamp,
+    collection_id: Id,
+    creations: BTreeMap<Id, CausalStamp>,
+    initial_name: String,
     name: ScalarRegister<String>,
 }
 
@@ -190,19 +192,47 @@ impl MaterializedState {
                     .apply(stamp, field.value().to_vec())
             }
             PayloadBody::CreateAlbum { album_id, name } => {
-                if self.albums.contains_key(album_id) {
-                    return Err(Error::new(
-                        ChurStatus::AuthenticationFailed,
-                        "album identifier was reused",
-                    ));
+                if let Some(album) = self.albums.get_mut(album_id) {
+                    if album.initial_name != *name
+                        || album.collection_id != *payload.collection_id()
+                    {
+                        return Err(Error::new(
+                            ChurStatus::AuthenticationFailed,
+                            "album identifier was reused",
+                        ));
+                    }
+                    if let Some(previous) = album.creations.get(stamp.operation_id()) {
+                        return if causal_relation(previous, &stamp)? == CausalRelation::Same {
+                            Ok(MergeOutcome::Duplicate)
+                        } else {
+                            Err(Error::new(
+                                ChurStatus::AuthenticationFailed,
+                                "album creation operation was reused",
+                            ))
+                        };
+                    }
+                    for created in album.creations.values() {
+                        if causal_relation(created, &stamp)? != CausalRelation::Concurrent {
+                            return Err(Error::new(
+                                ChurStatus::AuthenticationFailed,
+                                "album identifier was reused",
+                            ));
+                        }
+                    }
+                    // Old backups can carry the same logical album to two
+                    // devices before either authored its first sync record.
+                    album.creations.insert(*stamp.operation_id(), stamp);
+                    return Ok(MergeOutcome::Applied);
                 }
-                let mut register = ScalarRegister::new();
-                register.apply(stamp.clone(), name.clone())?;
                 self.albums.insert(
                     *album_id,
                     MaterializedAlbum {
-                        created: stamp,
-                        name: register,
+                        collection_id: *payload.collection_id(),
+                        creations: BTreeMap::from([(*stamp.operation_id(), stamp)]),
+                        initial_name: name.clone(),
+                        // Creation is one shared initial value. A duplicate initial
+                        // snapshot must never compete with an explicit rename.
+                        name: ScalarRegister::new(),
                     },
                 );
                 Ok(MergeOutcome::Applied)
@@ -211,11 +241,13 @@ impl MaterializedState {
                 let Some(album) = self.albums.get_mut(album_id) else {
                     return Ok(MergeOutcome::PendingCause);
                 };
-                if causal_relation(&album.created, &stamp)? == CausalRelation::After {
-                    return Err(Error::new(
-                        ChurStatus::AuthenticationFailed,
-                        "album rename precedes album creation",
-                    ));
+                for created in album.creations.values() {
+                    if causal_relation(created, &stamp)? == CausalRelation::After {
+                        return Err(Error::new(
+                            ChurStatus::AuthenticationFailed,
+                            "album rename precedes album creation",
+                        ));
+                    }
                 }
                 album.name.apply(stamp, name.clone())
             }
@@ -423,17 +455,30 @@ impl MaterializedState {
     /// Deterministically displayed album name.
     #[must_use]
     pub fn album_name(&self, album_id: &Id) -> Option<&str> {
-        self.albums
-            .get(album_id)?
-            .name
-            .displayed()
-            .map(String::as_str)
+        let album = self.albums.get(album_id)?;
+        Some(
+            album
+                .name
+                .displayed()
+                .map_or(album.initial_name.as_str(), String::as_str),
+        )
     }
 
     /// Whether an object's live add tokens place it in an album.
     #[must_use]
     pub fn album_contains(&self, album_id: &Id, object_id: &Id) -> bool {
         self.album_memberships.contains(&(*album_id, *object_id))
+    }
+
+    /// Accepted live memberships, including media not downloaded locally yet.
+    pub fn album_memberships(&self) -> impl Iterator<Item = (Id, Id)> + '_ {
+        self.album_memberships.elements().copied()
+    }
+
+    /// Live observed add tokens for a catalog membership removal.
+    #[must_use]
+    pub fn album_membership_tokens(&self, album_id: &Id, object_id: &Id) -> Vec<Id> {
+        self.album_memberships.add_tokens(&(*album_id, *object_id))
     }
 
     /// Whether an object has at least one live favorite token.

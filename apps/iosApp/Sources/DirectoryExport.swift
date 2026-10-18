@@ -201,9 +201,12 @@ final class DirectoryExportFile: @unchecked Sendable {
     private let session: DirectoryExportSession
     private let displayName: String
     private var url: URL?
+    private var identity: DirectoryExportFileIdentity?
     private var fd: Int32 = -1
     private var published = false
     private var closed = false
+    private var coordinationComplete = false
+    private var scopeReleased = false
 
     fileprivate init(session: DirectoryExportSession, displayName: String) {
         self.session = session
@@ -213,9 +216,10 @@ final class DirectoryExportFile: @unchecked Sendable {
     var descriptor: Int32 { lock.lock(); defer { lock.unlock() }; return fd }
 
     fileprivate func open(url: URL, descriptor: Int32) -> Bool {
-        lock.lock(); self.url = url; fd = descriptor; lock.unlock()
+        guard let identity = DirectoryExportFileIdentity(descriptor: descriptor) else { return false }
+        lock.lock(); self.url = url; self.identity = identity; fd = descriptor; lock.unlock()
         guard session.isActive else {
-            lock.lock(); self.url = nil; fd = -1; lock.unlock()
+            lock.lock(); self.url = nil; self.identity = nil; fd = -1; lock.unlock()
             return false
         }
         return true
@@ -241,7 +245,18 @@ final class DirectoryExportFile: @unchecked Sendable {
         return false
     }
 
-    func discard() { lock.lock(); published = false; lock.unlock() }
+    func discard() {
+        lock.lock()
+        published = false
+        // A batch can fail after an earlier file has been published and
+        // closed. That file still owns its identity and access lease.
+        let rollback = coordinationComplete ? takeRollback() : nil
+        let release = coordinationComplete && !scopeReleased
+        if release { scopeReleased = true }
+        lock.unlock()
+        if let rollback { Self.remove(rollback, coordinated: true) }
+        if release { session.release() }
+    }
 
     func close() {
         guard closeDescriptor() else { return }
@@ -263,13 +278,68 @@ final class DirectoryExportFile: @unchecked Sendable {
     fileprivate func awaitCompletion() {
         completion.wait()
         lock.lock()
-        if !published, let url { try? FileManager.default.removeItem(at: url) }
-        url = nil
+        let rollback = !published ? takeRollback() : nil
         lock.unlock()
+        if let rollback { Self.remove(rollback, coordinated: false) }
     }
 
     fileprivate func coordinationFinished() {
-        session.release()
+        lock.lock()
+        coordinationComplete = true
+        // discard() can race the end of the first coordinated accessor.
+        let rollback = !published ? takeRollback() : nil
+        let release = !published && !scopeReleased
+        if release { scopeReleased = true }
+        lock.unlock()
+        if let rollback { Self.remove(rollback, coordinated: true) }
+        if release { session.release() }
         coordinated.signal()
+    }
+
+    /// Called under lock. Names alone never establish ownership of an output.
+    private func takeRollback() -> (URL, DirectoryExportFileIdentity)? {
+        guard let url, let identity else { return nil }
+        self.url = nil
+        self.identity = nil
+        return (url, identity)
+    }
+
+    private static func remove(_ output: (URL, DirectoryExportFileIdentity), coordinated: Bool) {
+        let removeOwnedFile = {
+            if output.1.matches(url: output.0) { _ = Darwin.unlink(output.0.path) }
+        }
+        if coordinated {
+            DirectoryExportCoordinator().coordinate(at: output.0.deletingLastPathComponent()) { _ in removeOwnedFile() }
+        } else { removeOwnedFile() }
+    }
+
+    deinit {
+        // A successful batch keeps published files. Their retained capability
+        // ends when the host releases the destination object.
+        if !scopeReleased { session.release() }
+    }
+}
+
+private struct DirectoryExportFileIdentity {
+    let device: dev_t
+    let inode: ino_t
+    let birthSeconds: Int
+    let birthNanoseconds: Int
+
+    init?(descriptor: Int32) {
+        var value = stat()
+        guard Darwin.fstat(descriptor, &value) == 0 else { return nil }
+        device = value.st_dev
+        inode = value.st_ino
+        birthSeconds = value.st_birthtimespec.tv_sec
+        birthNanoseconds = value.st_birthtimespec.tv_nsec
+    }
+
+    func matches(url: URL) -> Bool {
+        var value = stat()
+        return Darwin.lstat(url.path, &value) == 0 &&
+            value.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) &&
+            value.st_dev == device && value.st_ino == inode &&
+            value.st_birthtimespec.tv_sec == birthSeconds && value.st_birthtimespec.tv_nsec == birthNanoseconds
     }
 }

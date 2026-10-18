@@ -136,6 +136,10 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             guard mediaScratchReady, let scene = self?.scene else { MediaPickerDelegate.answerNothing(answer); return }
             scene.presentMediaPicker(answer)
         }
+        IosLivePhotoPicker.shared.present = { [weak self] answer in
+            guard mediaScratchReady, let scene = self?.scene else { MediaPickerDelegate.answerNothing(answer); return }
+            scene.presentMediaPicker(answer, fullLivePhotos: true)
+        }
         let pairingScratchReady = ApprovalPickerDelegate.prepareScratch()
         IosPairingFiles.shared.presentOpen = { [weak self] answer in
             guard pairingScratchReady, let scene = self?.scene else { _ = answer(nil); return }
@@ -159,6 +163,16 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             scene.presentDocumentPicker(answer)
         }
         IosDocumentPicker.shared.cancel = { [weak self] in self?.scene?.cancelDocumentImports() }
+        IosAudioPicker.shared.present = { [weak self] answer in
+            guard let scene = self?.scene else { DocumentPickerDelegate.answerNoAudio(answer); return }
+            scene.presentAudioPicker(answer)
+        }
+        IosAudioPicker.shared.cancel = { [weak self] in self?.scene?.cancelDocumentImports() }
+        IosLivePhotoFilesPicker.shared.present = { [weak self] answer in
+            guard let scene = self?.scene else { DocumentPickerDelegate.answerNoAudio(answer); return }
+            scene.presentLivePhotoFilesPicker(answer)
+        }
+        IosLivePhotoFilesPicker.shared.cancel = { [weak self] in self?.scene?.cancelDocumentImports() }
         IosAlbumExportPicker.shared.cancel = { [weak self] in self?.scene?.cancelAlbumExportPicker() }
         return true
     }
@@ -260,10 +274,28 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         if host.scene === self { host.scene = nil }
     }
 
-    func presentMediaPicker(_ answer: @escaping MediaAnswer) {
+    func presentMediaPicker(_ answer: @escaping MediaAnswer, fullLivePhotos: Bool = false) {
+        if fullLivePhotos {
+            let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+            if status == .notDetermined {
+                let prompt = host.controller.beginPrompt()
+                PHPhotoLibrary.requestAuthorization(for: .readWrite) { [weak self] _ in
+                    DispatchQueue.main.async {
+                        guard let self, self.host.controller.endPrompt(bracket: prompt) else { MediaPickerDelegate.answerNothing(answer); return }
+                        self.presentMediaPicker(answer, fullLivePhotos: true)
+                    }
+                }
+                return
+            }
+            guard status == .authorized || status == .limited else {
+                host.controller.report(message: "Full Live Photo import needs Photos access. Allow access in Settings, then try again.")
+                MediaPickerDelegate.answerNothing(answer)
+                return
+            }
+        }
         guard let presenter = window?.rootViewController else { MediaPickerDelegate.answerNothing(answer); return }
         var configuration = PHPickerConfiguration(photoLibrary: .shared())
-        configuration.filter = .any(of: [.images, .videos])
+        configuration.filter = fullLivePhotos ? .livePhotos : .any(of: [.images, .videos])
         // Any number of items, in the order picked, `IOS.md` §15.1. `.current`
         // hands over each item as stored rather than transcoded, so a HEIC
         // original stays HEIC (§15.3).
@@ -271,7 +303,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         configuration.selection = .ordered
         configuration.preferredAssetRepresentationMode = .current
         let picker = PHPickerViewController(configuration: configuration)
-        let delegate = MediaPickerDelegate(answer: answer) { [weak self] in self?.mediaPicker = nil }
+        let delegate = MediaPickerDelegate(answer: answer, fullLivePhotos: fullLivePhotos) { [weak self] in self?.mediaPicker = nil }
         mediaPicker = delegate
         picker.delegate = delegate
         presenter.present(picker, animated: true)
@@ -332,6 +364,52 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                 }) { source in
                     guard let source else { _ = loaded(KotlinInt(int: -1), nil, "application/octet-stream", KotlinLong(longLong: 0), { KotlinUnit() }); return }
                     _ = loaded(KotlinInt(int: source.descriptor), source.name, source.contentType, KotlinLong(longLong: source.size), { source.close(); return KotlinUnit() })
+                }
+                return KotlinUnit()
+            }, { selected.close(); return KotlinUnit() })
+        }
+        documentPicker = delegate
+        documentPickerController = picker
+        picker.delegate = delegate
+        presenter.present(picker, animated: true)
+    }
+
+    func presentAudioPicker(_ answer: @escaping AudioDocumentAnswer) {
+        presentMediaDocumentPicker(answer, types: [.audio])
+    }
+
+    func presentLivePhotoFilesPicker(_ answer: @escaping AudioDocumentAnswer) {
+        presentMediaDocumentPicker(answer, types: [UTType(exportedAs: "dev.po4yka.chur.live-photo", conformingTo: .data)])
+    }
+
+    private func presentMediaDocumentPicker(_ answer: @escaping AudioDocumentAnswer, types: [UTType]) {
+        guard let presenter = window?.rootViewController, presenter.presentedViewController == nil else {
+            DocumentPickerDelegate.answerNoAudio(answer)
+            host.controller.report(message: "The media file picker is unavailable. Please try again.")
+            return
+        }
+        let generation = exportGeneration
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: false)
+        picker.allowsMultipleSelection = true
+        let delegate = DocumentPickerDelegate { [weak self] urls in
+            guard let self else { DocumentPickerDelegate.answerNoAudio(answer); return }
+            self.documentPicker = nil
+            self.documentPickerController = nil
+            guard self.exportGeneration == generation, !urls.isEmpty else {
+                DocumentPickerDelegate.answerNoAudio(answer); return
+            }
+            let selected = DocumentImportSelection(urls: urls)
+            self.documentSelections.add(selected)
+            _ = answer(KotlinInt(int: Int32(selected.count)), { index, prepare, loaded in
+                selected.load(index: Int(truncating: index), shouldContinue: {
+                    prepare(KotlinLong(longLong: 0), KotlinLong(longLong: 0)).boolValue
+                }) { source in
+                    guard let source else {
+                        _ = loaded(KotlinInt(int: -1), nil, "application/octet-stream", KotlinLong(longLong: 0), nil, { KotlinUnit() })
+                        return
+                    }
+                    _ = loaded(KotlinInt(int: source.descriptor), source.name, source.contentType,
+                        KotlinLong(longLong: source.size), source.readablePath, { source.close(); return KotlinUnit() })
                 }
                 return KotlinUnit()
             }, { selected.close(); return KotlinUnit() })
@@ -409,8 +487,9 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             return
         }
         if target == .mediaLibrary {
-            guard let type = UTType(filenameExtension: url.pathExtension),
-                  type.conforms(to: .image) || type.conforms(to: .movie) else {
+            let isLivePhoto = url.pathExtension.lowercased() == "churlive"
+            let type = UTType(filenameExtension: url.pathExtension)
+            guard isLivePhoto || type?.conforms(to: .image) == true || type?.conforms(to: .movie) == true else {
                 finishExport(url, generation: generation)
                 host.controller.report(message: "Only photos and videos can be saved to Photos.")
                 return
@@ -431,8 +510,18 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                         }
                         return
                     }
+                    if isLivePhoto {
+                        LivePhotoRestoration.save(url, shouldContinue: { [weak self] in
+                            DispatchQueue.main.sync { self?.exportGeneration == generation }
+                        }) { [weak self] saved in
+                            if self?.finishExport(url, generation: generation) == true {
+                                self?.host.controller.report(message: saved ? "Live Photo saved to Photos. The copy is outside the vault." : "Photos could not restore every Live Photo resource. Export the bundle to Files to keep all resources.")
+                            }
+                        }
+                        return
+                    }
                     PHPhotoLibrary.shared().performChanges({
-                        if type.conforms(to: .movie) {
+                        if type?.conforms(to: .movie) == true {
                             PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
                         } else {
                             PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url)
@@ -512,11 +601,22 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 typealias DocumentLoaded = (KotlinInt, String?, String, KotlinLong, @escaping () -> KotlinUnit) -> KotlinUnit
 typealias DocumentLoad = (KotlinInt, @escaping (KotlinLong, KotlinLong) -> KotlinBoolean, @escaping DocumentLoaded) -> KotlinUnit
 typealias DocumentAnswer = (KotlinInt, @escaping DocumentLoad, @escaping () -> KotlinUnit) -> KotlinUnit
+// AVFoundation needs the coordinated URL in addition to the source fd. The
+// source lease keeps both readable until Kotlin releases the imported item.
+typealias AudioDocumentLoaded = (KotlinInt, String?, String, KotlinLong, String?, @escaping () -> KotlinUnit) -> KotlinUnit
+typealias AudioDocumentLoad = (KotlinInt, @escaping (KotlinLong, KotlinLong) -> KotlinBoolean, @escaping AudioDocumentLoaded) -> KotlinUnit
+typealias AudioDocumentAnswer = (KotlinInt, @escaping AudioDocumentLoad, @escaping () -> KotlinUnit) -> KotlinUnit
 
 private final class DocumentPickerDelegate: NSObject, UIDocumentPickerDelegate {
     private var answer: (([URL]) -> Void)?
     init(answer: @escaping ([URL]) -> Void) { self.answer = answer }
     func finish(_ urls: [URL]) { let callback = answer; answer = nil; callback?(urls) }
+    static func answerNoAudio(_ answer: AudioDocumentAnswer) {
+        _ = answer(KotlinInt(int: 0), { _, _, loaded in
+            _ = loaded(KotlinInt(int: -1), nil, "application/octet-stream", KotlinLong(longLong: 0), nil, { KotlinUnit() })
+            return KotlinUnit()
+        }, { KotlinUnit() })
+    }
     static func answerNothing(_ answer: DocumentAnswer) {
         _ = answer(KotlinInt(int: 0), { _, _, loaded in
             _ = loaded(KotlinInt(int: -1), nil, "application/octet-stream", KotlinLong(longLong: 0), { KotlinUnit() })
@@ -573,13 +673,14 @@ typealias MediaReview = ([KotlinInt], @escaping (KotlinInt, KotlinInt) -> Kotlin
 
 /// The answer to a pick: how many items, how to load each one, and how to
 /// delete their originals after the import.
-typealias MediaAnswer = (KotlinInt, @escaping MediaLoad, @escaping MediaReview) -> KotlinUnit
+typealias MediaAnswer = (KotlinInt, @escaping MediaLoad, @escaping MediaReview, @escaping (KotlinInt) -> KotlinBoolean) -> KotlinUnit
 
 private final class MediaPickerDelegate: NSObject, PHPickerViewControllerDelegate {
     private static let scratch = FileManager.default.temporaryDirectory
         .appendingPathComponent("chur-media-imports", isDirectory: true)
     private var answer: MediaAnswer?
     private let done: () -> Void
+    private let fullLivePhotos: Bool
 
     static func prepareScratch() -> Bool {
         do {
@@ -603,11 +704,13 @@ private final class MediaPickerDelegate: NSObject, PHPickerViewControllerDelegat
         _ = answer(
             KotlinInt(int: 0),
             { _, _, loaded in loaded(nil, nil) },
-            { _, done in done(KotlinInt(int: 0), KotlinInt(int: 0)) }
+            { _, done in done(KotlinInt(int: 0), KotlinInt(int: 0)) },
+            { _ in KotlinBoolean(bool: false) }
         )
     }
 
-    init(answer: @escaping MediaAnswer, done: @escaping () -> Void) {
+    init(answer: @escaping MediaAnswer, fullLivePhotos: Bool = false, done: @escaping () -> Void) {
+        self.fullLivePhotos = fullLivePhotos
         self.answer = answer
         self.done = done
     }
@@ -622,24 +725,56 @@ private final class MediaPickerDelegate: NSObject, PHPickerViewControllerDelegat
         picker.dismiss(animated: true)
         guard let answer else { return }
         self.answer = nil
+        let fullLivePhotos = self.fullLivePhotos
         let providers = results.map(\.itemProvider)
-        let assets = results.map(\.assetIdentifier)
+        let photoAccess = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        let canReadMetadata = photoAccess == .authorized || photoAccess == .limited
+        let identifiers = providers.map(Self.fileType)
+        let safety = MediaOriginalSafety(items: results.enumerated().map { index, result in
+            let type = identifiers[index].flatMap { UTType($0) }
+            let concrete = type?.preferredFilenameExtension != nil
+            let kind: MediaOriginalSafety.Kind = concrete && type?.conforms(to: .image) == true ? .photo
+                : concrete && type?.conforms(to: .movie) == true ? .video : .unknown
+            var compound = result.itemProvider.canLoadObject(ofClass: PHLivePhoto.self)
+                || result.itemProvider.hasItemConformingToTypeIdentifier(UTType.livePhoto.identifier)
+            // Use metadata only if Photos already permits it. Import itself
+            // must not ask for photo-library access.
+            if canReadMetadata, let id = result.assetIdentifier,
+               let asset = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject {
+                compound = compound || asset.mediaSubtypes.contains(.photoLive)
+                    || PHAssetResource.assetResources(for: asset).count != 1
+            }
+            return .init(assetIdentifier: result.assetIdentifier, kind: kind, isCompound: compound)
+        })
         _ = answer(
             KotlinInt(int: Int32(providers.count)),
             { index, prepare, loaded in
+                let position = index.intValue
+                guard providers.indices.contains(position) else { return loaded(nil, nil) }
+                safety.recordLoaded(index: position, typeIdentifier: nil)
+                if fullLivePhotos {
+                    guard let id = results[position].assetIdentifier,
+                          let asset = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject else { return loaded(nil, nil) }
+                    Self.loadLivePhoto(asset, prepare: { prepare(KotlinLong(longLong: $0), KotlinLong(longLong: $1)).boolValue }, loaded: { path, name in _ = loaded(path, name) })
+                    return KotlinUnit()
+                }
                 Self.load(
-                    providers[index.intValue],
+                    providers[position], identifier: identifiers[position],
                     prepare: { prepare(KotlinLong(longLong: $0), KotlinLong(longLong: $1)).boolValue },
-                    loaded: { _ = loaded($0, $1) }
+                    loaded: { path, name in
+                        safety.recordLoaded(index: position, typeIdentifier: path == nil ? nil : identifiers[position])
+                        _ = loaded(path, name)
+                    }
                 )
                 return KotlinUnit()
             },
             { indices, done in
-                Self.deleteOriginals(indices.compactMap { assets[$0.intValue] }) { found, deleted in
+                Self.deleteOriginals(safety.candidates(indices: indices.map(\.intValue)), safety: safety) { found, deleted in
                     _ = done(KotlinInt(int: found), KotlinInt(int: deleted))
                 }
                 return KotlinUnit()
-            }
+            },
+            { index in KotlinBoolean(bool: safety.canReview(index: index.intValue)) }
         )
         done()
     }
@@ -652,19 +787,27 @@ private final class MediaPickerDelegate: NSObject, PHPickerViewControllerDelegat
     /// shows the items and asks before it deletes them, and a refusal of
     /// either deletes nothing. An item outside the access the user granted is
     /// not found. The answer comes on the main thread.
-    private static func deleteOriginals(_ identifiers: [String], done: @escaping (Int32, Int32) -> Void) {
+    private static func deleteOriginals(_ candidates: [(index: Int, identifier: String)], safety: MediaOriginalSafety, done: @escaping (Int32, Int32) -> Void) {
+        guard !candidates.isEmpty else { done(0, 0); return }
         PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
             let granted = status == .authorized || status == .limited
-            let assets = granted && !identifiers.isEmpty
-                ? PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
-                : nil
-            guard let assets, assets.count > 0 else {
+            let assets: [PHAsset] = granted ? candidates.compactMap { candidate in
+                guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [candidate.identifier], options: nil).firstObject else { return nil }
+                let resources = PHAssetResource.assetResources(for: asset).map { resource in
+                    MediaOriginalSafety.Resource(
+                        kind: resource.type == .photo ? .photo : resource.type == .video ? .video : .unknown,
+                        typeIdentifier: resource.uniformTypeIdentifier
+                    )
+                }
+                return safety.canDelete(index: candidate.index, isLivePhoto: asset.mediaSubtypes.contains(.photoLive), resources: resources) ? asset : nil
+            } : []
+            guard !assets.isEmpty else {
                 DispatchQueue.main.async { done(0, 0) }
                 return
             }
             let found = Int32(assets.count)
             PHPhotoLibrary.shared().performChanges({
-                PHAssetChangeRequest.deleteAssets(assets)
+                PHAssetChangeRequest.deleteAssets(assets as NSArray)
             }) { deleted, _ in
                 DispatchQueue.main.async { done(found, deleted ? found : 0) }
             }
@@ -679,15 +822,20 @@ private final class MediaPickerDelegate: NSObject, PHPickerViewControllerDelegat
     /// observer keeps a fetch that stalls on the network cancellable. The
     /// copy is made before the provider's callback returns, because the
     /// provider deletes its file then. Kotlin calls this on the main thread.
+    private static func fileType(_ provider: NSItemProvider) -> String? {
+        provider.registeredTypeIdentifiers.first { identifier in
+            guard let type = UTType(identifier), !type.conforms(to: .livePhoto) else { return false }
+            return type.conforms(to: .image) || type.conforms(to: .movie)
+        }
+    }
+
     private static func load(
         _ provider: NSItemProvider,
+        identifier: String?,
         prepare: @escaping (Int64, Int64) -> Bool,
         loaded: @escaping (String?, String?) -> Void
     ) {
-        guard let identifier = provider.registeredTypeIdentifiers.first(where: {
-            guard let type = UTType($0) else { return false }
-            return type.conforms(to: .image) || type.conforms(to: .movie)
-        }) else {
+        guard let identifier else {
             loaded(nil, nil)
             return
         }
@@ -715,6 +863,26 @@ private final class MediaPickerDelegate: NSObject, PHPickerViewControllerDelegat
             }
         }
         RunLoop.main.add(ticker, forMode: .common)
+    }
+
+    private static func loadLivePhoto(_ asset: PHAsset, prepare: @escaping (Int64, Int64) -> Bool, loaded: @escaping (String?, String?) -> Void) {
+        let capture = LivePhotoCapture()
+        let keepGoing: () -> Bool = {
+            if Thread.isMainThread { return prepare(0, 0) }
+            return DispatchQueue.main.sync { prepare(0, 0) }
+        }
+        let ticker = Timer(timeInterval: 0.25, repeats: true) { timer in
+            if !keepGoing() { capture.cancel(); timer.invalidate() }
+        }
+        RunLoop.main.add(ticker, forMode: .common)
+        do {
+            let exports = FileManager.default.temporaryDirectory.appendingPathComponent("chur-exports")
+            let budget = try ScratchCopy.remainingBudget(in: [scratch, exports, FileManager.default.temporaryDirectory.appendingPathComponent("chur-incoming-media")])
+            capture.capture(asset: asset, directory: scratch, limit: UInt64(max(0, budget)), shouldContinue: keepGoing) { url in
+                ticker.invalidate()
+                loaded(url?.path, url == nil ? nil : "Live Photo.churlive")
+            }
+        } catch { ticker.invalidate(); loaded(nil, nil) }
     }
 
     /// Holds the fetch for the timer, which is made before the fetch starts.

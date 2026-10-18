@@ -39,6 +39,17 @@ class ViewerStillTest {
     }
 
     @Test
+    fun zoom_reads_a_bounded_original_before_its_screen_preview() {
+        val large = photo.copy(width = 4_000, height = 3_000)
+        assertEquals(listOf(ORIGINAL, SCREEN_PREVIEW, GRID_PREVIEW, THUMBNAIL), stillSources(large, highResolution = true))
+        val fallback = listOf(SCREEN_PREVIEW, GRID_PREVIEW, THUMBNAIL)
+        assertEquals(fallback, stillSources(large.copy(plaintextSize = 33L * 1024 * 1024), highResolution = true))
+        assertEquals(fallback, stillSources(large.copy(integritySummary = 6), highResolution = true))
+        assertEquals(fallback, stillSources(large.copy(width = 16_385), highResolution = true))
+        assertEquals(fallback, stillSources(large.copy(width = 16_384, height = 16_384), highResolution = true))
+    }
+
+    @Test
     fun a_quarantined_photograph_never_reads_its_original() {
         // CATALOG_SCHEMA_V1.md §5.1: a quarantined container is not presented or retried.
         assertEquals(listOf(SCREEN_PREVIEW, GRID_PREVIEW, THUMBNAIL), stillSources(photo.copy(integritySummary = 6)))

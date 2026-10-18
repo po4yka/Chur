@@ -42,6 +42,17 @@ object SourceDeletionCopy {
         }
     }
 
+    /** A source that fails the complete-copy check must never get manual deletion advice. */
+    fun verifiedOutcome(picked: Int, found: Int, deleted: Int): String {
+        if (found == 0) return if (picked == 1)
+            "Kept the original. Chur could not verify a complete copy or access the source."
+        else "Kept the originals. Chur could not verify complete copies or access the sources."
+        if (deleted == 0) return if (picked == 1) "Kept the original." else "Kept the originals."
+        val retained = picked - deleted
+        return "Deleted ${originals(deleted)}." + if (retained > 0)
+            " Kept the remaining originals; Chur could not verify complete copies or access all sources." else ""
+    }
+
     private fun originals(count: Int): String = if (count == 1) "1 original" else "$count originals"
 }
 

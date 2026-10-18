@@ -353,28 +353,14 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
         )
     }
     moving?.let { album ->
-        AlertDialog(
-            onDismissRequest = { moving = null },
-            title = { Text("Move album") },
-            text = {
-                Column(modifier = Modifier.heightIn(max = 360.dp)) {
-                    TextButton(onClick = {
-                        actions.onMoveAlbum(album, null, null); moving = null
-                    }) { Text("Top level") }
-                    LazyColumn {
-                        items(albums.filter { it.id != album.id && !descendantOf(it, album, albums) },
-                            key = { it.id }) { parent ->
-                            TextButton(onClick = {
-                                actions.onMoveAlbum(album, parent, null); moving = null
-                            }) { Text(parent.name) }
-                        }
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = { TextButton(onClick = { moving = null }) { Text("Cancel") } },
+        MoveAlbumDialog(
+            albums = albums,
+            album = album,
+            onChoose = { parent -> actions.onMoveAlbum(album, parent, null); moving = null },
+            onDismiss = { moving = null },
         )
     }
+
     deleting?.let { album ->
         val descendants = albums.count { descendantOf(it, album, albums) }
         AlertDialog(

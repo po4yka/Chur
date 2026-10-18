@@ -60,7 +60,10 @@ val iosHostSymbols =
         // Step 5: the media codec.
         "IosMediaCodec",
         "IosMediaPicker",
+        "IosLivePhotoPicker",
+        "IosLivePhotoFilesPicker",
         "IosDocumentPicker",
+        "IosAudioPicker",
         "IosIncomingShares",
         // Step 6: the background task and the sync engine it drives.
         "IosSyncBackground",
@@ -245,6 +248,9 @@ kotlin {
     }
 
     sourceSets {
+        iosTest {
+            kotlin.srcDir("src/liveSyncTest/kotlin")
+        }
         commonMain.dependencies {
             implementation(project(":shared:core-model"))
             api(project(":shared:core-vault"))
@@ -292,4 +298,8 @@ tasks.withType<KotlinNativeSimulatorTest>().configureEach {
     standalone.set(false)
     val selected = providers.environmentVariable("CHUR_IOS_TEST_DEVICE")
     if (selected.isPresent) device.set(selected)
+    val livePhotoFixtures = rootProject.layout.projectDirectory.dir("tests/media/live-photo-native")
+    inputs.dir(livePhotoFixtures).withPathSensitivity(PathSensitivity.RELATIVE)
+    environment("CHUR_LIVE_PHOTO_FIXTURES", livePhotoFixtures.asFile.absolutePath)
+    environment("SIMCTL_CHILD_CHUR_LIVE_PHOTO_FIXTURES", livePhotoFixtures.asFile.absolutePath)
 }

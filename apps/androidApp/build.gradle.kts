@@ -55,6 +55,9 @@ android {
         compose = true
     }
 
+    sourceSets.getByName("androidTest").kotlin.srcDir("../../shared/app/src/liveSyncTest/kotlin")
+    sourceSets.getByName("androidTest").assets.srcDir(rootProject.file("tests/media"))
+
     signingConfigs {
         create("release") {
             // CI supplies a temporary file; local builds can point at the

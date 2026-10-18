@@ -157,6 +157,8 @@ fun ViewerScreen(
     onNoticeShown: (Long) -> Unit = {},
     stillState: ViewerStillState = if (preview != null) ViewerStillState.Ready else ViewerStillState.Loading,
     onVerifyStill: (() -> Unit)? = null,
+    onZoomChanged: (Boolean) -> Unit = {},
+    animation: (@Composable (Modifier) -> Unit)? = null,
 ) {
     // §25.5: the canvas and the scrims run edge to edge, and what is read or
     // pressed keeps clear of the system bars, the cutout, and the gesture
@@ -180,8 +182,11 @@ fun ViewerScreen(
     // zoomed the pager does not swipe, and one finger pans the photo instead.
     val zoom = remember(projection.id) { mutableStateOf(ViewerZoom()) }
     val zoomed by remember(zoom) { derivedStateOf { zoom.value.zoomed } }
+    LaunchedEffect(zoomed) { onZoomChanged(zoomed) }
     val photo = projection.mediaKind == MEDIA_CLASS_IMAGE
-    val documentMode = projection.mediaKind == MEDIA_CLASS_FILE
+    // A preserved Live Photo can have a playable video even when its still
+    // format has no decoder and the catalog stores it as a file.
+    val documentMode = projection.mediaKind == MEDIA_CLASS_FILE && player == null
     val visibleChrome = chromeVisible || documentMode
     val chromeFadeMillis = LocalChurMotion.current.stateDurationMillis
     val mediaDurationMillis = LocalChurMotion.current.mediaDurationMillis
@@ -255,7 +260,7 @@ fun ViewerScreen(
                 } else if (settled) {
                     ViewerMedia(preview ?: thumbnails[page.id], player, controlsPadding, waveform, zoom.takeIf { photo },
                         audio = page.mediaKind == MEDIA_CLASS_AUDIO, stillState = stillState, onVerifyStill = onVerifyStill,
-                        onInteraction = { touch() })
+                        onInteraction = { touch() }, animation = animation)
                 } else {
                     thumbnails[page.id]?.let { ViewerMedia(it, player = null, controlsPadding = controlsPadding, waveform = null,
                         audio = page.mediaKind == MEDIA_CLASS_AUDIO) }
@@ -377,6 +382,7 @@ private fun ViewerMedia(
     stillState: ViewerStillState = ViewerStillState.Ready,
     onVerifyStill: (() -> Unit)? = null,
     onInteraction: () -> Unit = {},
+    animation: (@Composable (Modifier) -> Unit)? = null,
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         if (player != null) {
@@ -400,7 +406,7 @@ private fun ViewerMedia(
         } else if (audio) {
             AudioArtwork(preview, Modifier.fillMaxSize(), controlsPadding)
         } else if (preview != null && zoom != null) {
-            ZoomableStill(preview, zoom, onInteraction)
+            ZoomableStill(preview, zoom, onInteraction, animation)
         } else if (preview != null) {
             Image(
                 bitmap = preview,
@@ -434,7 +440,12 @@ private fun ViewerMedia(
  * and the pager keeps it as a swipe.
  */
 @Composable
-private fun ZoomableStill(still: ImageBitmap, zoom: MutableState<ViewerZoom>, onInteraction: () -> Unit) {
+private fun ZoomableStill(
+    still: ImageBitmap,
+    zoom: MutableState<ViewerZoom>,
+    onInteraction: () -> Unit,
+    animation: (@Composable (Modifier) -> Unit)? = null,
+) {
     var viewer by remember { mutableStateOf(Size.Zero) }
     LaunchedEffect(still) {
         zoom.value = zoom.value.normalized(still.size(), viewer)
@@ -452,11 +463,7 @@ private fun ZoomableStill(still: ImageBitmap, zoom: MutableState<ViewerZoom>, on
     val transform = rememberTransformableState { centroid, zoomChange, pan, _ ->
         zoom.value = zoom.value.transformed(centroid, zoomChange, pan, still.size(), viewer)
     }
-    Image(
-        bitmap = still,
-        contentDescription = null,
-        contentScale = ContentScale.Fit,
-        modifier = Modifier
+    val imageModifier = Modifier
             .fillMaxSize()
             .onSizeChanged {
                 viewer = it.toSize()
@@ -502,8 +509,9 @@ private fun ZoomableStill(still: ImageBitmap, zoom: MutableState<ViewerZoom>, on
                 scaleY = now.scale
                 translationX = now.offset.x
                 translationY = now.offset.y
-            },
-    )
+            }
+    if (animation != null) animation(imageModifier)
+    else Image(bitmap = still, contentDescription = null, contentScale = ContentScale.Fit, modifier = imageModifier)
 }
 
 private fun ImageBitmap.size() = Size(width.toFloat(), height.toFloat())

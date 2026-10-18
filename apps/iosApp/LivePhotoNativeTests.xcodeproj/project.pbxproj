@@ -1,0 +1,33 @@
+// !$*UTF8*$!
+{archiveVersion=1; classes={}; objectVersion=77; objects={
+00000000000000000000006E = {isa=PBXFileReference; lastKnownFileType=sourcecode.swift; path="Sources/LivePhotoBundle.swift"; sourceTree="<group>"; };
+00000000000000000000001E = {isa=PBXBuildFile; fileRef=00000000000000000000006E; };
+00000000000000000000006F = {isa=PBXFileReference; lastKnownFileType=sourcecode.swift; path="Sources/LivePhotoCapture.swift"; sourceTree="<group>"; };
+00000000000000000000001F = {isa=PBXBuildFile; fileRef=00000000000000000000006F; };
+000000000000000000000070 = {isa=PBXFileReference; lastKnownFileType=sourcecode.swift; path="NativeTests/LivePhotoNativeTests.swift"; sourceTree="<group>"; };
+000000000000000000000020 = {isa=PBXBuildFile; fileRef=000000000000000000000070; };
+000000000000000000000071 = {isa=PBXFileReference; lastKnownFileType=image.jpeg; path="../../tests/media/live-photo-native/still.jpg"; sourceTree="<group>"; };
+000000000000000000000021 = {isa=PBXBuildFile; fileRef=000000000000000000000071; };
+000000000000000000000072 = {isa=PBXFileReference; lastKnownFileType=video.quicktime; path="../../tests/media/live-photo-native/motion.mov"; sourceTree="<group>"; };
+000000000000000000000022 = {isa=PBXBuildFile; fileRef=000000000000000000000072; };
+000000000000000000000001 = {isa=PBXProject; buildConfigurationList=000000000000000000000006; compatibilityVersion="Xcode 16.0"; mainGroup=000000000000000000000002; projectDirPath=""; projectRoot=""; targets=(000000000000000000000003,000000000000000000000200); };
+000000000000000000000002 = {isa=PBXGroup; children=(00000000000000000000006E,00000000000000000000006F,000000000000000000000070,000000000000000000000071,000000000000000000000072,000000000000000000000004,000000000000000000000201,000000000000000000000202); sourceTree="<group>"; };
+000000000000000000000003 = {isa=PBXNativeTarget; name=LivePhotoNativeTests; productName=LivePhotoNativeTests; productType="com.apple.product-type.bundle.unit-test"; productReference=000000000000000000000004; buildConfigurationList=000000000000000000000007; buildPhases=(000000000000000000000008,000000000000000000000009); dependencies=(000000000000000000000209); };
+000000000000000000000004 = {isa=PBXFileReference; explicitFileType=wrapper.cfbundle; path=LivePhotoNativeTests.xctest; sourceTree=BUILT_PRODUCTS_DIR; };
+000000000000000000000006 = {isa=XCConfigurationList; buildConfigurations=(00000000000000000000000A); defaultConfigurationName=Debug; };
+000000000000000000000007 = {isa=XCConfigurationList; buildConfigurations=(00000000000000000000000B); defaultConfigurationName=Debug; };
+000000000000000000000008 = {isa=PBXSourcesBuildPhase; buildActionMask=2147483647; files=(00000000000000000000001E,00000000000000000000001F,000000000000000000000020); runOnlyForDeploymentPostprocessing=0; };
+000000000000000000000009 = {isa=PBXResourcesBuildPhase; buildActionMask=2147483647; files=(000000000000000000000021,000000000000000000000022); runOnlyForDeploymentPostprocessing=0; };
+00000000000000000000000A = {isa=XCBuildConfiguration; name=Debug; buildSettings={SDKROOT=iphoneos; IPHONEOS_DEPLOYMENT_TARGET=18.0; SWIFT_VERSION=5.0; CLANG_ENABLE_MODULES=YES; }; };
+00000000000000000000000B = {isa=XCBuildConfiguration; name=Debug; buildSettings={TEST_HOST="$(BUILT_PRODUCTS_DIR)/LivePhotoTestHost.app/LivePhotoTestHost"; BUNDLE_LOADER="$(TEST_HOST)"; PRODUCT_BUNDLE_IDENTIFIER=dev.po4yka.chur.livephototests; PRODUCT_NAME="$(TARGET_NAME)"; GENERATE_INFOPLIST_FILE=YES; INFOPLIST_KEY_NSPhotoLibraryUsageDescription="Validate task-owned Live Photo fixtures."; INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription="Restore task-owned Live Photo fixtures."; TARGETED_DEVICE_FAMILY="1,2"; CODE_SIGN_STYLE=Automatic; SWIFT_VERSION=5.0; SWIFT_OPTIMIZATION_LEVEL="-Onone"; ENABLE_TESTABILITY=YES; }; };
+000000000000000000000200 = {isa=PBXNativeTarget; name=LivePhotoTestHost; productName=LivePhotoTestHost; productType="com.apple.product-type.application"; productReference=000000000000000000000202; buildConfigurationList=000000000000000000000203; buildPhases=(000000000000000000000204); dependencies=(); };
+000000000000000000000201 = {isa=PBXFileReference; lastKnownFileType=sourcecode.swift; path="NativeTests/TestHost.swift"; sourceTree="<group>"; };
+000000000000000000000202 = {isa=PBXFileReference; explicitFileType=wrapper.application; path=LivePhotoTestHost.app; sourceTree=BUILT_PRODUCTS_DIR; };
+000000000000000000000203 = {isa=XCConfigurationList; buildConfigurations=(000000000000000000000205); defaultConfigurationName=Debug; };
+000000000000000000000204 = {isa=PBXSourcesBuildPhase; buildActionMask=2147483647; files=(000000000000000000000206); runOnlyForDeploymentPostprocessing=0; };
+000000000000000000000205 = {isa=XCBuildConfiguration; name=Debug; buildSettings={INFOPLIST_KEY_UIApplicationSceneManifest_Generation=YES; PRODUCT_BUNDLE_IDENTIFIER=dev.po4yka.chur.livephototesthost; PRODUCT_NAME="$(TARGET_NAME)"; GENERATE_INFOPLIST_FILE=YES; INFOPLIST_KEY_NSPhotoLibraryUsageDescription="Validate task-owned Live Photo fixtures."; INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription="Restore task-owned Live Photo fixtures."; TARGETED_DEVICE_FAMILY="1,2"; CODE_SIGN_STYLE=Automatic; SWIFT_VERSION=5.0; SWIFT_OPTIMIZATION_LEVEL="-Onone"; ENABLE_TESTABILITY=YES; }; };
+000000000000000000000206 = {isa=PBXBuildFile; fileRef=000000000000000000000201; };
+000000000000000000000209 = {isa=PBXTargetDependency; target=000000000000000000000200; targetProxy=00000000000000000000020A; };
+00000000000000000000020A = {isa=PBXContainerItemProxy; containerPortal=000000000000000000000001; proxyType=1; remoteGlobalIDString=000000000000000000000200; remoteInfo=LivePhotoTestHost; };
+
+}; rootObject=000000000000000000000001; }

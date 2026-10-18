@@ -13,6 +13,7 @@
 		447A82A14D059F7F406C3264 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 875D1A98DA0F6D353EA2C2F6 /* ShareViewController.swift */; };
 		5E2A781CF29AA242C39DCFFB /* ScratchCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3B19C20AB1C110C0E63735C /* ScratchCopy.swift */; };
 		66315BC5A8904169C52C47C6 /* PublicCamera.swift in Sources */ = {isa = PBXBuildFile; fileRef = A78EC5913FC317057CE38C63 /* PublicCamera.swift */; };
+		76E3C117A8D81A188D530B17 /* MediaOriginalSafety.swift in Sources */ = {isa = PBXBuildFile; fileRef = C50431BC72A0E54BEFAA66B6 /* MediaOriginalSafety.swift */; };
 		7D9C51CF50DBD191FEA70385 /* IncomingShareInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D4757613DACDFC38CB949AB /* IncomingShareInbox.swift */; };
 		9134555525F2B5F6A9C0F816 /* IncomingShareItems.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FEF35F12A854F397F674ABE /* IncomingShareItems.swift */; };
 		9EF133A9F98E205C798773E1 /* DocumentImport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0523F2FBC67DAC872B495D25 /* DocumentImport.swift */; };
@@ -20,6 +21,8 @@
 		C2F50F7FDF7FEC15452F18A5 /* IncomingShareItems.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FEF35F12A854F397F674ABE /* IncomingShareItems.swift */; };
 		E198BEBB3DE6A67DA79C432E /* IncomingShareInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D4757613DACDFC38CB949AB /* IncomingShareInbox.swift */; };
 		F45227CA2321CC19791DBBA6 /* ChurApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31B0CA2861DF43D785A14AA2 /* ChurApp.swift */; };
+		ACACACACACACACACACAC1100 /* LivePhotoBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABABABABABABABABABAB1100; };
+		ACACACACACACACACACAC1200 /* LivePhotoCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABABABABABABABABABAB1200; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -59,7 +62,10 @@
 		A78EC5913FC317057CE38C63 /* PublicCamera.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublicCamera.swift; sourceTree = "<group>"; };
 		BA457393957CC3760250CA00 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C3B19C20AB1C110C0E63735C /* ScratchCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchCopy.swift; sourceTree = "<group>"; };
+		C50431BC72A0E54BEFAA66B6 /* MediaOriginalSafety.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaOriginalSafety.swift; sourceTree = "<group>"; };
 		F8273036673BB879A9FAC937 /* IncomingShareSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncomingShareSelection.swift; sourceTree = "<group>"; };
+		ABABABABABABABABABAB1100 /* LivePhotoBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePhotoBundle.swift; sourceTree = "<group>"; };
+		ABABABABABABABABABAB1200 /* LivePhotoCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePhotoCapture.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -72,6 +78,9 @@
 				5D4757613DACDFC38CB949AB /* IncomingShareInbox.swift */,
 				2FEF35F12A854F397F674ABE /* IncomingShareItems.swift */,
 				F8273036673BB879A9FAC937 /* IncomingShareSelection.swift */,
+				ABABABABABABABABABAB1100 /* LivePhotoBundle.swift */,
+				ABABABABABABABABABAB1200 /* LivePhotoCapture.swift */,
+				C50431BC72A0E54BEFAA66B6 /* MediaOriginalSafety.swift */,
 				A78EC5913FC317057CE38C63 /* PublicCamera.swift */,
 				C3B19C20AB1C110C0E63735C /* ScratchCopy.swift */,
 			);
@@ -222,6 +231,9 @@
 				E198BEBB3DE6A67DA79C432E /* IncomingShareInbox.swift in Sources */,
 				C2F50F7FDF7FEC15452F18A5 /* IncomingShareItems.swift in Sources */,
 				436EEBE1565AF5D80B62B712 /* IncomingShareSelection.swift in Sources */,
+				ACACACACACACACACACAC1100 /* LivePhotoBundle.swift in Sources */,
+				ACACACACACACACACACAC1200 /* LivePhotoCapture.swift in Sources */,
+				76E3C117A8D81A188D530B17 /* MediaOriginalSafety.swift in Sources */,
 				66315BC5A8904169C52C47C6 /* PublicCamera.swift in Sources */,
 				5E2A781CF29AA242C39DCFFB /* ScratchCopy.swift in Sources */,
 			);

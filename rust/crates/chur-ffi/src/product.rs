@@ -880,7 +880,10 @@ pub unsafe extern "C" fn chur_album_create(
             created_ms: crate::api::now_ms(),
             revision: 1,
         };
-        with_catalog_mut(&entry, |catalog| store::put_album(catalog, &album))?;
+        with_album_mutation(
+            &entry,
+            chur_catalog::own_sync::AlbumMutation::Create(&album),
+        )?;
         // SAFETY: the caller guarantees 16 writable bytes.
         unsafe { crate::api::write_id(out_album_id, &album_id) }
     })
@@ -904,7 +907,11 @@ pub unsafe extern "C" fn chur_album_rename(
         let bytes = unsafe { crate::api::borrow_bytes(name, name_length)? };
         let text = core::str::from_utf8(bytes)
             .map_err(|_| Error::new(ChurStatus::InvalidInput, "the album name is not UTF-8"))?;
-        with_catalog_mut(&entry, |catalog| store::rename_album(catalog, &id, text))
+        with_album_mutation(
+            &entry,
+            chur_catalog::own_sync::AlbumMutation::Rename(&id, text),
+        )
+        .map(|_| ())
     })
 }
 
@@ -992,9 +999,11 @@ pub unsafe extern "C" fn chur_album_set_membership(
         let object_id = unsafe { object_id_of(object)? };
         let flag = boolean(member)?;
         let now = crate::api::now_ms();
-        with_catalog_mut(&entry, |catalog| {
-            store::set_album_membership(catalog, &album, &object_id, flag, now)
-        })
+        with_album_mutation(
+            &entry,
+            chur_catalog::own_sync::AlbumMutation::Membership(&album, &object_id, flag, now),
+        )
+        .map(|_| ())
     })
 }
 
@@ -1089,17 +1098,64 @@ pub unsafe extern "C" fn chur_album_place_objects(
             (None, Some(album)) => store::AlbumDestination::New(album, parent.as_ref()),
             _ => unreachable!("the target shape was validated"),
         };
-        let id = with_catalog_mut(&entry, |catalog| {
-            store::place_album_members(
-                catalog,
+        let id = with_album_mutation(
+            &entry,
+            chur_catalog::own_sync::AlbumMutation::Place(
                 destination,
                 source.as_ref(),
                 &objects,
                 move_members,
                 now,
+            ),
+        )?
+        .ok_or_else(|| {
+            Error::new(
+                ChurStatus::InternalFailure,
+                "album placement has no destination",
             )
         })?;
         unsafe { crate::api::write_id(out_album_id, &id) }
+    })
+}
+
+/// Removes a packed selection from an album as one durable catalog edit.
+/// # Safety
+/// `album_id` covers 16 bytes and `object_ids` covers `object_count * 16` bytes.
+#[unsafe(no_mangle)]
+#[expect(unsafe_code, reason = "the C ABI borrows caller-owned identifiers")]
+pub unsafe extern "C" fn chur_album_remove_objects(
+    session: Handle,
+    album_id: *const u8,
+    object_ids: *const u8,
+    object_count: u32,
+) -> Status {
+    guard_status_for(session, || {
+        ensure!(
+            object_count > 0
+                && u64::from(object_count) <= chur_core::limits::catalog::ALBUM_MEMBERSHIPS_MAX,
+            InvalidInput,
+            "the selection size is outside the album bound"
+        );
+        let entry = registry::get(session, Kind::Session)?;
+        let album = Id::from_slice(unsafe { crate::api::borrow_bytes(album_id, 16)? })?;
+        let length = object_count.checked_mul(16).ok_or_else(|| {
+            Error::new(
+                ChurStatus::ResourceLimitExceeded,
+                "the selection length overflows",
+            )
+        })?;
+        let bytes = unsafe { crate::api::borrow_bytes(object_ids, length)? };
+        let objects = bytes
+            .as_chunks::<16>()
+            .0
+            .iter()
+            .map(|chunk| Id::new(*chunk))
+            .collect::<Result<Vec<_>>>()?;
+        with_album_mutation(
+            &entry,
+            chur_catalog::own_sync::AlbumMutation::Remove(&album, &objects),
+        )
+        .map(|_| ())
     })
 }
 
@@ -1542,6 +1598,21 @@ fn with_session_mut<T>(
     };
     let mut guard = registry::lock(guarded);
     body(&mut guard)
+}
+
+fn with_album_mutation(
+    entry: &std::sync::Arc<Entry>,
+    mutation: chur_catalog::own_sync::AlbumMutation<'_>,
+) -> Result<Option<Id>> {
+    with_session_mut(entry, |session| {
+        chur_media::keys::ensure_default_collection(session)?;
+        let root = session.root_secret()?.duplicate();
+        let vault = session.vault_id();
+        if chur_catalog::sync_membership::load(session.catalog_ref()?)?.is_none() {
+            chur_catalog::sync_receive::provision_local_identity(session.catalog()?, &root, vault)?;
+        }
+        chur_catalog::own_sync::mutate_album(session.catalog()?, &root, vault, mutation)
+    })
 }
 
 fn with_catalog_mut<T>(

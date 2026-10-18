@@ -246,7 +246,7 @@ class ChurVaultHostTest {
     fun the_handshake_matches_the_frozen_abi() {
         val handshake = ChurVault.handshake()
         assertEquals(2, handshake.major)
-        assertEquals(24, handshake.minor, "content indexing uses the runtime-owned ABI 2.24 surface")
+        assertEquals(25, handshake.minor, "album removal uses the runtime-owned ABI 2.25 surface")
         assertEquals(1, handshake.objectFormatMin)
         assertEquals(1, handshake.objectFormatMax)
         assertTrue(handshake.capabilities and 0b0000_0010L != 0L, "the reader is declared")
@@ -360,6 +360,33 @@ class ChurVaultHostTest {
         assertEquals(4_096L, detail.plaintextSize)
         assertEquals(1, detail.tags.size)
         assertEquals("Sommer", detail.tags.first().second)
+    }
+
+    @Test
+    fun removing_album_objects_uses_one_native_transaction_and_keeps_other_memberships() {
+        val session = createVault(openRuntime())
+        val first = import(session, byteArrayOf(1, 2, 3), "first.jpg")
+        import(session, byteArrayOf(4, 5, 6), "second.jpg")
+        val objects = ChurVault.query(session, ObjectQuery()).objects.map { it.objectId }
+        assertEquals(2, objects.size)
+        val source = ChurVault.createAlbum(session, "Source")
+        val other = ChurVault.createAlbum(session, "Other")
+        ChurVault.placeAlbumObjects(session, source, "", null, null, objects, false)
+        ChurVault.placeAlbumObjects(session, other, "", null, null, objects, false)
+        val query = ObjectQuery(QueryScope.ALBUM, scopeId = source)
+        val before = ChurVault.query(session, query)
+        assertEquals(ChurStatus.CONFLICT, assertFailsWith<ChurFailure> {
+            ChurVault.removeAlbumObjects(session, source, listOf(first, ByteArray(16) { 99 }))
+        }.status)
+        assertEquals(before.catalogGeneration, ChurVault.query(session, query).catalogGeneration)
+        assertEquals(2L, ChurVault.query(session, query).totalCount)
+        ChurVault.removeAlbumObjects(session, source, objects)
+        assertEquals(0L, ChurVault.query(session, query).totalCount)
+        assertEquals(2L, ChurVault.query(session, ObjectQuery(QueryScope.ALBUM, scopeId = other)).totalCount)
+        assertEquals(2L, ChurVault.query(session, ObjectQuery()).totalCount)
+        val reader = ChurVault.openReader(session, first, StreamKind.ORIGINAL)
+        try { assertContentEquals(byteArrayOf(1, 2, 3), ChurVault.readRange(reader, 0, 3)) }
+        finally { ChurVault.closeReader(reader) }
     }
 
     @Test

@@ -168,6 +168,57 @@ impl DurableOperationLog {
         )
     }
 
+    /// Composes local catalog edits and their signed outbox in one transaction.
+    /// On failure no accepted in-memory head may outlive the rolled-back rows.
+    pub(crate) fn local_transaction<T>(
+        &mut self,
+        db: &mut CatalogDb,
+        membership: &MembershipState,
+        body: impl FnOnce(&mut Self, &Transaction<'_>) -> Result<T>,
+    ) -> Result<T> {
+        let result = db.transaction(|transaction| body(self, transaction));
+        if result.is_err() {
+            *self = load(db, membership)?;
+        }
+        result
+    }
+
+    /// Persists a freshly authored local record inside its catalog transaction.
+    pub(crate) fn accept_local_in(
+        &mut self,
+        transaction: &Transaction<'_>,
+        operation: &Operation,
+        membership: &MembershipState,
+    ) -> Result<()> {
+        ensure!(
+            !self.forked_devices.contains(operation.device_id()),
+            SyncChainFork,
+            "the local device chain is frozen"
+        );
+        ensure!(
+            self.log.accept(operation, membership)? == ApplyOutcome::Applied,
+            InternalFailure,
+            "fresh local operation was not applied"
+        );
+        let digest = operation.digest();
+        transaction.execute(
+            "INSERT INTO sync_operations (device_id, device_sequence, operation_id, digest, record)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![operation.device_id().as_bytes().as_slice(),
+                as_sqlite_integer(operation.device_sequence(), "the operation sequence is too large")?,
+                operation.operation_id().as_bytes().as_slice(), digest.as_slice(), operation.encode()],
+        ).map_err(|error| map_sqlite(error, "the local operation could not be written"))?;
+        transaction.execute(
+            "INSERT INTO sync_heads (device_id, accepted_sequence, accepted_digest, floor_sequence, floor_digest)
+             VALUES (?1, ?2, ?3, NULL, NULL)
+             ON CONFLICT(device_id) DO UPDATE SET accepted_sequence = excluded.accepted_sequence,
+                 accepted_digest = excluded.accepted_digest",
+            params![operation.device_id().as_bytes().as_slice(),
+                as_sqlite_integer(operation.device_sequence(), "the operation sequence is too large")?, digest.as_slice()],
+        ).map_err(|error| map_sqlite(error, "the local head could not be written"))?;
+        bump_generation(transaction)
+    }
+
     /// Validates one received operation and commits its logical projection,
     /// record, and accepted head in one catalog transaction.
     pub fn accept_with(

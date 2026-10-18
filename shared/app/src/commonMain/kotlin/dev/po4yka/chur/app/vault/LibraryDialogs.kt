@@ -2,8 +2,8 @@ package dev.po4yka.chur.app.vault
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -20,6 +20,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.privateKeyboardOptions
 import dev.po4yka.chur.app.theme.DestructiveButton
@@ -53,6 +57,53 @@ fun NewAlbumDialog(onCreate: (String) -> Unit, onDismiss: () -> Unit) {
 }
 
 @Composable
+fun MoveAlbumDialog(
+    albums: List<AlbumSummary>,
+    album: AlbumSummary,
+    onChoose: (AlbumSummary?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var filter by remember(album.id) { mutableStateOf("") }
+    val destinations = remember(albums, album.id) { albumDestinations(albums, album.id) }
+    val matches = remember(destinations, filter) {
+        destinations.filter { it.path.contains(filter.trim(), ignoreCase = true) }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Move album") },
+        text = {
+            Column(modifier = Modifier.heightIn(max = 360.dp)) {
+                OutlinedTextField(
+                    value = filter, onValueChange = { filter = it }, singleLine = true,
+                    label = { Text("Find destination") }, keyboardOptions = privateKeyboardOptions(),
+                    colors = churOutlinedTextFieldColors(), modifier = Modifier.fillMaxWidth()
+                        .testTag("album-move-filter"),
+                )
+                LazyColumn(modifier = Modifier.weight(1f, fill = false).fillMaxWidth()
+                    .testTag("album-move-destinations")) {
+                    item {
+                        TextButton(onClick = { onChoose(null) }, modifier = Modifier.fillMaxWidth()
+                            .semantics { contentDescription = "Move album to top level" }) {
+                            Text("Top level", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start)
+                        }
+                    }
+                    items(matches, key = { it.album.id }) { destination ->
+                        TextButton(onClick = { onChoose(destination.album) },
+                            modifier = Modifier.fillMaxWidth().testTag("album-move-${destination.album.id}")
+                                .semantics { contentDescription = "Move album to ${destination.path}" }) {
+                            Text(destination.path, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start)
+                        }
+                    }
+                    if (matches.isEmpty()) item { Text("No matching albums") }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
 fun AlbumPickerDialog(
     albums: List<AlbumSummary>,
     currentAlbum: AlbumSummary?,
@@ -62,19 +113,29 @@ fun AlbumPickerDialog(
     onDismiss: () -> Unit,
 ) {
     var name by remember { mutableStateOf("") }
+    var filter by remember { mutableStateOf("") }
     var parent by remember(currentAlbum?.id) { mutableStateOf(currentAlbum) }
     var parentExpanded by remember { mutableStateOf(false) }
+    val destinations = remember(albums) { albumDestinations(albums) }
     val verb = if (move) "Move" else "Add"
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("$verb to album") },
         text = {
             Column(modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
-                albumRows(albums).filterNot { it.first.id == currentAlbum?.id }.forEach { (album, depth) ->
+                OutlinedTextField(
+                    value = filter, onValueChange = { filter = it }, singleLine = true,
+                    label = { Text("Find destination") }, keyboardOptions = privateKeyboardOptions(),
+                    colors = churOutlinedTextFieldColors(), modifier = Modifier.fillMaxWidth(),
+                )
+                destinations.filter { it.album.id != currentAlbum?.id &&
+                    it.path.contains(filter.trim(), ignoreCase = true) }.forEach { destination ->
                     TextButton(
-                        onClick = { onChoose(album) },
-                        modifier = Modifier.padding(start = (depth * 16).coerceAtMost(96).dp),
-                    ) { Text(album.name) }
+                        onClick = { onChoose(destination.album) },
+                        modifier = Modifier.fillMaxWidth().semantics {
+                            contentDescription = "$verb to ${destination.path}"
+                        },
+                    ) { Text(destination.path, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start) }
                 }
                 Text("Create a new destination")
                 OutlinedTextField(
@@ -87,16 +148,16 @@ fun AlbumPickerDialog(
                 )
                 Box {
                     TextButton(onClick = { parentExpanded = true }) {
-                        Text("Inside: ${parent?.name ?: "Top level"}")
+                        Text("Inside: ${destinations.firstOrNull { it.album.id == parent?.id }?.path ?: "Top level"}")
                     }
                     DropdownMenu(expanded = parentExpanded, onDismissRequest = { parentExpanded = false }) {
                         DropdownMenuItem(text = { Text("Top level") }, onClick = {
                             parent = null; parentExpanded = false
                         })
-                        albumRows(albums).forEach { (album, depth) ->
+                        destinations.forEach { destination ->
                             DropdownMenuItem(
-                                text = { Text("${"  ".repeat(depth.coerceAtMost(6))}${album.name}") },
-                                onClick = { parent = album; parentExpanded = false },
+                                text = { Text(destination.path) },
+                                onClick = { parent = destination.album; parentExpanded = false },
                             )
                         }
                     }

@@ -585,20 +585,44 @@ No UI success is shown until Rust commits the encrypted original and private cat
 
 ### 15.3 Live Photos, RAW, and paired resources
 
-Live Photos, RAW+JPEG pairs, spatial media, and other compound assets require an explicit object-bundle model.
+The separate **Full Live Photos (Photos access)** action uses the immutable
+[`format/LIVE_PHOTO_BUNDLE_V1.md`](format/LIVE_PHOTO_BUNDLE_V1.md) Original stream.
+It requests read-write Photos access with the existing prompt lease and requires
+the selected `PHAsset` to be readable. A limited selection must include that
+asset. The picker grant alone does not grant full PhotoKit access.
 
-Until that model is specified, v1 SHOULD either:
+The **Live Photo packages** action imports `.churlive` files from Files through a
+coordinated source lease and the media pipeline. It does not request Photos
+access or copy the complete package into plaintext scratch. It validates the
+complete resource table and hashes before the vault commit. This path supports
+packages exported on Android. **Documents and files** remains an explicit opaque
+file import; use **Live Photo packages** to enable media playback and Photos
+restoration for these packages.
 
-- import the selected primary representation with a clear limitation; or
-- exclude the unsupported compound type.
+Capture enumerates every `PHAssetResource`, writes each resource in bounded,
+sequential chunks, records its public role, filename, UTI, byte length and SHA-256,
+and checks the fresh asset inventory and modification date before publishing.
+It preserves the original photo, paired movie with audio, edited resources and
+unknown sidecars. Errors and cancellation remove partial output. A provider-only
+`PHLivePhoto` cannot prove resource completeness and is not a full-import fallback.
 
-It MUST NOT silently drop paired resources while claiming lossless archival.
+Previews use the selected photo range. The private player reads only the selected
+paired-video range, including its audio tracks. Files export preserves all resources
+inside the complete portable bundle. The iOS UI does not export separate resource
+files. Photos restoration submits every resource to
+one `PHAssetCreationRequest`, after the public role-combination preflight. An
+unsupported combination fails explicitly; it must not drop edits or sidecars.
+
+The default selection-only photo/video action can still provide a single display
+representation. Its existing warning states that this is not a complete compound
+archive. RAW+JPEG, spatial media, and other compound types remain subject to that
+limit unless a separate format specifies their resource contract.
 
 ### 15.4 Source deletion
 
 After an import commits, Chur offers the choice of `DESIGN.md` §15.3 once for the batch, and only for the items whose import committed. Keep original is the default and asks for nothing. Review source deletion asks for read-write Photos access (`NSPhotoLibraryUsageDescription`) at that moment, fetches the picked assets by the identifiers the picker returned, and deletes them through `PHPhotoLibrary.performChanges`, where Photos shows the items and asks before it deletes them. Deleted items go to Recently Deleted. An asset outside the access the user granted, including a limited selection without it, is not found, and the outcome names the Photos app for the rest. A refusal of either request deletes nothing.
 
-Import stays selection-only (§15.1). The owner chose in-app deletion over an explanation alone. The Photos identifiers stay in memory until the user answers and are never logged (§28).
+Default import stays selection-only (§15.1). Full Live Photo import (§15.3) does not offer source deletion. The owner chose in-app deletion over an explanation alone. The Photos identifiers stay in memory until the user answers and are never logged (§28).
 
 ---
 

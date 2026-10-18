@@ -21,6 +21,7 @@ pub mod password;
 pub mod random;
 pub mod recovery;
 pub mod secret;
+pub mod sha256;
 pub mod tuple;
 
 pub use aead::Nonce;

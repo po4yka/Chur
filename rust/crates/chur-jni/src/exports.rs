@@ -2219,6 +2219,40 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumSetMembership<'loca
     })
 }
 
+/// Removes a selection from one album in one native transaction.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumRemoveObjects<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    album_id: JByteArray<'local>,
+    object_ids: JByteArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(album) = fixed_array(env, &album_id, ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        let Some(objects) = byte_array(env, &object_ids) else {
+            return INVALID_INPUT;
+        };
+        if objects.is_empty() || objects.len() % ID_LEN != 0 {
+            return INVALID_INPUT;
+        }
+        let Ok(count) = u32::try_from(objects.len() / ID_LEN) else {
+            return INVALID_INPUT;
+        };
+        // SAFETY: both arrays remain live through the synchronous call.
+        unsafe {
+            chur_ffi::product::chur_album_remove_objects(
+                handle_of(session),
+                album.as_ptr(),
+                objects.as_ptr(),
+                count,
+            )
+        }
+    })
+}
+
 /// Places a selection in an album in one native transaction.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumPlaceObjects<'local>(

@@ -69,6 +69,16 @@ class SourceDeletionTest {
     }
 
     @Test
+    fun unverified_Photos_resources_are_retained_without_manual_deletion_advice() {
+        assertEquals("Kept the original. Chur could not verify a complete copy or access the source.",
+            SourceDeletionCopy.verifiedOutcome(picked = 1, found = 0, deleted = 0))
+        assertEquals("Deleted 1 original. Kept the remaining originals; Chur could not verify complete copies or access all sources.",
+            SourceDeletionCopy.verifiedOutcome(picked = 2, found = 1, deleted = 1))
+        assertEquals("Kept the original.", SourceDeletionCopy.verifiedOutcome(picked = 1, found = 1, deleted = 0))
+        assertEquals("Deleted 2 originals.", SourceDeletionCopy.verifiedOutcome(picked = 2, found = 2, deleted = 2))
+    }
+
+    @Test
     fun the_outcome_says_what_the_system_did_and_where_the_rest_goes() {
         val place = "your Photos or Files app"
         assertEquals(

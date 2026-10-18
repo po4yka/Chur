@@ -1,4 +1,5 @@
 import java.security.MessageDigest
+import org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest
 
 // The platform half of `docs/interop/MEDIA_PIPELINE.md`.
 //
@@ -75,4 +76,16 @@ tasks.configureEach {
     if ((name.startsWith("compile") && name.contains("Android")) || name.startsWith("mergeAndroid") || name == "check") {
         dependsOn(verifyOfflineOcrInputs)
     }
+}
+
+// ImageIO and the type registry need the services of a fully booted simulator.
+// Use the same explicit test device as the app's native tests.
+tasks.withType<KotlinNativeSimulatorTest>().configureEach {
+    standalone.set(false)
+    val selected = providers.environmentVariable("CHUR_IOS_TEST_DEVICE")
+    if (selected.isPresent) device.set(selected)
+    val fixtures = rootProject.layout.projectDirectory.dir("apps/androidApp/src/androidTest/assets/media-formats")
+    inputs.file(fixtures.file("camera.dng")).withPathSensitivity(PathSensitivity.RELATIVE)
+    environment("CHUR_MEDIA_TEST_FIXTURES", fixtures.asFile.absolutePath)
+    environment("SIMCTL_CHILD_CHUR_MEDIA_TEST_FIXTURES", fixtures.asFile.absolutePath)
 }

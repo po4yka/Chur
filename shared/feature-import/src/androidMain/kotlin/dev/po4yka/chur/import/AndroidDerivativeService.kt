@@ -33,12 +33,15 @@ class AndroidDerivativeService : Service() {
                             )
                             val kindCode = data.readInt()
                             val kind = StreamKind.entries.first { it.code == kindCode }
+                            val sourceOffset = data.readLong()
+                            val sourceLength = data.readLong().takeIf { it >= 0 }
+                            require(sourceOffset >= 0 && (sourceLength == null || sourceOffset <= Long.MAX_VALUE - sourceLength))
                             val media = PickedMedia(
                                 source.fd, true, null, probe.contentType, null, null, uri, {},
                             )
                             try {
                                 val result = if (code == DERIVATIVE_OCR) AndroidOfflineOcr(this@AndroidDerivativeService).recognize(source, probe.contentType)
-                                    else AndroidMediaCodec(contentResolver, source).derive(media, probe, kind)
+                                    else AndroidMediaCodec(contentResolver, source, sourceOffset, sourceLength).derive(media, probe, kind)
                                 DataOutputStream(ParcelFileDescriptor.AutoCloseOutputStream(output)).use { into ->
                                     if (result != null) try {
                                         if (result.bytes.size <= if (code == DERIVATIVE_OCR) OCR_RESULT_MAX else DERIVATIVE_RESULT_MAX) {

@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.background
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -60,6 +62,17 @@ import platform.AVFoundation.AVAssetResourceLoaderDelegateProtocol
 import platform.AVFoundation.AVAssetResourceLoadingRequest
 import platform.AVFoundation.AVPlayer
 import platform.AVFoundation.AVPlayerItem
+import platform.AVFoundation.AVPlayerItemStatusReadyToPlay
+import platform.AVFoundation.AVMediaSelectionGroup
+import platform.AVFoundation.AVMediaSelectionOption
+import platform.AVFoundation.AVMediaCharacteristicAudible
+import platform.AVFoundation.AVMediaCharacteristicLegible
+import platform.AVFoundation.AVURLAssetReferenceRestrictionsKey
+import platform.AVFoundation.AVAssetReferenceRestrictionForbidAll
+import platform.AVFoundation.asset
+import platform.AVFoundation.mediaSelectionGroupForMediaCharacteristic
+import platform.AVFoundation.currentMediaSelection
+import platform.AVFoundation.selectMediaOption
 import platform.AVFoundation.AVPlayerTimeControlStatusPlaying
 import platform.AVFoundation.AVPlayerTimeControlStatusWaitingToPlayAtSpecifiedRate
 import platform.AVFoundation.AVPlayerLayer
@@ -82,11 +95,13 @@ import platform.Foundation.NSNotificationCenter
 import platform.Foundation.NSOperationQueue
 import platform.Foundation.NSError
 import platform.Foundation.NSLocalizedDescriptionKey
+import platform.Foundation.NSNumber
 import platform.Foundation.NSData
 import platform.Foundation.NSURL
 import platform.Foundation.create
 import platform.UIKit.UIAccessibilityIsVoiceOverRunning
 import platform.UIKit.UIAccessibilityVoiceOverStatusDidChangeNotification
+import platform.UniformTypeIdentifiers.UTType
 import platform.UIKit.UIView
 import platform.darwin.NSObject
 import platform.darwin.dispatch_queue_create
@@ -134,19 +149,8 @@ actual fun VaultPlayer(
     val scrubInteractions = remember { MutableInteractionSource() }
     val dragging by scrubInteractions.collectIsDraggedAsState()
     var controlsFocused by remember { mutableStateOf(false) }
-    val loader = remember(source.objectId, source.plaintextSize) { ChurResourceLoader(source) }
-    val player = remember(loader) {
-        val asset = AVURLAsset(NSURL(string = "chur://vault/object"), options = null)
-        // A serial queue of its own, never the main queue. The delegate answers
-        // synchronously and its first answer takes the repository's mutex and
-        // then a native read; on the main queue that is the user interface
-        // waiting on a catalog query, which is the shape of an unresponsive
-        // application rather than a slow one. Serial is what AVFoundation
-        // expects and is also what the reader needs: `FFI_CONTRACT.md` §8
-        // serializes calls per reader handle in v1.
-        asset.resourceLoader.setDelegate(loader, loaderQueue)
-        privatePlayer(AVPlayerItem(asset as AVAsset))
-    }
+    val loader = remember(source.objectId, source.kind, source.offset, source.length) { ChurResourceLoader(source) }
+    val player = remember(loader) { privatePlayer(privatePlayerItem(loader)) }
     val readerProblem by loader.problem.collectAsState()
     var nativeProblem by remember(player) { mutableStateOf<PlaybackProblem?>(null) }
     val problem = readerProblem ?: nativeProblem
@@ -158,6 +162,11 @@ actual fun VaultPlayer(
     val buffering = phase == IosPlaybackPhase.BUFFERING
     var position by remember(player) { mutableStateOf(0f) }
     var duration by remember(player) { mutableStateOf(0f) }
+    var audioGroup by remember(player) { mutableStateOf<AVMediaSelectionGroup?>(null) }
+    var subtitleGroup by remember(player) { mutableStateOf<AVMediaSelectionGroup?>(null) }
+    var selectedAudio by remember(player) { mutableStateOf<AVMediaSelectionOption?>(null) }
+    var selectedSubtitle by remember(player) { mutableStateOf<AVMediaSelectionOption?>(null) }
+    var groupsLoaded by remember(player) { mutableStateOf(false) }
     var scrub by remember(player) { mutableStateOf(IosPlaybackScrub()) }
     val controlsHeld = iosPlaybackControlsHeld(
         controlsPinned, voiceOver, keyboard, controlsFocused, dragging || scrub.active,
@@ -165,6 +174,16 @@ actual fun VaultPlayer(
     val displayedPosition = scrub.displayedPosition(position)
     LaunchedEffect(player) {
         while (true) {
+            val item = player.currentItem
+            if (item?.status == AVPlayerItemStatusReadyToPlay) {
+                if (!groupsLoaded) {
+                    audioGroup = item.asset.mediaSelectionGroupForMediaCharacteristic(AVMediaCharacteristicAudible)
+                    subtitleGroup = item.asset.mediaSelectionGroupForMediaCharacteristic(AVMediaCharacteristicLegible)
+                    groupsLoaded = true
+                }
+                selectedAudio = audioGroup?.let { item.currentMediaSelection.selectedMediaOptionInMediaSelectionGroup(it) }
+                selectedSubtitle = subtitleGroup?.let { item.currentMediaSelection.selectedMediaOptionInMediaSelectionGroup(it) }
+            }
             position = CMTimeGetSeconds(player.currentTime()).takeIf { it.isFinite() }?.toFloat() ?: 0f
             duration = player.currentItem?.let { CMTimeGetSeconds(it.duration) }
                 ?.takeIf { it.isFinite() && it > 0 }?.toFloat() ?: 0f
@@ -304,9 +323,71 @@ actual fun VaultPlayer(
                     color = Color.White,
                     modifier = Modifier.padding(bottom = 8.dp),
                 )
+                player.currentItem?.let { item ->
+                    audioGroup?.takeIf { it.options.size > 1 }?.let { group ->
+                        MediaTrackMenu(item, group, "Audio", selectedAudio, allowOff = false)
+                    }
+                    subtitleGroup?.takeIf { it.options.isNotEmpty() }?.let { group ->
+                        MediaTrackMenu(item, group, "Subtitles", selectedSubtitle, allowOff = group.allowsEmptySelection)
+                    }
+                }
             }
         }
     }
+}
+
+@Composable
+private fun MediaTrackMenu(
+    item: AVPlayerItem,
+    group: AVMediaSelectionGroup,
+    label: String,
+    selected: AVMediaSelectionOption?,
+    allowOff: Boolean,
+) {
+    var expanded by remember(group) { mutableStateOf(false) }
+    Box {
+        TextButton(onClick = { expanded = true }) {
+            Text("$label: ${selected?.displayName ?: if (allowOff) "Off" else "Automatic"}", color = Color.White)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            if (allowOff) DropdownMenuItem(
+                text = { Text("Off") },
+                onClick = { selectMediaTrack(item, group, null); expanded = false },
+            )
+            group.options.filterIsInstance<AVMediaSelectionOption>().forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.displayName) },
+                    enabled = option.playable,
+                    onClick = { selectMediaTrack(item, group, option); expanded = false },
+                )
+            }
+        }
+    }
+}
+
+/** Only select tracks embedded in the current native group; null means subtitles off. */
+internal fun selectMediaTrack(item: AVPlayerItem, group: AVMediaSelectionGroup, option: AVMediaSelectionOption?): Boolean {
+    if (option == null && !group.allowsEmptySelection) return false
+    if (option != null && (option !in group.options || !option.playable)) return false
+    item.selectMediaOption(option, inMediaSelectionGroup = group)
+    return true
+}
+
+/** Forbid remote and local references outside the encrypted container. */
+internal fun privatePlaybackAsset(url: NSURL): AVURLAsset = AVURLAsset(
+    url,
+    options = mapOf(AVURLAssetReferenceRestrictionsKey to NSNumber(unsignedLongLong = AVAssetReferenceRestrictionForbidAll)),
+)
+
+/** Create a private player item that reads authenticated vault ranges. */
+internal fun privatePlayerItem(loader: ChurResourceLoader): AVPlayerItem {
+    val asset = privatePlaybackAsset(NSURL(string = "chur://vault/object"))
+    // Native range reads run on one serial queue, away from the main thread.
+    asset.resourceLoader.setDelegate(loader, loaderQueue)
+    return AVPlayerItem(
+        asset as AVAsset,
+        automaticallyLoadedAssetKeys = listOf("availableMediaCharacteristicsWithMediaSelectionOptions"),
+    )
 }
 
 /** Private playback starts paused and cannot use an external player. */
@@ -326,7 +407,7 @@ internal fun privatePlayer(item: AVPlayerItem): AVPlayer = AVPlayer().apply {
  * method returns, which is the simplest correct shape and is what a local
  * source can do. A network source would return `true` and finish later.
  */
-private class ChurResourceLoader(private val source: PlaybackSource) :
+internal class ChurResourceLoader(private val source: PlaybackSource) :
     NSObject(), AVAssetResourceLoaderDelegateProtocol {
 
     private val vault: VaultRepository get() = source.vault
@@ -358,20 +439,27 @@ private class ChurResourceLoader(private val source: PlaybackSource) :
                 request.finishLoading()
                 return true
             }
-            val offset = data.requestedOffset
-            if (offset < 0) return fail(request, ChurStatus.INVALID_INPUT)
+            if (data.requestedOffset < 0 || data.currentOffset < 0 || data.requestedLength < 0) return fail(request, ChurStatus.INVALID_INPUT)
+            val offset = maxOf(data.requestedOffset, data.currentOffset)
             if (offset >= size) {
                 request.finishLoading()
                 return true
             }
-            val wanted = minOf(data.requestedLength.toLong(), size - offset)
-            if (retirement.terminal) return finishRetired(request)
-            val bytes = vault.readLeased(reader, offset, wanted.toInt())
-            // A read already in progress can finish after disposal. Its bytes
-            // must not be sent to the detached player.
-            if (retirement.terminal) return finishRetired(request)
-            if (bytes.isEmpty() && wanted > 0) return fail(request, ChurStatus.OBJECT_INCOMPLETE)
-            if (bytes.isNotEmpty()) data.respondWithData(bytes.toNSData())
+            val alreadyDelivered = offset - data.requestedOffset
+            val wanted = minOf((data.requestedLength.toLong() - alreadyDelivered).coerceAtLeast(0L), size - offset)
+            var delivered = 0L
+            while (delivered < wanted) {
+                if (retirement.terminal) return finishRetired(request)
+                val take = minOf(65_536L, wanted - delivered).toInt()
+                val bytes = vault.readLeased(reader, source.offset + offset + delivered, take)
+                try {
+                    // Disposal wins even when an authenticated read was already in flight.
+                    if (retirement.terminal) return finishRetired(request)
+                    if (bytes.isEmpty()) return fail(request, ChurStatus.OBJECT_INCOMPLETE)
+                    data.respondWithData(bytes.toNSData())
+                    delivered += bytes.size
+                } finally { bytes.fill(0) }
+            }
             request.finishLoading()
             return true
         } catch (failure: ChurFailure) {
@@ -413,7 +501,11 @@ private class ChurResourceLoader(private val source: PlaybackSource) :
         if (!info.byteRangeSupported || info.plaintextSize < 0) {
             throw ChurFailure(ChurStatus.INVALID_INPUT, "private playback ranges")
         }
-        size = info.plaintextSize
+        if (source.offset < 0 || source.length < 0 || source.offset > info.plaintextSize ||
+            source.length > info.plaintextSize - source.offset) {
+            throw ChurFailure(ChurStatus.INVALID_INPUT, "private playback resource bounds")
+        }
+        size = source.length
     }
 
 }
@@ -433,22 +525,9 @@ internal class IosPlaybackReaderRetirement(
     }
 }
 
-/**
- * The uniform type identifier AVFoundation is told, from the IANA type the
- * catalog authenticated.
- *
- * `FFI_CONTRACT.md` §6.1 says iOS converts the value with `UTType(mimeType:)`.
- * That initializer is unavailable from Kotlin/Native, so the two abstract types
- * the player needs are named directly: `public.movie` and `public.audio` are
- * the identifiers every concrete video and audio type conforms to, which is
- * enough for AVFoundation to choose a track reader, and anything else is left
- * to the codec's own sniffing rather than replaced with a guess.
- */
-private fun utTypeOf(contentType: String): String? = when {
-    contentType.startsWith("video/") -> "public.movie"
-    contentType.startsWith("audio/") -> "public.audio"
-    else -> null
-}
+/** Resolve the authenticated MIME type through the native type registry. */
+internal fun utTypeOf(contentType: String): String? =
+    UTType.typeWithMIMEType(contentType)?.identifier
 
 /**
  * The queue the resource loader answers on.

@@ -1,0 +1,14 @@
+[
+  {
+    "type": 1,
+    "filename": "still.jpg",
+    "length": 911,
+    "sha256": "dd3b41e308e6a33fc95d81cd36afc9b860c16abdd990f6732a7a53e06c468c87"
+  },
+  {
+    "type": 9,
+    "filename": "motion.mov",
+    "length": 32116,
+    "sha256": "30f2fbab4ce6b72d05b2d59632a48cf56db11ef6cb253c2ce5a2033c1dfc2c8d"
+  }
+]

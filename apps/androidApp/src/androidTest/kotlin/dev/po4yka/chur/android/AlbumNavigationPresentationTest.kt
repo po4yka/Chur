@@ -7,6 +7,7 @@ import android.os.SystemClock
 import android.view.ContextThemeWrapper
 import android.view.View
 import android.view.ViewGroup
+import android.view.inspector.WindowInspector
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.CompositionLocalProvider
@@ -23,6 +24,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.Density
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -31,9 +33,15 @@ import dev.po4yka.chur.app.vault.VaultActions
 import dev.po4yka.chur.app.vault.VaultDestination
 import dev.po4yka.chur.app.vault.VaultShell
 import dev.po4yka.chur.app.vault.VaultUiState
+import dev.po4yka.chur.app.vault.ContentView
+import dev.po4yka.chur.app.vault.LibraryTile
+import dev.po4yka.chur.app.vault.MoveAlbumDialog
+import dev.po4yka.chur.app.vault.loadedObjectSelection
 import dev.po4yka.chur.app.vault.albumParent
 import dev.po4yka.chur.app.vault.albumPath
 import dev.po4yka.chur.ffi.AlbumSummary
+import dev.po4yka.chur.ffi.ObjectPage
+import dev.po4yka.chur.ffi.ObjectProjection
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -137,6 +145,67 @@ class AlbumNavigationPresentationTest {
         f.assertNoSavedPath()
     }
 
+    @Test
+    fun move_picker_uses_full_paths_and_search_to_choose_the_correct_duplicate_at_double_font() =
+        present(fontScale = 2f) { f ->
+            val family = album(10, "Family")
+            val work = album(11, "Work")
+            val familyYear = album(12, "2026", family)
+            val workYear = album(13, "2026", work)
+            val source = album(14, "To move")
+            val child = album(15, "Source child", source)
+            f.main {
+                f.state.value = f.state.value.copy(albums = listOf(family, work, familyYear, workYear, source, child))
+                f.moving.value = source
+            }
+            assertTrue(f.await { f.tag("album-move-filter") != null })
+            f.enterDestination("2026")
+            f.revealMoveDestination(1, familyYear)
+            f.assertFullText("album-move-${familyYear.id}", "Family / 2026")
+            f.revealMoveDestination(2, workYear)
+            f.assertFullText("album-move-${workYear.id}", "Work / 2026")
+            f.main {
+                assertEquals(listOf("Move album to Work / 2026"),
+                    f.tagOnMain("album-move-${workYear.id}")!!.config.getOrNull(SemanticsProperties.ContentDescription))
+            }
+            f.enterDestination("Work / 2026")
+            assertTrue(f.await { f.tag("album-move-${familyYear.id}") == null &&
+                f.tag("album-move-${workYear.id}") != null })
+            f.clickTag("album-move-${workYear.id}")
+            assertEquals(workYear.id, f.chosenParent?.id)
+        }
+
+    @Test
+    fun selection_menu_states_loaded_scope_when_more_than_one_page_exists() = present { f ->
+        val all = (1..300).map { id -> ObjectProjection(
+            byteArrayOf((id ushr 8).toByte(), id.toByte()), byteArrayOf(), 1, 0, 0,
+            false, 1, 1, 1, 0, false, 0, 0, false,
+        ) }
+        f.main {
+            f.page.value = ObjectPage(all.take(128), 300, 1, byteArrayOf(1))
+            f.selection = setOf(all.first().id)
+            f.state.value = f.state.value.copy(destination = VaultDestination.LIBRARY,
+                tiles = all.take(128).map { LibraryTile(it, null, it.id in f.selection) },
+                mediaView = ContentView.LIST, selectedCount = 1, canLoadMore = true)
+        }
+        f.clickText("More")
+        assertTrue(f.await { f.button("Select loaded items") != null })
+        assertTrue(f.button("Select all") == null)
+        f.clickText("Select loaded items")
+        assertTrue(f.await { f.selection.size == 128 && f.state.value.selectedCount == 128 })
+        assertFalse(all[128].id in f.selection)
+        f.main {
+            f.page.value = f.page.value.copy(objects = all.take(256), nextCursor = byteArrayOf(2))
+            f.state.value = f.state.value.copy(tiles = all.take(256).map {
+                LibraryTile(it, null, it.id in f.selection)
+            })
+        }
+        f.clickText("More")
+        f.clickText("Select loaded items")
+        assertTrue(f.await { f.selection.size == 256 && f.state.value.selectedCount == 256 })
+        assertFalse(all[256].id in f.selection)
+    }
+
     private fun present(fontScale: Float = 1f, longNames: Boolean = false, test: (Fixture) -> Unit) {
         val activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
@@ -156,6 +225,9 @@ class AlbumNavigationPresentationTest {
                             ChurTheme(dark = false) {
                                 if (f.shown.value) VaultShell(f.state.value, f.actions,
                                     systemBack = { enabled, back -> BackHandler(enabled, back) })
+                                f.moving.value?.let { album -> MoveAlbumDialog(f.state.value.albums, album,
+                                    onChoose = { f.chosenParent = it; f.moving.value = null },
+                                    onDismiss = { f.moving.value = null }) }
                             }
                         }
                     }
@@ -176,6 +248,10 @@ class AlbumNavigationPresentationTest {
         val all = listOf(root, child, leaf, otherRoot)
         val state = mutableStateOf(VaultUiState(destination = VaultDestination.ALBUMS, albums = all))
         val shown = mutableStateOf(true)
+        val moving = mutableStateOf<AlbumSummary?>(null)
+        var chosenParent: AlbumSummary? = null
+        val page = mutableStateOf(ObjectPage(emptyList(), 0, 1, null))
+        var selection = emptySet<String>()
         val registry = SaveableStateRegistry(emptyMap()) { true }
         val steps = mutableListOf<String>()
         lateinit var view: ComposeView
@@ -189,6 +265,11 @@ class AlbumNavigationPresentationTest {
             }, onAlbumRoot = { state.value = state.value.copy(destination = VaultDestination.ALBUMS, openAlbum = null, selectedCount = 0) },
             onCreateAlbum = {}, onLock = { state.value = VaultUiState(); shown.value = false }, onVerifyAll = {},
             onAddRecoverySlot = {}, onChangePassword = {},
+            onSelectLoadedItems = {
+                selection = loadedObjectSelection(page.value)
+                state.value = state.value.copy(selectedCount = selection.size,
+                    tiles = state.value.tiles.map { it.copy(selected = it.projection.id in selection) })
+            },
             onClearSelection = { steps += "selection"; state.value = state.value.copy(selectedCount = 0) })
 
         fun main(action: () -> Unit) = instrumentation.runOnMainSync(action)
@@ -202,7 +283,8 @@ class AlbumNavigationPresentationTest {
             return condition()
         }
         fun nodes(): List<SemanticsNode> { var result = emptyList<SemanticsNode>(); main { result = nodesOnMain(false) }; return result }
-        fun nodesOnMain(merged: Boolean) = view.roots().flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = merged) }
+        fun nodesOnMain(merged: Boolean) = WindowInspector.getGlobalWindowViews().flatMap { it.roots() }
+            .flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = merged) }
         fun tag(value: String): SemanticsNode? { var node: SemanticsNode? = null; main { node = tagOnMain(value) }; return node }
         fun tagOnMain(value: String) = nodesOnMain(true).firstOrNull { it.config.getOrNull(SemanticsProperties.TestTag) == value }
         fun ancestorTag(album: AlbumSummary) = "album-breadcrumb-${album.id}"
@@ -226,6 +308,31 @@ class AlbumNavigationPresentationTest {
                 assertFalse(SemanticsProperties.Disabled in node.config)
                 assertTrue(node.config.getOrNull(SemanticsActions.OnClick)?.action?.invoke() == true)
             }
+            settleFrames()
+        }
+        fun enterDestination(value: String) {
+            main { assertTrue(requireNotNull(tagOnMain("album-move-filter")).config
+                .getOrNull(SemanticsActions.SetText)?.action?.invoke(AnnotatedString(value)) == true) }
+            settleFrames()
+        }
+        fun revealMoveDestination(index: Int, album: AlbumSummary) {
+            main { assertTrue(requireNotNull(tagOnMain("album-move-destinations")).config
+                .getOrNull(SemanticsActions.ScrollToIndex)?.action?.invoke(index) == true) }
+            settleFrames()
+            assertTrue(await { tag("album-move-${album.id}") != null })
+        }
+        fun button(text: String): SemanticsNode? {
+            var result: SemanticsNode? = null
+            main { result = nodesOnMain(true).singleOrNull { node ->
+                node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == text } == true &&
+                    SemanticsActions.OnClick in node.config
+            } }
+            return result
+        }
+        fun clickText(text: String) {
+            assertTrue("$text must be reachable", await { button(text) != null })
+            val node = requireNotNull(button(text))
+            main { assertTrue(node.config.getOrNull(SemanticsActions.OnClick)?.action?.invoke() == true) }
             settleFrames()
         }
         fun back() {

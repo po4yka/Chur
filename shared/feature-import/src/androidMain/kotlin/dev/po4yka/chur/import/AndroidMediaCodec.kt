@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
+import android.media.AudioFormat
 import android.media.ExifInterface
 import android.media.MediaExtractor
 import android.media.MediaFormat
@@ -21,6 +22,8 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.FilterInputStream
 import java.io.InterruptedIOException
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.time.DateTimeException
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -41,10 +44,12 @@ class AndroidMediaCodec private constructor(
     private val resolver: ContentResolver,
     private val decoderContext: Context?,
     private val sourceDescriptor: ParcelFileDescriptor?,
+    private val sourceOffset: Long = 0,
+    private val sourceLength: Long? = null,
 ) : MediaCodec {
     constructor(resolver: ContentResolver) : this(resolver, null, null)
     constructor(context: Context) : this(context.contentResolver, context.applicationContext, null)
-    internal constructor(resolver: ContentResolver, source: ParcelFileDescriptor) : this(resolver, null, source)
+    internal constructor(resolver: ContentResolver, source: ParcelFileDescriptor, offset: Long = 0, length: Long? = null) : this(resolver, null, source, offset, length)
 
     override suspend fun deriveBounded(
         media: PickedMedia,
@@ -100,7 +105,8 @@ class AndroidMediaCodec private constructor(
                     }
                 }
             } }
-            val type = runCatching { resolver.getType(uri) }.getOrNull() ?: "application/octet-stream"
+            val livePhoto = if (seekable) readLivePhotoBundle(descriptor.fd, size, validatePayloads = false) else null
+            val type = if (livePhoto != null) LivePhotoBundle.CONTENT_TYPE else sourceType(uri, name, runCatching { resolver.getType(uri) }.getOrNull())
             return PickedMedia(
                 descriptor = descriptor.fd,
                 seekable = seekable,
@@ -110,7 +116,8 @@ class AndroidMediaCodec private constructor(
                 captureTimeMs = taken ?: if (asFile) null else embeddedCaptureTime(uri, normalizeType(type)),
                 platformHandle = uri,
                 close = { descriptor.close() },
-                importAsFile = asFile,
+                importAsFile = asFile && livePhoto == null,
+                livePhoto = livePhoto,
             )
         } catch (_: Exception) {
             descriptor.close()
@@ -147,14 +154,28 @@ class AndroidMediaCodec private constructor(
     }
 
     override fun probe(media: PickedMedia): ProbedMedia? {
+        media.livePhoto?.let { bundle ->
+            return withPhotoCodec(media, bundle.displayPhoto) { codec, photo -> codec.probe(photo) }
+        }
         val type = normalizeType(media.contentTypeHint)
         val uri = uriOf(media) ?: return ProbedMedia(MediaBounds.CLASS_OPAQUE, 0, 0, 0, type)
-        return when {
-            type.startsWith("image/") -> probeImage(uri, type)
-            type.startsWith("video/") -> probeVideo(uri, type)
-            type.startsWith("audio/") -> probeAudio(uri, type)
-            else -> ProbedMedia(MediaBounds.CLASS_OPAQUE, 0, 0, 0, type)
-        }
+        // Provider MIME and file names can be absent or wrong. A native decoder
+        // or extractor must confirm media from the bytes before classification.
+        probeImage(uri, type)?.let { return it }
+        withRetriever(uri) { retriever ->
+            val nativeType = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE)
+                ?.let(::normalizeType) ?: type
+            when {
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_VIDEO) == "yes" ->
+                    videoProbe(retriever, nativeType)
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO) == "yes" ->
+                    ProbedMedia(MediaBounds.CLASS_AUDIO, 0, 0,
+                        retriever.metadataLong(MediaMetadataRetriever.METADATA_KEY_DURATION), nativeType)
+                else -> null
+            }
+        }?.let { return it }
+        return if (type.startsWith("image/") || type.startsWith("video/") || type.startsWith("audio/")) null
+        else ProbedMedia(MediaBounds.CLASS_OPAQUE, 0, 0, 0, type)
     }
 
     /**
@@ -167,7 +188,7 @@ class AndroidMediaCodec private constructor(
     private fun probeImage(uri: Uri, type: String): ProbedMedia? {
         val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         read(uri) { stream -> BitmapFactory.decodeStream(stream, null, options) }
-        if (options.outWidth <= 0 || options.outHeight <= 0) return null
+        if (options.outWidth <= 0 || options.outHeight <= 0) return probeRawThumbnail(uri, type)
         val swapped = swapsDimensions(imageOrientation(uri))
         return ProbedMedia(
             mediaClass = MediaBounds.CLASS_IMAGE,
@@ -178,21 +199,31 @@ class AndroidMediaCodec private constructor(
         )
     }
 
-    private fun probeVideo(uri: Uri, type: String): ProbedMedia? = withRetriever(uri) { retriever ->
-        ProbedMedia(
-            mediaClass = MediaBounds.CLASS_VIDEO,
-            width = retriever.metadataInt(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH),
-            height = retriever.metadataInt(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT),
-            durationMs = retriever.metadataLong(MediaMetadataRetriever.METADATA_KEY_DURATION),
-            contentType = type,
-        )
+    /** A RAW preview is optional; the original RAW bytes remain the source. */
+    private fun probeRawThumbnail(uri: Uri, type: String): ProbedMedia? {
+        if (type !in RAW_TYPES) return null
+        return read(uri) { stream ->
+            val exif = ExifInterface(stream)
+            if (!exif.hasThumbnail()) return@read null
+            val width = exif.getAttributeInt(ExifInterface.TAG_PIXEL_X_DIMENSION, 0).takeIf { it > 0 }
+                ?: exif.getAttributeInt(ExifInterface.TAG_IMAGE_WIDTH, 0)
+            val height = exif.getAttributeInt(ExifInterface.TAG_PIXEL_Y_DIMENSION, 0).takeIf { it > 0 }
+                ?: exif.getAttributeInt(ExifInterface.TAG_IMAGE_LENGTH, 0)
+            if (width <= 0 || height <= 0) return@read null
+            val swapped = swapsDimensions(exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL))
+            ProbedMedia(MediaBounds.CLASS_IMAGE, if (swapped) height else width, if (swapped) width else height, 0, type)
+        }
     }
 
-    private fun probeAudio(uri: Uri, type: String): ProbedMedia? = withRetriever(uri) { retriever ->
-        ProbedMedia(
-            mediaClass = MediaBounds.CLASS_AUDIO,
-            width = 0,
-            height = 0,
+    private fun videoProbe(retriever: MediaMetadataRetriever, type: String): ProbedMedia {
+        val width = retriever.metadataInt(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+        val height = retriever.metadataInt(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+        val rotation = retriever.metadataInt(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+        val swapped = ((rotation % 360) + 360) % 360 in listOf(90, 270)
+        return ProbedMedia(
+            mediaClass = MediaBounds.CLASS_VIDEO,
+            width = if (swapped) height else width,
+            height = if (swapped) width else height,
             durationMs = retriever.metadataLong(MediaMetadataRetriever.METADATA_KEY_DURATION),
             contentType = type,
         )
@@ -205,6 +236,9 @@ class AndroidMediaCodec private constructor(
         cancelRequested: () -> Boolean,
     ): Derivative? {
         if (cancelRequested()) return null
+        media.livePhoto?.let { bundle ->
+            return withPhotoCodec(media, bundle.displayPhoto) { codec, photo -> codec.derive(photo, probe, kind, cancelRequested) }
+        }
         val uri = uriOf(media) ?: return null
         if (kind == StreamKind.AUDIO_WAVEFORM) return deriveWaveform(uri, probe, cancelRequested)
         if (probe.mediaClass == MediaBounds.CLASS_AUDIO) return deriveArtwork(uri, kind, cancelRequested)
@@ -349,16 +383,16 @@ class AndroidMediaCodec private constructor(
             extractor.selectTrack(track)
             val format = extractor.getTrackFormat(track)
             val mime = format.getString(MediaFormat.KEY_MIME) ?: return null
-            val sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-            val channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-            val frames = probe.durationMs * sampleRate / 1_000L * channels
-            val accumulator = Waveform.Accumulator(frames)
-
-            codec = android.media.MediaCodec.createDecoderByType(mime)
-            codec.configure(format, null, null, 0)
-            codec.start()
-            drain(codec, extractor, accumulator, cancelRequested)
-            if (cancelRequested()) return null
+            val accumulator = if (mime == "audio/raw") {
+                // PCM WAVE has no compressed frames and needs no MediaCodec.
+                readPcm(extractor, format, probe.durationMs, cancelRequested)
+            } else {
+                codec = android.media.MediaCodec.createDecoderByType(mime)
+                codec.configure(format, null, null, 0)
+                codec.start()
+                drain(codec, extractor, format, probe.durationMs, cancelRequested)
+            } ?: return null
+            if (cancelRequested() || accumulator.sampleCount == 0L) return null
             return Derivative(
                 kind = StreamKind.AUDIO_WAVEFORM,
                 bytes = accumulator.encode(probe.durationMs),
@@ -380,9 +414,9 @@ class AndroidMediaCodec private constructor(
     }
 
     /**
-     * Runs one synchronous decode loop, feeding every sample into `into`.
+     * Runs one synchronous decode loop. Only output EOS confirms completion.
      *
-     * The loop is bounded twice: it stops at the input end of stream, and it
+     * The loop is bounded twice: it stops at the output end of stream, and it
      * stops after [DECODE_STALL_LIMIT] consecutive iterations that move no
      * buffer, so a decoder that stops producing cannot spin here forever. §12
      * gives a derivative generation 30 seconds, and the caller applies that; the
@@ -391,14 +425,17 @@ class AndroidMediaCodec private constructor(
     private fun drain(
         codec: android.media.MediaCodec,
         extractor: MediaExtractor,
-        into: Waveform.Accumulator,
+        inputFormat: MediaFormat,
+        durationMs: Long,
         cancelRequested: () -> Boolean,
-    ) {
+    ): Waveform.Accumulator? {
         val info = android.media.MediaCodec.BufferInfo()
+        var outputFormat = inputFormat
+        var into: Waveform.Accumulator? = null
         var inputDone = false
         var stalls = 0
         while (stalls < DECODE_STALL_LIMIT) {
-            if (cancelRequested()) return
+            if (cancelRequested()) return null
             var moved = false
             if (!inputDone) {
                 val index = codec.dequeueInputBuffer(BUFFER_TIMEOUT_US)
@@ -422,20 +459,59 @@ class AndroidMediaCodec private constructor(
                 }
             }
             val output = codec.dequeueOutputBuffer(info, BUFFER_TIMEOUT_US)
-            if (output >= 0) {
+            if (output == android.media.MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                val next = codec.outputFormat
+                // A channel/rate change after samples would change their time
+                // mapping. Refuse the optional derivative instead of lying.
+                if (into != null && (next.getInteger(MediaFormat.KEY_SAMPLE_RATE) != outputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE) ||
+                        next.getInteger(MediaFormat.KEY_CHANNEL_COUNT) != outputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT))) return null
+                outputFormat = next
                 moved = true
-                val buffer = codec.getOutputBuffer(output)
-                if (buffer != null && info.size > 0) {
-                    val pcm = ByteArray(info.size)
-                    buffer.position(info.offset)
-                    buffer.get(pcm)
-                    into.addAll(pcm)
+            } else if (output >= 0) {
+                moved = true
+                try {
+                    if (info.size > 0 && info.flags and android.media.MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
+                        val buffer = codec.getOutputBuffer(output) ?: return null
+                        buffer.limit(info.offset + info.size)
+                        buffer.position(info.offset)
+                        val accumulator = into ?: accumulator(outputFormat, durationMs).also { into = it }
+                        if (!addPcm(buffer.slice().order(ByteOrder.nativeOrder()), outputFormat, accumulator)) return null
+                    }
+                } finally {
+                    codec.releaseOutputBuffer(output, false)
                 }
-                codec.releaseOutputBuffer(output, false)
-                if (info.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) return
+                if (info.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) return into
             }
             stalls = if (moved) 0 else stalls + 1
         }
+        return null
+    }
+
+    private fun accumulator(format: MediaFormat, durationMs: Long): Waveform.Accumulator =
+        Waveform.Accumulator(durationMs * format.getInteger(MediaFormat.KEY_SAMPLE_RATE) / 1_000L *
+            format.getInteger(MediaFormat.KEY_CHANNEL_COUNT))
+
+    private fun readPcm(extractor: MediaExtractor, format: MediaFormat, durationMs: Long,
+        cancelRequested: () -> Boolean): Waveform.Accumulator? {
+        val into = accumulator(format, durationMs)
+        val buffer = ByteBuffer.allocateDirect(256 * 1024).order(ByteOrder.nativeOrder())
+        while (!cancelRequested()) {
+            buffer.clear()
+            val size = extractor.readSampleData(buffer, 0)
+            if (size < 0) return into
+            if (size == 0 || size > buffer.capacity()) return null
+            buffer.position(0)
+            buffer.limit(size)
+            if (!addPcm(buffer, format, into)) return null
+            if (!extractor.advance()) return into
+        }
+        return null
+    }
+
+    private fun addPcm(buffer: ByteBuffer, format: MediaFormat, into: Waveform.Accumulator): Boolean {
+        val encoding = if (format.containsKey(MediaFormat.KEY_PCM_ENCODING)) format.getInteger(MediaFormat.KEY_PCM_ENCODING)
+            else AudioFormat.ENCODING_PCM_16BIT
+        return addAndroidPcm(buffer, encoding, into)
     }
 
     /**
@@ -457,7 +533,28 @@ class AndroidMediaCodec private constructor(
         val rawHeight = if (swapped) targetWidth else targetHeight
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         read(uri, cancelRequested) { BitmapFactory.decodeStream(it, null, bounds) }
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0 || cancelRequested()) return null
+        if (cancelRequested()) return null
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+            val thumbnailBytes = read(uri, cancelRequested) { ExifInterface(it).thumbnail } ?: return null
+            val thumbnail = try {
+                if (thumbnailBytes.size > MediaBounds.AUDIO_ART_ENCODED_MAX_BYTES) return null
+                val thumbnailBounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(thumbnailBytes, 0, thumbnailBytes.size, thumbnailBounds)
+                if (thumbnailBounds.outWidth <= 0 || thumbnailBounds.outHeight <= 0 ||
+                    thumbnailBounds.outWidth.toLong() * thumbnailBounds.outHeight > MediaBounds.IMAGE_AREA_MAX) return null
+                var thumbnailSample = 1
+                while (thumbnailBounds.outWidth / (thumbnailSample * 2) >= rawWidth &&
+                    thumbnailBounds.outHeight / (thumbnailSample * 2) >= rawHeight) thumbnailSample *= 2
+                BitmapFactory.decodeByteArray(thumbnailBytes, 0, thumbnailBytes.size,
+                    BitmapFactory.Options().apply { inSampleSize = thumbnailSample }) ?: return null
+            } finally { thumbnailBytes.fill(0) }
+            val matrix = orientationMatrix(orientation) ?: return thumbnail
+            return try {
+                Bitmap.createBitmap(thumbnail, 0, 0, thumbnail.width, thumbnail.height, matrix, true).also {
+                    if (it !== thumbnail) thumbnail.recycle()
+                }
+            } catch (failure: Exception) { thumbnail.recycle(); throw failure }
+        }
         var sample = 1
         while (bounds.outWidth / (sample * 2) >= rawWidth &&
             bounds.outHeight / (sample * 2) >= rawHeight
@@ -522,7 +619,28 @@ class AndroidMediaCodec private constructor(
 
     private fun <T> read(uri: Uri, body: (InputStream) -> T): T? = try {
         if (sourceDescriptor == null) resolver.openInputStream(uri)?.use(body)
-        else openDecodeDescriptor(uri)?.let { ParcelFileDescriptor.AutoCloseInputStream(it).use(body) }
+        else openDecodeDescriptor(uri)?.let { descriptor ->
+            ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { input ->
+                val length = sourceLength
+                if (length == null) body(input) else body(object : FilterInputStream(input) {
+                    private var remaining: Long = requireNotNull(length)
+                    override fun read(): Int {
+                        if (remaining == 0L) return -1
+                        val value = `in`.read()
+                        if (value >= 0) remaining--
+                        return value
+                    }
+                    override fun read(bytes: ByteArray, offset: Int, count: Int): Int {
+                        if (remaining == 0L) return -1
+                        val read = `in`.read(bytes, offset, minOf(count.toLong(), remaining).toInt())
+                        if (read > 0) remaining -= read
+                        return read
+                    }
+                    override fun skip(count: Long): Long = `in`.skip(minOf(count, remaining)).also { remaining -= it }
+                    override fun available(): Int = minOf(`in`.available().toLong(), remaining).toInt()
+                })
+            }
+        }
     } catch (_: Exception) {
         null
     }
@@ -532,7 +650,7 @@ class AndroidMediaCodec private constructor(
         val copy = ParcelFileDescriptor.dup(source.fileDescriptor)
         return try {
             // The service owns this source independently of the import reader.
-            Os.lseek(copy.fileDescriptor, 0, OsConstants.SEEK_SET)
+            Os.lseek(copy.fileDescriptor, sourceOffset, OsConstants.SEEK_SET)
             copy
         } catch (_: ErrnoException) {
             copy.close()
@@ -546,7 +664,8 @@ class AndroidMediaCodec private constructor(
         val retriever = MediaMetadataRetriever()
         return try {
             openDecodeDescriptor(uri)?.use { descriptor ->
-                retriever.setDataSource(descriptor.fileDescriptor)
+                if (sourceLength != null) retriever.setDataSource(descriptor.fileDescriptor, sourceOffset, sourceLength)
+                else retriever.setDataSource(descriptor.fileDescriptor)
                 body(retriever)
             }
         } catch (_: Exception) {
@@ -564,6 +683,16 @@ class AndroidMediaCodec private constructor(
     private fun MediaMetadataRetriever.metadataLong(key: Int): Long =
         extractMetadata(key)?.toLongOrNull() ?: 0
 
+    private fun <T> withPhotoCodec(media: PickedMedia, photo: LivePhotoResource, body: (AndroidMediaCodec, PickedMedia) -> T): T =
+        ParcelFileDescriptor.fromFd(media.descriptor).use { descriptor ->
+            val position = Os.lseek(descriptor.fileDescriptor, 0, OsConstants.SEEK_CUR)
+            try {
+                body(AndroidMediaCodec(resolver, descriptor, photo.offset, photo.byteLength),
+                    media.copy(livePhoto = null, contentTypeHint = photo.contentType, originalFilename = photo.originalFilename,
+                        knownLength = photo.byteLength))
+            } finally { Os.lseek(descriptor.fileDescriptor, position, OsConstants.SEEK_SET) }
+        }
+
     private fun uriOf(media: PickedMedia): Uri? = media.platformHandle as? Uri
 
     /**
@@ -576,13 +705,89 @@ class AndroidMediaCodec private constructor(
     private fun normalizeType(hint: String): String =
         hint.substringBefore(';').trim().lowercase()
 
+    private fun sourceType(uri: Uri, name: String?, hint: String?): String {
+        val normalized = hint?.let(::normalizeType)
+        if (normalized != null && normalized !in setOf("application/octet-stream", "binary/octet-stream", "application/ogg")) {
+            return normalized
+        }
+        // Native probing below confirms these hints. The signature check also
+        // recognises unnamed TIFF/DNG sources whose decoder is unavailable.
+        val header = read(uri) { stream ->
+            val buffer = ByteArray(64)
+            var size = 0
+            while (size < buffer.size) {
+                val count = stream.read(buffer, size, buffer.size - size)
+                if (count <= 0) break
+                size += count
+            }
+            buffer.copyOf(size)
+        }
+        if (header != null) {
+            val type = when {
+                header.size >= 12 && header.copyOfRange(4, 8).contentEquals("ftyp".toByteArray()) &&
+                    (8..header.size - 4 step 4).any { index ->
+                        String(header, index, 4, Charsets.US_ASCII) in setOf("avif", "avis")
+                    } -> "image/avif"
+                header.size >= 4 && ((header[0] == 73.toByte() && header[1] == 73.toByte() && header[2] == 42.toByte() && header[3] == 0.toByte()) ||
+                    (header[0] == 77.toByte() && header[1] == 77.toByte() && header[2] == 0.toByte() && header[3] == 42.toByte())) ->
+                    if (name?.substringAfterLast('.')?.lowercase() == "dng") "image/x-adobe-dng" else "image/tiff"
+                else -> null
+            }
+            if (type != null) return type
+        }
+        return when (name?.substringAfterLast('.')?.lowercase()) {
+            "avif" -> "image/avif"
+            "dng" -> "image/x-adobe-dng"
+            "tif", "tiff" -> "image/tiff"
+            "gif" -> "image/gif"
+            "webp" -> "image/webp"
+            "apng", "png" -> "image/png"
+            "ogg", "oga", "opus" -> "audio/ogg"
+            "mkv" -> "video/x-matroska"
+            "webm" -> "video/webm"
+            else -> normalized ?: "application/octet-stream"
+        }
+    }
+
     private companion object {
+        val RAW_TYPES = setOf("image/x-adobe-dng", "image/dng")
         /** How long one dequeue waits before the loop tries the other side. */
         const val BUFFER_TIMEOUT_US = 10_000L
 
         /** How many buffer-less iterations end a decode that has stopped. */
         const val DECODE_STALL_LIMIT = 200
     }
+}
+
+/** Fold native Android PCM without allocating a second decoded buffer. */
+internal fun addAndroidPcm(buffer: ByteBuffer, encoding: Int, into: Waveform.Accumulator): Boolean {
+    val bytesPerSample = when (encoding) {
+        AudioFormat.ENCODING_PCM_8BIT -> 1
+        AudioFormat.ENCODING_PCM_16BIT -> 2
+        AudioFormat.ENCODING_PCM_24BIT_PACKED -> 3
+        AudioFormat.ENCODING_PCM_FLOAT, AudioFormat.ENCODING_PCM_32BIT -> 4
+        else -> return false
+    }
+    if (buffer.remaining() % bytesPerSample != 0) return false
+    while (buffer.hasRemaining()) {
+        val sample = when (encoding) {
+            AudioFormat.ENCODING_PCM_8BIT -> ((buffer.get().toInt() and 255) - 128) shl 8
+            AudioFormat.ENCODING_PCM_16BIT -> buffer.short.toInt()
+            AudioFormat.ENCODING_PCM_FLOAT -> {
+                val value = buffer.float
+                if (!value.isFinite()) return false
+                (value.coerceIn(-1f, 1f) * 32767f).toInt()
+            }
+            AudioFormat.ENCODING_PCM_24BIT_PACKED -> {
+                // Android PCM output uses native byte order (little endian).
+                buffer.get()
+                (buffer.get().toInt() and 255) or (buffer.get().toInt() shl 8)
+            }
+            else -> buffer.int shr 16
+        }
+        into.add(sample.toShort())
+    }
+    return true
 }
 
 /**

@@ -101,7 +101,7 @@ actual fun VaultPlayer(
             AccessibilityManager.FLAG_CONTENT_CONTROLS or AccessibilityManager.FLAG_CONTENT_ICONS,
         )
     }
-    val player = remember(source.objectId, source.plaintextSize) {
+    val player = remember(source.objectId, source.plaintextSize, source.offset, source.length) {
         val factory = ChurDataSource.Factory(source)
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(ProgressiveMediaSource.Factory(factory))
@@ -394,8 +394,12 @@ private class ChurDataSource(private val source: PlaybackSource) : DataSource {
                     DataSourceException.POSITION_OUT_OF_RANGE,
                 )
             }
+            if (source.offset < 0 || source.length < 0 || source.offset > info.plaintextSize ||
+                source.length > info.plaintextSize - source.offset) {
+                throw DataSourceException(DataSourceException.POSITION_OUT_OF_RANGE)
+            }
             position = dataSpec.position
-            val available = info.plaintextSize - position
+            val available = source.length - position
             if (available < 0) {
                 throw DataSourceException(DataSourceException.POSITION_OUT_OF_RANGE)
             }
@@ -409,6 +413,9 @@ private class ChurDataSource(private val source: PlaybackSource) : DataSource {
         } catch (failure: ChurFailure) {
             release()
             throw DataSourceException(java.io.IOException(failure), failure.status.value)
+        } catch (failure: Exception) {
+            release()
+            throw failure
         }
     }
 
@@ -417,7 +424,7 @@ private class ChurDataSource(private val source: PlaybackSource) : DataSource {
         if (remaining == 0L) return androidx.media3.common.C.RESULT_END_OF_INPUT
         val take = minOf(length.toLong(), remaining).toInt()
         val bytes = try {
-            vault.readLeased(reader, position, take)
+            vault.readLeased(reader, source.offset + position, take)
         } catch (failure: ChurFailure) {
             throw DataSourceException(java.io.IOException(failure), failure.status.value)
         }

@@ -47,6 +47,9 @@ class PlaybackSource(
     internal val kind: StreamKind = StreamKind.ORIGINAL,
     /** Starts the host's explicit library verification. Never retries failed media. */
     val onVerify: (() -> Unit)? = null,
+    /** A resource range in a compound original. Player offsets are relative to this range. */
+    val offset: Long = 0,
+    val length: Long = plaintextSize,
 ) {
     /** True when the type names something a player can open. */
     val playable: Boolean

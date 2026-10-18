@@ -44,6 +44,54 @@ final class DirectoryExportTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), [])
     }
 
+    func testLaterResourceFailureRollsBackAnEarlierPublishedClosedFile() throws {
+        let unrelated = root.appendingPathComponent("existing.txt")
+        try Data([9]).write(to: unrelated)
+        let grant = try session()
+        let directory = try XCTUnwrap(grant.directory)
+        let first = try XCTUnwrap(directory.createFile(displayName: "photo.jpg", plaintextSize: 1))
+        XCTAssertTrue(first.publishChecked())
+        first.close()
+        let second = try XCTUnwrap(directory.createFile(displayName: "movie.mov", plaintextSize: 1))
+        second.discard(); second.close()
+        first.discard(); first.close()
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), ["existing.txt"])
+        XCTAssertEqual(try Data(contentsOf: unrelated), Data([9]))
+        directory.close()
+    }
+
+    func testRollbackAfterCloseKeepsAReplacementAtThePublishedPath() throws {
+        let grant = try session()
+        let directory = try XCTUnwrap(grant.directory)
+        let file = try XCTUnwrap(directory.createFile(displayName: "photo.jpg", plaintextSize: 1))
+        XCTAssertTrue(file.publishChecked())
+        file.close()
+        let published = root.appendingPathComponent("photo.jpg")
+        // Keep the original inode allocated, so this is a distinct file identity.
+        try FileManager.default.moveItem(at: published, to: root.appendingPathComponent("moved.jpg"))
+        try Data([7, 8]).write(to: published)
+        file.discard(); file.close()
+        XCTAssertEqual(try Data(contentsOf: published), Data([7, 8]))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("moved.jpg").path))
+        directory.close()
+    }
+
+    func testRollbackAfterCloseRetainsScopeUntilItsCoordinatedCleanupFinishes() throws {
+        var stops = 0
+        let grant = try session { stops += 1 }
+        let directory = try XCTUnwrap(grant.directory)
+        let file = try XCTUnwrap(directory.createFile(displayName: "photo.jpg", plaintextSize: 1))
+        XCTAssertTrue(file.publishChecked())
+        file.close()
+        directory.close()
+        XCTAssertEqual(stops, 0)
+        file.discard()
+        XCTAssertEqual(stops, 1)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), [])
+        file.discard(); file.close(); grant.close()
+        XCTAssertEqual(stops, 1)
+    }
+
     func testSessionCancellationKeepsScopeUntilNativeWriterClosesItsLease() throws {
         var stops = 0
         let grant = try session { stops += 1 }

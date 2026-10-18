@@ -854,8 +854,14 @@ pub fn accept_content_operation(
 ) -> Result<ApplyOutcome> {
     let operation = Operation::decode(record)?;
     let payload = OperationPayload::open_for_operation(&operation, keys)?;
+    let creates_new_album = match payload.body() {
+        PayloadBody::CreateAlbum { album_id, .. } => state.album_name(album_id).is_none(),
+        _ => false,
+    };
     let mut projected_state = None;
     let purges = std::cell::RefCell::new(Vec::new());
+    let album_projection = std::cell::RefCell::new(None);
+    let resolved_memberships = std::cell::Cell::new(false);
     let outcome = log.accept_gated_with(
         db,
         &operation,
@@ -878,10 +884,29 @@ pub fn accept_content_operation(
                     .borrow_mut()
                     .extend(candidate.retry_deferred_after(&payload));
             }
+            resolved_memberships
+                .set(candidate.pending_operations(None) < state.pending_operations(None));
+            if resolved_memberships.get()
+                || matches!(
+                    payload.body(),
+                    PayloadBody::CreateAlbum { .. }
+                        | PayloadBody::RenameAlbum { .. }
+                        | PayloadBody::AddAlbumMembership { .. }
+                        | PayloadBody::RemoveAlbumMembership { .. }
+                )
+            {
+                *album_projection.borrow_mut() = Some(candidate.clone());
+            }
             projected_state = Some(candidate);
             Ok(true)
         },
         |tx| {
+            if let Some(state) = album_projection.borrow().as_ref() {
+                project_album_operation(tx, state, &payload, creates_new_album)?;
+                if resolved_memberships.get() {
+                    crate::own_sync::project_live_album_memberships(tx, state)?;
+                }
+            }
             for purge in purges.borrow().iter() {
                 crate::deletion::project_purge(tx, purge)?;
             }
@@ -889,6 +914,11 @@ pub fn accept_content_operation(
         },
     )?;
     if outcome == ApplyOutcome::Applied {
+        if let PayloadBody::CreateObject { object_id, .. }
+        | PayloadBody::CommitObject { object_id, .. } = payload.body()
+        {
+            crate::own_sync::mark_album_object_ready(db, object_id);
+        }
         *state = projected_state.ok_or_else(|| {
             Error::new(
                 ChurStatus::InternalFailure,
@@ -897,6 +927,60 @@ pub fn accept_content_operation(
         })?;
     }
     Ok(outcome)
+}
+
+fn project_album_operation(
+    tx: &rusqlite::Transaction<'_>,
+    state: &MaterializedState,
+    payload: &OperationPayload,
+    creates_new_album: bool,
+) -> Result<()> {
+    match payload.body() {
+        PayloadBody::CreateAlbum { album_id, .. } if creates_new_album => {
+            if let Some(name) = state.album_name(album_id) {
+                let (present, total): (bool, i64) = tx.query_row(
+                    "SELECT EXISTS (SELECT 1 FROM albums WHERE album_id = ?1), (SELECT count(*) FROM albums)",
+                    [album_id.as_bytes().as_slice()], |row| Ok((row.get(0)?, row.get(1)?)))
+                    .map_err(|error| map_sqlite(error, "received album bound could not be read"))?;
+                ensure!(
+                    present
+                        || from_sqlite_integer(total, "received album count is negative")?
+                            < chur_core::limits::catalog::ALBUMS_MAX,
+                    ResourceLimitExceeded,
+                    "received album exceeds the catalog bound"
+                );
+                tx.execute("INSERT INTO albums (album_id, name, created_ms, revision, parent_album_id, sort_position)
+                    VALUES (?1, ?2, 0, 1, NULL,
+                        (SELECT coalesce(max(sort_position) + 1, 0) FROM albums WHERE parent_album_id IS NULL))
+                    ON CONFLICT(album_id) DO UPDATE SET name = excluded.name",
+                    rusqlite::params![album_id.as_bytes().as_slice(), name])
+                    .map_err(|error| map_sqlite(error, "received album could not be projected"))?;
+            }
+        }
+        PayloadBody::RenameAlbum { album_id, .. } | PayloadBody::CreateAlbum { album_id, .. } => {
+            if let Some(name) = state.album_name(album_id) {
+                // Deletion remains a local v7 operation. A later rename must
+                // not recreate a locally removed album or its subtree.
+                tx.execute(
+                    "UPDATE albums SET name = ?2, revision = revision + 1
+                    WHERE album_id = ?1 AND name != ?2",
+                    rusqlite::params![album_id.as_bytes().as_slice(), name],
+                )
+                .map_err(|error| map_sqlite(error, "received album name could not be projected"))?;
+            }
+        }
+        PayloadBody::AddAlbumMembership {
+            album_id,
+            object_id,
+        }
+        | PayloadBody::RemoveAlbumMembership {
+            album_id,
+            object_id,
+            ..
+        } => crate::own_sync::project_album_member(tx, state, album_id, object_id)?,
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Authenticates, decrypts, and atomically commits one membership operation.

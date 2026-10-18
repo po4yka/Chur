@@ -86,7 +86,7 @@ Rust validates ranges and serializes/encrypts the canonical representation. Raw 
 
 A reported source length remains a hint: extra bytes are read and the authenticated final commit records the actual length. A stream that ends before its reported length is refused as `IO_FAILURE` and its unfinished transaction is abandoned. This prevents a cancelled or failed incoming producer from activating a truncated prefix. Unknown-length sources remain supported. Cancellation is checked after source reads, before commit, and during final verification.
 
-Capture time comes from the provider when it publishes one; on Android that is the `DATE_TAKEN` column of the photo picker and the media store. The iOS photo picker publishes none, because the asset's date needs photo library access, which import does not ask for ([`../IOS.md`](../IOS.md) §15.1). When the provider publishes none, the platform reads the file, on both platforms: a photo's EXIF `DateTimeOriginal` with its `OffsetTimeOriginal`, and a video container's creation date, which names an instant and needs no time zone. An EXIF time with no offset is read in the device's time zone at import. A time that does not parse, or that falls before 1970, is absent, and the catalog substitutes the import time under [`CATALOG_SCHEMA_V1.md`](../format/CATALOG_SCHEMA_V1.md) §8.1.
+Capture time comes from the provider when it publishes one; on Android that is the `DATE_TAKEN` column of the photo picker and the media store. Ordinary iOS photo import does not request Photos access for the asset's date ([`../IOS.md`](../IOS.md) §15.1). The separate **Full Live Photos** action requests Photos access and can use the selected asset's creation date. When the provider publishes no date, the platform reads the file, on both platforms: a photo's EXIF `DateTimeOriginal` with its `OffsetTimeOriginal`, and a video container's creation date, which names an instant and needs no time zone. An EXIF time with no offset is read in the device's time zone at import. A time that does not parse, or that falls before 1970, is absent, and the catalog substitutes the import time under [`CATALOG_SCHEMA_V1.md`](../format/CATALOG_SCHEMA_V1.md) §8.1.
 
 ## 5. Originals
 
@@ -174,13 +174,23 @@ Audio keeps canonical source dimensions of zero. After its waveform, import atte
 
 ## 7. Compound media
 
-Live Photos, spatial media, RAW+JPEG pairs, sidecar metadata, and similar items are represented as one logical object with multiple immutable streams/relationships when supported. Missing parts produce an explicit incomplete/unsupported state, not silent flattening.
+Full Live Photos use one immutable Original with MIME `application/vnd.chur.live-photo` and extension `.churlive`. The format is defined in [`LIVE_PHOTO_BUNDLE_V1.md`](../format/LIVE_PHOTO_BUNDLE_V1.md). It stores every Photos resource in order, including original and edited photo/movie resources, adjustments, and unknown positive resource roles. Each resource retains its exact bytes, name, UTI, MIME, length, and SHA-256. Audio stays inside its paired movie. This does not add a stream kind, catalog schema, or sync protocol.
+
+The iOS **Full Live Photos** action is opt-in. It needs Photos access to enumerate all resources of the selected `PHAsset`; a provider's display-only `PHLivePhoto` is not a complete capture. Capture writes bounded sequential data to protected, backup-excluded scratch and removes incomplete output. Denied access, a resource failure, a changed inventory, a limit, cancellation, or lock fails the full import. It must not save only the still image. Rust validates the full table, exact package length, and all resource hashes before the final commit and catalog activation.
+
+The package requires one nonempty original photo and one nonempty original paired video. Display uses the full-size photo/movie pair when both occur exactly once; otherwise it uses the original pair. Display selection does not remove other resources. Spatial media, separate RAW+JPEG pairs, sidecar metadata, and other compound formats need their own complete representation when supported. Missing parts produce an explicit incomplete or unsupported result.
 
 ## 8. Image display
 
 Timeline uses encrypted thumbnail/preview assets. Full-resolution original is decrypted only for detailed viewing/export. Decoder buffers are session-scoped; disk plaintext cache is prohibited.
 
 Import makes no screen preview for a photograph whose long edge is at or below the 2048 px target of §12, so the viewer shows its original. A platform image decoder needs the whole encoded file in memory, so the viewer reads such an original, only when its long edge is 2048 px or less and its size is 32 MiB or less, with `read_at` into one caller-owned native buffer of that size ([`FFI_CONTRACT.md`](FFI_CONTRACT.md) §7). The decoder reads that buffer in place, and the viewer clears it after the decode. The original never becomes a Kotlin `ByteArray` or a Swift `Data` ([`FFI_CONTRACT.md`](FFI_CONTRACT.md) §6). The viewer never reads the original of a quarantined object.
+
+The settled viewer page can animate native GIF and WebP on Android, and GIF, WebP, and APNG on iOS when the native decoder exposes multiple frames. Animation uses no plaintext file or whole-file managed array. Its encoded source is at most 32 MiB, its source canvas is at most 2048 px per edge, and its rendered long edge is at most 1024 px. The decoder closes before the native source buffer is cleared. Reduced motion starts animation paused. Unsupported or larger animations keep the still preview; the original remains exportable.
+
+A zoom can read an original of at most 32 MiB and decode at most a 4096 px long edge. This gives more detail without caching an unbounded full-resolution bitmap. Quarantined objects never use this path.
+
+For a Live Photo, preview generation and original-image display read only the selected photo resource range. The image bounds apply to that resource, not to a whole-package decode. A `.churlive` package is never passed to an image decoder as JPEG.
 
 ## 9. Video/audio playback
 
@@ -195,9 +205,15 @@ Player asks for plaintext ranges. Rust:
 
 Seek latency and buffer sizes are benchmarked under performance budgets.
 
+Live Photo playback exposes only the selected paired-movie byte range to the player. Offsets and EOF are relative to that resource. The original movie retains its audio tracks; the player must not read another resource or the package header as movie data.
+
 ## 10. Export/transcode/edit
 
 Export may return original, selected derivative, or explicit transcoded output. UI states which. Any plaintext scratch follows `PLAINTEXT_LIFECYCLE.md`.
+
+Generic original export, backup, selective copy, and sync preserve the complete Live Photo package bytes. Files restoration checks every resource hash before it creates output, then writes every resource and the complete portable `.churlive` bundle. Safe output names may differ from recorded names; the bundle retains the original metadata. Cancellation, lock, or a later output failure rolls back all files created by that restoration, including earlier published resources, without removing unrelated files.
+
+iOS Photos restoration checks that Photos supports the complete role combination and submits every resource in one asset-creation request with its recorded role, name, and UTI. An unsupported combination or rejected request fails explicitly; it must not omit resources to save a partial asset. Android supports the portable package, exact resource export, and paired movie/audio playback. It does not create an Apple Photos database asset.
 
 Editing is future scope. A non-destructive edit should store encrypted edit instructions/derived revision rather than mutate original container.
 
@@ -217,7 +233,7 @@ Pixel-identical cross-platform thumbnails may be impractical; cryptographic bind
 ## 12. Limits
 
 - still image at most 16384 px in either dimension and at most 67108864 px in total; a source above either bound is rejected before decode;
-- video at most 7680 by 4320 px per track, at most 8 tracks;
+- video long edge at most 7680 px and short edge at most 4320 px per track, in either orientation, at most 8 tracks;
 - video or audio duration at most 14400000 ms (4 hours);
 - metadata revision at most 128 fields, each field value at most 8192 bytes, whole revision at most 65536 bytes;
 - derivative long-edge targets: small thumbnail 320 px, grid preview 640 px, screen preview 2048 px, video poster frame 2048 px. The audio waveform has no long edge, because §6.1 makes it a data record rather than a picture; it is bounded instead at 4096 buckets and 4104 bytes for the whole record;
@@ -241,7 +257,11 @@ storage full
 cryptographic/container corruption
 ```
 
-A codec failure must not commit a catalog entry claiming required derivatives exist; policy may permit original-only import with explicit status.
+A codec failure must not commit a catalog entry claiming required derivatives exist. If a media probe has no decoder, import preserves the original as an opaque file and reports that the device cannot preview or play it. A required thumbnail, poster, or waveform failure reports an incomplete preview. Missing optional audio artwork is not an error. Explicit file import keeps its existing opaque behavior.
+
+The iOS audio picker uses a coordinated security-scoped URL and descriptor until import closes the source. It does not copy the file to plaintext scratch. System type detection replaces an extension allowlist; a detected container still requires a platform decoder for playback. Playback errors must be visible.
+
+A regular Photos selection may contain a Live Photo, a RAW/JPEG pair, or edited resources. If that path keeps one selected representation, it warns the user to retain the Photos original. The separate **Full Live Photos** path preserves all resources under §7 and fails if full capture is unavailable. Complete capture does not authorize source deletion. Source deletion is offered only for an eligible loaded index. The native deletion callback checks current asset resources and their type again; a Live Photo, other compound asset, edited asset, unknown type, or mismatched asset is never deleted.
 
 ## 14. Tests
 
@@ -251,6 +271,8 @@ A codec failure must not commit a catalog entry claiming required derivatives ex
 - cloud-backed unknown-length sources;
 - malformed metadata and extreme dimensions/duration;
 - compound asset partial failure;
+- shared Live Photo format vectors, malformed tables/hashes, and exact package/resource import, export, and backup round trips;
+- native matched Live Photo photo/movie capture and Photos restoration with audio; real captured, edited, HDR, and cloud-backed assets remain separate acceptance cases;
 - cancellation/lock at every stage;
 - storage full and process death;
 - derivative revision invalidation;

@@ -467,6 +467,8 @@ internal object ChurJni {
         member: Boolean,
     ): Int
 
+    external fun albumRemoveObjects(session: Long, albumId: ByteArray, objectIds: ByteArray): Int
+
     external fun albumPlaceObjects(
         session: Long,
         targetId: ByteArray,

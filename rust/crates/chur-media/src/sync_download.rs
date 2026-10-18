@@ -493,7 +493,18 @@ pub fn activate_shared(session: &mut Session, object: &SharedObject, now_ms: u64
                 duration_ms: properties.duration_ms(),
             },
         },
-    )
+    )?;
+    if chur_catalog::own_sync::is_local_collection(session.catalog_ref()?, &object.collection_id)? {
+        let root = session.root_secret()?.duplicate();
+        let vault = session.vault_id();
+        chur_catalog::own_sync::project_received_album_memberships(
+            session.catalog()?,
+            &root,
+            vault,
+            &object.object_id,
+        )?;
+    }
+    Ok(())
 }
 
 fn verify_committed(

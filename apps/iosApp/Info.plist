@@ -35,7 +35,7 @@
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save selected vault media to your photo library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Delete originals you imported into the vault, when you ask to.</string>
+	<string>Import complete Live Photo resources and review deletion of imported originals only when you choose.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -65,6 +65,30 @@
 		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>dev.po4yka.chur.live-photo</string>
+			<key>UTTypeDescription</key>
+			<string>Chur Live Photo bundle</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>churlive</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/vnd.chur.live-photo</string>
+				</array>
+			</dict>
+		</dict>
 	</array>
 </dict>
 </plist>
