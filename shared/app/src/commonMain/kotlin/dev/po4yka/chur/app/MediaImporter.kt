@@ -91,6 +91,7 @@ class MediaImporter(
         repository: VaultRepository,
         source: PickedMedia?,
         expectedGeneration: Long? = null,
+        requestedObjectId: ByteArray? = null,
         onProgress: (OperationProgress) -> Unit = {},
         cancelRequested: () -> Boolean = { false },
     ): Outcome {
@@ -159,6 +160,7 @@ class MediaImporter(
                             knownLength = media.knownLength,
                             captureTimeMs = media.captureTimeMs,
                             originalFilename = media.originalFilename,
+                            requestedObjectId = requestedObjectId,
                         ),
                 )
             val terminal = try {

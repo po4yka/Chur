@@ -502,6 +502,7 @@ mod reader_teardown_tests {
             let object = import::import_bytes(
                 &mut native,
                 SourceCapability {
+                    requested_object_id: None,
                     seekable: true,
                     known_length: Some(4096),
                     content_type_hint: "application/octet-stream".into(),

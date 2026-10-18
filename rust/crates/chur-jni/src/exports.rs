@@ -18,7 +18,7 @@
 )]
 use chur_ffi::api::Status;
 use chur_ffi::records::{
-    ChurContentInfoV1, ChurCreateRequestV1, ChurImportRequestV1, ChurObjectRefV1, ChurProgressV1,
+    ChurContentInfoV1, ChurCreateRequestV1, ChurImportRequestV2, ChurObjectRefV1, ChurProgressV1,
     ChurQueryV1, ChurRuntimeConfigV1, ChurScanRequestV1, ChurUnlockRequestV1,
 };
 use chur_ffi::sync::ChurSyncReportV1;
@@ -1190,6 +1190,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_importBegin<'local>(
     capture_time_ms: jlong,
     content_type: JString<'local>,
     original_filename: JString<'local>,
+    requested_object_id: JByteArray<'local>,
     out_import: JLongArray<'local>,
 ) -> jint {
     crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
@@ -1197,6 +1198,14 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_importBegin<'local>(
             return INVALID_INPUT;
         };
         let filename = string_bytes(env, &original_filename);
+        let requested_id = if requested_object_id.is_null() {
+            None
+        } else {
+            let Some(id) = fixed_array(env, &requested_object_id, ID_LEN) else {
+                return INVALID_INPUT;
+            };
+            Some(id)
+        };
         let (Ok(media_class), Ok(width), Ok(height)) = (
             u8::try_from(media_class),
             u32::try_from(width),
@@ -1206,7 +1215,10 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_importBegin<'local>(
         };
         // A negative value is the JVM's way of saying absent, because a Kotlin
         // `Long?` would box on every call.
-        let request = ChurImportRequestV1 {
+        let request = ChurImportRequestV2 {
+            requested_object_id: requested_id
+                .as_ref()
+                .map_or(core::ptr::null(), |id| id.as_ptr()),
             seekable: u8::from(seekable),
             known_length_present: u8::from(known_length >= 0),
             media_class,
@@ -2048,6 +2060,7 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumCreate<'local>(
     _class: JClass<'local>,
     session: jlong,
     name: JString<'local>,
+    requested_id: JByteArray<'local>,
     out_album_id: JByteArray<'local>,
 ) -> jint {
     crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
@@ -2057,6 +2070,14 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumCreate<'local>(
         let Ok(length) = u32::try_from(bytes.len()) else {
             return INVALID_INPUT;
         };
+        let requested = if requested_id.is_null() {
+            None
+        } else {
+            let Some(id) = fixed_array(env, &requested_id, ID_LEN) else {
+                return INVALID_INPUT;
+            };
+            Some(id)
+        };
         let mut album = [0u8; ID_LEN];
         // SAFETY: `bytes` and `album` are live locals.
         let status = unsafe {
@@ -2064,6 +2085,9 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_albumCreate<'local>(
                 handle_of(session),
                 bytes.as_ptr(),
                 length,
+                requested
+                    .as_ref()
+                    .map_or(core::ptr::null(), |id| id.as_ptr()),
                 album.as_mut_ptr(),
             )
         };

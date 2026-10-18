@@ -72,6 +72,7 @@ fn identity_provisioning_is_private_atomic_and_idempotent() {
     let shared_object_id = import_bytes(
         &mut direct,
         SourceCapability {
+            requested_object_id: None,
             seekable: true,
             known_length: Some(plaintext.len() as u64),
             content_type_hint: "image/jpeg".to_owned(),

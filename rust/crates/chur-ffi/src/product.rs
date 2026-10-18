@@ -854,8 +854,8 @@ pub unsafe extern "C" fn chur_object_metadata(
 ///
 /// # Safety
 ///
-/// `name` covers `name_length` bytes and `out_album_id` points to 16 writable
-/// bytes.
+/// `name` covers `name_length` bytes, a non-null `requested_album_id` covers
+/// 16 readable bytes, and `out_album_id` points to 16 writable bytes.
 #[unsafe(no_mangle)]
 #[expect(
     unsafe_code,
@@ -865,6 +865,7 @@ pub unsafe extern "C" fn chur_album_create(
     session: Handle,
     name: *const u8,
     name_length: u32,
+    requested_album_id: *const u8,
     out_album_id: *mut u8,
 ) -> Status {
     guard_status_for(session, || {
@@ -873,17 +874,33 @@ pub unsafe extern "C" fn chur_album_create(
         let text = unsafe { crate::api::borrow_bytes(name, name_length)? };
         let text = core::str::from_utf8(text)
             .map_err(|_| Error::new(ChurStatus::InvalidInput, "the album name is not UTF-8"))?;
-        let album_id = chur_crypto::random::id()?;
+        let album_id = if requested_album_id.is_null() {
+            chur_crypto::random::id()?
+        } else {
+            // SAFETY: a non-null requested identity covers 16 readable bytes for this call.
+            Id::from_slice(unsafe { crate::api::borrow_bytes(requested_album_id, 16)? })?
+        };
         let album = Album {
             album_id,
             name: text.to_owned(),
             created_ms: crate::api::now_ms(),
             revision: 1,
         };
-        with_album_mutation(
-            &entry,
-            chur_catalog::own_sync::AlbumMutation::Create(&album),
-        )?;
+        with_session_mut(&entry, |session| {
+            if let Some(existing) = store::album_name(session.catalog_ref()?, &album_id)? {
+                ensure!(
+                    existing == album.name,
+                    InvalidInput,
+                    "the requested album identity has different metadata"
+                );
+                return Ok(());
+            }
+            mutate_album_session(
+                session,
+                chur_catalog::own_sync::AlbumMutation::Create(&album),
+            )?;
+            Ok(())
+        })?;
         // SAFETY: the caller guarantees 16 writable bytes.
         unsafe { crate::api::write_id(out_album_id, &album_id) }
     })
@@ -1604,15 +1621,20 @@ fn with_album_mutation(
     entry: &std::sync::Arc<Entry>,
     mutation: chur_catalog::own_sync::AlbumMutation<'_>,
 ) -> Result<Option<Id>> {
-    with_session_mut(entry, |session| {
-        chur_media::keys::ensure_default_collection(session)?;
-        let root = session.root_secret()?.duplicate();
-        let vault = session.vault_id();
-        if chur_catalog::sync_membership::load(session.catalog_ref()?)?.is_none() {
-            chur_catalog::sync_receive::provision_local_identity(session.catalog()?, &root, vault)?;
-        }
-        chur_catalog::own_sync::mutate_album(session.catalog()?, &root, vault, mutation)
-    })
+    with_session_mut(entry, |session| mutate_album_session(session, mutation))
+}
+
+fn mutate_album_session(
+    session: &mut Session,
+    mutation: chur_catalog::own_sync::AlbumMutation<'_>,
+) -> Result<Option<Id>> {
+    chur_media::keys::ensure_default_collection(session)?;
+    let root = session.root_secret()?.duplicate();
+    let vault = session.vault_id();
+    if chur_catalog::sync_membership::load(session.catalog_ref()?)?.is_none() {
+        chur_catalog::sync_receive::provision_local_identity(session.catalog()?, &root, vault)?;
+    }
+    chur_catalog::own_sync::mutate_album(session.catalog()?, &root, vault, mutation)
 }
 
 fn with_catalog_mut<T>(

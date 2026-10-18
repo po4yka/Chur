@@ -40,6 +40,7 @@ fn production_local_identity_backs_up_and_restores_without_replacing_the_live_si
     let object_id = import::import_bytes(
         &mut session,
         SourceCapability {
+            requested_object_id: None,
             seekable: true,
             known_length: Some(plaintext.len() as u64),
             content_type_hint: "image/jpeg".into(),

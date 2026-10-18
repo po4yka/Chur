@@ -288,6 +288,7 @@ internal object ChurJni {
         captureTimeMs: Long,
         contentType: String,
         originalFilename: String?,
+        requestedObjectId: ByteArray?,
         outImport: LongArray,
     ): Int
 
@@ -452,6 +453,7 @@ internal object ChurJni {
     external fun albumCreate(
         session: Long,
         name: String,
+        requestedId: ByteArray?,
         outAlbumId: ByteArray,
     ): Int
 

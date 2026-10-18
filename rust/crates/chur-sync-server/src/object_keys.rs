@@ -1142,6 +1142,7 @@ mod tests {
         let running = import::begin(
             &mut source,
             import::SourceCapability {
+                requested_object_id: None,
                 seekable: true,
                 known_length: Some(photo.len() as u64),
                 content_type_hint: "image/jpeg".into(),
@@ -1716,6 +1717,7 @@ mod tests {
         let running = import::begin(
             &mut source,
             import::SourceCapability {
+                requested_object_id: None,
                 seekable: true,
                 known_length: Some(photo.len() as u64),
                 content_type_hint: "image/jpeg".into(),

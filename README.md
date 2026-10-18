@@ -228,7 +228,7 @@ The checked-in version catalog, wrapper, and Cargo manifests are the version sou
 | Android host | API 29 minimum, API 37 compile/target, pinned NDK |
 | iOS host | UIKit, Compose framework, embedded Share Extension, iOS 18.0 minimum |
 | Build | Gradle 9.8.1, AGP 9.4.1, JDK 21, pinned Rust toolchain, Xcode 27 for local host builds |
-| Native boundary | hand-written C ABI 2.25, JNI on Android, cinterop and Swift C calls on iOS |
+| Native boundary | hand-written C ABI 3.0, JNI on Android, cinterop and Swift C calls on iOS |
 | Cryptography | XChaCha20-Poly1305, Argon2id, HKDF-SHA-256, HPKE, Ed25519 |
 
 Room, DataStore, Koin, Coil, Navigation 3, Kermit, and generated UniFFI bindings are not part of the current dependency graph. Do not infer a dependency from an illustrative interface in a design document.
@@ -984,7 +984,28 @@ python3 scripts/chur-device.py --port PORT batch tag-add --target TAG_ID --scope
 python3 scripts/chur-device.py --port PORT batch tag-add --target TAG_ID --scope search --terms "beach" --apply
 ```
 
-The command also supports tags, favorites, search, pagination, and album removal; see `--help`. `album-delete ALBUM_ID --yes` removes that album and its child albums and memberships but retains every media object. Import with `--album` adds each committed object to the album; if that second step fails, the result includes the imported object ID and `album_error`. A batch command first lists the complete selection and changes nothing until `--apply` is supplied. It limits selections to 1,000 objects by default (`--max-objects` changes the limit) and reports each object's result; partial failures return exit code 1. It connects through `adb forward` and removes that forwarding when the command ends. Imports use a seekable, temporary descriptor backed by the computer file and do not copy a plaintext source file into Android storage. The CLI reports source bytes requested by the device during import; they may exceed file size if the codec rereads ranges. Export streams the original with byte progress, verifies its size and SHA-256 against the device, and creates a new local file only after verification. The channel works only with the vault currently open on the phone, stops when the app leaves the foreground, and expires after 10 minutes without a command. The dialog shows whether a computer is connected. Command output can contain private object identifiers and album or tag names.
+Directories are imported recursively as album trees, including empty directories. The root directory becomes a child album of `--album` when supplied. Symlinks and overlapping source selections are refused before changes. Sources remain on the computer. A private, durable checkpoint stores the selected vault, source SHA-256 hashes, and random object/album identities before requests. Repeating the same import resumes that selection and resolves a lost commit response without creating duplicate objects or albums. Use `--transfer-state` to select the checkpoint; the default is under `~/.local/state/chur-device/`. Keep this file private: it contains local paths and vault identifiers, but no pairing code. Source changes require a new transfer; changes detected during streaming are reported as an uncertain result with the object ID for inspection.
+
+```sh
+python3 scripts/chur-device.py --port PORT import ./Trip --transfer-state ./trip-transfer.json
+python3 scripts/chur-device.py --port PORT export-album ALBUM_ID ./trip-export
+python3 scripts/chur-device.py --port PORT list --all --details
+python3 scripts/chur-device.py --port PORT trash OBJECT_ID
+python3 scripts/chur-device.py --port PORT list --scope trash --all
+python3 scripts/chur-device.py --port PORT restore OBJECT_ID
+python3 scripts/chur-device.py --port PORT delete OBJECT_ID --yes
+python3 scripts/chur-device.py --port PORT tag-rename TAG_ID "New tag"
+python3 scripts/chur-device.py --port PORT tag-delete TAG_ID --yes
+python3 scripts/chur-device.py --port PORT note-import ./note.txt --title "Travel notes"
+python3 scripts/chur-device.py --port PORT notes --terms "travel"
+python3 scripts/chur-device.py --port PORT note-export NOTE_ID ./note-copy.txt
+```
+
+`export-album` creates a new destination containing the album subtree and its authenticated originals, retaining empty albums. Untrusted names are made safe and suffixed with stable IDs to avoid collisions; ordinary filename extensions are retained. Existing files and directories are not overwritten. The command also supports favorites, full album organization, recoverable trash, explicit permanent deletion, quarantine listing and damaged-file removal, tag management, and revision-checked private-note editing, pinning, trash, restoration and deletion; see `--help`. Notes transfer bounded UTF-8 body chunks rather than one oversized JSON frame. Album/tag lists and detail tags use pages bounded by actual encoded size; changed snapshots return `CURSOR_STALE` instead of silently skipping rows.
+
+`album-delete ALBUM_ID --yes` removes that album and its children and memberships but retains media objects. Import with `--album` adds each committed object to the album; a membership failure retains its imported ID and reports `album_error`. Batch actions show the complete selection and require `--apply`; permanent batch deletion additionally requires `--yes`. Selections are limited to 1,000 objects by default (`--max-objects` changes the limit). Per-object failures and incomplete `list --details` return exit code 1.
+
+The CLI connects through `adb forward` and removes its forwarding on exit. Imports expose seekable temporary descriptors backed by computer files without staging a plaintext source on Android; reported source bytes can exceed file size when codecs reread ranges. Export verifies size and SHA-256 before publishing a new local file. The protocol is version 2 and requires the matching current app and script; old version-1 clients are rejected. The channel works only with the open identity, closes on background/lock/Stop, and expires after ten minutes of inactivity. Handshakes and frames have absolute deadlines, and queued work belongs to the session that accepted it. Output can contain private names, paths and IDs.
 
 ---
 

@@ -963,6 +963,9 @@ class ChurController(
         // Mask synchronously, before the native lock waits for an in-flight call.
         privacy.setEnabled(true)
         lockEpoch += 1
+        // End private sync projections before the public route becomes visible.
+        sessionSync.cancelChildren()
+        sync?.endSession()
         setRoute(if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell)
         lock(LockReason.PANIC)
     }
@@ -2606,13 +2609,13 @@ class ChurController(
      * work. It is a pick of one, so its card reads in the `DESIGN.md` §15.2
      * phases, as [importAll] does, and not in bytes.
      */
-    suspend fun importMedia(importer: MediaImporter, open: () -> PickedMedia?): MediaImporter.Outcome? {
+    suspend fun importMedia(importer: MediaImporter, requestedObjectId: ByteArray? = null, open: () -> PickedMedia?): MediaImporter.Outcome? {
         val generation = (repository.state.value as? VaultState.Unlocked)?.generation ?: return null
         return tracked("import") { token ->
             _activeOperation.update { current ->
                 current?.takeIf { it.id == token }?.copy(item = 1, items = 1) ?: current
             }
-            importItem(importer, token, generation) { open() }
+            importItem(importer, token, generation, requestedObjectId) { open() }
         }
     }
 
@@ -2720,6 +2723,7 @@ class ChurController(
         importer: MediaImporter,
         token: Long,
         generation: Long,
+        requestedObjectId: ByteArray? = null,
         open: suspend () -> PickedMedia?,
     ): MediaImporter.Outcome = try {
         withContext(Dispatchers.Default) {
@@ -2727,6 +2731,7 @@ class ChurController(
                 repository = repository,
                 source = open(),
                 expectedGeneration = generation,
+                requestedObjectId = requestedObjectId,
                 onProgress = { updateOperation(token, it, keepCancellableOnSuccess = true) },
                 cancelRequested = { cancellationRequested(token) },
             )
