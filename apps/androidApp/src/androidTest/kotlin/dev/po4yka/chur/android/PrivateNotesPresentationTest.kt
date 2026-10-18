@@ -11,6 +11,7 @@ import android.view.ViewGroup
 import android.view.inspector.WindowInspector
 import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
+import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
@@ -32,6 +33,7 @@ import dev.po4yka.chur.app.PrivateNoteEditorState
 import dev.po4yka.chur.app.PrivateNotesActions
 import dev.po4yka.chur.app.PrivateNotesUiState
 import dev.po4yka.chur.app.theme.ChurTheme
+import dev.po4yka.chur.app.vault.LocalPrivatePanic
 import dev.po4yka.chur.app.vault.PrivateNotesScreen
 import dev.po4yka.chur.ffi.PrivateNote
 import dev.po4yka.chur.ffi.PrivateNoteSummary
@@ -93,6 +95,41 @@ class PrivateNotesPresentationTest {
         f.capture("private-notes-dirty-back-public.png", dialog = true)
         f.click("Keep editing")
         assertEquals("<script>literal public draft</script>", f.state.value.editor!!.body)
+    }
+
+    @Test
+    fun undo_then_replace_all_in_one_ui_turn_uses_the_latest_source() = present { f ->
+        f.main { f.state.value = f.state.value.copy(editor = PrivateNoteEditorState(f.note, body = "cat")) }
+        assertTrue(f.await { f.tag("private-note-body")?.config?.getOrNull(SemanticsProperties.EditableText)?.text == "cat" })
+        f.setText("private-note-body", "cat dog")
+        f.click("Find")
+        assertTrue(f.await { f.tag("private-note-find") != null && f.tag("private-note-replace") != null })
+        f.setText("private-note-find", "cat")
+        f.setText("private-note-replace", "fox")
+        assertTrue(f.await {
+            f.tag("private-note-find")?.config?.getOrNull(SemanticsProperties.EditableText)?.text == "cat" &&
+                f.tag("private-note-replace")?.config?.getOrNull(SemanticsProperties.EditableText)?.text == "fox"
+        })
+        // Both real callbacks come from the same composition: no frame or
+        // recomposition is allowed between Undo and Replace all.
+        f.clickInSameTurn("Undo", "Replace all")
+        assertEquals("fox", f.state.value.editor!!.body)
+        assertTrue(f.await { f.tag("private-note-body")?.config?.getOrNull(SemanticsProperties.EditableText)?.text == "fox" })
+    }
+
+    @Test
+    fun private_markdown_format_menu_hides_the_source_and_popup_with_one_action() = present(editor = true) { f ->
+        val source = "# Fictional menu source"
+        f.main { f.state.value = f.state.value.copy(editor = PrivateNoteEditorState(f.note.copy(body = source,
+            format = dev.po4yka.chur.ffi.PrivateNoteFormat.MARKDOWN))) }
+        assertTrue(f.await { f.tag("private-note-body")?.config?.getOrNull(SemanticsProperties.EditableText)?.text == source })
+        f.click("Format")
+        assertTrue(f.await { f.button("Bold") != null && f.button("Lock and hide") != null })
+        f.click("Lock and hide")
+        assertTrue(f.await { f.text("Public screen") != null && f.button("Bold") == null &&
+            f.button("Lock and hide") == null && f.tag("private-note-body") == null })
+        assertEquals(1, f.hideCalls)
+        assertEquals(null, f.state.value.editor)
     }
 
     @Test
@@ -159,7 +196,13 @@ class PrivateNotesPresentationTest {
                     setLayerType(View.LAYER_TYPE_SOFTWARE, null)
                     setContent {
                         CompositionLocalProvider(LocalDensity provides Density(density, fontScale), LocalConfiguration provides configuration) {
-                            ChurTheme(dark = false) { PrivateNotesScreen(f.state.value, f.actions, onLock = {}, onPanic = {}) }
+                            ChurTheme(dark = false) {
+                                if (f.hidden.value) Text("Public screen") else {
+                                    CompositionLocalProvider(LocalPrivatePanic provides f::panic) {
+                                        PrivateNotesScreen(f.state.value, f.actions, onLock = f::panic, onPanic = f::panic)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -172,6 +215,13 @@ class PrivateNotesPresentationTest {
     }
 
     private inner class Fixture(val activity: MainActivity, editor: Boolean) {
+        val hidden = mutableStateOf(false)
+        var hideCalls = 0
+        fun panic() {
+            hideCalls++
+            state.value = PrivateNotesUiState()
+            hidden.value = true
+        }
         val longBody = (1..120).joinToString("\n") { "Public literal line $it — UTF-8 🌍" }
         val note = PrivateNote(ByteArray(16) { 7 }, 1, "Public sample title", "Public sample body", 1, 2, false, null, 40)
         val summary = PrivateNoteSummary(note.noteId, 1, note.title, note.body, 1, 2, false, null, 40)
@@ -234,6 +284,16 @@ class PrivateNotesPresentationTest {
             main {
                 val node = nodesOnMain().first { value in it.labels && SemanticsActions.OnClick in it.config }
                 assertTrue(node.config[SemanticsActions.OnClick].action?.invoke() == true)
+            }
+        }
+        fun clickInSameTurn(vararg values: String) {
+            assertTrue(await { values.all { button(it) != null } })
+            main {
+                val callbacks = values.map { value ->
+                    requireNotNull(nodesOnMain().first { value in it.labels && SemanticsActions.OnClick in it.config }
+                        .config[SemanticsActions.OnClick].action)
+                }
+                callbacks.forEach { callback -> assertTrue(callback.invoke()) }
             }
         }
         fun setText(tag: String, value: String) = main {

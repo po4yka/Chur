@@ -69,6 +69,27 @@ class DiscreetExitPresentationTest {
     }
 
     @Test
+    fun public_markdown_menu_does_not_advertise_private_controls() {
+        val note = Note("public", "Public note", "**Public text**", 1)
+        present({ NoteEditorScreen(OpenNote(note, false), {}, {}, {},
+            onOpenSettings = {}, savedNote = note) }) { f ->
+            f.main {
+                val toolbar = f.nodes().first { it.config.getOrNull(SemanticsProperties.HorizontalScrollAxisRange)
+                    ?.maxValue()?.let { maximum -> maximum > 0f } == true }
+                assertTrue(toolbar.config[SemanticsActions.ScrollBy].action?.invoke(100_000f, 0f) == true)
+            }
+            assertTrue(f.await { f.nodes().any { node ->
+                node.config.getOrNull(SemanticsProperties.HorizontalScrollAxisRange)?.let { axis ->
+                    axis.maxValue() > 0f && kotlin.math.abs(axis.maxValue() - axis.value()) <= 1f
+                } == true
+            } })
+            f.click("Format")
+            assertTrue(f.await { f.has("Bold") })
+            assertFalse(f.has("Lock and hide"))
+        }
+    }
+
+    @Test
     fun public_settings_keeps_a_failed_draft_until_saved_content_is_acknowledged() {
         val note = Note("public", "Public note", "Public text", 1)
         val saved = mutableStateOf(note)

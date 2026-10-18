@@ -14,9 +14,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -59,6 +57,8 @@ import com.mikepenz.markdown.utils.resolveImageAlt
 import dev.po4yka.chur.app.privateKeyboardOptions
 import dev.po4yka.chur.app.privateNoteTextFieldPolicy
 import dev.po4yka.chur.app.utf8Size
+import dev.po4yka.chur.app.vault.PrivateAlertDialog
+import dev.po4yka.chur.app.vault.PrivateDropdownMenu
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.ast.ASTNode
 import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
@@ -126,7 +126,7 @@ internal fun MarkdownEditor(
                 if (markdown) TextButton(onClick = { outline = !outline }, enabled = enabled) { Text("Outline") }
                 if (markdown && !readOnly && !preview) Box {
                     TextButton(enabled = enabled, onClick = { formatting = true }) { Text("Format") }
-                    DropdownMenu(expanded = formatting, onDismissRequest = { formatting = false }) {
+                    PrivateDropdownMenu(expanded = formatting, onDismissRequest = { formatting = false }) {
                         MarkdownCommand.entries.forEach { action -> DropdownMenuItem(text = { Text(action.label) },
                             onClick = { formatting = false; command(action) }) }
                     }
@@ -135,31 +135,34 @@ internal fun MarkdownEditor(
             if (finding && !readOnly) {
                 OutlinedTextField(query, { query = it }, label = { Text("Find text") }, singleLine = true,
                     keyboardOptions = if (private) privateKeyboardOptions() else androidx.compose.foundation.text.KeyboardOptions.Default,
-                    modifier = Modifier.fillMaxWidth().then(if (private) Modifier.privateNoteTextFieldPolicy() else Modifier))
+                    modifier = Modifier.fillMaxWidth().then(if (private) Modifier.privateNoteTextFieldPolicy() else Modifier)
+                        .testTag(if (private) "private-note-find" else "note-find"))
                 OutlinedTextField(replacement, { replacement = it }, label = { Text("Replace with") }, singleLine = true,
                     keyboardOptions = if (private) privateKeyboardOptions() else androidx.compose.foundation.text.KeyboardOptions.Default,
-                    modifier = Modifier.fillMaxWidth().then(if (private) Modifier.privateNoteTextFieldPolicy() else Modifier))
+                    modifier = Modifier.fillMaxWidth().then(if (private) Modifier.privateNoteTextFieldPolicy() else Modifier)
+                        .testTag(if (private) "private-note-replace" else "note-replace"))
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                     TextButton(enabled = query.isNotEmpty(), onClick = {
-                        val from = value.selection.max.coerceAtMost(body.length)
-                        val found = body.indexOf(query, from, ignoreCase = true).let { if (it < 0) body.indexOf(query, ignoreCase = true) else it }
+                        val source = value.text
+                        val from = value.selection.max.coerceAtMost(source.length)
+                        val found = source.indexOf(query, from, ignoreCase = true).let { if (it < 0) source.indexOf(query, ignoreCase = true) else it }
                         if (found < 0) message = "No matches." else value = value.copy(selection = TextRange(found, found + query.length), composition = null)
                     }) { Text("Next match") }
                     TextButton(enabled = enabled && query.isNotEmpty(), onClick = {
                         if (value.text.substring(value.selection.min, value.selection.max).equals(query, ignoreCase = true)) {
                             val start = value.selection.min
-                            publish(TextFieldValue(body.replaceRange(start, value.selection.max, replacement), TextRange(start + replacement.length)))
+                            publish(TextFieldValue(value.text.replaceRange(start, value.selection.max, replacement), TextRange(start + replacement.length)))
                         }
                     }) { Text("Replace") }
                     TextButton(enabled = enabled && query.isNotEmpty(), onClick = {
-                        publish(TextFieldValue(body.replace(query, replacement, ignoreCase = true)))
+                        publish(TextFieldValue(value.text.replace(query, replacement, ignoreCase = true)))
                     }) { Text("Replace all") }
                 }
             }
-            if (outline && markdown) MarkdownOutline(body) { offset -> preview = false; value = value.copy(selection = TextRange(offset)); outline = false }
+            if (outline && markdown) MarkdownOutline(value.text) { offset -> preview = false; value = value.copy(selection = TextRange(offset)); outline = false }
             if (preview && markdown) {
-                MarkdownPreview(body, modifier = Modifier.height(documentHeight).fillMaxWidth(), onToggleTask = if (!enabled || readOnly) null else { start, end ->
-                    toggleMarkdownTask(body, start, end)?.let { publish(TextFieldValue(it, TextRange(start))) }
+                MarkdownPreview(value.text, modifier = Modifier.height(documentHeight).fillMaxWidth(), onToggleTask = if (!enabled || readOnly) null else { start, end ->
+                    toggleMarkdownTask(value.text, start, end)?.let { publish(TextFieldValue(it, TextRange(start))) }
                 })
             } else {
                 OutlinedTextField(value = value, onValueChange = { next ->
@@ -230,7 +233,7 @@ internal fun MarkdownPreview(body: String, modifier: Modifier = Modifier, onTogg
             loading = { Text("Preparing preview…") },
             error = { Text("Preview could not be rendered. The original source is available in Edit source.") })
     }
-    link?.let { uri -> AlertDialog(onDismissRequest = { link = null }, title = { Text("Open external link?") },
+    link?.let { uri -> PrivateAlertDialog(onDismissRequest = { link = null }, title = { Text("Open external link?") },
         text = { Text(if (openFailed) "The link could not be opened. Try again or cancel." else "The destination will receive this address.\n$uri") },
         confirmButton = { TextButton(onClick = { try { host.openUri(uri); link = null } catch (_: Exception) { openFailed = true } }) { Text("Open") } },
         dismissButton = { TextButton(onClick = { link = null }) { Text("Cancel") } }) }
