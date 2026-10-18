@@ -114,6 +114,7 @@ class PrivateNotesPresentationTest {
         f.assertBodyVisible(minHeightDp = 160f)
         f.capture("private-notes-editor-scrolled-public-320-font2.png")
         f.scrollEditorToBottom()
+        f.capture("private-notes-editor-controls-public-320-font2.png")
         f.assertButtonVisible("Move to Trash")
         f.assertButtonVisible("Export")
         f.assertButtonVisible("Encrypted archive")
@@ -122,7 +123,6 @@ class PrivateNotesPresentationTest {
         f.assertLabelFits("Encrypted archive")
         f.assertButtonVisible("Save")
         f.assertButtonVisible("Lock now")
-        f.capture("private-notes-editor-controls-public-320-font2.png")
     }
 
     @Test
@@ -266,9 +266,16 @@ class PrivateNotesPresentationTest {
             val node = requireNotNull(nodesOnMain().firstOrNull { value in it.labels && SemanticsActions.OnClick in it.config })
             val location = IntArray(2).also(view::getLocationInWindow)
             val bounds = node.boundsInWindow
-            assertTrue("$value must have a real visible touch target",
-                bounds.width > 0f && bounds.height >= 40f * activity.resources.displayMetrics.density)
-            assertTrue("$value must fit vertically in the visible screen",
+            val density = activity.resources.displayMetrics.density
+            val axis = tagOnMain("private-note-editor-scroll")?.config?.getOrNull(SemanticsProperties.VerticalScrollAxisRange)
+            val candidates = nodesOnMain().filter { value in it.labels && SemanticsActions.OnClick in it.config }
+                .joinToString { "id=${it.id}, bounds=${it.boundsInWindow}" }
+            val metrics = "bounds=$bounds, minimumHeight=${40f * density}px, density=$density, " +
+                "view=(${location[0]},${location[1]},${view.width},${view.height}), " +
+                "outerScroll=${axis?.value?.invoke()}/${axis?.maxValue?.invoke()}, candidates=[$candidates]"
+            assertTrue("$value must have a real visible touch target; $metrics",
+                bounds.width > 0f && bounds.height >= 40f * density)
+            assertTrue("$value must fit vertically in the visible screen; $metrics",
                 bounds.top >= location[1] - 1f && bounds.bottom <= location[1] + view.height + 1f)
         }
         fun assertHeadingFits(value: String) = main {
@@ -287,7 +294,25 @@ class PrivateNotesPresentationTest {
                 val node = requireNotNull(tagOnMain("private-note-editor-scroll"))
                 assertTrue(node.config.getOrNull(SemanticsActions.ScrollBy)?.action?.invoke(0f, 20_000f) == true)
             }
-            instrumentation.waitForIdleSync()
+            // ScrollBy schedules a coroutine/animation. Looper idle alone can
+            // occur between its frames while the footer remains clipped.
+            val settled = await {
+                var atEnd = false
+                main {
+                    val axis = tagOnMain("private-note-editor-scroll")?.config
+                        ?.getOrNull(SemanticsProperties.VerticalScrollAxisRange)
+                    if (axis != null) atEnd = axis.maxValue().isFinite() &&
+                        kotlin.math.abs(axis.maxValue() - axis.value()) <= 1f
+                }
+                atEnd
+            }
+            var position = "missing editor scroll semantics"
+            main {
+                val axis = tagOnMain("private-note-editor-scroll")?.config
+                    ?.getOrNull(SemanticsProperties.VerticalScrollAxisRange)
+                if (axis != null) position = "${axis.value()}/${axis.maxValue()}px"
+            }
+            assertTrue("the outer editor scroll must reach its actual end, observed $position", settled)
         }
         fun assertLabelFits(value: String) = main {
             val node = view.roots().flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false) }
