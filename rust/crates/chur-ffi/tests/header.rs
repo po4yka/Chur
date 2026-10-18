@@ -437,7 +437,7 @@ fn every_declared_function_is_exported() {
     );
 
     // Calling each one proves the list above is not a stale copy.
-    assert_eq!(chur_ffi::chur_abi_version_major(), 3);
+    assert_eq!(chur_ffi::chur_abi_version_major(), 4);
     assert_eq!(chur_ffi::chur_abi_version_minor(), 0);
     assert_eq!(
         chur_ffi::chur_capabilities(),

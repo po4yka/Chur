@@ -788,14 +788,15 @@ chur_status_t chur_backup_restore(chur_handle_t runtime, int32_t source_fd,
                                   uint32_t password_length,
                                   chur_handle_t *out_operation);
 
-/* Private local notes, ABI 2.21. All records are bounded to 1 MiB.
+/* Private local notes, ABI 4.0 (breaking record layout). All records are bounded to 1 MiB.
  * Integer fields in the byte control records are big endian. No plaintext is retained by the ABI.
  * Query: trash:u8, limit:u64, terms:u32+UTF8, cursor:u32+bytes (0 or 65).
- * Save: id:16 (zero creates), expected_revision:u64, pinned:u8, title:u32+UTF8, body:u32+UTF8.
+ * Save: id:16 (zero creates), expected_revision:u64, pinned:u8, format:u8 (plain0/markdown1), title:u32+UTF8, body:u32+UTF8.
  * Get: id:16. Change: id:16, expected_revision:u64, action:u8 (pin1/unpin2/trash3/restore4/purge5).
- * Note: id16, revision/created_ms/updated_ms/deleted_ms:u64 (UINT64_MAX absent), pinned:u8,
+ * Note: id16, revision/created_ms/updated_ms/deleted_ms:u64 (UINT64_MAX absent), pinned:u8, format:u8 (plain0/markdown1),
  * export_size:u64, title:u32+UTF8, body:u32+UTF8. Query replaces body with <=160 codepoints preview,
  * preceded by count:u32 and followed by cursor:u32+bytes. Purge returns zero bytes.
+ * Export snapshots the revision and format: Markdown is body bytes exactly; plain text is title+LF+LF+body.
  * Output capacity MUST be >=1048576; all pointers remain valid for this call.
  */
 chur_status_t chur_private_notes_query(chur_handle_t session, const uint8_t *request, size_t request_len, uint8_t *destination, size_t capacity, size_t *written);

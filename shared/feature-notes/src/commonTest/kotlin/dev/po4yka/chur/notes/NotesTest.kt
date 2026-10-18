@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
 
 class NotesTest {
     private fun note(id: String, title: String, body: String, updated: Long, pinned: Boolean = false) =
@@ -65,4 +66,26 @@ class NotesTest {
         store.remove("a")
         assertTrue(store.all().isEmpty())
     }
+
+    @Test
+    fun new_notes_use_markdown_but_legacy_json_remains_plain_text() {
+        assertEquals(NoteFormat.MARKDOWN, note("new", "", "# heading", 1).format)
+        val legacy = Json.decodeFromString(
+            Note.serializer(),
+            """{"id":"old","title":"","body":"# literal heading","updatedMs":1}""",
+        )
+        assertEquals(NoteFormat.PLAIN_TEXT, legacy.format)
+        assertEquals("# literal heading", legacy.body)
+    }
+
+    @Test
+    fun both_note_formats_round_trip_the_exact_source() {
+        val source = "# Heading\r\n\r\n**bold**  \n- [ ] task\n\tcode \\ \"quoted\"\n"
+        for (format in NoteFormat.entries) {
+            val original = Note("note", "Title", source, 1, pinned = true, format = format)
+            val encoded = Json.encodeToString(Note.serializer(), original)
+            assertEquals(original, Json.decodeFromString(Note.serializer(), encoded))
+        }
+    }
+
 }

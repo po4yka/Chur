@@ -85,7 +85,7 @@ PDF preview is optional and limited to 32 MiB of encoded data and one raster pag
 
 ### 4.1 Private note editing
 
-A private note title has at most 256 UTF-8 bytes and its body at most 256 KiB. List pages contain at most 100 bounded previews. Private editing uses a separate controller, no public NoteStore, and a null saveable-state registry. It executes no markup. Save is explicit; errors retain session edits for retry. Lock and disposal drop text, identifiers, previews, and search state without a final save. Only real input refreshes the idle timer.
+A private note title has at most 256 UTF-8 bytes and its body at most 256 KiB. List pages contain at most 100 bounded previews. Private editing uses a separate controller, no public NoteStore, and a null saveable-state registry. Markdown preview renders locally in Compose without HTML/script execution or resource fetching. External HTTP/HTTPS/mail links require confirmation. Source, undo, find/replace and outline remain route-owned. Save is explicit; errors retain session edits for retry. Lock and disposal drop text, identifiers, previews, and search state without a final save. Only real input refreshes the idle timer.
 
 Modern and legacy clipboard write guards, context-action filtering, hardware shortcuts, and accessibility action guards prevent Copy/Cut. Cut must not delete editor text. Paste is an explicit user action and uses the existing clipboard without clearing it. Keyboard settings request no personalized learning on Android and disable autocorrection; they do not establish a trusted input method. Managed text and platform layout/input copies have no secure-erasure guarantee.
 

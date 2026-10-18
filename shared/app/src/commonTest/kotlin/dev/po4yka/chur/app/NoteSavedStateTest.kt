@@ -39,4 +39,13 @@ class NoteSavedStateTest {
         assertNull(DraftSaver.restore(tooLong)?.value)
         assertEquals(false, tooLong)
     }
+
+    @Test
+    fun stale_or_malformed_open_note_state_is_dropped_without_guessing_its_format() {
+        for (saved in listOf<Any>(false, emptyList<Any>(), listOf("note", 1L, false, false),
+            listOf("note", 1L, false, false, "FUTURE"), listOf("note", "invalid-time", false, false, "MARKDOWN"))) {
+            assertNull(OpenNoteSaver.restore(saved))
+        }
+    }
+
 }

@@ -59,14 +59,16 @@ use crate::panic::guard;
 ///
 /// A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the
 /// library is not called again in that process.
-pub const ABI_VERSION_MAJOR: u32 = 3;
+pub const ABI_VERSION_MAJOR: u32 = 4;
 
 /// Minor component of the native API version.
 ///
 /// A minor difference is negotiated only within explicitly compatible
 /// behaviour; it never selects a cryptographic suite from untrusted input.
 ///
-/// ABI 3 adds caller-persisted import and album identities for safe desktop retries.
+/// ABI 4 adds the explicit private-note format to existing binary control records.
+/// It retains ABI 3 caller-persisted import and album identities for safe desktop retries.
+/// A caller from an earlier major must refuse before exchanging any payload.
 pub const ABI_VERSION_MINOR: u32 = 0;
 
 /// Capability bit: independent decoy identity supported.
@@ -297,7 +299,7 @@ mod tests {
 
     #[test]
     fn the_handshake_answers_every_documented_fact() {
-        assert_eq!(chur_abi_version_major(), 3);
+        assert_eq!(chur_abi_version_major(), 4);
         assert_eq!(chur_abi_version_minor(), 0);
         assert_eq!(chur_object_format_min(), 1);
         assert_eq!(chur_object_format_max(), 1);

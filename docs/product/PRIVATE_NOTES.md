@@ -18,7 +18,7 @@ The selected scope is local notes plus encrypted portable backup. Notes do not e
 
 ## Editor and saving
 
-The editor handles literal text. It executes no markup, links, scripts, or document macros. A note has at most 256 UTF-8 bytes of title and 256 KiB of body. A vault holds at most 10000 notes, including Trash.
+The editor preserves UTF-8 Markdown source and provides an offline CommonMark/GFM preview. Each note stores an explicit format: migrated notes remain literal text until the user changes format; new notes use Markdown. Preview does not execute scripts or document macros. A note has at most 256 UTF-8 bytes of title and 256 KiB of body. A vault holds at most 10000 notes, including Trash.
 
 Saving is explicit. A new empty editor creates no record until Save. On save, Rust commits the row and its search index in one transaction. Each update supplies the last read revision; an outdated editor receives a conflict and cannot overwrite a newer revision. An unchanged save does not advance the revision.
 
@@ -38,19 +38,19 @@ The catalog and FTS use secure-delete settings to reduce deleted-cell retention.
 
 Export acts on a selected saved revision. A dirty editor first offers Save and Export. The existing destination dialog warns that the copy is unencrypted and can be retained by its recipient. Android offers Files, Downloads, and Share; iOS offers Files and Share.
 
-Rust formats UTF-8 as `title + "\n\n" + body`, including two LF bytes when the title is empty. An unexpired note in Trash can use this TXT export without being restored; its current saved revision is still required. An expired, purged, or changed note refuses export. This does not enable selective encrypted export of Trash. The exact byte count reserves the platform scratch budget. A session-bound request retains only an identifier, revision, safe filename, size, and generation while a picker is open. The host does not fetch body text solely to export it.
+Markdown export is the exact UTF-8 body as `.md`; it does not prepend the title or add whitespace. Plain text export keeps `title + "\n\n" + body`, including two LF bytes when the title is empty. An unexpired note in Trash can use this plaintext export without being restored; its current saved revision is still required. An expired, purged, or changed note refuses export. This does not enable selective encrypted export of Trash. The exact byte count reserves the platform scratch budget. A session-bound request retains only an identifier, revision, safe filename, format, size, and generation while a picker is open. The host does not fetch body text solely to export it.
 
 The normal native Export operation owns a duplicate destination descriptor, reports progress, and accepts cancellation. Rust copies a bounded saved revision into a zeroizing buffer and releases catalog access before provider writes. The host publishes only a complete successful operation under the same session and removes incomplete copies where the provider permits it. A blocked operating-system write has the same cancellation limit as existing media export.
 
-Portable backup includes the encrypted catalog and its note tables for the selected identity. Restore preserves notes, revisions, pin state, Trash, and search. It does not merge the sibling identity or copy notes into the public shell. Historical backups remain separate copies with their original credentials and retention.
+Portable backup includes the encrypted catalog and its note tables for the selected identity. Restore preserves notes, format, revisions, pin state, Trash, and search. It does not merge the sibling identity or copy notes into the public shell. Historical backups remain separate copies with their original credentials and retention.
 
 ### Selective encrypted archives
 
-The list and saved-note editor also offer [selective encrypted archives](SELECTIVE_ENCRYPTED_EXPORT.md). Select page or a long press starts a note selection; selected saved revisions can span pages. The archive has independent keys and a new password. It opens through separate Restore or imports fresh copies into an existing vault. This action remains separate from the deliberate plaintext TXT export.
+The list and saved-note editor also offer [selective encrypted archives](SELECTIVE_ENCRYPTED_EXPORT.md). Select page or a long press starts a note selection; selected saved revisions can span pages. The archive has independent keys and a new password. It opens through separate Restore or imports fresh copies into an existing vault. This action remains separate from the deliberate plaintext TXT/Markdown export.
 
 ## Storage and compatibility
 
-See [`../format/CATALOG_SCHEMA_V9.md`](../format/CATALOG_SCHEMA_V9.md), [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md) §6.25, and [`../adr/0061-local-private-notes.md`](../adr/0061-local-private-notes.md). The normal authenticated schema migration upgrades v8 to v9. Older clients fail closed on the newer catalog; no media container or sync record changes.
+See [`../format/CATALOG_SCHEMA_V12.md`](../format/CATALOG_SCHEMA_V12.md), [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md) §6.25, and [`../adr/0061-local-private-notes.md`](../adr/0061-local-private-notes.md). The normal authenticated schema migration proceeds sequentially through v12. Existing notes receive the explicit plain-text discriminator without reinterpreting their content. Format changes participate in the saved revision. Older clients fail closed on the newer catalog; no media container or sync record changes.
 
 ## Validation
 

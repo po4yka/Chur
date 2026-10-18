@@ -84,7 +84,7 @@ Chur
 
 ### Public shell
 
-The public shell is a functional application surface. Notes supports editing, search, and pinning. Calculator performs decimal calculations. Camera saves confirmed captures to a local public album. Public Settings selects the shell and provides the visible vault entry. A Journal shell is not implemented.
+The public shell is a functional application surface. Notes supports [Markdown source editing and offline GFM preview](docs/product/MARKDOWN_NOTES.md), formatting, checklists, tables, local code highlighting, find/replace, undo/redo, `.md` import/export, search, and pinning. Calculator performs decimal calculations. Camera saves confirmed captures to a local public album. Public Settings selects the shell and provides the visible vault entry. A Journal shell is not implemented.
 
 Public Notes uses a separate JSON store; shell preferences use platform preferences. Public photos use a separate public directory. These stores enter ordinary platform backup and do not contain private-vault data. See [Discreet Mode](docs/product/DISCREET_MODE.md).
 
@@ -220,7 +220,7 @@ The checked-in version catalog, wrapper, and Cargo manifests are the version sou
 | Navigation and state | shared route state, `ChurController`, StateFlow, coroutines |
 | Composition | explicit host construction and session-scoped owners |
 | Public persistence | JSON Notes, platform preferences, local public camera files |
-| Private persistence | Rust-owned SQLCipher catalog, schema v10 |
+| Private persistence | Rust-owned SQLCipher catalog, schema v12 |
 | Images and media | bounded session cache, platform decoders, Media3 and AVFoundation |
 | Local recognition | bundled Tesseract4Android 4.9.0 English/Russian models; Apple Vision |
 | Network | Ktor 3.6.0, OkHttp on Android, Darwin on iOS |
@@ -228,7 +228,7 @@ The checked-in version catalog, wrapper, and Cargo manifests are the version sou
 | Android host | API 29 minimum, API 37 compile/target, pinned NDK |
 | iOS host | UIKit, Compose framework, embedded Share Extension, iOS 18.0 minimum |
 | Build | Gradle 9.8.1, AGP 9.4.1, JDK 21, pinned Rust toolchain, Xcode 27 for local host builds |
-| Native boundary | hand-written C ABI 3.0, JNI on Android, cinterop and Swift C calls on iOS |
+| Native boundary | hand-written C ABI 4.0, JNI on Android, cinterop and Swift C calls on iOS |
 | Cryptography | XChaCha20-Poly1305, Argon2id, HKDF-SHA-256, HPKE, Ed25519 |
 
 Room, DataStore, Koin, Coil, Navigation 3, Kermit, and generated UniFFI bindings are not part of the current dependency graph. Do not infer a dependency from an illustrative interface in a design document.

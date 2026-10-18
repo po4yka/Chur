@@ -88,23 +88,22 @@ second custom optics engine would add unnecessary rendering and lifecycle code.
   runtime network request is required by this integration. Resolve transitives
   through the checked-in Gradle lockfiles. Dependency updates remain deliberate.
 - **Resolved Android graph:** the three direct modules also bring
-  `haze-utils:2.0.1` and their Android variants. In the shared Android runtime,
-  this moves AndroidX Activity 1.8.2 to 1.13.0, Core 1.16.0 to 1.19.1,
-  AndroidX Lifecycle 2.10.0 to 2.11.0, JetBrains Lifecycle 2.9.6 to 2.11.0,
-  and Tracing 2.0.0 to 2.0.3; Activity also introduces NavigationEvent 1.0.0.
-  The application already selected the newer Activity, Core, and AndroidX
-  Lifecycle versions. Collection remains at its existing 1.5.0 compile and
-  1.6.0 runtime resolutions; common resolution metadata aligns Collection to
-  1.6.0 and JetBrains Lifecycle to 2.11.0. Compose 1.12.1, Kotlin 2.4.21, and
-  the native iOS artifact versions remain unchanged. These are graphics/lifecycle dependencies, not a new
-  native library or a change to stored vault formats. The four reviewed Android
+  `haze-utils:2.0.1` and their Android variants. The combined Markdown/Haze
+  Android runtime locks select Activity 1.13.0,
+  Core 1.19.1, AndroidX and JetBrains Lifecycle 2.11.0, Tracing 2.0.3,
+  and NavigationEvent 1.0.0. Core compile/metadata entries remain at 1.18.0;
+  the higher runtime resolution preserves Haze's constraint. Collection keeps
+  its 1.5.0 compile and 1.6.0 runtime resolutions, with common resolution
+  metadata at 1.6.0. Compose 1.12.1 and Kotlin 2.4.21 are unchanged by this
+  integration. Haze adds no iOS renderer artifacts, native library, or change
+  to stored vault formats. The four reviewed Android
   AARs total 887,401 downloaded bytes and contain no `jni/` or `prefab/`
   entries; this is not a measurement of the final APK size increase.
 - **Runtime policy:** API 33+ uses AGSL glass, API 31–32 uses RenderEffect blur,
   and API 29–30 uses opaque surfaces. Increased contrast uses opaque surfaces.
   Source retention is `ClearWhenUnavailable`; the source and effect graph belong
-  to the private composition and leave with it. Native media surfaces are not
-  copied. The experimental full-37.2 window-backdrop backend remains disabled:
+  to the private composition, keyed by session generation, and leave with it.
+  Native media surfaces are not copied. The experimental full-37.2 window-backdrop backend remains disabled:
   selected-source capture gives the application control over private input.
 - **Cost and acceptance:** the extra offscreen layers affect GPU memory and frame
   timing; a readable fallback does not prove optical parity. Measure the
@@ -307,3 +306,13 @@ A dependency that captures logs, crashes, analytics, sessions, screens, or netwo
 - **Advisory scope:** model parsers are security-sensitive. Only the two hash-pinned bundled models reach Tesseract. The packaged libpng 1.6.48 is older than later upstream security fixes. Chur does not call its encoded-image file parser: the selected JNI entry point accepts decoded bitmaps. This limits the exposed path and does not establish that the bundled native binary is free of defects. Review the complete native dependency set on each update.
 - **Data and permissions:** the engine has no Chur network, analytics, log, system-index, or public Notes integration. It adds no permission. Originals, page rasters, and text remain in memory; model files contain no private data. Recognized bytes go to the SQLCipher content index, and temporary byte arrays are cleared on success, failure, and cancellation.
 - **Update and removal:** review upstream release notes and advisories, exact artifact/model hashes, native libraries and licenses, ELF alignment, real English/Russian image and PDF recognition, decoder cancellation, and the Android build before each update. Remove the dependency, model assets, and pinned-input check together if Android OCR is replaced. The encrypted index format does not depend on the engine, and a new engine must rebuild derived records.
+
+### Markdown renderer 0.46.0 and local code highlighting
+
+- **Capability:** shared Android/iOS CommonMark/GFM preview and code highlighting for public/private notes. Approved by the user during implementation on 2026-10-18. Source editing remains application-owned; preview never rewrites stored source.
+- **Alternatives:** custom Markdown parsing/rendering duplicates a mature parser; Markwon is Android-only; Swift renderers are iOS-only; a WebView editor adds a browser/bridge lifecycle. No existing dependency supplied this capability.
+- **Pins and maintenance:** `com.mikepenz:multiplatform-markdown-renderer-m3` and `-code` 0.46.0, [upstream release](https://github.com/mikepenz/multiplatform-markdown-renderer/releases/tag/v0.46.0). Transitive JetBrains Markdown 0.7.17 and Highlights 1.1.0 are locked in Gradle lockfiles.
+- **Licenses:** [renderer Apache-2.0 with inherited MIT portions](https://github.com/mikepenz/multiplatform-markdown-renderer/blob/v0.46.0/LICENSE); [Highlights Apache-2.0](https://github.com/SnipMeDev/Highlights/blob/1.1.0/LICENSE). Preserve upstream notices; these are not cryptographic dependencies or independently audited parsers.
+- **Boundary:** Kotlin/Compose libraries, no new Rust unsafe/native parser or platform permissions. No Coil/Ktor image-loader module, telemetry, remote fetch, CDN, WebView or new plaintext store is installed. Code headers/copy buttons remain disabled. URI handling is intercepted and gated by explicit confirmation.
+- **Compatibility and cost:** validate Android and iOS with this repository's pinned Kotlin/Compose toolchain. Parsing/highlighting adds code size, CPU and transient document/layout allocations; benchmark actual long notes before changing existing note bounds. No claim of zero-copy or secure erasure follows from these dependencies.
+- **Updates/removal:** update exact versions and locks deliberately, reviewing syntax/layout and private lifecycle regressions. Stored Markdown is independent of renderer serialization, so replacement does not require converting user source.

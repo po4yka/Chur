@@ -1249,6 +1249,8 @@ Decoy content should be credible and editable, not a static gallery of stock ima
 
 ### 19.1 Notes
 
+Public and private notes share the [Markdown source editor and offline preview](docs/product/MARKDOWN_NOTES.md), with separate persistence and privacy policies. Existing plain-text notes retain their format; preview never rewrites source.
+
 - familiar list/detail model;
 - true create, edit, delete, search, and folders/tags as product scope allows;
 - no private-vault metadata in suggestions;

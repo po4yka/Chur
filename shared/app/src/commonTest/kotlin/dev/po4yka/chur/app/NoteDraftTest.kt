@@ -76,6 +76,17 @@ class NoteDraftTest {
         assertEquals(emptyList(), editor.removed)
     }
 
+    @Test
+    fun discarding_clears_the_draft_without_a_disposal_save_or_delete() = runTest {
+        val editor = Editor(this, OpenNote(Note("kept", "Title", "saved", 1), isNew = false))
+        editor.type("unsaved source")
+        editor.draft.value = null
+        editor.leave()
+        advanceUntilIdle()
+        assertEquals(emptyList(), editor.saved)
+        assertEquals(emptyList(), editor.removed)
+    }
+
     /** [rememberNoteDraft] for [open], composed on [test]'s scheduler. */
     private class Editor(private val test: TestScope, open: OpenNote) {
         val saved = mutableListOf<Note>()

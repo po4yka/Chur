@@ -3,6 +3,7 @@ package dev.po4yka.chur.app.notes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -11,6 +12,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -27,6 +29,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -43,6 +46,7 @@ import dev.po4yka.chur.app.theme.SettingsGlyph
 import dev.po4yka.chur.app.theme.LocalChurColors
 import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
 import dev.po4yka.chur.notes.Note
+import dev.po4yka.chur.notes.NoteFormat
 import dev.po4yka.chur.notes.Notes
 import kotlinx.coroutines.delay
 
@@ -67,7 +71,9 @@ fun NotesScreen(
     onOpenSettings: () -> Unit,
     showFirstWriteDisclosure: Boolean = false,
     onAcknowledgeDisclosure: () -> Unit = {},
+    onImport: (String, String) -> Unit = { _, _ -> },
 ) {
+    var importFailed by remember { mutableStateOf(false) }
     val colors = LocalChurColors.current
     Scaffold(
         containerColor = colors.canvas,
@@ -75,6 +81,7 @@ fun NotesScreen(
             TopAppBar(
                 title = { Text("Notes") },
                 actions = {
+                    NoteImportAction(onImported = onImport, onFailure = { importFailed = true })
                     IconButton(onClick = onOpenSettings) {
                         Icon(SettingsGlyph, contentDescription = "Settings")
                     }
@@ -90,6 +97,7 @@ fun NotesScreen(
         },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            if (importFailed) Text("The Markdown file could not be imported. Use UTF-8 text up to 256 KiB.", color = colors.error)
             if (showFirstWriteDisclosure) {
                 FirstWriteDisclosure(onAcknowledge = onAcknowledgeDisclosure)
             }
@@ -180,6 +188,7 @@ private fun NoteRow(note: Note, onClick: () -> Unit) {
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            if (note.pinned) Text("Pinned", style = MaterialTheme.typography.labelSmall)
         }
     }
 }
@@ -255,17 +264,55 @@ private fun EmptyNotes(hasQuery: Boolean, onCreate: (() -> Unit)? = null) {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NoteEditorScreen(
-    open: OpenNote,
-    onSave: (Note) -> Unit,
-    onRemove: (String) -> Unit,
-    onBack: () -> Unit,
+fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) -> Unit, onBack: () -> Unit,
     onOpenSettings: () -> Unit,
-) {
-    var draft by rememberNoteDraft(open, onSave, onRemove)
+    savedNote: Note? = null, writeFailed: Boolean = false,
+    systemBack: @Composable (onBack: () -> Unit) -> Unit = {}) {
+    var pinned by rememberSaveable(open.note.id) { mutableStateOf(open.note.pinned) }
+    var formatName by rememberSaveable(open.note.id) { mutableStateOf(open.note.format.name) }
+    val format = NoteFormat.valueOf(formatName)
+    val saveWithMetadata: (Note) -> Unit = { onSave(it.copy(pinned = pinned, format = NoteFormat.valueOf(formatName))) }
+    var draft by rememberNoteDraft(open, saveWithMetadata, onRemove)
     val (title, body) = draft ?: run {
         LaunchedEffect(Unit) { onBack() }
         return
+    }
+    var exportFailed by remember { mutableStateOf(false) }
+    val exit = remember(open.note.id) { PublicNoteExitGuard() }
+    fun currentDraftNote(): Note? = draft?.let { (currentTitle, currentBody) ->
+        open.note.copy(title = currentTitle, body = currentBody, pinned = pinned,
+            format = NoteFormat.valueOf(formatName))
+    }
+    val current = requireNotNull(currentDraftNote())
+    var leavingForSettings by remember(open.note.id) { mutableStateOf(false) }
+    val closeWithoutSave = { draft = null; if (leavingForSettings) onOpenSettings() else onBack() }
+    fun requestLeave(settings: Boolean) {
+        val latest = currentDraftNote() ?: return
+        leavingForSettings = settings
+        if (open.isNew && latest.title.isBlank() && latest.body.isBlank()) {
+            draft = null
+            onRemove(open.note.id)
+            closeWithoutSave()
+        } else exit.request(latest, savedNote, onSave, closeWithoutSave)
+    }
+    val requestBack = { requestLeave(false) }
+    systemBack(requestBack)
+    LaunchedEffect(exit.requested, current, savedNote) { currentDraftNote()?.let { exit.acknowledge(it, savedNote, closeWithoutSave) } }
+    LaunchedEffect(pinned, format) { currentDraftNote()?.let(onSave) }
+    if (exit.requested) {
+        AlertDialog(
+            onDismissRequest = exit::keepEditing,
+            title = { Text(if (writeFailed) "Save failed" else "Saving note") },
+            text = { Text(if (writeFailed) "Your draft is still here. Retry saving before leaving, or discard unsaved changes."
+                else "The editor will close after this note has been saved.") },
+            confirmButton = { TextButton(enabled = writeFailed, onClick = {
+                currentDraftNote()?.let { exit.request(it, savedNote, onSave, closeWithoutSave) }
+            }) { Text(if (writeFailed) "Retry" else "Saving…") } },
+            dismissButton = { Row {
+                TextButton(onClick = exit::keepEditing) { Text("Keep editing") }
+                TextButton(onClick = { exit.discard(closeWithoutSave) }) { Text("Discard") }
+            } },
+        )
     }
 
     var confirmingDelete by rememberSaveable { mutableStateOf(false) }
@@ -293,14 +340,14 @@ fun NoteEditorScreen(
             TopAppBar(
                 title = { Text("Note") },
                 navigationIcon = {
-                    // Leaving is the save: the draft's dispose writes it.
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = requestBack) {
                         Icon(BackGlyph, contentDescription = "Back")
                     }
                 },
                 actions = {
-                    IconButton(onClick = onOpenSettings) { Icon(SettingsGlyph, contentDescription = "Settings") }
-                    TextButton(onClick = { confirmingDelete = true }) { Text("Delete") }
+                    IconButton(enabled = !exit.requested, onClick = { requestLeave(true) }) { Icon(SettingsGlyph, contentDescription = "Settings") }
+                    PublicNoteExportAction(title, body, format == NoteFormat.MARKDOWN, enabled = !exit.requested, onFailure = { exportFailed = true })
+                    TextButton(enabled = !exit.requested, onClick = { confirmingDelete = true }) { Text("Delete") }
                 },
             )
         },
@@ -311,22 +358,55 @@ fun NoteEditorScreen(
         ) {
             OutlinedTextField(
                 value = title,
-                onValueChange = { draft = it to body },
+                onValueChange = { changed -> draft?.let { draft = changed to it.second } },
+                enabled = !exit.requested,
                 singleLine = true,
                 label = { Text("Title") },
                 modifier = Modifier.fillMaxWidth(),
                 colors = churOutlinedTextFieldColors(),
             )
-            OutlinedTextField(
-                value = body,
-                onValueChange = { draft = title to it },
-                label = { Text("Note") },
-                modifier = Modifier.fillMaxWidth().weight(1f),
-                colors = churOutlinedTextFieldColors(),
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(pinned, onCheckedChange = { pinned = it }, enabled = !exit.requested)
+                Text("Pinned")
+                val saved = samePublicNoteContent(current, savedNote)
+                Text(if (writeFailed) "Save failed" else if (saved) "Saved" else "Unsaved", modifier = Modifier.weight(1f))
+                if (writeFailed) TextButton(onClick = { currentDraftNote()?.let(onSave) }) { Text("Retry") }
+            }
+            if (exportFailed) Text("The file could not be exported. Try again.", color = colors.error)
+            MarkdownEditor(body, { changed -> draft?.let { draft = it.first to changed } }, format == NoteFormat.MARKDOWN,
+                { formatName = if (it) NoteFormat.MARKDOWN.name else NoteFormat.PLAIN_TEXT.name }, Modifier.fillMaxWidth().weight(1f), enabled = !exit.requested)
         }
     }
 }
+
+/** A close request is completed only by the store's acknowledgement of every edited field. */
+internal class PublicNoteExitGuard {
+    var requested: Boolean by mutableStateOf(false)
+        private set
+
+    fun request(current: Note, saved: Note?, onSave: (Note) -> Unit, onClose: () -> Unit) {
+        if (samePublicNoteContent(current, saved)) {
+            requested = false
+            onClose()
+        } else {
+            requested = true
+            onSave(current)
+        }
+    }
+
+    fun acknowledge(current: Note, saved: Note?, onClose: () -> Unit) {
+        if (requested && samePublicNoteContent(current, saved)) {
+            requested = false
+            onClose()
+        }
+    }
+
+    fun keepEditing() { requested = false }
+    fun discard(onClose: () -> Unit) { requested = false; onClose() }
+}
+
+internal fun samePublicNoteContent(current: Note, saved: Note?): Boolean =
+    saved != null && current.copy(updatedMs = saved.updatedMs) == saved
 
 /**
  * [NoteEditorScreen]'s text and the writes it makes, apart from its layout, so
@@ -449,19 +529,16 @@ fun rememberOpenNote(): MutableState<OpenNote?> =
     rememberSaveable(stateSaver = OpenNoteSaver) { mutableStateOf(null) }
 
 internal val OpenNoteSaver: Saver<OpenNote?, Any> = Saver(
-    save = { open -> open?.run { listOf(note.id, note.updatedMs, note.pinned, isNew) } },
-    restore = { saved ->
-        val fields = saved as List<*>
-        OpenNote(
-            note = Note(
-                id = fields[0] as String,
-                title = "",
-                body = "",
-                updatedMs = fields[1] as Long,
-                pinned = fields[2] as Boolean,
-            ),
-            isNew = fields[3] as Boolean,
-            restored = true,
-        )
+    save = { open -> open?.run { listOf(note.id, note.updatedMs, note.pinned, isNew, note.format.name) } },
+    restore = restoreNote@{ saved ->
+        val fields = saved as? List<*> ?: return@restoreNote null
+        if (fields.size != 5) return@restoreNote null
+        val id = fields[0] as? String ?: return@restoreNote null
+        val updatedMs = fields[1] as? Long ?: return@restoreNote null
+        val pinned = fields[2] as? Boolean ?: return@restoreNote null
+        val isNew = fields[3] as? Boolean ?: return@restoreNote null
+        val format = NoteFormat.entries.firstOrNull { it.name == fields[4] } ?: return@restoreNote null
+        if (id.isBlank()) return@restoreNote null
+        OpenNote(Note(id, "", "", updatedMs, pinned, format), isNew = isNew, restored = true)
     },
 )

@@ -1,5 +1,7 @@
 package dev.po4yka.chur.ffi
 
+enum class PrivateNoteFormat { PLAIN_TEXT, MARKDOWN }
+
 /** Private plaintext exists only in the unlocked session. Never log or save these records. */
 data class PrivateNote(
     val noteId: ByteArray,
@@ -11,6 +13,7 @@ data class PrivateNote(
     val pinned: Boolean,
     val trashedAtMs: Long?,
     val exportSize: Long,
+    val format: PrivateNoteFormat = PrivateNoteFormat.PLAIN_TEXT,
 ) {
     val id: String get() = noteId.joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
     override fun toString(): String = "PrivateNote(<redacted>)"
@@ -26,6 +29,7 @@ data class PrivateNoteSummary(
     val pinned: Boolean,
     val trashedAtMs: Long?,
     val exportSize: Long,
+    val format: PrivateNoteFormat = PrivateNoteFormat.PLAIN_TEXT,
 ) {
     val id: String get() = noteId.joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
     override fun toString(): String = "PrivateNoteSummary(<redacted>)"
@@ -56,9 +60,9 @@ internal class PrivateNoteReader(private val bytes: ByteArray) {
     fun note(): PrivateNote {
         val id = raw(16); require(id.any { it != 0.toByte() })
         val revision = number(); val created = number(); val updated = number(); val deleted = number()
-        val pin = byte(); val size = number()
-        require(revision > 0 && created >= 0 && updated >= 0 && (deleted == -1L || deleted >= 0) && pin <= 1 && size in 2..262402)
-        return PrivateNote(id, revision, text(256), text(262144), created, updated, pin == 1, if (deleted == -1L) null else deleted, size)
+        val pin = byte(); val format = byte(); val size = number()
+        require(revision > 0 && created >= 0 && updated >= 0 && (deleted == -1L || deleted >= 0) && pin <= 1 && format in 0..1 && size in 0..(if (format == 1) 262144 else 262402) && (format == 1 || size >= 2))
+        return PrivateNote(id, revision, text(256), text(262144), created, updated, pin == 1, if (deleted == -1L) null else deleted, size, PrivateNoteFormat.entries[format])
     }
     fun end() { require(at == bytes.size) }
 }
@@ -71,7 +75,7 @@ internal fun decodePrivateNotePage(bytes: ByteArray): PrivateNotePage {
     require(count in 0..100)
     val notes = List(count) {
         val n = r.note()
-        PrivateNoteSummary(n.noteId, n.revision, n.title, n.body, n.createdMs, n.updatedMs, n.pinned, n.trashedAtMs, n.exportSize)
+        PrivateNoteSummary(n.noteId, n.revision, n.title, n.body, n.createdMs, n.updatedMs, n.pinned, n.trashedAtMs, n.exportSize, n.format)
     }
     val cursor = r.sized(65).takeIf { it.isNotEmpty() }
     require(cursor == null || cursor.size == 65); r.end()

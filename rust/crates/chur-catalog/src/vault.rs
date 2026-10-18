@@ -23,8 +23,8 @@ use chur_format::constants::{
     CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V3,
     CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V5, CATALOG_FORMAT_VERSION_V6,
     CATALOG_FORMAT_VERSION_V7, CATALOG_FORMAT_VERSION_V8, CATALOG_FORMAT_VERSION_V9,
-    CATALOG_FORMAT_VERSION_V10, CATALOG_FORMAT_VERSION_V11, DESCRIPTOR_VERSION_V1, SlotType,
-    VaultState,
+    CATALOG_FORMAT_VERSION_V10, CATALOG_FORMAT_VERSION_V11, CATALOG_FORMAT_VERSION_V12,
+    DESCRIPTOR_VERSION_V1, SlotType, VaultState,
 };
 use chur_format::descriptor::{
     CatalogDescriptor, KeySlotDescriptor, MigrationDescriptor, ObjectStoreDescriptor,
@@ -327,7 +327,7 @@ pub fn create_with_params(
         descriptor_generation: 0,
         state: VaultState::Initializing,
         catalog: CatalogDescriptor {
-            catalog_format_version: CATALOG_FORMAT_VERSION_V11,
+            catalog_format_version: CATALOG_FORMAT_VERSION_V12,
             opaque_catalog_path_id: catalog_path_id,
             catalog_generation,
             catalog_header_commitment: header_commitment,
@@ -800,7 +800,10 @@ fn finish_unlock(
         if descriptor.state == VaultState::Active {
             let (to, migration_generation) =
                 match (descriptor.catalog.catalog_format_version, version) {
-                    (CATALOG_FORMAT_VERSION_V11, CATALOG_FORMAT_VERSION_V11) => break,
+                    (CATALOG_FORMAT_VERSION_V12, CATALOG_FORMAT_VERSION_V12) => break,
+                    (CATALOG_FORMAT_VERSION_V11, CATALOG_FORMAT_VERSION_V11) => {
+                        (CATALOG_FORMAT_VERSION_V12, 11)
+                    }
                     (CATALOG_FORMAT_VERSION_V10, CATALOG_FORMAT_VERSION_V10) => {
                         (CATALOG_FORMAT_VERSION_V11, 10)
                     }
@@ -883,6 +886,9 @@ fn finish_unlock(
                 (CATALOG_FORMAT_VERSION_V10, CATALOG_FORMAT_VERSION_V11) => {
                     schema::migrate_v10_to_v11(&mut catalog)?;
                 }
+                (CATALOG_FORMAT_VERSION_V11, CATALOG_FORMAT_VERSION_V12) => {
+                    schema::migrate_v11_to_v12(&mut catalog)?;
+                }
                 (CATALOG_FORMAT_VERSION_V8, CATALOG_FORMAT_VERSION_V9) => {
                     schema::migrate_v8_to_v9(&mut catalog)?;
                 }
@@ -908,8 +914,8 @@ fn finish_unlock(
     let version = schema::open_at_current_version(&mut catalog, now_ms)?;
     ensure!(
         descriptor.state == VaultState::Active
-            && descriptor.catalog.catalog_format_version == CATALOG_FORMAT_VERSION_V11
-            && version == CATALOG_FORMAT_VERSION_V11,
+            && descriptor.catalog.catalog_format_version == CATALOG_FORMAT_VERSION_V12
+            && version == CATALOG_FORMAT_VERSION_V12,
         CatalogCorrupt,
         "the catalog format version disagrees with the descriptor"
     );
@@ -997,6 +1003,7 @@ fn validate_catalog_migration(descriptor: &VaultDescriptor) -> Result<MigrationD
                     | (CATALOG_FORMAT_VERSION_V8, CATALOG_FORMAT_VERSION_V9, 8)
                     | (CATALOG_FORMAT_VERSION_V9, CATALOG_FORMAT_VERSION_V10, 9)
                     | (CATALOG_FORMAT_VERSION_V10, CATALOG_FORMAT_VERSION_V11, 10)
+                    | (CATALOG_FORMAT_VERSION_V11, CATALOG_FORMAT_VERSION_V12, 11)
             ),
         MigrationRequired,
         "the descriptor names an unsupported migration"
@@ -1711,7 +1718,7 @@ pub fn install_descriptor(
 ///
 /// The restore namespace is not openable yet, so it does not need an
 /// intermediate installed `MIGRATING` descriptor. The caller must update the
-/// unpublished descriptor to catalog v11 before making it active when this
+/// unpublished descriptor to catalog v12 before making it active when this
 /// function returns `true`.
 pub fn prepare_restored_catalog(
     catalog: &mut CatalogDb,
@@ -1736,6 +1743,7 @@ pub fn prepare_restored_catalog(
             schema::migrate_v8_to_v9(catalog)?;
             schema::migrate_v9_to_v10(catalog)?;
             schema::migrate_v10_to_v11(catalog)?;
+            schema::migrate_v11_to_v12(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
@@ -1749,6 +1757,7 @@ pub fn prepare_restored_catalog(
             schema::migrate_v8_to_v9(catalog)?;
             schema::migrate_v9_to_v10(catalog)?;
             schema::migrate_v10_to_v11(catalog)?;
+            schema::migrate_v11_to_v12(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
@@ -1761,6 +1770,7 @@ pub fn prepare_restored_catalog(
             schema::migrate_v8_to_v9(catalog)?;
             schema::migrate_v9_to_v10(catalog)?;
             schema::migrate_v10_to_v11(catalog)?;
+            schema::migrate_v11_to_v12(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
@@ -1772,6 +1782,7 @@ pub fn prepare_restored_catalog(
             schema::migrate_v8_to_v9(catalog)?;
             schema::migrate_v9_to_v10(catalog)?;
             schema::migrate_v10_to_v11(catalog)?;
+            schema::migrate_v11_to_v12(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
@@ -1782,6 +1793,7 @@ pub fn prepare_restored_catalog(
             schema::migrate_v8_to_v9(catalog)?;
             schema::migrate_v9_to_v10(catalog)?;
             schema::migrate_v10_to_v11(catalog)?;
+            schema::migrate_v11_to_v12(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
@@ -1791,6 +1803,7 @@ pub fn prepare_restored_catalog(
             schema::migrate_v8_to_v9(catalog)?;
             schema::migrate_v9_to_v10(catalog)?;
             schema::migrate_v10_to_v11(catalog)?;
+            schema::migrate_v11_to_v12(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
@@ -1799,6 +1812,7 @@ pub fn prepare_restored_catalog(
             schema::migrate_v8_to_v9(catalog)?;
             schema::migrate_v9_to_v10(catalog)?;
             schema::migrate_v10_to_v11(catalog)?;
+            schema::migrate_v11_to_v12(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
@@ -1806,21 +1820,29 @@ pub fn prepare_restored_catalog(
             schema::migrate_v8_to_v9(catalog)?;
             schema::migrate_v9_to_v10(catalog)?;
             schema::migrate_v10_to_v11(catalog)?;
+            schema::migrate_v11_to_v12(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
         (CATALOG_FORMAT_VERSION_V9, CATALOG_FORMAT_VERSION_V9) => {
             schema::migrate_v9_to_v10(catalog)?;
             schema::migrate_v10_to_v11(catalog)?;
+            schema::migrate_v11_to_v12(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
         (CATALOG_FORMAT_VERSION_V10, CATALOG_FORMAT_VERSION_V10) => {
             schema::migrate_v10_to_v11(catalog)?;
+            schema::migrate_v11_to_v12(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
-        (CATALOG_FORMAT_VERSION_V11, CATALOG_FORMAT_VERSION_V11) => Ok(false),
+        (CATALOG_FORMAT_VERSION_V11, CATALOG_FORMAT_VERSION_V11) => {
+            schema::migrate_v11_to_v12(catalog)?;
+            catalog.checkpoint()?;
+            Ok(true)
+        }
+        (CATALOG_FORMAT_VERSION_V12, CATALOG_FORMAT_VERSION_V12) => Ok(false),
         _ => bail!(
             MigrationRequired,
             "the restored descriptor and catalog versions are unsupported"
@@ -2297,14 +2319,14 @@ mod tests {
         let reopened = unlock_with_password(&root_dir, PASSWORD, 2).expect("migrate and unlock");
         assert_eq!(
             reopened.descriptor.catalog.catalog_format_version,
-            CATALOG_FORMAT_VERSION_V11
+            CATALOG_FORMAT_VERSION_V12
         );
         assert_eq!(reopened.descriptor.state, VaultState::Active);
         assert!(reopened.descriptor.migration.is_none());
         assert_eq!(
             reopened.descriptor.descriptor_generation,
             source.descriptor_generation
-                + 2 * u64::from(CATALOG_FORMAT_VERSION_V11 - source.catalog.catalog_format_version)
+                + 2 * u64::from(CATALOG_FORMAT_VERSION_V12 - source.catalog.catalog_format_version)
         );
     }
 
@@ -2333,14 +2355,14 @@ mod tests {
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V11
+                CATALOG_FORMAT_VERSION_V12
             );
             assert!(reopened.descriptor.migration.is_none());
             assert_eq!(
                 reopened.descriptor.descriptor_generation,
                 migrating.descriptor_generation
                     + 1
-                    + 2 * u64::from(CATALOG_FORMAT_VERSION_V11 - CATALOG_FORMAT_VERSION_V2)
+                    + 2 * u64::from(CATALOG_FORMAT_VERSION_V12 - CATALOG_FORMAT_VERSION_V2)
             );
         }
     }
@@ -2369,14 +2391,14 @@ mod tests {
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V11
+                CATALOG_FORMAT_VERSION_V12
             );
             assert!(reopened.descriptor.migration.is_none());
             assert_eq!(
                 reopened.descriptor.descriptor_generation,
                 migrating.descriptor_generation
                     + 1
-                    + 2 * u64::from(CATALOG_FORMAT_VERSION_V11 - CATALOG_FORMAT_VERSION_V3)
+                    + 2 * u64::from(CATALOG_FORMAT_VERSION_V12 - CATALOG_FORMAT_VERSION_V3)
             );
         }
     }
@@ -2405,14 +2427,14 @@ mod tests {
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V11
+                CATALOG_FORMAT_VERSION_V12
             );
             assert!(reopened.descriptor.migration.is_none());
             assert_eq!(
                 reopened.descriptor.descriptor_generation,
                 migrating.descriptor_generation
                     + 1
-                    + 2 * u64::from(CATALOG_FORMAT_VERSION_V11 - CATALOG_FORMAT_VERSION_V4)
+                    + 2 * u64::from(CATALOG_FORMAT_VERSION_V12 - CATALOG_FORMAT_VERSION_V4)
             );
         }
     }
@@ -2441,14 +2463,14 @@ mod tests {
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V11
+                CATALOG_FORMAT_VERSION_V12
             );
             assert!(reopened.descriptor.migration.is_none());
             assert_eq!(
                 reopened.descriptor.descriptor_generation,
                 migrating.descriptor_generation
                     + 1
-                    + 2 * u64::from(CATALOG_FORMAT_VERSION_V11 - CATALOG_FORMAT_VERSION_V6)
+                    + 2 * u64::from(CATALOG_FORMAT_VERSION_V12 - CATALOG_FORMAT_VERSION_V6)
             );
         }
     }
@@ -2975,7 +2997,7 @@ mod tests {
             unlock_with_password(&root_dir, PASSWORD, 1_700_000_001_000).expect("v8 migration");
         assert_eq!(
             reopened.descriptor.catalog.catalog_format_version,
-            CATALOG_FORMAT_VERSION_V11
+            CATALOG_FORMAT_VERSION_V12
         );
         let note = crate::notes::save(
             reopened.catalog().expect("catalog"),
@@ -2984,6 +3006,7 @@ mod tests {
             "title",
             "body",
             false,
+            crate::notes::NoteFormat::PlainText,
             1_700_000_001_000,
         )
         .expect("save");
@@ -3026,7 +3049,7 @@ mod tests {
                 unlock_with_password(&root_dir, PASSWORD, 1_700_000_001_000).expect("resume");
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V11
+                CATALOG_FORMAT_VERSION_V12
             );
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert!(reopened.descriptor.migration.is_none());
@@ -3045,6 +3068,54 @@ mod tests {
         }
     }
     #[test]
+    fn a_v11_note_format_migration_resumes_before_and_after_sql_commit() {
+        for sql_committed in [false, true] {
+            let root_dir = scratch();
+            let mut session = make(&root_dir);
+            let note = crate::notes::save(
+                session.catalog().expect("catalog"),
+                None,
+                0,
+                "Legacy",
+                "# literal source",
+                true,
+                crate::notes::NoteFormat::PlainText,
+                1_700_000_000_000,
+            )
+            .expect("note");
+            session.catalog().expect("catalog").connection().execute_batch("ALTER TABLE private_notes DROP COLUMN format; UPDATE vault_state SET catalog_format_version=11;").expect("v11 catalog");
+            let mut source = session.descriptor.clone();
+            source.catalog.catalog_format_version = CATALOG_FORMAT_VERSION_V11;
+            let migrating = migrating_descriptor(&source, CATALOG_FORMAT_VERSION_V12, 11);
+            install_authenticated_descriptor(
+                &root_dir,
+                &session.entry_name,
+                &migrating,
+                session.root_secret().expect("root"),
+            )
+            .expect("authenticated descriptor");
+            if sql_committed {
+                schema::migrate_v11_to_v12(session.catalog().expect("catalog"))
+                    .expect("SQL commit");
+            }
+            drop(session);
+            let reopened = unlock_with_password(&root_dir, PASSWORD, 1_700_000_001_000)
+                .expect("resume note format migration");
+            assert_eq!(
+                reopened.descriptor.catalog.catalog_format_version,
+                CATALOG_FORMAT_VERSION_V12
+            );
+            assert_eq!(reopened.descriptor.state, VaultState::Active);
+            assert!(reopened.descriptor.migration.is_none());
+            let restored = crate::notes::get(reopened.catalog_ref().expect("catalog"), &note.id)
+                .expect("legacy note");
+            assert_eq!(restored.format, crate::notes::NoteFormat::PlainText);
+            assert_eq!(restored.body, "# literal source");
+            assert_eq!(restored.revision, note.revision);
+        }
+    }
+
+    #[test]
     fn a_v10_to_v11_migration_resumes_before_and_after_the_sql_commit() {
         for sql_committed in [false, true] {
             let root_dir = scratch();
@@ -3054,7 +3125,7 @@ mod tests {
                 .expect("catalog")
                 .connection()
                 .execute_batch(
-                    "DROP TABLE own_sync_pending_album_memberships;
+                    "ALTER TABLE private_notes DROP COLUMN format; DROP TABLE own_sync_pending_album_memberships;
                  UPDATE vault_state SET catalog_format_version = 10;",
                 )
                 .expect("v10 catalog");
@@ -3077,7 +3148,7 @@ mod tests {
                 .expect("resume album intent migration");
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V11
+                CATALOG_FORMAT_VERSION_V12
             );
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert!(reopened.descriptor.migration.is_none());
@@ -3096,7 +3167,7 @@ mod tests {
     }
 
     #[test]
-    fn restore_prepares_v10_and_preserves_current_v11_without_an_implicit_future_downgrade() {
+    fn restore_prepares_v10_and_preserves_current_v12_without_an_implicit_future_downgrade() {
         let root_dir = scratch();
         let mut session = make(&root_dir);
         let descriptor = session.descriptor.clone();
@@ -3109,7 +3180,7 @@ mod tests {
             .expect("catalog")
             .connection()
             .execute_batch(
-                "DROP TABLE own_sync_pending_album_memberships;
+                "ALTER TABLE private_notes DROP COLUMN format; DROP TABLE own_sync_pending_album_memberships;
              UPDATE vault_state SET catalog_format_version = 10;",
             )
             .expect("v10 restore fixture");
@@ -3122,13 +3193,13 @@ mod tests {
         assert_eq!(
             schema::recorded_version(session.catalog().expect("catalog").connection())
                 .expect("version"),
-            Some(CATALOG_FORMAT_VERSION_V11)
+            Some(CATALOG_FORMAT_VERSION_V12)
         );
         session
             .catalog()
             .expect("catalog")
             .connection()
-            .execute("UPDATE vault_state SET catalog_format_version = 12", [])
+            .execute("UPDATE vault_state SET catalog_format_version = 13", [])
             .expect("future catalog fixture");
         assert_eq!(
             rejection(prepare_restored_catalog(
@@ -3140,7 +3211,7 @@ mod tests {
         assert_eq!(
             schema::recorded_version(session.catalog().expect("catalog").connection())
                 .expect("version"),
-            Some(12)
+            Some(13)
         );
     }
 
@@ -3149,7 +3220,7 @@ mod tests {
         for sql_committed in [false, true] {
             let root_dir = scratch();
             let mut session = make(&root_dir);
-            session.catalog().unwrap().transaction(|tx|{tx.execute_batch("DROP TABLE own_sync_pending_album_memberships; DROP TABLE content_index; UPDATE vault_state SET catalog_format_version=9;").unwrap();Ok(())}).unwrap();
+            session.catalog().unwrap().transaction(|tx|{tx.execute_batch("ALTER TABLE private_notes DROP COLUMN format; DROP TABLE own_sync_pending_album_memberships; DROP TABLE content_index; UPDATE vault_state SET catalog_format_version=9;").unwrap();Ok(())}).unwrap();
             let mut source = session.descriptor.clone();
             source.catalog.catalog_format_version = CATALOG_FORMAT_VERSION_V9;
             let migrating = migrating_descriptor(&source, CATALOG_FORMAT_VERSION_V10, 9);
@@ -3168,7 +3239,7 @@ mod tests {
                 .expect("resume content migration");
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V11
+                CATALOG_FORMAT_VERSION_V12
             );
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert!(reopened.descriptor.migration.is_none());

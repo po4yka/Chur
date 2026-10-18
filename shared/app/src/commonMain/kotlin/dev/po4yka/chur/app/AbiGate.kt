@@ -63,7 +63,7 @@ public sealed interface GateResult {
 }
 
 /** The major ABI version this application was built against. */
-public const val EXPECTED_ABI_MAJOR: UInt = 3u
+public const val EXPECTED_ABI_MAJOR: UInt = 4u
 
 /** Build-flavor bit: a release build. */
 public const val FLAVOR_RELEASE: UInt = 1u

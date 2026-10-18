@@ -2,13 +2,17 @@ package dev.po4yka.chur.app.vault
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -29,6 +33,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.LocalSaveableStateRegistry
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,6 +48,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.ActiveOperation
 import dev.po4yka.chur.app.Notice
 import dev.po4yka.chur.app.PrivateNoteConfirmation
@@ -49,6 +58,9 @@ import dev.po4yka.chur.app.PrivateNoteInputPolicy
 import dev.po4yka.chur.app.PrivateNotesUiState
 import dev.po4yka.chur.app.privateKeyboardOptions
 import dev.po4yka.chur.app.privateNoteTextFieldPolicy
+import dev.po4yka.chur.app.notes.MarkdownEditor
+import dev.po4yka.chur.app.notes.NoteImportAction
+import dev.po4yka.chur.ffi.PrivateNoteFormat
 import dev.po4yka.chur.app.theme.BackGlyph
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.LocalChurColors
@@ -66,10 +78,11 @@ fun PrivateNotesScreen(
     onCancelOperation: () -> Unit = {},
     notice: Notice? = null,
     onNoticeShown: (Long) -> Unit = {},
+    onImportActivity: (Boolean) -> Unit = {},
 ) {
     CompositionLocalProvider(LocalSaveableStateRegistry provides null) {
         PrivateNoteInputPolicy {
-            PrivateNotesContent(state, actions, onLock, onPanic, operation, onCancelOperation, notice, onNoticeShown)
+            PrivateNotesContent(state, actions, onLock, onPanic, operation, onCancelOperation, notice, onNoticeShown, onImportActivity)
         }
     }
 }
@@ -85,6 +98,7 @@ private fun PrivateNotesContent(
     onCancelOperation: () -> Unit,
     notice: Notice?,
     onNoticeShown: (Long) -> Unit,
+    onImportActivity: (Boolean) -> Unit,
 ) {
     val colors = LocalChurColors.current
     val editor = state.editor
@@ -118,7 +132,7 @@ private fun PrivateNotesContent(
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
             if (editor == null) {
-                PrivateNotesList(state, actions, busy, Modifier.weight(1f))
+                PrivateNotesList(state, actions, busy, Modifier.weight(1f), onImportActivity)
             } else {
                 PrivateNoteEditor(editor, actions, busy, Modifier.weight(1f))
             }
@@ -173,11 +187,14 @@ private fun PrivateNotesContent(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun PrivateNotesList(state: PrivateNotesUiState, actions: PrivateNotesActions, busy: Boolean, modifier: Modifier) {
+private fun PrivateNotesList(state: PrivateNotesUiState, actions: PrivateNotesActions, busy: Boolean, modifier: Modifier, onImportActivity: (Boolean) -> Unit) {
+    var importFailed by remember { mutableStateOf(false) }
     val colors = LocalChurColors.current
     val selecting = state.selection.isNotEmpty()
     Column(modifier.padding(horizontal = ChurSpacing.gutter), verticalArrangement = Arrangement.spacedBy(ChurSpacing.one)) {
         FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            if (!state.trash && !selecting) NoteImportAction(enabled = !busy,
+                onImported = actions::importMarkdown, onFailure = { importFailed = true }, onPickerActive = onImportActivity)
             if (!selecting) TextButton(enabled = !busy, onClick = { actions.showTrash(!state.trash) }) {
                 Text(if (state.trash) "Active notes" else "Trash")
             }
@@ -185,6 +202,7 @@ private fun PrivateNotesList(state: PrivateNotesUiState, actions: PrivateNotesAc
             if (!state.trash) TextButton(enabled = !busy && !state.loading && state.notes.isNotEmpty(),
                 onClick = actions::selectPage) { Text("Select page") }
         }
+        if (importFailed) Text("The Markdown file could not be imported. Use UTF-8 text up to 256 KiB.", color = colors.error)
         OutlinedTextField(value = state.terms, onValueChange = actions::search, enabled = !busy, singleLine = true,
             label = { Text(if (state.trash) "Search Trash" else "Search private notes") },
             keyboardOptions = privateKeyboardOptions().copy(imeAction = ImeAction.Search),
@@ -234,39 +252,48 @@ private fun PrivateNotesList(state: PrivateNotesUiState, actions: PrivateNotesAc
 @Composable
 private fun PrivateNoteEditor(editor: PrivateNoteEditorState, actions: PrivateNotesActions, busy: Boolean, modifier: Modifier) {
     val colors = LocalChurColors.current
-    Column(modifier.padding(ChurSpacing.gutter), verticalArrangement = Arrangement.spacedBy(ChurSpacing.one)) {
-        if (editor.trashed) {
-            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(ChurSpacing.two)) {
-                item { Text(editor.title.ifBlank { "Untitled note" }, style = MaterialTheme.typography.titleLarge, color = colors.ink) }
-                items(documentTextChunks(editor.body)) { Text(it, style = MaterialTheme.typography.bodyMedium, color = colors.ink) }
+    BoxWithConstraints(modifier) {
+        // Body has its own bounded viewport; metadata never competes for its height.
+        // The surrounding form scrolls below the sticky Save/Lock app bar.
+        val editorHeight = maxOf(360.dp, maxHeight * 0.7f)
+        Column(Modifier.fillMaxWidth().testTag("private-note-editor-scroll")
+            .verticalScroll(rememberScrollState()).padding(ChurSpacing.gutter),
+            verticalArrangement = Arrangement.spacedBy(ChurSpacing.one)) {
+            if (editor.trashed && editor.format == PrivateNoteFormat.MARKDOWN) {
+                Text(editor.title.ifBlank { "Untitled note" }, style = MaterialTheme.typography.titleLarge, color = colors.ink)
+                dev.po4yka.chur.app.notes.MarkdownPreview(editor.body, Modifier.height(editorHeight).fillMaxWidth())
+            } else if (editor.trashed) {
+                LazyColumn(Modifier.height(editorHeight), verticalArrangement = Arrangement.spacedBy(ChurSpacing.two)) {
+                    item { Text(editor.title.ifBlank { "Untitled note" }, style = MaterialTheme.typography.titleLarge, color = colors.ink) }
+                    items(documentTextChunks(editor.body)) { Text(it, style = MaterialTheme.typography.bodyMedium, color = colors.ink) }
+                }
+            } else {
+                OutlinedTextField(value = editor.title, onValueChange = actions::title, singleLine = true, enabled = !busy,
+                    keyboardOptions = privateKeyboardOptions().copy(imeAction = ImeAction.Next), label = { Text("Title") },
+                    modifier = Modifier.fillMaxWidth().privateNoteTextFieldPolicy().testTag("private-note-title"),
+                    colors = churOutlinedTextFieldColors())
+                MarkdownEditor(editor.body, actions::body, editor.format == PrivateNoteFormat.MARKDOWN,
+                    { actions.format(if (it) PrivateNoteFormat.MARKDOWN else PrivateNoteFormat.PLAIN_TEXT) },
+                    Modifier.fillMaxWidth().height(editorHeight), private = true, enabled = !busy)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = editor.pinned, onCheckedChange = actions::pinned, enabled = !busy)
+                    Text("Pinned", color = colors.ink)
+                }
+                Text(if (editor.dirty) "Unsaved changes are cleared when the vault locks."
+                    else if (editor.saved != null) "Saved in this vault." else "Save to keep this note in the vault.",
+                    style = MaterialTheme.typography.bodySmall, color = colors.inkMuted)
             }
-        } else {
-            OutlinedTextField(value = editor.title, onValueChange = actions::title, singleLine = true, enabled = !busy,
-                keyboardOptions = privateKeyboardOptions().copy(imeAction = ImeAction.Next), label = { Text("Title") },
-                modifier = Modifier.fillMaxWidth().privateNoteTextFieldPolicy().testTag("private-note-title"),
-                colors = churOutlinedTextFieldColors())
-            OutlinedTextField(value = editor.body, onValueChange = actions::body, enabled = !busy,
-                keyboardOptions = privateKeyboardOptions(), label = { Text("Note") },
-                modifier = Modifier.fillMaxWidth().weight(1f).privateNoteTextFieldPolicy().testTag("private-note-body"),
-                colors = churOutlinedTextFieldColors())
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = editor.pinned, onCheckedChange = actions::pinned, enabled = !busy)
-                Text("Pinned", color = colors.ink)
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                if (editor.trashed) {
+                    TextButton(enabled = !busy, onClick = actions::restore) { Text("Restore") }
+                    TextButton(enabled = !busy, onClick = actions::requestPurge) { Text("Delete permanently") }
+                } else if (editor.saved != null) {
+                    TextButton(enabled = !busy, onClick = actions::requestTrash) { Text("Move to Trash") }
+                }
+                TextButton(enabled = !busy && (editor.saved != null || editor.canSave), onClick = actions::export) { Text("Export") }
+                if (!editor.trashed) TextButton(enabled = !busy && (editor.saved != null || editor.canSave),
+                    onClick = actions::exportEncrypted) { Text("Encrypted archive") }
             }
-            Text(if (editor.dirty) "Unsaved changes are cleared when the vault locks."
-                else if (editor.saved != null) "Saved in this vault." else "Save to keep this note in the vault.",
-                style = MaterialTheme.typography.bodySmall, color = colors.inkMuted)
-        }
-        FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            if (editor.trashed) {
-                TextButton(enabled = !busy, onClick = actions::restore) { Text("Restore") }
-                TextButton(enabled = !busy, onClick = actions::requestPurge) { Text("Delete permanently") }
-            } else if (editor.saved != null) {
-                TextButton(enabled = !busy, onClick = actions::requestTrash) { Text("Move to Trash") }
-            }
-            TextButton(enabled = !busy && (editor.saved != null || editor.canSave), onClick = actions::export) { Text("Export") }
-            if (!editor.trashed) TextButton(enabled = !busy && (editor.saved != null || editor.canSave),
-                onClick = actions::exportEncrypted) { Text("Encrypted archive") }
         }
     }
 }

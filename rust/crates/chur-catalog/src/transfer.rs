@@ -199,7 +199,7 @@ pub fn copy_note(db: &mut CatalogDb, source: &notes::Note) -> Result<Id> {
     let id = chur_crypto::random::id()?;
     db.transaction(|tx|{
         let count:i64=tx.query_row("SELECT count(*) FROM private_notes",[],|r|r.get(0)).map_err(|e|map_sqlite(e,"the note count could not be read"))?;ensure!(count<10000,ResourceLimitExceeded,"the private note count limit was reached");
-        tx.execute("INSERT INTO private_notes(note_id,revision,title,body,created_ms,updated_ms,pinned) VALUES(?1,1,?2,?3,?4,?5,?6)",params![id.as_bytes().as_slice(),&source.title,&source.body,created,updated,source.pinned]).map_err(|e|map_sqlite(e,"the archive note could not be imported"))?;
+        tx.execute("INSERT INTO private_notes(note_id,revision,title,body,created_ms,updated_ms,pinned,format) VALUES(?1,1,?2,?3,?4,?5,?6,?7)",params![id.as_bytes().as_slice(),&source.title,&source.body,created,updated,source.pinned,source.format as u8]).map_err(|e|map_sqlite(e,"the archive note could not be imported"))?;
         tx.execute("INSERT INTO private_note_search(rowid,title,body) SELECT rowid,title,body FROM private_notes WHERE note_id=?1",[id.as_bytes().as_slice()]).map_err(|e|map_sqlite(e,"the note search row could not be imported"))?;schema::bump_generation(tx)?;Ok(id)
     })
 }

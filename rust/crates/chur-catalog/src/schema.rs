@@ -16,7 +16,7 @@ use chur_format::{
         CATALOG_FORMAT_VERSION_V1, CATALOG_FORMAT_VERSION_V2, CATALOG_FORMAT_VERSION_V3,
         CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V5, CATALOG_FORMAT_VERSION_V6,
         CATALOG_FORMAT_VERSION_V7, CATALOG_FORMAT_VERSION_V8, CATALOG_FORMAT_VERSION_V9,
-        CATALOG_FORMAT_VERSION_V10, CATALOG_FORMAT_VERSION_V11,
+        CATALOG_FORMAT_VERSION_V10, CATALOG_FORMAT_VERSION_V11, CATALOG_FORMAT_VERSION_V12,
     },
     envelope::ObjectKeyEnvelope,
 };
@@ -65,6 +65,9 @@ const STEPS: &[Step] = &[
     },
     Step {
         version: CATALOG_FORMAT_VERSION_V11,
+    },
+    Step {
+        version: CATALOG_FORMAT_VERSION_V12,
     },
 ];
 
@@ -712,6 +715,24 @@ INSERT INTO own_sync_pending_album_memberships(album_id, object_id)
     SELECT album_id, object_id FROM album_memberships;
 "#;
 
+/// Explicit body interpretation; all existing notes remain literal text.
+const V12_DDL: &str = "ALTER TABLE private_notes ADD COLUMN format INTEGER NOT NULL DEFAULT 0 CHECK(format IN (0,1));";
+
+/// Adds the body discriminator after an authenticated v11 transition.
+pub fn migrate_v11_to_v12(db: &mut CatalogDb) -> Result<()> {
+    ensure!(
+        recorded_version(db.connection())? == Some(CATALOG_FORMAT_VERSION_V11),
+        MigrationRequired,
+        "the catalog is not version eleven"
+    );
+    db.transaction(|tx| {
+        tx.execute("UPDATE vault_state SET active_migration_target=12 WHERE only_row=1", []).map_err(|e| map_sqlite(e, "the note format migration target could not be written"))?;
+        tx.execute_batch(V12_DDL).map_err(|e| map_sqlite(e, "the note format migration failed"))?;
+        tx.execute("UPDATE vault_state SET catalog_format_version=12,active_migration_target=NULL WHERE only_row=1", []).map_err(|e| map_sqlite(e, "the note format catalog version could not be written"))?;
+        Ok(())
+    })
+}
+
 /// Retains the existing album snapshot after an authenticated v10 transition.
 ///
 /// # Errors
@@ -768,15 +789,15 @@ pub fn open_at_current_version(db: &mut CatalogDb, now_ms: u64) -> Result<u16> {
     let present = recorded_version(db.connection())?;
     let Some(present) = present else {
         install(db, now_ms)?;
-        return Ok(CATALOG_FORMAT_VERSION_V11);
+        return Ok(CATALOG_FORMAT_VERSION_V12);
     };
-    if present != CATALOG_FORMAT_VERSION_V11 {
+    if present != CATALOG_FORMAT_VERSION_V12 {
         bail!(
             MigrationRequired,
             "the catalog requires an authenticated schema migration"
         );
     }
-    Ok(CATALOG_FORMAT_VERSION_V11)
+    Ok(CATALOG_FORMAT_VERSION_V12)
 }
 
 /// The version the database records, or `None` when the schema is absent.
@@ -844,13 +865,16 @@ fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
             .execute_batch(V11_DDL)
             .map_err(|error| map_sqlite(error, "the album intent schema could not be created"))?;
         transaction
+            .execute_batch(V12_DDL)
+            .map_err(|e| map_sqlite(e, "the note format schema could not be created"))?;
+        transaction
             .execute(
                 "INSERT INTO vault_state (
                      only_row, catalog_format_version, catalog_generation,
                      active_migration_target, object_store_checkpoint,
                      integrity_checkpoint_ms, capability_flags
                  ) VALUES (1, ?1, 1, NULL, 0, ?2, 0)",
-                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V11), checkpoint],
+                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V12), checkpoint],
             )
             .map_err(|error| map_sqlite(error, "the catalog state row could not be written"))?;
         Ok(())
@@ -1422,11 +1446,41 @@ mod tests {
     }
 
     #[test]
-    fn a_new_catalog_installs_version_eleven() {
+    fn v11_note_format_migration_preserves_literal_source_and_rolls_back_on_failure() {
+        let mut db = open();
+        open_at_current_version(&mut db, 1).expect("current");
+        db.connection().execute_batch("ALTER TABLE private_notes DROP COLUMN format; UPDATE vault_state SET catalog_format_version=11; INSERT INTO private_notes(note_id,revision,title,body,created_ms,updated_ms,pinned) VALUES(x'01010101010101010101010101010101',7,'Legacy','# literal text',1,2,1);").expect("v11 rows");
+        let generation = generation(&db).expect("generation");
+        db.connection().execute_batch("CREATE TRIGGER refuse_v12 BEFORE UPDATE OF catalog_format_version ON vault_state WHEN NEW.catalog_format_version=12 BEGIN SELECT RAISE(ABORT,'fixture failure'); END;").expect("failure trigger");
+        assert!(migrate_v11_to_v12(&mut db).is_err());
+        assert_eq!(
+            recorded_version(db.connection()).expect("version"),
+            Some(CATALOG_FORMAT_VERSION_V11)
+        );
+        let (format_columns, marker):(i64, Option<i64>) = db.connection().query_row("SELECT (SELECT count(*) FROM pragma_table_info('private_notes') WHERE name='format'),active_migration_target FROM vault_state", [], |r| Ok((r.get(0)?,r.get(1)?))).expect("rollback");
+        assert_eq!((format_columns, marker), (0, None));
+        db.connection()
+            .execute_batch("DROP TRIGGER refuse_v12")
+            .expect("clear failure");
+        migrate_v11_to_v12(&mut db).expect("real migration");
+        let id = Id::from_slice(&[1; 16]).expect("id");
+        let note = crate::notes::get(&db, &id).expect("legacy note");
+        assert_eq!(note.format, crate::notes::NoteFormat::PlainText);
+        assert_eq!(note.body, "# literal text");
+        assert_eq!(note.revision, 7);
+        assert!(note.pinned);
+        assert_eq!(
+            generation,
+            self::generation(&db).expect("generation retained")
+        );
+    }
+
+    #[test]
+    fn a_new_catalog_installs_version_twelve() {
         let mut db = open();
         assert_eq!(
             open_at_current_version(&mut db, 1_700_000_000_000).expect("install"),
-            CATALOG_FORMAT_VERSION_V11
+            CATALOG_FORMAT_VERSION_V12
         );
         let sharing_tables: i64 = db
             .connection()
@@ -1498,7 +1552,7 @@ mod tests {
         }
         assert_eq!(
             STEPS.last().map(|step| step.version),
-            Some(CATALOG_FORMAT_VERSION_V11)
+            Some(CATALOG_FORMAT_VERSION_V12)
         );
     }
 

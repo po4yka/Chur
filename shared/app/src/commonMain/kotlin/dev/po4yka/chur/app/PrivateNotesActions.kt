@@ -1,6 +1,7 @@
 package dev.po4yka.chur.app
 
 import dev.po4yka.chur.ffi.PrivateNoteSummary
+import dev.po4yka.chur.ffi.PrivateNoteFormat
 
 /** Events from the pure private-notes screen. Storage remains in the session controller. */
 interface PrivateNotesActions {
@@ -14,6 +15,8 @@ interface PrivateNotesActions {
     fun title(value: String)
     fun body(value: String)
     fun pinned(value: Boolean)
+    fun format(value: PrivateNoteFormat)
+    fun importMarkdown(title: String, body: String)
     fun back()
     fun dismissConfirmation()
     fun discardAndBack()

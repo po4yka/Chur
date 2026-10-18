@@ -18,6 +18,7 @@ import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.text.AnnotatedString
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.po4yka.chur.app.theme.ChurTheme
@@ -59,10 +60,70 @@ class DiscreetExitPresentationTest {
     @Test
     fun public_note_editor_can_open_settings_without_returning_to_the_list() {
         var settings = 0
-        present({ NoteEditorScreen(OpenNote(Note("public", "Public note", "Public text", 1), false),
-            {}, {}, {}, onOpenSettings = { settings++ }) }) { f ->
+        val note = Note("public", "Public note", "Public text", 1)
+        present({ NoteEditorScreen(OpenNote(note, false),
+            {}, {}, {}, onOpenSettings = { settings++ }, savedNote = note) }) { f ->
             f.click("Settings")
             assertEquals(1, settings)
+        }
+    }
+
+    @Test
+    fun public_markdown_menu_does_not_advertise_private_controls() {
+        val note = Note("public", "Public note", "**Public text**", 1)
+        present({ NoteEditorScreen(OpenNote(note, false), {}, {}, {},
+            onOpenSettings = {}, savedNote = note) }) { f ->
+            assertTrue(f.await { f.nodes().any { it.config.getOrNull(SemanticsProperties.HorizontalScrollAxisRange)?.maxValue()?.let { max -> max > 0f } == true } })
+            f.main {
+                val toolbar = f.nodes().first { it.config.getOrNull(SemanticsProperties.HorizontalScrollAxisRange)
+                    ?.maxValue()?.let { maximum -> maximum > 0f } == true }
+                assertTrue(toolbar.config[SemanticsActions.ScrollBy].action?.invoke(100_000f, 0f) == true)
+            }
+            assertTrue(f.await { f.nodes().any { node ->
+                node.config.getOrNull(SemanticsProperties.HorizontalScrollAxisRange)?.let { axis ->
+                    axis.maxValue() > 0f && kotlin.math.abs(axis.maxValue() - axis.value()) <= 1f
+                } == true
+            } })
+            f.click("Format")
+            assertTrue(f.await { f.has("Bold") })
+            assertFalse(f.has("Lock and hide"))
+        }
+    }
+
+    @Test
+    fun public_settings_keeps_a_failed_draft_until_saved_content_is_acknowledged() {
+        val note = Note("public", "Public note", "Public text", 1)
+        val saved = mutableStateOf(note)
+        val failed = mutableStateOf(true)
+        var submitted: Note? = null
+        var settings = 0
+        present({ NoteEditorScreen(OpenNote(note, false), { submitted = it }, {}, {},
+            onOpenSettings = { settings++ }, savedNote = saved.value, writeFailed = failed.value) }) { f ->
+            assertTrue(f.await { f.nodes().any { it.config.getOrNull(SemanticsProperties.TestTag) == "note-body" } })
+            f.main {
+                val title = f.nodes().first { it.config.getOrNull(SemanticsProperties.EditableText)?.text == note.title }
+                val body = f.nodes().first { it.config.getOrNull(SemanticsProperties.TestTag) == "note-body" }
+                val settingsAction = f.buttons("Settings").single().config[SemanticsActions.OnClick].action
+                // All callbacks come from one composition, as batched input can.
+                assertTrue(title.config[SemanticsActions.SetText].action?.invoke(AnnotatedString("Changed public title")) == true)
+                assertTrue(body.config[SemanticsActions.SetText].action?.invoke(AnnotatedString("Changed public source")) == true)
+                assertTrue(settingsAction?.invoke() == true)
+            }
+            assertTrue(f.await { f.has("Save failed") })
+            assertEquals(0, settings)
+            f.click("Keep editing")
+            assertTrue(f.await { f.buttons("Settings").any { SemanticsProperties.Disabled !in it.config } })
+            assertTrue(f.await { f.nodes().any {
+                it.config.getOrNull(SemanticsProperties.EditableText)?.text == "Changed public title"
+            } })
+            f.click("Settings")
+            f.main {
+                assertEquals("Changed public title", submitted?.title)
+                assertEquals("Changed public source", submitted?.body)
+                failed.value = false
+                saved.value = requireNotNull(submitted)
+            }
+            assertTrue(f.await { settings == 1 })
         }
     }
 

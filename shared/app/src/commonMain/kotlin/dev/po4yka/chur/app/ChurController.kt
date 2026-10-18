@@ -34,6 +34,7 @@ import dev.po4yka.chur.vault.LockPolicy
 import dev.po4yka.chur.vault.VaultRepository
 import dev.po4yka.chur.vault.VaultState
 import dev.po4yka.chur.imports.PickedMedia
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -179,6 +180,8 @@ class ChurController(
     private val _launcherRequest = MutableStateFlow<LauncherRequest?>(null)
     val launcherRequest: StateFlow<LauncherRequest?> = _launcherRequest.asStateFlow()
     private val _notes = MutableStateFlow<List<Note>>(emptyList())
+    private val _publicNoteWriteFailureId = MutableStateFlow<String?>(null)
+    private val publicNoteWrites = kotlinx.coroutines.sync.Mutex()
     private val _disclosureDue = MutableStateFlow(false)
     private val _publicDisclosureRequired = MutableStateFlow(true)
     /** Camera must show the public-data statement before its first file write. */
@@ -329,6 +332,7 @@ class ChurController(
 
     /** The public notes. */
     val notesState: StateFlow<List<Note>> = _notes.asStateFlow()
+    val publicNoteWriteFailureId: StateFlow<String?> = _publicNoteWriteFailureId.asStateFlow()
 
     /** The current library page. */
     val page: StateFlow<ObjectPage> = _page.asStateFlow()
@@ -2014,7 +2018,7 @@ class ChurController(
                 }
                 checkSession()
                 val output = destination ?: exports.create(
-                    request.filename, "text/plain", target, uri, request.exportSize,
+                    request.filename, request.contentType, target, uri, request.exportSize,
                 ) ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the export destination")
                 destination = output
                 checkSession()
@@ -2682,17 +2686,28 @@ class ChurController(
      * `Notes.ordered` sorts by it.
      */
     fun putNote(note: Note) = guarded {
-        val stored = notes.all().firstOrNull { it.id == note.id }
-        if (stored == null && note.title.isBlank() && note.body.isBlank()) return@guarded
-        if (stored != null && stored.copy(updatedMs = note.updatedMs) == note) return@guarded
-        val first = !notes.disclosureAcknowledged()
-        notes.put(note.copy(updatedMs = clock()))
-        _notes.value = notes.all()
-        // `DISCREET_MODE.md`: the statement appears on the first public-shell
-        // write, which is this one. It is raised after the write rather than
-        // before it, so the note the user was making is never interrupted.
-        if (first) {
-            _disclosureDue.value = true
+        publicNoteWrites.withLock {
+            try {
+                val all = notes.all()
+                val stored = all.firstOrNull { it.id == note.id }
+                if (stored == null && note.title.isBlank() && note.body.isBlank()) return@withLock
+                if (stored != null && stored.copy(updatedMs = note.updatedMs) == note) {
+                    _notes.value = all
+                    if (_publicNoteWriteFailureId.value == note.id) _publicNoteWriteFailureId.value = null
+                    return@withLock
+                }
+                val first = !notes.disclosureAcknowledged()
+                notes.put(note.copy(updatedMs = clock()))
+                _notes.value = notes.all()
+                if (_publicNoteWriteFailureId.value == note.id) _publicNoteWriteFailureId.value = null
+                // The disclosure follows the first successful public write.
+                if (first) _disclosureDue.value = true
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                _publicNoteWriteFailureId.value = note.id
+                throw failure
+            }
         }
     }
 
@@ -2716,8 +2731,11 @@ class ChurController(
      * because that note is blank: a note the user emptied stays.
      */
     fun removeNote(id: String) = guarded {
-        notes.remove(id)
-        _notes.value = notes.all()
+        publicNoteWrites.withLock {
+            notes.remove(id)
+            _notes.value = notes.all()
+            if (_publicNoteWriteFailureId.value == id) _publicNoteWriteFailureId.value = null
+        }
     }
 
     /** Reports the outcome of a host-driven import, §13 of the media pipeline. */
@@ -3120,9 +3138,7 @@ class ChurController(
         // cancelled: its bootstrap still finishes. Until the next unlock finds
         // the vault that owns the saved state, the engine shows nothing that
         // a run or a setup reports, so neither can show the server late.
-        // Fence publication before cancellation handlers can report old status.
-        sync?.endSession()
-        sessionSync.cancelChildren()
+        endSessionSync()
         // A launch whose result never arrived belonged to the session that just
         // ended. Carrying its count forward would suppress the background lock
         // of the next session, so the count ends with the session. So do the
@@ -3131,6 +3147,12 @@ class ChurController(
         hostActivities = 0
         prompts = 0
         promptEpoch += 1
+    }
+
+    /** Clears the session's sync projection before any locked/public route can be observed. */
+    private fun endSessionSync() {
+        sync?.endSession()
+        sessionSync.cancelChildren()
     }
 
     private suspend fun completeUnlock(target: AppRoute, epoch: Long) {

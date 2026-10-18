@@ -206,6 +206,8 @@ class SelectiveArchivePresentationTest {
             override fun title(value: String) = Unit
             override fun body(value: String) = Unit
             override fun pinned(value: Boolean) = Unit
+            override fun format(value: dev.po4yka.chur.ffi.PrivateNoteFormat) = Unit
+            override fun importMarkdown(title: String, body: String) = Unit
             override fun back() = Unit
             override fun dismissConfirmation() = Unit
             override fun discardAndBack() = Unit

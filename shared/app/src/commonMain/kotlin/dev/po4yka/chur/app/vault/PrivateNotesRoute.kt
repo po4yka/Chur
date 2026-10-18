@@ -41,6 +41,7 @@ fun PrivateNotesRoute(
     onEncryptedExport: (List<PrivateNoteSelection>) -> Unit = {},
     initialCreateRequest: Long? = null,
     onNavigationBusyChange: (Boolean) -> Unit = {},
+    onImportActivity: (Boolean) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val close by rememberUpdatedState(onClose)
@@ -66,6 +67,6 @@ fun PrivateNotesRoute(
             touch()
         }
     }) {
-        PrivateNotesScreen(state, controller, onLock, onPanic, operation, onCancelOperation, notice, onNoticeShown)
+        PrivateNotesScreen(state, controller, onLock, onPanic, operation, onCancelOperation, notice, onNoticeShown, onImportActivity)
     }
 }

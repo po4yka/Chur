@@ -57,11 +57,14 @@ ktor = "3.6.0"
 androidTesseract = "4.9.0"
 # Android-only source-backed chrome; iOS uses UIKit materials.
 haze = "2.0.1"
+markdownRenderer = "0.46.0"
 
 [libraries]
 haze-core = { module = "dev.chrisbanes.haze:haze", version.ref = "haze" }
 haze-blur = { module = "dev.chrisbanes.haze:haze-blur", version.ref = "haze" }
 haze-glass = { module = "dev.chrisbanes.haze:haze-glass", version.ref = "haze" }
+markdown-renderer = { module = "com.mikepenz:multiplatform-markdown-renderer-m3", version.ref = "markdownRenderer" }
+markdown-code = { module = "com.mikepenz:multiplatform-markdown-renderer-code", version.ref = "markdownRenderer" }
 android-tesseract = { module = "cz.adaptech.tesseract4android:tesseract4android", version.ref = "androidTesseract" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }

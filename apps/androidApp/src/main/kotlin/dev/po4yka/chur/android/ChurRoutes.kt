@@ -325,6 +325,7 @@ private fun PublicShellRoute(controller: ChurController, route: AppRoute) {
 private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> Unit) {
     val focus = LocalFocusManager.current
     val notes by controller.notesState.collectAsState()
+    val writeFailureId by controller.publicNoteWriteFailureId.collectAsState()
     val disclosureDue by controller.disclosureDue.collectAsState()
     var query by remember { mutableStateOf("") }
     // Saved state, so a recreation or a process restart reopens the note being
@@ -337,12 +338,11 @@ private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> U
     }
 
     editing?.let { open ->
-        // System and predictive Back close the editor, as its arrow does,
-        // `DESIGN.md` §22.1. Closing is all either does: the editor writes the
-        // draft as it leaves composition, so no save rides on the press.
-        BackHandler { editing = null }
         NoteEditorScreen(
             open = open,
+            savedNote = notes.firstOrNull { it.id == open.note.id },
+            writeFailed = writeFailureId == open.note.id,
+            systemBack = { onBack -> BackHandler(onBack = onBack) },
             onSave = controller::putNote,
             onRemove = controller::removeNote,
             onBack = { editing = null },
@@ -356,6 +356,11 @@ private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> U
 
     NotesScreen(
         notes = notes,
+        onImport = { title, body ->
+            val imported = Note(id = "note-${System.nanoTime()}", title = title, body = body, updatedMs = System.currentTimeMillis())
+            controller.putNote(imported)
+            editing = OpenNote(imported, isNew = false)
+        },
         query = query,
         onQueryChange = { query = it },
         onOpen = { editing = OpenNote(it, isNew = false) },
@@ -806,7 +811,7 @@ private fun VaultRoute(controller: ChurController) {
             }
         }
     }
-    val privateNoteFilePicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+    val onPrivateNoteFilePicked: (android.net.Uri?) -> Unit = { uri ->
         val request = pendingPrivateNoteExport
         pendingPrivateNoteExport = null
         if (request != null) {
@@ -816,6 +821,8 @@ private fun VaultRoute(controller: ChurController) {
             if (uri != null) controller.exportPrivateNote(request, ExportTarget.FILES, uri.toString())
         }
     }
+    val privateNoteFilePicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain"), onPrivateNoteFilePicked)
+    val privateMarkdownFilePicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/markdown"), onPrivateNoteFilePicked)
     val albumExportPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         val albumId = pendingAlbumExport
         pendingAlbumExport = null
@@ -1139,6 +1146,11 @@ private fun VaultRoute(controller: ChurController) {
             onClose = { focusManager.clearFocus(); showingPrivateNotes = false; privateNoteCreateRequest = null },
             onLock = { controller.lock() }, onPanic = controller::panic,
             onTouch = { controller.recordPrivateNoteActivity(generation) },
+            onImportActivity = { active ->
+                if ((controller.vaultState.value as? VaultState.Unlocked)?.generation == generation) {
+                    if (active) controller.beginHostActivity() else controller.endHostActivity()
+                }
+            },
             onExport = { choosingPrivateNoteExport = PrivateNoteExportRequest.from(it, generation) },
             systemBack = { enabled, back -> BackHandler(enabled = enabled, onBack = back) },
             operation = operation, onCancelOperation = controller::cancelActiveOperation,
@@ -1152,7 +1164,7 @@ private fun VaultRoute(controller: ChurController) {
                     if (target == ExportTarget.FILES) {
                         pendingPrivateNoteExport = request
                         controller.beginHostActivity()
-                        try { privateNoteFilePicker.launch(request.filename) } catch (_: Exception) {
+                        try { if (request.contentType == "text/markdown") privateMarkdownFilePicker.launch(request.filename) else privateNoteFilePicker.launch(request.filename) } catch (_: Exception) {
                             pendingPrivateNoteExport = null
                             controller.endHostActivity()
                             controller.report("The file picker could not be opened.")

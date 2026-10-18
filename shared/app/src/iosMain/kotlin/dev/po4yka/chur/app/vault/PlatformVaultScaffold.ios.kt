@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -55,7 +56,7 @@ internal actual fun PlatformVaultScaffold(
     SideEffect {
         if (session != 0L) chrome.update(state, actions, colors.accent, navigationBusy, covered) else chrome.clear()
     }
-    CompositionLocalProvider(LocalVaultBottomInset provides bottom) {
+    CompositionLocalProvider(LocalContentColor provides colors.ink, LocalVaultBottomInset provides bottom) {
         Box(Modifier.fillMaxSize().background(colors.canvas)) {
             content(PaddingValues(
                 start = safe.calculateStartPadding(direction),

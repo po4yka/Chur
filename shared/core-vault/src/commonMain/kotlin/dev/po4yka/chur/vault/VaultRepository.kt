@@ -4,6 +4,7 @@ import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.core.platformkeys.DeviceSlot
 import dev.po4yka.chur.core.platformkeys.DeviceSlotException
 import dev.po4yka.chur.ffi.PrivateNote
+import dev.po4yka.chur.ffi.PrivateNoteFormat
 import dev.po4yka.chur.ffi.PrivateNoteSelection
 import dev.po4yka.chur.ffi.PrivateNotePage
 import dev.po4yka.chur.ffi.PrivateNoteAction
@@ -367,7 +368,7 @@ class VaultRepository(
     /** A stale editor must not access a later unlocked identity. */
     suspend fun privateNotes(generation: Long, terms: String = "", trashed: Boolean = false, limit: Int = 50, cursor: ByteArray? = null): PrivateNotePage = withNoteSession(generation) { ChurVault.privateNotes(it, terms, trashed, limit, cursor) }
     suspend fun privateNote(generation: Long, id: ByteArray): PrivateNote = withNoteSession(generation) { ChurVault.privateNote(it, id) }
-    suspend fun savePrivateNote(generation: Long, id: ByteArray? = null, expectedRevision: Long = 0, title: String, body: String, pinned: Boolean = false): PrivateNote = withNoteSession(generation) { ChurVault.savePrivateNote(it, id, expectedRevision, title, body, pinned) }
+    suspend fun savePrivateNote(generation: Long, id: ByteArray? = null, expectedRevision: Long = 0, title: String, body: String, pinned: Boolean = false, format: PrivateNoteFormat = PrivateNoteFormat.PLAIN_TEXT): PrivateNote = withNoteSession(generation) { ChurVault.savePrivateNote(it, id, expectedRevision, title, body, pinned, format) }
     suspend fun changePrivateNote(generation: Long, id: ByteArray, expectedRevision: Long, action: PrivateNoteAction): PrivateNote? = withNoteSession(generation) { ChurVault.changePrivateNote(it, id, expectedRevision, action) }
     suspend fun beginPrivateNoteExport(generation: Long, id: ByteArray, expectedRevision: Long, destinationFd: Int): Long = withNoteSession(generation) { ChurVault.beginPrivateNoteExport(it, id, expectedRevision, destinationFd) }
     suspend fun privateNoteActivity(generation: Long) { withNoteSession(generation) { Unit } }

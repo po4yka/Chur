@@ -19,7 +19,7 @@ The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT**, 
 
 Individual statements are classified as **Decision**, **Invariant**, **Proposal**, **Deferred**, or **Non-goal**, defined once in [`README.md`](README.md#statement-classification). The status of this document as a whole is in its header and uses the document-status vocabulary of the same file.
 
-This document defines the system model and required properties. The versioned [format specifications](README.md#formats), accepted ADRs, and canonical vectors own byte-exact layouts. Schema extensions through v10 and ABI 2.24 are implemented; that fact does not close the security release gates.
+This document defines the system model and required properties. The versioned [format specifications](README.md#formats), accepted ADRs, and canonical vectors own byte-exact layouts. Schema extensions through v12 and ABI 4.0 are implemented; that fact does not close the security release gates.
 
 ---
 
@@ -51,7 +51,7 @@ Recorded as ADRs:
 - Rust is the canonical owner of all private-vault formats and cryptographic state transitions — [`ADR-0001`](adr/0001-rust-owns-private-vault.md).
 - Large media uses independent XChaCha20-Poly1305 chunks and an authenticated final commit — [`ADR-0002`](adr/0002-independent-aead-chunks.md), with the public container layout frozen by [`ADR-0008`](adr/0008-freeze-object-container-v1-layout.md).
 - The immutable encrypted media container is separate from the mutable object-key envelope — [`ADR-0003`](adr/0003-separate-object-key-envelope.md).
-- Rust owns the SQLCipher catalog — accepted [`ADR-0004`](adr/0004-rust-owned-private-catalog.md) and [`ADR-0038`](adr/0038-adopt-sqlcipher-as-the-v1-catalog-engine.md). The current physical schema is [v11](format/CATALOG_SCHEMA_V11.md), built on the earlier versioned schemas. Device and audit acceptance remain separate.
+- Rust owns the SQLCipher catalog — accepted [`ADR-0004`](adr/0004-rust-owned-private-catalog.md) and [`ADR-0038`](adr/0038-adopt-sqlcipher-as-the-v1-catalog-engine.md). The current physical schema is [v12](format/CATALOG_SCHEMA_V12.md), built on the earlier versioned schemas. Device and audit acceptance remain separate.
 - Real and decoy vaults have independent roots, catalogs, object namespaces, caches, and sessions — [`ADR-0005`](adr/0005-real-and-decoy-vault-isolation.md).
 - FFI is split into a structured control plane and a bounded streaming data plane — [`ADR-0006`](adr/0006-control-and-data-plane-ffi.md). Both planes use the hand-written C ABI frozen by [`ADR-0016`](adr/0016-freeze-the-v1-c-abi.md); v1 has no generated binding layer.
 - The initial product is a local recoverable vault without cloud sharing — [`ADR-0007`](adr/0007-local-first-before-sync.md).
@@ -347,7 +347,7 @@ Module boundaries MUST prevent feature modules from importing platform-native ke
 | Private persistence | Rust-owned SQLCipher, schema v10 |
 | Images | authenticated derivatives, platform decoders, bounded session cache |
 | Local OCR | bundled English/Russian Tesseract on Android; Vision on iOS |
-| Interop | hand-written C ABI 2.24, JNI/cinterop, direct Swift media reads |
+| Interop | hand-written C ABI 4.0, JNI/cinterop, direct Swift media reads |
 | Build | root Gradle scripts and version catalog; Cargo and Xcode host builds |
 
 Exact pins are in the manifests and lockfiles; [Development](../DEVELOPMENT.md) owns the commands. The interfaces below explain ownership; they are not a list of generated classes or dependencies. Room, Koin, Navigation 3, Coil, and Kermit are not used in the current build.

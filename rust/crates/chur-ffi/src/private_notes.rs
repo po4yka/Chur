@@ -74,6 +74,7 @@ fn encode(out: &mut Vec<u8>, n: &notes::Note, text: &str, size: u64) {
     out.extend_from_slice(&n.updated_ms.to_be_bytes());
     out.extend_from_slice(&n.deleted_ms.unwrap_or(u64::MAX).to_be_bytes());
     out.push(u8::from(n.pinned));
+    out.push(n.format as u8);
     out.extend_from_slice(&size.to_be_bytes());
     string(out, &n.title);
     string(out, text);
@@ -244,7 +245,7 @@ pub unsafe extern "C" fn chur_private_note_get(
         )
     }
 }
-/// Saves under CAS. Request: id16 (zero creates), expected u64, pinned u8, title/body u32+UTF8.
+/// Saves under CAS. Request: id16 (zero creates), expected u64, pinned u8, format u8, title/body u32+UTF8.
 /// # Safety
 /// Request and output pointers follow `control`'s synchronous contract.
 #[unsafe(no_mangle)]
@@ -274,6 +275,7 @@ pub unsafe extern "C" fn chur_private_note_save(
                 let expected = r.number()?;
                 let pin = r.byte()?;
                 ensure!(pin <= 1, InvalidInput, "the pin flag is invalid");
+                let format = notes::NoteFormat::try_from(r.byte()?)?;
                 let title = r.string(256)?;
                 let body = r.string(262144)?;
                 ensure!(
@@ -281,7 +283,16 @@ pub unsafe extern "C" fn chur_private_note_save(
                     InvalidInput,
                     "the request has trailing bytes"
                 );
-                let n = notes::save(db, id, expected, title, body, pin == 1, api::now_ms())?;
+                let n = notes::save(
+                    db,
+                    id,
+                    expected,
+                    title,
+                    body,
+                    pin == 1,
+                    format,
+                    api::now_ms(),
+                )?;
                 encode(out, &n, &n.body, n.export_size());
                 Ok(())
             },
@@ -325,7 +336,7 @@ pub unsafe extern "C" fn chur_private_note_change(
         )
     }
 }
-/// Starts an owned cancellable plaintext UTF-8 export: title, two LF bytes, body.
+/// Starts an owned cancellable UTF-8 export: Markdown body, or plain title/two LF/body.
 /// The worker releases the session mutex before it writes to the provider.
 /// # Safety
 /// `id` reads sixteen bytes, `out` writes one handle, and `fd` is an open writable descriptor.
@@ -347,8 +358,10 @@ pub unsafe extern "C" fn chur_private_note_export_begin(
             let n = notes::get(db, &id)?;
             ensure!(n.revision == expected, Conflict, "the private note changed");
             let mut b = Zeroizing::new(Vec::with_capacity(n.export_size() as usize));
-            b.extend_from_slice(n.title.as_bytes());
-            b.extend_from_slice(b"\n\n");
+            if n.format == notes::NoteFormat::PlainText {
+                b.extend_from_slice(n.title.as_bytes());
+                b.extend_from_slice(b"\n\n");
+            }
             b.extend_from_slice(n.body.as_bytes());
             Ok(b)
         })?;
@@ -435,7 +448,16 @@ mod tests {
         }
         let now = api::now_ms();
         let note = with_catalog(session, |db| {
-            let note = notes::save(db, None, 0, "Заметка", "Текст\nwith emoji 🗒", false, now)?;
+            let note = notes::save(
+                db,
+                None,
+                0,
+                "Заметка",
+                "Текст\nwith emoji 🗒",
+                false,
+                notes::NoteFormat::PlainText,
+                now,
+            )?;
             Ok(notes::change(db, &note.id, note.revision, 3, now)?.unwrap())
         })
         .unwrap();
@@ -471,14 +493,82 @@ mod tests {
         drop(entry);
         drop(output);
 
+        let markdown = with_catalog(session, |db| {
+            notes::save(
+                db,
+                None,
+                0,
+                "Omitted title",
+                "# Source\n\n- [x] exact\n",
+                false,
+                notes::NoteFormat::Markdown,
+                now,
+            )
+        })
+        .unwrap();
+        let markdown_path = root.join("note.md");
+        let markdown_output = std::fs::File::create(&markdown_path).unwrap();
+        let mut markdown_operation = 0;
+        assert_eq!(
+            unsafe {
+                chur_private_note_export_begin(
+                    session,
+                    markdown.id.as_bytes().as_ptr(),
+                    markdown.revision,
+                    markdown_output.as_raw_fd(),
+                    &mut markdown_operation,
+                )
+            },
+            0
+        );
+        let markdown_entry = registry::get(markdown_operation, Kind::Operation).unwrap();
+        let Entry::Operation {
+            operation: markdown_worker,
+            ..
+        } = markdown_entry.as_ref()
+        else {
+            panic!("operation")
+        };
+        markdown_worker.join();
+        assert_eq!(markdown_worker.poll().status, 0);
+        assert_eq!(
+            std::fs::read(&markdown_path).unwrap(),
+            markdown.body.as_bytes()
+        );
+        assert_eq!(
+            std::fs::metadata(&markdown_path).unwrap().len(),
+            markdown.export_size()
+        );
+        assert_eq!(unsafe { api::chur_operation_close(markdown_operation) }, 0);
+        drop(markdown_entry);
+        drop(markdown_output);
+
         let expired = with_catalog(session, |db| {
             let old = now - chur_catalog::trash::RETENTION_MS - 1;
-            let note = notes::save(db, None, 0, "expired", "body", false, old)?;
+            let note = notes::save(
+                db,
+                None,
+                0,
+                "expired",
+                "body",
+                false,
+                notes::NoteFormat::PlainText,
+                old,
+            )?;
             Ok(notes::change(db, &note.id, note.revision, 3, old)?.unwrap())
         })
         .unwrap();
         let purged = with_catalog(session, |db| {
-            let note = notes::save(db, None, 0, "purged", "body", false, now)?;
+            let note = notes::save(
+                db,
+                None,
+                0,
+                "purged",
+                "body",
+                false,
+                notes::NoteFormat::PlainText,
+                now,
+            )?;
             let note = notes::change(db, &note.id, note.revision, 3, now)?.unwrap();
             notes::change(db, &note.id, note.revision, 5, now)?;
             Ok(note)

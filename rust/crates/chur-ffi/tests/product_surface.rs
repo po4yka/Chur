@@ -1114,6 +1114,7 @@ fn private_note_output_preflight_cannot_commit_a_failed_create_or_change() {
     let mut save = vec![0; 16];
     save.extend_from_slice(&0u64.to_be_bytes());
     save.push(0);
+    save.push(1); // Markdown body format
     save.extend_from_slice(&1u32.to_be_bytes());
     save.push(b't');
     save.extend_from_slice(&1u32.to_be_bytes());
@@ -1164,6 +1165,22 @@ fn private_note_output_preflight_cannot_commit_a_failed_create_or_change() {
         OK
     );
     assert_eq!(&output[..4], &[0; 4]);
+    save[25] = 2; // Unknown format must not commit even with sufficient output capacity.
+    assert_eq!(
+        unsafe {
+            chur_private_note_save(
+                session,
+                save.as_ptr(),
+                save.len(),
+                output.as_mut_ptr(),
+                output.len(),
+                &mut written,
+            )
+        },
+        ChurStatus::InvalidInput as i32
+    );
+    assert_eq!(written, 0);
+    save[25] = 1;
     assert_eq!(
         unsafe {
             chur_private_note_save(

@@ -11,6 +11,7 @@ import android.view.ViewGroup
 import android.view.inspector.WindowInspector
 import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
+import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
@@ -32,6 +33,7 @@ import dev.po4yka.chur.app.PrivateNoteEditorState
 import dev.po4yka.chur.app.PrivateNotesActions
 import dev.po4yka.chur.app.PrivateNotesUiState
 import dev.po4yka.chur.app.theme.ChurTheme
+import dev.po4yka.chur.app.vault.LocalPrivatePanic
 import dev.po4yka.chur.app.vault.PrivateNotesScreen
 import dev.po4yka.chur.ffi.PrivateNote
 import dev.po4yka.chur.ffi.PrivateNoteSummary
@@ -48,6 +50,30 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class PrivateNotesPresentationTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
+
+    @Test
+    fun markdown_preview_tasks_source_and_trash_keep_real_document_content() = present(editor = true) { f ->
+        val source = "# Public Markdown sample\n\n- [ ] Public checklist task\n\n| First | Second |\n| --- | --- |\n| one | two |\n\n```kotlin\nval answer = 42\n```\n\n**Bold** and ~~strike~~ with [a link](https://example.invalid)."
+        f.main { f.state.value = f.state.value.copy(editor = PrivateNoteEditorState(f.note.copy(body = source,
+            format = dev.po4yka.chur.ffi.PrivateNoteFormat.MARKDOWN))) }
+        f.click("Preview")
+        assertTrue(f.await { f.text("Public Markdown sample") != null })
+        f.assertHeadingFits("Public Markdown sample")
+        f.assertButtonVisible("Checklist item")
+        f.capture("private-notes-markdown-preview-public.png")
+        f.click("Checklist item")
+        assertTrue(f.await { f.state.value.editor!!.body.contains("- [x] Public checklist task") })
+        f.click("Edit source")
+        assertTrue(f.await { f.tag("private-note-body") != null })
+        assertEquals(source.replace("- [ ]", "- [x]"), f.state.value.editor!!.body)
+        f.main {
+            val editor = f.state.value.editor!!
+            f.state.value = f.state.value.copy(editor = PrivateNoteEditorState(f.note.copy(body = editor.body,
+                format = dev.po4yka.chur.ffi.PrivateNoteFormat.MARKDOWN, trashedAtMs = 3)))
+        }
+        assertTrue(f.await { f.text("Restore") != null && f.text("Public Markdown sample") != null })
+        f.capture("private-notes-markdown-trash-public.png")
+    }
 
     @Test
     fun list_editor_failed_save_and_dirty_back_have_explicit_reachable_states() = present { f ->
@@ -72,10 +98,47 @@ class PrivateNotesPresentationTest {
     }
 
     @Test
+    fun undo_then_replace_all_in_one_ui_turn_uses_the_latest_source() = present { f ->
+        f.main { f.state.value = f.state.value.copy(editor = PrivateNoteEditorState(f.note, body = "cat")) }
+        assertTrue(f.await { f.tag("private-note-body")?.config?.getOrNull(SemanticsProperties.EditableText)?.text == "cat" })
+        f.setText("private-note-body", "cat dog")
+        f.click("Find")
+        assertTrue(f.await { f.tag("private-note-find") != null && f.tag("private-note-replace") != null })
+        f.setText("private-note-find", "cat")
+        f.setText("private-note-replace", "fox")
+        assertTrue(f.await {
+            f.tag("private-note-find")?.config?.getOrNull(SemanticsProperties.EditableText)?.text == "cat" &&
+                f.tag("private-note-replace")?.config?.getOrNull(SemanticsProperties.EditableText)?.text == "fox"
+        })
+        // Both real callbacks come from the same composition: no frame or
+        // recomposition is allowed between Undo and Replace all.
+        f.clickInSameTurn("Undo", "Replace all")
+        assertEquals("fox", f.state.value.editor!!.body)
+        assertTrue(f.await { f.tag("private-note-body")?.config?.getOrNull(SemanticsProperties.EditableText)?.text == "fox" })
+    }
+
+    @Test
+    fun private_markdown_format_menu_hides_the_source_and_popup_with_one_action() = present(editor = true) { f ->
+        val source = "# Fictional menu source"
+        f.main { f.state.value = f.state.value.copy(editor = PrivateNoteEditorState(f.note.copy(body = source,
+            format = dev.po4yka.chur.ffi.PrivateNoteFormat.MARKDOWN))) }
+        assertTrue(f.await { f.tag("private-note-body")?.config?.getOrNull(SemanticsProperties.EditableText)?.text == source })
+        f.click("Format")
+        assertTrue(f.await { f.button("Bold") != null && f.button("Lock and hide") != null })
+        f.click("Lock and hide")
+        assertTrue(f.await { f.text("Public screen") != null && f.button("Bold") == null &&
+            f.button("Lock and hide") == null && f.tag("private-note-body") == null })
+        assertEquals(1, f.hideCalls)
+        assertEquals(null, f.state.value.editor)
+    }
+
+    @Test
     fun narrow_double_font_editor_keeps_save_controls_and_long_body_scrollable() = present(fontScale = 2f, editor = true) { f ->
         assertTrue(f.await { f.tag("private-note-body") != null })
         f.assertLabelFits("Save")
-        assertTrue(f.button("Lock now") != null)
+        f.assertButtonVisible("Save")
+        f.assertButtonVisible("Lock now")
+        f.assertBodyVisible(minHeightDp = 160f)
         f.capture("private-notes-editor-public-320-font2.png")
         var scrolled = false
         f.main {
@@ -85,7 +148,18 @@ class PrivateNotesPresentationTest {
         }
         assertTrue("the literal note body must have its own vertical scroll", scrolled)
         assertEquals(f.longBody, f.state.value.editor!!.body)
+        f.assertBodyVisible(minHeightDp = 160f)
         f.capture("private-notes-editor-scrolled-public-320-font2.png")
+        f.scrollEditorToBottom()
+        f.capture("private-notes-editor-controls-public-320-font2.png")
+        f.assertButtonVisible("Move to Trash")
+        f.assertButtonVisible("Export")
+        f.assertButtonVisible("Encrypted archive")
+        f.assertLabelFits("Move to Trash")
+        f.assertLabelFits("Export")
+        f.assertLabelFits("Encrypted archive")
+        f.assertButtonVisible("Save")
+        f.assertButtonVisible("Lock now")
     }
 
     @Test
@@ -122,7 +196,13 @@ class PrivateNotesPresentationTest {
                     setLayerType(View.LAYER_TYPE_SOFTWARE, null)
                     setContent {
                         CompositionLocalProvider(LocalDensity provides Density(density, fontScale), LocalConfiguration provides configuration) {
-                            ChurTheme(dark = false) { PrivateNotesScreen(f.state.value, f.actions, onLock = {}, onPanic = {}) }
+                            ChurTheme(dark = false) {
+                                if (f.hidden.value) Text("Public screen") else {
+                                    CompositionLocalProvider(LocalPrivatePanic provides f::panic) {
+                                        PrivateNotesScreen(f.state.value, f.actions, onLock = f::panic, onPanic = f::panic)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -135,6 +215,13 @@ class PrivateNotesPresentationTest {
     }
 
     private inner class Fixture(val activity: MainActivity, editor: Boolean) {
+        val hidden = mutableStateOf(false)
+        var hideCalls = 0
+        fun panic() {
+            hideCalls++
+            state.value = PrivateNotesUiState()
+            hidden.value = true
+        }
         val longBody = (1..120).joinToString("\n") { "Public literal line $it — UTF-8 🌍" }
         val note = PrivateNote(ByteArray(16) { 7 }, 1, "Public sample title", "Public sample body", 1, 2, false, null, 40)
         val summary = PrivateNoteSummary(note.noteId, 1, note.title, note.body, 1, 2, false, null, 40)
@@ -152,6 +239,8 @@ class PrivateNotesPresentationTest {
             override fun title(value: String) { state.value = state.value.copy(editor = state.value.editor!!.copy(title = value)) }
             override fun body(value: String) { state.value = state.value.copy(editor = state.value.editor!!.copy(body = value)) }
             override fun pinned(value: Boolean) { state.value = state.value.copy(editor = state.value.editor!!.copy(pinned = value)) }
+            override fun format(value: dev.po4yka.chur.ffi.PrivateNoteFormat) { state.value = state.value.copy(editor = state.value.editor!!.copy(format = value)) }
+            override fun importMarkdown(title: String, body: String) { state.value = state.value.copy(editor = PrivateNoteEditorState(title = title, body = body)) }
             override fun back() { state.value = state.value.copy(confirmation = PrivateNoteConfirmation.LEAVE) }
             override fun dismissConfirmation() { state.value = state.value.copy(confirmation = null) }
             override fun discardAndBack() { state.value = state.value.copy(editor = null, confirmation = null) }
@@ -197,9 +286,93 @@ class PrivateNotesPresentationTest {
                 assertTrue(node.config[SemanticsActions.OnClick].action?.invoke() == true)
             }
         }
+        fun clickInSameTurn(vararg values: String) {
+            assertTrue(await { values.all { button(it) != null } })
+            main {
+                val callbacks = values.map { value ->
+                    requireNotNull(nodesOnMain().first { value in it.labels && SemanticsActions.OnClick in it.config }
+                        .config[SemanticsActions.OnClick].action)
+                }
+                callbacks.forEach { callback -> assertTrue(callback.invoke()) }
+            }
+        }
         fun setText(tag: String, value: String) = main {
             val node = requireNotNull(tagOnMain(tag))
             assertTrue(node.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(AnnotatedString(value)) == true)
+        }
+        fun assertBodyVisible(minHeightDp: Float) = main {
+            val field = requireNotNull(tagOnMain("private-note-body"))
+            val bounds = field.boundsInWindow
+            val location = IntArray(2).also(view::getLocationInWindow)
+            val saveBottom = requireNotNull(nodesOnMain().firstOrNull {
+                "Save" in it.labels && SemanticsActions.OnClick in it.config
+            }).boundsInWindow.bottom
+            val top = maxOf(bounds.top, location[1].toFloat(), saveBottom)
+            val bottom = minOf(bounds.bottom, (location[1] + view.height).toFloat())
+            val visibleHeight = (bottom - top).coerceAtLeast(0f)
+            val density = activity.resources.displayMetrics.density
+            assertTrue("body must expose at least ${minHeightDp}dp, observed ${visibleHeight / density}dp",
+                visibleHeight >= minHeightDp * density)
+            val layouts = mutableListOf<TextLayoutResult>()
+            (sequenceOf(field) + field.descendants()).forEach { node ->
+                node.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.invoke(layouts)
+            }
+            val layout = requireNotNull(layouts.firstOrNull { it.layoutInput.text.text == longBody })
+            assertTrue("the real body must lay out multiple visible lines", layout.lineCount >= 3)
+            assertTrue("at least three complete body lines must fit the visible viewport",
+                layout.getLineBottom(2) <= visibleHeight - 12f * density)
+        }
+        fun assertButtonVisible(value: String) = main {
+            val node = requireNotNull(nodesOnMain().firstOrNull { value in it.labels && SemanticsActions.OnClick in it.config })
+            val location = IntArray(2).also(view::getLocationInWindow)
+            val bounds = node.boundsInWindow
+            val density = activity.resources.displayMetrics.density
+            val axis = tagOnMain("private-note-editor-scroll")?.config?.getOrNull(SemanticsProperties.VerticalScrollAxisRange)
+            val candidates = nodesOnMain().filter { value in it.labels && SemanticsActions.OnClick in it.config }
+                .joinToString { "id=${it.id}, bounds=${it.boundsInWindow}" }
+            val metrics = "bounds=$bounds, minimumHeight=${40f * density}px, density=$density, " +
+                "view=(${location[0]},${location[1]},${view.width},${view.height}), " +
+                "outerScroll=${axis?.value?.invoke()}/${axis?.maxValue?.invoke()}, candidates=[$candidates]"
+            assertTrue("$value must have a real visible touch target; $metrics",
+                bounds.width > 0f && bounds.height >= 40f * density)
+            assertTrue("$value must fit vertically in the visible screen; $metrics",
+                bounds.top >= location[1] - 1f && bounds.bottom <= location[1] + view.height + 1f)
+        }
+        fun assertHeadingFits(value: String) = main {
+            val nodes = view.roots().flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false) }
+            val node = nodes.first { it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == value } == true }
+            val layouts = mutableListOf<TextLayoutResult>()
+            assertTrue(node.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.invoke(layouts) == true)
+            val layout = requireNotNull(layouts.firstOrNull())
+            assertTrue("Markdown heading must use reading-scale typography", layout.layoutInput.style.fontSize.value <= 32f)
+            assertFalse("Markdown heading must wrap within its viewport", layout.didOverflowWidth)
+            assertTrue("the entire Markdown heading must fit its visible viewport", node.boundsInWindow.height + 1f >= layout.size.height)
+            assertEquals(value.length, layout.getLineEnd(layout.lineCount - 1, visibleEnd = true))
+        }
+        fun scrollEditorToBottom() {
+            main {
+                val node = requireNotNull(tagOnMain("private-note-editor-scroll"))
+                assertTrue(node.config.getOrNull(SemanticsActions.ScrollBy)?.action?.invoke(0f, 20_000f) == true)
+            }
+            // ScrollBy schedules a coroutine/animation. Looper idle alone can
+            // occur between its frames while the footer remains clipped.
+            val settled = await {
+                var atEnd = false
+                main {
+                    val axis = tagOnMain("private-note-editor-scroll")?.config
+                        ?.getOrNull(SemanticsProperties.VerticalScrollAxisRange)
+                    if (axis != null) atEnd = axis.maxValue().isFinite() &&
+                        kotlin.math.abs(axis.maxValue() - axis.value()) <= 1f
+                }
+                atEnd
+            }
+            var position = "missing editor scroll semantics"
+            main {
+                val axis = tagOnMain("private-note-editor-scroll")?.config
+                    ?.getOrNull(SemanticsProperties.VerticalScrollAxisRange)
+                if (axis != null) position = "${axis.value()}/${axis.maxValue()}px"
+            }
+            assertTrue("the outer editor scroll must reach its actual end, observed $position", settled)
         }
         fun assertLabelFits(value: String) = main {
             val node = view.roots().flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false) }
