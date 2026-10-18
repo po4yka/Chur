@@ -272,6 +272,9 @@ kotlin {
             implementation(libs.compose.ui)
         }
         androidMain.dependencies {
+            implementation(libs.haze.core)
+            implementation(libs.haze.blur)
+            implementation(libs.haze.glass)
             // The player of `MEDIA_PIPELINE.md` §9. It receives plaintext ranges
             // from a vault-backed `DataSource` and never sees a container, a
             // key, or a path, which is the split §1 fixes.

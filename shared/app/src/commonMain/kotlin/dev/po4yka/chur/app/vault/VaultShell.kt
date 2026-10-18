@@ -45,7 +45,6 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -56,6 +55,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -402,8 +402,10 @@ fun VaultShell(
     LaunchedEffect(notice?.id, settingsShown) {
         if (settingsShown && notice?.pointsToSettings == true) actions.onNoticeShown(notice.id)
     }
-    Scaffold(
-        containerColor = colors.canvas,
+    PlatformVaultScaffold(
+        state = state,
+        actions = actions,
+        navigationBusy = settingsBusy || albumsBusy,
         topBar = {
             // §11.4: selection replaces the ordinary top actions rather than
             // adding to them, so only the lock control is in both modes.
@@ -411,6 +413,7 @@ fun VaultShell(
                 SelectionBar(state, actions)
             } else {
                 TopAppBar(
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent, scrolledContainerColor = Color.Transparent),
                     title = {
                         IncomingContent(false, LocalChurMotion.current.stateDurationMillis) {
                             Text(state.openAlbum?.name ?: state.libraryScopeTitle ?: state.destination.label,
@@ -490,7 +493,7 @@ fun VaultShell(
             }
         },
         bottomBar = {
-            NavigationBar {
+            NavigationBar(containerColor = Color.Transparent, tonalElevation = 0.dp) {
                 VaultDestination.entries.forEach { destination ->
                     NavigationBarItem(
                         selected = state.destination == destination && state.openAlbum == null,
@@ -560,7 +563,8 @@ fun VaultShell(
                 }
                 state.operation?.let { operation ->
                     IncomingContent(operation.id, motion.stateDurationMillis,
-                        Modifier.fillMaxWidth().heightIn(max = progressMaxHeight)
+                        Modifier.fillMaxWidth().padding(bottom = LocalVaultBottomInset.current)
+                            .heightIn(max = progressMaxHeight)
                             .padding(horizontal = ChurSpacing.gutter, vertical = ChurSpacing.two)) {
                         OperationProgressCard(operation, actions.onCancelOperation)
                     }
@@ -738,6 +742,7 @@ internal fun LockControl(
 private fun SelectionBar(state: VaultUiState, actions: VaultActions) {
     var expanded by remember { mutableStateOf(false) }
     TopAppBar(
+        colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent, scrolledContainerColor = Color.Transparent),
         title = {
             IncomingContent(true, LocalChurMotion.current.stateDurationMillis) {
                 Text("${state.selectedCount} selected")
@@ -920,7 +925,7 @@ private fun SearchBody(state: VaultUiState, actions: VaultActions,
             }
             when {
                 state.searchTerms.isBlank() -> Box(
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    modifier = Modifier.weight(1f).fillMaxWidth().padding(bottom = LocalVaultBottomInset.current),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
@@ -954,7 +959,7 @@ private fun SearchBody(state: VaultUiState, actions: VaultActions,
 /** One relevant way out of an empty scope; the caller keeps its sort and location. */
 @Composable
 private fun EmptyBrowseResult(message: String, actionLabel: String, onAction: (() -> Unit)?, modifier: Modifier) {
-    Column(modifier.fillMaxWidth().padding(ChurSpacing.gutter),
+    Column(modifier.fillMaxWidth().padding(bottom = LocalVaultBottomInset.current).padding(ChurSpacing.gutter),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(ChurSpacing.two, Alignment.CenterVertically)) {
         Box(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
@@ -979,7 +984,8 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions, onNavigatio
     NavigationBusyEffect(changingPassword || confirmingDisconnect || confirmingDamagedDeletion ||
         askingRecovery || choosingAutoLock || pairingBusy || sharingBusy || syncSetupBusy, onNavigationBusyChange)
     LazyColumn(
-        contentPadding = PaddingValues(ChurSpacing.gutter),
+        contentPadding = PaddingValues(start = ChurSpacing.gutter, top = ChurSpacing.gutter, end = ChurSpacing.gutter,
+            bottom = ChurSpacing.gutter + LocalVaultBottomInset.current),
         verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
     ) {
         item {

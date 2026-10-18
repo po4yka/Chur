@@ -64,7 +64,7 @@ The iOS target MUST NOT own:
 | Native language | Swift toolchain from Xcode 27; source settings in `project.yml` |
 | Shared language | Kotlin 2.4.20 / K2 |
 | Shared UI | Compose Multiplatform 1.12.1 |
-| Host UI | UIKit app and scene delegates, Compose content |
+| Host UI | UIKit app/scene delegates and native vault navigation/tab chrome, shared Compose content |
 | Navigation/state | shared route state, controllers, StateFlow, UDF |
 | Public persistence | JSON Notes, platform shell preferences, public camera files |
 | Images | authenticated derivatives, platform decoders, bounded session cache |

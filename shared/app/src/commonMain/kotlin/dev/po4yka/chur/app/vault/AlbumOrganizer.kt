@@ -280,14 +280,14 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
             colors = churOutlinedTextFieldColors(),
         )
         if (albums.isEmpty()) {
-            Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(bottom = LocalVaultBottomInset.current), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("No albums yet", style = MaterialTheme.typography.titleMedium)
                     Text("Group objects you want to find together.", color = colors.inkMuted)
                 }
             }
         } else if (rows.isEmpty()) {
-            Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(bottom = LocalVaultBottomInset.current), contentAlignment = Alignment.Center) {
                 Text("No matching albums", color = colors.inkMuted)
             }
         } else {
@@ -299,7 +299,8 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
                     columns = GridCells.Adaptive(150.dp),
                     state = gridState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(ChurSpacing.gutter),
+                    contentPadding = PaddingValues(start = ChurSpacing.gutter, top = ChurSpacing.gutter, end = ChurSpacing.gutter,
+                    bottom = ChurSpacing.gutter + LocalVaultBottomInset.current),
                     horizontalArrangement = Arrangement.spacedBy(ChurSpacing.two),
                     verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
                 ) {
@@ -311,7 +312,8 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(ChurSpacing.gutter),
+                    contentPadding = PaddingValues(start = ChurSpacing.gutter, top = ChurSpacing.gutter, end = ChurSpacing.gutter,
+                    bottom = ChurSpacing.gutter + LocalVaultBottomInset.current),
                     verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
                 ) {
                     items(rows, key = { it.first.id }) { (album, depth) ->
@@ -322,7 +324,7 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
             if (dragged?.let { rootAlbumDrop(it, albums) } != null) {
                 Box(
                     modifier = Modifier.align(Alignment.BottomEnd).fillMaxWidth(0.55f)
-                        .padding(end = ChurSpacing.gutter, bottom = ChurSpacing.one)
+                        .padding(end = ChurSpacing.gutter, bottom = ChurSpacing.one + LocalVaultBottomInset.current)
                         .onGloballyPositioned { rootDropBounds = it.boundsInWindow() }
                         .background(if (rootDropBounds.contains(dropPoint)) colors.accentSoft else colors.surface)
                         .border(2.dp, colors.accent, RoundedCornerShape(12.dp))

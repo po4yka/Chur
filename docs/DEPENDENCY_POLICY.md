@@ -72,6 +72,48 @@ Security-critical additions require a dedicated reviewer.
 - do not allow dependency updates to silently change persisted or wire bytes;
 - keep a documented minimum Rust/toolchain policy once implementation begins.
 
+## Haze 2 Android navigation material
+
+The Android source set of `shared/app` uses the exact **2.0.1** release of
+`dev.chrisbanes.haze:haze`, `haze-blur`, and `haze-glass`. These render navigation
+material over shared Compose content. iOS uses UIKit and does not link Haze.
+The alternative evaluated was Kyant Backdrop; implementing and maintaining a
+second custom optics engine would add unnecessary rendering and lifecycle code.
+
+- **Owner and license:** [Chris Banes / Haze](https://github.com/chrisbanes/haze/tree/2.0.1),
+  Apache-2.0. Preserve the upstream license and applicable notices in distribution.
+  Release/source inspection is not an independent security audit.
+- **Scope:** Android graphics and Compose runtime dependencies; no Rust or C ABI
+  change, new permission, persistent cache, background service, analytics, or
+  runtime network request is required by this integration. Resolve transitives
+  through the checked-in Gradle lockfiles. Dependency updates remain deliberate.
+- **Resolved Android graph:** the three direct modules also bring
+  `haze-utils:2.0.1` and their Android variants. In the shared Android runtime,
+  this moves AndroidX Activity 1.8.2 to 1.13.0, Core 1.16.0 to 1.19.1,
+  AndroidX Lifecycle 2.10.0 to 2.11.0, JetBrains Lifecycle 2.9.6 to 2.11.0,
+  and Tracing 2.0.0 to 2.0.3; Activity also introduces NavigationEvent 1.0.0.
+  The application already selected the newer Activity, Core, and AndroidX
+  Lifecycle versions. Collection remains at its existing 1.5.0 compile and
+  1.6.0 runtime resolutions; common resolution metadata aligns Collection to
+  1.6.0 and JetBrains Lifecycle to 2.11.0. Compose 1.12.1, Kotlin 2.4.21, and
+  the native iOS artifact versions remain unchanged. These are graphics/lifecycle dependencies, not a new
+  native library or a change to stored vault formats. The four reviewed Android
+  AARs total 887,401 downloaded bytes and contain no `jni/` or `prefab/`
+  entries; this is not a measurement of the final APK size increase.
+- **Runtime policy:** API 33+ uses AGSL glass, API 31–32 uses RenderEffect blur,
+  and API 29–30 uses opaque surfaces. Increased contrast uses opaque surfaces.
+  Source retention is `ClearWhenUnavailable`; the source and effect graph belong
+  to the private composition and leave with it. Native media surfaces are not
+  copied. The experimental full-37.2 window-backdrop backend remains disabled:
+  selected-source capture gives the application control over private input.
+- **Cost and acceptance:** the extra offscreen layers affect GPU memory and frame
+  timing; a readable fallback does not prove optical parity. Measure the
+  integrated app, not only upstream samples. No device performance guarantee is
+  implied by the dependency choice.
+- **Removal/update:** platform chrome is behind the `PlatformVaultScaffold`
+  boundary. Haze can be updated or removed in the Android implementation without
+  changing shared screen state, native iOS controls, or stored vault bytes.
+
 ## Vendored agent skills
 
 `.agents/` and `.claude/` hold agent instruction files copied from third-party repositories. They are vendored content under this policy, not generated state: they are tracked, reviewed on update, and never run against a real vault, a production secret, or user media. They contribute no code to the Android, iOS, Rust, or CLI artifacts and are excluded from release evidence and from the SBOM.

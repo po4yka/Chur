@@ -1496,7 +1496,7 @@ Do not accept dynamic color automatically for private and public surfaces. It co
 Shared Compose owns:
 
 - token application;
-- ordinary app bars/navigation;
+- navigation state, commands, and common screen content;
 - media grid and album components;
 - unlock explanatory content;
 - settings and progress presentation;
@@ -1504,6 +1504,8 @@ Shared Compose owns:
 
 Native shells own:
 
+- platform chrome: UIKit navigation/tab bars on iOS, Compose controls with
+  Android-rendered glass on Android;
 - BiometricPrompt / LocalAuthentication UI;
 - system pickers;
 - share/save destinations;
@@ -1538,6 +1540,29 @@ Forbidden divergence:
 - fields and primary actions never hide under IME or home indicator;
 - bottom navigation includes system inset;
 - privacy cover fills the entire scene/window, including system-bar-adjacent area where possible.
+
+### 25.6 Platform glass and shared content
+
+The vault uses the same content, state, and actions on both platforms. iOS
+chrome uses real UIKit bars and controls: iOS 26 and later supply Liquid Glass,
+while earlier supported systems use their native appearance. Android chrome
+uses Haze 2 with an explicitly selected, session-scoped content source. API 33
+and later support shader optics; older supported versions use reduced effects
+or an opaque material. Glass does not require increasing minimum OS versions.
+
+Chrome may differ in material and placement, but must preserve every action,
+selection state, accessible label, and the Lock now / Lock and hide gesture.
+There is one authoritative navigation state; native controls dispatch the same
+commands as common content. Scroll containers inset their items around chrome
+while their background may extend beneath it. Fields and controls remain
+unobscured by bars or the keyboard.
+
+Glass is confined to navigation and floating controls. Authentication,
+recovery, privacy covers, and locked/public transitions remain opaque. Remove
+native chrome, retained input, effect layers, and private accessibility content
+when the private screen is disposed. A blur or glass frame never substitutes
+for a privacy cover. Respect reduced transparency, reduced motion, contrast,
+and platform font scaling.
 
 ---
 

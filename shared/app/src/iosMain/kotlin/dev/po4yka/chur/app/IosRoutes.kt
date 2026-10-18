@@ -9,6 +9,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.CompositionLocalProvider
+import dev.po4yka.chur.app.vault.LocalIosVaultChrome
+import dev.po4yka.chur.app.vault.LocalIosVaultChromeCovered
+import dev.po4yka.chur.app.vault.LocalIosVaultSession
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -368,6 +372,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     var privateNotesBusy by remember(generation) { mutableStateOf(false) }
     var initialCreateRequest by remember(generation) { mutableStateOf<Long?>(null) }
     var searchFocusRequest by remember(generation) { mutableStateOf<Long?>(null) }
+    val nativeChrome = LocalIosVaultChrome.current
     var shellNavigationBusy by remember(generation) { mutableStateOf(false) }
     var choosingPrivateNoteExport by remember(generation) { mutableStateOf<PrivateNoteExportRequest?>(null) }
     var thumbnailsConcealed by remember(generation) { mutableStateOf(true) }
@@ -462,11 +467,11 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     val launcherRequest by controller.launcherRequest.collectAsState()
     val launcherSceneReady by IosLauncherActions.sceneReady.collectAsState()
     val incomingShare by IosIncomingShares.inbox.state.collectAsState()
-    val navigationBusy = shellNavigationBusy || privateNotesBusy || viewing != null || selection.isNotEmpty() ||
-        choosingArchive != null || choosingArchiveImport || choosingPrivateNoteExport != null ||
+    val modalNavigationBusy = choosingArchive != null || choosingArchiveImport || choosingPrivateNoteExport != null ||
         exportingAlbum != null || albumPickerPending || documentPickerPending || choosingImportSource ||
         creatingAlbum || choosingAlbum || choosingTag || managingTags || confirmingDelete ||
         confirmingEmptyTrash || choosingExport || originals != null || incomingShare != null
+    val navigationBusy = shellNavigationBusy || privateNotesBusy || viewing != null || selection.isNotEmpty() || modalNavigationBusy
     DisposableEffect(controller, navigationBusy) {
         controller.setLauncherNavigationBusy(navigationBusy)
         onDispose { controller.setLauncherNavigationBusy(false) }
@@ -474,7 +479,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     LaunchedEffect(launcherRequest?.token, generation, navigationBusy, launcherSceneReady) {
         val request = launcherRequest ?: return@LaunchedEffect
         if (!launcherSceneReady) return@LaunchedEffect
-        if (navigationBusy) {
+        if (navigationBusy || nativeChrome?.hasVisibleMenu() == true) {
             controller.rejectLauncherAction(request.token)
             return@LaunchedEffect
         }
@@ -925,6 +930,10 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             Modifier
         },
     ) {
+        CompositionLocalProvider(
+            LocalIosVaultChromeCovered provides (viewing != null || modalNavigationBusy),
+            LocalIosVaultSession provides generation,
+        ) {
         VaultShell(
             searchFocusRequest = searchFocusRequest,
             onNavigationBusyChange = { shellNavigationBusy = it },
@@ -1147,6 +1156,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             // iOS has no system Back to deliver, `DESIGN.md` §25.4.
             systemBack = { _, _ -> },
         )
+        }
     }
 
     viewing?.let { projection ->

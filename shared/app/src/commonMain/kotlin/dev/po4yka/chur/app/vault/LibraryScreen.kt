@@ -388,7 +388,8 @@ fun MediaBrowser(
                 columns = GridCells.Fixed(geometry.columns),
                 horizontalArrangement = Arrangement.spacedBy(geometry.gap),
                 verticalArrangement = Arrangement.spacedBy(geometry.gap),
-                contentPadding = PaddingValues(geometry.gap),
+                contentPadding = PaddingValues(start = geometry.gap, top = geometry.gap, end = geometry.gap,
+                    bottom = geometry.gap + LocalVaultBottomInset.current),
                 modifier = Modifier.fillMaxSize(),
             ) {
                 items(tiles, key = { it.projection.id }) { tile ->
@@ -410,7 +411,8 @@ fun MediaBrowser(
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(ChurSpacing.gutter),
+            contentPadding = PaddingValues(start = ChurSpacing.gutter, top = ChurSpacing.gutter, end = ChurSpacing.gutter,
+                    bottom = ChurSpacing.gutter + LocalVaultBottomInset.current),
             verticalArrangement = Arrangement.spacedBy(ChurSpacing.one),
         ) {
             listItems(tiles, key = { it.projection.id }) { tile ->
@@ -432,7 +434,7 @@ fun MediaBrowser(
         if (dragged != null && travelled && onDropIntoAlbum != null) {
             Box(
                 modifier = Modifier.align(Alignment.BottomEnd).fillMaxWidth(0.55f)
-                    .padding(end = ChurSpacing.gutter, bottom = ChurSpacing.one)
+                    .padding(end = ChurSpacing.gutter, bottom = ChurSpacing.one + LocalVaultBottomInset.current)
                     .onGloballyPositioned { albumDropBounds = it.boundsInWindow() }
                     .background(if (albumDropBounds.contains(dropPoint)) colors.accentSoft else colors.surface)
                     .border(2.dp, colors.accent, RoundedCornerShape(12.dp))
@@ -767,7 +769,7 @@ private fun SelectionCheck(selected: Boolean, progress: Float, modifier: Modifie
 @Composable
 fun EmptyLibrary(onImport: (() -> Unit)?, modifier: Modifier = Modifier) {
     val colors = LocalChurColors.current
-    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    Box(modifier = modifier.fillMaxSize().padding(bottom = LocalVaultBottomInset.current), contentAlignment = Alignment.Center) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),

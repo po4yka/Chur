@@ -65,7 +65,7 @@ Android MUST NOT own:
 | Target SDK | Android API 37 |
 | Minimum SDK | API 29, frozen by [ADR-0017](adr/0017-freeze-the-supported-device-set.md) |
 | Kotlin | Kotlin 2.4.20 / K2 |
-| UI | Compose Multiplatform 1.12.1 hosted by a thin Android shell |
+| UI | Compose Multiplatform 1.12.1 with Haze 2 vault chrome, hosted by a thin Android shell |
 | Navigation | shared route state in `shared/app` |
 | State | controllers, StateFlow, Flow, UDF |
 | Public persistence | JSON Notes, platform shell preferences, public camera files |

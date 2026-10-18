@@ -963,6 +963,7 @@ class ChurController(
         // Mask synchronously, before the native lock waits for an in-flight call.
         privacy.setEnabled(true)
         lockEpoch += 1
+        endSessionSyncRun()
         setRoute(if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell)
         lock(LockReason.PANIC)
     }
@@ -2915,6 +2916,14 @@ class ChurController(
         clearPrivateProjections()
     }
 
+    /** Invalidate visible sync before cancellation handlers or a public route can run. */
+    private fun endSessionSyncRun() {
+        // These are non-blocking: native lock and pending I/O can finish later.
+        // Ending the epoch first prevents that work from publishing private status.
+        sync?.endSession()
+        sessionSync.cancelChildren()
+    }
+
     private suspend fun clearPrivateProjections() {
         clearLauncherAction()
         launcherNavigationBusy = false
@@ -2959,8 +2968,7 @@ class ChurController(
         // cancelled: its bootstrap still finishes. Until the next unlock finds
         // the vault that owns the saved state, the engine shows nothing that
         // a run or a setup reports, so neither can show the server late.
-        sessionSync.cancelChildren()
-        sync?.endSession()
+        endSessionSyncRun()
         // A launch whose result never arrived belonged to the session that just
         // ended. Carrying its count forward would suppress the background lock
         // of the next session, so the count ends with the session. So do the

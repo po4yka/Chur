@@ -2,6 +2,9 @@
 
 package dev.po4yka.chur.app
 
+import androidx.compose.runtime.CompositionLocalProvider
+import dev.po4yka.chur.app.vault.IosVaultChrome
+import dev.po4yka.chur.app.vault.LocalIosVaultChrome
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.uikit.OnFocusBehavior
@@ -48,16 +51,19 @@ import platform.UIKit.didMoveToParentViewController
  * ends every route above the keyboard, `DESIGN.md` §25.5, and a pan on top of
  * that would move the field a second time.
  */
-fun ChurViewController(controller: ChurController, gate: GateResult): UIViewController =
-    ChurRootViewController(
-        ComposeUIViewController(configure = { onFocusBehavior = OnFocusBehavior.DoNothing }) {
-            val route by controller.route.collectAsState()
-            val state by controller.vaultState.collectAsState()
+fun ChurViewController(controller: ChurController, gate: GateResult): UIViewController {
+    val chrome = IosVaultChrome()
+    val compose = ComposeUIViewController(configure = { onFocusBehavior = OnFocusBehavior.DoNothing }) {
+        val route by controller.route.collectAsState()
+        val state by controller.vaultState.collectAsState()
+        CompositionLocalProvider(LocalIosVaultChrome provides chrome) {
             ChurApp(gate = gate, route = route) {
                 IosRoutes(controller = controller, route = route, vaultState = state)
             }
-        },
-    )
+        }
+    }
+    return ChurRootViewController(compose, chrome)
+}
 
 /**
  * The root the Xcode host presents, with the Compose controller as its child.
@@ -70,6 +76,7 @@ fun ChurViewController(controller: ChurController, gate: GateResult): UIViewCont
  */
 internal class ChurRootViewController(
     private val content: UIViewController,
+    private val vaultChrome: IosVaultChrome,
 ) : UIViewController(nibName = null, bundle = null) {
     /** `null` outside the viewer, else whether the viewer shows its chrome. */
     var viewerChrome: Boolean? = null
@@ -86,6 +93,12 @@ internal class ChurRootViewController(
         content.view.setAutoresizingMask(UIViewAutoresizingFlexibleWidth or UIViewAutoresizingFlexibleHeight)
         view.addSubview(content.view)
         content.didMoveToParentViewController(this)
+        vaultChrome.attach(view)
+    }
+
+    override fun viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        vaultChrome.layout()
     }
 
     override fun preferredStatusBarStyle(): UIStatusBarStyle =

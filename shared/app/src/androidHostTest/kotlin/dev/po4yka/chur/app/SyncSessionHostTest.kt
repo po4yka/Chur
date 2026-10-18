@@ -131,8 +131,10 @@ class SyncSessionHostTest {
             assertTrue(sync.status.value.busy, "the owner's pull is retrying")
 
             relaunched.panic()
-            withTimeout(10_000) { relaunched.route.first { it == AppRoute.PublicShell } }
-            assertNull(sync.status.value.serverUrl, "the lock left the owner's server on show")
+            // Panic publishes a neutral route before native locking can finish.
+            // Its sync projection must already be neutral in the same call.
+            assertEquals(AppRoute.PublicShell, relaunched.route.value)
+            assertNull(sync.status.value.serverUrl, "panic left the owner's server on show")
             withTimeout(10_000) { ended.await() }
 
             // From here on, nothing shows the owner's server or its run.
