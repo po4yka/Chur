@@ -2,6 +2,8 @@ package dev.po4yka.chur.vault
 
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.LockReason
+import dev.po4yka.chur.ffi.PrivateNoteFormat
+import dev.po4yka.chur.ffi.PrivateNoteSelection
 import dev.po4yka.chur.ffi.PrivateNoteAction
 import java.io.File
 import java.io.FileDescriptor
@@ -155,6 +157,40 @@ class PrivateNotesRepositoryHostTest {
         assertEquals(body, destination.privateNote(restoredGeneration, note.noteId).body)
         assertEquals(listOf(note.id), destination.privateNotes(restoredGeneration).notes.map { it.id })
         assertFailsWith<ChurFailure> { destination.privateNote(restoredGeneration, sibling.noteId) }
+    }
+
+    @Test
+    fun markdown_source_format_survives_export_backup_restore_and_selective_archive(): Unit = runBlocking {
+        val sourceRoot = root()
+        val source = repository(sourceRoot)
+        source.start(); source.create(PASSWORD, false)
+        val generation = generation(source)
+        val body = "# Заголовок\n\n- [x] Выполнено\n\n```kotlin\nval answer = 42\n```\n"
+        val note = source.savePrivateNote(generation, title = "Separate title", body = body, format = PrivateNoteFormat.MARKDOWN)
+        assertEquals(PrivateNoteFormat.MARKDOWN, source.privateNotes(generation).notes.single().format)
+        val outputFile = File(sourceRoot, "note.md")
+        FileOutputStream(outputFile).use { output -> finish(source, source.beginPrivateNoteExport(generation, note.noteId, note.revision, descriptor(output.fd))) }
+        assertEquals(body, outputFile.readText())
+        assertEquals(body.encodeToByteArray().size.toLong(), note.exportSize)
+        outputFile.delete()
+        val backup = File(sourceRoot, "backup.chur")
+        FileOutputStream(backup).use { output -> finish(source, source.beginBackup(descriptor(output.fd))) }
+        val restored = repository(root()); restored.start()
+        FileInputStream(backup).use { input -> finish(restored, restored.beginRestore(descriptor(input.fd), PASSWORD)) }
+        restored.unlock(PASSWORD)
+        val roundTrip = restored.privateNote(generation(restored), note.noteId)
+        assertEquals(body, roundTrip.body)
+        assertEquals(PrivateNoteFormat.MARKDOWN, roundTrip.format)
+        val archive = File(sourceRoot, "selection.chur")
+        FileOutputStream(archive).use { output -> finish(source, source.beginSelectiveExport(generation, emptyList(), emptyList(), listOf(PrivateNoteSelection(note.noteId, note.revision)), OTHER_PASSWORD, descriptor(output.fd))) }
+        assertNoPlaintext(archive, body)
+        val target = repository(root()); target.start(); target.create(PASSWORD, false)
+        FileInputStream(archive).use { input -> finish(target, target.beginSelectiveImport(generation(target), descriptor(input.fd), OTHER_PASSWORD)) }
+        val selected = target.privateNotes(generation(target)).notes.single()
+        assertFalse(selected.noteId.contentEquals(note.noteId))
+        val imported = target.privateNote(generation(target), selected.noteId)
+        assertEquals(body, imported.body)
+        assertEquals(PrivateNoteFormat.MARKDOWN, imported.format)
     }
 
     private suspend fun finish(vault: VaultRepository, operation: Long) {

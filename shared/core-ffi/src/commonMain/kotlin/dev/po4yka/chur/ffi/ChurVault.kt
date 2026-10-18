@@ -374,8 +374,7 @@ object ChurVault {
     /** Returns the durable ciphertext prefix for a signed shared object. */
     fun sharedDownloadOffset(session: Long, collectionId: ByteArray, objectId: ByteArray): ULong {
         require(collectionId.size == 16 && objectId.size == 16) { "invalid shared download ID" }
-        // ABI 1.12 can receive shared objects but has no resume export.
-        if (ChurNative.abiVersionMinor() < 13) return 0uL
+        requireCurrentAbi()
         val out = LongArray(1)
         ChurFailure.check(
             ChurNative.sharingDownloadOffset(session, collectionId, objectId, out),
@@ -687,9 +686,7 @@ object ChurVault {
     /** Public Keychain item ID or Keystore alias for a slot in this session. */
     fun platformSlotIdentifier(session: Long, slotId: ByteArray): ByteArray {
         require(slotId.size == 16) { "invalid slot ID" }
-        if (ChurNative.abiVersionMinor() < 14) {
-            throw ChurFailure(ChurStatus.UNSUPPORTED_VERSION, "platform slot identifier")
-        }
+        requireCurrentAbi()
         return withChurBuffer(64) { buffer ->
             val written = IntArray(1)
             ChurFailure.check(
@@ -911,9 +908,7 @@ object ChurVault {
         destinationFd: Int,
         maxOutputBytes: Long = Long.MAX_VALUE,
     ): Long {
-        if (ChurNative.abiVersionMajor() != 2 || ChurNative.abiVersionMinor() < 23) {
-            throw ChurFailure(ChurStatus.ABI_INCOMPATIBLE, "external archive")
-        }
+        requireCurrentAbi()
         require(destinationFd >= 0) { "invalid archive destination" }
         val request = encodeExternalArchiveRequest(files, password, maxOutputBytes)
         return try {
@@ -971,14 +966,14 @@ object ChurVault {
     }
 
     private fun contentIndexControl(session: Long, request: ByteArray, call: (Long, ByteArray, ChurBuffer, IntArray) -> Int): ByteArray =
-        try { withChurBuffer(1_048_576) { buffer ->
+        try { requireCurrentAbi(); withChurBuffer(1_048_576) { buffer ->
             val written = IntArray(1)
             ChurFailure.check(call(session, request, buffer, written), "content index")
             buffer.copyOut(written[0])
         } } finally { request.fill(0) }
 
     private fun noteControl(session: Long, request: ByteArray, call: (Long, ByteArray, ChurBuffer, IntArray) -> Int): ByteArray =
-        try { withChurBuffer(1_048_576) { buffer ->
+        try { requireCurrentAbi(); withChurBuffer(1_048_576) { buffer ->
             val written = IntArray(1)
             ChurFailure.check(call(session, request, buffer, written), "private note")
             buffer.copyOut(written[0])
@@ -1001,14 +996,14 @@ object ChurVault {
         return try { decodePrivateNote(bytes) } finally { bytes.fill(0) }
     }
 
-    fun savePrivateNote(session: Long, id: ByteArray? = null, expectedRevision: Long = 0, title: String, body: String, pinned: Boolean = false): PrivateNote {
+    fun savePrivateNote(session: Long, id: ByteArray? = null, expectedRevision: Long = 0, title: String, body: String, pinned: Boolean = false, format: PrivateNoteFormat = PrivateNoteFormat.PLAIN_TEXT): PrivateNote {
         val titleBytes = title.encodeToByteArray(); val bodyBytes = body.encodeToByteArray()
         try {
             require(id == null || id.size == 16)
             if (titleBytes.size > 256 || bodyBytes.size > 262144) throw ChurFailure(ChurStatus.RESOURCE_LIMIT_EXCEEDED, "private note text exceeds its bound")
             require(expectedRevision >= 0)
-            val writer = PrivateNoteWriter(16 + 8 + 1 + 4 + titleBytes.size + 4 + bodyBytes.size)
-            writer.raw(id ?: ByteArray(16)); writer.number(expectedRevision); writer.byte(if (pinned) 1 else 0); writer.sized(titleBytes); writer.sized(bodyBytes)
+            val writer = PrivateNoteWriter(16 + 8 + 2 + 4 + titleBytes.size + 4 + bodyBytes.size)
+            writer.raw(id ?: ByteArray(16)); writer.number(expectedRevision); writer.byte(if (pinned) 1 else 0); writer.byte(format.ordinal); writer.sized(titleBytes); writer.sized(bodyBytes)
             val bytes = noteControl(session, writer.bytes, ChurNative::privateNoteSave)
             return try { decodePrivateNote(bytes) } finally { bytes.fill(0) }
         } finally { titleBytes.fill(0); bodyBytes.fill(0) }
@@ -1022,7 +1017,14 @@ object ChurVault {
         return try { if (bytes.isEmpty()) null else decodePrivateNote(bytes) } finally { bytes.fill(0) }
     }
 
+    private fun requireCurrentAbi() {
+        if (ChurNative.abiVersionMajor() != 3) {
+            throw ChurFailure(ChurStatus.ABI_INCOMPATIBLE, "native ABI 3 is required")
+        }
+    }
+
     fun beginPrivateNoteExport(session: Long, id: ByteArray, expectedRevision: Long, destinationFd: Int): Long {
+        requireCurrentAbi()
         require(id.size == 16 && expectedRevision > 0)
         val out = LongArray(1)
         ChurFailure.check(ChurNative.privateNoteExportBegin(session, id, expectedRevision, destinationFd, out), "export private note")

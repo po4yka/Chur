@@ -239,6 +239,7 @@ private fun PublicShellRoute(controller: ChurController, route: AppRoute) {
 @Composable
 private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> Unit) {
     val notes by controller.notesState.collectAsState()
+    val writeFailureId by controller.publicNoteWriteFailureId.collectAsState()
     val disclosureDue by controller.disclosureDue.collectAsState()
     var query by remember { mutableStateOf("") }
     // Saved state, shared with the Android host. This host does not persist
@@ -253,6 +254,8 @@ private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> U
     editing?.let { open ->
         NoteEditorScreen(
             open = open,
+            savedNote = notes.firstOrNull { it.id == open.note.id },
+            writeFailed = writeFailureId == open.note.id,
             onSave = controller::putNote,
             onRemove = controller::removeNote,
             onBack = { editing = null },
@@ -262,6 +265,11 @@ private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> U
 
     NotesScreen(
         notes = notes,
+        onImport = { title, body ->
+            val imported = Note(id = "note-${(NSDate().timeIntervalSince1970 * 1_000_000).toLong()}", title = title, body = body, updatedMs = (NSDate().timeIntervalSince1970 * 1000).toLong())
+            controller.putNote(imported)
+            editing = OpenNote(imported, isNew = false)
+        },
         query = query,
         onQueryChange = { query = it },
         onOpen = { editing = OpenNote(it, isNew = false) },
@@ -892,6 +900,11 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             onClose = { focusManager.clearFocus(); showingPrivateNotes = false; initialCreateRequest = null },
             onLock = { controller.lock() }, onPanic = controller::panic,
             onTouch = { controller.recordPrivateNoteActivity(generation) },
+            onImportActivity = { active ->
+                if ((controller.vaultState.value as? VaultState.Unlocked)?.generation == generation) {
+                    if (active) controller.beginHostActivity() else controller.endHostActivity()
+                }
+            },
             onExport = { choosingPrivateNoteExport = PrivateNoteExportRequest.from(it, generation) },
             systemBack = { _, _ -> }, operation = operation,
             onCancelOperation = controller::cancelActiveOperation,

@@ -6,6 +6,9 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * The public store, which is one JSON file.
@@ -21,95 +24,87 @@ import kotlinx.serialization.json.Json
  * whole file is rewritten on every change, which is the same reasoning: at this
  * size the simplest durable write is also the fastest one.
  */
-class FileNoteStore(private val path: String) : NoteStore {
+class FileNoteStore internal constructor(
+    private val path: String,
+    private val readFile: (String) -> String?,
+    private val writeFile: (String, String) -> Unit,
+) : NoteStore {
+    constructor(path: String) : this(path, ::readNoteFile, ::writeNoteFile)
+
     private val mutex = Mutex()
-    private var cache: MutableMap<String, Note>? = null
-    private var acknowledged = false
+    private var cache: State? = null
 
     override suspend fun all(): List<Note> = mutex.withLock {
-        Notes.ordered(load().values.toList())
+        Notes.ordered(load().notes.values.toList())
     }
 
     override suspend fun put(note: Note): Unit = mutex.withLock {
-        val notes = load()
-        notes[note.id] = note
-        save(notes)
+        val state = load()
+        save(state.copy(notes = state.notes + (note.id to note)))
     }
 
     override suspend fun remove(id: String): Unit = mutex.withLock {
-        val notes = load()
-        if (notes.remove(id) != null) save(notes)
+        val state = load()
+        if (id in state.notes) save(state.copy(notes = state.notes - id))
     }
 
     override suspend fun disclosureAcknowledged(): Boolean = mutex.withLock {
-        load()
-        acknowledged
+        load().acknowledged
     }
 
     override suspend fun acknowledgeDisclosure(): Unit = mutex.withLock {
-        val notes = load()
-        if (!acknowledged) {
-            acknowledged = true
-            save(notes)
-        }
+        val state = load()
+        if (!state.acknowledged) save(state.copy(acknowledged = true))
     }
 
     /**
-     * Reads the file once and keeps it.
-     *
-     * A file that exists and does not parse is an error rather than an empty
-     * store. The empty store is the more convenient answer and the wrong one:
-     * the next write would replace the unreadable file, and whatever it held
-     * would be gone.
+     * An unreadable or unsupported file is an error, never an empty store that
+     * a subsequent write could overwrite. Failed reads do not populate cache.
      */
-    private suspend fun load(): MutableMap<String, Note> {
+    private suspend fun load(): State {
         cache?.let { return it }
-        val text = withContext(Dispatchers.Default) { readNoteFile(path) }
-        val notes = LinkedHashMap<String, Note>()
-        if (text != null && text.isNotBlank()) {
+        val text = withContext(Dispatchers.Default) { readFile(path) }
+        val state = if (text != null && text.isNotBlank()) {
             val file = try {
-                json.decodeFromString(NoteFileV1.serializer(), text)
+                val document = json.parseToJsonElement(text).jsonObject
+                val version = document["version"]?.let {
+                    it.jsonPrimitive.intOrNull ?: error("invalid note file version")
+                } ?: 1
+                check(version in 1..2) { "unsupported note file version $version" }
+                json.decodeFromJsonElement(NoteFile.serializer(), document)
             } catch (cause: Exception) {
                 throw IllegalStateException("the note file at $path is not readable", cause)
             }
-            file.notes.forEach { notes[it.id] = it }
-            acknowledged = file.disclosureAcknowledged
+            State(file.notes.associateBy { it.id }, file.disclosureAcknowledged)
+        } else {
+            State(emptyMap(), false)
         }
-        cache = notes
-        return notes
+        cache = state
+        return state
     }
 
-    private suspend fun save(notes: MutableMap<String, Note>) {
+    /** Publish the new in-memory state only after its atomic write succeeds. */
+    private suspend fun save(state: State) {
         val text = json.encodeToString(
-            NoteFileV1.serializer(),
-            NoteFileV1(notes = notes.values.toList(), disclosureAcknowledged = acknowledged),
+            NoteFile.serializer(),
+            NoteFile(version = 2, notes = state.notes.values.toList(), disclosureAcknowledged = state.acknowledged),
         )
-        withContext(Dispatchers.Default) { writeNoteFile(path, text) }
+        withContext(Dispatchers.Default) { writeFile(path, text) }
+        cache = state
     }
+
+    private data class State(val notes: Map<String, Note>, val acknowledged: Boolean)
 
     private companion object {
-        val json: Json = Json { prettyPrint = false }
+        val json: Json = Json { encodeDefaults = true }
     }
 }
 
-/**
- * The file's contents.
- *
- * The version field is what a later shell reads first. It costs one integer
- * now and is the difference between migrating the file and guessing at it.
- */
+/** Version 1 omitted note formats; the note serializer preserves those as plain text. */
 @Serializable
-private data class NoteFileV1(
+private data class NoteFile(
     val version: Int = 1,
     val notes: List<Note>,
-    /**
-     * Whether the first-write disclosure has been shown.
-     *
-     * It defaults to false, so a file written by the build before this field
-     * existed shows the statement once. Showing it to a user who has seen it
-     * costs a dismissal; not showing it to one who has not is the failure
-     * `DISCREET_MODE.md` forbids.
-     */
     val disclosureAcknowledged: Boolean = false,
 )
 

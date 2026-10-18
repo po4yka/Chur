@@ -28,6 +28,28 @@ import kotlin.test.assertTrue
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class PrivateNotesControllerTest {
     @Test
+    fun markdown_import_and_format_only_edits_survive_explicit_save_without_rewriting_source() = runTest {
+        val access = Access()
+        val controller = controller(access)
+        runCurrent()
+        val source = "# Заголовок\n\n- [ ] task\n\n| a | b |\n| --- | --- |\n| x | y |\n\n[ref]: https://example.invalid\n"
+        controller.importMarkdown("Imported", source)
+        assertEquals(0, access.saves)
+        assertEquals(dev.po4yka.chur.ffi.PrivateNoteFormat.MARKDOWN, controller.state.value.editor!!.format)
+        controller.save()
+        advanceUntilIdle()
+        assertEquals(source, controller.state.value.editor!!.saved!!.body)
+        assertFalse(controller.state.value.editor!!.dirty)
+        controller.format(dev.po4yka.chur.ffi.PrivateNoteFormat.PLAIN_TEXT)
+        assertTrue(controller.state.value.editor!!.dirty)
+        controller.save()
+        advanceUntilIdle()
+        assertEquals(source, controller.state.value.editor!!.saved!!.body)
+        assertEquals(dev.po4yka.chur.ffi.PrivateNoteFormat.PLAIN_TEXT, controller.state.value.editor!!.saved!!.format)
+        controller.close()
+    }
+
+    @Test
     fun a_new_note_is_only_a_session_draft_until_explicit_save() = runTest {
         val access = Access()
         val controller = controller(access)
@@ -426,11 +448,11 @@ class PrivateNotesControllerTest {
                 if (paged && cursor == null) byteArrayOf(1) else null)
         }
         override suspend fun load(generation: Long, id: ByteArray): PrivateNote { loads++; return record }
-        override suspend fun save(generation: Long, saved: PrivateNote?, title: String, body: String, pinned: Boolean): PrivateNote {
+        override suspend fun save(generation: Long, saved: PrivateNote?, title: String, body: String, pinned: Boolean, format: dev.po4yka.chur.ffi.PrivateNoteFormat): PrivateNote {
             saves++
             saveGate?.let { withContext(NonCancellable) { it.await() } }
             saveFailure?.let { throw ChurFailure(it, "private note") }
-            record = record.copy(revision = (saved?.revision ?: 0) + 1, title = title, body = body, pinned = pinned)
+            record = record.copy(revision = (saved?.revision ?: 0) + 1, title = title, body = body, pinned = pinned, format = format)
             return record
         }
         override suspend fun change(generation: Long, id: ByteArray, revision: Long, action: PrivateNoteAction): PrivateNote? {

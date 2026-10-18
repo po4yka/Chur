@@ -3,6 +3,7 @@ package dev.po4yka.chur.app
 import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.PrivateNote
+import dev.po4yka.chur.ffi.PrivateNoteFormat
 import dev.po4yka.chur.ffi.PrivateNoteAction
 import dev.po4yka.chur.ffi.PrivateNotePage
 import dev.po4yka.chur.ffi.PrivateNoteSelection
@@ -32,10 +33,11 @@ data class PrivateNoteEditorState(
     val title: String = saved?.title.orEmpty(),
     val body: String = saved?.body.orEmpty(),
     val pinned: Boolean = saved?.pinned ?: false,
+    val format: PrivateNoteFormat = saved?.format ?: PrivateNoteFormat.MARKDOWN,
 ) {
     val trashed: Boolean get() = saved?.trashedAtMs != null
     val dirty: Boolean get() = if (saved == null) title.isNotEmpty() || body.isNotEmpty() || pinned
-        else title != saved.title || body != saved.body || pinned != saved.pinned
+        else title != saved.title || body != saved.body || pinned != saved.pinned || format != saved.format
     val canSave: Boolean get() = !trashed && dirty && (saved != null || title.isNotBlank() || body.isNotBlank())
     override fun toString(): String = "PrivateNoteEditorState(<redacted>)"
 }
@@ -63,7 +65,7 @@ data class PrivateNotesUiState(
 internal interface PrivateNotesAccess {
     suspend fun page(generation: Long, terms: String, trash: Boolean, cursor: ByteArray?): PrivateNotePage
     suspend fun load(generation: Long, id: ByteArray): PrivateNote
-    suspend fun save(generation: Long, saved: PrivateNote?, title: String, body: String, pinned: Boolean): PrivateNote
+    suspend fun save(generation: Long, saved: PrivateNote?, title: String, body: String, pinned: Boolean, format: PrivateNoteFormat): PrivateNote
     suspend fun change(generation: Long, id: ByteArray, revision: Long, action: PrivateNoteAction): PrivateNote?
 }
 
@@ -71,9 +73,9 @@ private class VaultPrivateNotesAccess(private val vault: VaultRepository) : Priv
     override suspend fun page(generation: Long, terms: String, trash: Boolean, cursor: ByteArray?) =
         vault.privateNotes(generation, terms = terms, trashed = trash, limit = 50, cursor = cursor)
     override suspend fun load(generation: Long, id: ByteArray) = vault.privateNote(generation, id)
-    override suspend fun save(generation: Long, saved: PrivateNote?, title: String, body: String, pinned: Boolean) =
+    override suspend fun save(generation: Long, saved: PrivateNote?, title: String, body: String, pinned: Boolean, format: PrivateNoteFormat) =
         vault.savePrivateNote(generation, id = saved?.noteId, expectedRevision = saved?.revision ?: 0,
-            title = title, body = body, pinned = pinned)
+            title = title, body = body, pinned = pinned, format = format)
     override suspend fun change(generation: Long, id: ByteArray, revision: Long, action: PrivateNoteAction) =
         vault.changePrivateNote(generation, id, revision, action)
 }
@@ -202,6 +204,12 @@ class PrivateNotesController internal constructor(
     override fun title(value: String) = edit { copy(title = value) }
     override fun body(value: String) = edit { copy(body = value) }
     override fun pinned(value: Boolean) = edit { copy(pinned = value) }
+    override fun format(value: PrivateNoteFormat) = edit { copy(format = value) }
+    override fun importMarkdown(title: String, body: String) {
+        if (!current() || state.value.busy || state.value.editor != null) return
+        create()
+        edit { copy(title = title, body = body, format = PrivateNoteFormat.MARKDOWN) }
+    }
     private fun edit(change: PrivateNoteEditorState.() -> PrivateNoteEditorState) {
         if (!current() || state.value.busy) return
         val editor = state.value.editor?.takeUnless { it.trashed } ?: return
@@ -242,7 +250,7 @@ class PrivateNotesController internal constructor(
         if (!editor.canSave) return
         update { it.copy(confirmation = null) }
         runAction {
-            val saved = withContext(dispatcher) { access.save(generation, editor.saved, editor.title, editor.body, editor.pinned) }
+            val saved = withContext(dispatcher) { access.save(generation, editor.saved, editor.title, editor.body, editor.pinned, editor.format) }
             update { it.copy(editor = PrivateNoteEditorState(saved)) }
             when {
                 export && current() -> if (encrypted) sendEncrypted(listOf(saved.selection())) else onExport(saved)

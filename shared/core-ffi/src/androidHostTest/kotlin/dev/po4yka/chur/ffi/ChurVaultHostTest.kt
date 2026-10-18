@@ -245,8 +245,8 @@ class ChurVaultHostTest {
     @Test
     fun the_handshake_matches_the_frozen_abi() {
         val handshake = ChurVault.handshake()
-        assertEquals(2, handshake.major)
-        assertEquals(25, handshake.minor, "album removal uses the runtime-owned ABI 2.25 surface")
+        assertEquals(3, handshake.major)
+        assertEquals(0, handshake.minor, "private note formats require the breaking ABI 3.0 surface")
         assertEquals(1, handshake.objectFormatMin)
         assertEquals(1, handshake.objectFormatMax)
         assertTrue(handshake.capabilities and 0b0000_0010L != 0L, "the reader is declared")

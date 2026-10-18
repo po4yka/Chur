@@ -122,7 +122,8 @@ Document status describes a whole document. Individual statements inside a docum
 - [`format/CATALOG_SCHEMA_V8.md`](format/CATALOG_SCHEMA_V8.md) — recoverable Trash.
 - [`format/CATALOG_SCHEMA_V9.md`](format/CATALOG_SCHEMA_V9.md) — local private notes.
 - [`format/CATALOG_SCHEMA_V10.md`](format/CATALOG_SCHEMA_V10.md) — local encrypted content index.
-- [`format/CATALOG_SCHEMA_V11.md`](format/CATALOG_SCHEMA_V11.md) — durable pending album additions; current physical schema.
+- [`format/CATALOG_SCHEMA_V11.md`](format/CATALOG_SCHEMA_V11.md) — durable pending album additions.
+- [`format/CATALOG_SCHEMA_V12.md`](format/CATALOG_SCHEMA_V12.md) — explicit private-note format; current physical schema.
 - [`format/BACKUP_FORMAT_V1.md`](format/BACKUP_FORMAT_V1.md)
 - [`format/TEST_VECTORS.md`](format/TEST_VECTORS.md)
 

@@ -281,6 +281,42 @@ class ControllerContainmentTest {
         assertTrue(controller.disclosureDue.value)
     }
 
+    @Test
+    fun failed_public_write_is_scoped_to_its_note_and_retry_or_noop_clears_that_failure() = runTest(dispatcher) {
+        val original = Note("a", "Title", "saved", 1)
+        val other = Note("b", "Other", "body", 2)
+        val memory = InMemoryNoteStore(listOf(original, other))
+        var failWrites = true
+        val store = object : NoteStore by memory {
+            override suspend fun put(note: Note) {
+                if (failWrites) error("write failure")
+                memory.put(note)
+            }
+        }
+        val controller = controllerOver(store, clock = { 9 })
+        val changed = original.copy(body = "# changed source  \n", pinned = true)
+        controller.putNote(changed)
+        advanceUntilIdle()
+        assertEquals("a", controller.publicNoteWriteFailureId.value)
+        assertEquals(original, memory.all().first { it.id == "a" })
+
+        controller.putNote(other)
+        advanceUntilIdle()
+        assertEquals("a", controller.publicNoteWriteFailureId.value)
+        controller.putNote(original)
+        advanceUntilIdle()
+        assertEquals(null, controller.publicNoteWriteFailureId.value)
+
+        controller.putNote(changed)
+        advanceUntilIdle()
+        assertEquals("a", controller.publicNoteWriteFailureId.value)
+        failWrites = false
+        controller.putNote(changed)
+        advanceUntilIdle()
+        assertEquals(null, controller.publicNoteWriteFailureId.value)
+        assertEquals(changed.copy(updatedMs = 9), controller.notesState.value.first { it.id == "a" })
+    }
+
     private fun controllerOver(
         notes: NoteStore,
         exports: ExportSink = NoExports,

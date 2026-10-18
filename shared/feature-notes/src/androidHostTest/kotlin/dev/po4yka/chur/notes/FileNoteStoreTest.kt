@@ -1,10 +1,12 @@
 package dev.po4yka.chur.notes
 
 import java.io.File
+import java.io.IOException
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 
@@ -73,4 +75,103 @@ class FileNoteStoreTest {
         assertFailsWith<IllegalStateException> { FileNoteStore(path).all() }
         assertEquals("{ this is not the note file", File(path).readText())
     }
+
+    @Test
+    fun a_failed_update_keeps_the_saved_state_and_the_same_value_can_be_retried() = runTest {
+        val original = Note("a", "Saved", "original", 1)
+        FileNoteStore(path).put(original)
+        val writer = FailingWriter()
+        val store = FileNoteStore(path, ::readNoteFile, writer::write)
+        val changed = original.copy(body = "# Unsaved\n\n- [x] exact source  \n", updatedMs = 2)
+
+        writer.failNext = true
+        assertFailsWith<IOException> { store.put(changed) }
+        assertEquals(listOf(original), store.all())
+        assertEquals(listOf(original), FileNoteStore(path).all())
+
+        store.put(changed)
+        assertEquals(listOf(changed), store.all())
+        assertEquals(listOf(changed), FileNoteStore(path).all())
+    }
+
+    @Test
+    fun a_failed_delete_keeps_the_note_and_retry_persists_its_removal() = runTest {
+        val note = Note("a", "Saved", "body", 1)
+        FileNoteStore(path).put(note)
+        val writer = FailingWriter()
+        val store = FileNoteStore(path, ::readNoteFile, writer::write)
+
+        writer.failNext = true
+        assertFailsWith<IOException> { store.remove(note.id) }
+        assertEquals(listOf(note), store.all())
+        assertEquals(listOf(note), FileNoteStore(path).all())
+
+        store.remove(note.id)
+        assertEquals(emptyList(), store.all())
+        assertEquals(emptyList(), FileNoteStore(path).all())
+    }
+
+    @Test
+    fun a_failed_disclosure_write_does_not_acknowledge_and_retry_survives_reopen() = runTest {
+        val writer = FailingWriter()
+        val store = FileNoteStore(path, ::readNoteFile, writer::write)
+
+        writer.failNext = true
+        assertFailsWith<IOException> { store.acknowledgeDisclosure() }
+        assertFalse(store.disclosureAcknowledged())
+        assertFalse(FileNoteStore(path).disclosureAcknowledged())
+
+        store.acknowledgeDisclosure()
+        assertTrue(store.disclosureAcknowledged())
+        assertTrue(FileNoteStore(path).disclosureAcknowledged())
+    }
+
+    @Test
+    fun version_one_is_migrated_without_reinterpreting_its_plain_text() = runTest {
+        File(path).writeText(
+            """{"version":1,"notes":[{"id":"old","title":"Legacy","body":"# literal heading","updatedMs":1}],"disclosureAcknowledged":true}""",
+        )
+        val store = FileNoteStore(path)
+        val legacy = store.all().single()
+        assertEquals(NoteFormat.PLAIN_TEXT, legacy.format)
+        assertEquals("# literal heading", legacy.body)
+        assertTrue(store.disclosureAcknowledged())
+
+        val markdown = Note("new", "Markdown", "# Heading\n\n| a | b |\n| - | - |\n| 1 | 2 |\n", 2)
+        store.put(markdown)
+
+        val reopened = FileNoteStore(path).all()
+        assertEquals(listOf(markdown, legacy), reopened)
+        assertTrue(File(path).readText().contains("\"version\":2"))
+        assertTrue(File(path).readText().contains("\"format\":\"PLAIN_TEXT\""))
+        assertTrue(File(path).readText().contains("\"format\":\"MARKDOWN\""))
+    }
+
+    @Test
+    fun an_unsupported_version_cannot_be_read_or_overwritten() = runTest {
+        for (version in listOf(0, 3, 999)) {
+            val contents = """{"version":$version,"notes":[],"disclosureAcknowledged":false}"""
+            File(path).writeText(contents)
+            val store = FileNoteStore(path)
+
+            assertFailsWith<IllegalStateException> { store.all() }
+            assertFailsWith<IllegalStateException> { store.put(Note("a", "", "body", 1)) }
+            assertFailsWith<IllegalStateException> { store.remove("a") }
+            assertFailsWith<IllegalStateException> { store.acknowledgeDisclosure() }
+            assertEquals(contents, File(path).readText())
+        }
+    }
+
+    private class FailingWriter {
+        var failNext = false
+
+        fun write(path: String, contents: String) {
+            if (failNext) {
+                failNext = false
+                throw IOException("injected atomic-write failure")
+            }
+            writeNoteFile(path, contents)
+        }
+    }
+
 }

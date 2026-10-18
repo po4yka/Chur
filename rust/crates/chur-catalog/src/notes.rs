@@ -8,6 +8,25 @@ use chur_core::{Id, Result, ensure};
 use rusqlite::{Connection, OptionalExtension, params};
 use zeroize::Zeroize;
 
+/// Persisted interpretation of a note body. Legacy text is never inferred as Markdown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum NoteFormat {
+    /// Literal UTF-8 text, including Markdown punctuation.
+    PlainText = 0,
+    /// UTF-8 Markdown source.
+    Markdown = 1,
+}
+impl TryFrom<u8> for NoteFormat {
+    type Error = chur_core::Error;
+    fn try_from(value: u8) -> Result<Self> {
+        match value {
+            0 => Ok(Self::PlainText),
+            1 => Ok(Self::Markdown),
+            _ => Err(chur_core::err!(InvalidInput, "the note format is unknown")),
+        }
+    }
+}
 /// A private note. Debug intentionally omits private text.
 pub struct Note {
     /// Opaque vault-local identity.
@@ -18,6 +37,8 @@ pub struct Note {
     pub title: String,
     /// UTF-8 body, at most 256 KiB; a Summary holds only its preview here.
     pub body: String,
+    /// Explicit body format, committed with its revision.
+    pub format: NoteFormat,
     /// Native creation time in milliseconds.
     pub created_ms: u64,
     /// Monotonic update time in milliseconds.
@@ -39,9 +60,14 @@ impl Drop for Note {
     }
 }
 impl Note {
-    /// Exact size of title, two LF bytes, and body in UTF-8.
+    /// Exact export size: Markdown source, or legacy title, two LF bytes and body.
     pub fn export_size(&self) -> u64 {
-        (self.title.len() + 2 + self.body.len()) as u64
+        (self.body.len()
+            + if self.format == NoteFormat::PlainText {
+                self.title.len() + 2
+            } else {
+                0
+            }) as u64
     }
 }
 /// A list row never contains the whole body.
@@ -58,7 +84,7 @@ pub struct Page {
     /// Opaque cursor, absent at the end.
     pub next_cursor: Option<Vec<u8>>,
 }
-const COLUMNS: &str = "note_id,revision,title,body,created_ms,updated_ms,pinned,deleted_ms";
+const COLUMNS: &str = "note_id,revision,title,body,created_ms,updated_ms,pinned,deleted_ms,format";
 fn decode(row: &rusqlite::Row<'_>) -> rusqlite::Result<Note> {
     let bytes: Vec<u8> = row.get(0)?;
     let id = Id::from_slice(&bytes).map_err(|_| rusqlite::Error::InvalidQuery)?;
@@ -71,6 +97,8 @@ fn decode(row: &rusqlite::Row<'_>) -> rusqlite::Result<Note> {
         updated_ms: row.get::<_, i64>(5)? as u64,
         pinned: row.get(6)?,
         deleted_ms: row.get::<_, Option<i64>>(7)?.map(|n| n as u64),
+        format: NoteFormat::try_from(row.get::<_, u8>(8)?)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
     })
 }
 fn get_conn(conn: &Connection, id: &Id) -> Result<Note> {
@@ -88,6 +116,10 @@ pub fn get(db: &CatalogDb, id: &Id) -> Result<Note> {
     get_conn(db.connection(), id)
 }
 /// Creates or replaces one active note under optimistic revision control.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a CAS save commits all bounded note fields and their explicit format together"
+)]
 pub fn save(
     db: &mut CatalogDb,
     id: Option<Id>,
@@ -95,6 +127,7 @@ pub fn save(
     title: &str,
     body: &str,
     pinned: bool,
+    format: NoteFormat,
     now: u64,
 ) -> Result<Note> {
     ensure!(
@@ -125,13 +158,13 @@ pub fn save(
             let old=get_conn(tx,&note_id)?;
             ensure!(old.revision==expected,Conflict,"the private note changed");
             ensure!(old.deleted_ms.is_none(),Conflict,"the private note is in trash");
-            if old.title==title && old.body==body && old.pinned==pinned{return Ok(old)}
+            if old.title==title && old.body==body && old.pinned==pinned && old.format==format{return Ok(old)}
             ensure!(revision<i64::MAX,ResourceLimitExceeded,"the note revision is exhausted");
-            tx.execute("UPDATE private_notes SET title=?2,body=?3,pinned=?4,revision=revision+1,updated_ms=max(updated_ms,?5) WHERE note_id=?1",params![note_id.as_bytes().as_slice(),title,body,pinned,now]).map_err(|e|map_sqlite(e,"the private note could not be saved"))?;
+            tx.execute("UPDATE private_notes SET title=?2,body=?3,pinned=?4,format=?6,revision=revision+1,updated_ms=max(updated_ms,?5) WHERE note_id=?1",params![note_id.as_bytes().as_slice(),title,body,pinned,now,format as u8]).map_err(|e|map_sqlite(e,"the private note could not be saved"))?;
         }else{
             let count:i64=tx.query_row("SELECT count(*) FROM private_notes",[],|r|r.get(0)).map_err(|e|map_sqlite(e,"the note count could not be read"))?;
             ensure!(count<10000,ResourceLimitExceeded,"the private note count limit was reached");
-            tx.execute("INSERT INTO private_notes(note_id,revision,title,body,created_ms,updated_ms,pinned) VALUES(?1,1,?2,?3,?4,?4,?5)",params![note_id.as_bytes().as_slice(),title,body,now,pinned]).map_err(|e|map_sqlite(e,"the private note could not be created"))?;
+            tx.execute("INSERT INTO private_notes(note_id,revision,title,body,created_ms,updated_ms,pinned,format) VALUES(?1,1,?2,?3,?4,?4,?5,?6)",params![note_id.as_bytes().as_slice(),title,body,now,pinned,format as u8]).map_err(|e|map_sqlite(e,"the private note could not be created"))?;
         }
         reindex(tx,&note_id)?;schema::bump_generation(tx)?;get_conn(tx,&note_id)
     })
@@ -261,7 +294,7 @@ pub fn page(
     } else {
         (2, i64::MAX, vec![255; 16])
     };
-    let sql = "SELECT n.note_id,n.revision,n.title,substr(n.body,1,160),n.created_ms,n.updated_ms,n.pinned,n.deleted_ms,length(CAST(n.title AS BLOB))+2+length(CAST(n.body AS BLOB)) FROM private_notes n WHERE (n.deleted_ms IS NOT NULL)=?1 AND (?2='' OR n.rowid IN (SELECT rowid FROM private_note_search WHERE private_note_search MATCH ?3)) AND (n.pinned,n.updated_ms,n.note_id)<(?4,?5,?6) ORDER BY n.pinned DESC,n.updated_ms DESC,n.note_id DESC LIMIT ?7";
+    let sql = "SELECT n.note_id,n.revision,n.title,substr(n.body,1,160),n.created_ms,n.updated_ms,n.pinned,n.deleted_ms,n.format,CASE WHEN n.format=0 THEN length(CAST(n.title AS BLOB))+2 ELSE 0 END+length(CAST(n.body AS BLOB)) FROM private_notes n WHERE (n.deleted_ms IS NOT NULL)=?1 AND (?2='' OR n.rowid IN (SELECT rowid FROM private_note_search WHERE private_note_search MATCH ?3)) AND (n.pinned,n.updated_ms,n.note_id)<(?4,?5,?6) ORDER BY n.pinned DESC,n.updated_ms DESC,n.note_id DESC LIMIT ?7";
     let mut stmt = db
         .connection()
         .prepare(sql)
@@ -284,7 +317,7 @@ pub fn page(
             |row| {
                 Ok(Summary {
                     note: decode(row)?,
-                    export_size: row.get::<_, i64>(8)? as u64,
+                    export_size: row.get::<_, i64>(9)? as u64,
                 })
             },
         )
@@ -330,9 +363,95 @@ mod tests {
         }
     }
     #[test]
+    fn format_changes_are_revisioned_and_archives_preserve_exact_source() {
+        let mut db = db();
+        let source = "# Heading\n\n- [x] done\n\n```rust\nlet n = 1;\n```\n";
+        let plain = save(
+            &mut db,
+            None,
+            0,
+            "Title",
+            source,
+            false,
+            NoteFormat::PlainText,
+            1,
+        )
+        .expect("plain");
+        assert_eq!(plain.export_size(), (source.len() + 7) as u64);
+        let markdown = save(
+            &mut db,
+            Some(plain.id),
+            1,
+            "Title",
+            source,
+            false,
+            NoteFormat::Markdown,
+            2,
+        )
+        .expect("format edit");
+        assert_eq!(markdown.revision, 2);
+        assert_eq!(markdown.export_size(), source.len() as u64);
+        assert_eq!(
+            status(save(
+                &mut db,
+                Some(plain.id),
+                1,
+                "Wrong",
+                "lost",
+                false,
+                NoteFormat::PlainText,
+                3
+            )),
+            chur_core::ChurStatus::Conflict
+        );
+        let row = page(&db, "", false, 50, None)
+            .expect("page")
+            .notes
+            .remove(0);
+        assert_eq!(row.note.format, NoteFormat::Markdown);
+        assert_eq!(row.export_size, source.len() as u64);
+        let trashed = change(&mut db, &plain.id, 2, 3, 3)
+            .expect("trash")
+            .expect("note");
+        assert_eq!(trashed.format, NoteFormat::Markdown);
+        let restored = change(&mut db, &plain.id, 3, 4, 4)
+            .expect("restore")
+            .expect("note");
+        let mut target = self::db();
+        let fresh = crate::transfer::copy_note(&mut target, &restored).expect("archive copy");
+        assert_ne!(fresh, plain.id);
+        let copied = get(&target, &fresh).expect("copied");
+        assert_eq!(copied.format, NoteFormat::Markdown);
+        assert_eq!(copied.body, source);
+        assert_eq!(copied.revision, 1);
+        let empty = save(
+            &mut target,
+            None,
+            0,
+            "Empty",
+            "",
+            false,
+            NoteFormat::Markdown,
+            5,
+        )
+        .expect("empty markdown");
+        assert_eq!(empty.export_size(), 0);
+    }
+
+    #[test]
     fn revisions_search_trash_and_expiry_are_atomic() {
         let mut db = db();
-        let a = save(&mut db, None, 0, "秘密 note", "body needle 😀", false, 10).expect("create");
+        let a = save(
+            &mut db,
+            None,
+            0,
+            "秘密 note",
+            "body needle 😀",
+            false,
+            NoteFormat::PlainText,
+            10,
+        )
+        .expect("create");
         assert_eq!(a.revision, 1);
         assert_eq!(
             page(&db, "needle", false, 10, None)
@@ -342,11 +461,30 @@ mod tests {
             1
         );
         assert_eq!(
-            status(save(&mut db, Some(a.id), 9, "lost", "lost", false, 11)),
+            status(save(
+                &mut db,
+                Some(a.id),
+                9,
+                "lost",
+                "lost",
+                false,
+                NoteFormat::PlainText,
+                11
+            )),
             chur_core::ChurStatus::Conflict
         );
         assert_eq!(get(&db, &a.id).expect("unchanged").body, "body needle 😀");
-        let same = save(&mut db, Some(a.id), 1, &a.title, &a.body, false, 11).expect("same");
+        let same = save(
+            &mut db,
+            Some(a.id),
+            1,
+            &a.title,
+            &a.body,
+            false,
+            NoteFormat::PlainText,
+            11,
+        )
+        .expect("same");
         assert_eq!(same.revision, 1);
         let b = change(&mut db, &a.id, 1, 1, 11)
             .expect("pin")
@@ -392,8 +530,28 @@ mod tests {
     fn bounded_unicode_preview_and_cursor_never_return_whole_bodies() {
         let mut db = db();
         let text = "😀".repeat(200);
-        let first = save(&mut db, None, 0, "first", &text, true, 1).expect("create");
-        save(&mut db, None, 0, "second", "second body", false, 2).expect("create");
+        let first = save(
+            &mut db,
+            None,
+            0,
+            "first",
+            &text,
+            true,
+            NoteFormat::PlainText,
+            1,
+        )
+        .expect("create");
+        save(
+            &mut db,
+            None,
+            0,
+            "second",
+            "second body",
+            false,
+            NoteFormat::PlainText,
+            2,
+        )
+        .expect("create");
         let page1 = page(&db, "", false, 1, None).expect("page");
         assert_eq!(page1.notes[0].note.id, first.id);
         assert_eq!(page1.notes[0].note.body.chars().count(), 160);
@@ -412,11 +570,29 @@ mod tests {
             chur_core::ChurStatus::Conflict
         );
         assert_eq!(
-            status(save(&mut db, None, 0, &"界".repeat(86), "", false, 1)),
+            status(save(
+                &mut db,
+                None,
+                0,
+                &"界".repeat(86),
+                "",
+                false,
+                NoteFormat::PlainText,
+                1
+            )),
             chur_core::ChurStatus::ResourceLimitExceeded
         );
         assert_eq!(
-            status(save(&mut db, None, 0, "", &"x".repeat(262145), false, 1)),
+            status(save(
+                &mut db,
+                None,
+                0,
+                "",
+                &"x".repeat(262145),
+                false,
+                NoteFormat::PlainText,
+                1
+            )),
             chur_core::ChurStatus::ResourceLimitExceeded
         );
         assert!(page(&db, "\" OR * !!!", false, 10, None).is_ok());

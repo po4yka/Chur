@@ -1,6 +1,10 @@
 package dev.po4yka.chur.notes
 
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 
 /**
  * The public Notes shell of `docs/product/DISCREET_MODE.md` and `DESIGN.md`
@@ -18,14 +22,19 @@ import kotlinx.serialization.Serializable
  * the shell must work before anything else exists.
  */
 
-/** One public note. Nothing here is private, and nothing here is encrypted. */
+/** The syntax of the body; legacy plain text is never implicitly reinterpreted. */
 @Serializable
+enum class NoteFormat { PLAIN_TEXT, MARKDOWN }
+
+/** One public note. Nothing here is private, and nothing here is encrypted. */
+@Serializable(with = NoteSerializer::class)
 data class Note(
     val id: String,
     val title: String,
     val body: String,
     val updatedMs: Long,
     val pinned: Boolean = false,
+    val format: NoteFormat = NoteFormat.MARKDOWN,
 ) {
     /** The first line, which the list shows when the title is empty. */
     val displayTitle: String
@@ -39,6 +48,33 @@ data class Note(
             return lines.drop(if (skipFirst) 1 else 0).firstOrNull()?.take(120).orEmpty()
         }
 }
+
+/** Decoding an absent format must retain the meaning of pre-Markdown notes. */
+internal object NoteSerializer : KSerializer<Note> {
+    override val descriptor: SerialDescriptor = StoredNote.serializer().descriptor
+
+    override fun serialize(encoder: Encoder, value: Note) {
+        encoder.encodeSerializableValue(
+            StoredNote.serializer(),
+            StoredNote(value.id, value.title, value.body, value.updatedMs, value.pinned, value.format),
+        )
+    }
+
+    override fun deserialize(decoder: Decoder): Note {
+        val stored = decoder.decodeSerializableValue(StoredNote.serializer())
+        return Note(stored.id, stored.title, stored.body, stored.updatedMs, stored.pinned, stored.format)
+    }
+}
+
+@Serializable
+private data class StoredNote(
+    val id: String,
+    val title: String,
+    val body: String,
+    val updatedMs: Long,
+    val pinned: Boolean = false,
+    val format: NoteFormat = NoteFormat.PLAIN_TEXT,
+)
 
 /**
  * Where public notes live.

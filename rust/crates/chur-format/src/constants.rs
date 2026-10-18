@@ -59,6 +59,8 @@ pub const CATALOG_FORMAT_VERSION_V9: u16 = 0x0009;
 pub const CATALOG_FORMAT_VERSION_V10: u16 = 0x000a;
 /// §15.2: private catalog v11 with durable pending album membership additions.
 pub const CATALOG_FORMAT_VERSION_V11: u16 = 0x000b;
+/// Explicit private note body format.
+pub const CATALOG_FORMAT_VERSION_V12: u16 = 0x000c;
 /// §15.2: `object_store_format_version`.
 pub const OBJECT_STORE_FORMAT_VERSION_V1: u16 = 0x0001;
 /// §15.2: `slot_version` of the v1 key-slot families.

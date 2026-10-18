@@ -50,6 +50,28 @@ class PrivateNotesPresentationTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
 
     @Test
+    fun markdown_preview_tasks_source_and_trash_keep_real_document_content() = present(editor = true) { f ->
+        val source = "# Public Markdown sample\n\n- [ ] Public checklist task\n\n| First | Second |\n| --- | --- |\n| one | two |\n\n```kotlin\nval answer = 42\n```\n\n**Bold** and ~~strike~~ with [a link](https://example.invalid)."
+        f.main { f.state.value = f.state.value.copy(editor = PrivateNoteEditorState(f.note.copy(body = source,
+            format = dev.po4yka.chur.ffi.PrivateNoteFormat.MARKDOWN))) }
+        f.click("Preview")
+        assertTrue(f.await { f.text("Public Markdown sample") != null })
+        f.capture("private-notes-markdown-preview-public.png")
+        f.click("Checklist item")
+        assertTrue(f.await { f.state.value.editor!!.body.contains("- [x] Public checklist task") })
+        f.click("Edit source")
+        assertTrue(f.await { f.tag("private-note-body") != null })
+        assertEquals(source.replace("- [ ]", "- [x]"), f.state.value.editor!!.body)
+        f.main {
+            val editor = f.state.value.editor!!
+            f.state.value = f.state.value.copy(editor = PrivateNoteEditorState(f.note.copy(body = editor.body,
+                format = dev.po4yka.chur.ffi.PrivateNoteFormat.MARKDOWN, trashedAtMs = 3)))
+        }
+        assertTrue(f.await { f.text("Restore") != null && f.text("Public Markdown sample") != null })
+        f.capture("private-notes-markdown-trash-public.png")
+    }
+
+    @Test
     fun list_editor_failed_save_and_dirty_back_have_explicit_reachable_states() = present { f ->
         assertTrue(f.await { f.text("Public sample title") != null })
         f.capture("private-notes-list-public.png")
@@ -152,6 +174,8 @@ class PrivateNotesPresentationTest {
             override fun title(value: String) { state.value = state.value.copy(editor = state.value.editor!!.copy(title = value)) }
             override fun body(value: String) { state.value = state.value.copy(editor = state.value.editor!!.copy(body = value)) }
             override fun pinned(value: Boolean) { state.value = state.value.copy(editor = state.value.editor!!.copy(pinned = value)) }
+            override fun format(value: dev.po4yka.chur.ffi.PrivateNoteFormat) { state.value = state.value.copy(editor = state.value.editor!!.copy(format = value)) }
+            override fun importMarkdown(title: String, body: String) { state.value = state.value.copy(editor = PrivateNoteEditorState(title = title, body = body)) }
             override fun back() { state.value = state.value.copy(confirmation = PrivateNoteConfirmation.LEAVE) }
             override fun dismissConfirmation() { state.value = state.value.copy(confirmation = null) }
             override fun discardAndBack() { state.value = state.value.copy(editor = null, confirmation = null) }
