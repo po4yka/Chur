@@ -57,13 +57,18 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -379,7 +384,14 @@ fun VaultShell(
     // No default: a host that forgot it would compile, pass every test, and
     // send Back home, where the background lock closes the vault.
     systemBack: @Composable (enabled: Boolean, onBack: () -> Unit) -> Unit,
+    searchFocusRequest: Long? = null,
+    onNavigationBusyChange: (Boolean) -> Unit = {},
 ) {
+    var scopesExpanded by remember(state.destination, state.openAlbum?.id, state.selectedCount) { mutableStateOf(false) }
+    var albumExportExpanded by remember(state.openAlbum?.id, state.selectedCount) { mutableStateOf(false) }
+    var settingsBusy by remember { mutableStateOf(false) }
+    var albumsBusy by remember { mutableStateOf(false) }
+    NavigationBusyEffect(scopesExpanded || albumExportExpanded || settingsBusy || albumsBusy, onNavigationBusyChange)
     val colors = LocalChurColors.current
     val back = state.backStep(actions)
     systemBack(back != null) { back?.invoke() }
@@ -419,7 +431,6 @@ fun VaultShell(
                     },
                     actions = {
                         if (state.destination == VaultDestination.LIBRARY && state.openAlbum == null) {
-                            var scopesExpanded by remember { mutableStateOf(false) }
                             Box {
                                 TextButton(onClick = { scopesExpanded = true }) { Text("Browse") }
                                 DropdownMenu(expanded = scopesExpanded,
@@ -459,7 +470,6 @@ fun VaultShell(
                             }
                         }
                         state.openAlbum?.let { album ->
-                            var albumExportExpanded by remember { mutableStateOf(false) }
                             Box {
                                 TextButton(enabled = state.operation == null, onClick = { albumExportExpanded = true }) {
                                     Text("Export album")
@@ -541,10 +551,11 @@ fun VaultShell(
                         state.destination == VaultDestination.ALBUMS ->
                             AlbumOrganizer(state.albums, actions, state.albumView, actions.onAlbumViewChange,
                                 state.albumOrder, actions.onAlbumOrderChange,
-                                state.albumFilter, actions.onAlbumFilterChange)
+                                state.albumFilter, actions.onAlbumFilterChange,
+                                onNavigationBusyChange = { albumsBusy = it })
                         state.destination == VaultDestination.SEARCH ->
-                            SearchBody(state, actions, state.mediaView, actions.onMediaViewChange)
-                        else -> SettingsBody(state, actions)
+                            SearchBody(state, actions, state.mediaView, actions.onMediaViewChange, searchFocusRequest)
+                        else -> SettingsBody(state, actions, onNavigationBusyChange = { settingsBusy = it })
                     }
                 }
                 state.operation?.let { operation ->
@@ -872,8 +883,16 @@ private fun LibraryBody(state: VaultUiState, actions: VaultActions,
 
 @Composable
 private fun SearchBody(state: VaultUiState, actions: VaultActions,
-    view: ContentView, onViewChange: (ContentView) -> Unit) {
+    view: ContentView, onViewChange: (ContentView) -> Unit, focusRequest: Long?) {
     val colors = LocalChurColors.current
+    val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    LaunchedEffect(focusRequest) {
+        if (focusRequest != null) {
+            focusRequester.requestFocus()
+            keyboard?.show()
+        }
+    }
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         // The IME and large text can make the controls taller than the viewport.
         // Keep them scrollable and reserve space for results in either view.
@@ -888,7 +907,7 @@ private fun SearchBody(state: VaultUiState, actions: VaultActions,
                     label = { Text("Search") },
                     placeholder = { Text("Names, tags, or indexed text", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     keyboardOptions = privateKeyboardOptions(),
-                    modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter),
+                    modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter).focusRequester(focusRequester),
                     colors = churOutlinedTextFieldColors(),
                 )
                 ContentIndexControls(state.contentIndex, actions)
@@ -946,7 +965,7 @@ private fun EmptyBrowseResult(message: String, actionLabel: String, onAction: ((
 }
 
 @Composable
-private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
+private fun SettingsBody(state: VaultUiState, actions: VaultActions, onNavigationBusyChange: (Boolean) -> Unit) {
     val colors = LocalChurColors.current
     var changingPassword by remember { mutableStateOf(false) }
     var confirmingDisconnect by remember { mutableStateOf(false) }
@@ -954,6 +973,11 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
     var askingRecovery by remember { mutableStateOf(false) }
     val hasRecovery = state.slots.any { it.slotType == 4 }
     var choosingAutoLock by remember { mutableStateOf(false) }
+    var pairingBusy by remember { mutableStateOf(false) }
+    var sharingBusy by remember { mutableStateOf(false) }
+    var syncSetupBusy by remember { mutableStateOf(false) }
+    NavigationBusyEffect(changingPassword || confirmingDisconnect || confirmingDamagedDeletion ||
+        askingRecovery || choosingAutoLock || pairingBusy || sharingBusy || syncSetupBusy, onNavigationBusyChange)
     LazyColumn(
         contentPadding = PaddingValues(ChurSpacing.gutter),
         verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
@@ -1144,11 +1168,12 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
                     actions.onPrepareDevicePairing, actions.onInspectDevicePairing, actions.onApproveDevicePairing,
                     actions.onSavePairingApproval, actions.onOpenPairingApproval,
                     actions.onLoadPairedDevices, actions.onRevokePairedDevice,
+                    onNavigationBusyChange = { pairingBusy = it },
                 )
             }
             if (!sync.configured) {
                 item {
-                    SyncSetupCard(onConfigure = actions.onConfigureSync)
+                    SyncSetupCard(onConfigure = actions.onConfigureSync, onNavigationBusyChange = { syncSetupBusy = it })
                 }
             } else {
                 if (sync.integrityStop != null) {
@@ -1166,7 +1191,7 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions) {
                     SettingsAction("Sync now", actions.onSyncNow, enabled = !sync.busy)
                 }
                 item {
-                    SharingCard(state, actions)
+                    SharingCard(state, actions, onNavigationBusyChange = { sharingBusy = it })
                 }
                 // The engine reports a stop as a status, and the copy for it
                 // is this layer's, `ERROR_MODEL.md` "Layer mapping".
@@ -1575,4 +1600,14 @@ private fun SettingsSwitch(
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         modifier = Modifier.toggleable(value = checked, enabled = enabled, role = Role.Switch) { onToggle() },
     )
+}
+
+/** Keep launcher navigation from disposing an unfinished local UI flow. */
+@Composable
+internal fun NavigationBusyEffect(busy: Boolean, onChanged: (Boolean) -> Unit) {
+    val report by rememberUpdatedState(onChanged)
+    DisposableEffect(busy) {
+        report(busy)
+        onDispose { report(false) }
+    }
 }

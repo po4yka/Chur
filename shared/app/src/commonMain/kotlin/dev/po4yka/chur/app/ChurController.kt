@@ -164,6 +164,12 @@ class ChurController(
     private val _route = MutableStateFlow<AppRoute>(
         if (initiallyLockWholeApp) AppRoute.AppUnlock else AppRoute.PublicShell,
     )
+    private var pendingLauncherAction: LauncherAction? = null
+    private var launcherToken = 0L
+    private var launcherNavigationBusy = false
+    private var launcherLocking = false
+    private val _launcherRequest = MutableStateFlow<LauncherRequest?>(null)
+    val launcherRequest: StateFlow<LauncherRequest?> = _launcherRequest.asStateFlow()
     private val _notes = MutableStateFlow<List<Note>>(emptyList())
     private val _disclosureDue = MutableStateFlow(false)
     private val _publicDisclosureRequired = MutableStateFlow(true)
@@ -419,7 +425,7 @@ class ChurController(
         if (initialState is VaultState.NoVault && _appLockEnabled.value) {
             withContext(Dispatchers.Default) { appLockSetting.write(false) }
             _appLockEnabled.value = false
-            setRoute(AppRoute.PublicShell)
+            if (pendingLauncherAction == null) setRoute(AppRoute.PublicShell)
         }
         _notes.value = notes.all()
         _publicDisclosureRequired.value = !notes.disclosureAcknowledged()
@@ -428,6 +434,7 @@ class ChurController(
         refreshDeviceUnlockOffer()
         guarded { runIdleTimer() }
         started = true
+        dispatchLauncherAction()
     }
 
     /**
@@ -444,7 +451,90 @@ class ChurController(
      * uncaught `launch` and end the process, which is the crash
      * `PLAINTEXT_LIFECYCLE.md` §8 replaces with an orderly lock.
      */
-    fun begin() = guarded { start() }
+    fun begin() = guarded {
+        try {
+            start()
+        } finally {
+            if (!started) clearLauncherAction()
+        }
+    }
+
+    /** Native hosts call this on Main after decoding the closed command set. */
+    fun requestLauncherAction(action: LauncherAction): Boolean {
+        if (action == LauncherAction.LOCK_AND_HIDE) {
+            panic()
+            return true
+        }
+        val gate = _route.value == AppRoute.Unlock || _route.value == AppRoute.AppUnlock
+        if (launcherLocking || launcherNavigationBusy || _activeOperation.value != null || _recoveryPhrase.value != null ||
+            (hostActivities > 0 && !gate) ||
+            _route.value !in setOf(AppRoute.PublicShell, AppRoute.PublicSettings, AppRoute.Vault, AppRoute.Unlock, AppRoute.AppUnlock)
+        ) {
+            post("Finish or cancel the current action first.")
+            return false
+        }
+        pendingLauncherAction = action
+        launcherToken += 1
+        _launcherRequest.value = null
+        if (started) dispatchLauncherAction()
+        return true
+    }
+
+    /** Public editors and vault dialogs keep their current work when a shortcut arrives. */
+    fun setLauncherNavigationBusy(busy: Boolean) {
+        launcherNavigationBusy = busy
+    }
+
+    fun acknowledgeLauncherAction(token: Long, generation: Long): Boolean {
+        val request = _launcherRequest.value ?: return false
+        if (request.token != token || request.generation != generation ||
+            (repository.state.value as? VaultState.Unlocked)?.generation != generation || _route.value != AppRoute.Vault
+        ) return false
+        if (launcherLocking || launcherNavigationBusy || _activeOperation.value != null ||
+            hostActivities > 0 || _recoveryPhrase.value != null
+        ) {
+            rejectLauncherAction(token)
+            return false
+        }
+        clearLauncherAction()
+        return true
+    }
+
+    fun rejectLauncherAction(token: Long) {
+        if (_launcherRequest.value?.token != token) return
+        clearLauncherAction()
+        post("Finish or cancel the current action first.")
+    }
+
+    /** An incoming share takes precedence over deferred launcher navigation. */
+    fun cancelLauncherAction() = clearLauncherAction()
+
+    private fun clearLauncherAction() {
+        pendingLauncherAction = null
+        _launcherRequest.value = null
+    }
+
+    private fun dispatchLauncherAction() {
+        val action = pendingLauncherAction ?: return
+        when (val state = repository.state.value) {
+            is VaultState.Unlocked -> {
+                if (_unlocking.value && _route.value != AppRoute.Vault) return
+                privacy.setEnabled(true)
+                if (_route.value != AppRoute.Vault) setRoute(AppRoute.Vault)
+                _launcherRequest.value = LauncherRequest(launcherToken, action, state.generation)
+            }
+            is VaultState.NoVault -> {
+                clearLauncherAction()
+                setRoute(AppRoute.PublicSettings)
+                post("Set up Chur before using this action.")
+            }
+            is VaultState.Locked -> {
+                val next = if (_route.value == AppRoute.AppUnlock) AppRoute.AppUnlock else AppRoute.Unlock
+                if (_route.value != next) setRoute(next)
+            }
+            else -> Unit
+        }
+    }
 
     /**
      * The timer behind the auto-lock choices of `DESIGN.md` §14.4.
@@ -843,14 +933,19 @@ class ChurController(
 
     /** Locks now, `DESIGN.md` §14.3. */
     fun lock(reason: LockReason = LockReason.USER) = guarded {
-        contentIndexer.reset()
-        lockEpoch += 1
-        _activeOperation.value = null
-        exports.cancelPending()
-        withContext(Dispatchers.Default) { repository.lock(reason) }
-        privacy.setEnabled(false)
-        clearPrivateProjections()
-        setRoute(if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell)
+        try {
+            clearLauncherAction()
+            contentIndexer.reset()
+            lockEpoch += 1
+            _activeOperation.value = null
+            exports.cancelPending()
+            withContext(Dispatchers.Default) { repository.lock(reason) }
+            privacy.setEnabled(false)
+            clearPrivateProjections()
+            setRoute(if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell)
+        } finally {
+            launcherLocking = false
+        }
     }
 
     /**
@@ -861,7 +956,16 @@ class ChurController(
      * identically. A reason that changed the transition would make panic a
      * different operation, and that section says it is not.
      */
-    fun panic() = lock(LockReason.PANIC)
+    fun panic() {
+        clearLauncherAction()
+        launcherLocking = true
+        _recoveryPhrase.value = null
+        // Mask synchronously, before the native lock waits for an in-flight call.
+        privacy.setEnabled(true)
+        lockEpoch += 1
+        setRoute(if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell)
+        lock(LockReason.PANIC)
+    }
 
     /**
      * Marks that the host is running an activity it launched itself.
@@ -950,6 +1054,7 @@ class ChurController(
         privacy.setEnabled(true)
         promptHeldLock = prompts > 0
         if (hostActivities > 0) return
+        clearLauncherAction()
         lockEpoch += 1
         if (_appLockEnabled.value || policy.lockOnBackground) {
             _activeOperation.value = null
@@ -1019,6 +1124,7 @@ class ChurController(
 
     /** Moves to a route the public shell offers. */
     fun goTo(next: AppRoute) {
+        if (next !in setOf(AppRoute.Unlock, AppRoute.AppUnlock, AppRoute.Recover, AppRoute.AppRecover)) clearLauncherAction()
         setRoute(next)
     }
 
@@ -2590,6 +2696,7 @@ class ChurController(
 
     /** Closes the runtime, which a finishing host does. */
     suspend fun shutdown() {
+        clearLauncherAction()
         withContext(Dispatchers.Default) { repository.shutdown() }
     }
 
@@ -2809,6 +2916,8 @@ class ChurController(
     }
 
     private suspend fun clearPrivateProjections() {
+        clearLauncherAction()
+        launcherNavigationBusy = false
         contentIndexer.reset()
         _activeOperation.value = null
         exports.cancelPending()
@@ -2870,7 +2979,7 @@ class ChurController(
             setRoute(if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell)
             return
         }
-        if (target == AppRoute.AppUnlock || target == AppRoute.AppRecover) {
+        if ((target == AppRoute.AppUnlock || target == AppRoute.AppRecover) && pendingLauncherAction == null) {
             exports.cancelPending()
             withContext(Dispatchers.Default) { repository.lock(LockReason.USER) }
             privacy.setEnabled(false)
@@ -2890,12 +2999,14 @@ class ChurController(
      */
     private suspend fun enterVault(notice: String? = null) {
         val generation = (repository.state.value as? VaultState.Unlocked)?.generation ?: return
+        val initialQueryRevision = queryRevision
         privacy.setEnabled(true)
         setRoute(AppRoute.Vault)
+        dispatchLauncherAction()
         post(notice)
         val initialPage = withContext(Dispatchers.Default) { repository.page(ObjectQuery()) }
         if ((repository.state.value as? VaultState.Unlocked)?.generation != generation) return
-        _page.value = initialPage
+        if (queryRevision == initialQueryRevision) _page.value = initialPage
         // `SYNC_PROTOCOL_V1.md` §7: "Decrypted application occurs after
         // explicit unlock". Whatever the locked puller staged while the vault
         // was closed is validated and applied here, off the first frame, and
@@ -3034,6 +3145,7 @@ class ChurController(
      * attempt.
      */
     private fun setRoute(next: AppRoute) {
+        if (next !in setOf(AppRoute.Vault, AppRoute.Unlock, AppRoute.AppUnlock, AppRoute.Recover, AppRoute.AppRecover)) clearLauncherAction()
         if (_route.value == AppRoute.EncryptFiles && next != AppRoute.EncryptFiles) clearExternalArchiveSecret()
         routeVisit += 1
         _notice.value = null

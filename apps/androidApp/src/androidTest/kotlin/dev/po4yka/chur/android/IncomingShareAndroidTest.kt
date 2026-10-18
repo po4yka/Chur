@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
+import androidx.lifecycle.Lifecycle
 import dev.po4yka.chur.app.MediaImporter
 import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.ObjectQuery
@@ -16,7 +18,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -163,14 +164,16 @@ class IncomingShareAndroidTest {
         host.incomingShares.discard()
         val intent = Intent(context, MainActivity::class.java).setAction(Intent.ACTION_SEND)
             .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "cold incoming secret")
-        ActivityScenario.launch<MainActivity>(intent).use { scenario ->
-            scenario.onActivity { activity ->
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        var activity = instrumentation.startActivitySync(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        try {
+            instrumentation.runOnMainSync {
                 assertEquals(1, host.incomingShares.state.value!!.count)
                 assertNull(activity.intent.extras)
                 assertNull(activity.intent.clipData)
             }
-            scenario.recreate()
-            scenario.onActivity { activity ->
+            activity = recreateActivity(activity, host)
+            instrumentation.runOnMainSync {
                 assertEquals(1, host.incomingShares.state.value!!.count)
                 host.incomingShares.discard()
                 assertNull(host.incomingShares.state.value)
@@ -178,17 +181,20 @@ class IncomingShareAndroidTest {
                     .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "warm incoming secret")
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }
-            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            instrumentation.waitForIdleSync()
             runBlocking {
                 withTimeout(5_000) { host.incomingShares.state.first { it?.count == 1 } }
             }
-            scenario.onActivity { activity ->
+            instrumentation.runOnMainSync {
                 assertEquals(1, host.incomingShares.state.value!!.count)
                 assertNull(activity.intent.extras)
                 host.incomingShares.discard()
             }
-            scenario.recreate()
-            scenario.onActivity { assertNull(host.incomingShares.state.value) }
+            activity = recreateActivity(activity, host)
+            instrumentation.runOnMainSync { assertNull(host.incomingShares.state.value) }
+        } finally {
+            finishActivity(activity)
+            host.incomingShares.discard()
         }
     }
 
@@ -281,16 +287,65 @@ class IncomingShareAndroidTest {
                 identifier = "private identifier"
                 clipData = ClipData.newRawUri("private name", uri)
             }
-        val sanitized = sanitizedIncomingShareIntent(context, external)
-        assertEquals(Intent.ACTION_SEND, sanitized.action)
-        assertEquals("text/plain", sanitized.type)
-        assertEquals(external.component, sanitized.component)
-        assertEquals(external.categories, sanitized.categories)
-        assertNull(sanitized.extras)
-        assertNull(sanitized.data)
-        assertNull(sanitized.clipData)
-        assertNull(sanitized.selector)
-        assertNull(sanitized.identifier)
+        val host = ChurHost.of(context)
+        host.incomingShares.discard()
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val activity = instrumentation.startActivitySync(
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        ) as MainActivity
+        try {
+            instrumentation.runOnMainSync {
+                // Deliver the nested payload to the production callback: a
+                // system launch would resolve the selector before delivery.
+                activity.intent = external
+                instrumentation.callActivityOnNewIntent(activity, external)
+                val sanitized = activity.intent
+                assertEquals(Intent.ACTION_MAIN, sanitized.action)
+                assertEquals(external.component, sanitized.component)
+                assertNull(sanitized.type)
+                assertNull(sanitized.categories)
+                assertNull(sanitized.`package`)
+                assertNull(sanitized.extras)
+                assertNull(sanitized.data)
+                assertNull(sanitized.clipData)
+                assertNull(sanitized.selector)
+                assertNull(sanitized.identifier)
+            }
+        } finally {
+            finishActivity(activity)
+            host.incomingShares.discard()
+        }
+    }
+
+    private fun recreateActivity(previous: MainActivity, host: ChurHost): MainActivity {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.runOnMainSync { previous.recreate() }
+        var replacement: MainActivity? = null
+        awaitLifecycle {
+            replacement = (host.activity as? MainActivity)?.takeIf {
+                it !== previous && it.lifecycle.currentState == Lifecycle.State.RESUMED
+            }
+            replacement != null
+        }
+        return requireNotNull(replacement)
+    }
+
+    private fun finishActivity(activity: MainActivity) {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync { activity.finish() }
+        awaitLifecycle { activity.isDestroyed }
+    }
+
+    private fun awaitLifecycle(ready: () -> Boolean) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val deadline = SystemClock.uptimeMillis() + 10_000
+        while (SystemClock.uptimeMillis() < deadline) {
+            instrumentation.waitForIdleSync()
+            var complete = false
+            instrumentation.runOnMainSync { complete = ready() }
+            if (complete) return
+            SystemClock.sleep(40)
+        }
+        error("The production Activity did not finish its lifecycle transition")
     }
 
     @Test

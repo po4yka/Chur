@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="launcher_import">Импорт</string>
+    <string name="launcher_search">Поиск</string>
+    <string name="launcher_lock_and_hide">Блокировка и маскировка</string>
+    <string name="launcher_new_private_note">Новая приватная заметка</string>
+    <string name="launcher_lock_and_hide_short">Заблокировать</string>
+    <string name="launcher_new_private_note_short">Приватная заметка</string>
+    <string name="launcher_finish_share">Завершите или отмените получение файлов перед выбором действия приложения.</string>
+</resources>

@@ -57,9 +57,12 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import dev.po4yka.chur.app.LauncherAction
 import dev.po4yka.chur.app.AppRoute
 import dev.po4yka.chur.app.ActiveOperation
 import dev.po4yka.chur.app.ChurController
@@ -297,6 +300,7 @@ private fun PublicShellRoute(controller: ChurController, route: AppRoute) {
                 showFirstWriteDisclosure = disclosureDue,
                 onAcknowledgeDisclosure = controller::acknowledgeDisclosure,
                 onBeginCapture = controller::beginPublicCameraActivity,
+                onNavigationBusyChange = controller::setLauncherNavigationBusy,
             )
         }
     }
@@ -311,6 +315,10 @@ private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> U
     // written; the editor saves its own draft whenever it leaves.
     var editing by rememberOpenNote()
     val focusManager = LocalFocusManager.current
+    DisposableEffect(controller, editing != null) {
+        controller.setLauncherNavigationBusy(editing != null)
+        onDispose { controller.setLauncherNavigationBusy(false) }
+    }
 
     editing?.let { open ->
         // System and predictive Back close the editor, as its arrow does,
@@ -532,7 +540,9 @@ private fun VaultRoute(controller: ChurController) {
     var quickSettingsLockMessage by remember(activity) { mutableStateOf<String?>(null) }
     val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
-    val deviceControl = remember(context) { ChurHost.of(context).deviceControl }
+    val host = remember(context) { ChurHost.of(context) }
+    val incomingShare by host.incomingShares.state.collectAsState()
+    val deviceControl = host.deviceControl
     val devicePairing by deviceControl.pairing.collectAsState()
     val deviceConnected by deviceControl.connected.collectAsState()
 
@@ -542,6 +552,10 @@ private fun VaultRoute(controller: ChurController) {
     var choosingArchive by remember(generation) { mutableStateOf<SelectiveExportRequest?>(null) }
     var choosingArchiveImport by remember(generation) { mutableStateOf(false) }
     var showingPrivateNotes by remember(generation) { mutableStateOf(false) }
+    var privateNotesBusy by remember(generation) { mutableStateOf(false) }
+    var privateNoteCreateRequest by remember(generation) { mutableStateOf<Long?>(null) }
+    var searchFocusRequest by remember(generation) { mutableStateOf<Long?>(null) }
+    var shellNavigationBusy by remember(generation) { mutableStateOf(false) }
     var choosingPrivateNoteExport by remember(generation) { mutableStateOf<PrivateNoteExportRequest?>(null) }
     var pendingPrivateNoteExport by remember(generation) { mutableStateOf<PrivateNoteExportRequest?>(null) }
     var thumbnailsConcealed by remember(generation) { mutableStateOf(true) }
@@ -633,6 +647,58 @@ private fun VaultRoute(controller: ChurController) {
     // The picked items whose import committed, until the user answers the
     // step of `DESIGN.md` §15.3. A lock disposes of the route and of them.
     var originals by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    val launcherRequest by controller.launcherRequest.collectAsState()
+    val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
+    val launcherNavigationBusy = incomingShare != null || shellNavigationBusy || privateNotesBusy || viewing != null || selection.isNotEmpty() ||
+        creatingAlbum || choosingAlbum || movingSelection || choosingTag || managingTags ||
+        confirmingDelete || confirmingEmptyTrash || choosingExport || choosingImport ||
+        choosingArchive != null || choosingArchiveImport || choosingPrivateNoteExport != null ||
+        pendingPrivateNoteExport != null || exportingAlbum != null || pendingAlbumExport != null ||
+        pendingDocumentImport != null || originals.isNotEmpty() || devicePairing != null ||
+        quickSettingsLockBusy || operation != null
+    DisposableEffect(controller, launcherNavigationBusy) {
+        controller.setLauncherNavigationBusy(launcherNavigationBusy)
+        onDispose { controller.setLauncherNavigationBusy(false) }
+    }
+    LaunchedEffect(launcherRequest?.token, lifecycleState) {
+        val request = launcherRequest ?: return@LaunchedEffect
+        if (lifecycleState != Lifecycle.State.RESUMED) return@LaunchedEffect
+        if (launcherNavigationBusy) {
+            controller.rejectLauncherAction(request.token)
+            return@LaunchedEffect
+        }
+        if (!controller.acknowledgeLauncherAction(request.token, generation)) return@LaunchedEffect
+        focusManager.clearFocus()
+        openAlbum = null
+        openTag = null
+        favoritesOnly = false
+        trashOpen = false
+        quarantineOpen = false
+        recentlyAdded = false
+        selection = emptySet()
+        terms = ""
+        mediaKinds = 0
+        when (request.action) {
+            LauncherAction.IMPORT -> {
+                showingPrivateNotes = false
+                privateNoteCreateRequest = null
+                destination = VaultDestination.LIBRARY
+                importAlbumId = null
+                choosingImport = true
+            }
+            LauncherAction.SEARCH -> {
+                showingPrivateNotes = false
+                privateNoteCreateRequest = null
+                destination = VaultDestination.SEARCH
+                searchFocusRequest = request.token
+            }
+            LauncherAction.NEW_PRIVATE_NOTE -> {
+                privateNoteCreateRequest = request.token
+                showingPrivateNotes = true
+            }
+            LauncherAction.LOCK_AND_HIDE -> Unit // Handled synchronously by the controller.
+        }
+    }
     val deleteOriginals = rememberOriginalDeletion(controller)
     val localNetwork = rememberLocalNetworkAccess(controller)
     val pairingFiles = rememberPairingApprovalFiles(controller, localNetwork)
@@ -1045,7 +1111,9 @@ private fun VaultRoute(controller: ChurController) {
     if (showingPrivateNotes) {
         PrivateNotesRoute(
             vault = controller.vault, generation = generation,
-            onClose = { focusManager.clearFocus(); showingPrivateNotes = false },
+            initialCreateRequest = privateNoteCreateRequest,
+            onNavigationBusyChange = { privateNotesBusy = it },
+            onClose = { focusManager.clearFocus(); showingPrivateNotes = false; privateNoteCreateRequest = null },
             onLock = { controller.lock() }, onPanic = controller::panic,
             onTouch = { controller.recordPrivateNoteActivity(generation) },
             onExport = { choosingPrivateNoteExport = PrivateNoteExportRequest.from(it, generation) },
@@ -1092,6 +1160,8 @@ private fun VaultRoute(controller: ChurController) {
         },
     ) {
         VaultShell(
+            searchFocusRequest = searchFocusRequest,
+            onNavigationBusyChange = { shellNavigationBusy = it },
             state = VaultUiState(
                 destination = destination,
                 tiles = page.objects.map { projection ->
@@ -1169,7 +1239,7 @@ private fun VaultRoute(controller: ChurController) {
                 onToggleSelection = { projection ->
                     selection = selection.toggle(projection.id)
                 },
-                onOpenPrivateNotes = { focusManager.clearFocus(); selection = emptySet(); recentlyAdded = false; showingPrivateNotes = true },
+                onOpenPrivateNotes = { focusManager.clearFocus(); selection = emptySet(); recentlyAdded = false; privateNoteCreateRequest = null; showingPrivateNotes = true },
                 onImport = { choosingImport = true },
                 onSearch = {
                     terms = it

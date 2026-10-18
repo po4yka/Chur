@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -38,6 +39,8 @@ fun PrivateNotesRoute(
     notice: Notice? = null,
     onNoticeShown: (Long) -> Unit = {},
     onEncryptedExport: (List<PrivateNoteSelection>) -> Unit = {},
+    initialCreateRequest: Long? = null,
+    onNavigationBusyChange: (Boolean) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val close by rememberUpdatedState(onClose)
@@ -51,6 +54,11 @@ fun PrivateNotesRoute(
     val session by vault.state.collectAsState()
     val state by controller.state.collectAsState()
     if ((session as? VaultState.Unlocked)?.generation != generation) return
+    NavigationBusyEffect(state.editor != null || state.busy || state.selection.isNotEmpty() ||
+        state.confirmation != null, onNavigationBusyChange)
+    LaunchedEffect(controller, initialCreateRequest) {
+        if (initialCreateRequest != null) controller.create()
+    }
     systemBack(true, controller::back)
     Box(Modifier.fillMaxSize().pointerInput(Unit) {
         awaitEachGesture {

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="launcher_import">Import</string>
+    <string name="launcher_search">Search</string>
+    <string name="launcher_lock_and_hide">Lock and hide</string>
+    <string name="launcher_new_private_note">New private note</string>
+    <string name="launcher_lock_and_hide_short">Lock and hide</string>
+    <string name="launcher_new_private_note_short">New private note</string>
+    <string name="launcher_finish_share">Finish or discard the pending share before opening an app action.</string>
+</resources>

@@ -33,7 +33,8 @@ import dev.po4yka.chur.ffi.toHex
 
 /** One Settings flow for sharing the vault's whole cryptographic collection. */
 @Composable
-internal fun SharingCard(state: VaultUiState, actions: VaultActions) {
+internal fun SharingCard(state: VaultUiState, actions: VaultActions,
+    onNavigationBusyChange: (Boolean) -> Unit = {}) {
     val colors = LocalChurColors.current
     var enrollment by remember { mutableStateOf("") }
     var inspected by remember { mutableStateOf("") }
@@ -41,6 +42,7 @@ internal fun SharingCard(state: VaultUiState, actions: VaultActions) {
     var scopeConfirmed by remember(enrollment) { mutableStateOf(false) }
     var permission by remember { mutableStateOf(SharingPermission.READ) }
     var revoking by remember { mutableStateOf<SharingMember?>(null) }
+    NavigationBusyEffect(enrollment.isNotEmpty() || revoking != null, onNavigationBusyChange)
     val recipient = state.sharingRecipient.takeIf { inspected == enrollment && inspected.isNotBlank() }
 
     Card(modifier = Modifier.fillMaxWidth()) {

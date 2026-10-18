@@ -14,14 +14,21 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     weak var scene: SceneDelegate?
     private var incomingSelection: IncomingShareSelection?
     private var checkingIncoming = false
+    private var incomingRefreshCompletions: [() -> Void] = []
+    var incomingShareBusy: Bool { checkingIncoming || incomingSelection != nil || IosIncomingShares.shared.hasPending() }
     private var incomingScratchReady = false
     private let incomingScratch = FileManager.default.temporaryDirectory
         .appendingPathComponent("chur-incoming-media", isDirectory: true)
 
-    func refreshIncomingShares() {
-        guard storageReady, gate is GateResultCompatible, !checkingIncoming,
-            incomingSelection == nil, !IosIncomingShares.shared.hasPending(),
-            UIApplication.shared.applicationState == .active else { return }
+    func refreshIncomingShares(completion: @escaping () -> Void = {}) {
+        guard storageReady, gate is GateResultCompatible,
+            UIApplication.shared.applicationState == .active else { completion(); return }
+        if checkingIncoming {
+            incomingRefreshCompletions.append(completion)
+            return
+        }
+        guard incomingSelection == nil, !IosIncomingShares.shared.hasPending() else { completion(); return }
+        incomingRefreshCompletions.append(completion)
         checkingIncoming = true
         DispatchQueue.global(qos: .userInitiated).async {
             var prepared: IncomingShareSelection?
@@ -46,9 +53,15 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             } catch { /* Unavailable App Group or locked Keychain: try on next activation. */ }
             DispatchQueue.main.async {
                 self.checkingIncoming = false
+                defer {
+                    let completions = self.incomingRefreshCompletions
+                    self.incomingRefreshCompletions.removeAll()
+                    completions.forEach { $0() }
+                }
                 guard let selected = prepared else { return }
                 guard UIApplication.shared.applicationState == .active,
                     !IosIncomingShares.shared.hasPending() else { return }
+                self.controller.cancelLauncherAction()
                 self.incomingSelection = selected
                 _ = IosIncomingShares.shared.offer(count: Int32(selected.count), load: { index, prepare, loaded in
                     selected.load(index: Int(truncating: index), shouldContinue: {
@@ -207,12 +220,19 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     private var activeExportURL: URL?
     private var activeExportController: UIViewController?
     private var exportGeneration = 0
+    private let quickActions = LauncherQuickActionDispatcher()
+    private var quickActionMaskPending = false
 
     private var host: AppDelegate { UIApplication.shared.delegate as! AppDelegate }
 
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options: UIScene.ConnectionOptions) {
         guard let scene = scene as? UIWindowScene else { return }
         host.scene = self
+        IosLauncherActions.shared.onMaskRendered = { [weak self] in
+            guard let self else { return }
+            self.quickActionMaskPending = false
+            if UIApplication.shared.applicationState == .active { self.host.privacy.detach() }
+        }
         let window = UIWindow(windowScene: scene)
         if host.storageReady {
             window.rootViewController = IosEntryPointKt.ChurViewController(controller: host.controller, gate: host.gate)
@@ -235,9 +255,63 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         if host.storageReady, host.gate is GateResultCompatible {
             host.controller.begin()
         }
+        if let shortcut = options.shortcutItem {
+            receiveQuickAction(shortcut) { _ in }
+        }
+    }
+
+    func windowScene(_ windowScene: UIWindowScene, performActionFor shortcutItem: UIApplicationShortcutItem,
+                     completionHandler: @escaping (Bool) -> Void) {
+        receiveQuickAction(shortcutItem, completion: completionHandler)
+    }
+
+    private func receiveQuickAction(_ shortcut: UIApplicationShortcutItem, completion: @escaping (Bool) -> Void) {
+        // Even an active scene must finish its inbox scan before navigation.
+        // The dispatcher still executes lock immediately, without this wait.
+        quickActions.receive(type: shortcut.type, active: false,
+            perform: performQuickAction, completion: completion)
+        if let action = LauncherQuickAction(rawValue: shortcut.type), action != .lockAndHide,
+            UIApplication.shared.applicationState == .active {
+            activateQuickActionsAfterInboxRefresh()
+        }
+    }
+
+    private func activateQuickActionsAfterInboxRefresh() {
+        IosLauncherActions.shared.setSceneReady(ready: false)
+        host.refreshIncomingShares { [weak self] in
+            guard let self, self.host.scene === self,
+                UIApplication.shared.applicationState == .active else { return }
+            IosLauncherActions.shared.setSceneReady(ready: true)
+            self.quickActions.activate(perform: self.performQuickAction)
+        }
+    }
+
+    private func performQuickAction(_ action: LauncherQuickAction) -> Bool {
+        guard host.storageReady, host.gate is GateResultCompatible else { return false }
+        guard let command = LauncherAction.companion.fromExternalAction(value: action.rawValue) else { return false }
+        if action == .lockAndHide {
+            // Conceal before the controller revokes the session and routes to
+            // the public shell/app gate. This action never prompts for unlock.
+            host.privacy.attach()
+            quickActionMaskPending = true
+            let handled = host.controller.requestLauncherAction(action: command)
+            host.cancelPublicCamera()
+            mediaPicker?.cancel()
+            cancelPendingExports()
+            // Lock also leaves any native picker. Its detached callback cannot
+            // authorize work in the revoked session.
+            window?.rootViewController?.dismiss(animated: false)
+            IosLauncherActions.shared.requestMask()
+            return handled
+        }
+        guard UIApplication.shared.applicationState == .active,
+            window?.rootViewController?.presentedViewController == nil,
+            !host.incomingShareBusy else { return false }
+        return host.controller.requestLauncherAction(action: command)
     }
 
     func sceneWillResignActive(_ scene: UIScene) {
+        IosLauncherActions.shared.setSceneReady(ready: false)
         // The cover exists only while the scene is inactive, and only over a
         // screen the switcher must not show; `IosPrivacyCover` says why.
         if host.controller.privacyCoverNeeded { host.privacy.attach() }
@@ -247,6 +321,9 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidEnterBackground(_ scene: UIScene) {
+        IosLauncherActions.shared.setSceneReady(ready: false)
+        // An action still waiting for the inbox/scene belongs to this visit.
+        quickActions.cancel()
         host.cancelPublicCamera()
         // UIKit takes the switcher picture after this returns, and a session
         // can have opened since the scene resigned active: a vault creation
@@ -261,17 +338,25 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {
-        host.privacy.detach()
+        if !quickActionMaskPending { host.privacy.detach() }
         // UIApplication can remain inactive during the scene callback. Check
         // its foreground guard after UIKit completes that state transition.
-        DispatchQueue.main.async { [weak self] in self?.host.refreshIncomingShares() }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.activateQuickActionsAfterInboxRefresh()
+        }
     }
 
     func sceneDidDisconnect(_ scene: UIScene) {
+        quickActions.cancel()
         host.cancelPublicCamera()
         cancelAlbumExportPicker()
         cancelDocumentImports()
-        if host.scene === self { host.scene = nil }
+        if host.scene === self {
+            IosLauncherActions.shared.setSceneReady(ready: false)
+            host.scene = nil
+            IosLauncherActions.shared.onMaskRendered = nil
+        }
     }
 
     func presentMediaPicker(_ answer: @escaping MediaAnswer, fullLivePhotos: Bool = false) {
@@ -713,6 +798,13 @@ private final class MediaPickerDelegate: NSObject, PHPickerViewControllerDelegat
         self.fullLivePhotos = fullLivePhotos
         self.answer = answer
         self.done = done
+    }
+
+    func cancel() {
+        guard let answer else { return }
+        self.answer = nil
+        Self.answerNothing(answer)
+        done()
     }
 
     /// Answers with the pick and fetches nothing yet: Kotlin loads one item

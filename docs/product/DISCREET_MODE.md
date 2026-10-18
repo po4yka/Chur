@@ -166,6 +166,8 @@ Private data is excluded from:
 - voice-assistant indexing;
 - public deep-link parameters.
 
+[App icon actions](APP_ICON_ACTIONS.md) publish only four fixed generic capabilities: Import, Search, Lock and hide, and New private note. They disclose no private data or session state. Private navigation uses the normal session gate; Lock and hide performs panic lock and displays the public shell or the enabled whole-app gate. It does not change the launcher icon or promise to hide the product's vault functionality.
+
 A future private widget requires a dedicated threat model and locked-state rendering contract.
 
 ## Deep links

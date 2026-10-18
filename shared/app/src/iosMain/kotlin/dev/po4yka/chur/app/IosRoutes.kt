@@ -18,6 +18,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.ImageBitmap
@@ -115,6 +116,15 @@ internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: 
     val phrase by controller.recoveryPhrase.collectAsState()
     val formError by controller.formError.collectAsState()
     val unlocking by controller.unlocking.collectAsState()
+    val maskRequest by IosLauncherActions.maskRequest.collectAsState()
+    LaunchedEffect(route, maskRequest, phrase) {
+        if (maskRequest > 0 && phrase == null && (route == AppRoute.PublicShell || route == AppRoute.AppUnlock)) {
+            // Let the neutral composition draw before removing the UIKit cover.
+            withFrameNanos { }
+            withFrameNanos { }
+            IosLauncherActions.onMaskRendered?.invoke()
+        }
+    }
     val incomingCodec = remember { IosMediaCodec() }
     val incomingImporter = remember(incomingCodec) { MediaImporter(incomingCodec) }
     DisposableEffect(controller) {
@@ -220,6 +230,7 @@ private fun PublicShellRoute(controller: ChurController, route: AppRoute) {
                 onOpenSettings = { controller.goTo(AppRoute.PublicSettings) },
                 showFirstWriteDisclosure = disclosureDue,
                 onAcknowledgeDisclosure = controller::acknowledgeDisclosure,
+                onNavigationBusyChange = controller::setLauncherNavigationBusy,
             )
         }
     }
@@ -234,6 +245,10 @@ private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> U
     // the composition's saved state, so on iOS it lasts as long as the view
     // controller; the editor saves its own draft whenever it leaves.
     var editing by rememberOpenNote()
+    DisposableEffect(controller, editing != null) {
+        controller.setLauncherNavigationBusy(editing != null)
+        onDispose { controller.setLauncherNavigationBusy(false) }
+    }
 
     editing?.let { open ->
         NoteEditorScreen(
@@ -350,6 +365,10 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     var choosingArchive by remember(generation) { mutableStateOf<SelectiveExportRequest?>(null) }
     var choosingArchiveImport by remember(generation) { mutableStateOf(false) }
     var showingPrivateNotes by remember(generation) { mutableStateOf(false) }
+    var privateNotesBusy by remember(generation) { mutableStateOf(false) }
+    var initialCreateRequest by remember(generation) { mutableStateOf<Long?>(null) }
+    var searchFocusRequest by remember(generation) { mutableStateOf<Long?>(null) }
+    var shellNavigationBusy by remember(generation) { mutableStateOf(false) }
     var choosingPrivateNoteExport by remember(generation) { mutableStateOf<PrivateNoteExportRequest?>(null) }
     var thumbnailsConcealed by remember(generation) { mutableStateOf(true) }
     var destination by remember { mutableStateOf(VaultDestination.LIBRARY) }
@@ -440,6 +459,56 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     val scope = rememberCoroutineScope()
     val codec = remember { IosMediaCodec() }
     val importer = remember { MediaImporter(codec) }
+    val launcherRequest by controller.launcherRequest.collectAsState()
+    val launcherSceneReady by IosLauncherActions.sceneReady.collectAsState()
+    val incomingShare by IosIncomingShares.inbox.state.collectAsState()
+    val navigationBusy = shellNavigationBusy || privateNotesBusy || viewing != null || selection.isNotEmpty() ||
+        choosingArchive != null || choosingArchiveImport || choosingPrivateNoteExport != null ||
+        exportingAlbum != null || albumPickerPending || documentPickerPending || choosingImportSource ||
+        creatingAlbum || choosingAlbum || choosingTag || managingTags || confirmingDelete ||
+        confirmingEmptyTrash || choosingExport || originals != null || incomingShare != null
+    DisposableEffect(controller, navigationBusy) {
+        controller.setLauncherNavigationBusy(navigationBusy)
+        onDispose { controller.setLauncherNavigationBusy(false) }
+    }
+    LaunchedEffect(launcherRequest?.token, generation, navigationBusy, launcherSceneReady) {
+        val request = launcherRequest ?: return@LaunchedEffect
+        if (!launcherSceneReady) return@LaunchedEffect
+        if (navigationBusy) {
+            controller.rejectLauncherAction(request.token)
+            return@LaunchedEffect
+        }
+        if (!controller.acknowledgeLauncherAction(request.token, generation)) return@LaunchedEffect
+        focusManager.clearFocus()
+        openAlbum = null
+        openTag = null
+        favoritesOnly = false
+        trashOpen = false
+        quarantineOpen = false
+        recentlyAdded = false
+        selection = emptySet()
+        terms = ""
+        mediaKinds = 0
+        when (request.action) {
+            LauncherAction.IMPORT -> {
+                showingPrivateNotes = false
+                initialCreateRequest = null
+                destination = VaultDestination.LIBRARY
+                choosingImportSource = true
+            }
+            LauncherAction.SEARCH -> {
+                showingPrivateNotes = false
+                initialCreateRequest = null
+                destination = VaultDestination.SEARCH
+                searchFocusRequest = request.token
+            }
+            LauncherAction.NEW_PRIVATE_NOTE -> {
+                initialCreateRequest = request.token
+                showingPrivateNotes = true
+            }
+            LauncherAction.LOCK_AND_HIDE -> Unit // The controller handles this synchronously.
+        }
+    }
 
     LaunchedEffect(destination, openAlbum, openTag, favoritesOnly, trashOpen, quarantineOpen, recentlyAdded,
         terms, mediaSort, albumSort, mediaKinds) {
@@ -820,7 +889,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     if (showingPrivateNotes) {
         PrivateNotesRoute(
             vault = controller.vault, generation = generation,
-            onClose = { focusManager.clearFocus(); showingPrivateNotes = false },
+            onClose = { focusManager.clearFocus(); showingPrivateNotes = false; initialCreateRequest = null },
             onLock = { controller.lock() }, onPanic = controller::panic,
             onTouch = { controller.recordPrivateNoteActivity(generation) },
             onExport = { choosingPrivateNoteExport = PrivateNoteExportRequest.from(it, generation) },
@@ -828,6 +897,8 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             onCancelOperation = controller::cancelActiveOperation,
             notice = notice, onNoticeShown = controller::consume,
             onEncryptedExport = { choosingArchive = SelectiveExportRequest(generation, notes = it) },
+            initialCreateRequest = initialCreateRequest,
+            onNavigationBusyChange = { privateNotesBusy = it },
         )
         choosingPrivateNoteExport?.let { request ->
             ExportOptionsDialog(media = false, files = true, share = true,
@@ -855,6 +926,8 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         },
     ) {
         VaultShell(
+            searchFocusRequest = searchFocusRequest,
+            onNavigationBusyChange = { shellNavigationBusy = it },
             state = VaultUiState(
                 destination = destination,
                 tiles = page.objects.map { projection ->
@@ -927,7 +1000,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 onToggleSelection = { projection ->
                     selection = selection.toggle(projection.id)
                 },
-                onOpenPrivateNotes = { focusManager.clearFocus(); selection = emptySet(); recentlyAdded = false; showingPrivateNotes = true },
+                onOpenPrivateNotes = { focusManager.clearFocus(); selection = emptySet(); recentlyAdded = false; initialCreateRequest = null; showingPrivateNotes = true },
                 onImport = { choosingImportSource = true },
                 onSearch = {
                     terms = it

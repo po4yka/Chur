@@ -114,14 +114,19 @@ private fun siblingsOf(album: AlbumSummary, albums: List<AlbumSummary>): List<Al
 fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
     view: ContentView, onViewChange: (ContentView) -> Unit,
     order: AlbumOrder, onOrderChange: (AlbumOrder) -> Unit,
-    filter: String, onFilterChange: (String) -> Unit) {
+    filter: String, onFilterChange: (String) -> Unit,
+    onNavigationBusyChange: (Boolean) -> Unit = {}) {
     val colors = LocalChurColors.current
+    var menuId by remember { mutableStateOf<String?>(null) }
+    var sortExpanded by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf<AlbumSummary?>(null) }
     var renameText by remember { mutableStateOf("") }
     var deleting by remember { mutableStateOf<AlbumSummary?>(null) }
     var moving by remember { mutableStateOf<AlbumSummary?>(null) }
     val bounds = remember { mutableStateMapOf<String, Rect>() }
     var dragged by remember { mutableStateOf<AlbumSummary?>(null) }
+    NavigationBusyEffect(renaming != null || deleting != null || moving != null || dragged != null ||
+        menuId != null || sortExpanded, onNavigationBusyChange)
     var dropPoint by remember { mutableStateOf(Offset.Zero) }
     var viewport by remember { mutableStateOf(Rect.Zero) }
     var rootDropBounds by remember { mutableStateOf(Rect.Zero) }
@@ -175,11 +180,13 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
 
     val grid = view == ContentView.GRID
     val albumCard: @Composable (AlbumSummary, Int) -> Unit = { album, depth ->
-        DisposableEffect(album.id) { onDispose { bounds.remove(album.id) } }
+        DisposableEffect(album.id) { onDispose {
+            bounds.remove(album.id)
+            if (menuId == album.id) menuId = null
+        } }
         val siblings = siblingsOf(album, albums)
         val index = siblings.indexOfFirst { it.id == album.id }
         val parent = parentOf(album, albums)
-        var menu by remember(album.id) { mutableStateOf(false) }
         Card(
             onClick = { actions.onOpenAlbum(album) },
             modifier = Modifier
@@ -218,28 +225,28 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
                     }
                 }
                 Box {
-                    TextButton(onClick = { menu = true }) { Text("More") }
-                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    TextButton(onClick = { menuId = album.id }) { Text("More") }
+                    DropdownMenu(expanded = menuId == album.id, onDismissRequest = { menuId = null }) {
                         DropdownMenuItem(text = { Text("Rename") }, onClick = {
-                            menu = false; renameText = album.name; renaming = album
+                            menuId = null; renameText = album.name; renaming = album
                         })
                         DropdownMenuItem(text = { Text("Move to…") }, onClick = {
-                            menu = false; moving = album
+                            menuId = null; moving = album
                         })
                         if (canReorder && index > 0) {
                             DropdownMenuItem(text = { Text("Move up") }, onClick = {
-                                menu = false
+                                menuId = null
                                 actions.onMoveAlbum(album, parent, siblings[index - 1])
                             })
                         }
                         if (canReorder && index in 0 until siblings.lastIndex) {
                             DropdownMenuItem(text = { Text("Move down") }, onClick = {
-                                menu = false
+                                menuId = null
                                 actions.onMoveAlbum(album, parent, siblings.getOrNull(index + 2))
                             })
                         }
                         DropdownMenuItem(text = { Text("Delete album") }, onClick = {
-                            menu = false; deleting = album
+                            menuId = null; deleting = album
                         })
                     }
                 }
@@ -249,7 +256,6 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
 
     Column(modifier = Modifier.fillMaxSize()) {
         ContentViewToggle(view, onViewChange)
-        var sortExpanded by remember { mutableStateOf(false) }
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = ChurSpacing.gutter)) {
             Box {
                 TextButton(onClick = { sortExpanded = true }, modifier = Modifier.heightIn(min = 48.dp)) {

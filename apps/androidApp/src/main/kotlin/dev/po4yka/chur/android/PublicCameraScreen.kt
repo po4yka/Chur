@@ -27,6 +27,7 @@ internal fun AndroidPublicCameraScreen(
     showFirstWriteDisclosure: Boolean,
     onAcknowledgeDisclosure: () -> Unit,
     onBeginCapture: () -> (() -> Unit),
+    onNavigationBusyChange: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     var storageResult by remember(context) {
@@ -59,6 +60,13 @@ internal fun AndroidPublicCameraScreen(
         if (unfinishedCapture || storage.discardedPreviousCapture)
             "The previous camera session ended. Its unsaved photo was discarded." else null,
     ) }
+    // Keep captures/reviews and the selected photo's delete confirmation in
+    // place when an external launcher command asks to leave this surface.
+    val navigationBusy = busy || unfinishedCapture || preview != null || selectedPhotoId != null
+    DisposableEffect(onNavigationBusyChange, navigationBusy) {
+        onNavigationBusyChange(navigationBusy)
+        onDispose { onNavigationBusyChange(false) }
+    }
     val captureLease = remember { arrayOfNulls<() -> Unit>(1) }
     fun releaseCaptureLease() {
         val close = captureLease[0]

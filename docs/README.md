@@ -83,6 +83,7 @@ Document status describes a whole document. Individual statements inside a docum
 - [`product/CONTENT_SEARCH.md`](product/CONTENT_SEARCH.md) — local text extraction, English/Russian OCR, encrypted index, retries, and limits.
 - [`product/EXTERNAL_FILE_ENCRYPTION.md`](product/EXTERNAL_FILE_ENCRYPTION.md) — external sources to independent CHURBAK1 archives without library import.
 - [`product/INCOMING_SHARES.md`](product/INCOMING_SHARES.md) — Android share intents, iOS encrypted ingress queue, and confirmed vault import.
+- [`product/APP_ICON_ACTIONS.md`](product/APP_ICON_ACTIONS.md) — Home Screen Import, Search, Lock and hide, and New private note; authenticated one-time routing.
 
 - [`product/DISCREET_MODE.md`](product/DISCREET_MODE.md) — public shell, launcher, notifications, recents, external surfaces, and product claims.
 - [`product/AUDIO_ARTWORK.md`](product/AUDIO_ARTWORK.md) — embedded audio covers, bounded derivation, encrypted storage, playback, and concealment.

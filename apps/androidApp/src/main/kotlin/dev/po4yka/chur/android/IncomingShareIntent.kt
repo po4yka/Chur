@@ -80,12 +80,3 @@ internal fun incomingSharePayload(
 
 internal const val MAX_INCOMING_ITEMS = 100
 internal const val MAX_INCOMING_TEXT_BYTES = 1024 * 1024
-
-/** Preserve launch identity for lifecycle observers, but retain no external payload. */
-internal fun sanitizedIncomingShareIntent(context: Context, source: Intent): Intent =
-    Intent(context, MainActivity::class.java).apply {
-        action = source.action
-        type = source.type
-        source.`package`?.let { setPackage(it) }
-        source.categories?.forEach { addCategory(it) }
-    }

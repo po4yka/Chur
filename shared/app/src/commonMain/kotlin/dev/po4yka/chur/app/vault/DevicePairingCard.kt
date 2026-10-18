@@ -48,6 +48,7 @@ internal fun DevicePairingCard(
     onOpenApproval: () -> Unit,
     onLoadDevices: () -> Unit,
     onRevokeDevice: (dev.po4yka.chur.ffi.PairedDevice) -> Unit,
+    onNavigationBusyChange: (Boolean) -> Unit = {},
 ) {
     var revoke by remember { mutableStateOf<dev.po4yka.chur.ffi.PairedDevice?>(null) }
     revoke?.let { peer ->
@@ -63,6 +64,7 @@ internal fun DevicePairingCard(
     }
     var request by remember { mutableStateOf("") }
     var confirmed by remember(request) { mutableStateOf(false) }
+    NavigationBusyEffect(request.isNotEmpty() || revoke != null, onNavigationBusyChange)
     val inspectedFingerprint = state.inspectedFingerprint.takeIf {
         request.isNotBlank() && state.inspectedRequestCode == request
     }

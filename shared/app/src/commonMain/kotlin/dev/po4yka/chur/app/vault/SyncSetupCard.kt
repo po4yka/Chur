@@ -39,10 +39,12 @@ internal object SyncSetupCopy {
  * cleared by the caller's guarded reset rather than kept in state.
  */
 @Composable
-internal fun SyncSetupCard(onConfigure: (serverUrl: String, bootstrapSecret: String) -> Unit) {
+internal fun SyncSetupCard(onConfigure: (serverUrl: String, bootstrapSecret: String) -> Unit,
+    onNavigationBusyChange: (Boolean) -> Unit = {}) {
     val colors = LocalChurColors.current
     var serverUrl by remember { mutableStateOf("") }
     var secret by remember { mutableStateOf("") }
+    NavigationBusyEffect(serverUrl.isNotEmpty() || secret.isNotEmpty(), onNavigationBusyChange)
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(ChurSpacing.three),

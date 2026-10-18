@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Chur</string>
+    <string name="device_slot_title">Хранилище</string>
+    <string name="device_slot_subtitle">Подтвердите личность, чтобы использовать блокировку экрана устройства для доступа к хранилищу.</string>
+    <string name="device_slot_cancel">Отмена</string>
+    <string name="owner_check_subtitle">Подтвердите личность, чтобы увидеть новую фразу восстановления.</string>
+    <string name="quick_settings_lock_label">Заблокировать Chur</string>
+    <string name="quick_settings_lock_added">Кнопка «Заблокировать Chur» добавлена в быстрые настройки.</string>
+    <string name="quick_settings_lock_already_added">Кнопка «Заблокировать Chur» уже есть в быстрых настройках.</string>
+    <string name="quick_settings_lock_not_added">Кнопка «Заблокировать Chur» не добавлена. Её можно добавить позже в режиме редактирования быстрых настроек.</string>
+    <string name="quick_settings_lock_manual">Откройте быстрые настройки, нажмите «Изменить» и добавьте кнопку «Заблокировать Chur».</string>
+    <string name="quick_settings_lock_in_progress">Запрос на добавление кнопки быстрых настроек уже открыт.</string>
+    <string name="quick_settings_lock_foreground">Оставьте Chur открытым и попробуйте добавить кнопку ещё раз.</string>
+    <string name="quick_settings_lock_unavailable">На этом устройстве кнопки быстрых настроек недоступны.</string>
+    <string name="quick_settings_lock_failed">Не удалось добавить кнопку. Откройте быстрые настройки, нажмите «Изменить» и добавьте кнопку «Заблокировать Chur».</string>
+</resources>

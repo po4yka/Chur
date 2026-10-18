@@ -23,6 +23,7 @@ This inventory describes the current pre-release code. Product contracts own beh
 | Selective archives | independent password and keys for selected originals, album subtrees, and saved private notes. Restore as a separate vault or import fresh copies. [Contract](product/SELECTIVE_ENCRYPTED_EXPORT.md) |
 | External encryption | Public Settings or Vault Settings encrypts selected external files into CHURBAK1 without library import or a required local vault. [Contract](product/EXTERNAL_FILE_ENCRYPTION.md) |
 | Share to Chur | Android SEND/SEND_MULTIPLE and an iOS Share Extension receive files, media, text, and URLs; normal authentication and destination confirmation precede import. Links are stored as text. [Contract](product/INCOMING_SHARES.md) |
+| App icon actions | iOS Home Screen Quick Actions and Android dynamic App Shortcuts for Import, Search, Lock and hide, and New private note; normal authorization with one authentication for an explicit private command. [Contract](product/APP_ICON_ACTIONS.md) |
 | Lock and privacy | immediate, idle, background, and panic lock; private screenshot/recents policy; Android Quick Settings Lock Chur tile. [Discreet Mode](product/DISCREET_MODE.md#lock-behavior) |
 | Sync and collection sharing | self-hosted ciphertext relay, signed operations, rollback/fork detection, verified recipient devices, grants, and forward-only revocation. This is distinct from incoming OS Share and archive exchange. [Sync documents](README.md#sync-and-sharing) |
 

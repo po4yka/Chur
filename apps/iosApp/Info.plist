@@ -36,6 +36,41 @@
 	<string>Save selected vault media to your photo library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Import complete Live Photo resources and review deletion of imported originals only when you choose.</string>
+	<key>UIApplicationShortcutItems</key>
+	<array>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>dev.po4yka.chur.action.import</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Import</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>square.and.arrow.down</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>dev.po4yka.chur.action.search</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Search</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>magnifyingglass</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>dev.po4yka.chur.action.lock-and-hide</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Lock and hide</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>lock.fill</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>dev.po4yka.chur.action.new-private-note</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>New private note</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>square.and.pencil</string>
+		</dict>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

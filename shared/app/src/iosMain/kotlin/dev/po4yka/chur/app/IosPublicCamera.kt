@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import dev.po4yka.chur.app.publicshell.CameraScreen
 import dev.po4yka.chur.app.publicshell.PublicCameraPhoto
+import dev.po4yka.chur.app.vault.NavigationBusyEffect
 import kotlinx.cinterop.readBytes
 import org.jetbrains.skia.Image
 import org.jetbrains.skia.Codec
@@ -37,6 +38,7 @@ internal fun IosPublicCameraScreen(
     onOpenSettings: () -> Unit,
     showFirstWriteDisclosure: Boolean,
     onAcknowledgeDisclosure: () -> Unit,
+    onNavigationBusyChange: (Boolean) -> Unit = {},
 ) {
     val owner = remember { PublicCameraOwner() }
     var capturePath by remember { mutableStateOf<String?>(null) }
@@ -45,6 +47,10 @@ internal fun IosPublicCameraScreen(
     var photos by remember { mutableStateOf(IosPublicCamera.list?.invoke().orEmpty()) }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
+    // A pending capture/review, an opened public photo (including its delete
+    // confirmation), or a native load/save must finish before vault navigation.
+    NavigationBusyEffect(capturePath != null || selectedPhotoId != null || preview != null || busy,
+        onNavigationBusyChange)
     DisposableEffect(owner) {
         IosPublicCamera.onCancellation = {
             if (owner.active) {

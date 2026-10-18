@@ -8,6 +8,7 @@ targets:
     deploymentTarget: "18.0"
     sources:
       - Sources
+      - Resources
       - Assets.xcassets
       - ChurMirror.icon
     info:
@@ -33,6 +34,19 @@ targets:
               public.mime-type:
                 - application/vnd.chur.live-photo
         UILaunchScreen: {}
+        UIApplicationShortcutItems:
+          - UIApplicationShortcutItemType: dev.po4yka.chur.action.import
+            UIApplicationShortcutItemTitle: "Import"
+            UIApplicationShortcutItemIconSymbolName: square.and.arrow.down
+          - UIApplicationShortcutItemType: dev.po4yka.chur.action.search
+            UIApplicationShortcutItemTitle: "Search"
+            UIApplicationShortcutItemIconSymbolName: magnifyingglass
+          - UIApplicationShortcutItemType: dev.po4yka.chur.action.lock-and-hide
+            UIApplicationShortcutItemTitle: "Lock and hide"
+            UIApplicationShortcutItemIconSymbolName: lock.fill
+          - UIApplicationShortcutItemType: dev.po4yka.chur.action.new-private-note
+            UIApplicationShortcutItemTitle: "New private note"
+            UIApplicationShortcutItemIconSymbolName: square.and.pencil
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
           UISceneConfigurations:

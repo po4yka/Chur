@@ -14,11 +14,13 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import dev.po4yka.chur.app.ChurApp
+import dev.po4yka.chur.app.LauncherAction
 import dev.po4yka.chur.app.GateResult
 import dev.po4yka.chur.app.NativeHandshake
 import dev.po4yka.chur.app.gate
 import dev.po4yka.chur.app.needsPrivacyCover
 import dev.po4yka.chur.ffi.ChurVault
+import java.io.IOException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.combine
 
@@ -45,6 +47,7 @@ import kotlinx.coroutines.flow.combine
  */
 class MainActivity : FragmentActivity() {
     private lateinit var host: ChurHost
+    private var gateCompatible = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -54,8 +57,8 @@ class MainActivity : FragmentActivity() {
         host.activity = this
         // Recreation keeps the process inbox. A restored activity never replays
         // the original payload after process death or a completed import.
-        if (savedInstanceState == null) receiveShare(intent)
-        else clearShareIntent()
+        val launchIntent = intent
+        intent = sanitizedLauncherIntent(this)
         // The window is new and the session it will show may already be open.
         // §1 of `PLAINTEXT_LIFECYCLE.md` puts the switcher snapshot in the
         // forbidden column, and the platform can take one before the collector
@@ -72,7 +75,9 @@ class MainActivity : FragmentActivity() {
             // session. It runs on the controller's scope and not on this
             // activity's, because `lifecycleScope` is cancelled at `onDestroy`
             // and a start cancelled part-way arms no timer at all.
+            gateCompatible = true
             controller.begin()
+            if (savedInstanceState == null) receiveExternalIntent(launchIntent)
         } else {
             host.incomingShares.discard()
         }
@@ -118,25 +123,49 @@ class MainActivity : FragmentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        receiveShare(intent)
+        receiveExternalIntent(intent)
+    }
+
+    private fun receiveExternalIntent(incoming: Intent) {
+        // Read only an allowlisted action; no extra, URI or saved intent can
+        // supply a private query, identity, or replay token.
+        val action = LauncherAction.fromExternalAction(incoming.action)
+        intent = sanitizedLauncherIntent(this)
+        if (!gateCompatible) return
+        if (incoming.action == Intent.ACTION_SEND || incoming.action == Intent.ACTION_SEND_MULTIPLE) {
+            receiveShare(incoming)
+            return
+        }
+        if (action == null) return
+        if (action != LauncherAction.LOCK_AND_HIDE && host.incomingShares.state.value != null) {
+            android.widget.Toast.makeText(this, R.string.launcher_finish_share, android.widget.Toast.LENGTH_LONG).show()
+            return
+        }
+        host.privacy.setEnabled(true)
+        host.controller.requestLauncherAction(action)
+        if (action == LauncherAction.LOCK_AND_HIDE) {
+            try {
+                host.deviceControl.stop()
+            } catch (_: IOException) {
+                // Session revocation above must complete even if socket close fails.
+            }
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        host.privacy.setEnabled(host.controller.privacyCoverNeeded)
     }
 
     private fun receiveShare(incoming: Intent) {
         if (incoming.action != Intent.ACTION_SEND && incoming.action != Intent.ACTION_SEND_MULTIPLE) return
         val payload = incomingSharePayload(this, incoming)
-        clearShareIntent()
         if (payload == null) {
             android.widget.Toast.makeText(this, "That shared content could not be received. Share up to 100 files or 1 MiB of text.", android.widget.Toast.LENGTH_LONG).show()
             return
         }
-        if (!host.incomingShares.offer(AndroidIncomingShareSource(applicationContext, payload))) {
+        if (host.incomingShares.offer(AndroidIncomingShareSource(applicationContext, payload))) {
+            host.controller.cancelLauncherAction()
+        } else {
             android.widget.Toast.makeText(this, "Finish or discard the pending share before sending more content.", android.widget.Toast.LENGTH_LONG).show()
         }
-    }
-
-    private fun clearShareIntent() {
-        // Do not retain external extras, ClipData, names or text on the Activity.
-        intent = sanitizedIncomingShareIntent(this, intent)
     }
 
     /**
@@ -155,6 +184,7 @@ class MainActivity : FragmentActivity() {
     override fun onResume() {
         super.onResume()
         host.endShareActivity()
+        LauncherShortcuts.refresh(this)
     }
 
     override fun onPause() {
