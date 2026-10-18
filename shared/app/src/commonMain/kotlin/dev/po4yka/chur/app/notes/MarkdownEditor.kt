@@ -3,9 +3,11 @@ package dev.po4yka.chur.app.notes
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -46,11 +48,13 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.compose.elements.highlightedCodeBlock
 import com.mikepenz.markdown.compose.elements.highlightedCodeFence
 import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.utils.resolveImageAlt
 import dev.po4yka.chur.app.privateKeyboardOptions
 import dev.po4yka.chur.app.privateNoteTextFieldPolicy
@@ -103,78 +107,84 @@ internal fun MarkdownEditor(
     fun command(command: MarkdownCommand) = publish(markdownEdit(value, command))
     // Reading revision makes history button state observable without retaining a second document.
     @Suppress("UNUSED_VARIABLE") val observedRevision = revision
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-            TextButton(enabled = enabled && !readOnly, onClick = { onMarkdownChange(!markdown); preview = false }) {
-                Text(if (markdown) "Markdown" else "Plain text")
-            }
-            if (markdown) TextButton(onClick = { preview = !preview }, enabled = enabled) { Text(if (preview) "Edit source" else "Preview") }
-            if (!readOnly) {
-                TextButton(enabled = enabled && history.canUndo, onClick = { history.undo()?.let { publish(it, false) } }) { Text("Undo") }
-                TextButton(enabled = enabled && history.canRedo, onClick = { history.redo()?.let { publish(it, false) } }) { Text("Redo") }
-                TextButton(onClick = { finding = !finding; preview = false }, enabled = enabled) { Text("Find") }
-            }
-            if (markdown) TextButton(onClick = { outline = !outline }, enabled = enabled) { Text("Outline") }
-            if (markdown && !readOnly && !preview) Box {
-                TextButton(enabled = enabled, onClick = { formatting = true }) { Text("Format") }
-                DropdownMenu(expanded = formatting, onDismissRequest = { formatting = false }) {
-                    MarkdownCommand.entries.forEach { action -> DropdownMenuItem(text = { Text(action.label) },
-                        onClick = { formatting = false; command(action) }) }
+    BoxWithConstraints(modifier) {
+        // Find/outline controls may grow with accessibility text. Scroll them
+        // above a bounded document, instead of shrinking the document to zero.
+        val documentHeight = if (maxHeight == Dp.Infinity) 320.dp else maxOf(240.dp, maxHeight - 72.dp)
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                TextButton(enabled = enabled && !readOnly, onClick = { onMarkdownChange(!markdown); preview = false }) {
+                    Text(if (markdown) "Markdown" else "Plain text")
+                }
+                if (markdown) TextButton(onClick = { preview = !preview }, enabled = enabled) { Text(if (preview) "Edit source" else "Preview") }
+                if (!readOnly) {
+                    TextButton(enabled = enabled && history.canUndo, onClick = { history.undo()?.let { publish(it, false) } }) { Text("Undo") }
+                    TextButton(enabled = enabled && history.canRedo, onClick = { history.redo()?.let { publish(it, false) } }) { Text("Redo") }
+                    TextButton(onClick = { finding = !finding; preview = false }, enabled = enabled) { Text("Find") }
+                }
+                if (markdown) TextButton(onClick = { outline = !outline }, enabled = enabled) { Text("Outline") }
+                if (markdown && !readOnly && !preview) Box {
+                    TextButton(enabled = enabled, onClick = { formatting = true }) { Text("Format") }
+                    DropdownMenu(expanded = formatting, onDismissRequest = { formatting = false }) {
+                        MarkdownCommand.entries.forEach { action -> DropdownMenuItem(text = { Text(action.label) },
+                            onClick = { formatting = false; command(action) }) }
+                    }
                 }
             }
-        }
-        if (finding && !readOnly) {
-            OutlinedTextField(query, { query = it }, label = { Text("Find text") }, singleLine = true,
-                keyboardOptions = if (private) privateKeyboardOptions() else androidx.compose.foundation.text.KeyboardOptions.Default,
-                modifier = Modifier.fillMaxWidth().then(if (private) Modifier.privateNoteTextFieldPolicy() else Modifier))
-            OutlinedTextField(replacement, { replacement = it }, label = { Text("Replace with") }, singleLine = true,
-                keyboardOptions = if (private) privateKeyboardOptions() else androidx.compose.foundation.text.KeyboardOptions.Default,
-                modifier = Modifier.fillMaxWidth().then(if (private) Modifier.privateNoteTextFieldPolicy() else Modifier))
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-                TextButton(enabled = query.isNotEmpty(), onClick = {
-                    val from = value.selection.max.coerceAtMost(body.length)
-                    val found = body.indexOf(query, from, ignoreCase = true).let { if (it < 0) body.indexOf(query, ignoreCase = true) else it }
-                    if (found < 0) message = "No matches." else value = value.copy(selection = TextRange(found, found + query.length), composition = null)
-                }) { Text("Next match") }
-                TextButton(enabled = enabled && query.isNotEmpty(), onClick = {
-                    if (value.text.substring(value.selection.min, value.selection.max).equals(query, ignoreCase = true)) {
-                        val start = value.selection.min
-                        publish(TextFieldValue(body.replaceRange(start, value.selection.max, replacement), TextRange(start + replacement.length)))
-                    }
-                }) { Text("Replace") }
-                TextButton(enabled = enabled && query.isNotEmpty(), onClick = {
-                    publish(TextFieldValue(body.replace(query, replacement, ignoreCase = true)))
-                }) { Text("Replace all") }
-            }
-        }
-        if (outline && markdown) MarkdownOutline(body) { offset -> preview = false; value = value.copy(selection = TextRange(offset)); outline = false }
-        if (preview && markdown) {
-            MarkdownPreview(body, modifier = Modifier.weight(1f).fillMaxWidth(), onToggleTask = if (!enabled || readOnly) null else { start, end ->
-                toggleMarkdownTask(body, start, end)?.let { publish(TextFieldValue(it, TextRange(start))) }
-            })
-        } else {
-            OutlinedTextField(value = value, onValueChange = { next ->
-                publish(if (markdown) continueMarkdownList(value, next) else next)
-            }, enabled = enabled, readOnly = readOnly,
-                label = { Text(if (markdown) "Markdown source" else "Note") },
-                textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = if (markdown) FontFamily.Monospace else FontFamily.Default),
-                keyboardOptions = if (private) privateKeyboardOptions() else androidx.compose.foundation.text.KeyboardOptions.Default,
-                modifier = Modifier.weight(1f).fillMaxWidth()
-                    .then(if (private) Modifier.privateNoteTextFieldPolicy() else Modifier)
-                    .testTag(if (private) "private-note-body" else "note-body")
-                    .onPreviewKeyEvent { event ->
-                        if (event.type != KeyEventType.KeyDown || !(event.isCtrlPressed || event.isMetaPressed) || !enabled || readOnly) false
-                        else when (event.key) {
-                            Key.Z -> { (if (event.isShiftPressed) history.redo() else history.undo())?.let { publish(it, false) }; true }
-                            Key.Y -> { history.redo()?.let { publish(it, false) }; true }
-                            Key.B -> if (markdown) { command(MarkdownCommand.BOLD); true } else false
-                            Key.I -> if (markdown) { command(MarkdownCommand.ITALIC); true } else false
-                            Key.F -> { finding = true; true }
-                            else -> false
+            if (finding && !readOnly) {
+                OutlinedTextField(query, { query = it }, label = { Text("Find text") }, singleLine = true,
+                    keyboardOptions = if (private) privateKeyboardOptions() else androidx.compose.foundation.text.KeyboardOptions.Default,
+                    modifier = Modifier.fillMaxWidth().then(if (private) Modifier.privateNoteTextFieldPolicy() else Modifier))
+                OutlinedTextField(replacement, { replacement = it }, label = { Text("Replace with") }, singleLine = true,
+                    keyboardOptions = if (private) privateKeyboardOptions() else androidx.compose.foundation.text.KeyboardOptions.Default,
+                    modifier = Modifier.fillMaxWidth().then(if (private) Modifier.privateNoteTextFieldPolicy() else Modifier))
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                    TextButton(enabled = query.isNotEmpty(), onClick = {
+                        val from = value.selection.max.coerceAtMost(body.length)
+                        val found = body.indexOf(query, from, ignoreCase = true).let { if (it < 0) body.indexOf(query, ignoreCase = true) else it }
+                        if (found < 0) message = "No matches." else value = value.copy(selection = TextRange(found, found + query.length), composition = null)
+                    }) { Text("Next match") }
+                    TextButton(enabled = enabled && query.isNotEmpty(), onClick = {
+                        if (value.text.substring(value.selection.min, value.selection.max).equals(query, ignoreCase = true)) {
+                            val start = value.selection.min
+                            publish(TextFieldValue(body.replaceRange(start, value.selection.max, replacement), TextRange(start + replacement.length)))
                         }
-                    })
+                    }) { Text("Replace") }
+                    TextButton(enabled = enabled && query.isNotEmpty(), onClick = {
+                        publish(TextFieldValue(body.replace(query, replacement, ignoreCase = true)))
+                    }) { Text("Replace all") }
+                }
+            }
+            if (outline && markdown) MarkdownOutline(body) { offset -> preview = false; value = value.copy(selection = TextRange(offset)); outline = false }
+            if (preview && markdown) {
+                MarkdownPreview(body, modifier = Modifier.height(documentHeight).fillMaxWidth(), onToggleTask = if (!enabled || readOnly) null else { start, end ->
+                    toggleMarkdownTask(body, start, end)?.let { publish(TextFieldValue(it, TextRange(start))) }
+                })
+            } else {
+                OutlinedTextField(value = value, onValueChange = { next ->
+                    publish(if (markdown) continueMarkdownList(value, next) else next)
+                }, enabled = enabled, readOnly = readOnly,
+                    label = { Text(if (markdown) "Markdown source" else "Note") },
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = if (markdown) FontFamily.Monospace else FontFamily.Default),
+                    keyboardOptions = if (private) privateKeyboardOptions() else androidx.compose.foundation.text.KeyboardOptions.Default,
+                    modifier = Modifier.height(documentHeight).fillMaxWidth()
+                        .then(if (private) Modifier.privateNoteTextFieldPolicy() else Modifier)
+                        .testTag(if (private) "private-note-body" else "note-body")
+                        .onPreviewKeyEvent { event ->
+                            if (event.type != KeyEventType.KeyDown || !(event.isCtrlPressed || event.isMetaPressed) || !enabled || readOnly) false
+                            else when (event.key) {
+                                Key.Z -> { (if (event.isShiftPressed) history.redo() else history.undo())?.let { publish(it, false) }; true }
+                                Key.Y -> { history.redo()?.let { publish(it, false) }; true }
+                                Key.B -> if (markdown) { command(MarkdownCommand.BOLD); true } else false
+                                Key.I -> if (markdown) { command(MarkdownCommand.ITALIC); true } else false
+                                Key.F -> { finding = true; true }
+                                else -> false
+                            }
+                        })
+            }
+            message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         }
-        message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     }
 }
 
@@ -197,6 +207,14 @@ internal fun MarkdownPreview(body: String, modifier: Modifier = Modifier, onTogg
     } } }
     CompositionLocalProvider(LocalUriHandler provides guarded) {
         Markdown(body, modifier = modifier.verticalScroll(rememberScrollState()),
+            typography = markdownTypography(
+                h1 = MaterialTheme.typography.headlineMedium,
+                h2 = MaterialTheme.typography.headlineSmall,
+                h3 = MaterialTheme.typography.titleLarge,
+                h4 = MaterialTheme.typography.titleMedium,
+                h5 = MaterialTheme.typography.titleMedium,
+                h6 = MaterialTheme.typography.titleSmall,
+            ),
             components = markdownComponents(
                 codeBlock = highlightedCodeBlock, codeFence = highlightedCodeFence,
                 image = { model -> Text("Image: ${model.node.resolveImageAlt(model.content).orEmpty()} (image reference preserved; automatic loading is disabled)") },

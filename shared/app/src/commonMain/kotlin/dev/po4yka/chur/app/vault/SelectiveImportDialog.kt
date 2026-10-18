@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -31,7 +30,7 @@ fun SelectiveImportDialog(
     DisposableEffect(Unit) { onDispose { password = "" } }
     val dismiss = { password = ""; onDismiss() }
     ArchiveSecretInput {
-        AlertDialog(
+        PrivateAlertDialog(
             onDismissRequest = dismiss,
             title = { Text("Import encrypted archive") },
             text = {

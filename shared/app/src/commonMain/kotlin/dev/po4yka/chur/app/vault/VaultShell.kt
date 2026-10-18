@@ -24,11 +24,9 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
@@ -433,7 +431,7 @@ fun VaultShell(
                         if (state.destination == VaultDestination.LIBRARY && state.openAlbum == null) {
                             Box {
                                 TextButton(onClick = { scopesExpanded = true }) { Text("Browse") }
-                                DropdownMenu(expanded = scopesExpanded,
+                                PrivateDropdownMenu(expanded = scopesExpanded,
                                     onDismissRequest = { scopesExpanded = false }) {
                                     DropdownMenuItem(text = { Text("All media") }, onClick = {
                                         scopesExpanded = false; actions.onShowAllMedia()
@@ -474,7 +472,7 @@ fun VaultShell(
                                 TextButton(enabled = state.operation == null, onClick = { albumExportExpanded = true }) {
                                     Text("Export album")
                                 }
-                                DropdownMenu(expanded = albumExportExpanded, onDismissRequest = { albumExportExpanded = false }) {
+                                PrivateDropdownMenu(expanded = albumExportExpanded, onDismissRequest = { albumExportExpanded = false }) {
                                     DropdownMenuItem(text = { Text("Unencrypted folder") }, onClick = {
                                         albumExportExpanded = false; actions.onExportAlbum(album)
                                     })
@@ -753,7 +751,7 @@ private fun SelectionBar(state: VaultUiState, actions: VaultActions) {
                 enabled = state.operation == null) { Text("Export") }
             Box {
                 TextButton(onClick = { expanded = true }) { Text("More") }
-                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                PrivateDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                     DropdownMenuItem(
                         text = { Text("Select loaded items") },
                         onClick = { expanded = false; actions.onSelectLoadedItems() },
@@ -1266,7 +1264,7 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions, onNavigatio
         }
     }
     if (confirmingDamagedDeletion) {
-        AlertDialog(
+        PrivateAlertDialog(
             onDismissRequest = { confirmingDamagedDeletion = false },
             title = { Text("Delete damaged files permanently?") },
             text = { Text("This deletes every file that verification found damaged. These files cannot be restored from Trash.") },
@@ -1285,7 +1283,7 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions, onNavigatio
         // that cannot be taken back, so the confirm is destructive. §27: the
         // copy says only what is true. Nothing on this device is deleted, and
         // it promises nothing about connecting again.
-        AlertDialog(
+        PrivateAlertDialog(
             onDismissRequest = { confirmingDisconnect = false },
             title = { Text("Stop syncing with this server?") },
             text = { Text("This device stops sending and receiving changes. Nothing is deleted from this device.") },
@@ -1307,7 +1305,7 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions, onNavigatio
         // replacement says the old phrase still opens them. Nothing changes
         // until the new words are typed back, so the confirm is not
         // destructive.
-        AlertDialog(
+        PrivateAlertDialog(
             onDismissRequest = { askingRecovery = false },
             title = { Text(if (hasRecovery) "Replace recovery phrase?" else "Set up a recovery phrase?") },
             text = {
@@ -1375,7 +1373,7 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions, onNavigatio
 @Composable
 private fun AutoLockDialog(current: AutoLock, onChoose: (AutoLock) -> Unit, onDismiss: () -> Unit) {
     val colors = LocalChurColors.current
-    AlertDialog(
+    PrivateAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Auto-lock") },
         text = {
@@ -1431,7 +1429,7 @@ private fun ChangePasswordDialog(
     var usePin by remember { mutableStateOf(false) }
     val matching = password.isNotEmpty() && password == confirmation &&
         (!usePin || isValidVaultPin(password))
-    AlertDialog(
+    PrivateAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Change password or PIN") },
         text = {

@@ -76,6 +76,7 @@ fun UnlockScreen(
     deviceUnlockOffered: Boolean = false,
     onUseDevice: () -> Unit = {},
     appGate: Boolean = false,
+    onReturnToPublic: (() -> Unit)? = null,
 ) {
     var password by remember { mutableStateOf("") }
     var usePin by remember { mutableStateOf(false) }
@@ -95,6 +96,11 @@ fun UnlockScreen(
                 modifier = Modifier.widthIn(max = 420.dp),
                 verticalArrangement = Arrangement.spacedBy(ChurSpacing.three),
             ) {
+                // Cancellation stays available during key derivation and a device prompt.
+                // The whole-app gate has no public bypass.
+                if (!appGate && onReturnToPublic != null) {
+                    TextButton(onClick = onReturnToPublic) { Text("Return to public screen") }
+                }
                 PrivateBoundaryMark(size = 56.dp)
                 Text("Chur", style = MaterialTheme.typography.headlineMedium)
                 Text(
@@ -176,6 +182,7 @@ fun RecoveryScreen(
     error: String?,
     onRecover: (String) -> Unit,
     onBack: () -> Unit,
+    onReturnToPublic: (() -> Unit)? = null,
 ) {
     var phrase by remember { mutableStateOf("") }
     val canRecover = !busy && phrase.isNotBlank()
@@ -192,6 +199,9 @@ fun RecoveryScreen(
                 modifier = Modifier.widthIn(max = 420.dp),
                 verticalArrangement = Arrangement.spacedBy(ChurSpacing.three),
             ) {
+                onReturnToPublic?.let { leave ->
+                    TextButton(onClick = leave) { Text("Return to public screen") }
+                }
                 Text("Recovery phrase", style = MaterialTheme.typography.headlineSmall)
                 Text(
                     "Enter the 24 words in order. Chur has no copy of them and no " +
@@ -219,7 +229,7 @@ fun RecoveryScreen(
                 ) {
                     Text(if (busy) "Opening" else "Recover")
                 }
-                TextButton(onClick = onBack, enabled = !busy) { Text("Back") }
+                TextButton(onClick = onBack, enabled = !busy || onReturnToPublic == null) { Text("Back") }
             }
         }
     }

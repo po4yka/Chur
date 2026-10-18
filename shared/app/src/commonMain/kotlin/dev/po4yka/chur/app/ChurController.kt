@@ -36,6 +36,7 @@ import dev.po4yka.chur.vault.VaultState
 import dev.po4yka.chur.imports.PickedMedia
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -51,6 +52,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
@@ -169,6 +172,11 @@ class ChurController(
     private var launcherToken = 0L
     private var launcherNavigationBusy = false
     private var launcherLocking = false
+    /** New credential attempts must not overtake an earlier native lock. */
+    private var pendingLock: Job? = null
+    private var cleanupToken = 0L
+    /** The Apple adapter owns one LAContext; password/create never acquire this mutex. */
+    private val appleEntryMutex = Mutex()
     private val _launcherRequest = MutableStateFlow<LauncherRequest?>(null)
     val launcherRequest: StateFlow<LauncherRequest?> = _launcherRequest.asStateFlow()
     private val _notes = MutableStateFlow<List<Note>>(emptyList())
@@ -574,15 +582,21 @@ class ChurController(
      * `Creating` only once the work has reached the repository.
      */
     private var phraseRequested = false
+    /** Only the newest entry request may change busy state. Lock revokes it synchronously. */
+    private var entryRequestToken = 0L
+    private val nativeEntries = MutableStateFlow<Set<CompletableDeferred<Unit>>>(emptySet())
 
     private fun requestPhrase(body: suspend () -> Unit) {
-        if (phraseRequested || _recoveryPhrase.value != null) return
+        if (phraseRequested || _unlocking.value || _recoveryPhrase.value != null) return
         phraseRequested = true
+        val token = ++entryRequestToken
+        val epoch = lockEpoch
         guarded {
             try {
+                if (token != entryRequestToken || !awaitLockCleanup(epoch)) return@guarded
                 body()
             } finally {
-                phraseRequested = false
+                if (token == entryRequestToken) phraseRequested = false
             }
         }
     }
@@ -594,10 +608,12 @@ class ChurController(
             say("Use at least 12 digits for a vault PIN.")
             return@requestPhrase
         }
-        endOpenSession()
+        val epoch = endOpenSession()
+        if (epoch != lockEpoch) return@requestPhrase
+        val target = _route.value
         val bytes = password.encodeToByteArray()
         val phrase = try {
-            withContext(Dispatchers.Default) { repository.create(bytes, offerRecovery) }
+            nativeEntry(epoch) { repository.create(bytes, offerRecovery) }
         } catch (failure: ChurFailure) {
             // One sentence for every reason a creation is refused.
             // `DECOY_VAULT.md` §10 forbids a surface that differs by whether a
@@ -612,6 +628,10 @@ class ChurController(
             return@requestPhrase
         } finally {
             bytes.fill(0)
+        }
+        if (epoch != lockEpoch || _route.value != target) {
+            closeStaleSession()
+            return@requestPhrase
         }
         if (phrase != null) _recoveryPhrase.value = phrase else enterVault()
     }
@@ -644,23 +664,36 @@ class ChurController(
         _recoveryPhrase.value = null
         // A creation waits in `Creating` until the phrase is confirmed.
         val creating = vaultState.value is VaultState.Creating
+        val epoch = lockEpoch
+        phraseRequested = true
+        val token = ++entryRequestToken
         guarded {
-            if (withContext(Dispatchers.Default) { repository.confirmRecoveryPhrase() }) {
-                if (creating) enterVault(notice = PHRASE_SAVED) else say(PHRASE_SAVED)
-            } else {
-                say("This recovery phrase was not saved.")
+            try {
+                if (token != entryRequestToken || epoch != lockEpoch) return@guarded
+                val confirmed = nativeEntry(epoch) { repository.confirmRecoveryPhrase() }
+                if (epoch != lockEpoch) {
+                    closeStaleSession()
+                    return@guarded
+                }
+                if (confirmed) {
+                    if (creating) enterVault(notice = PHRASE_SAVED) else say(PHRASE_SAVED)
+                } else {
+                    say("This recovery phrase was not saved.")
+                }
+            } finally {
+                if (token == entryRequestToken) phraseRequested = false
             }
         }
     }
 
     /** Unlocks with a password. */
     fun unlock(password: String) = attempt {
-        endOpenSession()
+        val epoch = endOpenSession()
+        if (epoch != lockEpoch) return@attempt
         val target = _route.value
-        val epoch = lockEpoch
         val bytes = password.encodeToByteArray()
         try {
-            withContext(Dispatchers.Default) { repository.unlock(bytes) }
+            nativeEntry(epoch) { repository.unlock(bytes) }
         } finally {
             bytes.fill(0)
         }
@@ -669,10 +702,10 @@ class ChurController(
 
     /** Unlocks with the recovery phrase, and says why a phrase was refused. */
     fun recover(phrase: String) = attempt(::recoveryCopy) {
-        endOpenSession()
+        val epoch = endOpenSession()
+        if (epoch != lockEpoch) return@attempt
         val target = _route.value
-        val epoch = lockEpoch
-        withContext(Dispatchers.Default) { repository.unlockWithRecovery(phrase.trim()) }
+        nativeEntry(epoch) { repository.unlockWithRecovery(phrase.trim()) }
         completeUnlock(target, epoch)
     }
 
@@ -684,13 +717,14 @@ class ChurController(
      * in turn, because the material names no identity.
      */
     fun unlockWithDevice() = attempt {
-        endOpenSession()
+        val epoch = endOpenSession()
+        if (epoch != lockEpoch) return@attempt
         val target = _route.value
-        val epoch = lockEpoch
         val material = withContext(Dispatchers.Default) { repository.keystoreMaterial() }
         // Not `firstNotNullOfOrNull`: the unwrap suspends now, because the
         // platform asks the user to authorize it first.
         var root: ByteArray? = null
+        val hostEpoch = promptEpoch
         beginHostActivity()
         try {
             withContext(Dispatchers.Default) {
@@ -705,29 +739,38 @@ class ChurController(
                 }
             }
         } finally {
-            endHostActivity()
+            if (hostEpoch == promptEpoch) endHostActivity()
         }
         val opened = root ?: throw ChurFailure(ChurStatus.AUTHENTICATION_FAILED, "no device slot opened")
-        withContext(Dispatchers.Default) { repository.unlockWithKeystoreRoot(opened) }
+        try {
+            if (epoch != lockEpoch || _route.value != target) return@attempt
+            nativeEntry(epoch) { repository.unlockWithKeystoreRoot(opened) }
+        } finally {
+            opened.fill(0)
+        }
         completeUnlock(target, epoch)
     }
 
     /** Opens the vault with a Keychain secret released by local authorization. */
     fun unlockWithAppleDevice() = attempt {
-        endOpenSession()
+        val epoch = endOpenSession()
+        if (epoch != lockEpoch) return@attempt
         val target = _route.value
-        val epoch = lockEpoch
-        beginHostActivity()
-        try {
-            withContext(Dispatchers.Default) {
-                appleDeviceUnlock.beginUnlock()
+        appleEntryMutex.withLock {
+            if (epoch != lockEpoch || _route.value != target) return@attempt
+            val hostEpoch = promptEpoch
+            var hostActivityHeld = true
+            beginHostActivity()
+            try {
+                withContext(Dispatchers.Default) { appleDeviceUnlock.beginUnlock() }
                 try {
                     var opened = false
-                    for (itemId in appleDeviceUnlock.itemIds()) {
-                        val secret = appleDeviceUnlock.releaseSecret(itemId)
+                    for (itemId in withContext(Dispatchers.Default) { appleDeviceUnlock.itemIds() }) {
+                        val secret = withContext(Dispatchers.Default) { appleDeviceUnlock.releaseSecret(itemId) }
                         try {
+                            if (epoch != lockEpoch || _route.value != target) return@attempt
                             try {
-                                repository.unlockWithDeviceSecret(secret)
+                                nativeEntry(epoch) { repository.unlockWithDeviceSecret(secret) }
                                 opened = true
                                 break
                             } catch (failure: ChurFailure) {
@@ -737,17 +780,22 @@ class ChurController(
                             secret.fill(0)
                         }
                     }
-                    if (!opened) {
-                        throw ChurFailure(ChurStatus.AUTHENTICATION_FAILED, "no device slot opened")
-                    }
+                    if (!opened) throw ChurFailure(ChurStatus.AUTHENTICATION_FAILED, "no device slot opened")
+                    // The OS prompt is over; platform context disposal must
+                    // not suppress background locking of the opened screen.
+                    if (hostEpoch == promptEpoch) endHostActivity()
+                    hostActivityHeld = false
+                    // Authorize/publish on this Main turn before platform
+                    // teardown suspends. A late endUnlock must never perform
+                    // stale native cleanup against a newer password session.
+                    completeUnlock(target, epoch)
                 } finally {
-                    appleDeviceUnlock.endUnlock()
+                    withContext(NonCancellable + Dispatchers.Default) { appleDeviceUnlock.endUnlock() }
                 }
+            } finally {
+                if (hostActivityHeld && hostEpoch == promptEpoch) endHostActivity()
             }
-        } finally {
-            endHostActivity()
         }
-        completeUnlock(target, epoch)
     }
 
     /**
@@ -935,43 +983,139 @@ class ChurController(
         null
     }
 
-    /** Locks now, `DESIGN.md` §14.3. */
-    fun lock(reason: LockReason = LockReason.USER) = guarded {
+    /** Conceals on the caller's UI turn; native cleanup must never delay the public screen. */
+    fun lock(reason: LockReason = LockReason.USER) {
+        concealPrivateSession()
+        enablePrivacyCover()
+        queueNativeLock(reason)
+    }
+
+    /** The same immediate concealment, recorded by Rust with the panic reason. */
+    fun panic() = lock(LockReason.PANIC)
+
+    private fun enablePrivacyCover() {
         try {
-            clearLauncherAction()
-            endSessionSync()
-            contentIndexer.reset()
-            lockEpoch += 1
-            _activeOperation.value = null
-            exports.cancelPending()
-            withContext(Dispatchers.Default) { repository.lock(reason) }
-            privacy.setEnabled(false)
-            clearPrivateProjections()
-            setRoute(if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell)
+            privacy.setEnabled(true)
+        } catch (_: Exception) {
+            post(userCopy(ChurStatus.INTERNAL_FAILURE))
+        }
+    }
+
+    private fun concealPrivateSession() {
+        lockEpoch += 1
+        entryRequestToken += 1
+        phraseRequested = false
+        _unlocking.value = false
+        clearPrivateProjections()
+        launcherLocking = true
+        setRoute(if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell)
+    }
+
+    private fun queueNativeLock(reason: LockReason) {
+        val previous = pendingLock
+        val epoch = lockEpoch
+        val token = ++cleanupToken
+        val entriesBeforeLock = nativeEntries.value
+        pendingLock = scope.launch {
+            previous?.join()
+            // Native calls are synchronous and cannot be cancelled. Their
+            // tickets end before teardown; public masking already happened.
+            entriesBeforeLock.forEach { it.await() }
+            // Provider or filesystem revocation can fail. The native session
+            // must still close; a failure keeps the cover enabled and is
+            // reported by the controller's exception handler.
+            try {
+                exports.cancelPending()
+            } finally {
+                closeNativeSession(reason)
+            }
+            // An earlier cleanup may finish after another lock, but must
+            // never remove the newer transition's privacy cover. A failed
+            // native cleanup keeps the cover enabled and projections closed.
+            if (epoch == lockEpoch && token == cleanupToken) {
+                privacy.setEnabled(needsPrivacyCover(repository.state.value, _route.value, _recoveryPhrase.value != null))
+                launcherLocking = false
+            }
+        }
+    }
+
+    /** Track native opens independently of slow OS prompts and Main result delivery. */
+    private suspend fun <T> nativeEntry(expectedEpoch: Long, body: suspend () -> T): T {
+        val completed = CompletableDeferred<Unit>()
+        nativeEntries.update { it + completed }
+        try {
+            if (expectedEpoch != lockEpoch) throw CancellationException("entry authorization expired")
+            val result = withContext(Dispatchers.Default) { body() }
+            if (expectedEpoch != lockEpoch) {
+                // Register stale-result teardown before releasing this ticket.
+                // It may wait for this ticket, so never join it from here.
+                launcherLocking = true
+                queueNativeLock(LockReason.BACKGROUND)
+                throw CancellationException("entry authorization expired")
+            }
+            return result
         } finally {
-            launcherLocking = false
+            completed.complete(Unit)
+            nativeEntries.update { it - completed }
         }
     }
 
     /**
-     * Locks immediately, `DISCREET_MODE.md` "The panic gesture".
-     *
-     * It is the same transition as [lock] and differs in urgency only: the
-     * reason reaches Rust as `PANIC`, which the vault records and treats
-     * identically. A reason that changed the transition would make panic a
-     * different operation, and that section says it is not.
+     * A joined Job may have failed. A fresh user attempt gets one new teardown
+     * attempt; credentials never open native state behind failed cleanup.
      */
-    fun panic() {
-        clearLauncherAction()
+    private suspend fun awaitLockCleanup(expectedEpoch: Long): Boolean {
+        val previous = awaitPendingLockTail(expectedEpoch)
+        if (expectedEpoch != lockEpoch) return false
+        if (previous?.isCancelled == true) {
+            // One fresh teardown for this explicit user attempt. Waiting for
+            // a changing tail above is serialization, not another retry.
+            queueNativeLock(LockReason.USER)
+            val retry = awaitPendingLockTail(expectedEpoch)
+            if (expectedEpoch != lockEpoch) return false
+            if (retry?.isCancelled == true || launcherLocking) {
+                throw ChurFailure(ChurStatus.INTERNAL_FAILURE, "the previous lock could not finish")
+            }
+        }
+        if (launcherLocking) throw ChurFailure(ChurStatus.INTERNAL_FAILURE, "the lock is still completing")
+        return true
+    }
+
+    private suspend fun awaitPendingLockTail(expectedEpoch: Long): Job? {
+        var joined: Job?
+        do {
+            joined = pendingLock
+            joined?.join()
+            if (expectedEpoch != lockEpoch) return null
+        } while (joined !== pendingLock)
+        return joined
+    }
+
+    /**
+     * Every teardown records the same barrier, including identity replacement
+     * and a late native open. Its failure must remain visible to the next
+     * explicit credential attempt, even after native state became Locked.
+     */
+    private suspend fun closeTrackedSession(reason: LockReason) {
         launcherLocking = true
-        _recoveryPhrase.value = null
-        // Mask synchronously, before the native lock waits for an in-flight call.
-        privacy.setEnabled(true)
-        lockEpoch += 1
-        // End private sync projections before the public route becomes visible.
-        endSessionSync()
-        setRoute(if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell)
-        lock(LockReason.PANIC)
+        queueNativeLock(reason)
+        val cleanup = pendingLock ?: return
+        cleanup.join()
+        if (cleanup.isCancelled) {
+            throw ChurFailure(ChurStatus.INTERNAL_FAILURE, "the session cleanup did not finish")
+        }
+    }
+
+    /** Closes a native open that finished after its UI authorization expired. */
+    private suspend fun closeStaleSession() = closeTrackedSession(LockReason.BACKGROUND)
+
+    /** Release cached plaintext even when native or platform cleanup fails. */
+    private suspend fun closeNativeSession(reason: LockReason) {
+        try {
+            withContext(Dispatchers.Default) { repository.lock(reason) }
+        } finally {
+            withContext(NonCancellable) { thumbnails.clear() }
+        }
     }
 
     /**
@@ -1057,42 +1201,27 @@ class ChurController(
 
     /** The application left the foreground. */
     suspend fun onBackground() {
-        contentIndexer.cancel()
-        privacy.setEnabled(true)
-        promptHeldLock = prompts > 0
-        if (hostActivities > 0) return
-        clearLauncherAction()
-        lockEpoch += 1
-        if (_appLockEnabled.value || policy.lockOnBackground) {
-            _activeOperation.value = null
-            exports.cancelPending()
-        }
-        withContext(Dispatchers.Default) {
-            if (_appLockEnabled.value) repository.lock(LockReason.BACKGROUND)
-            else repository.onBackground()
-        }
-        // A background that did not lock keeps a creation waiting for its
-        // phrase together with the phrase.
-        val after = repository.state.value
-        if (after !is VaultState.Unlocked && after !is VaultState.Creating) {
-            clearPrivateProjections()
-            setRoute(if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell)
-        }
+        if (prepareBackgroundLock()) pendingLock?.join()
     }
 
-    /**
-     * The same transition, on this controller's own scope.
-     *
-     * A host whose window is going away cannot carry the lock: an Android
-     * activity's `lifecycleScope` is cancelled at `onDestroy`, and a back
-     * press runs `onPause` and `onDestroy` in one pass, so the lock the pause
-     * started was cancelled at its first suspension point and the session
-     * stayed open in a process the platform keeps. This scope is the
-     * controller's, which §14 of `docs/interop/FFI_CONTRACT.md` gives the life
-     * of the process, so the lock of `PLAINTEXT_LIFECYCLE.md` §8 completes
-     * whatever the window does.
-     */
-    fun background() = guarded { onBackground() }
+    private fun prepareBackgroundLock(): Boolean {
+        contentIndexer.cancel()
+        enablePrivacyCover()
+        promptHeldLock = prompts > 0
+        if (hostActivities > 0) return false
+        if (_appLockEnabled.value || policy.lockOnBackground) {
+            lock(LockReason.BACKGROUND)
+            return true
+        }
+        // A policy that retains the open session still invalidates an
+        // in-flight credential attempt when the host leaves the foreground.
+        clearLauncherAction()
+        lockEpoch += 1
+        return false
+    }
+
+    /** Controller-owned cleanup survives the host activity's destruction. */
+    fun background() { prepareBackgroundLock() }
 
     /**
      * The idle check of `DESIGN.md` §14.4, which [runIdleTimer] drives.
@@ -1112,19 +1241,31 @@ class ChurController(
      */
     suspend fun checkIdle() {
         withContext(NonCancellable) {
+            var concealedEpoch: Long? = null
+            var concealedRoute: AppRoute? = null
             if (withContext(Dispatchers.Default) {
                 if (_activeOperation.value?.let { !it.cancelling && it.name != "external-archive" } == true) repository.noteActivity()
                 repository.lockIfIdle {
                     withContext(NonCancellable + Dispatchers.Main) {
-                        lockEpoch += 1
-                        _activeOperation.value = null
-                        exports.cancelPending()
+                        concealPrivateSession()
+                        concealedEpoch = lockEpoch
+                        concealedRoute = _route.value
+                        // Complete physical cache release before the native
+                        // idle close permits another credential operation.
+                        thumbnails.clear()
                     }
                 }
             }) {
-                privacy.setEnabled(false)
-                clearPrivateProjections()
-                setRoute(if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell)
+                // The native idle close can finish before its Main continuation.
+                // A newer lock or authenticated session owns its own cover.
+                val after = repository.state.value
+                if (concealedEpoch != lockEpoch || after is VaultState.Unlocked || after is VaultState.Creating) {
+                    return@withContext
+                }
+                exports.cancelPending()
+                if (concealedEpoch != lockEpoch || _route.value != concealedRoute) return@withContext
+                privacy.setEnabled(needsPrivacyCover(repository.state.value, _route.value, _recoveryPhrase.value != null))
+                launcherLocking = false
             }
         }
     }
@@ -1182,24 +1323,27 @@ class ChurController(
 
     /** Loads the albums. */
     fun loadAlbums() = guarded(clearMessage = false) {
-        _albums.value = withContext(Dispatchers.Default) { repository.albums() }
+        publishPrivate(_albums) { repository.albums() }
     }
 
     /** Loads tags only for the unlocked selection picker. */
     fun loadTags() = guarded {
-        _tags.value = withContext(Dispatchers.Default) { repository.tags() }
+        publishPrivate(_tags) { repository.tags() }
     }
 
     /** Refreshes the visible projections after a host command changes the vault. */
     suspend fun refreshExternalChanges(albums: Boolean = false, tags: Boolean = false) {
-        reload()
-        if (albums) refreshAlbums()
-        if (tags) _tags.value = withContext(Dispatchers.Default) { repository.tags() }
+        val session = privateSession() ?: return
+        reload(session.generation)
+        if (!session.isCurrent()) return
+        if (albums) refreshAlbums(session.generation)
+        if (!session.isCurrent()) return
+        if (tags) publishPrivate(_tags) { repository.tags() }
     }
 
     /** Loads the key slots. */
     fun loadSlots() = guarded(clearMessage = false) {
-        _slots.value = withContext(Dispatchers.Default) { repository.slots() }
+        publishPrivate(_slots) { repository.slots() }
     }
 
     /** Sets or clears the favourite flag. */
@@ -1424,26 +1568,26 @@ class ChurController(
             repository.applyTagSelection(null, name, objectIds, true)
         }
         reload()
-        _tags.value = withContext(Dispatchers.Default) { repository.tags() }
+        publishPrivate(_tags) { repository.tags() }
         say("Updated ${items(objectIds.size)}.")
         onSuccess()
     }
 
     fun createTag(name: String) = guarded {
         withContext(Dispatchers.Default) { repository.createTag(name) }
-        _tags.value = withContext(Dispatchers.Default) { repository.tags() }
+        publishPrivate(_tags) { repository.tags() }
     }
 
     fun renameTag(tagId: ByteArray, name: String) = guarded {
         withContext(Dispatchers.Default) { repository.renameTag(tagId, name) }
         reload()
-        _tags.value = withContext(Dispatchers.Default) { repository.tags() }
+        publishPrivate(_tags) { repository.tags() }
     }
 
     fun deleteTag(tagId: ByteArray, onSuccess: () -> Unit = {}) = guarded {
         withContext(Dispatchers.Default) { repository.deleteTag(tagId) }
         reload()
-        _tags.value = withContext(Dispatchers.Default) { repository.tags() }
+        publishPrivate(_tags) { repository.tags() }
         say("Tag deleted.")
         onSuccess()
     }
@@ -1648,8 +1792,14 @@ class ChurController(
 
     /** Loads public sharing identity and current active recipients for Settings. */
     fun loadSharing() = guarded(clearMessage = false) {
-        _sharingIdentity.value = withContext(Dispatchers.Default) { repository.syncIdentity() }
-        _sharingOverview.value = withContext(Dispatchers.Default) { repository.sharingOverview() }
+        val session = privateSession() ?: return@guarded
+        val result = withContext(Dispatchers.Default) {
+            repository.syncIdentity() to repository.sharingOverview()
+        }
+        if (session.isCurrent()) {
+            _sharingIdentity.value = result.first
+            _sharingOverview.value = result.second
+        }
     }
 
     /** Validates the pasted self-signed enrollment and shows its fingerprint. */
@@ -1663,7 +1813,9 @@ class ChurController(
         } catch (_: IllegalArgumentException) {
             throw ChurFailure(ChurStatus.INVALID_INPUT, "enrollment is not hexadecimal")
         }
+        val session = privateSession() ?: return@guarded
         val recipient = withContext(Dispatchers.Default) { repository.inspectEnrollment(bytes) }
+        if (!session.isCurrent()) return@guarded
         recipientEnrollment = bytes
         _sharingRecipient.value = recipient
     }
@@ -1680,7 +1832,7 @@ class ChurController(
             repository.prepareShare(collection, enrollment, permission)
         }
         engine.publishShare(share)
-        _sharingOverview.value = withContext(Dispatchers.Default) { repository.sharingOverview() }
+        publishPrivate(_sharingOverview) { repository.sharingOverview() }
         recipientEnrollment = null
         _sharingRecipient.value = null
         say("Access published.")
@@ -1703,7 +1855,7 @@ class ChurController(
                 repository.revokeShare(collection, member.vaultId, member.deviceId)
             }
         }
-        _sharingOverview.value = withContext(Dispatchers.Default) { repository.sharingOverview() }
+        publishPrivate(_sharingOverview) { repository.sharingOverview() }
         say("Access revoked for future updates.")
     }
 
@@ -1756,6 +1908,7 @@ class ChurController(
      * when it is entered again.
      */
     fun addRecoverySlot() = requestPhrase {
+        val session = privateSession() ?: return@requestPhrase
         val strict = _deviceSlotStrict.value
         val android = deviceUnlock.available
         val prompt = if (deviceUnlock.ownerCheckTakesScreen(strict)) {
@@ -1780,7 +1933,7 @@ class ChurController(
         } finally {
             if (prompt == null) endHostActivity() else current = endPrompt(prompt)
         }
-        if (!current) return@requestPhrase
+        if (!current || !session.isCurrent()) return@requestPhrase
         when (check) {
             OwnerCheck.CONFIRMED -> Unit
             OwnerCheck.CANCELLED -> return@requestPhrase
@@ -1797,7 +1950,8 @@ class ChurController(
                 return@requestPhrase
             }
         }
-        _recoveryPhrase.value = withContext(Dispatchers.Default) { repository.beginRecoverySlot() }
+        val phrase = nativeEntry(session.epoch) { repository.beginRecoverySlot() }
+        if (session.isCurrent()) _recoveryPhrase.value = phrase
     }
 
     /** Replaces the password slot with a password or a long numeric PIN. */
@@ -1814,7 +1968,7 @@ class ChurController(
             bytes.fill(0)
         }
         say("Vault credential changed. Existing backups still use the old credential.")
-        _slots.value = withContext(Dispatchers.Default) { repository.slots() }
+        publishPrivate(_slots) { repository.slots() }
     }
 
     /** One object's detail record, §6.5. */
@@ -2331,7 +2485,8 @@ class ChurController(
     /** Restore installs an independent identity and leaves the existing vault locked. */
     fun restoreArchiveAsSeparateVault() = guarded {
         if (_activeOperation.value != null) { say("Finish the current operation first."); return@guarded }
-        endOpenSession()
+        val epoch = endOpenSession()
+        if (epoch != lockEpoch) return@guarded
         privacy.setEnabled(true)
         setRoute(AppRoute.RestoreBackup)
     }
@@ -2867,15 +3022,15 @@ class ChurController(
      * screen from its pages, so a swipe did nothing (`DESIGN.md` §13.1).
      */
     private suspend fun reload(expectedGeneration: Long? = null) {
-        val generation = (repository.state.value as? VaultState.Unlocked)?.generation ?: return
+        val session = privateSession() ?: return
+        val generation = session.generation
         if (expectedGeneration == null || expectedGeneration == generation) {
             val query = currentQuery
             val revision = queryRevision
             val result = if (query.scope == QueryScope.SEARCH && query.terms.isNullOrBlank()) {
                 ObjectPage(emptyList(), 0, 0, null)
             } else pageThrough(query, _page.value.objects.size)
-            if (revision == queryRevision &&
-                (repository.state.value as? VaultState.Unlocked)?.generation == generation) _page.value = result
+            if (revision == queryRevision && session.isCurrent()) _page.value = result
         }
     }
 
@@ -2908,10 +3063,10 @@ class ChurController(
         }
 
     private suspend fun refreshAlbums(expectedGeneration: Long? = null) {
-        val generation = (repository.state.value as? VaultState.Unlocked)?.generation ?: return
-        if (expectedGeneration != null && expectedGeneration != generation) return
+        val session = privateSession() ?: return
+        if (expectedGeneration != null && expectedGeneration != session.generation) return
         val result = withContext(Dispatchers.Default) { repository.albums() }
-        if ((repository.state.value as? VaultState.Unlocked)?.generation == generation) _albums.value = result
+        if (session.isCurrent()) _albums.value = result
     }
 
     /**
@@ -2922,34 +3077,35 @@ class ChurController(
      * show one identity's albums, tags, slots or sharing inside the next until
      * each reloads - the cross-identity surface `DECOY_VAULT.md` §10 forbids.
      *
-     * It locks the session here rather than leaving that to the repository's
-     * next open, for two reasons. The lock waits behind the old session's
-     * calls already in flight, so their results land before the clear and
-     * not after it. And a device unlock the user then cancels leaves the
-     * vault locked on both sides, not open in Rust with nothing on screen.
+     * Projections are cleared before waiting for native teardown. Every
+     * private read retains its originating epoch and generation, so a late
+     * completion cannot refill them. A cancelled device unlock therefore
+     * leaves nothing on screen and no preceding session open in Rust.
      *
      * Every entry point calls it before it reads the epoch, and before
      * [beginHostActivity], whose count the clear resets.
      */
-    private suspend fun endOpenSession() {
-        if (repository.state.value !is VaultState.Unlocked) return
+    private suspend fun endOpenSession(): Long {
+        val previousEpoch = lockEpoch
+        if (!awaitLockCleanup(previousEpoch) || repository.state.value !is VaultState.Unlocked) return previousEpoch
         lockEpoch += 1
-        withContext(Dispatchers.Default) { repository.lock(LockReason.USER) }
+        val epoch = lockEpoch
         clearPrivateProjections()
+        closeTrackedSession(LockReason.USER)
+        return epoch
     }
 
-    private suspend fun clearPrivateProjections() {
+    private fun clearPrivateProjections() {
         clearLauncherAction()
         launcherNavigationBusy = false
         contentIndexer.reset()
         _activeOperation.value = null
-        exports.cancelPending()
         currentQuery = ObjectQuery()
         queryRevision++
         // §10.3: a lock transition destroys private back-stack projections, and
         // these flows are that projection. §4 of `PLAINTEXT_LIFECYCLE.md` and
         // §8 step 7 add the decoded-image cache, which leaves with them.
-        thumbnails.clear()
+        thumbnails.invalidate()
         _page.value = ObjectPage(emptyList(), 0, 0, null)
         _albums.value = emptyList()
         _tags.value = emptyList()
@@ -3001,17 +3157,19 @@ class ChurController(
 
     private suspend fun completeUnlock(target: AppRoute, epoch: Long) {
         if (epoch != lockEpoch || _route.value != target) {
-            exports.cancelPending()
-            withContext(Dispatchers.Default) { repository.lock(LockReason.BACKGROUND) }
             clearPrivateProjections()
-            setRoute(if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell)
+            closeTrackedSession(LockReason.BACKGROUND)
+            // The user may already be using public Settings or an editor.
+            // Closing a stale native result must not replace that navigation.
             return
         }
         if ((target == AppRoute.AppUnlock || target == AppRoute.AppRecover) && pendingLauncherAction == null) {
-            exports.cancelPending()
-            withContext(Dispatchers.Default) { repository.lock(LockReason.USER) }
-            privacy.setEnabled(false)
+            closeTrackedSession(LockReason.USER)
+            // Native teardown suspends too. A panic or background during it
+            // revokes this whole-app authorization before it opens the shell.
+            if (epoch != lockEpoch || _route.value != target) return
             setRoute(AppRoute.PublicShell)
+            privacy.setEnabled(needsPrivacyCover(repository.state.value, _route.value, _recoveryPhrase.value != null))
         } else {
             enterVault()
         }
@@ -3027,13 +3185,14 @@ class ChurController(
      */
     private suspend fun enterVault(notice: String? = null) {
         val generation = (repository.state.value as? VaultState.Unlocked)?.generation ?: return
+        val epoch = lockEpoch
         val initialQueryRevision = queryRevision
         privacy.setEnabled(true)
         setRoute(AppRoute.Vault)
         dispatchLauncherAction()
         post(notice)
         val initialPage = withContext(Dispatchers.Default) { repository.page(ObjectQuery()) }
-        if ((repository.state.value as? VaultState.Unlocked)?.generation != generation) return
+        if (epoch != lockEpoch || (repository.state.value as? VaultState.Unlocked)?.generation != generation) return
         if (queryRevision == initialQueryRevision) _page.value = initialPage
         // `SYNC_PROTOCOL_V1.md` §7: "Decrypted application occurs after
         // explicit unlock". Whatever the locked puller staged while the vault
@@ -3127,7 +3286,8 @@ class ChurController(
         context: CoroutineContext = EmptyCoroutineContext,
         body: suspend () -> Unit,
     ) {
-        scope.launch(context + RouteVisit(routeVisit)) {
+        val session = SessionVisit(lockEpoch, (repository.state.value as? VaultState.Unlocked)?.generation)
+        scope.launch(context + RouteVisit(routeVisit) + session) {
             try {
                 if (clearMessage) say(null)
                 body()
@@ -3152,13 +3312,16 @@ class ChurController(
      * refusal, so the form shows the refusal once it is no longer busy.
      */
     private fun attempt(copy: (ChurStatus) -> String = ::userCopy, body: suspend () -> Unit) {
-        if (_unlocking.value) return
+        if (_unlocking.value || phraseRequested) return
         _unlocking.value = true
+        val token = ++entryRequestToken
+        val epoch = lockEpoch
         guarded(copy = copy) {
             try {
+                if (token != entryRequestToken || !awaitLockCleanup(epoch)) return@guarded
                 body()
             } finally {
-                _unlocking.value = false
+                if (token == entryRequestToken) _unlocking.value = false
             }
         }
     }
@@ -3222,6 +3385,30 @@ class ChurController(
         pointsToSettings: Boolean = false,
     ) {
         post(text, currentCoroutineContext()[RouteVisit]?.number ?: routeVisit, security, action, pointsToSettings)
+    }
+
+    /** The identity and UI lifetime that own a private projection. */
+    private inner class PrivateSession(val epoch: Long, val generation: Long) {
+        fun isCurrent(): Boolean = !launcherLocking && epoch == lockEpoch &&
+            (repository.state.value as? VaultState.Unlocked)?.generation == generation
+    }
+
+    private suspend fun privateSession(): PrivateSession? {
+        val generation = (repository.state.value as? VaultState.Unlocked)?.generation ?: return null
+        val action = currentCoroutineContext()[SessionVisit]
+        if (action != null && (action.epoch != lockEpoch ||
+                (action.generation != null && action.generation != generation))) return null
+        return PrivateSession(lockEpoch, generation).takeIf { it.isCurrent() }
+    }
+
+    private suspend fun <T> publishPrivate(target: MutableStateFlow<T>, read: suspend () -> T) {
+        val session = privateSession() ?: return
+        val result = withContext(Dispatchers.Default) { read() }
+        if (session.isCurrent()) target.value = result
+    }
+
+    private class SessionVisit(val epoch: Long, val generation: Long?) : AbstractCoroutineContextElement(SessionVisit) {
+        companion object Key : CoroutineContext.Key<SessionVisit>
     }
 
     /** The [routeVisit] a piece of guarded work started in. */

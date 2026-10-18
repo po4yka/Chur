@@ -22,6 +22,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.theme.ChurSpacing
+import dev.po4yka.chur.app.vault.PrivateAlertDialog
+import dev.po4yka.chur.app.vault.LocalPrivatePanic
 import dev.po4yka.chur.app.vault.albumRows
 import dev.po4yka.chur.vault.VaultState
 import kotlinx.coroutines.CancellationException
@@ -56,8 +58,11 @@ fun IncomingSharePrompt(
         var target by remember(pending.id, unlocked.generation) { mutableStateOf<String?>(null) }
         val selected = albums.firstOrNull { it.id == target }
         // No private destination or scroll state enters the host's saved state.
-        CompositionLocalProvider(LocalSaveableStateRegistry provides null) {
-            AlertDialog(
+        CompositionLocalProvider(
+            LocalSaveableStateRegistry provides null,
+            LocalPrivatePanic provides { controller.panic() },
+        ) {
+            PrivateAlertDialog(
                 onDismissRequest = inbox::discard,
                 title = { Text("Import shared items") },
                 text = {

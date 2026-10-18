@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -52,7 +51,7 @@ internal fun DevicePairingCard(
 ) {
     var revoke by remember { mutableStateOf<dev.po4yka.chur.ffi.PairedDevice?>(null) }
     revoke?.let { peer ->
-        AlertDialog(
+        PrivateAlertDialog(
             onDismissRequest = { revoke = null },
             title = { Text("Revoke this device?") },
             text = { Text("Device fingerprint: ${peer.fingerprint}\n\nThis device loses server and new object-key access. Copies it already received cannot be recalled.") },

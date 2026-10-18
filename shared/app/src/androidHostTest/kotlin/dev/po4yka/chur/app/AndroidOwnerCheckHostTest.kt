@@ -137,6 +137,7 @@ class AndroidOwnerCheckHostTest {
                 controller.endHostActivity()
                 controller.background()
                 withTimeout(10_000) { controller.route.first { it == AppRoute.PublicShell } }
+                withTimeout(10_000) { controller.vaultState.first { it is VaultState.Locked } }
                 assertIs<VaultState.Locked>(controller.vaultState.value, case)
                 assertNull(controller.recoveryPhrase.value, "$case: the lock kept the phrase")
 

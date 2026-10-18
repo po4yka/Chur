@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -123,7 +122,7 @@ fun MediaSortFilterControls(
                 TextButton(onClick = { expanded = true }, modifier = Modifier.heightIn(min = 48.dp)) {
                     Text("Sort: ${sortLabel(sort, trash)} ▾", color = colors.accent)
                 }
-                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                PrivateDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                     sortChoices(album).forEach { choice ->
                         DropdownMenuItem(
                             text = { Text("${if (sort == choice) "✓ " else ""}${sortLabel(choice, trash)}") },

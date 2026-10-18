@@ -10,6 +10,8 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -58,7 +60,9 @@ class ThumbnailCache internal constructor(
 
     private val mutex = Mutex()
     private val entries = LinkedHashMap<Key, ImageBitmap>()
-    private var epoch = 0L
+    private val epoch = MutableStateFlow(0L)
+    /** Protected by mutex; entries from another epoch are never cache hits. */
+    private var entriesEpoch = 0L
     private var cachedDecodedBytes = 0L
 
     /**
@@ -87,16 +91,22 @@ class ThumbnailCache internal constructor(
     ): ImageBitmap? {
         currentCoroutineContext().ensureActive()
         val key = Key(generation, id, kind, rendition)
-        val loadEpoch = mutex.withLock {
-            entries[key]?.let { return it }
-            epoch
+        val loadEpoch = epoch.value
+        mutex.withLock {
+            if (epoch.value != loadEpoch) return null
+            if (entriesEpoch != loadEpoch) {
+                entries.clear()
+                cachedDecodedBytes = 0
+                entriesEpoch = loadEpoch
+            }
+            entries[key]?.let { return it.takeIf { epoch.value == loadEpoch } }
         }
         val image = try {
             withContext(dispatcher) {
                 val bytes = read()
                 try {
                     // A lock during the read needs no decode or raster allocation.
-                    if (mutex.withLock { epoch != loadEpoch }) return@withContext null
+                    if (epoch.value != loadEpoch) return@withContext null
                     currentCoroutineContext().ensureActive()
                     render(bytes, rendition)
                 } finally {
@@ -114,7 +124,7 @@ class ThumbnailCache internal constructor(
         } ?: return null
         return mutex.withLock {
             currentCoroutineContext().ensureActive()
-            if (epoch != loadEpoch) return null
+            if (epoch.value != loadEpoch) return null
             val cost = estimatedDecodedBytes(image)
             if (cost > maxDecodedBytes) return image
             entries.remove(key)?.let { cachedDecodedBytes -= estimatedDecodedBytes(it) }
@@ -135,11 +145,17 @@ class ThumbnailCache internal constructor(
      * new session opens; this is what makes it unreachable while the process is
      * still locked, which is the case §8 is about.
      */
+    /** Invalidates cached hits and in-flight work on the caller's turn, without waiting for a mutex. */
+    fun invalidate() {
+        epoch.update { it + 1 }
+    }
+
     suspend fun clear() {
+        invalidate()
         mutex.withLock {
-            epoch += 1
             entries.clear()
             cachedDecodedBytes = 0
+            entriesEpoch = epoch.value
         }
     }
 

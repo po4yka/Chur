@@ -1,6 +1,5 @@
 package dev.po4yka.chur.app.vault
 
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -66,7 +65,7 @@ object SourceDeletionCopy {
  */
 @Composable
 fun SourceDeletionDialog(count: Int, onKeep: () -> Unit, onReview: () -> Unit) {
-    AlertDialog(
+    PrivateAlertDialog(
         onDismissRequest = onKeep,
         title = { Text(SourceDeletionCopy.title(count)) },
         text = { Text(SourceDeletionCopy.body(count)) },

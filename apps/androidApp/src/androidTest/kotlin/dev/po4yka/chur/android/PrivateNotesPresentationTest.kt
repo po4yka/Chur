@@ -56,6 +56,8 @@ class PrivateNotesPresentationTest {
             format = dev.po4yka.chur.ffi.PrivateNoteFormat.MARKDOWN))) }
         f.click("Preview")
         assertTrue(f.await { f.text("Public Markdown sample") != null })
+        f.assertHeadingFits("Public Markdown sample")
+        f.assertButtonVisible("Checklist item")
         f.capture("private-notes-markdown-preview-public.png")
         f.click("Checklist item")
         assertTrue(f.await { f.state.value.editor!!.body.contains("- [x] Public checklist task") })
@@ -97,7 +99,9 @@ class PrivateNotesPresentationTest {
     fun narrow_double_font_editor_keeps_save_controls_and_long_body_scrollable() = present(fontScale = 2f, editor = true) { f ->
         assertTrue(f.await { f.tag("private-note-body") != null })
         f.assertLabelFits("Save")
-        assertTrue(f.button("Lock now") != null)
+        f.assertButtonVisible("Save")
+        f.assertButtonVisible("Lock now")
+        f.assertBodyVisible(minHeightDp = 160f)
         f.capture("private-notes-editor-public-320-font2.png")
         var scrolled = false
         f.main {
@@ -107,7 +111,18 @@ class PrivateNotesPresentationTest {
         }
         assertTrue("the literal note body must have its own vertical scroll", scrolled)
         assertEquals(f.longBody, f.state.value.editor!!.body)
+        f.assertBodyVisible(minHeightDp = 160f)
         f.capture("private-notes-editor-scrolled-public-320-font2.png")
+        f.scrollEditorToBottom()
+        f.assertButtonVisible("Move to Trash")
+        f.assertButtonVisible("Export")
+        f.assertButtonVisible("Encrypted archive")
+        f.assertLabelFits("Move to Trash")
+        f.assertLabelFits("Export")
+        f.assertLabelFits("Encrypted archive")
+        f.assertButtonVisible("Save")
+        f.assertButtonVisible("Lock now")
+        f.capture("private-notes-editor-controls-public-320-font2.png")
     }
 
     @Test
@@ -224,6 +239,55 @@ class PrivateNotesPresentationTest {
         fun setText(tag: String, value: String) = main {
             val node = requireNotNull(tagOnMain(tag))
             assertTrue(node.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(AnnotatedString(value)) == true)
+        }
+        fun assertBodyVisible(minHeightDp: Float) = main {
+            val field = requireNotNull(tagOnMain("private-note-body"))
+            val bounds = field.boundsInWindow
+            val location = IntArray(2).also(view::getLocationInWindow)
+            val saveBottom = requireNotNull(nodesOnMain().firstOrNull {
+                "Save" in it.labels && SemanticsActions.OnClick in it.config
+            }).boundsInWindow.bottom
+            val top = maxOf(bounds.top, location[1].toFloat(), saveBottom)
+            val bottom = minOf(bounds.bottom, (location[1] + view.height).toFloat())
+            val visibleHeight = (bottom - top).coerceAtLeast(0f)
+            val density = activity.resources.displayMetrics.density
+            assertTrue("body must expose at least ${minHeightDp}dp, observed ${visibleHeight / density}dp",
+                visibleHeight >= minHeightDp * density)
+            val layouts = mutableListOf<TextLayoutResult>()
+            (sequenceOf(field) + field.descendants()).forEach { node ->
+                node.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.invoke(layouts)
+            }
+            val layout = requireNotNull(layouts.firstOrNull { it.layoutInput.text.text == longBody })
+            assertTrue("the real body must lay out multiple visible lines", layout.lineCount >= 3)
+            assertTrue("at least three complete body lines must fit the visible viewport",
+                layout.getLineBottom(2) <= visibleHeight - 12f * density)
+        }
+        fun assertButtonVisible(value: String) = main {
+            val node = requireNotNull(nodesOnMain().firstOrNull { value in it.labels && SemanticsActions.OnClick in it.config })
+            val location = IntArray(2).also(view::getLocationInWindow)
+            val bounds = node.boundsInWindow
+            assertTrue("$value must have a real visible touch target",
+                bounds.width > 0f && bounds.height >= 40f * activity.resources.displayMetrics.density)
+            assertTrue("$value must fit vertically in the visible screen",
+                bounds.top >= location[1] - 1f && bounds.bottom <= location[1] + view.height + 1f)
+        }
+        fun assertHeadingFits(value: String) = main {
+            val nodes = view.roots().flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false) }
+            val node = nodes.first { it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == value } == true }
+            val layouts = mutableListOf<TextLayoutResult>()
+            assertTrue(node.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.invoke(layouts) == true)
+            val layout = requireNotNull(layouts.firstOrNull())
+            assertTrue("Markdown heading must use reading-scale typography", layout.layoutInput.style.fontSize.value <= 32f)
+            assertFalse("Markdown heading must wrap within its viewport", layout.didOverflowWidth)
+            assertTrue("the entire Markdown heading must fit its visible viewport", node.boundsInWindow.height + 1f >= layout.size.height)
+            assertEquals(value.length, layout.getLineEnd(layout.lineCount - 1, visibleEnd = true))
+        }
+        fun scrollEditorToBottom() {
+            main {
+                val node = requireNotNull(tagOnMain("private-note-editor-scroll"))
+                assertTrue(node.config.getOrNull(SemanticsActions.ScrollBy)?.action?.invoke(0f, 20_000f) == true)
+            }
+            instrumentation.waitForIdleSync()
         }
         fun assertLabelFits(value: String) = main {
             val node = view.roots().flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false) }

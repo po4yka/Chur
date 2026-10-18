@@ -1,6 +1,5 @@
 package dev.po4yka.chur.app.vault
 
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.foundation.rememberScrollState
@@ -12,7 +11,7 @@ import dev.po4yka.chur.ffi.AlbumSummary
 /** A deliberate plaintext-boundary choice, before the host asks for a folder. */
 @Composable
 fun AlbumExportDialog(album: AlbumSummary, onConfirm: () -> Unit, onDismiss: () -> Unit) {
-    AlertDialog(
+    PrivateAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Export album") },
         text = { Text("Export all items in ${album.name} and its subalbums into a new folder. " +

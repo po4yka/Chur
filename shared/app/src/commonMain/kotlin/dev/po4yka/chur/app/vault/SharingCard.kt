@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
@@ -126,7 +125,7 @@ internal fun SharingCard(state: VaultUiState, actions: VaultActions,
     }
 
     revoking?.let { member ->
-        AlertDialog(
+        PrivateAlertDialog(
             onDismissRequest = { revoking = null },
             title = { Text(if (member.active) "Revoke encrypted access?" else "Check revocation?") },
             text = {

@@ -265,6 +265,7 @@ private fun EmptyNotes(hasQuery: Boolean, onCreate: (() -> Unit)? = null) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) -> Unit, onBack: () -> Unit,
+    onOpenSettings: () -> Unit,
     savedNote: Note? = null, writeFailed: Boolean = false,
     systemBack: @Composable (onBack: () -> Unit) -> Unit = {}) {
     var pinned by rememberSaveable(open.note.id) { mutableStateOf(open.note.pinned) }
@@ -279,14 +280,17 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
     var exportFailed by remember { mutableStateOf(false) }
     val exit = remember(open.note.id) { PublicNoteExitGuard() }
     val current = open.note.copy(title = title, body = body, pinned = pinned, format = format)
-    val closeWithoutSave = { draft = null; onBack() }
-    val requestBack = {
+    var leavingForSettings by remember(open.note.id) { mutableStateOf(false) }
+    val closeWithoutSave = { draft = null; if (leavingForSettings) onOpenSettings() else onBack() }
+    val requestLeave: (Boolean) -> Unit = { settings ->
+        leavingForSettings = settings
         if (open.isNew && title.isBlank() && body.isBlank()) {
             draft = null
             onRemove(open.note.id)
-            onBack()
+            closeWithoutSave()
         } else exit.request(current, savedNote, onSave, closeWithoutSave)
     }
+    val requestBack = { requestLeave(false) }
     systemBack(requestBack)
     LaunchedEffect(exit.requested, current, savedNote) { exit.acknowledge(current, savedNote, closeWithoutSave) }
     LaunchedEffect(pinned, format) { saveWithMetadata(open.note.copy(title = title, body = body)) }
@@ -336,6 +340,7 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
                     }
                 },
                 actions = {
+                    IconButton(enabled = !exit.requested, onClick = { requestLeave(true) }) { Icon(SettingsGlyph, contentDescription = "Settings") }
                     PublicNoteExportAction(title, body, format == NoteFormat.MARKDOWN, enabled = !exit.requested, onFailure = { exportFailed = true })
                     TextButton(enabled = !exit.requested, onClick = { confirmingDelete = true }) { Text("Delete") }
                 },

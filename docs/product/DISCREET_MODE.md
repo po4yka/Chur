@@ -91,6 +91,8 @@ A later phase may add a configurable secret route. It would be an addition to th
 
 The feature layer receives an opaque session result. It should not branch on `isReal` or `isDecoy`.
 
+The vault unlock and recovery screens offer a visible return to the selected public screen, including while authentication is pending. Returning invalidates that attempt: a delayed credential result must not reopen private content. The optional whole-app gate has no public-screen bypass; its recovery screen may return only to that gate.
+
 ## Lock behavior
 
 Locking must:
@@ -105,11 +107,13 @@ Locking must:
 
 Panic lock performs the same security transition immediately. It is not a data deletion command.
 
+Both ordinary and panic lock conceal private content and clear feature projections before waiting for native work to drain. Pending creation, recovery, and private metadata results belong to the session epoch that requested them and must not restore a phrase, private route, or projection after that epoch ends. Native lock completion remains necessary before another session may be used.
+
 ### The panic gesture
 
-The panic transition is bound to **a long press on the lock control**, and an ordinary press performs the ordinary lock. The control sits in the private chrome, so the gesture is reachable from every private screen without navigating first, which is the property a panic transition needs and a control on one screen would not have.
+The panic transition is bound to **a long press on the lock control**, and an ordinary press performs the ordinary lock. The lock stays visible when viewer controls are hidden. Private dialogs, sheets, and popup menus also offer Lock and hide, so hiding content never requires dismissing another surface first.
 
-It satisfies the same six requirements the session gate carries, and for the same reason: the control is already visible and labelled, so nothing about it is secret. What the long press adds is that it skips every confirmation and every in-flight save. The two differ in urgency and not in what they do to the session — the seven steps above run either way — so binding both to one control keeps the product honest about that.
+It satisfies the same six requirements the session gate carries: the control is visible and labelled, and Settings explains the press and hold actions. Neither action waits for a confirmation or a save before concealing the screen. Both run the same security transition; long press and Lock and hide identify the panic reason rather than a weaker or stronger authentication boundary.
 
 Accessibility: a long press is exposed as a custom accessibility action on the same control, named for what it does. That is the accessible alternative the section below requires, and it is an alternative rather than a second mechanism.
 

@@ -121,6 +121,7 @@ class SelectiveArchiveControllerHostTest {
         sink.returnedDocument = File(root, "late-returned.churbak").apply { createNewFile() }
         owner.exportedFile(RETURNED_URI)
         assertReturnedDocumentDiscarded(sink.closedOutput())
+        withTimeout(TIMEOUT) { controller.vault.state.first { it is VaultState.Locked } }
         assertTrue(controller.vault.state.value is VaultState.Locked)
         assertNull(controller.activeOperation.value)
     }
