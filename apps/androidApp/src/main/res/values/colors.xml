@@ -2,5 +2,5 @@
 <!-- The public canvas and the theme-invariant launcher ground. -->
 <resources>
     <color name="canvas">#FAFAF9</color>
-    <color name="launcher_background">#080808</color>
+    <color name="launcher_background">#0A0A0A</color>
 </resources>

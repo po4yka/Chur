@@ -512,14 +512,20 @@ The name suggests a boundary around what belongs to the user. The visual identit
 
 ### 5.2 Mark direction
 
-The primary launcher mark is a carved boundary post wrapped with a red cord
-that forms an interrupted ring. The opening represents authorized passage,
-not weakness. The selected source and its light/dark adaptations are in
-`art/app-icon/`.
+The primary launcher mark is a silver mirror charm repelling a small horned
+charcoal spirit. Its reflected silhouette makes the protective boundary visible
+without a literal security symbol. Silver, ivory, and charcoal use the interface's
+neutral palette; Android's launcher ground is `#0A0A0A`, while iOS uses the native
+System Dark fill. The mirror, reflection, and spirit are separate transparent
+layers in `apps/iosApp/ChurMirror.icon`. Native specular treatment applies to the
+mirror; the character detail keeps its authored material. A contrast-adapted Mono
+layer supports Clear and Tinted appearances. Android has a separate one-color
+alpha mask. Source artwork and generation prompts are in `art/app-icon/`.
 
-The cord red is reserved for the launcher mark and restrained private identity
-marks. Blue remains the functional focus and selection color; semantic error
-uses its separate error token. The cord never signals a locked or error state.
+The red interrupted ring remains a separate restrained private-surface identity
+mark. Blue remains the functional focus and selection color; semantic error uses
+its separate error token. Neither the ring nor the mirror charm signals a locked or
+error state. Launcher colors do not change interface color tokens.
 
 Do not use as the primary mark:
 
@@ -1480,7 +1486,7 @@ Material colorScheme.error         ← Chur error
 
 Do not use Material primary as a shortcut for focus or selected state: it is
 neutral by design. Shared controls apply `focus`, `accent`, `accent-soft`, and
-`selection-soft` explicitly. The red cord is a brand mark token and is never
+`selection-soft` explicitly. The red private identity ring is a brand mark token and is never
 used for navigation, form focus, progress, or integrity status.
 
 Do not accept dynamic color automatically for private and public surfaces. It could weaken identity consistency, contrast, real/decoy equivalence, or screenshot-review predictability. Dynamic color requires a separate ADR and security/design review.
@@ -1746,7 +1752,7 @@ No item in this list blocks Phase 1. An item that did block it has been decided,
 
 | Was | Now |
 | --- | --- |
-| Primary launcher icon | Carved boundary post with interrupted red cord; `art/app-icon/` |
+| Primary launcher icon | Silver mirror charm repelling a horned spirit on charcoal; `apps/iosApp/ChurMirror.icon` and `art/app-icon/` |
 | Public shell shipped at launch | Notes, fixed by [`ROADMAP.md`](ROADMAP.md) Phase 1 |
 | Compact navigation destinations and import placement | §10.1 |
 | Library grid density and adaptive column algorithm | §11.1 |

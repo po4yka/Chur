@@ -85,7 +85,14 @@ configuration, and Compose's required frame-duration setting. Keep these in
 
 ## App icon
 
-`Assets.xcassets` is a target source in `project.yml`, and `ASSETCATALOG_COMPILER_APPICON_NAME` selects `AppIcon`. The checked-in `AppIcon.appiconset` contains Default, Dark, and Tinted appearances of the selected Chur boundary marker.
+`ChurMirror.icon` is a native Icon Composer document and a target source in
+`project.yml`; `ASSETCATALOG_COMPILER_APPICON_NAME` selects `ChurMirror`. It contains
+separate mirror, reflected spirit, and external spirit layers, plus a contrast
+adaptation for Mono appearances. Default and Dark preserve the silver/charcoal
+artwork. There is no legacy `AppIcon.appiconset`. Xcode generates the older-system
+representations from the document; the deployment target remains iOS 18.0.
+Open the `.icon` in Icon Composer to edit materials and appearance overrides.
+Selected artwork and layer-generation prompts are in `art/app-icon/`.
 
 ## Incoming system shares
 

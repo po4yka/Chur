@@ -125,7 +125,7 @@ The tile has one fixed action label, icon, and inactive action state. It must no
 
 ## Launcher and icon presentation
 
-The default launcher presentation uses the Chur name and boundary-post icon; the public shell remains Notes.
+The default launcher presentation uses the Chur name and silver mirror-charm icon; the public shell remains Notes.
 
 Any alternate icon or launcher presentation must be user-selected, documented, reversible, and supported by platform APIs. The default store listing must accurately describe Chur as an encrypted private archive with optional discreet interfaces.
 
