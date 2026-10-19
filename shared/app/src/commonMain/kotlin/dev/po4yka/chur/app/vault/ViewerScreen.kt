@@ -66,7 +66,6 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
@@ -122,7 +121,9 @@ import kotlin.math.min
  *
  * [player] is given the padding that keeps a player's own controls between
  * the chrome rows, [VaultPlayer]. [onTouch] reports each touch on the viewer,
- * a chrome control's too, which a player counts as activity.
+ * a chrome control's too, which a player counts as activity. With
+ * [nativeControls], the host supplies both action rows and the always-available
+ * Lock/Panic escape. Media and detail controls use its actual safe areas.
  */
 @Composable
 fun ViewerScreen(
@@ -159,6 +160,7 @@ fun ViewerScreen(
     onVerifyStill: (() -> Unit)? = null,
     onZoomChanged: (Boolean) -> Unit = {},
     animation: (@Composable (Modifier) -> Unit)? = null,
+    nativeControls: Boolean = false,
 ) {
     // §25.5: the canvas and the scrims run edge to edge, and what is read or
     // pressed keeps clear of the system bars, the cutout, and the gesture
@@ -203,9 +205,14 @@ fun ViewerScreen(
     // controls, which hide with them.
     var chromeTop by remember { mutableIntStateOf(0) }
     var chromeBottom by remember { mutableIntStateOf(0) }
-    val controlsPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
-        .add(WindowInsets(top = chromeTop, bottom = chromeBottom))
-        .asPaddingValues()
+    // UIKit supplies its actual navigation/toolbar safe areas. Only the common
+    // controls need their measured rows added to the platform's system insets.
+    val controlsPadding = if (nativeControls) WindowInsets.safeDrawing.asPaddingValues() else
+        WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+            .add(WindowInsets(top = chromeTop, bottom = chromeBottom))
+            .asPaddingValues()
+    val detailTop = controlsPadding.calculateTopPadding()
+    val detailBottom = controlsPadding.calculateBottomPadding()
     BoxWithConstraints(
         modifier = Modifier.fillMaxSize().background(ViewerColors.canvas)
             .pointerInput(Unit) {
@@ -272,7 +279,7 @@ fun ViewerScreen(
         // both bright and dark media, which §6.4 requires them to be tested on.
         // §22.2 gives a simple state change 120-180 ms, and a fade is also
         // what §22.3 keeps under reduced motion.
-        AnimatedVisibility(
+        if (!nativeControls) AnimatedVisibility(
             visible = visibleChrome,
             modifier = Modifier.align(Alignment.TopStart),
             enter = fadeIn(tween(chromeFadeMillis)),
@@ -302,13 +309,13 @@ fun ViewerScreen(
         }
         // Privacy controls do not participate in chrome auto-hide or its fade.
         // A single tap must work even while video/photo controls are hidden.
-        Box(
+        if (!nativeControls) Box(
             Modifier.align(Alignment.TopEnd).windowInsetsPadding(topInsets)
                 .padding(ChurSpacing.two).background(ViewerColors.chromeScrim),
         ) {
             LockControl(onLock = onLock, onPanic = onPanic, tint = ViewerColors.content)
         }
-        AnimatedVisibility(
+        if (!nativeControls) AnimatedVisibility(
             visible = visibleChrome,
             modifier = Modifier.align(Alignment.BottomStart),
             enter = fadeIn(tween(chromeFadeMillis)),
@@ -353,17 +360,16 @@ fun ViewerScreen(
                 detail = detail,
                 projection = projection,
                 modifier = Modifier.align(Alignment.BottomCenter)
-                    .padding(top = with(LocalDensity.current) { chromeTop.toDp() },
-                        bottom = with(LocalDensity.current) { chromeBottom.toDp() })
-                    .heightIn(max = (maxHeight - with(LocalDensity.current) { (chromeTop + chromeBottom).toDp() })
-                        .coerceAtLeast(0.dp)),
+                    .padding(top = detailTop, bottom = detailBottom)
+                    .heightIn(max = (maxHeight - detailTop - detailBottom).coerceAtLeast(0.dp)),
             )
         }
         // `DESIGN.md` §26: an outcome is the shell's snackbar, drawn above
         // the progress of a running operation rather than over it.
         Column(
             modifier = Modifier.align(Alignment.BottomCenter).windowInsetsPadding(bottomInsets)
-                .padding(horizontal = ChurSpacing.gutter).padding(bottom = 88.dp),
+                .padding(horizontal = ChurSpacing.gutter)
+                .padding(bottom = if (nativeControls) ChurSpacing.two else 88.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             NoticeHost(notice, onNoticeShown)

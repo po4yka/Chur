@@ -1558,7 +1558,15 @@ or an opaque material. Glass does not require increasing minimum OS versions.
 Chrome may differ in material and placement, but must preserve every action,
 selection state, accessible label, and the Lock now / Lock and hide gesture.
 There is one authoritative navigation state; native controls dispatch the same
-commands as common content. Scroll containers inset their items around chrome
+commands as common content. On iOS, selection actions occupy the native
+navigation controller toolbar, replacing the tab bar until Clear selection
+restores it. The count and Clear selection remain in the navigation bar. Viewer
+Back and Info use the native navigation bar; favorite,
+export, tags and trash/restore commands use the native toolbar. The Compose
+media pager, zoom, player, details and operation notices remain shared. A direct
+Lock control remains visible when Viewer controls hide or ordinary actions are
+busy. Retained native actions are invalidated when the current media item or
+private presentation changes. Scroll containers inset their items around chrome
 while their background may extend beneath it. Fields and controls remain
 unobscured by bars or the keyboard.
 
