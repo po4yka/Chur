@@ -116,13 +116,14 @@ class IosViewerPanelTest {
         assertEquals("2 selected", nav.topViewController!!.navigationItem.title)
         assertEquals(listOf("Export", "Add to album", "Move to Trash", "More"), items.mapNotNull { it.title })
         assertEquals(1, nav.topViewController!!.navigationItem.rightBarButtonItems!!.size)
+        val export = items.single { it.title == "Export" }.primaryAction!!
         val add = items.single { it.title == "Add to album" }.primaryAction!!
         val delete = items.single { it.title == "Move to Trash" }.primaryAction!!
-        send(add); send(delete); chrome.performPrimary()
+        send(add); send(delete); send(export)
         assertEquals(listOf(1, 1, 1), listOf(exports, additions, deletions))
         chrome.update(VaultUiState(selectedCount = 2), callbacks, Color.Blue, true)
         assertTrue(nav.topViewController!!.toolbarItems!!.filterIsInstance<UIBarButtonItem>().all { !it.enabled })
-        send(add); send(delete); chrome.performPrimary()
+        send(add); send(delete); send(export)
         assertEquals(listOf(1, 1, 1), listOf(exports, additions, deletions))
         chrome.update(VaultUiState(), callbacks, Color.Blue, false)
         send(add); send(delete)
@@ -144,14 +145,115 @@ class IosViewerPanelTest {
         val nav = chrome.navigationControllers.first()
         val delete = nav.topViewController!!.toolbarItems!!.filterIsInstance<UIBarButtonItem>()
             .single { it.title == "Move to Trash" }.primaryAction!!
+        val export = nav.topViewController!!.toolbarItems!!.filterIsInstance<UIBarButtonItem>()
+            .single { it.title == "Export" }.primaryAction!!
         chrome.update(VaultUiState(selectedCount = 2, operation = ActiveOperation(1, "export")), actions, Color.Blue, false)
         assertTrue(nav.topViewController!!.toolbarItems!!.filterIsInstance<UIBarButtonItem>().all { !it.enabled })
-        send(delete); chrome.performPrimary()
+        send(delete); send(export)
         assertEquals(0, exports)
         assertEquals(0, deletions)
         assertFalse(nav.interactivePopGestureRecognizer!!.enabled)
         chrome.lockNow()
         assertEquals(1, locks)
+    }
+
+    @Test
+    fun equal_count_selection_changes_and_returning_to_same_items_retire_every_action_copy() {
+        val calls = mutableListOf<String>()
+        val chrome = prepare()
+        fun publish(id: String) {
+            chrome.update(VaultUiState(selectedCount = 1, selectionIds = setOf(id)), shell().copy(
+                onExportSelection = { calls += "$id export" },
+                onDeleteSelection = { calls += "$id delete" },
+                onTagSelection = { calls += "$id tags" },
+            ), Color.Blue, false)
+        }
+        publish("A")
+        val first = selectionActions(chrome)
+        first.forEach(::send)
+        assertEquals(listOf("A export", "A delete", "A tags"), calls)
+        publish("B")
+        val second = selectionActions(chrome)
+        first.forEach(::send)
+        assertEquals(3, calls.size)
+        second.forEach(::send)
+        assertEquals(listOf("B export", "B delete", "B tags"), calls.takeLast(3))
+        publish("A")
+        first.forEach(::send)
+        second.forEach(::send)
+        assertEquals(6, calls.size)
+        selectionActions(chrome).forEach(::send)
+        assertEquals(listOf("A export", "A delete", "A tags"), calls.takeLast(3))
+        chrome.clear()
+    }
+
+    @Test
+    fun selection_busy_modal_and_query_suspension_retire_actions_after_unblocking() {
+        for (barrier in listOf("busy", "modal", "operation", "query")) {
+            var calls = 0
+            val chrome = prepare()
+            val state = VaultUiState(selectedCount = 1, selectionIds = setOf("A"))
+            val actions = shell().copy(onExportSelection = { calls++ }, onDeleteSelection = { calls++ },
+                onTagSelection = { calls++ })
+            chrome.update(state, actions, Color.Blue, false)
+            val before = selectionActions(chrome)
+            when (barrier) {
+                "query" -> chrome.suspendNavigation()
+                "operation" -> chrome.update(state.copy(operation = ActiveOperation(1, "export")), actions, Color.Blue, false)
+                else -> chrome.update(state, actions, Color.Blue, barrier == "busy", covered = barrier == "modal")
+            }
+            before.forEach(::send)
+            val blocked = selectionActions(chrome)
+            blocked.forEach(::send)
+            assertEquals(0, calls, barrier)
+            chrome.update(state, actions, Color.Blue, false)
+            before.forEach(::send)
+            blocked.forEach(::send)
+            assertEquals(0, calls, "$barrier retained after unblock")
+            selectionActions(chrome).forEach(::send)
+            assertEquals(3, calls, "$barrier fresh after unblock")
+            chrome.clear()
+        }
+    }
+
+    @Test
+    fun trash_selection_has_precise_actions_and_clear_then_lock_retires_them() {
+        var restores = 0
+        var deletions = 0
+        var clears = 0
+        var locks = 0
+        val chrome = prepare()
+        val actions = shell().copy(onRestoreSelection = { restores++ }, onDeleteSelection = { deletions++ },
+            onClearSelection = { clears++ }, onLock = { locks++ })
+        val state = VaultUiState(selectedCount = 1, selectionIds = setOf("A"), trashOpen = true)
+        chrome.update(state, actions, Color.Blue, false)
+        val nav = chrome.navigationControllers.first()
+        val items = nav.topViewController!!.toolbarItems!!.filterIsInstance<UIBarButtonItem>()
+        assertEquals(listOf("Restore", "Delete permanently", "More"), items.mapNotNull { it.title })
+        assertEquals("1 selected", nav.topViewController!!.navigationItem.title)
+        assertEquals("Clear selection", (nav.topViewController!!.navigationItem.leftBarButtonItem!!.customView as UIButton).accessibilityLabel)
+        val restore = items.single { it.title == "Restore" }.primaryAction!!
+        val delete = items.single { it.title == "Delete permanently" }.primaryAction!!
+        val menu = items.single { it.title == "More" }.menu!!.children.filterIsInstance<UIAction>()
+        assertEquals(listOf("Lock and hide", "Select loaded items"), menu.map { it.title })
+        send(restore); send(delete)
+        assertEquals(listOf(1, 1), listOf(restores, deletions))
+        chrome.goBack()
+        assertEquals(1, clears)
+        chrome.update(state.copy(selectedCount = 0, selectionIds = emptySet()), actions, Color.Blue, false)
+        send(restore); send(delete)
+        assertEquals(listOf(1, 1), listOf(restores, deletions))
+        assertFalse(chrome.controller.tabBarHidden)
+        assertTrue(nav.toolbarHidden)
+        chrome.update(state, actions, Color.Blue, false)
+        val last = nav.topViewController!!.toolbarItems!!.filterIsInstance<UIBarButtonItem>()
+            .single { it.title == "Restore" }.primaryAction!!
+        chrome.lockNow()
+        send(last); menu.forEach(::send)
+        assertEquals(1, locks)
+        assertEquals(1, restores)
+        assertTrue(chrome.controller.view.hidden)
+        assertTrue(chrome.controller.view.accessibilityElementsHidden)
     }
 
     @Test
@@ -290,6 +392,14 @@ class IosViewerPanelTest {
         chrome.clear()
     }
 
+    private fun selectionActions(chrome: IosVaultChrome): List<UIAction> {
+        val items = chrome.navigationControllers.first().topViewController!!.toolbarItems!!.filterIsInstance<UIBarButtonItem>()
+        return listOf(
+            items.single { it.title == "Export" }.primaryAction!!,
+            items.single { it.title == "Move to Trash" }.primaryAction!!,
+            items.single { it.title == "More" }.menu!!.children.filterIsInstance<UIAction>().single { it.title == "Tags" },
+        )
+    }
     private fun send(action: UIAction) = UIButton.buttonWithType(UIButtonTypeSystem).sendAction(action)
     private fun panel(id: String) = IosViewerPanelState(1, 1, id, "Photo", favorite = false, trashed = false, busy = false, visible = true)
     private fun viewer() = IosViewerPanelActions({}, {}, {}, {}, {}, {}, {}, {})

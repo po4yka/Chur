@@ -152,6 +152,10 @@ class IosVaultNavigationTest {
             shouldSelectViewController = scene.chrome.navigationControllers.last())
         assertEquals(1, destinations)
         sender.sendAction(item)
+        assertEquals(0, scopes, "suspended callbacks stay retired after resume")
+        val resumedMenu = nav.topViewController!!.navigationItem.rightBarButtonItems!!
+            .filterIsInstance<platform.UIKit.UIBarButtonItem>().mapNotNull { it.menu }.single()
+        sender.sendAction(resumedMenu.children.filterIsInstance<platform.UIKit.UIAction>().first { it.title == "All media" })
         assertEquals(1, scopes)
         scene.chrome.suspendNavigation()
         scene.chrome.lockNow()

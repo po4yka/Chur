@@ -252,6 +252,8 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
 
     /** Freeze ordinary input while the shared owner registers its next query. */
     fun suspendNavigation() {
+        retireMenu()
+        key = null
         navigationBlocked = true
         back.enabled = false
         primary.enabled = false
@@ -296,7 +298,8 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         val next = ChromeKey(
             state.destination, state.openAlbum?.id,
             state.openAlbum?.name ?: state.libraryScopeTitle ?: state.destination.label,
-            state.selectedCount, state.operation != null, state.trashOpen,
+            state.selectedCount, state.selectionIds.toSet(), selectionBlocksPop && navigationBlocked,
+            state.operation != null, state.trashOpen,
             state.libraryScopeTitle != null, state.recentlyAdded, actions.onOpenPrivateNotes != null, state.tiles.isNotEmpty(),
         )
         navigationBar.tintColor = accentTint
@@ -306,6 +309,10 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
             // even when a navigation request was rejected while becoming busy.
             controller.selectedIndex = state.destination.ordinal.toULong()
             return
+        }
+        if (selectionBlocksPop || (key?.selection ?: 0) > 0) {
+            dismissMenus(navigationBar)
+            dismissMenus(toolbar)
         }
         retireMenu()
         key = next
@@ -343,7 +350,6 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
             right += secondary
         }
         val primaryTitle = when {
-            state.selectedCount > 0 && !state.trashOpen -> "Export"
             !next.busy && next.hasMedia && state.selectedCount == 0 && state.openAlbum != null -> "Import"
             !next.busy && next.hasMedia && state.selectedCount == 0 && state.destination == VaultDestination.LIBRARY &&
                 (state.libraryScopeTitle == null || state.recentlyAdded) -> "Import"
@@ -353,7 +359,6 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         if (primaryTitle != null) {
             primary.title = primaryTitle
             primaryCommand = when (primaryTitle) {
-                "Export" -> { a -> a.onExportSelection() }
                 "New album" -> { a -> a.onCreateAlbum() }
                 else -> { a -> a.onImport() }
             }
@@ -558,7 +563,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
 
     private fun selectionToolbar(state: VaultUiState): List<UIBarButtonItem> = buildList {
         if (!state.trashOpen) {
-            add(primary)
+            add(selectionItem(Command("Export") { it.onExportSelection() }, "square.and.arrow.up"))
             add(flexibleSpace())
             add(selectionItem(Command("Add to album") { it.onAddSelectionToAlbum() }, "rectangle.stack.badge.plus"))
         } else add(selectionItem(Command("Restore") { it.onRestoreSelection() }, "arrow.uturn.backward"))
@@ -704,7 +709,8 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
 
     private data class Command(val title: String, val enabled: Boolean = true, val run: (VaultActions) -> Unit)
     private data class ChromeKey(val destination: VaultDestination, val album: String?, val title: String,
-        val selection: Int, val busy: Boolean, val trash: Boolean, val scoped: Boolean,
+        val selection: Int, val selectionIds: Set<String>, val selectionBlocked: Boolean,
+        val busy: Boolean, val trash: Boolean, val scoped: Boolean,
         val recent: Boolean, val notes: Boolean, val hasMedia: Boolean)
 }
 
