@@ -54,6 +54,21 @@ impl<'a> Reader<'a> {
         core::str::from_utf8(self.take(len)?)
             .map_err(|_| chur_core::err!(InvalidInput, "the note text is not UTF-8"))
     }
+    fn count(&mut self) -> Result<usize> {
+        Ok(u32::from_be_bytes(
+            self.take(4)?
+                .try_into()
+                .map_err(|_| chur_core::err!(InvalidInput, "the attachment count is malformed"))?,
+        ) as usize)
+    }
+    fn finished(&self) -> Result<()> {
+        ensure!(
+            self.at == self.bytes.len(),
+            InvalidInput,
+            "the request has trailing bytes"
+        );
+        Ok(())
+    }
     fn end(self) -> Result<()> {
         ensure!(
             self.at == self.bytes.len(),
@@ -75,6 +90,7 @@ fn encode(out: &mut Vec<u8>, n: &notes::Note, text: &str, size: u64) {
     out.extend_from_slice(&n.deleted_ms.unwrap_or(u64::MAX).to_be_bytes());
     out.push(u8::from(n.pinned));
     out.push(n.format as u8);
+    out.extend_from_slice(&n.attachment_count.to_be_bytes());
     out.extend_from_slice(&size.to_be_bytes());
     string(out, &n.title);
     string(out, text);
@@ -135,7 +151,7 @@ unsafe fn control(
             bytes: input,
             at: 0,
         };
-        let mut record = Zeroizing::new(Vec::new());
+        let mut record = Zeroizing::new(Vec::with_capacity(CAPACITY));
         with_catalog(session, |db| {
             notes::purge_expired(db, api::now_ms())?;
             body(db, &mut reader, &mut record)
@@ -239,7 +255,12 @@ pub unsafe extern "C" fn chur_private_note_get(
                     "the request has trailing bytes"
                 );
                 let n = notes::get(db, &id)?;
-                encode(out, &n, &n.body, n.export_size());
+                encode(
+                    out,
+                    &n,
+                    &n.body,
+                    chur_catalog::note_attachments::export_size(db, &n)?,
+                );
                 Ok(())
             },
         )
@@ -293,7 +314,12 @@ pub unsafe extern "C" fn chur_private_note_save(
                     format,
                     api::now_ms(),
                 )?;
-                encode(out, &n, &n.body, n.export_size());
+                encode(
+                    out,
+                    &n,
+                    &n.body,
+                    chur_catalog::note_attachments::export_size(db, &n)?,
+                );
                 Ok(())
             },
         )
@@ -329,15 +355,167 @@ pub unsafe extern "C" fn chur_private_note_change(
                     "the request has trailing bytes"
                 );
                 if let Some(n) = notes::change(db, &id, expected, action, api::now_ms())? {
-                    encode(out, &n, &n.body, n.export_size());
+                    encode(
+                        out,
+                        &n,
+                        &n.body,
+                        chur_catalog::note_attachments::export_size(db, &n)?,
+                    );
                 }
                 Ok(())
             },
         )
     }
 }
-/// Starts an owned cancellable UTF-8 export: Markdown body, or plain title/two LF/body.
-/// The worker releases the session mutex before it writes to the provider.
+/// Executes one bounded attachment command. 1=list(id16), 2=put(id16,revision u64,file),
+/// 3=read(id16,attachment16), 4=remove(id16,revision u64,attachment16),
+/// 5=import(format u8,title/body strings,count u32,files). A file is id16,name/MIME
+/// strings,data u32+bytes. List returns count u32 and id/name/MIME/size u64 records;
+/// put/remove/import return the normal private-note record; read returns raw bytes.
+/// # Safety
+/// All input/output pointers remain readable/writable and non-overlapping for this synchronous call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn chur_private_note_attachments(
+    session: Handle,
+    request: *const u8,
+    len: usize,
+    destination: *mut u8,
+    capacity: usize,
+    written: *mut usize,
+) -> Status {
+    guard_status_for(session, || {
+        unsafe { api::write_out(written, 0)? };
+        ensure!(
+            len <= chur_catalog::note_attachments::TOTAL_MAX + 524288,
+            ResourceLimitExceeded,
+            "the attachment request exceeds its bound"
+        );
+        ensure!(
+            capacity <= chur_catalog::note_attachments::FILE_MAX + 1048576,
+            ResourceLimitExceeded,
+            "the attachment output exceeds its bound"
+        );
+        let request_length = u32::try_from(len).map_err(|_| {
+            chur_core::err!(
+                ResourceLimitExceeded,
+                "the attachment request length is out of range"
+            )
+        })?;
+        let input = unsafe { api::borrow_bytes(request, request_length)? };
+        let mut r = Reader {
+            bytes: input,
+            at: 0,
+        };
+        let command = r.byte()?;
+        ensure!(
+            capacity
+                >= if command == 3 {
+                    chur_catalog::note_attachments::FILE_MAX
+                } else {
+                    CAPACITY
+                },
+            ResourceLimitExceeded,
+            "the attachment output buffer is too small"
+        );
+        let output = unsafe { api::borrow_bytes_mut(destination, capacity)? };
+        let mut out = Zeroizing::new(Vec::with_capacity(capacity));
+        with_catalog(session, |db| {
+            use chur_catalog::note_attachments as files;
+            notes::purge_expired(db, api::now_ms())?;
+            match command {
+                1 => {
+                    let id = Id::from_slice(r.take(16)?)?;
+                    r.finished()?;
+                    let all = files::list(db, &id)?;
+                    out.extend_from_slice(&(all.len() as u32).to_be_bytes());
+                    for a in all {
+                        out.extend_from_slice(a.id.as_bytes());
+                        string(&mut out, &a.name);
+                        string(&mut out, &a.mime_type);
+                        out.extend_from_slice(&a.size.to_be_bytes());
+                    }
+                }
+                2 => {
+                    let id = Id::from_slice(r.take(16)?)?;
+                    let revision = r.number()?;
+                    let item = attachment(&mut r)?;
+                    r.finished()?;
+                    let n = files::put(db, &id, revision, item, api::now_ms())?;
+                    encode(&mut out, &n, &n.body, files::export_size(db, &n)?);
+                }
+                3 => {
+                    let id = Id::from_slice(r.take(16)?)?;
+                    let attachment = Id::from_slice(r.take(16)?)?;
+                    r.finished()?;
+                    out.extend_from_slice(&files::read(db, &id, &attachment)?);
+                }
+                4 => {
+                    let id = Id::from_slice(r.take(16)?)?;
+                    let revision = r.number()?;
+                    let attachment = Id::from_slice(r.take(16)?)?;
+                    r.finished()?;
+                    let n = files::remove(db, &id, revision, &attachment, api::now_ms())?;
+                    encode(&mut out, &n, &n.body, files::export_size(db, &n)?);
+                }
+                5 => {
+                    let format = notes::NoteFormat::try_from(r.byte()?)?;
+                    let title = r.string(256)?;
+                    let body = r.string(262144)?;
+                    let count = r.count()?;
+                    ensure!(
+                        count <= files::COUNT_MAX,
+                        ResourceLimitExceeded,
+                        "the attachment count exceeds its bound"
+                    );
+                    let mut all = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        all.push(attachment(&mut r)?);
+                    }
+                    r.finished()?;
+                    let n = files::import(db, title, body, format, &all, api::now_ms())?;
+                    encode(&mut out, &n, &n.body, files::export_size(db, &n)?);
+                }
+                _ => {
+                    return Err(chur_core::err!(
+                        InvalidInput,
+                        "the attachment command is unknown"
+                    ));
+                }
+            }
+            Ok(())
+        })?;
+        ensure!(
+            out.len() <= capacity,
+            ResourceLimitExceeded,
+            "the attachment output buffer is too small"
+        );
+        output[..out.len()].copy_from_slice(&out);
+        unsafe { api::write_out(written, out.len()) }
+    })
+}
+fn attachment(r: &mut Reader<'_>) -> Result<chur_catalog::note_attachments::AttachmentData> {
+    let id = Id::from_slice(r.take(16)?)?;
+    let name = r.string(240)?;
+    let mime_type = r.string(128)?;
+    let len = r.count()?;
+    ensure!(
+        len <= chur_catalog::note_attachments::FILE_MAX,
+        ResourceLimitExceeded,
+        "the attachment exceeds its byte bound"
+    );
+    let data = Zeroizing::new(r.take(len)?.to_vec());
+    Ok(chur_catalog::note_attachments::AttachmentData {
+        attachment: chur_catalog::note_attachments::Attachment {
+            id,
+            name: name.to_owned(),
+            mime_type: mime_type.to_owned(),
+            size: len as u64,
+        },
+        data,
+    })
+}
+
+/// Starts an owned cancellable export: package with files; otherwise exact Markdown/plain text.
 /// # Safety
 /// `id` reads sixteen bytes, `out` writes one handle, and `fd` is an open writable descriptor.
 #[unsafe(no_mangle)]
@@ -348,22 +526,47 @@ pub unsafe extern "C" fn chur_private_note_export_begin(
     fd: core::ffi::c_int,
     out: *mut Handle,
 ) -> Status {
+    unsafe { begin_export(session, id, expected, None, fd, out) }
+}
+/// Exports one file from the checked saved revision without returning plaintext to the host.
+/// Trash retains files until purge/expiry, under the same rules as complete note export.
+/// # Safety
+/// Identifiers read sixteen bytes, `out` writes one handle, and `fd` is an open writable descriptor.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn chur_private_note_attachment_export_begin(
+    session: Handle,
+    id: *const u8,
+    attachment_id: *const u8,
+    expected: u64,
+    fd: core::ffi::c_int,
+    out: *mut Handle,
+) -> Status {
+    unsafe { begin_export(session, id, expected, Some(attachment_id), fd, out) }
+}
+unsafe fn begin_export(
+    session: Handle,
+    id: *const u8,
+    expected: u64,
+    attachment_id: Option<*const u8>,
+    fd: core::ffi::c_int,
+    out: *mut Handle,
+) -> Status {
     guard_status_for(session, || {
         unsafe { api::write_out(out, 0)? };
         let id = Id::from_slice(unsafe { api::borrow_bytes(id, 16)? })?;
+        let attachment_id = attachment_id
+            .map(|id| Id::from_slice(unsafe { api::borrow_bytes(id, 16)? }))
+            .transpose()?;
         // Validate the descriptor before retaining a plaintext snapshot.
         let mut destination = unsafe { api::duplicate_descriptor(fd)? };
         let bytes = with_catalog(session, |db| {
             notes::purge_expired(db, api::now_ms())?;
             let n = notes::get(db, &id)?;
             ensure!(n.revision == expected, Conflict, "the private note changed");
-            let mut b = Zeroizing::new(Vec::with_capacity(n.export_size() as usize));
-            if n.format == notes::NoteFormat::PlainText {
-                b.extend_from_slice(n.title.as_bytes());
-                b.extend_from_slice(b"\n\n");
+            match attachment_id {
+                Some(attachment) => chur_catalog::note_attachments::read(db, &id, &attachment),
+                None => chur_catalog::note_attachments::export_bytes(db, &n),
             }
-            b.extend_from_slice(n.body.as_bytes());
-            Ok(b)
         })?;
         let operation =
             Operation::spawn(OperationKind::Export, bytes.len() as u64, move |shared| {
@@ -586,6 +789,104 @@ mod tests {
                     chur_private_note_export_begin(
                         session,
                         note.id.as_bytes().as_ptr(),
+                        revision,
+                        output.as_raw_fd(),
+                        &mut operation,
+                    )
+                },
+                status as i32
+            );
+            assert_eq!(operation, 0);
+            assert_eq!(output.metadata().unwrap().len(), 0);
+        }
+        let attachment_id = chur_crypto::random::id().unwrap();
+        let file_bytes = b"%PDF-1.7\nexact private attachment\0bytes";
+        let attachment = || chur_catalog::note_attachments::AttachmentData {
+            attachment: chur_catalog::note_attachments::Attachment {
+                id: attachment_id,
+                name: "document.pdf".to_owned(),
+                mime_type: "application/pdf".to_owned(),
+                size: file_bytes.len() as u64,
+            },
+            data: Zeroizing::new(file_bytes.to_vec()),
+        };
+        let attached = with_catalog(session, |db| {
+            chur_catalog::note_attachments::put(
+                db,
+                &markdown.id,
+                markdown.revision,
+                attachment(),
+                now,
+            )
+        })
+        .unwrap();
+        let file_path = root.join("attachment.pdf");
+        let file_output = std::fs::File::create(&file_path).unwrap();
+        let mut file_operation = 0;
+        assert_eq!(
+            unsafe {
+                chur_private_note_attachment_export_begin(
+                    session,
+                    attached.id.as_bytes().as_ptr(),
+                    attachment_id.as_bytes().as_ptr(),
+                    attached.revision,
+                    file_output.as_raw_fd(),
+                    &mut file_operation,
+                )
+            },
+            0
+        );
+        let file_entry = registry::get(file_operation, Kind::Operation).unwrap();
+        let Entry::Operation {
+            operation: worker, ..
+        } = file_entry.as_ref()
+        else {
+            panic!("operation")
+        };
+        worker.join();
+        assert_eq!(worker.poll().status, 0);
+        assert_eq!(std::fs::read(&file_path).unwrap(), file_bytes);
+        assert_eq!(unsafe { api::chur_operation_close(file_operation) }, 0);
+        drop(file_entry);
+        drop(file_output);
+
+        let expired_file = with_catalog(session, |db| {
+            let old = now - chur_catalog::trash::RETENTION_MS - 1;
+            let n = notes::save(
+                db,
+                None,
+                0,
+                "expired file",
+                "body",
+                false,
+                notes::NoteFormat::Markdown,
+                old,
+            )?;
+            let n = chur_catalog::note_attachments::put(db, &n.id, n.revision, attachment(), old)?;
+            Ok(notes::change(db, &n.id, n.revision, 3, old)?.unwrap())
+        })
+        .unwrap();
+        for (n, revision, status) in [
+            (
+                &attached,
+                attached.revision - 1,
+                chur_core::ChurStatus::Conflict,
+            ),
+            (
+                &expired_file,
+                expired_file.revision,
+                chur_core::ChurStatus::NotFound,
+            ),
+            (&purged, purged.revision, chur_core::ChurStatus::NotFound),
+        ] {
+            let output = std::fs::File::create(&file_path).unwrap();
+            let mut operation = 99;
+            assert_eq!(
+                unsafe {
+                    chur_private_note_attachment_export_begin(
+                        session,
+                        n.id.as_bytes().as_ptr(),
+                        attachment_id.as_bytes().as_ptr(),
                         revision,
                         output.as_raw_fd(),
                         &mut operation,

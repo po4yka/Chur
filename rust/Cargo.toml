@@ -89,6 +89,7 @@ tokio = { version = "=1.53.3", default-features = false, features = ["macros", "
 # bytes through them.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64ct = { version = "1.8.3", features = ["alloc"] }
 hex = "0.4"
 tower = { version = "=0.5.3", default-features = false, features = ["util"] }
 

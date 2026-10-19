@@ -13,7 +13,7 @@ Potential plaintext locations:
 | Rust secret buffers | Yes | unlocked operation/session only; zeroize |
 | Rust media buffers | Yes | bounded operation; overwrite/reuse |
 | JNI/direct buffers | Yes | bounded call; explicit ownership |
-| Kotlin `ByteArray` | Bounded | control data, authenticated document/OCR ranges, and extracted UTF-8 text; clear best-effort |
+| Kotlin `ByteArray` | Bounded | control data, authenticated document/OCR ranges, extracted UTF-8 text, and bounded private note attachments; clear best-effort |
 | decoded document text | Yes | at most a 1 MiB UTF-8 prefix; current viewer/session only; drop references on disposal or lock |
 | private note text | Yes | bounded open editor and list previews; explicit save to SQLCipher only; drop UI references on lock/disposal |
 | OCR text and page pixels | Bounded | extraction only; clear owned arrays and rasters after custody drains; persist text only in SQLCipher |
@@ -88,6 +88,8 @@ PDF preview is optional and limited to 32 MiB of encoded data and one raster pag
 A private note title has at most 256 UTF-8 bytes and its body at most 256 KiB. List pages contain at most 100 bounded previews. Private editing uses a separate controller, no public NoteStore, and a null saveable-state registry. Markdown preview renders locally in Compose without HTML/script execution or resource fetching. External HTTP/HTTPS/mail links require confirmation. Source, undo, find/replace and outline remain route-owned. Save is explicit; errors retain session edits for retry. Lock and disposal drop text, identifiers, previews, and search state without a final save. Only real input refreshes the idle timer.
 
 Modern and legacy clipboard write guards, context-action filtering, hardware shortcuts, and accessibility action guards prevent Copy/Cut. Cut must not delete editor text. Paste is an explicit user action and uses the existing clipboard without clearing it. Keyboard settings request no personalized learning on Android and disable autocorrection; they do not establish a trusted input method. Managed text and platform layout/input copies have no secure-erasure guarantee.
+
+Private note attachments live as note-owned BLOB rows in SQLCipher, including filenames and MIME metadata. The UI reads one authenticated catalog file of at most 8 MiB for a static local image preview; decoded images are at most 384 pixels per edge and route-owned. No network loader or plaintext scratch file is used. Repeated Markdown references share decode jobs; note-level count/aggregate bounds also bound image retention. Native and host input/read arrays are cleared after their consumer finishes, including cancellation and late results after lock. Private package import commits source and all files in one transaction; plaintext package export uses the saved-revision native export operation and the existing warning and destination policy.
 
 Private-note UTF-8 request/output arrays are bounded and cleared after interop. Rust clears owned note text and the export buffer on drop. Export requires the normal plaintext warning, snapshots a saved revision, and releases catalog access before writing the owned destination. The existing scratch and cancellation rules apply. See [`../product/PRIVATE_NOTES.md`](../product/PRIVATE_NOTES.md).
 

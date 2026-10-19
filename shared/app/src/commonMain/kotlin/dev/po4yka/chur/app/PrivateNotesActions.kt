@@ -17,6 +17,11 @@ interface PrivateNotesActions {
     fun pinned(value: Boolean)
     fun format(value: PrivateNoteFormat)
     fun importMarkdown(title: String, body: String)
+    fun importPackage(bytes: ByteArray) { bytes.fill(0) }
+    fun addAttachment(name: String, bytes: ByteArray) { bytes.fill(0) }
+    fun removeAttachment(id: String) {}
+    fun exportAttachment(id: String) {}
+    suspend fun readAttachment(id: String): ByteArray = error("attachment is unavailable")
     fun back()
     fun dismissConfirmation()
     fun discardAndBack()

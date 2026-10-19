@@ -535,9 +535,11 @@ internal expect object ChurNative {
     fun contentIndexClear(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int
     fun privateNotesQuery(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int
     fun privateNoteGet(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int
+    fun privateNoteAttachments(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int
     fun privateNoteSave(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int
     fun privateNoteChange(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int
     fun privateNoteExportBegin(session: Long, noteId: ByteArray, expectedRevision: Long, destinationFd: Int, outOperation: LongArray): Int
+    fun privateNoteAttachmentExportBegin(session: Long, noteId: ByteArray, expectedRevision: Long, attachmentId: ByteArray, destinationFd: Int, outOperation: LongArray): Int
 
     fun externalArchiveBegin(runtime: Long, request: ByteArray, sourceFds: IntArray, destinationFd: Int, outOperation: LongArray): Int
     fun selectiveExportBegin(session: Long, request: ByteArray, descriptor: Int, outOperation: LongArray): Int

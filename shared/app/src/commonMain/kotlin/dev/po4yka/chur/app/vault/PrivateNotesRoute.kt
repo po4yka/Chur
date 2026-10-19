@@ -42,14 +42,16 @@ fun PrivateNotesRoute(
     initialCreateRequest: Long? = null,
     onNavigationBusyChange: (Boolean) -> Unit = {},
     onImportActivity: (Boolean) -> Unit = {},
+    onAttachmentExport: (PrivateNote, dev.po4yka.chur.ffi.PrivateNoteAttachment) -> Unit = { _, _ -> },
 ) {
     val scope = rememberCoroutineScope()
     val close by rememberUpdatedState(onClose)
     val export by rememberUpdatedState(onExport)
     val touch by rememberUpdatedState(onTouch)
     val encryptedExport by rememberUpdatedState(onEncryptedExport)
+    val attachmentExport by rememberUpdatedState(onAttachmentExport)
     val controller = remember(vault, generation) {
-        PrivateNotesController(vault, generation, scope, { close() }, { export(it) }, { touch() }, { encryptedExport(it) })
+        PrivateNotesController(vault, generation, scope, { close() }, { export(it) }, { touch() }, { encryptedExport(it) }, { note, attachment -> attachmentExport(note, attachment) })
     }
     DisposableEffect(controller) { onDispose { controller.close() } }
     val session by vault.state.collectAsState()

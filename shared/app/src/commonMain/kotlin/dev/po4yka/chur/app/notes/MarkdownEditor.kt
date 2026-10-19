@@ -22,6 +22,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -54,6 +55,10 @@ import com.mikepenz.markdown.compose.elements.highlightedCodeFence
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.utils.resolveImageAlt
+import com.mikepenz.markdown.utils.resolveImageLink
+import com.mikepenz.markdown.compose.LocalReferenceLinkHandler
+import com.mikepenz.markdown.compose.MarkdownSuccess
+import com.mikepenz.markdown.model.ReferenceLinkHandler
 import dev.po4yka.chur.app.privateKeyboardOptions
 import dev.po4yka.chur.app.privateNoteTextFieldPolicy
 import dev.po4yka.chur.app.utf8Size
@@ -78,6 +83,8 @@ internal fun MarkdownEditor(
     private: Boolean = false,
     enabled: Boolean = true,
     readOnly: Boolean = false,
+    readAttachment: (suspend (String) -> ByteArray)? = null,
+    attachmentIds: Set<String> = emptySet(),
 ) {
     var value by remember { mutableStateOf(TextFieldValue(body)) }
     val history = remember { MarkdownHistory(value) }
@@ -161,7 +168,7 @@ internal fun MarkdownEditor(
             }
             if (outline && markdown) MarkdownOutline(value.text) { offset -> preview = false; value = value.copy(selection = TextRange(offset)); outline = false }
             if (preview && markdown) {
-                MarkdownPreview(value.text, modifier = Modifier.height(documentHeight).fillMaxWidth(), onToggleTask = if (!enabled || readOnly) null else { start, end ->
+                MarkdownPreview(value.text, readAttachment = readAttachment, attachmentIds = attachmentIds, modifier = Modifier.height(documentHeight).fillMaxWidth(), onToggleTask = if (!enabled || readOnly) null else { start, end ->
                     toggleMarkdownTask(value.text, start, end)?.let { publish(TextFieldValue(it, TextRange(start))) }
                 })
             } else {
@@ -200,8 +207,28 @@ internal fun toggleMarkdownTask(source: String, start: Int, end: Int): String? {
     return source.replaceRange(start + 1, start + 2, if (marker == "[ ]") "x" else " ")
 }
 
+/** The parsed source for this AST, which can differ from the next asynchronously parsed edit. */
+private val LocalRenderedMarkdownSource = staticCompositionLocalOf<String> { error("Markdown source is unavailable") }
+
+/** Inline component content is already the URL; its node describes the enclosing source block. */
+internal fun markdownInlineImageAlt(source: String, node: ASTNode, link: String,
+    references: ReferenceLinkHandler): String? {
+    val labels = mutableSetOf<String?>()
+    fun visit(image: ASTNode) {
+        if (image.type == MarkdownElementTypes.IMAGE) {
+            if (image.resolveImageLink(source, references) == link) labels += image.resolveImageAlt(source)
+        } else image.children.forEach(::visit)
+    }
+    visit(node)
+    // The upstream inline API deduplicates by URL and provides no placement identity.
+    // Different descriptions of that URL must not all inherit the first one's label.
+    return labels.singleOrNull()
+}
+
 @Composable
-internal fun MarkdownPreview(body: String, modifier: Modifier = Modifier, onToggleTask: ((Int, Int) -> Unit)? = null) {
+internal fun MarkdownPreview(body: String, modifier: Modifier = Modifier, onToggleTask: ((Int, Int) -> Unit)? = null,
+    readAttachment: (suspend (String) -> ByteArray)? = null, attachmentIds: Set<String> = emptySet()) {
+    val images = rememberNoteAttachmentImageCache(attachmentIds)
     val host = LocalUriHandler.current
     var link by remember { mutableStateOf<String?>(null) }
     var openFailed by remember { mutableStateOf(false) }
@@ -220,8 +247,22 @@ internal fun MarkdownPreview(body: String, modifier: Modifier = Modifier, onTogg
             ),
             components = markdownComponents(
                 codeBlock = highlightedCodeBlock, codeFence = highlightedCodeFence,
-                image = { model -> Text("Image: ${model.node.resolveImageAlt(model.content).orEmpty()} (image reference preserved; automatic loading is disabled)") },
-                inlineImage = { model -> Text("Image: ${model.node.resolveImageAlt(model.content).orEmpty()} (image reference)") },
+                image = { model ->
+                    val id = model.node.resolveImageLink(model.content, LocalReferenceLinkHandler.current)?.let(::noteAttachmentId)
+                    val name = model.node.resolveImageAlt(model.content).orEmpty()
+                    if (id != null && readAttachment != null && id in attachmentIds) NoteAttachmentImage(id, name, { readAttachment(id) }, images)
+                    else if (id != null) Text("Image unavailable: $name")
+                    else Text("Image: $name (only managed attachments are loaded)")
+                },
+                inlineImage = { model ->
+                    // Renderer 0.46 passes a resolved URL here, unlike the block image component.
+                    val id = noteAttachmentId(model.content)
+                    val name = markdownInlineImageAlt(LocalRenderedMarkdownSource.current, model.node,
+                        model.content, LocalReferenceLinkHandler.current) ?: "Image"
+                    if (id != null && readAttachment != null && id in attachmentIds) NoteAttachmentImage(id, name, { readAttachment(id) }, images)
+                    else if (id != null) Text("Image unavailable: $name")
+                    else Text("Image: $name (only managed attachments are loaded)")
+                },
                 checkbox = { model ->
                     val start = model.node.startOffset
                     val end = model.node.endOffset
@@ -230,6 +271,11 @@ internal fun MarkdownPreview(body: String, modifier: Modifier = Modifier, onTogg
                         modifier = Modifier.size(48.dp).semantics { contentDescription = "Checklist item" })
                 },
             ),
+            success = { state, components, renderedModifier ->
+                CompositionLocalProvider(LocalRenderedMarkdownSource provides state.content) {
+                    MarkdownSuccess(state, components, renderedModifier)
+                }
+            },
             loading = { Text("Preparing preview…") },
             error = { Text("Preview could not be rendered. The original source is available in Edit source.") })
     }

@@ -8,6 +8,7 @@ import dev.po4yka.chur.ffi.PrivateNotePage
 import dev.po4yka.chur.ffi.PrivateNoteSelection
 import dev.po4yka.chur.ffi.PrivateNoteSummary
 import dev.po4yka.chur.vault.VaultState
+import kotlinx.coroutines.async
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,6 +28,75 @@ import kotlin.test.assertTrue
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class PrivateNotesControllerTest {
+    @Test
+    fun attachment_add_requires_a_saved_revision_then_keeps_the_inserted_reference_unsaved() = runTest {
+        val access = Access()
+        val controller = controller(access)
+        controller.create()
+        val rejected = byteArrayOf(1, 2)
+        controller.addAttachment("file.bin", rejected)
+        assertTrue(rejected.all { it == 0.toByte() })
+        controller.body("new note")
+        controller.format(dev.po4yka.chur.ffi.PrivateNoteFormat.MARKDOWN)
+        controller.save(); advanceUntilIdle()
+        val data = byteArrayOf(1, 2, 3)
+        controller.addAttachment("file.bin", data); advanceUntilIdle()
+        assertTrue(data.all { it == 0.toByte() })
+        val editor = controller.state.value.editor!!
+        assertEquals(1, editor.attachments.size)
+        assertEquals(1, editor.saved!!.attachmentCount)
+        assertTrue(editor.body.contains("attachment:${editor.attachments.single().id}"))
+        assertTrue(editor.dirty)
+        controller.removeAttachment(editor.attachments.single().id); advanceUntilIdle()
+        assertEquals(1, access.files.size)
+        controller.save(); advanceUntilIdle()
+        controller.removeAttachment(editor.attachments.single().id); advanceUntilIdle()
+        assertTrue(access.files.isEmpty())
+        controller.close()
+    }
+
+    @Test
+    fun a_late_attachment_read_is_cleared_and_cannot_cross_a_lock_or_identity_change() = runTest {
+        val state = MutableStateFlow<VaultState>(VaultState.Unlocked(1))
+        val access = Access()
+        val idBytes = ByteArray(16) { 1 }
+        val id = "01".repeat(16)
+        access.files[id] = dev.po4yka.chur.ffi.PrivateNoteAttachmentData(idBytes, "a.bin", "application/octet-stream", byteArrayOf(3, 4))
+        access.record = access.record.copy(attachmentCount = 1)
+        val controller = controller(access, state)
+        controller.open(summary(access.record)); advanceUntilIdle()
+        val blocked = CompletableDeferred<Unit>()
+        access.attachmentGate = blocked
+        val result = async { runCatching { controller.readAttachment(id) } }
+        runCurrent()
+        state.value = VaultState.Unlocked(2); runCurrent()
+        blocked.complete(Unit); advanceUntilIdle()
+        assertTrue(result.await().isFailure)
+        assertTrue(access.lastAttachmentRead!!.all { it == 0.toByte() })
+        assertNull(controller.state.value.editor)
+    }
+
+    @Test
+    fun importing_a_package_commits_files_and_source_together_and_clears_input() = runTest {
+        val access = Access()
+        val controller = controller(access)
+        val id = "0123456789abcdef0123456789abcdef"
+        val body = "[file](attachment:$id)\n"
+        val bytes = dev.po4yka.chur.notes.NotePackages.encode(dev.po4yka.chur.notes.NotePackage("Imported", body,
+            dev.po4yka.chur.notes.NoteFormat.MARKDOWN, listOf(dev.po4yka.chur.notes.NotePackageAttachment(id, "a.bin",
+                "application/octet-stream", byteArrayOf(4, 5)))))
+        controller.importPackage(bytes); advanceUntilIdle()
+        assertTrue(bytes.all { it == 0.toByte() })
+        assertEquals(body, controller.state.value.editor!!.body)
+        assertFalse(controller.state.value.editor!!.dirty)
+        assertEquals(1, controller.state.value.editor!!.attachments.size)
+        assertContentEquals(byteArrayOf(4, 5), access.files.values.single().data)
+        controller.close()
+        val late = byteArrayOf(8, 9)
+        controller.importPackage(late)
+        assertTrue(late.all { it == 0.toByte() })
+    }
+
     @Test
     fun markdown_import_and_format_only_edits_survive_explicit_save_without_rewriting_source() = runTest {
         val access = Access()
@@ -453,6 +523,36 @@ class PrivateNotesControllerTest {
             saveGate?.let { withContext(NonCancellable) { it.await() } }
             saveFailure?.let { throw ChurFailure(it, "private note") }
             record = record.copy(revision = (saved?.revision ?: 0) + 1, title = title, body = body, pinned = pinned, format = format)
+            return record
+        }
+        val files = mutableMapOf<String, dev.po4yka.chur.ffi.PrivateNoteAttachmentData>()
+        var attachmentGate: CompletableDeferred<Unit>? = null
+        var attachmentReads = 0
+        var lastAttachmentRead: ByteArray? = null
+        override suspend fun attachments(generation: Long, id: ByteArray) = files.values.map {
+            dev.po4yka.chur.ffi.PrivateNoteAttachment(it.attachmentId, it.name, it.mimeType, it.data.size.toLong())
+        }
+        override suspend fun readAttachment(generation: Long, id: ByteArray, attachmentId: ByteArray): ByteArray {
+            attachmentReads++
+            attachmentGate?.let { withContext(NonCancellable) { it.await() } }
+            return files.values.first { it.attachmentId.contentEquals(attachmentId) }.data.copyOf().also { lastAttachmentRead = it }
+        }
+        override suspend fun putAttachment(generation: Long, saved: PrivateNote, attachment: dev.po4yka.chur.ffi.PrivateNoteAttachmentData): PrivateNote {
+            check(saved.revision == record.revision)
+            files[attachment.attachmentId.joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }] = attachment.copy(data = attachment.data.copyOf())
+            record = record.copy(revision = record.revision + 1, attachmentCount = files.size)
+            return record
+        }
+        override suspend fun removeAttachment(generation: Long, saved: PrivateNote, attachmentId: ByteArray): PrivateNote {
+            check(saved.revision == record.revision)
+            files.entries.removeAll { it.value.attachmentId.contentEquals(attachmentId) }
+            record = record.copy(revision = record.revision + 1, attachmentCount = files.size)
+            return record
+        }
+        override suspend fun importPackage(generation: Long, title: String, body: String, format: dev.po4yka.chur.ffi.PrivateNoteFormat,
+            attachments: List<dev.po4yka.chur.ffi.PrivateNoteAttachmentData>): PrivateNote {
+            record = record.copy(title = title, body = body, format = format, attachmentCount = attachments.size)
+            attachments.forEach { files[it.attachmentId.joinToString("") { b -> (b.toInt() and 255).toString(16).padStart(2, '0') }] = it.copy(data = it.data.copyOf()) }
             return record
         }
         override suspend fun change(generation: Long, id: ByteArray, revision: Long, action: PrivateNoteAction): PrivateNote? {

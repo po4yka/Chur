@@ -292,6 +292,7 @@ Each format version field has its own namespace:
 | `catalog_format_version` | `0x000a` | private catalog schema v10 with encrypted content search | [`CATALOG_SCHEMA_V10.md`](CATALOG_SCHEMA_V10.md) |
 | `catalog_format_version` | `0x000b` | private catalog schema v11 with pending album additions | [`CATALOG_SCHEMA_V11.md`](CATALOG_SCHEMA_V11.md) |
 | `catalog_format_version` | `0x000c` | private catalog schema v12 with explicit note body format | [`CATALOG_SCHEMA_V12.md`](CATALOG_SCHEMA_V12.md) |
+| `catalog_format_version` | `0x000d` | private catalog schema v13 with note-owned encrypted attachments | [`CATALOG_SCHEMA_V13.md`](CATALOG_SCHEMA_V13.md) |
 | `object_store_format_version` | `0x0001` | object store layout v1 | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §6 |
 | `slot_version` | `0x0001` | v1 key-slot families | [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §1 |
 

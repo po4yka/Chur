@@ -6,6 +6,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -31,6 +35,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -47,8 +52,13 @@ import dev.po4yka.chur.app.theme.LocalChurColors
 import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
 import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.notes.NoteFormat
+import dev.po4yka.chur.notes.NoteAttachment
+import dev.po4yka.chur.notes.NoteAttachments
 import dev.po4yka.chur.notes.Notes
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 
 /**
  * The public Notes shell, `DESIGN.md` §19.
@@ -72,7 +82,11 @@ fun NotesScreen(
     showFirstWriteDisclosure: Boolean = false,
     onAcknowledgeDisclosure: () -> Unit = {},
     onImport: (String, String) -> Unit = { _, _ -> },
+    onImportPackage: suspend (ByteArray) -> Unit = { error("package import unavailable") },
 ) {
+    val scope = rememberCoroutineScope()
+    var packageBusy by remember { mutableStateOf(false) }
+    var packageFailed by remember { mutableStateOf(false) }
     var importFailed by remember { mutableStateOf(false) }
     val colors = LocalChurColors.current
     Scaffold(
@@ -98,6 +112,22 @@ fun NotesScreen(
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             if (importFailed) Text("The Markdown file could not be imported. Use UTF-8 text up to 256 KiB.", color = colors.error)
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                NoteBinaryImportAction("Import note package", NoteAttachments.MAX_PACKAGE_BYTES, enabled = !packageBusy,
+                    onImported = { _, bytes ->
+                        packageBusy = true
+                        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                            try {
+                                onImportPackage(bytes)
+                                packageFailed = false
+                            } catch (cancelled: CancellationException) { throw cancelled
+                            } catch (_: Exception) { packageFailed = true
+                            } finally { bytes.fill(0); packageBusy = false }
+                        }
+                    }, onFailure = { packageFailed = true })
+                if (packageBusy) Text("Importing…")
+            }
+            if (packageFailed) Text("The note package could not be imported. Check its format and attachment limits.", color = colors.error)
             if (showFirstWriteDisclosure) {
                 FirstWriteDisclosure(onAcknowledge = onAcknowledgeDisclosure)
             }
@@ -189,6 +219,7 @@ private fun NoteRow(note: Note, onClick: () -> Unit) {
                 )
             }
             if (note.pinned) Text("Pinned", style = MaterialTheme.typography.labelSmall)
+            if (note.attachments.isNotEmpty()) Text("${note.attachments.size} attachments", style = MaterialTheme.typography.labelSmall)
         }
     }
 }
@@ -267,12 +298,23 @@ private fun EmptyNotes(hasQuery: Boolean, onCreate: (() -> Unit)? = null) {
 fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) -> Unit, onBack: () -> Unit,
     onOpenSettings: () -> Unit,
     savedNote: Note? = null, writeFailed: Boolean = false,
+    onAddAttachment: suspend (Note, String, ByteArray) -> NoteAttachment = { _, _, _ -> error("attachments unavailable") },
+    onReadAttachment: suspend (String) -> ByteArray = { error("attachments unavailable") },
+    onRemoveAttachment: suspend (String) -> Unit = { error("attachments unavailable") },
+    onExportPackage: suspend (Note) -> ByteArray = { error("package export unavailable") },
     systemBack: @Composable (onBack: () -> Unit) -> Unit = {}) {
     var pinned by rememberSaveable(open.note.id) { mutableStateOf(open.note.pinned) }
     var formatName by rememberSaveable(open.note.id) { mutableStateOf(open.note.format.name) }
     val format = NoteFormat.valueOf(formatName)
-    val saveWithMetadata: (Note) -> Unit = { onSave(it.copy(pinned = pinned, format = NoteFormat.valueOf(formatName))) }
-    var draft by rememberNoteDraft(open, saveWithMetadata, onRemove)
+    val attachments = savedNote?.attachments ?: open.note.attachments
+    val saveWithMetadata: (Note) -> Unit = {
+        onSave(it.copy(pinned = pinned, format = NoteFormat.valueOf(formatName), attachments = attachments))
+    }
+    var draft by rememberNoteDraft(open, saveWithMetadata, onRemove, { attachments.isNotEmpty() })
+    val scope = rememberCoroutineScope()
+    var attachmentBusy by remember(open.note.id) { mutableStateOf(false) }
+    var attachmentFailed by remember(open.note.id) { mutableStateOf(false) }
+    var pendingRemoval by remember { mutableStateOf<String?>(null) }
     val (title, body) = draft ?: run {
         LaunchedEffect(Unit) { onBack() }
         return
@@ -281,7 +323,7 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
     val exit = remember(open.note.id) { PublicNoteExitGuard() }
     fun currentDraftNote(): Note? = draft?.let { (currentTitle, currentBody) ->
         open.note.copy(title = currentTitle, body = currentBody, pinned = pinned,
-            format = NoteFormat.valueOf(formatName))
+            format = NoteFormat.valueOf(formatName), attachments = attachments)
     }
     val current = requireNotNull(currentDraftNote())
     var leavingForSettings by remember(open.note.id) { mutableStateOf(false) }
@@ -289,7 +331,8 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
     fun requestLeave(settings: Boolean) {
         val latest = currentDraftNote() ?: return
         leavingForSettings = settings
-        if (open.isNew && latest.title.isBlank() && latest.body.isBlank()) {
+        if (attachmentBusy) return
+        if (open.isNew && latest.title.isBlank() && latest.body.isBlank() && latest.attachments.isEmpty()) {
             draft = null
             onRemove(open.note.id)
             closeWithoutSave()
@@ -333,6 +376,21 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
         )
     }
 
+    pendingRemoval?.let { id ->
+        AlertDialog(onDismissRequest = { if (!attachmentBusy) pendingRemoval = null },
+            title = { Text("Remove this attachment?") },
+            text = { Text("The file is removed from this note. Export it first if you need a copy.") },
+            confirmButton = { TextButton(enabled = !attachmentBusy, onClick = {
+                attachmentBusy = true
+                scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    try { onRemoveAttachment(id); pendingRemoval = null; attachmentFailed = false
+                    } catch (cancelled: CancellationException) { throw cancelled
+                    } catch (_: Exception) { attachmentFailed = true
+                    } finally { attachmentBusy = false }
+                }
+            }) { Text("Remove") } },
+            dismissButton = { TextButton(enabled = !attachmentBusy, onClick = { pendingRemoval = null }) { Text("Cancel") } })
+    }
     val colors = LocalChurColors.current
     Scaffold(
         containerColor = colors.canvas,
@@ -340,33 +398,33 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
             TopAppBar(
                 title = { Text("Note") },
                 navigationIcon = {
-                    IconButton(onClick = requestBack) {
+                    IconButton(enabled = !attachmentBusy, onClick = requestBack) {
                         Icon(BackGlyph, contentDescription = "Back")
                     }
                 },
                 actions = {
-                    IconButton(enabled = !exit.requested, onClick = { requestLeave(true) }) { Icon(SettingsGlyph, contentDescription = "Settings") }
-                    PublicNoteExportAction(title, body, format == NoteFormat.MARKDOWN, enabled = !exit.requested, onFailure = { exportFailed = true })
-                    TextButton(enabled = !exit.requested, onClick = { confirmingDelete = true }) { Text("Delete") }
+                    IconButton(enabled = !exit.requested && !attachmentBusy, onClick = { requestLeave(true) }) { Icon(SettingsGlyph, contentDescription = "Settings") }
+                    PublicNoteExportAction(title, body, format == NoteFormat.MARKDOWN, enabled = !exit.requested && !attachmentBusy, onFailure = { exportFailed = true })
+                    TextButton(enabled = !exit.requested && !attachmentBusy, onClick = { confirmingDelete = true }) { Text("Delete") }
                 },
             )
         },
     ) { padding ->
         Column(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(ChurSpacing.gutter),
+            modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(ChurSpacing.gutter),
             verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
         ) {
             OutlinedTextField(
                 value = title,
                 onValueChange = { changed -> draft?.let { draft = changed to it.second } },
-                enabled = !exit.requested,
+                enabled = !exit.requested && !attachmentBusy,
                 singleLine = true,
                 label = { Text("Title") },
                 modifier = Modifier.fillMaxWidth(),
                 colors = churOutlinedTextFieldColors(),
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(pinned, onCheckedChange = { pinned = it }, enabled = !exit.requested)
+                Checkbox(pinned, onCheckedChange = { pinned = it }, enabled = !exit.requested && !attachmentBusy)
                 Text("Pinned")
                 val saved = samePublicNoteContent(current, savedNote)
                 Text(if (writeFailed) "Save failed" else if (saved) "Saved" else "Unsaved", modifier = Modifier.weight(1f))
@@ -374,7 +432,57 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
             }
             if (exportFailed) Text("The file could not be exported. Try again.", color = colors.error)
             MarkdownEditor(body, { changed -> draft?.let { draft = it.first to changed } }, format == NoteFormat.MARKDOWN,
-                { formatName = if (it) NoteFormat.MARKDOWN.name else NoteFormat.PLAIN_TEXT.name }, Modifier.fillMaxWidth().weight(1f), enabled = !exit.requested)
+                { formatName = if (it) NoteFormat.MARKDOWN.name else NoteFormat.PLAIN_TEXT.name }, Modifier.fillMaxWidth().height(400.dp), enabled = !exit.requested && !attachmentBusy,
+                attachmentIds = attachments.map { it.id }.toSet(),
+                readAttachment = { id ->
+                    require(attachments.any { it.id == id }) { "attachment not found" }
+                    onReadAttachment(id)
+                })
+            Text("Images and attachments", style = MaterialTheme.typography.titleMedium)
+            Text("Files in public notes are unencrypted.", style = MaterialTheme.typography.bodySmall)
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                NoteBinaryImportAction("Add image or file", NoteAttachments.MAX_FILE_BYTES,
+                    enabled = !exit.requested && !attachmentBusy && attachments.size < NoteAttachments.MAX_ATTACHMENTS,
+                    onImported = { name, bytes ->
+                        attachmentBusy = true
+                        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                            try {
+                                val added = onAddAttachment(requireNotNull(currentDraftNote()), name, bytes)
+                                draft?.takeIf { NoteFormat.valueOf(formatName) == NoteFormat.MARKDOWN }?.let { text ->
+                                    val reference = attachmentMarkdownReference(added.name, added.id, added.mimeType.startsWith("image/"))
+                                    draft = text.first to (text.second + if (text.second.isEmpty()) reference else "\n\n$reference")
+                                }
+                                attachmentFailed = false
+                            } catch (cancelled: CancellationException) { throw cancelled
+                            } catch (_: Exception) { attachmentFailed = true
+                            } finally { bytes.fill(0); attachmentBusy = false }
+                        }
+                    }, onFailure = { attachmentFailed = true })
+                PublicNoteBinaryExportAction(noteExportFilename(title, true).removeSuffix(".md") + ".churnote",
+                    "application/vnd.chur.note+json", enabled = !exit.requested && !attachmentBusy,
+                    label = "Export note package", load = { onExportPackage(requireNotNull(currentDraftNote())) },
+                    onFailure = { attachmentFailed = true })
+            }
+            if (attachmentBusy) Text("Updating attachments…")
+            if (attachmentFailed) Text("The attachment operation failed. Your note is still here. Try again.", color = colors.error)
+            attachments.forEach { attachment ->
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(ChurSpacing.two)) {
+                        Text(attachment.name, style = MaterialTheme.typography.titleSmall)
+                        Text("${attachment.sizeBytes} bytes · ${attachment.mimeType}", style = MaterialTheme.typography.bodySmall)
+                        if (attachment.mimeType.startsWith("image/")) NoteAttachmentImage(attachment.id, attachment.name,
+                            read = { onReadAttachment(attachment.id) })
+                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                            PublicNoteBinaryExportAction(attachment.name, attachment.mimeType,
+                                enabled = !exit.requested && !attachmentBusy, load = { onReadAttachment(attachment.id) },
+                                onFailure = { attachmentFailed = true })
+                            TextButton(enabled = !exit.requested && !attachmentBusy, onClick = { pendingRemoval = attachment.id }) {
+                                Text("Remove attachment")
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -429,6 +537,7 @@ internal fun rememberNoteDraft(
     open: OpenNote,
     onSave: (Note) -> Unit,
     onRemove: (String) -> Unit,
+    hasAttachments: () -> Boolean = { false },
 ): MutableState<Pair<String, String>?> {
     val note = open.note
     val draft = rememberSaveable(note.id, saver = DraftSaver) {
@@ -438,6 +547,7 @@ internal fun rememberNoteDraft(
     }
     val save by rememberUpdatedState(onSave)
     val remove by rememberUpdatedState(onRemove)
+    val attachmentsPresent by rememberUpdatedState(hasAttachments)
     val text = draft.value ?: return draft
 
     LaunchedEffect(text) {
@@ -448,7 +558,7 @@ internal fun rememberNoteDraft(
         onDispose {
             // Read now, so what is on screen as the editor leaves is written.
             val (title, body) = draft.value ?: return@onDispose
-            if (open.isNew && title.isBlank() && body.isBlank()) {
+            if (open.isNew && title.isBlank() && body.isBlank() && !attachmentsPresent()) {
                 remove(note.id)
             } else {
                 save(note.copy(title = title, body = body))

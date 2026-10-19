@@ -14,6 +14,7 @@ data class PrivateNote(
     val trashedAtMs: Long?,
     val exportSize: Long,
     val format: PrivateNoteFormat = PrivateNoteFormat.PLAIN_TEXT,
+    val attachmentCount: Int = 0,
 ) {
     val id: String get() = noteId.joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
     override fun toString(): String = "PrivateNote(<redacted>)"
@@ -30,6 +31,7 @@ data class PrivateNoteSummary(
     val trashedAtMs: Long?,
     val exportSize: Long,
     val format: PrivateNoteFormat = PrivateNoteFormat.PLAIN_TEXT,
+    val attachmentCount: Int = 0,
 ) {
     val id: String get() = noteId.joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
     override fun toString(): String = "PrivateNoteSummary(<redacted>)"
@@ -55,14 +57,15 @@ internal class PrivateNoteReader(private val bytes: ByteArray) {
     fun byte(): Int { require(at < bytes.size); return bytes[at++].toInt() and 255 }
     fun number(): Long { var out = 0L; repeat(8) { out = (out shl 8) or byte().toLong() }; return out }
     fun raw(size: Int): ByteArray { require(size >= 0 && size <= bytes.size - at); return bytes.copyOfRange(at, at + size).also { at += size } }
+    fun count():Int { var n=0L;repeat(4){n=(n shl 8) or byte().toLong()};require(n<=Int.MAX_VALUE);return n.toInt() }
     fun sized(max: Int): ByteArray { var n = 0L; repeat(4) { n = (n shl 8) or byte().toLong() }; require(n <= max); return raw(n.toInt()) }
     fun text(max: Int): String { val b = sized(max); return try { b.decodeToString(throwOnInvalidSequence = true) } finally { b.fill(0) } }
     fun note(): PrivateNote {
         val id = raw(16); require(id.any { it != 0.toByte() })
         val revision = number(); val created = number(); val updated = number(); val deleted = number()
-        val pin = byte(); val format = byte(); val size = number()
-        require(revision > 0 && created >= 0 && updated >= 0 && (deleted == -1L || deleted >= 0) && pin <= 1 && format in 0..1 && size in 0..(if (format == 1) 262144 else 262402) && (format == 1 || size >= 2))
-        return PrivateNote(id, revision, text(256), text(262144), created, updated, pin == 1, if (deleted == -1L) null else deleted, size, PrivateNoteFormat.entries[format])
+        val pin = byte(); val format = byte(); val attachmentCount = count(); val size = number()
+        require(revision > 0 && created >= 0 && updated >= 0 && (deleted == -1L || deleted >= 0) && pin <= 1 && format in 0..1 && attachmentCount in 0..32 && size in 0..(if (attachmentCount > 0) 25165824 else if (format == 1) 262144 else 262402) && (format == 1 || size >= 2))
+        return PrivateNote(id, revision, text(256), text(262144), created, updated, pin == 1, if (deleted == -1L) null else deleted, size, PrivateNoteFormat.entries[format], attachmentCount)
     }
     fun end() { require(at == bytes.size) }
 }
@@ -75,9 +78,19 @@ internal fun decodePrivateNotePage(bytes: ByteArray): PrivateNotePage {
     require(count in 0..100)
     val notes = List(count) {
         val n = r.note()
-        PrivateNoteSummary(n.noteId, n.revision, n.title, n.body, n.createdMs, n.updatedMs, n.pinned, n.trashedAtMs, n.exportSize, n.format)
+        PrivateNoteSummary(n.noteId, n.revision, n.title, n.body, n.createdMs, n.updatedMs, n.pinned, n.trashedAtMs, n.exportSize, n.format, n.attachmentCount)
     }
     val cursor = r.sized(65).takeIf { it.isNotEmpty() }
     require(cursor == null || cursor.size == 65); r.end()
     return PrivateNotePage(notes, cursor)
+}
+
+/** Metadata for a note-owned encrypted file. Never persist outside the unlocked session. */
+data class PrivateNoteAttachment(val attachmentId: ByteArray, val name: String, val mimeType: String, val size: Long) {
+    val id: String get() = attachmentId.joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
+    override fun toString(): String = "PrivateNoteAttachment(<redacted>)"
+}
+/** Import payload; the caller must erase [data] after the operation, including failure. */
+data class PrivateNoteAttachmentData(val attachmentId: ByteArray, val name: String, val mimeType: String, val data: ByteArray) {
+    override fun toString(): String = "PrivateNoteAttachmentData(<redacted>)"
 }

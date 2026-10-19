@@ -7,6 +7,8 @@ import dev.po4yka.chur.app.notes.MarkdownHistory
 import dev.po4yka.chur.app.notes.continueMarkdownList
 import dev.po4yka.chur.app.notes.markdownEdit
 import dev.po4yka.chur.app.notes.toggleMarkdownTask
+import dev.po4yka.chur.app.notes.markdownInlineImageAlt
+import com.mikepenz.markdown.model.ReferenceLinkHandlerImpl
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -21,6 +23,43 @@ import org.intellij.markdown.flavours.gfm.GFMTokenTypes
 import org.intellij.markdown.parser.MarkdownParser
 
 class MarkdownEditingTest {
+    @Test fun inline_images_resolve_each_alt_against_full_parsed_source_not_the_resolved_url() {
+        val first = "attachment:0102030405060708090a0b0c0d0e0f10"
+        val second = "attachment:1112131415161718191a1b1c1d1e1f20"
+        val source = "# A preceding block gives image nodes absolute source offsets\n\n" +
+            "Before ![First image]($first) and ![Second image]($second) after."
+        val tree = MarkdownParser(GFMFlavourDescriptor()).buildMarkdownTreeFromString(source)
+        val block = tree.children.last { it.type == MarkdownElementTypes.PARAGRAPH }
+        val references = ReferenceLinkHandlerImpl()
+        assertTrue(block.startOffset > first.length, "the resolved URL cannot be used as the AST source")
+        assertEquals("First image", markdownInlineImageAlt(source, block, first, references))
+        assertEquals("Second image", markdownInlineImageAlt(source, block, second, references))
+        assertNull(markdownInlineImageAlt(source, block, "https://example.invalid/missing", references))
+    }
+
+    @Test fun repeated_inline_url_with_different_labels_uses_an_honest_generic_fallback() {
+        val link = "attachment:0102030405060708090a0b0c0d0e0f10"
+        val source = "Before ![First view]($link) and ![Second view]($link) after."
+        val tree = MarkdownParser(GFMFlavourDescriptor()).buildMarkdownTreeFromString(source)
+        val block = tree.children.first { it.type == MarkdownElementTypes.PARAGRAPH }
+        val references = ReferenceLinkHandlerImpl()
+        assertNull(markdownInlineImageAlt(source, block, link, references))
+        val images = block.children.filter { it.type == MarkdownElementTypes.IMAGE }
+        assertEquals(2, images.size)
+        assertEquals("First view", markdownInlineImageAlt(source, images[0], link, references))
+        assertEquals("Second view", markdownInlineImageAlt(source, images[1], link, references))
+    }
+
+    @Test fun reference_style_inline_images_keep_the_source_label_and_resolved_destination() {
+        val link = "attachment:0102030405060708090a0b0c0d0e0f10"
+        val source = "# Prefix\n\nText ![Reference image][local] after.\n\n[local]: $link\n"
+        val tree = MarkdownParser(GFMFlavourDescriptor()).buildMarkdownTreeFromString(source)
+        val block = tree.children.first { it.type == MarkdownElementTypes.PARAGRAPH }
+        val references = ReferenceLinkHandlerImpl().apply { store("[local]", link) }
+        assertEquals("Reference image", markdownInlineImageAlt(source, block, link, references))
+        assertTrue(source.contains("![Reference image][local]"), "resolving an image must leave its exact source intact")
+    }
+
     @Test fun formatting_changes_only_the_selected_source() {
         val original = "before **existing** Привет 🌍 after"
         val start = original.indexOf("Привет")

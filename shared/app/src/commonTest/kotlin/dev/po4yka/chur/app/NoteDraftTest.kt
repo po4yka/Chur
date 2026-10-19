@@ -87,8 +87,20 @@ class NoteDraftTest {
         assertEquals(emptyList(), editor.removed)
     }
 
+    @Test
+    fun leaving_a_new_blank_note_with_an_attachment_does_not_delete_it() = runTest {
+        var hasAttachments = false
+        val editor = Editor(this, OpenNote(Note("files-only", "", "", 1), isNew = true),
+            hasAttachments = { hasAttachments })
+        // Import completes after the editor first composed; disposal must read current membership.
+        hasAttachments = true
+        editor.leave()
+        assertEquals(emptyList(), editor.removed)
+        assertEquals(listOf("files-only"), editor.saved.map { it.id })
+    }
+
     /** [rememberNoteDraft] for [open], composed on [test]'s scheduler. */
-    private class Editor(private val test: TestScope, open: OpenNote) {
+    private class Editor(private val test: TestScope, open: OpenNote, hasAttachments: () -> Boolean = { false }) {
         val saved = mutableListOf<Note>()
         val removed = mutableListOf<String>()
         lateinit var draft: MutableState<Pair<String, String>?>
@@ -99,7 +111,7 @@ class NoteDraftTest {
         init {
             test.launch(clock) { recomposer.runRecomposeAndApplyChanges() }
             composition.setContent {
-                draft = rememberNoteDraft(open, onSave = { saved += it }, onRemove = { removed += it })
+                draft = rememberNoteDraft(open, onSave = { saved += it }, onRemove = { removed += it }, hasAttachments = hasAttachments)
             }
             test.runCurrent()
         }

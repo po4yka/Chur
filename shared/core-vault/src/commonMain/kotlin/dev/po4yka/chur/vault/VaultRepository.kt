@@ -4,6 +4,8 @@ import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.core.platformkeys.DeviceSlot
 import dev.po4yka.chur.core.platformkeys.DeviceSlotException
 import dev.po4yka.chur.ffi.PrivateNote
+import dev.po4yka.chur.ffi.PrivateNoteAttachment
+import dev.po4yka.chur.ffi.PrivateNoteAttachmentData
 import dev.po4yka.chur.ffi.PrivateNoteFormat
 import dev.po4yka.chur.ffi.PrivateNoteSelection
 import dev.po4yka.chur.ffi.PrivateNotePage
@@ -371,6 +373,20 @@ class VaultRepository(
     suspend fun savePrivateNote(generation: Long, id: ByteArray? = null, expectedRevision: Long = 0, title: String, body: String, pinned: Boolean = false, format: PrivateNoteFormat = PrivateNoteFormat.PLAIN_TEXT): PrivateNote = withNoteSession(generation) { ChurVault.savePrivateNote(it, id, expectedRevision, title, body, pinned, format) }
     suspend fun changePrivateNote(generation: Long, id: ByteArray, expectedRevision: Long, action: PrivateNoteAction): PrivateNote? = withNoteSession(generation) { ChurVault.changePrivateNote(it, id, expectedRevision, action) }
     suspend fun beginPrivateNoteExport(generation: Long, id: ByteArray, expectedRevision: Long, destinationFd: Int): Long = withNoteSession(generation) { ChurVault.beginPrivateNoteExport(it, id, expectedRevision, destinationFd) }
+    suspend fun privateNoteAttachments(generation: Long, id: ByteArray): List<PrivateNoteAttachment> = withNoteSession(generation) { ChurVault.privateNoteAttachments(it,id) }
+    suspend fun readPrivateNoteAttachment(generation: Long, id: ByteArray, attachmentId: ByteArray): ByteArray = withNoteSession(generation) { ChurVault.readPrivateNoteAttachment(it,id,attachmentId) }
+    suspend fun putPrivateNoteAttachment(generation: Long, id: ByteArray, expectedRevision: Long, attachment: PrivateNoteAttachmentData): PrivateNote = withNoteSession(generation) { ChurVault.putPrivateNoteAttachment(it,id,expectedRevision,attachment) }
+    suspend fun removePrivateNoteAttachment(generation: Long, id: ByteArray, expectedRevision: Long, attachmentId: ByteArray): PrivateNote = withNoteSession(generation) { ChurVault.removePrivateNoteAttachment(it,id,expectedRevision,attachmentId) }
+    suspend fun importPrivateNotePackage(generation: Long, title: String, body: String, format: PrivateNoteFormat, attachments: List<PrivateNoteAttachmentData>): PrivateNote = withNoteSession(generation) { ChurVault.importPrivateNotePackage(it,title,body,format,attachments) }
+    suspend fun beginPrivateNoteAttachmentExport(
+        generation: Long,
+        id: ByteArray,
+        expectedRevision: Long,
+        attachmentId: ByteArray,
+        destinationFd: Int,
+    ): Long = withNoteSession(generation) {
+        ChurVault.beginPrivateNoteAttachmentExport(it, id, expectedRevision, attachmentId, destinationFd)
+    }
     suspend fun privateNoteActivity(generation: Long) { withNoteSession(generation) { Unit } }
 
     /** An old indexing job must never read or write a later unlocked identity. */

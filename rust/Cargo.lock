@@ -224,11 +224,14 @@ dependencies = [
 name = "chur-catalog"
 version = "0.1.0"
 dependencies = [
+ "base64ct",
  "chur-core",
  "chur-crypto",
  "chur-format",
  "chur-sync-protocol",
  "rusqlite",
+ "serde",
+ "serde_json",
  "zeroize",
 ]
 

@@ -6,7 +6,7 @@
 
 Private notes belong to the selected unlocked vault identity. Open **Browse → Private notes** from Library. The screen has its own list, search, editor, pinned order, and Trash. It does not use the public Notes model, JSON file, saved-state registry, or disclosure state.
 
-The selected scope is local notes plus encrypted portable backup. Notes do not enter media albums, media search, device-control exports, sync, or collection sharing. Public Notes remain available without unlocking and keep their existing public persistence.
+The selected scope is local notes with managed images and files, plaintext portable note packages, and encrypted portable backup. See the shared [Markdown and attachment contract](MARKDOWN_NOTES.md) for editor capabilities, limits, and public/private transfer behavior. Notes do not enter media albums, media search, device-control exports, sync, or collection sharing. Public Notes remain available without unlocking and keep their existing public persistence.
 
 ## List and search
 
@@ -38,11 +38,13 @@ The catalog and FTS use secure-delete settings to reduce deleted-cell retention.
 
 Export acts on a selected saved revision. A dirty editor first offers Save and Export. The existing destination dialog warns that the copy is unencrypted and can be retained by its recipient. Android offers Files, Downloads, and Share; iOS offers Files and Share.
 
-Markdown export is the exact UTF-8 body as `.md`; it does not prepend the title or add whitespace. Plain text export keeps `title + "\n\n" + body`, including two LF bytes when the title is empty. An unexpired note in Trash can use this plaintext export without being restored; its current saved revision is still required. An expired, purged, or changed note refuses export. This does not enable selective encrypted export of Trash. The exact byte count reserves the platform scratch budget. A session-bound request retains only an identifier, revision, safe filename, format, size, and generation while a picker is open. The host does not fetch body text solely to export it.
+For a note without files, Markdown export is the exact UTF-8 body as `.md`; it does not prepend the title or add whitespace. Plain text export keeps `title + "\n\n" + body`, including two LF bytes when the title is empty. An unexpired note in Trash can use this plaintext export without being restored; its current saved revision is still required. An expired, purged, or changed note refuses export. This does not enable selective encrypted export of Trash. The exact byte count reserves the platform scratch budget. A session-bound request retains only an identifier, revision, safe filename, format, size, and generation while a picker is open. The host does not fetch body text solely to export it.
+
+A note with files exports a [portable `.churnote` package](../format/NOTE_PACKAGE_V1.md) containing its exact source, explicit format, and all attachment bytes. Private attachment metadata and content remain in the selected encrypted SQLCipher catalog; preview creates no public file or plaintext disk cache. Import validates and commits the complete package atomically. Add/remove requires a saved clean note and its current revision; the automatically inserted Markdown reference is an unsaved text edit until Save.
 
 The normal native Export operation owns a duplicate destination descriptor, reports progress, and accepts cancellation. Rust copies a bounded saved revision into a zeroizing buffer and releases catalog access before provider writes. The host publishes only a complete successful operation under the same session and removes incomplete copies where the provider permits it. A blocked operating-system write has the same cancellation limit as existing media export.
 
-Portable backup includes the encrypted catalog and its note tables for the selected identity. Restore preserves notes, format, revisions, pin state, Trash, and search. It does not merge the sibling identity or copy notes into the public shell. Historical backups remain separate copies with their original credentials and retention.
+Portable backup includes the encrypted catalog and its note tables for the selected identity. Restore preserves notes, format, revisions, pin state, Trash, search, and attachment bytes. It does not merge the sibling identity or copy notes into the public shell. Historical backups remain separate copies with their original credentials and retention.
 
 ### Selective encrypted archives
 
@@ -50,7 +52,7 @@ The list and saved-note editor also offer [selective encrypted archives](SELECTI
 
 ## Storage and compatibility
 
-See [`../format/CATALOG_SCHEMA_V12.md`](../format/CATALOG_SCHEMA_V12.md), [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md) §6.25, and [`../adr/0061-local-private-notes.md`](../adr/0061-local-private-notes.md). The normal authenticated schema migration proceeds sequentially through v12. Existing notes receive the explicit plain-text discriminator without reinterpreting their content. Format changes participate in the saved revision. Older clients fail closed on the newer catalog; no media container or sync record changes.
+See [`../format/CATALOG_SCHEMA_V13.md`](../format/CATALOG_SCHEMA_V13.md), [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md) §6.25, and [`../adr/0061-local-private-notes.md`](../adr/0061-local-private-notes.md). The normal authenticated schema migration proceeds sequentially through v13. The v12 format discriminator preserves existing notes as plain text without reinterpreting their content; v13 adds note-scoped encrypted attachment metadata and BLOB content. Native callers require ABI 5.0. Format changes participate in the saved revision. Older clients fail closed on the newer catalog; no media container or sync record changes.
 
 ## Validation
 

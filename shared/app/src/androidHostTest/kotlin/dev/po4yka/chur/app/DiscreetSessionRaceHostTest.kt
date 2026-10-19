@@ -12,12 +12,14 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withTimeout
@@ -97,9 +99,8 @@ class DiscreetSessionRaceHostTest {
         val cleanupCalls = exports.cleanupCalls
         exports.failCleanup = false
         controller.goTo(AppRoute.Unlock)
-        controller.unlock(PASSWORD)
-        main.until { controller.route.value == AppRoute.Vault }
-        main.runNext()
+        completeRead { controller.unlock(PASSWORD) }
+        assertEquals(AppRoute.Vault, controller.route.value)
         assertEquals(cleanupCalls + 1, exports.cleanupCalls)
         assertIs<VaultState.Unlocked>(controller.vaultState.value)
         completeRead { controller.loadAlbums() }
@@ -114,10 +115,13 @@ class DiscreetSessionRaceHostTest {
         finishLock()
         exports.failCleanup = false
         controller.goTo(AppRoute.Unlock)
-        controller.unlock(PASSWORD)
-        main.runNext() // credential attempt queues its one cleanup retry.
-        main.runNext() // retry closes native state off Main.
-        val lateRetry = main.take()
+        val lateRetry = withRepositoryBlocked {
+            val unlock = actionJob { controller.unlock(PASSWORD) }
+            main.take(unlock).run() // Queues the one cleanup retry and waits for it.
+            val retry = pendingLock()
+            main.take(retry).run() // Native teardown suspends on the held mutex.
+            retry
+        }.let { main.take(it) }
         controller.panic()
         lateRetry.run()
         main.until { !controller.unlocking.value }
@@ -142,9 +146,8 @@ class DiscreetSessionRaceHostTest {
         assertEquals(userCopy(dev.po4yka.chur.core.model.ChurStatus.INTERNAL_FAILURE), controller.formError.value)
         assertTrue(cover.covered)
         exports.failCleanup = false
-        controller.create(SECOND_PASSWORD, false)
-        main.until { controller.route.value == AppRoute.Vault }
-        main.runNext()
+        completeRead { controller.create(SECOND_PASSWORD, false) }
+        assertEquals(AppRoute.Vault, controller.route.value)
         completeRead { controller.loadSlots() }
         assertTrue(controller.slots.value.isNotEmpty(), "new identity metadata must be usable after cleanup")
     }
@@ -170,9 +173,8 @@ class DiscreetSessionRaceHostTest {
         assertEquals(AppRoute.CreateVault, controller.route.value)
         assertEquals(userCopy(dev.po4yka.chur.core.model.ChurStatus.INTERNAL_FAILURE), controller.formError.value)
         exports.failCleanup = false
-        controller.create(SECOND_PASSWORD, false)
-        main.until { controller.route.value == AppRoute.Vault }
-        main.runNext()
+        completeRead { controller.create(SECOND_PASSWORD, false) }
+        assertEquals(AppRoute.Vault, controller.route.value)
         completeRead { controller.loadSlots() }
         assertTrue(controller.slots.value.isNotEmpty())
         assertTrue(controller.vault.albums().isEmpty(), "the recovered create opens its own identity")
@@ -183,9 +185,8 @@ class DiscreetSessionRaceHostTest {
         create()
         controller.lock()
         controller.goTo(AppRoute.Unlock)
-        controller.unlock(PASSWORD)
-        main.until { controller.route.value == AppRoute.Vault }
-        main.runNext() // the initial page, after all earlier native cleanup completed.
+        completeRead { controller.unlock(PASSWORD) }
+        assertEquals(AppRoute.Vault, controller.route.value)
         assertIs<VaultState.Unlocked>(controller.vaultState.value)
         assertTrue(controller.vault.slots().isNotEmpty())
     }
@@ -208,11 +209,13 @@ class DiscreetSessionRaceHostTest {
         controller.lock()
         finishLock()
         assertEquals(AppRoute.AppUnlock, controller.route.value)
-        controller.unlock(PASSWORD)
-        main.runNext() // credential verification begins.
-        main.runNext() // successful credential queues the tracked whole-app close.
-        main.runNext() // tracked close begins native teardown.
-        val lateGateCompletion = main.take()
+        val authorization = holdNativeResult { controller.unlock(PASSWORD) }
+        val lateGateCompletion = withRepositoryBlocked {
+            authorization.run() // Successful credentials queue the tracked whole-app close.
+            val close = pendingLock()
+            main.take(close).run()
+            close
+        }.let { main.take(it) }
         controller.panic()
         lateGateCompletion.run()
         assertEquals(AppRoute.AppUnlock, controller.route.value)
@@ -226,9 +229,7 @@ class DiscreetSessionRaceHostTest {
         controller.lock()
         finishLock()
         controller.goTo(AppRoute.Unlock)
-        controller.unlock(PASSWORD)
-        main.runNext()
-        val lateUnlock = main.take()
+        val lateUnlock = holdNativeResult { controller.unlock(PASSWORD) }
         controller.panic()
         controller.goTo(AppRoute.PublicSettings)
         lateUnlock.run()
@@ -244,12 +245,17 @@ class DiscreetSessionRaceHostTest {
     fun a_late_idle_lock_completion_cannot_remove_a_newer_panic_cover() = scenario {
         create()
         clock.now += LockPolicy().idleTimeoutMs + 1
-        val idleCheck = CoroutineScope(main).launch { controller.checkIdle() }
-        main.runNext() // idle policy is evaluated in the real repository.
-        main.runNext() // pre-close callback conceals on Main.
-        val lateIdleCompletion = main.take() // native lock finished; Main cleanup is held.
+        val name = CoroutineName("held-idle-check")
+        val idleCheck = withRepositoryBlocked {
+            CoroutineScope(main + name).launch { controller.checkIdle() }.also {
+                main.take(it).run() // Idle policy suspends on the held repository mutex.
+            }
+        }
+        main.take(name).run() // The real repository's before-close callback conceals on Main.
+        val lateIdleCompletion = main.take(name) // Native lock finished; Main cleanup is held.
         controller.panic()
         lateIdleCompletion.run()
+        main.until { idleCheck.isCompleted }
         assertTrue(idleCheck.isCompleted)
         assertTrue(cover.covered, "an old idle completion removed the new panic cover")
         assertEquals(AppRoute.PublicShell, controller.route.value)
@@ -270,20 +276,18 @@ class DiscreetSessionRaceHostTest {
     @Test
     fun fresh_authentication_waits_for_a_held_stale_creation_and_all_its_teardown_decisions() = scenario {
         controller.goTo(AppRoute.CreateVault)
-        controller.create(PASSWORD, false)
-        main.runNext()
-        val oldCreationResult = main.take() // native activated; Main has not authorized publication.
+        val oldCreationResult = holdNativeResult { controller.create(PASSWORD, false) }
         val identity = assertNotNull(controller.vault.syncIdentity()).vaultId
         controller.panic()
         controller.goTo(AppRoute.Unlock)
-        controller.unlock(PASSWORD) // fresh request starts before old Main completion.
+        val freshUnlock = actionJob { controller.unlock(PASSWORD) }
         assertTrue(controller.unlocking.value)
-        main.runNext() // panic cleanup waits for the old native ticket.
-        main.runNext() // fresh authentication waits for that cleanup.
+        main.take(pendingLock()).run() // Cleanup suspends on the old native ticket.
+        main.take(freshUnlock).run() // Fresh authentication suspends on that cleanup.
         oldCreationResult.run() // queues stale teardown, then releases the ticket.
         assertTrue(controller.unlocking.value, "old request finally cleared the new busy state")
-        main.until { controller.route.value == AppRoute.Vault }
-        main.runNext()
+        main.until { freshUnlock.isCompleted }
+        assertEquals(AppRoute.Vault, controller.route.value)
         assertIs<VaultState.Unlocked>(controller.vaultState.value)
         assertContentEquals(identity, assertNotNull(controller.vault.syncIdentity()).vaultId)
         controller.vault.createAlbum("Fresh album after stale creation")
@@ -297,19 +301,17 @@ class DiscreetSessionRaceHostTest {
         controller.lock()
         finishLock()
         controller.goTo(AppRoute.Unlock)
-        controller.unlock(PASSWORD)
-        main.runNext()
-        val oldUnlockResult = main.take()
+        val oldUnlockResult = holdNativeResult { controller.unlock(PASSWORD) }
         val identity = assertNotNull(controller.vault.syncIdentity()).vaultId
         controller.panic()
         controller.goTo(AppRoute.Unlock)
-        controller.unlock(PASSWORD)
-        main.runNext() // cleanup waits for old native completion.
-        main.runNext() // fresh credential waits for cleanup.
+        val freshUnlock = actionJob { controller.unlock(PASSWORD) }
+        main.take(pendingLock()).run()
+        main.take(freshUnlock).run()
         oldUnlockResult.run()
         assertTrue(controller.unlocking.value, "stale unlock finally cleared a fresh request's busy flag")
-        main.until { controller.route.value == AppRoute.Vault }
-        main.runNext()
+        main.until { freshUnlock.isCompleted }
+        assertEquals(AppRoute.Vault, controller.route.value)
         assertIs<VaultState.Unlocked>(controller.vaultState.value)
         assertContentEquals(identity, assertNotNull(controller.vault.syncIdentity()).vaultId)
         controller.vault.createAlbum("Fresh album after stale unlock")
@@ -326,11 +328,11 @@ class DiscreetSessionRaceHostTest {
             controller.lock()
             finishLock()
             controller.goTo(AppRoute.Unlock)
-            controller.unlockWithAppleDevice()
+            val oldAppleRequest = actionJob { controller.unlockWithAppleDevice() }
             main.awaitSignal(apple.entered[0])
             controller.panic()
             controller.goTo(AppRoute.Unlock)
-            controller.unlockWithAppleDevice()
+            val freshAppleRequest = actionJob { controller.unlockWithAppleDevice() }
             finishLock()
             main.barrier()
             assertEquals(1, apple.begins.get(), "new prompt must wait for the previous binding context")
@@ -340,10 +342,9 @@ class DiscreetSessionRaceHostTest {
             assertEquals(2, apple.active.get(), "old finally must not invalidate the new context")
             assertTrue(controller.unlocking.value, "old request finally changed the new busy state")
             apple.releases[1].countDown()
-            main.until { controller.route.value == AppRoute.Vault }
-            main.runNext()
+            main.until { freshAppleRequest.isCompleted && oldAppleRequest.isCompleted }
+            assertEquals(AppRoute.Vault, controller.route.value)
             main.awaitSignal(apple.ended[1])
-            main.runNext()
             assertEquals(0, apple.active.get())
             assertIs<VaultState.Unlocked>(controller.vaultState.value)
             completeRead { controller.loadSlots() }
@@ -361,20 +362,19 @@ class DiscreetSessionRaceHostTest {
             controller.lock()
             finishLock()
             controller.goTo(AppRoute.Unlock)
-            controller.unlockWithAppleDevice()
+            val oldAppleRequest = actionJob { controller.unlockWithAppleDevice() }
             main.awaitSignal(apple.entered[0])
             controller.panic()
             controller.goTo(AppRoute.Unlock)
             controller.unlock(PASSWORD)
-            main.until { controller.route.value == AppRoute.Vault }
-            main.runNext()
+            main.until { controller.route.value == AppRoute.Vault && !controller.unlocking.value }
             assertEquals(1, apple.active.get(), "the old OS prompt remains deliberately pending")
             assertContentEquals(identity, assertNotNull(controller.vault.syncIdentity()).vaultId)
             controller.vault.createAlbum("Password session while Apple prompt is pending")
             completeRead { controller.loadAlbums() }
             apple.releases[0].countDown()
             main.awaitSignal(apple.ended[0])
-            main.runNext()
+            main.until { oldAppleRequest.isCompleted }
             assertIs<VaultState.Unlocked>(controller.vaultState.value)
             assertEquals(AppRoute.Vault, controller.route.value)
             assertEquals("Password session while Apple prompt is pending", controller.albums.value.single().name)
@@ -392,7 +392,7 @@ class DiscreetSessionRaceHostTest {
                 controller.lock()
                 finishLock()
                 controller.goTo(AppRoute.Unlock)
-                controller.unlockWithAppleDevice()
+                val oldAppleRequest = actionJob { controller.unlockWithAppleDevice() }
                 main.awaitSignal(apple.entered[0])
                 apple.releases[0].countDown()
                 main.awaitSignal(apple.endEntered[0]) // old Apple native open succeeded; platform teardown is held.
@@ -400,16 +400,15 @@ class DiscreetSessionRaceHostTest {
                 if (background) controller.background() else controller.panic()
                 assertEquals(AppRoute.PublicShell, controller.route.value)
                 controller.goTo(AppRoute.Unlock)
-                controller.unlock(PASSWORD)
-                main.until { controller.route.value == AppRoute.Vault }
-                main.runNext()
+                completeRead { controller.unlock(PASSWORD) }
+                assertEquals(AppRoute.Vault, controller.route.value)
                 val freshGeneration = (controller.vaultState.value as VaultState.Unlocked).generation
                 assertTrue(oldGeneration != freshGeneration)
                 controller.vault.createAlbum("Fresh password album before old Apple end returns")
                 completeRead { controller.loadAlbums() }
                 apple.endReleases[0].countDown()
                 main.awaitSignal(apple.ended[0])
-                main.runNext() // deliver the held old endUnlock continuation and its finally.
+                main.until { oldAppleRequest.isCompleted }
                 assertEquals(freshGeneration, (controller.vaultState.value as VaultState.Unlocked).generation)
                 assertContentEquals(identity, assertNotNull(controller.vault.syncIdentity()).vaultId)
                 assertEquals(AppRoute.Vault, controller.route.value)
@@ -435,9 +434,7 @@ class DiscreetSessionRaceHostTest {
         controller.goTo(AppRoute.CreateVault)
         controller.create(PASSWORD, true)
         main.until { controller.recoveryPhrase.value != null }
-        controller.acknowledgeRecoveryPhrase()
-        main.runNext()
-        val lateConfirmation = main.take()
+        val lateConfirmation = holdNativeResult { controller.acknowledgeRecoveryPhrase() }
         controller.panic()
         lateConfirmation.run()
         assertEquals(AppRoute.PublicShell, controller.route.value)
@@ -448,9 +445,7 @@ class DiscreetSessionRaceHostTest {
     @Test
     fun a_recovery_phrase_returning_after_lock_is_never_published() = scenario {
         create()
-        controller.addRecoverySlot()
-        main.runNext() // owner check succeeds; the native slot is staged off Main.
-        val lateResult = main.take()
+        val lateResult = holdNativeResult { controller.addRecoverySlot() }
         controller.lock()
         lateResult.run()
         assertNull(controller.recoveryPhrase.value)
@@ -464,9 +459,7 @@ class DiscreetSessionRaceHostTest {
         controller.vault.createAlbum("Old identity album fixture")
         controller.vault.createTag("Old identity tag fixture")
         for (read in listOf<() -> Unit>(controller::loadAlbums, controller::loadTags, controller::loadSlots, controller::loadSharing)) {
-            read()
-            main.runNext()
-            val lateResult = main.take()
+            val lateResult = holdNativeResult(read)
             controller.panic()
             lateResult.run()
             assertTrue(controller.albums.value.isEmpty())
@@ -476,9 +469,8 @@ class DiscreetSessionRaceHostTest {
             assertNull(controller.sharingOverview.value)
             finishLock()
             controller.goTo(AppRoute.Unlock)
-            controller.unlock(PASSWORD)
-            main.until { controller.route.value == AppRoute.Vault }
-            main.runNext() // enterVault's initial page returns.
+            completeRead { controller.unlock(PASSWORD) }
+            assertEquals(AppRoute.Vault, controller.route.value)
         }
     }
 
@@ -486,9 +478,7 @@ class DiscreetSessionRaceHostTest {
     fun a_result_from_the_first_identity_cannot_be_published_into_the_second_identity() = scenario {
         create()
         controller.vault.createAlbum("Only first identity fixture")
-        controller.loadAlbums()
-        main.runNext()
-        val lateResult = main.take()
+        val lateResult = holdNativeResult { controller.loadAlbums() }
         controller.vault.lock(LockReason.USER)
         controller.vault.create("Second identity fixture password".encodeToByteArray(), false)
         lateResult.run()
@@ -498,9 +488,7 @@ class DiscreetSessionRaceHostTest {
 
     private suspend fun Fixture.createWhileHiding(offerRecovery: Boolean, hide: suspend Fixture.() -> Unit) {
         controller.goTo(AppRoute.CreateVault)
-        controller.create(PASSWORD, offerRecovery)
-        main.runNext()
-        val lateResult = main.take() // Rust finished, but the result has not reached feature state.
+        val lateResult = holdNativeResult { controller.create(PASSWORD, offerRecovery) }
         hide()
         lateResult.run()
         assertNull(controller.recoveryPhrase.value)
@@ -510,7 +498,8 @@ class DiscreetSessionRaceHostTest {
         assertTrue(controller.vaultState.value !is VaultState.Creating)
     }
 
-    private fun scenario(apple: AppleDeviceUnlock = NoAppleDeviceUnlock, test: suspend Fixture.() -> Unit) = runBlocking {
+    private fun scenario(apple: AppleDeviceUnlock = NoAppleDeviceUnlock,
+        test: suspend Fixture.() -> Unit) = runBlocking {
         val main = HeldMain()
         Dispatchers.setMain(main)
         val root = File(System.getProperty("java.io.tmpdir"), "chur-discreet-race-${System.nanoTime()}").apply { mkdirs() }
@@ -539,9 +528,45 @@ class DiscreetSessionRaceHostTest {
             controller.goTo(AppRoute.CreateVault)
             controller.create(PASSWORD, false)
             main.until { controller.route.value == AppRoute.Vault }
-            main.runNext() // enterVault's initial page returns.
+            // Finish the request, including its initial page. A count of dispatcher
+            // hops is not a barrier: fast withContext work need not suspend.
+            awaitPhraseRequestCompletion()
         }
-        suspend fun completeRead(read: () -> Unit) { read(); main.runNext(); main.runNext() }
+        fun actionJob(action: () -> Unit): Job {
+            val scope = controller.javaClass.getDeclaredField("scope").apply { isAccessible = true }
+                .get(controller) as CoroutineScope
+            val parent = checkNotNull(scope.coroutineContext[Job])
+            val before = parent.children.toSet()
+            action()
+            // The guarded action is attached synchronously, before HeldMain can run it.
+            return parent.children.filterNot { it in before }.single()
+        }
+        suspend fun completeRead(read: () -> Unit) {
+            val operation = actionJob(read)
+            // withContext may finish inline; await the action, not an assumed number of hops.
+            main.until { operation.isCompleted }
+        }
+        suspend fun <T> withRepositoryBlocked(body: suspend () -> T): T {
+            val mutex = controller.vault.javaClass.getDeclaredField("mutex").apply { isAccessible = true }
+                .get(controller.vault) as Mutex
+            mutex.lock()
+            return try { body() } finally { mutex.unlock() }
+        }
+        suspend fun holdNativeResult(action: () -> Unit): Runnable {
+            val operation = withRepositoryBlocked {
+                actionJob(action).also {
+                    // Force withContext to suspend Main before allowing the real native call.
+                    // Otherwise a fast Default call can return inline, leaving no result to hold.
+                    main.take(it).run()
+                    assertTrue(it.isActive, "the action must wait for its repository call")
+                }
+            }
+            return main.take(operation)
+        }
+        fun pendingLock(): Job = checkNotNull(
+            controller.javaClass.getDeclaredField("pendingLock").apply { isAccessible = true }
+                .get(controller) as? Job,
+        )
         suspend fun awaitPhraseRequestCompletion() {
             val requested = controller.javaClass.getDeclaredField("phraseRequested").apply { isAccessible = true }
             main.until { !requested.getBoolean(controller) }
@@ -550,25 +575,36 @@ class DiscreetSessionRaceHostTest {
             // Native state publication precedes the lock coroutine's Main
             // cleanup. Observe that Job, including when AppUnlock correctly
             // keeps its privacy cover enabled after successful cleanup.
-            val pending = controller.javaClass.getDeclaredField("pendingLock").apply { isAccessible = true }
-                .get(controller) as? Job
-            main.until { pending == null || pending.isCompleted }
+            val pending = pendingLock()
+            main.until { pending.isCompleted }
             assertTrue(controller.vaultState.value !is VaultState.Unlocked)
             assertTrue(controller.vaultState.value !is VaultState.Creating)
         }
     }
 
     private class HeldMain : CoroutineDispatcher() {
-        private val continuations = Channel<Runnable>(Channel.UNLIMITED)
-        override fun dispatch(context: CoroutineContext, block: Runnable) { check(continuations.trySend(block).isSuccess) }
-        suspend fun take(): Runnable = continuations.receive()
+        private data class Continuation(val context: CoroutineContext, val block: Runnable)
+        private val continuations = Channel<Continuation>(Channel.UNLIMITED)
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            check(continuations.trySend(Continuation(context, block)).isSuccess)
+        }
+        private suspend fun take(matching: (CoroutineContext) -> Boolean): Runnable {
+            while (true) {
+                val next = continuations.receive()
+                if (matching(next.context)) return next.block
+                next.block.run()
+            }
+        }
+        suspend fun take(job: Job): Runnable = take { it[Job] === job }
+        suspend fun take(name: CoroutineName): Runnable = take { it[CoroutineName] == name }
+        suspend fun take(): Runnable = continuations.receive().block
         suspend fun runNext() { take().run() }
         suspend fun until(done: () -> Boolean) { while (!done()) runNext() }
         suspend fun <T> awaitSignal(signal: Deferred<T>): T {
             while (!signal.isCompleted) {
                 select<Unit> {
                     signal.onAwait { }
-                    continuations.onReceive { it.run() }
+                    continuations.onReceive { it.block.run() }
                 }
             }
             return signal.await()

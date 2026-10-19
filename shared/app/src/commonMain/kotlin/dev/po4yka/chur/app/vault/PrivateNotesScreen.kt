@@ -60,6 +60,10 @@ import dev.po4yka.chur.app.privateKeyboardOptions
 import dev.po4yka.chur.app.privateNoteTextFieldPolicy
 import dev.po4yka.chur.app.notes.MarkdownEditor
 import dev.po4yka.chur.app.notes.NoteImportAction
+import dev.po4yka.chur.app.notes.NoteBinaryImportAction
+import dev.po4yka.chur.app.notes.NoteAttachmentImage
+import dev.po4yka.chur.app.notes.attachmentMarkdownReference
+import dev.po4yka.chur.notes.NoteAttachments
 import dev.po4yka.chur.ffi.PrivateNoteFormat
 import dev.po4yka.chur.app.theme.BackGlyph
 import dev.po4yka.chur.app.theme.ChurSpacing
@@ -134,7 +138,7 @@ private fun PrivateNotesContent(
             if (editor == null) {
                 PrivateNotesList(state, actions, busy, Modifier.weight(1f), onImportActivity)
             } else {
-                PrivateNoteEditor(editor, actions, busy, Modifier.weight(1f))
+                PrivateNoteEditor(editor, actions, busy, Modifier.weight(1f), onImportActivity)
             }
             state.error?.let {
                 Text(it, modifier = Modifier.padding(ChurSpacing.gutter).semantics { liveRegion = LiveRegionMode.Polite }, color = colors.error,
@@ -195,6 +199,9 @@ private fun PrivateNotesList(state: PrivateNotesUiState, actions: PrivateNotesAc
         FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             if (!state.trash && !selecting) NoteImportAction(enabled = !busy,
                 onImported = actions::importMarkdown, onFailure = { importFailed = true }, onPickerActive = onImportActivity)
+            if (!state.trash && !selecting) NoteBinaryImportAction("Import package", NoteAttachments.MAX_PACKAGE_BYTES,
+                enabled = !busy, onPickerActive = onImportActivity,
+                onImported = { _, bytes -> actions.importPackage(bytes) }, onFailure = { importFailed = true })
             if (!selecting) TextButton(enabled = !busy, onClick = { actions.showTrash(!state.trash) }) {
                 Text(if (state.trash) "Active notes" else "Trash")
             }
@@ -202,7 +209,7 @@ private fun PrivateNotesList(state: PrivateNotesUiState, actions: PrivateNotesAc
             if (!state.trash) TextButton(enabled = !busy && !state.loading && state.notes.isNotEmpty(),
                 onClick = actions::selectPage) { Text("Select page") }
         }
-        if (importFailed) Text("The Markdown file could not be imported. Use UTF-8 text up to 256 KiB.", color = colors.error)
+        if (importFailed) Text("Import failed. Use UTF-8 Markdown up to 256 KiB or a .churnote package up to 24 MiB.", color = colors.error)
         OutlinedTextField(value = state.terms, onValueChange = actions::search, enabled = !busy, singleLine = true,
             label = { Text(if (state.trash) "Search Trash" else "Search private notes") },
             keyboardOptions = privateKeyboardOptions().copy(imeAction = ImeAction.Search),
@@ -250,7 +257,18 @@ private fun PrivateNotesList(state: PrivateNotesUiState, actions: PrivateNotesAc
 }
 
 @Composable
-private fun PrivateNoteEditor(editor: PrivateNoteEditorState, actions: PrivateNotesActions, busy: Boolean, modifier: Modifier) {
+private fun PrivateNoteEditor(editor: PrivateNoteEditorState, actions: PrivateNotesActions, busy: Boolean, modifier: Modifier,
+    onImportActivity: (Boolean) -> Unit) {
+    var attachmentFailed by remember { mutableStateOf(false) }
+    var removing by remember { mutableStateOf<String?>(null) }
+    val readAttachment: suspend (String) -> ByteArray = { actions.readAttachment(it) }
+    val attachmentIds = editor.attachments.map { it.id }.toSet()
+    removing?.let { id -> PrivateAlertDialog(
+        onDismissRequest = { removing = null }, title = { Text("Remove attachment?") },
+        text = { Text("The file is removed from this note. Existing references remain in the source text.") },
+        confirmButton = { TextButton(enabled = !busy && !editor.dirty, onClick = { removing = null; actions.removeAttachment(id) }) { Text("Remove") } },
+        dismissButton = { TextButton(onClick = { removing = null }) { Text("Cancel") } }) }
+
     val colors = LocalChurColors.current
     BoxWithConstraints(modifier) {
         // Body has its own bounded viewport; metadata never competes for its height.
@@ -261,7 +279,7 @@ private fun PrivateNoteEditor(editor: PrivateNoteEditorState, actions: PrivateNo
             verticalArrangement = Arrangement.spacedBy(ChurSpacing.one)) {
             if (editor.trashed && editor.format == PrivateNoteFormat.MARKDOWN) {
                 Text(editor.title.ifBlank { "Untitled note" }, style = MaterialTheme.typography.titleLarge, color = colors.ink)
-                dev.po4yka.chur.app.notes.MarkdownPreview(editor.body, Modifier.height(editorHeight).fillMaxWidth())
+                dev.po4yka.chur.app.notes.MarkdownPreview(editor.body, Modifier.height(editorHeight).fillMaxWidth(), readAttachment = readAttachment, attachmentIds = attachmentIds)
             } else if (editor.trashed) {
                 LazyColumn(Modifier.height(editorHeight), verticalArrangement = Arrangement.spacedBy(ChurSpacing.two)) {
                     item { Text(editor.title.ifBlank { "Untitled note" }, style = MaterialTheme.typography.titleLarge, color = colors.ink) }
@@ -274,7 +292,7 @@ private fun PrivateNoteEditor(editor: PrivateNoteEditorState, actions: PrivateNo
                     colors = churOutlinedTextFieldColors())
                 MarkdownEditor(editor.body, actions::body, editor.format == PrivateNoteFormat.MARKDOWN,
                     { actions.format(if (it) PrivateNoteFormat.MARKDOWN else PrivateNoteFormat.PLAIN_TEXT) },
-                    Modifier.fillMaxWidth().height(editorHeight), private = true, enabled = !busy)
+                    Modifier.fillMaxWidth().height(editorHeight), private = true, enabled = !busy, readAttachment = readAttachment, attachmentIds = attachmentIds)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = editor.pinned, onCheckedChange = actions::pinned, enabled = !busy)
                     Text("Pinned", color = colors.ink)
@@ -283,6 +301,36 @@ private fun PrivateNoteEditor(editor: PrivateNoteEditorState, actions: PrivateNo
                     else if (editor.saved != null) "Saved in this vault." else "Save to keep this note in the vault.",
                     style = MaterialTheme.typography.bodySmall, color = colors.inkMuted)
             }
+            Text("Attachments (${editor.attachments.size}/32)", style = MaterialTheme.typography.titleSmall)
+            if (!editor.trashed) {
+                NoteBinaryImportAction("Add image or file", NoteAttachments.MAX_FILE_BYTES,
+                    enabled = !busy && editor.saved != null && !editor.dirty,
+                    onPickerActive = onImportActivity, onImported = actions::addAttachment,
+                    onFailure = { attachmentFailed = true })
+                if (editor.saved == null || editor.dirty) Text("Save changes before adding or removing files.",
+                    style = MaterialTheme.typography.bodySmall, color = colors.inkMuted)
+            }
+            if (attachmentFailed) Text("Could not import the file. Each file may be up to 8 MiB; a note may hold up to 16 MiB.", color = colors.error)
+            editor.attachments.forEach { attachment ->
+                Column(Modifier.fillMaxWidth().padding(vertical = ChurSpacing.one)) {
+                    Text(attachment.name, style = MaterialTheme.typography.bodyMedium)
+                    Text("${attachment.size} bytes · ${attachment.mimeType}", style = MaterialTheme.typography.bodySmall, color = colors.inkMuted)
+                    if (attachment.mimeType.startsWith("image/")) NoteAttachmentImage(attachment.id, attachment.name,
+                        read = { actions.readAttachment(attachment.id) })
+                    FlowRow {
+                        TextButton(enabled = !busy && !editor.dirty, onClick = { actions.exportAttachment(attachment.id) }) { Text("Save file") }
+                    }
+                    if (!editor.trashed) FlowRow {
+                        TextButton(enabled = !busy && editor.format == PrivateNoteFormat.MARKDOWN, onClick = {
+                            actions.body(editor.body + (if (editor.body.isEmpty()) "" else "\n\n") +
+                                attachmentMarkdownReference(attachment.name, attachment.id, attachment.mimeType.startsWith("image/")))
+                        }) { Text("Insert reference") }
+                        TextButton(enabled = !busy && !editor.dirty, onClick = { removing = attachment.id }) { Text("Remove file") }
+                    }
+                }
+            }
+            if (editor.attachments.isNotEmpty()) Text("Export includes all files in a portable .churnote package. Encrypted archives keep them encrypted.",
+                style = MaterialTheme.typography.bodySmall, color = colors.inkMuted)
             FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 if (editor.trashed) {
                     TextButton(enabled = !busy, onClick = actions::restore) { Text("Restore") }
@@ -290,7 +338,7 @@ private fun PrivateNoteEditor(editor: PrivateNoteEditorState, actions: PrivateNo
                 } else if (editor.saved != null) {
                     TextButton(enabled = !busy, onClick = actions::requestTrash) { Text("Move to Trash") }
                 }
-                TextButton(enabled = !busy && (editor.saved != null || editor.canSave), onClick = actions::export) { Text("Export") }
+                TextButton(enabled = !busy && (editor.saved != null || editor.canSave), onClick = actions::export) { Text(if (editor.attachments.isEmpty()) "Export" else "Export package") }
                 if (!editor.trashed) TextButton(enabled = !busy && (editor.saved != null || editor.canSave),
                     onClick = actions::exportEncrypted) { Text("Encrypted archive") }
             }

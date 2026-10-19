@@ -13,6 +13,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
+import android.view.inspector.WindowInspector
 import android.widget.FrameLayout
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
@@ -59,6 +60,69 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class PrivateNotesAndroidTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
+
+    @Test
+    fun encrypted_attachment_renders_from_native_storage_and_lock_removes_its_pixels_and_labels() {
+        val id = ByteArray(16) { (it + 1).toByte() }
+        val hex = id.joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
+        val bitmap = Bitmap.createBitmap(64, 48, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.rgb(30, 160, 130)) }
+        val bytes = java.io.ByteArrayOutputStream().use { out ->
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out); out.toByteArray()
+        }
+        bitmap.recycle()
+        try {
+            present(prepare = { vault ->
+                val generation = (vault.state.value as VaultState.Unlocked).generation
+                vault.importPrivateNotePackage(generation, "Public attachment sample",
+                    "# Local image\n\n![Public sample image](attachment:$hex)\n\n" +
+                        "Text with ![Inline reference image][local] after it.\n\n" +
+                        "[local]: attachment:$hex\n\n![Remote image](https://example.invalid/image.png)",
+                    dev.po4yka.chur.ffi.PrivateNoteFormat.MARKDOWN,
+                    listOf(dev.po4yka.chur.ffi.PrivateNoteAttachmentData(id, "fixture.png", "image/png", bytes)))
+            }) { fixture ->
+                fixture.clickText("Public attachment sample")
+                fixture.clickText("Preview")
+                assertTrue("the managed image is decoded by the actual platform renderer", fixture.await {
+                    fixture.nodes().any { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Public sample image") == true && it.size.width > 0 && it.size.height > 0 }
+                })
+                assertTrue("reference-style inline images retain their own alt text and decode from the same native attachment", fixture.await {
+                    fixture.nodes().any { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Inline reference image") == true && it.size.width > 0 && it.size.height > 0 }
+                })
+                assertTrue(fixture.await { fixture.hasText("only managed attachments are loaded") })
+                assertTrue(fixture.savedState().isEmpty())
+                fixture.capture("private-note-managed-image-public-fixture.png")
+                assertFalse(fixture.publicFile.readText().contains("fixture.png"))
+                runBlocking { fixture.vault.lock(LockReason.PANIC) }
+                assertTrue(fixture.await { fixture.hasText("Public fixture note") })
+                assertFalse(fixture.nodes().any { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Public sample image") == true })
+                runBlocking { fixture.vault.unlock(PASSWORD.encodeToByteArray()) }
+                val note = runBlocking { fixture.vault.privateNotes(fixture.generation).notes.single() }
+                org.junit.Assert.assertArrayEquals(bytes, runBlocking { fixture.vault.readPrivateNoteAttachment(fixture.generation, note.noteId, id) })
+                fixture.clickText("Public attachment sample")
+                fixture.clickText("Preview")
+                assertTrue(fixture.await { fixture.nodes().any {
+                    it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Public sample image") == true
+                } })
+                val originalSource = runBlocking { fixture.vault.privateNote(fixture.generation, note.noteId).body }
+                // Remove through the production controller while the same preview stays open.
+                fixture.fieldAction("private-note-editor-scroll") {
+                    assertTrue(it.config.getOrNull(SemanticsActions.ScrollBy)?.action?.invoke(0f, 20_000f) == true)
+                }
+                fixture.clickText("Remove file")
+                fixture.clickText("Remove")
+                assertTrue("removing a native attachment invalidates its existing inline previews", fixture.await {
+                    fixture.hasText("Image unavailable") && fixture.nodes().none {
+                        val labels = it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty()
+                        "Public sample image" in labels || "Inline reference image" in labels
+                    }
+                })
+                val detached = runBlocking { fixture.vault.privateNote(fixture.generation, note.noteId) }
+                assertEquals(originalSource, detached.body)
+                assertTrue(runBlocking { fixture.vault.privateNoteAttachments(fixture.generation, note.noteId).isEmpty() })
+                fixture.capture("private-note-detached-image-public-fixture.png")
+            }
+        } finally { bytes.fill(0) }
+    }
 
     @Test
     fun explicit_save_routes_to_native_notes_without_changing_public_notes_or_saved_state() = present { fixture ->
@@ -130,12 +194,12 @@ class PrivateNotesAndroidTest {
         assertTrue(runBlocking { fixture.vault.privateNotes(fixture.generation).notes.isEmpty() })
     }
 
-    private fun present(fontScale: Float = 1f, test: (Fixture) -> Unit) {
+    private fun present(fontScale: Float = 1f, prepare: suspend (VaultRepository) -> Unit = {}, test: (Fixture) -> Unit) {
         val root = File(instrumentation.targetContext.cacheDir, "private-notes-ui-${System.nanoTime()}").apply { mkdirs() }
         val vault = VaultRepository(File(root, "vault").path, { System.currentTimeMillis() })
         val publicFile = File(root, "public/notes.json")
         val publicStore = FileNoteStore(publicFile.path)
-        runBlocking { publicStore.put(PUBLIC_NOTE); vault.start(); vault.create(PASSWORD.encodeToByteArray(), false) }
+        runBlocking { publicStore.put(PUBLIC_NOTE); vault.start(); vault.create(PASSWORD.encodeToByteArray(), false); prepare(vault) }
         val activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         val fixture = Fixture(activity, vault, publicFile, publicStore)
@@ -177,7 +241,18 @@ class PrivateNotesAndroidTest {
         fun main(action: () -> Unit) { if (Looper.myLooper() == Looper.getMainLooper()) action() else instrumentation.runOnMainSync(action) }
         fun savedState(): Map<String, List<Any?>> { var saved = emptyMap<String, List<Any?>>() ; main { saved = registry.performSave() }; return saved }
         fun await(condition: () -> Boolean): Boolean { val until = SystemClock.uptimeMillis() + 5_000; while (SystemClock.uptimeMillis() < until) { if (condition()) return true; SystemClock.sleep(50) }; return condition() }
-        fun nodes(merged: Boolean = false): List<SemanticsNode> { var result = emptyList<SemanticsNode>(); main { result = roots(view).flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = merged) } }; return result }
+        fun nodes(merged: Boolean = false): List<SemanticsNode> {
+            var result = emptyList<SemanticsNode>()
+            main {
+                // Compose dialogs own a separate window, outside the fixture's ComposeView.
+                val dialogRoots = WindowInspector.getGlobalWindowViews()
+                    .filter { it !== activity.window.decorView }.flatMap(::roots)
+                result = (roots(view) + dialogRoots).flatMap {
+                    it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = merged)
+                }
+            }
+            return result
+        }
         fun hasText(text: String) = nodes().any { it.config.getOrNull(SemanticsProperties.Text)?.any { label -> text in label.text } == true }
         fun clickDescription(text: String) {
             fun clickable() = nodes(merged = true).firstOrNull {
@@ -185,6 +260,14 @@ class PrivateNotesAndroidTest {
                     SemanticsActions.OnClick in it.config && SemanticsProperties.Disabled !in it.config
             }
             assertTrue("enabled button with description: $text", await { clickable() != null })
+            main { assertTrue(requireNotNull(clickable()).config[SemanticsActions.OnClick].action?.invoke() == true) }
+        }
+        fun clickText(text: String) {
+            fun clickable() = nodes(merged = true).firstOrNull {
+                it.config.getOrNull(SemanticsProperties.Text)?.any { label -> label.text == text } == true &&
+                    SemanticsActions.OnClick in it.config && SemanticsProperties.Disabled !in it.config
+            }
+            assertTrue("enabled button or row: $text", await { clickable() != null })
             main { assertTrue(requireNotNull(clickable()).config[SemanticsActions.OnClick].action?.invoke() == true) }
         }
         fun clickTag(tag: String) {

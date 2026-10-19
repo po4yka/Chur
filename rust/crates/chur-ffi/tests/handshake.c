@@ -51,7 +51,7 @@ int main(void) {
               chur_key_slot_format_min() <= chur_key_slot_format_max(),
           "neither format range is the empty panic fallback");
 
-    check(chur_abi_version_major() == 4, "major ABI version is 4");
+    check(chur_abi_version_major() == 5, "major ABI version is 5");
     check(chur_abi_version_minor() == 0,
           "minor ABI version is 0, including persisted transfer identities and private note formats");
 
