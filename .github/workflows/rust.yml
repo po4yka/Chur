@@ -428,18 +428,27 @@ jobs:
           PY
       # TEST_VECTORS.md section 7 requires the vector suite to run on iOS as
       # well. This is that run, as a real Kotlin/Native binary.
-      - run: ./gradlew --no-daemon iosSimulatorArm64Test
-      - run: ./gradlew --no-daemon compileKotlinIosArm64
+      # All modules share this one device. Keep native tests and compilation
+      # from competing with real AVPlayer/Vision requests on the simulator.
+      - run: ./gradlew --no-daemon --no-parallel --max-workers=1 iosSimulatorArm64Test
+      - name: upload iOS test diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-test-results-${{ github.sha }}-${{ github.run_attempt }}
+          path: shared/**/build/test-results/iosSimulatorArm64Test/*.xml
+          if-no-files-found: warn
+      - run: ./gradlew --no-daemon --no-parallel --max-workers=1 compileKotlinIosArm64
       # The Compose Multiplatform shell links as an iOS framework, statically
       # against `libchur_ffi.a`. The Xcode project that embeds it is the host
       # application's; linking here proves the framework and the static library
       # agree on every symbol cinterop generated a binding for.
-      - run: ./gradlew --no-daemon linkDebugFrameworkIosSimulatorArm64
+      - run: ./gradlew --no-daemon --no-parallel --max-workers=1 linkDebugFrameworkIosSimulatorArm64
       # The same lockfile pin the Android job enforces, for the Kotlin/Native
       # configurations that only a macOS job resolves.
       - name: the Gradle lockfiles pin the resolution
         run: |
-          ./gradlew --no-daemon iosSimulatorArm64Test compileKotlinIosArm64 linkDebugFrameworkIosSimulatorArm64 --write-locks --quiet
+          ./gradlew --no-daemon --no-parallel --max-workers=1 iosSimulatorArm64Test compileKotlinIosArm64 linkDebugFrameworkIosSimulatorArm64 --write-locks --quiet
           git diff --exit-code -- '**/gradle.lockfile'
       - name: remove the owned Vision test simulator
         if: always()
