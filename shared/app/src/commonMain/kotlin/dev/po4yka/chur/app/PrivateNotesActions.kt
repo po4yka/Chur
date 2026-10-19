@@ -9,6 +9,7 @@ interface PrivateNotesActions {
     fun refresh()
     fun search(terms: String)
     fun filter(folder: String, tag: String) {}
+    fun showFilters(visible: Boolean) {}
     fun organize(folder: String, tags: List<String>) {}
     fun showHistory() {}
     fun previewRevision(revision: Long) {}

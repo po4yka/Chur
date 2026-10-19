@@ -3,6 +3,7 @@ package dev.po4yka.chur.app.notes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -14,6 +15,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.testTag
 import dev.po4yka.chur.app.privateKeyboardOptions
 import dev.po4yka.chur.app.privateNoteTextFieldPolicy
@@ -54,6 +57,7 @@ fun NoteFilterFields(folder: String, tag: String, enabled: Boolean, private: Boo
     onActivity: () -> Unit = {}, onApply: (String, String) -> Unit) {
     var folderDraft by remember(folder) { mutableStateOf(folder) }
     var tagDraft by remember(tag) { mutableStateOf(tag) }
+    var invalid by remember { mutableStateOf(false) }
     val field = if (private) Modifier.fillMaxWidth().privateNoteTextFieldPolicy() else Modifier.fillMaxWidth()
     Column(verticalArrangement = Arrangement.spacedBy(ChurSpacing.one)) {
         OutlinedTextField(folderDraft, { if (it != folderDraft) onActivity(); if (it.encodeToByteArray().size <= 64) folderDraft = it },
@@ -65,8 +69,24 @@ fun NoteFilterFields(folder: String, tag: String, enabled: Boolean, private: Boo
             keyboardOptions = if (private) privateKeyboardOptions() else androidx.compose.foundation.text.KeyboardOptions.Default,
             colors = churOutlinedTextFieldColors())
         FlowRow {
-            TextButton(enabled = enabled, onClick = { onApply(folderDraft.trim(), tagDraft.trim()) }) { Text("Apply filters") }
+            TextButton(enabled = enabled, onClick = {
+                val labels = try { NoteOrganization.folder(folderDraft).orEmpty() to NoteOrganization.folder(tagDraft).orEmpty()
+                } catch (_: IllegalArgumentException) { invalid = true; null }
+                labels?.let { onApply(it.first, it.second) }
+            }) { Text("Apply filters") }
             TextButton(enabled = enabled, onClick = { folderDraft = ""; tagDraft = ""; onApply("", "") }) { Text("Clear filters") }
         }
+        if (invalid) Text("Use valid labels up to 64 UTF-8 bytes each.")
+    }
+}
+
+@Composable
+fun NoteFilterSummary(folder: String, tag: String, enabled: Boolean, onClear: () -> Unit) {
+    if (folder.isEmpty() && tag.isEmpty()) return
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(listOfNotNull(folder.takeIf { it.isNotEmpty() }?.let { "Folder: $it" },
+            tag.takeIf { it.isNotEmpty() }?.let { "Tag: $it" }).joinToString(" · "),
+            Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+        TextButton(enabled = enabled, onClick = onClear) { Text("Clear filters") }
     }
 }

@@ -74,6 +74,7 @@ data class PrivateNotesUiState(
     val selection: Map<String, PrivateNoteSelection> = emptyMap(),
     val folderFilter: String = "",
     val tagFilter: String = "",
+    val filtersVisible: Boolean = false,
     val organization: Map<String, PrivateNoteOrganization> = emptyMap(),
     val history: List<PrivateNoteRevision>? = null,
     val historical: PrivateNoteRevisionDetail? = null,
@@ -201,13 +202,18 @@ class PrivateNotesController internal constructor(
         update { it.copy(trash = trash, terms = "", error = null, selection = emptyMap()) }
         loadPage(reset = true)
     }
+    override fun showFilters(visible: Boolean) {
+        if (!current() || state.value.editor != null || state.value.busy) return
+        onActivity()
+        update { it.copy(filtersVisible = visible) }
+    }
     override fun filter(folder: String, tag: String) {
         if (!current() || state.value.editor != null || state.value.busy) return
         if (utf8Size(folder) > 64 || utf8Size(tag) > 64 || (folder + tag).any { it.isISOControl() }) {
             update { it.copy(error = "Folder and tag filters must fit in 64 UTF-8 bytes each.") }; return
         }
         onActivity()
-        update { it.copy(folderFilter = folder.trim(), tagFilter = tag.trim(), selection = emptyMap()) }
+        update { it.copy(folderFilter = folder.trim(), tagFilter = tag.trim(), filtersVisible = false, selection = emptyMap()) }
         loadPage(reset = true)
     }
     override fun organize(folder: String, tags: List<String>) {
@@ -387,6 +393,7 @@ class PrivateNotesController internal constructor(
 
     override fun back() {
         if (!current() || state.value.busy) return
+        if (state.value.filtersVisible) { showFilters(false); return }
         if (state.value.history != null) { closeHistory(); return }
         val editor = state.value.editor
         when {

@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -99,6 +101,13 @@ fun NotesScreen(
     var folder by remember { mutableStateOf("") }
     var tag by remember { mutableStateOf("") }
     var pendingPurge by remember { mutableStateOf<Note?>(null) }
+    if (filters) AlertDialog(onDismissRequest = { filters = false },
+        title = { Text("Folders and tags") },
+        text = { Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+            NoteFilterFields(folder, tag, !packageBusy, onApply = { f, t -> folder = f; tag = t; filters = false })
+        } },
+        confirmButton = { TextButton(onClick = { filters = false }) { Text("Close") } })
+
     pendingPurge?.let { note -> AlertDialog(onDismissRequest = { pendingPurge = null },
         title = { Text("Delete this note permanently?") },
         text = { Text("The note, its retained versions and all their files will be removed. You cannot undo this.") },
@@ -133,13 +142,13 @@ fun NotesScreen(
         },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            Row {
+            FlowRow {
                 TextButton(enabled = !packageBusy, onClick = { trash = !trash; if (trash) onRefreshTrash() }) {
                     Text(if (trash) "Active notes" else "Trash")
                 }
-                TextButton(onClick = { filters = !filters }) { Text(if (filters) "Hide filters" else "Folders and tags") }
+                TextButton(enabled = !packageBusy && !filters, onClick = { filters = true }) { Text("Folders and tags") }
             }
-            if (filters) NoteFilterFields(folder, tag, !packageBusy, onApply = { f, t -> folder = f; tag = t })
+            NoteFilterSummary(folder, tag, !packageBusy && !filters) { folder = ""; tag = "" }
             if (importFailed) Text("The Markdown file could not be imported. Use UTF-8 text up to 256 KiB.", color = colors.error)
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                 NoteBinaryImportAction("Import note package", NoteAttachments.MAX_PACKAGE_BYTES, enabled = !packageBusy,

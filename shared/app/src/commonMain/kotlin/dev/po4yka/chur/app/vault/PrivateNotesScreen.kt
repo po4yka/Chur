@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -64,6 +65,7 @@ import dev.po4yka.chur.app.notes.NoteBinaryImportAction
 import dev.po4yka.chur.app.notes.NoteAttachmentImage
 import dev.po4yka.chur.app.notes.NoteOrganizationFields
 import dev.po4yka.chur.app.notes.NoteFilterFields
+import dev.po4yka.chur.app.notes.NoteFilterSummary
 import dev.po4yka.chur.app.notes.attachmentMarkdownReference
 import dev.po4yka.chur.notes.NoteAttachments
 import dev.po4yka.chur.ffi.PrivateNoteFormat
@@ -197,9 +199,15 @@ private fun PrivateNotesContent(
 @Composable
 private fun PrivateNotesList(state: PrivateNotesUiState, actions: PrivateNotesActions, busy: Boolean, modifier: Modifier, onImportActivity: (Boolean) -> Unit) {
     var importFailed by remember { mutableStateOf(false) }
-    var filters by remember { mutableStateOf(false) }
     val colors = LocalChurColors.current
     val selecting = state.selection.isNotEmpty()
+    if (state.filtersVisible) PrivateAlertDialog(onDismissRequest = { actions.showFilters(false) },
+        title = { Text("Folders and tags") },
+        text = { Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+            NoteFilterFields(state.folderFilter, state.tagFilter, !busy, private = true,
+                onActivity = actions::activity, onApply = actions::filter)
+        } },
+        confirmButton = { TextButton(onClick = { actions.showFilters(false) }) { Text("Close") } })
     Column(modifier.padding(horizontal = ChurSpacing.gutter), verticalArrangement = Arrangement.spacedBy(ChurSpacing.one)) {
         FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             if (!state.trash && !selecting) NoteImportAction(enabled = !busy,
@@ -211,12 +219,12 @@ private fun PrivateNotesList(state: PrivateNotesUiState, actions: PrivateNotesAc
                 Text(if (state.trash) "Active notes" else "Trash")
             }
             if (!selecting) TextButton(enabled = !busy && !state.loading, onClick = actions::refresh) { Text("Refresh") }
-            if (!selecting) TextButton(enabled = !busy, onClick = { filters = !filters }) { Text("Folders and tags") }
+            if (!selecting) TextButton(enabled = !busy && !state.filtersVisible, onClick = { actions.showFilters(true) }) { Text("Folders and tags") }
             if (!state.trash) TextButton(enabled = !busy && !state.loading && state.notes.isNotEmpty(),
                 onClick = actions::selectPage) { Text("Select page") }
         }
         if (importFailed) Text("Import failed. Use UTF-8 Markdown up to 256 KiB or a .churnote package up to 24 MiB.", color = colors.error)
-        if (filters) NoteFilterFields(state.folderFilter, state.tagFilter, !busy, private = true, onActivity = actions::activity, onApply = actions::filter)
+        NoteFilterSummary(state.folderFilter, state.tagFilter, !busy && !state.filtersVisible) { actions.filter("", "") }
         OutlinedTextField(value = state.terms, onValueChange = actions::search, enabled = !busy, singleLine = true,
             label = { Text(if (state.trash) "Search Trash" else "Search private notes") },
             keyboardOptions = privateKeyboardOptions().copy(imeAction = ImeAction.Search),

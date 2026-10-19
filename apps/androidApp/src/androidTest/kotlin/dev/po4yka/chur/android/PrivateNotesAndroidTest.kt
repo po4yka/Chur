@@ -166,9 +166,20 @@ class PrivateNotesAndroidTest {
         fixture.clickText("Folders and tags")
         fixture.fieldAction("note-filter-folder") { assertTrue(it.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(androidx.compose.ui.text.AnnotatedString("Projects")) == true) }
         fixture.fieldAction("note-filter-tag") { assertTrue(it.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(androidx.compose.ui.text.AnnotatedString("todo")) == true) }
+        fixture.capture("private-notes-filters-public-fixture.png")
+        assertTrue(fixture.savedState().isEmpty())
+        fixture.clickText("Lock and hide")
+        assertTrue(fixture.await { fixture.hasText("Public fixture note") })
+        assertFalse(fixture.nodes().any { it.config.getOrNull(SemanticsProperties.TestTag) == "note-filter-folder" })
+        runBlocking { fixture.vault.unlock(PASSWORD.encodeToByteArray()) }
+        assertTrue(fixture.await { fixture.hasText("Public synthetic title") })
+        fixture.clickText("Folders and tags")
+        fixture.fieldAction("note-filter-folder") { assertTrue(it.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(androidx.compose.ui.text.AnnotatedString("Projects")) == true) }
+        fixture.fieldAction("note-filter-tag") { assertTrue(it.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(androidx.compose.ui.text.AnnotatedString("todo")) == true) }
         fixture.clickText("Apply filters")
         assertTrue(fixture.await { fixture.hasText("Public synthetic title") })
         fixture.capture("private-notes-organization-public-fixture.png")
+        fixture.clickText("Folders and tags")
         fixture.fieldAction("note-filter-tag") { assertTrue(it.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(androidx.compose.ui.text.AnnotatedString("absent")) == true) }
         fixture.clickText("Apply filters")
         assertTrue(fixture.await { fixture.hasText("No matching private notes.") })
@@ -246,7 +257,8 @@ class PrivateNotesAndroidTest {
                 fixture.view = ComposeView(context).apply {
                     setContent {
                         CompositionLocalProvider(LocalDensity provides Density(density, fontScale), LocalConfiguration provides config,
-                            LocalSaveableStateRegistry provides fixture.registry) {
+                            LocalSaveableStateRegistry provides fixture.registry,
+                            dev.po4yka.chur.app.vault.LocalPrivatePanic provides { fixture.scope.launch { vault.lock(LockReason.PANIC) }; Unit }) {
                             val state by vault.state.collectAsState()
                             ChurApp(runGate(activity), if (state is VaultState.Unlocked) AppRoute.Vault else AppRoute.PublicShell) {
                                 if (state is VaultState.Unlocked) PrivateNotesRoute(vault, (state as VaultState.Unlocked).generation,
