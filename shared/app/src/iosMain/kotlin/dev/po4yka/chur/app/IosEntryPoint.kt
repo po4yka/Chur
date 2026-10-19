@@ -1,10 +1,12 @@
-@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, kotlin.experimental.ExperimentalNativeApi::class)
 
 package dev.po4yka.chur.app
 
 import androidx.compose.runtime.CompositionLocalProvider
 import dev.po4yka.chur.app.vault.IosVaultChrome
 import dev.po4yka.chur.app.vault.LocalIosVaultChrome
+import dev.po4yka.chur.app.vault.IosVaultScenes
+import dev.po4yka.chur.app.vault.LocalIosVaultScenes
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.uikit.OnFocusBehavior
@@ -31,6 +33,7 @@ import platform.UIKit.UIViewAutoresizingFlexibleWidth
 import platform.UIKit.UIViewController
 import platform.UIKit.addChildViewController
 import platform.UIKit.didMoveToParentViewController
+import kotlin.native.ref.WeakReference
 
 /**
  * The iOS entry point.
@@ -51,18 +54,34 @@ import platform.UIKit.didMoveToParentViewController
  * ends every route above the keyboard, `DESIGN.md` §25.5, and a pan on top of
  * that would move the field a second time.
  */
-fun ChurViewController(controller: ChurController, gate: GateResult): UIViewController {
+fun ChurViewController(controller: ChurController, gate: GateResult, privacy: IosPrivacyCover): UIViewController {
     val chrome = IosVaultChrome()
+    val scenes = IosVaultScenes(controller, gate, chrome)
     val compose = ComposeUIViewController(configure = { onFocusBehavior = OnFocusBehavior.DoNothing }) {
         val route by controller.route.collectAsState()
         val state by controller.vaultState.collectAsState()
-        CompositionLocalProvider(LocalIosVaultChrome provides chrome) {
+        CompositionLocalProvider(LocalIosVaultChrome provides chrome, LocalIosVaultScenes provides scenes) {
             ChurApp(gate = gate, route = route) {
                 IosRoutes(controller = controller, route = route, vaultState = state)
             }
         }
     }
-    return ChurRootViewController(compose, chrome)
+    val root = ChurRootViewController(compose, chrome)
+    val rootReference = WeakReference(root)
+    val controllerReference = WeakReference(controller)
+    val chromeReference = WeakReference(chrome)
+    val scenesReference = WeakReference(scenes)
+    scenes.viewerChrome = { rootReference.get()?.viewerChrome = it }
+    // Lock conceals the shared route before enabling its logical cover. Retire
+    // UIKit on that same UI turn, including controller-driven/background locks.
+    privacy.onStateChange = { enabled ->
+        if (enabled && controllerReference.get()?.route?.value != AppRoute.Vault) {
+            chromeReference.get()?.clear()
+            scenesReference.get()?.clear()
+            rootReference.get()?.viewerChrome = null
+        }
+    }
+    return root
 }
 
 /**
@@ -93,12 +112,12 @@ internal class ChurRootViewController(
         content.view.setAutoresizingMask(UIViewAutoresizingFlexibleWidth or UIViewAutoresizingFlexibleHeight)
         view.addSubview(content.view)
         content.didMoveToParentViewController(this)
-        vaultChrome.attach(view)
-    }
-
-    override fun viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        vaultChrome.layout()
+        val tabs = vaultChrome.controller
+        addChildViewController(tabs)
+        tabs.view.setFrame(view.bounds)
+        tabs.view.setAutoresizingMask(UIViewAutoresizingFlexibleWidth or UIViewAutoresizingFlexibleHeight)
+        view.addSubview(tabs.view)
+        tabs.didMoveToParentViewController(this)
     }
 
     override fun preferredStatusBarStyle(): UIStatusBarStyle =

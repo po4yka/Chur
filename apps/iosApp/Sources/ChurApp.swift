@@ -235,7 +235,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         }
         let window = UIWindow(windowScene: scene)
         if host.storageReady {
-            window.rootViewController = IosEntryPointKt.ChurViewController(controller: host.controller, gate: host.gate)
+            window.rootViewController = IosEntryPointKt.ChurViewController(controller: host.controller, gate: host.gate, privacy: host.privacy)
         } else {
             let failure = UIViewController()
             failure.view.backgroundColor = .systemBackground

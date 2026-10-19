@@ -25,7 +25,7 @@ import platform.UIKit.UIWindow
  * after that call returns, and a session can open between the two calls: a
  * vault creation whose key derivation ends after the scene resigned active.
  *
- * [setEnabled] does nothing on this platform. Android's flag cannot be seen
+ * [setEnabled] retires private presentations without displaying the cover. Android's flag cannot be seen
  * while the window is in front. This cover is a view, and a view added while
  * the scene is active hides the session and takes its touches. The controller
  * turns the cover on as it enters the vault, so a password unlock left the
@@ -43,9 +43,11 @@ import platform.UIKit.UIWindow
  */
 class IosPrivacyCover : PrivacyCover {
     private var cover: UIView? = null
+    /** Nonvisual presentation retirement; the scene still owns the opaque cover. */
+    internal var onStateChange: ((Boolean) -> Unit)? = null
 
     override fun setEnabled(enabled: Boolean) {
-        // Intentionally empty: the scene delegate decides, see above.
+        onStateChange?.invoke(enabled)
     }
 
     /**

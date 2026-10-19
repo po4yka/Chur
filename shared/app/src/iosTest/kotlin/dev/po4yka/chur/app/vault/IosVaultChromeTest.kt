@@ -28,6 +28,7 @@ class IosVaultChromeTest {
             assertNull(chrome.navigationBar.topItem)
             panics++
         })
+        prepare(chrome)
         chrome.update(VaultUiState(), callbacks, Color.Blue, true)
         val menu = chrome.navigationBar.topItem!!.rightBarButtonItems!!
             .filterIsInstance<platform.UIKit.UIBarButtonItem>().mapNotNull { it.menu }.single()
@@ -41,7 +42,7 @@ class IosVaultChromeTest {
         assertTrue(chrome.tabBar.items.isNullOrEmpty())
         sender.sendAction(escape)
         assertEquals(1, panics)
-        chrome.beginSession()
+        prepare(chrome, generation = 2L)
         chrome.update(VaultUiState(), callbacks, Color.Blue, false)
         // UIKit retains an immutable copy; retirement must fence its real block.
         sender.sendAction(escape)
@@ -59,19 +60,16 @@ class IosVaultChromeTest {
         GC.collect()
         assertNull(retained.owner.get())
         assertFalse(retained.panic.actionHandler!!.invoke(retained.panic))
-        val navigation = retained.host.subviews.filterIsInstance<platform.UIKit.UINavigationBar>().single()
-        val tabs = retained.host.subviews.filterIsInstance<platform.UIKit.UITabBar>().single()
-        assertNull(navigation.topItem)
-        assertTrue(tabs.items.isNullOrEmpty())
-        assertTrue(navigation.hidden && tabs.hidden)
+        assertTrue(retained.host.viewControllers.isNullOrEmpty())
+        assertTrue(retained.host.view.hidden)
+        assertTrue(retained.host.view.accessibilityElementsHidden)
         platform.UIKit.UIButton.buttonWithType(platform.UIKit.UIButtonTypeSystem).sendAction(retained.menuAction)
-        assertEquals(2, retained.host.subviews.size)
     }
 
     private fun retiredNativeControls(): RetainedNativeControls = autoreleasepool {
         val chrome = IosVaultChrome()
-        val host = platform.UIKit.UIView()
-        chrome.attach(host)
+        val host = chrome.controller
+        prepare(chrome)
         chrome.update(VaultUiState(), actions(), Color.Blue, false)
         val items = chrome.navigationBar.topItem!!.rightBarButtonItems!!
             .filterIsInstance<platform.UIKit.UIBarButtonItem>()
@@ -86,7 +84,7 @@ class IosVaultChromeTest {
 
     private data class RetainedNativeControls(
         val owner: WeakReference<IosVaultChrome>,
-        val host: platform.UIKit.UIView,
+        val host: platform.UIKit.UITabBarController,
         val panic: platform.UIKit.UIAccessibilityCustomAction,
         val menuAction: platform.UIKit.UIAction,
     )
@@ -95,23 +93,25 @@ class IosVaultChromeTest {
     fun native_tabs_forward_to_the_existing_navigation_owner_and_modal_blocks_touches() {
         val destinations = mutableListOf<VaultDestination>()
         val chrome = IosVaultChrome()
-        val host = platform.UIKit.UIView()
-        chrome.attach(host)
+        val host = chrome.controller
+        prepare(chrome)
         chrome.update(VaultUiState(), actions().copy(onDestination = { destinations += it }), Color.Blue, false)
-        assertEquals(chrome.navigationBar, host.subviews.filterIsInstance<platform.UIKit.UINavigationBar>().single())
-        assertEquals(chrome.tabBar, host.subviews.filterIsInstance<platform.UIKit.UITabBar>().single())
+        assertEquals(chrome.navigationControllers, host.viewControllers)
+        assertEquals(chrome.navigationControllers.first().navigationBar, chrome.navigationBar)
         val tabs = chrome.tabBar.items!!.filterIsInstance<platform.UIKit.UITabBarItem>()
         assertEquals(VaultDestination.entries.map { it.label }, tabs.map { it.title })
-        tabs.forEach { chrome.tabBar(chrome.tabBar, didSelectItem = it) }
+        chrome.navigationControllers.forEach {
+            assertFalse(chrome.tabBarController(host, shouldSelectViewController = it))
+        }
         assertEquals(VaultDestination.entries.toList(), destinations)
         // A native selection can precede an asynchronously rejected shared request.
-        chrome.tabBar.selectedItem = tabs.last()
+        host.selectedIndex = VaultDestination.SETTINGS.ordinal.toULong()
         chrome.update(VaultUiState(), actions().copy(onDestination = { destinations += it }), Color.Blue, true)
-        assertEquals(tabs.first(), chrome.tabBar.selectedItem)
+        assertEquals(VaultDestination.LIBRARY.ordinal.toULong(), host.selectedIndex)
         assertFalse(chrome.tabBar.userInteractionEnabled)
         assertTrue(chrome.tabBar.items!!.filterIsInstance<platform.UIKit.UITabBarItem>().all { !it.enabled })
         val prior = destinations.toList()
-        chrome.tabBar(chrome.tabBar, didSelectItem = chrome.tabBar.items!!.filterIsInstance<platform.UIKit.UITabBarItem>().last())
+        assertFalse(chrome.tabBarController(host, shouldSelectViewController = chrome.navigationControllers.last()))
         assertEquals(prior, destinations)
         chrome.clear()
     }
@@ -124,6 +124,7 @@ class IosVaultChromeTest {
         var panics = 0
         var locked = false
         val chrome = IosVaultChrome()
+        prepare(chrome)
         val album = AlbumSummary(ByteArray(16) { 7 }, 1, "Private album title")
         val callbacks = actions().copy(
             onImport = { imports++ },
@@ -165,7 +166,7 @@ class IosVaultChromeTest {
         assertEquals(0, imports)
         assertTrue(chrome.navigationBar.accessibilityElementsHidden)
         assertTrue(chrome.tabBar.accessibilityElementsHidden)
-        chrome.beginSession()
+        prepare(chrome, generation = 2L)
         val freshAlbum = AlbumSummary(ByteArray(16) { 9 }, 1, "Fresh private album")
         chrome.update(VaultUiState(openAlbum = freshAlbum), callbacks, Color.Blue, false)
         retiredActions.forEach { sender.sendAction(it) }
@@ -182,6 +183,8 @@ class IosVaultChromeTest {
         var oldImports = 0
         var currentImports = 0
         val chrome = IosVaultChrome()
+        prepare(chrome)
+        chrome.reconcile(1L, listOf(IosVaultScreen.Root(VaultDestination.ALBUMS)), VaultDestination.ALBUMS, animated = false)
         chrome.update(VaultUiState(destination = VaultDestination.ALBUMS), actions().copy(onCreateAlbum = { oldImports++ }), Color.Blue, false)
         chrome.update(VaultUiState(destination = VaultDestination.ALBUMS, libraryScopeTitle = "Private scope"),
             actions().copy(onCreateAlbum = { currentImports++ }), Color.Blue, false, covered = true)
@@ -204,6 +207,7 @@ class IosVaultChromeTest {
     fun empty_library_has_one_shared_import_action_and_selection_keeps_native_export() {
         var exports = 0
         val chrome = IosVaultChrome()
+        prepare(chrome)
         chrome.update(VaultUiState(), actions(), Color.Blue, false)
         assertFalse(chrome.navigationBar.topItem!!.rightBarButtonItems!!
             .filterIsInstance<platform.UIKit.UIBarButtonItem>().any { it.title == "Import" })
@@ -218,6 +222,7 @@ class IosVaultChromeTest {
     fun native_voiceover_panic_action_clears_chrome_before_lock_callback() {
         var panicked = false
         val chrome = IosVaultChrome()
+        prepare(chrome)
         chrome.update(VaultUiState(), actions().copy(onPanic = {
             assertTrue(chrome.navigationBar.hidden)
             assertNull(chrome.navigationBar.topItem)
@@ -238,6 +243,7 @@ class IosVaultChromeTest {
         var backs = 0
         var locks = 0
         val chrome = IosVaultChrome()
+        prepare(chrome)
         chrome.update(VaultUiState(selectedCount = 2), actions().copy(
             onExportSelection = { exports++ }, onClearSelection = { backs++ }, onLock = { locks++ },
         ), Color.Blue, true)
@@ -250,6 +256,12 @@ class IosVaultChromeTest {
         assertEquals(0, backs)
         chrome.lockNow()
         assertEquals(1, locks)
+    }
+
+    private fun prepare(chrome: IosVaultChrome, generation: Long = 1L) {
+        chrome.configureScreens(factory = { platform.UIKit.UIViewController() }, onPop = {}, onRetire = {})
+        chrome.reconcile(generation, listOf(IosVaultScreen.Root(VaultDestination.LIBRARY)),
+            VaultDestination.LIBRARY, animated = false)
     }
 
     private fun actions() = VaultActions(

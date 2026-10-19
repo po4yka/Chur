@@ -2,7 +2,6 @@
 
 package dev.po4yka.chur.app
 
-import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -10,8 +9,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.CompositionLocalProvider
 import dev.po4yka.chur.app.vault.LocalIosVaultChrome
-import dev.po4yka.chur.app.vault.LocalIosVaultChromeCovered
-import dev.po4yka.chur.app.vault.LocalIosVaultSession
+import dev.po4yka.chur.app.vault.LocalIosVaultScenes
+import dev.po4yka.chur.app.vault.LocalIosVaultScene
+import dev.po4yka.chur.app.vault.IosVaultScreen
+import dev.po4yka.chur.app.vault.forScene
+import dev.po4yka.chur.app.theme.LocalChurColors
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -23,11 +27,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.uikit.LocalUIViewController
 import dev.po4yka.chur.app.notes.NoteEditorScreen
 import dev.po4yka.chur.app.notes.NotesScreen
 import dev.po4yka.chur.app.notes.OpenNote
@@ -106,6 +107,9 @@ import platform.Foundation.NSTemporaryDirectory
 import platform.Foundation.NSURL
 import platform.Foundation.timeIntervalSince1970
 import platform.UIKit.UIApplication
+import platform.UIKit.endEditing
+import platform.UIKit.accessibilityElementsHidden
+import platform.UIKit.navigationItem
 import platform.posix.O_RDONLY
 import platform.posix.close
 import platform.posix.open
@@ -221,7 +225,9 @@ private fun IosRoutesContent(controller: ChurController, route: AppRoute, vaultS
             onRecover = controller::recover,
             onBack = { controller.panic() },
         )
-        AppRoute.Vault -> VaultRoute(controller, vaultState)
+        AppRoute.Vault -> key((vaultState as? VaultState.Unlocked)?.generation) {
+            VaultRoute(controller, vaultState)
+        }
     }
 }
 
@@ -400,7 +406,20 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     var privateNotesBusy by remember(generation) { mutableStateOf(false) }
     var initialCreateRequest by remember(generation) { mutableStateOf<Long?>(null) }
     var searchFocusRequest by remember(generation) { mutableStateOf<Long?>(null) }
-    val nativeChrome = LocalIosVaultChrome.current
+    val nativeChrome = checkNotNull(LocalIosVaultChrome.current)
+    val scenes = checkNotNull(LocalIosVaultScenes.current)
+    val colors = LocalChurColors.current
+    DisposableEffect(controller, nativeChrome, scenes, generation) {
+        if (controller.route.value == AppRoute.Vault &&
+            (controller.vaultState.value as? VaultState.Unlocked)?.generation == generation
+        ) {
+            nativeChrome.beginPresentation(generation)
+            scenes.begin(generation)
+        }
+        onDispose { nativeChrome.clear(); scenes.clear() }
+    }
+    var viewerNavigationBusy by remember(generation) { mutableStateOf(false) }
+    var viewerVisit by remember(generation) { mutableStateOf(0L) }
     var shellNavigationBusy by remember(generation) { mutableStateOf(false) }
     var choosingPrivateNoteExport by remember(generation) { mutableStateOf<PrivateNoteExportRequest?>(null) }
     var thumbnailsConcealed by remember(generation) { mutableStateOf(true) }
@@ -464,6 +483,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     }
     fun navigateAlbum(target: AlbumSummary?) {
         focusManager.clearFocus()
+        searchFocusRequest = null
         viewing = null
         selection = emptySet()
         openTag = null
@@ -507,7 +527,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     LaunchedEffect(launcherRequest?.token, generation, navigationBusy, launcherSceneReady) {
         val request = launcherRequest ?: return@LaunchedEffect
         if (!launcherSceneReady) return@LaunchedEffect
-        if (navigationBusy || nativeChrome?.hasVisibleMenu() == true) {
+        if (navigationBusy || nativeChrome.hasVisibleMenu()) {
             controller.rejectLauncherAction(request.token)
             return@LaunchedEffect
         }
@@ -522,6 +542,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         selection = emptySet()
         terms = ""
         mediaKinds = 0
+        searchFocusRequest = null
         when (request.action) {
             LauncherAction.IMPORT -> {
                 showingPrivateNotes = false
@@ -543,6 +564,9 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         }
     }
 
+    val browseLocation = listOf(destination, openAlbum, openTag, favoritesOnly, trashOpen,
+        quarantineOpen, recentlyAdded, terms, mediaSort, albumSort, mediaKinds)
+    var loadedLocation by remember(generation) { mutableStateOf<List<Any?>?>(null) }
     LaunchedEffect(destination, openAlbum, openTag, favoritesOnly, trashOpen, quarantineOpen, recentlyAdded,
         terms, mediaSort, albumSort, mediaKinds) {
         val query = browseQuery(destination, openAlbum, openTag, favoritesOnly,
@@ -559,6 +583,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             }
             else -> Unit
         }
+        loadedLocation = browseLocation
     }
 
     // The cache is the controller's: its lock transitions clear it whether
@@ -920,6 +945,14 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     }
 
     if (showingPrivateNotes) {
+        SideEffect {
+            scenes.activate(null)
+            nativeChrome.suspendNavigation()
+            nativeChrome.controller.view.endEditing(true)
+            nativeChrome.controller.view.hidden = true
+            nativeChrome.controller.view.accessibilityElementsHidden = true
+            scenes.viewerChrome?.invoke(null)
+        }
         PrivateNotesRoute(
             vault = controller.vault, generation = generation,
             onClose = { focusManager.clearFocus(); showingPrivateNotes = false; initialCreateRequest = null },
@@ -948,267 +981,301 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         return
     }
 
-    // The viewer below is drawn over the shell, so the shell stays composed
-    // and keeps its scroll position. Covered, it is out of a screen reader's
-    // reach, §4 of `PLAINTEXT_LIFECYCLE.md`, and out of keyboard focus, §23.3
-    // of `DESIGN.md`: opening the viewer takes the focus from it, and a
-    // hardware keyboard cannot move the focus back in.
-    Box(
-        if (viewing != null) {
-            Modifier
-                .clearAndSetSemantics {}
-                .focusProperties { onEnter = { cancelFocusChange() } }
-                .focusGroup()
-        } else {
-            Modifier
+    // Query registration clears the old page synchronously. Do not publish a
+    // destination with another screen's page while its load effect is pending.
+    val currentPage = if (loadedLocation == browseLocation) controller.page.value
+        else ObjectPage(emptyList(), 0, 0, null)
+    val shellState = VaultUiState(
+        destination = destination,
+        tiles = currentPage.objects.map { projection ->
+            LibraryTile(
+                projection = projection,
+                thumbnail = thumbnails[projection.id],
+                selected = projection.id in selection,
+                thumbnailConcealed = thumbnailRendition(projection.mediaKind, thumbnailsConcealed) ==
+                    ThumbnailRendition.Mosaic,
+            )
         },
-    ) {
-        CompositionLocalProvider(
-            LocalIosVaultChromeCovered provides (viewing != null || modalNavigationBusy),
-            LocalIosVaultSession provides generation,
-        ) {
-        VaultShell(
-            searchFocusRequest = searchFocusRequest,
-            onNavigationBusyChange = { shellNavigationBusy = it },
-            state = VaultUiState(
-                destination = destination,
-                tiles = page.objects.map { projection ->
-                    LibraryTile(
-                        projection = projection,
-                        thumbnail = thumbnails[projection.id],
-                        selected = projection.id in selection,
-                        thumbnailConcealed = thumbnailRendition(projection.mediaKind, thumbnailsConcealed) ==
-                            ThumbnailRendition.Mosaic,
-                    )
-                },
-                albums = albums,
-                searchTerms = terms,
-                contentIndex = contentIndex,
-                slots = slots,
-                openAlbum = openAlbum,
-                libraryScopeTitle = if (recentlyAdded) "Recently added" else if (trashOpen) "Trash" else if (quarantineOpen) "Quarantine" else openTag?.name ?: if (favoritesOnly) "Favorites" else null,
-                trashOpen = trashOpen,
-                recentlyAdded = recentlyAdded,
-                mediaView = mediaView,
-                thumbnailsConcealed = thumbnailsConcealed,
-                albumView = albumView,
-                sort = if (openAlbum != null) albumSort else if (recentlyAdded) QuerySort.IMPORT_DESC else mediaSort,
-                kinds = mediaKinds,
-                albumOrder = albumOrder,
-                albumFilter = albumFilter,
-                // The viewer is drawn over the shell here, so the shell leaves
-                // the notice to it while it is open rather than show it twice.
-                notice = notice.takeIf { viewing == null },
-                operation = operation,
-                selectedCount = selection.size,
-                canLoadMore = page.nextCursor != null,
-                deviceSlotAvailable = controller.deviceUnlockAvailable,
-                deviceSlotStrict = deviceSlotStrict,
-                appLockEnabled = appLockEnabled,
-                autoLock = autoLock,
-                sync = syncStatus,
-                devicePairing = vaultDevicePairing,
-                sharingIdentity = sharingIdentity,
-                sharingOverview = sharingOverview,
-                sharingRecipient = sharingRecipient,
-            ),
-            actions = VaultActions(
-                onThumbnailsConcealedChange = { thumbnailsConcealed = it },
-                onDestination = {
-                    openAlbum = null
-                    openTag = null
-                    favoritesOnly = false
-                    trashOpen = false
-                    quarantineOpen = false
-                    recentlyAdded = false
+        albums = albums,
+        searchTerms = terms,
+        contentIndex = contentIndex,
+        slots = slots,
+        openAlbum = openAlbum,
+        libraryScopeTitle = if (recentlyAdded) "Recently added" else if (trashOpen) "Trash" else if (quarantineOpen) "Quarantine" else openTag?.name ?: if (favoritesOnly) "Favorites" else null,
+        trashOpen = trashOpen,
+        recentlyAdded = recentlyAdded,
+        mediaView = mediaView,
+        thumbnailsConcealed = thumbnailsConcealed,
+        albumView = albumView,
+        sort = if (openAlbum != null) albumSort else if (recentlyAdded) QuerySort.IMPORT_DESC else mediaSort,
+        kinds = mediaKinds,
+        albumOrder = albumOrder,
+        albumFilter = albumFilter,
+        // The viewer is drawn over the shell here, so the shell leaves
+        // the notice to it while it is open rather than show it twice.
+        notice = notice.takeIf { viewing == null },
+        operation = operation,
+        selectedCount = selection.size,
+        canLoadMore = currentPage.nextCursor != null,
+        deviceSlotAvailable = controller.deviceUnlockAvailable,
+        deviceSlotStrict = deviceSlotStrict,
+        appLockEnabled = appLockEnabled,
+        autoLock = autoLock,
+        sync = syncStatus,
+        devicePairing = vaultDevicePairing,
+        sharingIdentity = sharingIdentity,
+        sharingOverview = sharingOverview,
+        sharingRecipient = sharingRecipient,
+    )
+    val shellActions = VaultActions(
+        onThumbnailsConcealedChange = { thumbnailsConcealed = it },
+        onDestination = {
+            searchFocusRequest = null
+            openAlbum = null
+            openTag = null
+            favoritesOnly = false
+            trashOpen = false
+            quarantineOpen = false
+            recentlyAdded = false
+            selection = emptySet()
+            destination = it
+        },
+        // Opening is opening. Before the viewer existed on this host it
+        // toggled selection, which made a video unreachable and a tap on a
+        // photograph mean two things.
+        onOpen = { projection ->
+            if (selection.isEmpty()) {
+                controller.report(null)
+                // A text field of the shell left focused would keep
+                // the keyboard open over the viewer, which is edge to
+                // edge (`ChurApp`), and take what is typed under it.
+                focusManager.clearFocus()
+                searchFocusRequest = null
+                viewerVisit++
+                viewing = projection
+            } else {
+                selection = selection.toggle(projection.id)
+            }
+        },
+        onToggleSelection = { projection ->
+            selection = selection.toggle(projection.id)
+        },
+        onOpenPrivateNotes = { focusManager.clearFocus(); searchFocusRequest = null; selection = emptySet(); recentlyAdded = false; initialCreateRequest = null; showingPrivateNotes = true },
+        onImport = { choosingImportSource = true },
+        onSearch = {
+            terms = it
+        },
+        onIndexContent = { controller.indexContent() },
+        onRebuildContentIndex = { controller.indexContent(rebuild = true) },
+        onCancelContentIndex = controller::cancelContentIndex,
+        onClearContentIndex = controller::clearContentIndex,
+        onExportAlbum = { exportingAlbum = it },
+        onEncryptedExportAlbum = { choosingArchive = SelectiveExportRequest(generation, albumIds = listOf(it.albumId)) },
+        onOpenAlbum = { navigateAlbum(it) },
+        onCloseAlbum = { navigateAlbum(albumParent(albums, openAlbum?.id)) },
+        onAlbumRoot = { navigateAlbum(null) },
+        onCreateAlbum = { creatingAlbum = true },
+        onMediaViewChange = { mediaView = it },
+        onAlbumViewChange = { albumView = it },
+        onSortChange = {
+            if (openAlbum != null) albumSort = it else if (!recentlyAdded) mediaSort = it
+            selection = emptySet()
+        },
+        onKindsChange = { mediaKinds = it; selection = emptySet() },
+        onAlbumOrderChange = { albumOrder = it },
+        onAlbumFilterChange = { albumFilter = it },
+        onShowRecentlyAdded = {
+            focusManager.clearFocus()
+            openAlbum = null
+            openTag = null
+            favoritesOnly = false
+            trashOpen = false
+            quarantineOpen = false
+            selection = emptySet()
+            destination = VaultDestination.LIBRARY
+            recentlyAdded = true
+        },
+        onShowAllMedia = { recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = false; selection = emptySet() },
+        onShowFavorites = { recentlyAdded = false; openTag = null; favoritesOnly = true; trashOpen = false; quarantineOpen = false; selection = emptySet() },
+        onShowTags = { controller.loadTags(); managingTags = true },
+        onShowTrash = { recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = true; quarantineOpen = false; selection = emptySet() },
+        onShowQuarantine = { recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = true; selection = emptySet() },
+        onEmptyTrash = { confirmingEmptyTrash = true },
+        onRestoreTrash = { controller.restoreTrash { selection = emptySet() } },
+        onRenameAlbum = { album, name -> controller.renameAlbum(album.albumId, name) },
+        onDeleteAlbum = { album ->
+            controller.deleteAlbum(album.albumId) {
+                if (openAlbum?.id == album.id) openAlbum = null
+            }
+        },
+        onMoveAlbum = { album, parent, before ->
+            controller.moveAlbum(album.albumId, parent?.albumId, before?.albumId)
+        },
+        onMoveAlbumMember = { objectToMove, before ->
+            openAlbum?.let { album ->
+                controller.moveAlbumMember(album.albumId, objectToMove.objectId, before?.objectId)
+            }
+        },
+        onDropMediaIntoAlbum = { objects, target ->
+            if (target != null) {
+                controller.placeObjectsInAlbum(target.albumId, objects.map { it.objectId },
+                    openAlbum?.albumId, openAlbum != null) { selection = emptySet() }
+            } else {
+                controller.loadAlbums()
+                organizingIds = objects.map { it.objectId }
+                movingSelection = openAlbum != null
+                choosingAlbum = true
+            }
+        },
+        onLoadMore = controller::loadNextPage,
+        onVisibleMediaChanged = { visibleMediaIds = it },
+        onLock = { controller.lock() },
+        onPanic = { controller.panic() },
+        onDeleteDamagedFiles = { controller.deleteDamagedFiles() },
+        onVerifyAll = { controller.verifyEverything() },
+        onAddRecoverySlot = controller::addRecoverySlot,
+        onChangePassword = controller::changePassword,
+        onToggleAppLock = controller::toggleAppLock,
+        onSetAutoLock = controller::setAutoLock,
+        onAddDeviceSlot = controller::enrollAppleDeviceSlot,
+        onToggleDeviceSlotPolicy = controller::toggleDeviceSlotPolicy,
+        onPrepareDevicePairing = { controller.prepareDevicePairing() },
+        onInspectDevicePairing = { controller.inspectDevicePairing(it) },
+        onApproveDevicePairing = { request, fingerprint -> controller.approveDevicePairing(request, fingerprint) },
+        onSavePairingApproval = pairingFiles.save,
+        onOpenPairingApproval = pairingFiles.open,
+        onLoadPairedDevices = { controller.loadPairedDevices() },
+        onRevokePairedDevice = { controller.revokePairedDevice(it) },
+        onCreateBackup = controller::createBackup,
+        onEncryptExternalFiles = controller::openExternalArchive,
+        onImportArchive = { choosingArchiveImport = true },
+        onRestoreArchive = controller::restoreArchiveAsSeparateVault,
+        onCreateSecondIdentity = controller::createSecondIdentity,
+        onSelectLoadedItems = { selection = loadedObjectSelection(page) },
+        onClearSelection = { selection = emptySet() },
+        onExportSelection = { choosingExport = true },
+        onEncryptedExportSelection = {
+            if (selection.size > 1000) controller.report("Select at most 1000 items for one encrypted archive.")
+            else choosingArchive = SelectiveExportRequest(generation, objectIds = selection.sorted().map { it.fromHex() })
+        },
+        onAddSelectionToAlbum = {
+            controller.loadAlbums()
+            organizingIds = selection.sorted().map { it.fromHex() }
+            movingSelection = false
+            choosingAlbum = true
+        },
+        onMoveSelectionToAlbum = {
+            controller.loadAlbums()
+            organizingIds = selection.sorted().map { it.fromHex() }
+            movingSelection = true
+            choosingAlbum = true
+        },
+        onTagSelection = {
+            controller.loadTags()
+            taggingIds = selection.sorted().map { it.fromHex() }
+            choosingTag = true
+        },
+        onSetSelectionFavorite = { favorite ->
+            controller.setFavoritesForAll(selection.sorted().map { it.fromHex() }, favorite) {
+                selection = emptySet()
+            }
+        },
+        onRemoveSelectionFromAlbum = {
+            openAlbum?.let { album ->
+                controller.removeAllFromAlbum(album.albumId, selectedObjects(page, selection)) {
                     selection = emptySet()
-                    destination = it
-                },
-                // Opening is opening. Before the viewer existed on this host it
-                // toggled selection, which made a video unreachable and a tap on a
-                // photograph mean two things.
-                onOpen = { projection ->
-                    if (selection.isEmpty()) {
-                        controller.report(null)
-                        // A text field of the shell left focused would keep
-                        // the keyboard open over the viewer, which is edge to
-                        // edge (`ChurApp`), and take what is typed under it.
-                        focusManager.clearFocus()
-                        viewing = projection
-                    } else {
-                        selection = selection.toggle(projection.id)
-                    }
-                },
-                onToggleSelection = { projection ->
-                    selection = selection.toggle(projection.id)
-                },
-                onOpenPrivateNotes = { focusManager.clearFocus(); selection = emptySet(); recentlyAdded = false; initialCreateRequest = null; showingPrivateNotes = true },
-                onImport = { choosingImportSource = true },
-                onSearch = {
-                    terms = it
-                },
-                onIndexContent = { controller.indexContent() },
-                onRebuildContentIndex = { controller.indexContent(rebuild = true) },
-                onCancelContentIndex = controller::cancelContentIndex,
-                onClearContentIndex = controller::clearContentIndex,
-                onExportAlbum = { exportingAlbum = it },
-                onEncryptedExportAlbum = { choosingArchive = SelectiveExportRequest(generation, albumIds = listOf(it.albumId)) },
-                onOpenAlbum = { navigateAlbum(it) },
-                onCloseAlbum = { navigateAlbum(albumParent(albums, openAlbum?.id)) },
-                onAlbumRoot = { navigateAlbum(null) },
-                onCreateAlbum = { creatingAlbum = true },
-                onMediaViewChange = { mediaView = it },
-                onAlbumViewChange = { albumView = it },
-                onSortChange = {
-                    if (openAlbum != null) albumSort = it else if (!recentlyAdded) mediaSort = it
-                    selection = emptySet()
-                },
-                onKindsChange = { mediaKinds = it; selection = emptySet() },
-                onAlbumOrderChange = { albumOrder = it },
-                onAlbumFilterChange = { albumFilter = it },
-                onShowRecentlyAdded = {
-                    focusManager.clearFocus()
-                    openAlbum = null
-                    openTag = null
-                    favoritesOnly = false
-                    trashOpen = false
-                    quarantineOpen = false
-                    selection = emptySet()
-                    destination = VaultDestination.LIBRARY
-                    recentlyAdded = true
-                },
-                onShowAllMedia = { recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = false; selection = emptySet() },
-                onShowFavorites = { recentlyAdded = false; openTag = null; favoritesOnly = true; trashOpen = false; quarantineOpen = false; selection = emptySet() },
-                onShowTags = { controller.loadTags(); managingTags = true },
-                onShowTrash = { recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = true; quarantineOpen = false; selection = emptySet() },
-                onShowQuarantine = { recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = true; selection = emptySet() },
-                onEmptyTrash = { confirmingEmptyTrash = true },
-                onRestoreTrash = { controller.restoreTrash { selection = emptySet() } },
-                onRenameAlbum = { album, name -> controller.renameAlbum(album.albumId, name) },
-                onDeleteAlbum = { album ->
-                    controller.deleteAlbum(album.albumId) {
-                        if (openAlbum?.id == album.id) openAlbum = null
-                    }
-                },
-                onMoveAlbum = { album, parent, before ->
-                    controller.moveAlbum(album.albumId, parent?.albumId, before?.albumId)
-                },
-                onMoveAlbumMember = { objectToMove, before ->
-                    openAlbum?.let { album ->
-                        controller.moveAlbumMember(album.albumId, objectToMove.objectId, before?.objectId)
-                    }
-                },
-                onDropMediaIntoAlbum = { objects, target ->
-                    if (target != null) {
-                        controller.placeObjectsInAlbum(target.albumId, objects.map { it.objectId },
-                            openAlbum?.albumId, openAlbum != null) { selection = emptySet() }
-                    } else {
-                        controller.loadAlbums()
-                        organizingIds = objects.map { it.objectId }
-                        movingSelection = openAlbum != null
-                        choosingAlbum = true
-                    }
-                },
-                onLoadMore = controller::loadNextPage,
-                onVisibleMediaChanged = { visibleMediaIds = it },
-                onLock = { controller.lock() },
-                onPanic = { controller.panic() },
-                onDeleteDamagedFiles = { controller.deleteDamagedFiles() },
-                onVerifyAll = { controller.verifyEverything() },
-                onAddRecoverySlot = controller::addRecoverySlot,
-                onChangePassword = controller::changePassword,
-                onToggleAppLock = controller::toggleAppLock,
-                onSetAutoLock = controller::setAutoLock,
-                onAddDeviceSlot = controller::enrollAppleDeviceSlot,
-                onToggleDeviceSlotPolicy = controller::toggleDeviceSlotPolicy,
-                onPrepareDevicePairing = { controller.prepareDevicePairing() },
-                onInspectDevicePairing = { controller.inspectDevicePairing(it) },
-                onApproveDevicePairing = { request, fingerprint -> controller.approveDevicePairing(request, fingerprint) },
-                onSavePairingApproval = pairingFiles.save,
-                onOpenPairingApproval = pairingFiles.open,
-                onLoadPairedDevices = { controller.loadPairedDevices() },
-                onRevokePairedDevice = { controller.revokePairedDevice(it) },
-                onCreateBackup = controller::createBackup,
-                onEncryptExternalFiles = controller::openExternalArchive,
-                onImportArchive = { choosingArchiveImport = true },
-                onRestoreArchive = controller::restoreArchiveAsSeparateVault,
-                onCreateSecondIdentity = controller::createSecondIdentity,
-                onSelectLoadedItems = { selection = loadedObjectSelection(page) },
-                onClearSelection = { selection = emptySet() },
-                onExportSelection = { choosingExport = true },
-                onEncryptedExportSelection = {
-                    if (selection.size > 1000) controller.report("Select at most 1000 items for one encrypted archive.")
-                    else choosingArchive = SelectiveExportRequest(generation, objectIds = selection.sorted().map { it.fromHex() })
-                },
-                onAddSelectionToAlbum = {
-                    controller.loadAlbums()
-                    organizingIds = selection.sorted().map { it.fromHex() }
-                    movingSelection = false
-                    choosingAlbum = true
-                },
-                onMoveSelectionToAlbum = {
-                    controller.loadAlbums()
-                    organizingIds = selection.sorted().map { it.fromHex() }
-                    movingSelection = true
-                    choosingAlbum = true
-                },
-                onTagSelection = {
-                    controller.loadTags()
-                    taggingIds = selection.sorted().map { it.fromHex() }
-                    choosingTag = true
-                },
-                onSetSelectionFavorite = { favorite ->
-                    controller.setFavoritesForAll(selection.sorted().map { it.fromHex() }, favorite) {
-                        selection = emptySet()
-                    }
-                },
-                onRemoveSelectionFromAlbum = {
-                    openAlbum?.let { album ->
-                        controller.removeAllFromAlbum(album.albumId, selectedObjects(page, selection)) {
-                            selection = emptySet()
-                        }
-                    }
-                },
-                onDeleteSelection = { confirmingDelete = true },
-                onRestoreSelection = { controller.restoreAll(selectedObjects(page, selection)) {
-                    selection = emptySet()
-                } },
-                onCancelOperation = controller::cancelActiveOperation,
-                onNoticeShown = controller::consume,
-                // iOS asks for local network access by itself, as the first
-                // connection to a local server goes out; the controller the
-                // entry point binds holds the lock off under that alert.
-                onConfigureSync = controller::configureSync,
-                onSyncNow = controller::syncNow,
-                onDisconnectSync = controller::disconnectSync,
-                onAcknowledgeSyncStop = controller::acknowledgeSyncStop,
-                onInspectSharingRecipient = controller::inspectSharingRecipient,
-                onShareWithRecipient = controller::shareWithRecipient,
-                onRevokeSharingMember = controller::revokeSharingMember,
-            ),
-            // iOS has no system Back to deliver, `DESIGN.md` §25.4.
-            systemBack = { _, _ -> },
-        )
+                }
+            }
+        },
+        onDeleteSelection = { confirmingDelete = true },
+        onRestoreSelection = { controller.restoreAll(selectedObjects(page, selection)) {
+            selection = emptySet()
+        } },
+        onCancelOperation = controller::cancelActiveOperation,
+        onNoticeShown = controller::consume,
+        // iOS asks for local network access by itself, as the first
+        // connection to a local server goes out; the controller the
+        // entry point binds holds the lock off under that alert.
+        onConfigureSync = controller::configureSync,
+        onSyncNow = controller::syncNow,
+        onDisconnectSync = controller::disconnectSync,
+        onAcknowledgeSyncStop = controller::acknowledgeSyncStop,
+        onInspectSharingRecipient = controller::inspectSharingRecipient,
+        onShareWithRecipient = controller::shareWithRecipient,
+        onRevokeSharingMember = controller::revokeSharingMember,
+    )
+    val albumScreens = openAlbum?.let { albumPath(albums, it.id) }.orEmpty()
+        .map { IosVaultScreen.Album(it.id) }
+    val shellScreen = albumScreens.lastOrNull() ?: IosVaultScreen.Root(destination)
+    val shellSearchFocusRequest = searchFocusRequest
+    val projection = viewing
+    val viewerScreen = projection?.let { IosVaultScreen.Viewer(viewerVisit) }
+    val viewerPage = projection?.let { viewerPages(currentPage.objects, it) }.orEmpty()
+    val screenStack = listOf(IosVaultScreen.Root(destination)) + albumScreens + listOfNotNull(viewerScreen)
+    SideEffect {
+        if (controller.route.value != AppRoute.Vault ||
+            (controller.vaultState.value as? VaultState.Unlocked)?.generation != generation
+        ) return@SideEffect
+        if (loadedLocation != browseLocation) {
+            scenes.activate(null)
+            nativeChrome.suspendNavigation()
+            return@SideEffect
         }
+        scenes.publish(shellScreen) { scene ->
+            VaultShell(
+                state = shellState,
+                actions = shellActions.forScene(scene),
+                searchFocusRequest = shellSearchFocusRequest,
+                onNavigationBusyChange = { if (scene.canObserve()) shellNavigationBusy = it },
+                systemBack = { _, _ -> },
+            )
+        }
+        if (viewerScreen != null && projection != null) {
+            scenes.publish(viewerScreen) { scene ->
+                IosViewerRoute(
+                    controller = controller, operation = operation, notice = notice,
+                    cache = cache, generation = generation, projection = projection,
+                    pages = viewerPage, thumbnails = viewerThumbnails,
+                    canLoadMore = currentPage.nextCursor != null, trashOpen = shellState.trashOpen,
+                    onSettled = { if (scene.canAct()) viewing = it },
+                    onBack = { if (scene.canAct()) viewing = null },
+                    onDeleted = { if (scene.canObserve()) viewing = null },
+                    onChromeChanged = { if (scene.canObserve()) scenes.viewerChrome?.invoke(it) },
+                    onNavigationBusyChange = { if (scene.canObserve()) viewerNavigationBusy = it },
+                )
+            }
+        } else {
+            viewerNavigationBusy = false
+            scenes.viewerChrome?.invoke(null)
+        }
+        scenes.activate(viewerScreen ?: shellScreen)
+        nativeChrome.configureScreens(factory = { screen ->
+            scenes.createController(screen).also { content ->
+                content.navigationItem.title = when (screen) {
+                    is IosVaultScreen.Root -> screen.destination.label
+                    is IosVaultScreen.Album -> albums.firstOrNull { it.id == screen.id }?.name
+                    is IosVaultScreen.Viewer -> null
+                }
+            }
+        }, onPop = { target ->
+            if (controller.route.value == AppRoute.Vault &&
+                (controller.vaultState.value as? VaultState.Unlocked)?.generation == generation
+            ) {
+                if (viewing != null && target == shellScreen) viewing = null
+                else when (target) {
+                    is IosVaultScreen.Album -> navigateAlbum(albums.firstOrNull { it.id == target.id })
+                    is IosVaultScreen.Root -> if (target.destination == VaultDestination.ALBUMS)
+                        navigateAlbum(null) else shellActions.onDestination(target.destination)
+                    is IosVaultScreen.Viewer -> Unit
+                }
+            }
+        }, onRetire = scenes::retire)
+        nativeChrome.reconcile(generation, screenStack, destination)
+        nativeChrome.update(shellState, shellActions, colors.accent,
+            navigationBusy = modalNavigationBusy || shellNavigationBusy || viewerNavigationBusy,
+            covered = modalNavigationBusy)
     }
 
-    viewing?.let { projection ->
-        IosViewerRoute(
-            controller = controller,
-            operation = operation,
-            notice = notice,
-            cache = cache,
-            generation = generation,
-            projection = projection,
-            pages = viewerPages(page.objects, projection),
-            thumbnails = viewerThumbnails,
-            canLoadMore = page.nextCursor != null,
-            onSettled = { viewing = it },
-            trashOpen = trashOpen,
-            onBack = { viewing = null },
-            onDeleted = { viewing = null },
-        )
-    }
 }
 
 /**
@@ -1239,7 +1306,13 @@ private fun IosViewerRoute(
     trashOpen: Boolean,
     onBack: () -> Unit,
     onDeleted: () -> Unit,
+    onChromeChanged: (Boolean?) -> Unit,
+    onNavigationBusyChange: (Boolean) -> Unit,
 ) {
+    val scene = checkNotNull(LocalIosVaultScene.current)
+    val nativeChrome = checkNotNull(LocalIosVaultChrome.current)
+    val currentChromeChanged by rememberUpdatedState(onChromeChanged)
+    val currentNavigationBusyChanged by rememberUpdatedState(onNavigationBusyChange)
     var detail by remember(projection.id) { mutableStateOf<ObjectDetail?>(null) }
     var favorite by remember(projection.id) { mutableStateOf(projection.favorite) }
     val tags by controller.tags.collectAsState()
@@ -1257,29 +1330,51 @@ private fun IosViewerRoute(
     val chromeVisible = chrome.visible(chromePinned)
     // §6.2 and §13.1: the status bar is light over the black canvas and goes
     // with the chrome, and it gets the theme's style back when the viewer goes.
-    val root = LocalUIViewController.current.parentViewController as? ChurRootViewController
-    DisposableEffect(root, chromeVisible) {
-        root?.viewerChrome = chromeVisible
-        onDispose { root?.viewerChrome = null }
+    val navigationBusy = showDetail || choosingTags || choosingExport || confirmingDelete || operation != null
+    LaunchedEffect(scene, scene.active, chromeVisible) {
+        if (scene.canObserve()) currentChromeChanged(chromeVisible)
+    }
+    LaunchedEffect(scene, scene.active, navigationBusy) {
+        if (scene.canObserve()) currentNavigationBusyChanged(navigationBusy)
+    }
+    DisposableEffect(scene) {
+        onDispose {
+            // A retired outgoing scene must not reset a newer Viewer's status.
+            if (scene.canObserve()) {
+                currentChromeChanged(null)
+                currentNavigationBusyChanged(false)
+            }
+        }
     }
 
     var zoomedPhoto by remember(projection.id, generation) { mutableStateOf(false) }
     val animation = rememberViewerAnimation(controller.vault, projection, generation, detail?.contentType)
-    LaunchedEffect(projection.id, generation, zoomedPhoto) {
-        // `IOS.md` §18: a preview before full-resolution ranges. The cached
-        // thumbnail shows at once, and the sharper still comes last so the
-        // detail does not wait for an original to decode.
-        preview = cache.load(controller.vault, generation, projection.objectId, projection.id)
+    LaunchedEffect(projection.id, generation, zoomedPhoto, scene.active) {
+        if (!scene.canObserve()) return@LaunchedEffect
+        // `IOS.md` §18: a preview before full-resolution ranges. A retired
+        // native scene must never accept a late decrypted result.
+        val cached = cache.load(controller.vault, generation, projection.objectId, projection.id)
+        if (!scene.canObserve()) return@LaunchedEffect
+        preview = cached
         if (projection.mediaKind == MEDIA_CLASS_AUDIO) {
-            waveform = controller.derivativeOf(projection.objectId, StreamKind.AUDIO_WAVEFORM)
+            val loaded = controller.derivativeOf(projection.objectId, StreamKind.AUDIO_WAVEFORM)
+            if (!scene.canObserve()) return@LaunchedEffect
+            waveform = loaded
         }
-        detail = controller.detailOf(projection.objectId)
-        if (detail?.contentType == dev.po4yka.chur.imports.LivePhotoBundle.CONTENT_TYPE) {
-            livePlayback = dev.po4yka.chur.app.vault.livePhotoPlaybackFor(
-                controller.vault, projection.objectId, onVerify = controller::verifyEverything)
+        val loadedDetail = controller.detailOf(projection.objectId)
+        if (!scene.canObserve()) return@LaunchedEffect
+        detail = loadedDetail
+        if (loadedDetail?.contentType == dev.po4yka.chur.imports.LivePhotoBundle.CONTENT_TYPE) {
+            val loaded = dev.po4yka.chur.app.vault.livePhotoPlaybackFor(
+                controller.vault, projection.objectId,
+                onVerify = { if (scene.canAct()) controller.verifyEverything() })
+            if (!scene.canObserve()) return@LaunchedEffect
+            livePlayback = loaded
         }
-        viewerStill(controller.vault, cache, generation, projection,
-            highResolution = zoomedPhoto && animation == null)?.let { preview = it }
+        val still = viewerStill(controller.vault, cache, generation, projection,
+            highResolution = zoomedPhoto && animation == null)
+        if (!scene.canObserve()) return@LaunchedEffect
+        still?.let { preview = it }
         stillState = if (preview != null || thumbnails[projection.id] != null) {
             ViewerStillState.Ready
         } else {
@@ -1299,7 +1394,7 @@ private fun IosViewerRoute(
             objectId = projection.objectId,
             mediaKind = projection.mediaKind,
             detail = detail,
-            onVerify = controller::verifyEverything,
+            onVerify = { if (scene.canAct()) controller.verifyEverything() },
         )
     }
 
@@ -1308,31 +1403,33 @@ private fun IosViewerRoute(
         pages = pages,
         thumbnails = thumbnails,
         canLoadMore = canLoadMore,
-        onLoadMore = controller::loadNextPage,
+        onLoadMore = { if (scene.canObserve()) controller.loadNextPage() },
         onSettled = onSettled,
         detail = detail,
         preview = preview,
         stillState = stillState,
-        onVerifyStill = { controller.verifyEverything() },
-        onZoomChanged = { zoomedPhoto = it },
+        onVerifyStill = { if (scene.canAct()) controller.verifyEverything() },
+        onZoomChanged = { if (scene.canAct()) zoomedPhoto = it },
         animation = animation,
         showDetail = showDetail,
         chromeVisible = chromeVisible,
-        onToggleChrome = { chrome.toggle(chromePinned) },
-        onTouch = chrome::touched,
+        onToggleChrome = { if (scene.canAct()) chrome.toggle(chromePinned) },
+        onTouch = { if (scene.canAct()) chrome.touched() },
         onBack = onBack,
-        onLock = { controller.lock() },
-        onPanic = { controller.panic() },
+        onLock = { if (scene.canEscape()) nativeChrome.lockNow() },
+        onPanic = { if (scene.canEscape()) nativeChrome.requestPanic() },
         onToggleFavorite = {
-            val next = !favorite
-            controller.setFavorite(projection.objectId, next) { favorite = next }
+            if (scene.canAct()) {
+                val next = !favorite
+                controller.setFavorite(projection.objectId, next) { if (scene.canObserve()) favorite = next }
+            }
         },
-        onEditTags = { controller.loadTags(); choosingTags = true },
-        onExport = { choosingExport = true },
-        onDelete = { confirmingDelete = true },
+        onEditTags = { if (scene.canAct()) { controller.loadTags(); choosingTags = true } },
+        onExport = { if (scene.canAct()) choosingExport = true },
+        onDelete = { if (scene.canAct()) confirmingDelete = true },
         trashOpen = trashOpen,
-        onRestore = { controller.restoreAll(listOf(projection.objectId), onDeleted) },
-        onToggleDetail = { showDetail = !showDetail },
+        onRestore = { if (scene.canAct()) controller.restoreAll(listOf(projection.objectId), onDeleted) },
+        onToggleDetail = { if (scene.canAct()) showDetail = !showDetail },
         player = playback?.let { source ->
             { modifier, controlsPadding ->
                 // `DESIGN.md` §13.1 and §13.2: the video opens on its poster,
@@ -1343,7 +1440,7 @@ private fun IosViewerRoute(
                     poster = preview,
                     controlsVisible = chromeVisible,
                     controlsPinned = chromePinned,
-                    onControlsVisibleChange = { chrome.follow(it, chromePinned) },
+                    onControlsVisibleChange = { if (scene.canObserve()) chrome.follow(it, chromePinned) },
                     controlsPadding = controlsPadding,
                     touches = chrome.touches,
                 )
@@ -1356,29 +1453,36 @@ private fun IosViewerRoute(
         } else null,
         waveform = waveform,
         operation = operation,
-        onCancelOperation = controller::cancelActiveOperation,
+        onCancelOperation = { if (scene.canAct()) controller.cancelActiveOperation() },
         notice = notice,
-        onNoticeShown = controller::consume,
+        onNoticeShown = { if (scene.canObserve()) controller.consume(it) },
     )
     if (choosingTags) {
         val selected = listOf(projection.objectId)
-        val refresh: () -> Unit = { viewerScope.launch { detail = controller.detailOf(projection.objectId) } }
+        val refresh: () -> Unit = {
+            if (scene.canObserve()) viewerScope.launch {
+                val loaded = controller.detailOf(projection.objectId)
+                if (scene.canObserve()) detail = loaded
+            }
+        }
         TagPickerDialog(tags = tags,
-            onAdd = { tag -> choosingTags = false; controller.setTagForAll(tag.tagId, selected, true, refresh) },
-            onRemove = { tag -> choosingTags = false; controller.setTagForAll(tag.tagId, selected, false, refresh) },
-            onCreate = { name -> choosingTags = false; controller.createTagWithObjects(name, selected, refresh) },
-            onDismiss = { choosingTags = false })
+            onAdd = { tag -> if (scene.canAct()) { choosingTags = false; controller.setTagForAll(tag.tagId, selected, true, refresh) } },
+            onRemove = { tag -> if (scene.canAct()) { choosingTags = false; controller.setTagForAll(tag.tagId, selected, false, refresh) } },
+            onCreate = { name -> if (scene.canAct()) { choosingTags = false; controller.createTagWithObjects(name, selected, refresh) } },
+            onDismiss = { if (scene.canAct()) choosingTags = false })
     }
     if (confirmingDelete) {
         DeleteSelectionDialog(
             count = 1,
             permanent = trashOpen,
             onDelete = {
-                confirmingDelete = false
-                if (trashOpen) controller.permanentlyDeleteAll(listOf(projection.objectId), onDeleted)
-                else controller.delete(projection.objectId, onDeleted)
+                if (scene.canAct()) {
+                    confirmingDelete = false
+                    if (trashOpen) controller.permanentlyDeleteAll(listOf(projection.objectId), onDeleted)
+                    else controller.delete(projection.objectId, onDeleted)
+                }
             },
-            onDismiss = { confirmingDelete = false },
+            onDismiss = { if (scene.canAct()) confirmingDelete = false },
         )
     }
     if (choosingExport) {
@@ -1387,10 +1491,12 @@ private fun IosViewerRoute(
             files = true,
             share = true,
             onChoose = { target ->
-                choosingExport = false
-                controller.export(projection.objectId, target)
+                if (scene.canAct()) {
+                    choosingExport = false
+                    controller.export(projection.objectId, target)
+                }
             },
-            onDismiss = { choosingExport = false },
+            onDismiss = { if (scene.canAct()) choosingExport = false },
         )
     }
 }

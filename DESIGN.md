@@ -1546,7 +1546,10 @@ Forbidden divergence:
 ### 25.6 Platform glass and shared content
 
 The vault uses the same content, state, and actions on both platforms. iOS
-chrome uses real UIKit bars and controls: iOS 26 and later supply Liquid Glass,
+chrome uses a UITabBarController with one UINavigationController per destination
+and distinct Compose content controllers for album and viewer frames. UIKit
+commits common navigation only after a completed native pop; cancellation
+keeps the current page and viewer. iOS 26 and later supply Liquid Glass,
 while earlier supported systems use their native appearance. Android chrome
 uses Haze 2 with an explicitly selected, session-scoped content source. API 33
 and later support shader optics; older supported versions use reduced effects

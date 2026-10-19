@@ -237,8 +237,14 @@ kotlin {
                     cargoTargetDirectory
                         .file("${appleTriples.getValue(targetName)}/debug/libchur_ffi.a")
                 linkerOpts(archive.asFile.absolutePath)
+                // A native test executable has no .app bundle. Embed its host
+                // metadata so Compose performs the same strict refresh-rate
+                // sanity check as it does in the production UIKit host.
+                val testInfoPlist = project.layout.projectDirectory.file("src/iosTest/resources/Info.plist")
+                linkerOpts("-sectcreate", "__TEXT", "__info_plist", testInfoPlist.asFile.absolutePath)
                 linkTaskProvider.configure {
                     inputs.file(archive)
+                    inputs.file(testInfoPlist)
                     dependsOn(
                         ":shared:core-ffi:cargoBuildFfi" +
                             targetName.replaceFirstChar { it.uppercase() },
