@@ -395,7 +395,13 @@ pub unsafe extern "C" fn chur_private_note_attachments(
             ResourceLimitExceeded,
             "the attachment output exceeds its bound"
         );
-        let input = unsafe { api::borrow_bytes(request, len)? };
+        let request_length = u32::try_from(len).map_err(|_| {
+            chur_core::err!(
+                ResourceLimitExceeded,
+                "the attachment request length is out of range"
+            )
+        })?;
+        let input = unsafe { api::borrow_bytes(request, request_length)? };
         let mut r = Reader {
             bytes: input,
             at: 0,

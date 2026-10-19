@@ -297,10 +297,25 @@ jobs:
       # cross-build, the per-ABI staging, and the `jniLibs` layout — which a
       # library-module build never reaches. Lint runs beside it, because an
       # Android host defect is more often a manifest or a resource than a type
-      # error. The instrumented tests are assembled too: no job runs them on a
-      # device, and compiling them is the least that keeps them from rotting
-      # behind a green run.
+      # error. The instrumented tests are assembled here and the notes/lock
+      # feature checks below run that actual application on an owned emulator.
       - run: ./gradlew --no-daemon :apps:androidApp:assembleDebug :apps:androidApp:lintDebug :apps:androidApp:assembleDebugAndroidTest
+      - name: install the Android notes UI test image
+        run: |
+          set -euo pipefail
+          test -e /dev/kvm
+          sudo chown "$(id -u):$(id -g)" /dev/kvm
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "emulator" "system-images;android-35;google_apis;x86_64"
+      - name: exercise notes images and private lock behavior on Android
+        timeout-minutes: 20
+        run: scripts/test-android-notes-ui.sh
+      - name: upload notes UI screenshots and device logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: notes-ui-${{ github.sha }}
+          path: build/notes-ui-ci/
+          if-no-files-found: error
       # DEFAULT locking honors the committed lockfile but does not fail on a
       # drift, so the pin is enforced here: a full re-resolution with
       # --write-locks must reproduce the committed files byte for byte, and a
