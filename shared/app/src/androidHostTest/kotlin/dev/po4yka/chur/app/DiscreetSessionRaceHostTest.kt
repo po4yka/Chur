@@ -361,20 +361,19 @@ class DiscreetSessionRaceHostTest {
             controller.lock()
             finishLock()
             controller.goTo(AppRoute.Unlock)
-            controller.unlockWithAppleDevice()
+            val oldAppleRequest = actionJob { controller.unlockWithAppleDevice() }
             main.awaitSignal(apple.entered[0])
             controller.panic()
             controller.goTo(AppRoute.Unlock)
             controller.unlock(PASSWORD)
-            main.until { controller.route.value == AppRoute.Vault }
-            main.runNext()
+            main.until { controller.route.value == AppRoute.Vault && !controller.unlocking.value }
             assertEquals(1, apple.active.get(), "the old OS prompt remains deliberately pending")
             assertContentEquals(identity, assertNotNull(controller.vault.syncIdentity()).vaultId)
             controller.vault.createAlbum("Password session while Apple prompt is pending")
             completeRead { controller.loadAlbums() }
             apple.releases[0].countDown()
             main.awaitSignal(apple.ended[0])
-            main.runNext()
+            main.until { oldAppleRequest.isCompleted }
             assertIs<VaultState.Unlocked>(controller.vaultState.value)
             assertEquals(AppRoute.Vault, controller.route.value)
             assertEquals("Password session while Apple prompt is pending", controller.albums.value.single().name)
@@ -552,7 +551,20 @@ class DiscreetSessionRaceHostTest {
             // hops is not a barrier: fast withContext work need not suspend.
             awaitPhraseRequestCompletion()
         }
-        suspend fun completeRead(read: () -> Unit) { read(); main.runNext(); main.runNext() }
+        fun actionJob(action: () -> Unit): Job {
+            val scope = controller.javaClass.getDeclaredField("scope").apply { isAccessible = true }
+                .get(controller) as CoroutineScope
+            val parent = checkNotNull(scope.coroutineContext[Job])
+            val before = parent.children.toSet()
+            action()
+            // The guarded action is attached synchronously, before HeldMain can run it.
+            return parent.children.filterNot { it in before }.single()
+        }
+        suspend fun completeRead(read: () -> Unit) {
+            val operation = actionJob(read)
+            // withContext may finish inline; await the action, not an assumed number of hops.
+            main.until { operation.isCompleted }
+        }
         suspend fun awaitPhraseRequestCompletion() {
             val requested = controller.javaClass.getDeclaredField("phraseRequested").apply { isAccessible = true }
             main.until { !requested.getBoolean(controller) }
