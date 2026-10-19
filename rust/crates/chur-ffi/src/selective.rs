@@ -462,7 +462,9 @@ fn copy(
             Conflict,
             "the selected note changed"
         );
-        target.with(|s| transfer::copy_note(s.catalog()?, &note))?;
+        let attachments =
+            source.with(|s| chur_catalog::note_attachments::all(s.catalog_ref()?, id))?;
+        target.with(|s| transfer::copy_note(s.catalog()?, &note, &attachments))?;
         completed += 1;
         shared.advance(completed, Stage::Running);
     }

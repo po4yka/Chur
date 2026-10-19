@@ -59,14 +59,14 @@ use crate::panic::guard;
 ///
 /// A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the
 /// library is not called again in that process.
-pub const ABI_VERSION_MAJOR: u32 = 4;
+pub const ABI_VERSION_MAJOR: u32 = 5;
 
 /// Minor component of the native API version.
 ///
 /// A minor difference is negotiated only within explicitly compatible
 /// behaviour; it never selects a cryptographic suite from untrusted input.
 ///
-/// ABI 4 adds the explicit private-note format to existing binary control records.
+/// ABI 5 adds the private-note attachment count to existing binary control records.
 /// It retains ABI 3 caller-persisted import and album identities for safe desktop retries.
 /// A caller from an earlier major must refuse before exchanging any payload.
 pub const ABI_VERSION_MINOR: u32 = 0;

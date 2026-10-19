@@ -14,6 +14,17 @@ import kotlin.test.assertTrue
 
 class NoteFileActionsTest {
     @Test
+    fun managed_attachment_resolution_accepts_only_a_complete_opaque_local_reference() {
+        val id = "0123456789abcdef0123456789abcdef"
+        kotlin.test.assertEquals(id, dev.po4yka.chur.app.notes.noteAttachmentId("attachment:$id"))
+        for (uri in listOf("https://example.invalid/attachment:$id", "file:///attachment:$id", "attachment:../$id", "attachment:$id?remote=1", "attachment:${id.uppercase()}")) {
+            kotlin.test.assertNull(dev.po4yka.chur.app.notes.noteAttachmentId(uri))
+        }
+        kotlin.test.assertEquals("![a\\[b\\].png](attachment:$id)",
+            dev.po4yka.chur.app.notes.attachmentMarkdownReference("a[b].png", id, true))
+    }
+
+    @Test
     fun markdown_import_preserves_the_exact_source_and_uses_the_filename_as_title() {
         val source = "# Heading\r\n\r\n**bold**  \n- [ ] item\n| a | b |\n| - | - |\n| 1 | 2 |\n"
         val note = decodeMarkdownNote("Document.MD", source.encodeToByteArray())

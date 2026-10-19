@@ -17,6 +17,7 @@ use chur_format::{
         CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V5, CATALOG_FORMAT_VERSION_V6,
         CATALOG_FORMAT_VERSION_V7, CATALOG_FORMAT_VERSION_V8, CATALOG_FORMAT_VERSION_V9,
         CATALOG_FORMAT_VERSION_V10, CATALOG_FORMAT_VERSION_V11, CATALOG_FORMAT_VERSION_V12,
+        CATALOG_FORMAT_VERSION_V13,
     },
     envelope::ObjectKeyEnvelope,
 };
@@ -68,6 +69,9 @@ const STEPS: &[Step] = &[
     },
     Step {
         version: CATALOG_FORMAT_VERSION_V12,
+    },
+    Step {
+        version: CATALOG_FORMAT_VERSION_V13,
     },
 ];
 
@@ -718,6 +722,31 @@ INSERT INTO own_sync_pending_album_memberships(album_id, object_id)
 /// Explicit body interpretation; all existing notes remain literal text.
 const V12_DDL: &str = "ALTER TABLE private_notes ADD COLUMN format INTEGER NOT NULL DEFAULT 0 CHECK(format IN (0,1));";
 
+/// Note-owned attachments never leave the SQLCipher catalog except explicit exports.
+const V13_DDL: &str = r#"
+CREATE TABLE private_note_attachments (
+ note_id BLOB NOT NULL REFERENCES private_notes(note_id) ON DELETE CASCADE CHECK(length(note_id)=16),
+ attachment_id BLOB NOT NULL CHECK(length(attachment_id)=16),
+ name TEXT NOT NULL CHECK(length(CAST(name AS BLOB)) BETWEEN 1 AND 240),
+ mime_type TEXT NOT NULL CHECK(mime_type IN ('image/png','image/jpeg','image/gif','image/webp','application/pdf','application/octet-stream')),
+ data BLOB NOT NULL CHECK(length(data)<=8388608),
+ PRIMARY KEY(note_id,attachment_id)
+) STRICT;
+"#;
+/// Adds bounded encrypted attachment storage after the authenticated descriptor transition.
+pub fn migrate_v12_to_v13(db: &mut CatalogDb) -> Result<()> {
+    ensure!(
+        recorded_version(db.connection())? == Some(CATALOG_FORMAT_VERSION_V12),
+        MigrationRequired,
+        "the catalog is not version twelve"
+    );
+    db.transaction(|tx| {
+ tx.execute("UPDATE vault_state SET active_migration_target=13 WHERE only_row=1",[]).map_err(|e|map_sqlite(e,"the attachment migration target could not be written"))?;
+ tx.execute_batch(V13_DDL).map_err(|e|map_sqlite(e,"the attachment schema migration failed"))?;
+ tx.execute("UPDATE vault_state SET catalog_format_version=13,active_migration_target=NULL WHERE only_row=1",[]).map_err(|e|map_sqlite(e,"the attachment schema version could not be written"))?; Ok(())
+ })
+}
+
 /// Adds the body discriminator after an authenticated v11 transition.
 pub fn migrate_v11_to_v12(db: &mut CatalogDb) -> Result<()> {
     ensure!(
@@ -789,15 +818,15 @@ pub fn open_at_current_version(db: &mut CatalogDb, now_ms: u64) -> Result<u16> {
     let present = recorded_version(db.connection())?;
     let Some(present) = present else {
         install(db, now_ms)?;
-        return Ok(CATALOG_FORMAT_VERSION_V12);
+        return Ok(CATALOG_FORMAT_VERSION_V13);
     };
-    if present != CATALOG_FORMAT_VERSION_V12 {
+    if present != CATALOG_FORMAT_VERSION_V13 {
         bail!(
             MigrationRequired,
             "the catalog requires an authenticated schema migration"
         );
     }
-    Ok(CATALOG_FORMAT_VERSION_V12)
+    Ok(CATALOG_FORMAT_VERSION_V13)
 }
 
 /// The version the database records, or `None` when the schema is absent.
@@ -868,13 +897,16 @@ fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
             .execute_batch(V12_DDL)
             .map_err(|e| map_sqlite(e, "the note format schema could not be created"))?;
         transaction
+            .execute_batch(V13_DDL)
+            .map_err(|e| map_sqlite(e, "the attachment schema could not be created"))?;
+        transaction
             .execute(
                 "INSERT INTO vault_state (
                      only_row, catalog_format_version, catalog_generation,
                      active_migration_target, object_store_checkpoint,
                      integrity_checkpoint_ms, capability_flags
                  ) VALUES (1, ?1, 1, NULL, 0, ?2, 0)",
-                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V12), checkpoint],
+                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V13), checkpoint],
             )
             .map_err(|error| map_sqlite(error, "the catalog state row could not be written"))?;
         Ok(())
@@ -902,6 +934,7 @@ const RESET_V7_DDL: &str = "
 DROP TABLE IF EXISTS own_sync_pending_album_memberships;
 DROP TABLE IF EXISTS content_index;
 DROP TABLE IF EXISTS private_note_search;
+DROP TABLE IF EXISTS private_note_attachments;
 DROP TABLE IF EXISTS private_notes;
 DROP TABLE trash_entries;
 DROP INDEX albums_siblings;
@@ -1476,11 +1509,11 @@ mod tests {
     }
 
     #[test]
-    fn a_new_catalog_installs_version_twelve() {
+    fn a_new_catalog_installs_version_thirteen() {
         let mut db = open();
         assert_eq!(
             open_at_current_version(&mut db, 1_700_000_000_000).expect("install"),
-            CATALOG_FORMAT_VERSION_V12
+            CATALOG_FORMAT_VERSION_V13
         );
         let sharing_tables: i64 = db
             .connection()
@@ -1552,7 +1585,7 @@ mod tests {
         }
         assert_eq!(
             STEPS.last().map(|step| step.version),
-            Some(CATALOG_FORMAT_VERSION_V12)
+            Some(CATALOG_FORMAT_VERSION_V13)
         );
     }
 

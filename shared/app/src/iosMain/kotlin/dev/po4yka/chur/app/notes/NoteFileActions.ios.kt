@@ -75,7 +75,7 @@ actual fun NoteImportAction(
                 if (accepted && url != null) scope.launch {
                     try {
                         val note = withContext(Dispatchers.Default) {
-                            val bytes = readMarkdownDocument(url)
+                            val bytes = readNoteDocument(url, NOTE_IMPORT_MAX_BYTES)
                             try { decodeMarkdownNote(url.lastPathComponent ?: error("missing filename"), bytes) }
                             finally { bytes.fill(0) }
                         }
@@ -150,7 +150,7 @@ actual fun PublicNoteExportAction(
     }) { Text(if (markdown) "Export .md" else "Export .txt") }
 }
 
-private class NotePickerDelegate(private val completion: (NSURL?) -> Unit) : NSObject(), UIDocumentPickerDelegateProtocol {
+internal class NotePickerDelegate(private val completion: (NSURL?) -> Unit) : NSObject(), UIDocumentPickerDelegateProtocol {
     override fun documentPicker(controller: UIDocumentPickerViewController, didPickDocumentsAtURLs: List<*>) {
         completion(didPickDocumentsAtURLs.firstOrNull() as? NSURL)
     }
@@ -161,7 +161,7 @@ private class NotePickerDelegate(private val completion: (NSURL?) -> Unit) : NSO
 }
 
 /** UIKit delegates are weak; retain them exactly as long as their presentation. */
-private class NotePickerPresentation {
+internal class NotePickerPresentation {
     private var picker: UIDocumentPickerViewController? = null
     private var delegate: NotePickerDelegate? = null
     var temporaryDirectory: String? = null
@@ -186,13 +186,13 @@ private class NotePickerPresentation {
     }
 }
 
-private fun readMarkdownDocument(url: NSURL): ByteArray {
+internal fun readNoteDocument(url: NSURL, maxBytes: Int): ByteArray {
     val scoped = url.startAccessingSecurityScopedResource()
     try {
         val descriptor = open(url.path ?: error("document has no path"), O_RDONLY)
         check(descriptor >= 0) { "cannot open document" }
         try {
-            val buffer = ByteArray(NOTE_IMPORT_MAX_BYTES + 1)
+            val buffer = ByteArray(maxBytes + 1)
             var count = 0
             try {
                 buffer.usePinned { pinned ->
@@ -203,7 +203,7 @@ private fun readMarkdownDocument(url: NSURL): ByteArray {
                         count += received
                     }
                 }
-                require(count <= NOTE_IMPORT_MAX_BYTES) { "note is too large" }
+                require(count <= maxBytes) { "note is too large" }
                 return buffer.copyOf(count)
             } finally { buffer.fill(0) }
         } finally { close(descriptor) }

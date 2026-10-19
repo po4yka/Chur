@@ -95,7 +95,7 @@ internal actual fun decodeForDisplay(original: ChurBuffer, maxEdgePx: Int): Imag
  * rather than when the image is first drawn.
  */
 @OptIn(ExperimentalForeignApi::class)
-private fun uprightThumbnail(source: CGImageSourceRef, maxEdgePx: Int): CGImageRef? = memScoped {
+internal fun uprightThumbnail(source: CGImageSourceRef, maxEdgePx: Int): CGImageRef? = memScoped {
     val edge = alloc<IntVar> { value = maxEdgePx }
     val maxPixelSize = CFNumberCreate(null, kCFNumberIntType, edge.ptr)
     val options = CFDictionaryCreateMutable(
@@ -118,7 +118,7 @@ private fun uprightThumbnail(source: CGImageSourceRef, maxEdgePx: Int): CGImageR
 
 /** Draws [image] into a new Skia bitmap of the same size, RGBA premultiplied. */
 @OptIn(ExperimentalForeignApi::class)
-private fun rasterOf(image: CGImageRef): ImageBitmap? {
+internal fun rasterOf(image: CGImageRef): ImageBitmap? {
     val width = CGImageGetWidth(image).toInt()
     val height = CGImageGetHeight(image).toInt()
     val bitmap = Bitmap()

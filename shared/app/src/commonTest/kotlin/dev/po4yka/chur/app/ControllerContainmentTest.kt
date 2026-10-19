@@ -5,6 +5,7 @@ import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.notes.InMemoryNoteStore
 import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.notes.NoteStore
+import dev.po4yka.chur.notes.NotePackages
 import dev.po4yka.chur.sync.SyncTransportFailure
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -17,6 +18,7 @@ import kotlinx.coroutines.test.setMain
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
@@ -317,6 +319,45 @@ class ControllerContainmentTest {
         assertEquals(changed.copy(updatedMs = 9), controller.notesState.value.first { it.id == "a" })
     }
 
+    @Test
+    fun stale_text_saves_preserve_attachment_membership_without_resurrecting_removed_files() = runTest(dispatcher) {
+        val original = note()
+        val store = InMemoryNoteStore(listOf(original))
+        val controller = controllerOver(store, clock = { 9L })
+        val added = controller.addPublicNoteAttachment(original, "file.bin", byteArrayOf(1, 2))
+        controller.putNote(original.copy(body = "Text captured before attachment import"))
+        advanceUntilIdle()
+        assertEquals(listOf(added), store.all().single().attachments)
+        assertContentEquals(byteArrayOf(1, 2), controller.readPublicNoteAttachment(original.id, added.id))
+
+        val stale = store.all().single()
+        controller.removePublicNoteAttachment(original.id, added.id)
+        controller.putNote(stale.copy(body = "Text captured before attachment removal"))
+        advanceUntilIdle()
+        assertTrue(store.all().single().attachments.isEmpty())
+        assertEquals("Text captured before attachment removal", store.all().single().body)
+    }
+
+    @Test
+    fun attachment_only_note_and_export_of_latest_unsaved_source_survive() = runTest(dispatcher) {
+        val store = InMemoryNoteStore()
+        val controller = controllerOver(store, clock = { 9L })
+        val blank = Note("files-only", "", "", 1)
+        val added = controller.addPublicNoteAttachment(blank, "empty.bin", byteArrayOf())
+        assertTrue(controller.disclosureDue.value)
+        assertEquals(listOf(added), store.all().single().attachments)
+        val bytes = controller.exportPublicNotePackage(blank.copy(body = "# Latest source  \n"))
+        try {
+            val decoded = NotePackages.decode(bytes)
+            try {
+                assertEquals("# Latest source  \n", decoded.body)
+                assertEquals(added.id, decoded.attachments.single().id)
+                assertContentEquals(byteArrayOf(), decoded.attachments.single().data)
+            } finally { decoded.attachments.forEach { it.data.fill(0) } }
+            assertEquals("# Latest source  \n", store.all().single().body)
+        } finally { bytes.fill(0) }
+    }
+
     private fun controllerOver(
         notes: NoteStore,
         exports: ExportSink = NoExports,
@@ -338,6 +379,11 @@ class ControllerContainmentTest {
         override suspend fun put(note: Note) = raise()
 
         override suspend fun remove(id: String) = raise()
+        override suspend fun addAttachment(noteId: String, name: String, data: ByteArray): dev.po4yka.chur.notes.NoteAttachment = raise()
+        override suspend fun readAttachment(noteId: String, attachmentId: String): ByteArray = raise()
+        override suspend fun removeAttachment(noteId: String, attachmentId: String): Unit = raise()
+        override suspend fun exportPackage(noteId: String): ByteArray = raise()
+        override suspend fun importPackage(data: ByteArray, noteId: String, updatedMs: Long): Note = raise()
 
         override suspend fun disclosureAcknowledged(): Boolean = raise()
 
@@ -351,6 +397,11 @@ class ControllerContainmentTest {
         override suspend fun put(note: Note) = Unit
 
         override suspend fun remove(id: String) = Unit
+        override suspend fun addAttachment(noteId: String, name: String, data: ByteArray): dev.po4yka.chur.notes.NoteAttachment = error("unused")
+        override suspend fun readAttachment(noteId: String, attachmentId: String): ByteArray = error("unused")
+        override suspend fun removeAttachment(noteId: String, attachmentId: String) = Unit
+        override suspend fun exportPackage(noteId: String): ByteArray = error("unused")
+        override suspend fun importPackage(data: ByteArray, noteId: String, updatedMs: Long): Note = error("unused")
 
         override suspend fun disclosureAcknowledged(): Boolean = true
 

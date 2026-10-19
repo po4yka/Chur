@@ -3,6 +3,15 @@ package dev.po4yka.chur.app
 import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.PrivateNote
+import dev.po4yka.chur.ffi.PrivateNoteAttachment
+import dev.po4yka.chur.ffi.PrivateNoteAttachmentData
+import dev.po4yka.chur.ffi.fromHex
+import dev.po4yka.chur.notes.NoteAttachments
+import dev.po4yka.chur.notes.NotePackages
+import dev.po4yka.chur.notes.NoteFormat
+import dev.po4yka.chur.app.notes.attachmentMarkdownReference
+import kotlin.uuid.Uuid
+import kotlinx.coroutines.CoroutineStart
 import dev.po4yka.chur.ffi.PrivateNoteFormat
 import dev.po4yka.chur.ffi.PrivateNoteAction
 import dev.po4yka.chur.ffi.PrivateNotePage
@@ -34,6 +43,7 @@ data class PrivateNoteEditorState(
     val body: String = saved?.body.orEmpty(),
     val pinned: Boolean = saved?.pinned ?: false,
     val format: PrivateNoteFormat = saved?.format ?: PrivateNoteFormat.MARKDOWN,
+    val attachments: List<PrivateNoteAttachment> = emptyList(),
 ) {
     val trashed: Boolean get() = saved?.trashedAtMs != null
     val dirty: Boolean get() = if (saved == null) title.isNotEmpty() || body.isNotEmpty() || pinned
@@ -67,6 +77,11 @@ internal interface PrivateNotesAccess {
     suspend fun load(generation: Long, id: ByteArray): PrivateNote
     suspend fun save(generation: Long, saved: PrivateNote?, title: String, body: String, pinned: Boolean, format: PrivateNoteFormat): PrivateNote
     suspend fun change(generation: Long, id: ByteArray, revision: Long, action: PrivateNoteAction): PrivateNote?
+    suspend fun attachments(generation: Long, id: ByteArray): List<PrivateNoteAttachment>
+    suspend fun readAttachment(generation: Long, id: ByteArray, attachmentId: ByteArray): ByteArray
+    suspend fun putAttachment(generation: Long, saved: PrivateNote, attachment: PrivateNoteAttachmentData): PrivateNote
+    suspend fun removeAttachment(generation: Long, saved: PrivateNote, attachmentId: ByteArray): PrivateNote
+    suspend fun importPackage(generation: Long, title: String, body: String, format: PrivateNoteFormat, attachments: List<PrivateNoteAttachmentData>): PrivateNote
 }
 
 private class VaultPrivateNotesAccess(private val vault: VaultRepository) : PrivateNotesAccess {
@@ -78,6 +93,14 @@ private class VaultPrivateNotesAccess(private val vault: VaultRepository) : Priv
             title = title, body = body, pinned = pinned, format = format)
     override suspend fun change(generation: Long, id: ByteArray, revision: Long, action: PrivateNoteAction) =
         vault.changePrivateNote(generation, id, revision, action)
+    override suspend fun attachments(generation: Long, id: ByteArray) = vault.privateNoteAttachments(generation, id)
+    override suspend fun readAttachment(generation: Long, id: ByteArray, attachmentId: ByteArray) = vault.readPrivateNoteAttachment(generation, id, attachmentId)
+    override suspend fun putAttachment(generation: Long, saved: PrivateNote, attachment: PrivateNoteAttachmentData) =
+        vault.putPrivateNoteAttachment(generation, saved.noteId, saved.revision, attachment)
+    override suspend fun removeAttachment(generation: Long, saved: PrivateNote, attachmentId: ByteArray) =
+        vault.removePrivateNoteAttachment(generation, saved.noteId, saved.revision, attachmentId)
+    override suspend fun importPackage(generation: Long, title: String, body: String, format: PrivateNoteFormat, attachments: List<PrivateNoteAttachmentData>) =
+        vault.importPrivateNotePackage(generation, title, body, format, attachments)
 }
 
 /**
@@ -94,11 +117,13 @@ class PrivateNotesController internal constructor(
     private val dispatcher: CoroutineDispatcher,
     private val onActivity: () -> Unit = {},
     private val onEncryptedExport: (List<PrivateNoteSelection>) -> Unit = {},
+    private val onAttachmentExport: (PrivateNote, PrivateNoteAttachment) -> Unit = { _, _ -> },
 ) : PrivateNotesActions {
     constructor(vault: VaultRepository, generation: Long, scope: CoroutineScope,
         onLeave: () -> Unit, onExport: (PrivateNote) -> Unit, onActivity: () -> Unit = {},
-        onEncryptedExport: (List<PrivateNoteSelection>) -> Unit = {}) :
-        this(generation, vault.state, VaultPrivateNotesAccess(vault), scope, onLeave, onExport, Dispatchers.Default, onActivity, onEncryptedExport)
+        onEncryptedExport: (List<PrivateNoteSelection>) -> Unit = {},
+        onAttachmentExport: (PrivateNote, PrivateNoteAttachment) -> Unit = { _, _ -> }) :
+        this(generation, vault.state, VaultPrivateNotesAccess(vault), scope, onLeave, onExport, Dispatchers.Default, onActivity, onEncryptedExport, onAttachmentExport)
 
     private val job = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + job)
@@ -199,7 +224,8 @@ class PrivateNotesController internal constructor(
         listing?.cancel()
         request++
         val loaded = withContext(dispatcher) { access.load(generation, note.noteId) }
-        update { it.copy(editor = PrivateNoteEditorState(loaded), confirmation = null, loading = false) }
+        val attachments = withContext(dispatcher) { access.attachments(generation, loaded.noteId) }
+        update { it.copy(editor = PrivateNoteEditorState(loaded, attachments = attachments), confirmation = null, loading = false) }
     }
     override fun title(value: String) = edit { copy(title = value) }
     override fun body(value: String) = edit { copy(body = value) }
@@ -209,6 +235,67 @@ class PrivateNotesController internal constructor(
         if (!current() || state.value.busy || state.value.editor != null) return
         create()
         edit { copy(title = title, body = body, format = PrivateNoteFormat.MARKDOWN) }
+    }
+    override fun importPackage(bytes: ByteArray) {
+        if (!current() || state.value.busy || state.value.editor != null) { bytes.fill(0); return }
+        runAction(cleanup = { bytes.fill(0) }) {
+            val imported = withContext(dispatcher) {
+                val packageNote = NotePackages.decode(bytes)
+                try {
+                    access.importPackage(generation, packageNote.title, packageNote.body,
+                        if (packageNote.format == NoteFormat.MARKDOWN) PrivateNoteFormat.MARKDOWN else PrivateNoteFormat.PLAIN_TEXT,
+                        packageNote.attachments.map { PrivateNoteAttachmentData(it.id.fromHex(), it.name, it.mimeType, it.data) })
+                } finally { packageNote.attachments.forEach { it.data.fill(0) } }
+            }
+            val attachments = withContext(dispatcher) { access.attachments(generation, imported.noteId) }
+            update { it.copy(editor = PrivateNoteEditorState(imported, attachments = attachments), selection = emptyMap(), confirmation = null) }
+        }
+    }
+    override fun addAttachment(name: String, bytes: ByteArray) {
+        val editor = state.value.editor
+        if (!current() || state.value.busy || editor?.saved == null || editor.dirty || editor.trashed) { bytes.fill(0); return }
+        runAction(cleanup = { bytes.fill(0) }) {
+            val id = Uuid.random().toString().replace("-", "")
+            val saved = withContext(dispatcher) {
+                val mime = NoteAttachments.validate(name, bytes)
+                access.putAttachment(generation, editor.saved, PrivateNoteAttachmentData(id.fromHex(), name, mime, bytes))
+            }
+            val attachments = withContext(dispatcher) { access.attachments(generation, saved.noteId) }
+            // Attaching is an explicit durable action. Inserting a reference remains an unsaved text edit.
+            val image = attachments.first { it.id == id }.mimeType.startsWith("image/")
+            val body = if (editor.format == PrivateNoteFormat.MARKDOWN) editor.body +
+                (if (editor.body.isEmpty()) "" else "\n\n") + attachmentMarkdownReference(name, id, image) else editor.body
+            val canInsert = utf8Size(body) <= PRIVATE_NOTE_BODY_MAX_BYTES
+            update { it.copy(editor = PrivateNoteEditorState(saved, body = if (canInsert) body else editor.body, attachments = attachments),
+                error = if (canInsert) null else "The attachment was saved. Its reference would exceed the 256 KiB text limit.") }
+        }
+    }
+    override fun removeAttachment(id: String) {
+        val editor = state.value.editor ?: return
+        val attachment = editor.attachments.firstOrNull { it.id == id } ?: return
+        if (!current() || state.value.busy || editor.saved == null || editor.dirty || editor.trashed) return
+        runAction {
+            val saved = withContext(dispatcher) { access.removeAttachment(generation, editor.saved, attachment.attachmentId) }
+            update { it.copy(editor = PrivateNoteEditorState(saved, attachments = editor.attachments.filterNot { it.id == id })) }
+        }
+    }
+    override fun exportAttachment(id: String) {
+        if (!current() || state.value.busy) return
+        val editor = state.value.editor ?: return
+        if (editor.dirty) return
+        val saved = editor.saved ?: return
+        val attachment = editor.attachments.firstOrNull { it.id == id } ?: return
+        onActivity()
+        onAttachmentExport(saved, attachment)
+    }
+    override suspend fun readAttachment(id: String): ByteArray {
+        check(current())
+        val editor = state.value.editor ?: error("note is not open")
+        val attachment = editor.attachments.firstOrNull { it.id == id } ?: error("attachment is unavailable")
+        val saved = editor.saved ?: error("note is not saved")
+        val bytes = access.readAttachment(generation, saved.noteId, attachment.attachmentId)
+        if (!current() || state.value.editor?.saved?.id != saved.id) { bytes.fill(0); error("session ended") }
+        return bytes
     }
     private fun edit(change: PrivateNoteEditorState.() -> PrivateNoteEditorState) {
         if (!current() || state.value.busy) return
@@ -251,7 +338,7 @@ class PrivateNotesController internal constructor(
         update { it.copy(confirmation = null) }
         runAction {
             val saved = withContext(dispatcher) { access.save(generation, editor.saved, editor.title, editor.body, editor.pinned, editor.format) }
-            update { it.copy(editor = PrivateNoteEditorState(saved)) }
+            update { it.copy(editor = PrivateNoteEditorState(saved, attachments = editor.attachments)) }
             when {
                 export && current() -> if (encrypted) sendEncrypted(listOf(saved.selection())) else onExport(saved)
                 leave -> leaveEditor()
@@ -326,16 +413,16 @@ class PrivateNotesController internal constructor(
         loadPage(reset = true)
     }
 
-    private fun runAction(action: suspend () -> Unit) {
-        if (!current() || state.value.busy) return
+    private fun runAction(cleanup: () -> Unit = {}, action: suspend () -> Unit) {
+        if (!current() || state.value.busy) { cleanup(); return }
         update { it.copy(busy = true, error = null) }
-        scope.launch {
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 if (current()) action()
             } catch (cancelled: CancellationException) { throw cancelled
             } catch (failure: Exception) {
                 update { it.copy(error = errorCopy(failure)) }
-            } finally { update { it.copy(busy = false) } }
+            } finally { cleanup(); update { it.copy(busy = false) } }
         }
     }
     private fun errorCopy(failure: Exception): String = when (failure) {

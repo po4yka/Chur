@@ -4,11 +4,13 @@ import java.io.File
 import java.io.IOException
 import kotlin.test.AfterTest
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.launch
 
 /**
  * The store keeps notes across instances, which is the whole point of it: a
@@ -142,14 +144,14 @@ class FileNoteStoreTest {
 
         val reopened = FileNoteStore(path).all()
         assertEquals(listOf(markdown, legacy), reopened)
-        assertTrue(File(path).readText().contains("\"version\":2"))
+        assertTrue(File(path).readText().contains("\"version\":3"))
         assertTrue(File(path).readText().contains("\"format\":\"PLAIN_TEXT\""))
         assertTrue(File(path).readText().contains("\"format\":\"MARKDOWN\""))
     }
 
     @Test
     fun an_unsupported_version_cannot_be_read_or_overwritten() = runTest {
-        for (version in listOf(0, 3, 999)) {
+        for (version in listOf(0, 4, 999)) {
             val contents = """{"version":$version,"notes":[],"disclosureAcknowledged":false}"""
             File(path).writeText(contents)
             val store = FileNoteStore(path)
@@ -160,6 +162,95 @@ class FileNoteStoreTest {
             assertFailsWith<IllegalStateException> { store.acknowledgeDisclosure() }
             assertEquals(contents, File(path).readText())
         }
+    }
+
+    @Test
+    fun attachments_survive_restart_and_removal_deletes_only_after_metadata_save() = runTest {
+        val note = Note("a", "Files", "source", 1)
+        val store = FileNoteStore(path)
+        store.put(note)
+        val bytes = byteArrayOf(0, 1, -1)
+        val attachment = store.addAttachment(note.id, "example.bin", bytes)
+        val reopened = FileNoteStore(path)
+        assertEquals(listOf(attachment), reopened.all().single().attachments)
+        assertContentEquals(bytes, reopened.readAttachment(note.id, attachment.id))
+
+        val writer = FailingWriter()
+        val failing = FileNoteStore(path, ::readNoteFile, writer::write)
+        writer.failNext = true
+        assertFailsWith<IOException> { failing.removeAttachment(note.id, attachment.id) }
+        assertContentEquals(bytes, failing.readAttachment(note.id, attachment.id))
+        assertContentEquals(bytes, FileNoteStore(path).readAttachment(note.id, attachment.id))
+
+        failing.removeAttachment(note.id, attachment.id)
+        assertTrue(FileNoteStore(path).all().single().attachments.isEmpty())
+        assertFalse(File("$path.attachments/${attachment.storageId}").exists())
+    }
+
+    @Test
+    fun attachment_metadata_is_never_published_after_a_failed_write() = runTest {
+        val note = Note("a", "Files", "source", 1)
+        FileNoteStore(path).put(note)
+        val writer = FailingWriter()
+        val store = FileNoteStore(path, ::readNoteFile, writer::write)
+        writer.failNext = true
+        assertFailsWith<IOException> { store.addAttachment(note.id, "example.bin", byteArrayOf(1)) }
+        assertEquals(note, store.all().single())
+        assertEquals(note, FileNoteStore(path).all().single())
+        assertTrue(File("$path.attachments").listFiles().orEmpty().isEmpty())
+    }
+
+    @Test
+    fun package_import_is_atomic_and_equal_reference_ids_do_not_overwrite_other_notes() = runTest {
+        val id = "0123456789abcdef0123456789abcdef"
+        fun content(byte: Byte) = NotePackages.encode(NotePackage("Imported", "[file](attachment:$id)  ", NoteFormat.MARKDOWN,
+            listOf(NotePackageAttachment(id, "file.bin", "application/octet-stream", byteArrayOf(byte)))))
+        val store = FileNoteStore(path)
+        val first = store.importPackage(content(1), "first", 1)
+        val second = store.importPackage(content(2), "second", 2)
+        assertEquals(first.body, second.body)
+        assertContentEquals(byteArrayOf(1), store.readAttachment("first", id))
+        assertContentEquals(byteArrayOf(2), store.readAttachment("second", id))
+        assertContentEquals(byteArrayOf(1), NotePackages.decode(store.exportPackage("first")).attachments.single().data)
+
+        val writer = FailingWriter()
+        val failing = FileNoteStore(path, ::readNoteFile, writer::write)
+        writer.failNext = true
+        assertFailsWith<IOException> { failing.importPackage(content(3), "failed", 3) }
+        assertEquals(setOf("first", "second"), FileNoteStore(path).all().map { it.id }.toSet())
+        assertEquals(2, File("$path.attachments").listFiles().orEmpty().size)
+    }
+
+    @Test
+    fun forged_or_stale_metadata_and_oversized_blob_are_rejected() = runTest {
+        val store = FileNoteStore(path)
+        val note = Note("a", "Files", "source", 1)
+        store.put(note)
+        val attachment = store.addAttachment(note.id, "example.bin", byteArrayOf(1))
+        assertFailsWith<IllegalArgumentException> { store.put(note.copy(title = "stale")) }
+        assertFailsWith<IllegalArgumentException> {
+            store.put(store.all().single().copy(attachments = listOf(attachment.copy(name = "changed"))))
+        }
+        File("$path.attachments/${attachment.storageId}").writeBytes(ByteArray(NoteAttachments.MAX_FILE_BYTES + 1))
+        assertFailsWith<IllegalArgumentException> { store.readAttachment(note.id, attachment.id) }
+        assertFailsWith<IllegalStateException> { store.readAttachment(note.id, "../notes.json") }
+    }
+
+    @Test
+    fun cancellation_during_metadata_commit_keeps_blob_metadata_and_cache_consistent() = runTest {
+        FileNoteStore(path).put(Note("a", "Files", "body", 1))
+        var duringWrite: () -> Unit = {}
+        val store = FileNoteStore(path, ::readNoteFile) { file, contents ->
+            duringWrite()
+            writeNoteFile(file, contents)
+        }
+        val operation = launch { store.addAttachment("a", "file.bin", byteArrayOf(1, 2, 3)) }
+        duringWrite = { operation.cancel() }
+        operation.join()
+        val attachment = store.all().single().attachments.single()
+        assertContentEquals(byteArrayOf(1, 2, 3), store.readAttachment("a", attachment.id))
+        assertEquals(store.all(), FileNoteStore(path).all())
+        assertContentEquals(byteArrayOf(1, 2, 3), FileNoteStore(path).readAttachment("a", attachment.id))
     }
 
     private class FailingWriter {

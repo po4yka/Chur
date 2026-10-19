@@ -765,7 +765,7 @@ fn restore_inner(
             ));
         }
         if vault::prepare_restored_catalog(&mut catalog, &local)? {
-            let target = chur_format::constants::CATALOG_FORMAT_VERSION_V12;
+            let target = chur_format::constants::CATALOG_FORMAT_VERSION_V13;
             let migration_steps = target - local.catalog.catalog_format_version;
             local.descriptor_generation = local
                 .descriptor_generation

@@ -27,6 +27,59 @@ import kotlin.test.assertTrue
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class PrivateNoteExportHostTest {
     @Test
+    fun attached_note_exports_portable_bytes_that_both_stores_can_import_without_source_loss() = scenario {
+        val attachmentId = ByteArray(16) { (it + 1).toByte() }
+        val payload = "Public synthetic attachment bytes".encodeToByteArray()
+        val saved = controller.vault.putPrivateNoteAttachment(generation, note.noteId, note.revision,
+            dev.po4yka.chur.ffi.PrivateNoteAttachmentData(attachmentId, "fixture.bin", "application/octet-stream", payload))
+        val attachedRequest = PrivateNoteExportRequest.from(saved, generation)
+        assertTrue(attachedRequest.filename.endsWith(".churnote"))
+        controller.exportPrivateNote(attachedRequest, ExportTarget.SHARE)
+        val output = sink.closedOutput()
+        withTimeout(10_000) { controller.notice.first { it?.text?.startsWith("Note exported.") == true } }
+        val bytes = output.file.readBytes()
+        assertEquals(saved.exportSize, bytes.size.toLong())
+        val decoded = dev.po4yka.chur.notes.NotePackages.decode(bytes)
+        try {
+            assertEquals(note.title, decoded.title)
+            assertEquals(note.body, decoded.body)
+            assertContentEquals(payload, decoded.attachments.single().data)
+            val publicStore = dev.po4yka.chur.notes.FileNoteStore(File(root, "public/notes.json").path)
+            val publicNote = publicStore.importPackage(bytes, "explicit-public-import", 2)
+            assertEquals(note.body, publicNote.body)
+            assertContentEquals(payload, publicStore.readAttachment(publicNote.id, decoded.attachments.single().id))
+            val imported = controller.vault.importPrivateNotePackage(generation, decoded.title, decoded.body,
+                dev.po4yka.chur.ffi.PrivateNoteFormat.PLAIN_TEXT, decoded.attachments.map {
+                    dev.po4yka.chur.ffi.PrivateNoteAttachmentData(attachmentId, it.name, it.mimeType, it.data)
+                })
+            assertFalse(imported.noteId.contentEquals(note.noteId))
+            assertContentEquals(payload, controller.vault.readPrivateNoteAttachment(generation, imported.noteId, attachmentId))
+        } finally { bytes.fill(0); payload.fill(0); decoded.attachments.forEach { it.data.fill(0) } }
+    }
+
+    @Test
+    fun an_individual_attachment_exports_original_bytes_with_its_actual_name_and_mime() = scenario {
+        val attachmentId = ByteArray(16) { (it + 1).toByte() }
+        val payload = "%PDF-1.7\nPublic synthetic fixture\n".encodeToByteArray() + byteArrayOf(0, -1, 10)
+        val saved = controller.vault.putPrivateNoteAttachment(generation, note.noteId, note.revision,
+            dev.po4yka.chur.ffi.PrivateNoteAttachmentData(attachmentId, "Схема.pdf", "application/pdf", payload))
+        val attachment = controller.vault.privateNoteAttachments(generation, saved.noteId).single()
+        val fileRequest = PrivateNoteExportRequest.fromAttachment(saved, attachment, generation)
+        try {
+            controller.exportPrivateNote(fileRequest, ExportTarget.SHARE)
+            val output = sink.closedOutput()
+            withTimeout(10_000) { controller.notice.first { it?.text?.startsWith("Note exported.") == true } }
+            assertEquals(Creation("Схема.pdf", "application/pdf", ExportTarget.SHARE, null, payload.size.toLong()), output.creation)
+            assertEquals(payload.size.toLong(), fileRequest.exportSize)
+            assertContentEquals(attachmentId, fileRequest.attachmentId)
+            assertContentEquals(payload, output.file.readBytes())
+            assertContentEquals(payload, output.bytesAtPublication)
+            assertEquals(listOf("publishChecked", "close"), output.events)
+            assertNull(controller.activeOperation.value)
+        } finally { payload.fill(0) }
+    }
+
+    @Test
     fun a_saved_note_exports_exact_utf8_and_publishes_before_closing_its_destination() = scenario {
         controller.exportPrivateNote(request, ExportTarget.SHARE)
         val output = sink.closedOutput()

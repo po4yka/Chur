@@ -54,6 +54,8 @@ import com.mikepenz.markdown.compose.elements.highlightedCodeFence
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.utils.resolveImageAlt
+import com.mikepenz.markdown.utils.resolveImageLink
+import com.mikepenz.markdown.compose.LocalReferenceLinkHandler
 import dev.po4yka.chur.app.privateKeyboardOptions
 import dev.po4yka.chur.app.privateNoteTextFieldPolicy
 import dev.po4yka.chur.app.utf8Size
@@ -78,6 +80,7 @@ internal fun MarkdownEditor(
     private: Boolean = false,
     enabled: Boolean = true,
     readOnly: Boolean = false,
+    readAttachment: (suspend (String) -> ByteArray)? = null,
 ) {
     var value by remember { mutableStateOf(TextFieldValue(body)) }
     val history = remember { MarkdownHistory(value) }
@@ -161,7 +164,7 @@ internal fun MarkdownEditor(
             }
             if (outline && markdown) MarkdownOutline(value.text) { offset -> preview = false; value = value.copy(selection = TextRange(offset)); outline = false }
             if (preview && markdown) {
-                MarkdownPreview(value.text, modifier = Modifier.height(documentHeight).fillMaxWidth(), onToggleTask = if (!enabled || readOnly) null else { start, end ->
+                MarkdownPreview(value.text, readAttachment = readAttachment, modifier = Modifier.height(documentHeight).fillMaxWidth(), onToggleTask = if (!enabled || readOnly) null else { start, end ->
                     toggleMarkdownTask(value.text, start, end)?.let { publish(TextFieldValue(it, TextRange(start))) }
                 })
             } else {
@@ -201,7 +204,9 @@ internal fun toggleMarkdownTask(source: String, start: Int, end: Int): String? {
 }
 
 @Composable
-internal fun MarkdownPreview(body: String, modifier: Modifier = Modifier, onToggleTask: ((Int, Int) -> Unit)? = null) {
+internal fun MarkdownPreview(body: String, modifier: Modifier = Modifier, onToggleTask: ((Int, Int) -> Unit)? = null,
+    readAttachment: (suspend (String) -> ByteArray)? = null) {
+    val images = rememberNoteAttachmentImageCache()
     val host = LocalUriHandler.current
     var link by remember { mutableStateOf<String?>(null) }
     var openFailed by remember { mutableStateOf(false) }
@@ -220,8 +225,18 @@ internal fun MarkdownPreview(body: String, modifier: Modifier = Modifier, onTogg
             ),
             components = markdownComponents(
                 codeBlock = highlightedCodeBlock, codeFence = highlightedCodeFence,
-                image = { model -> Text("Image: ${model.node.resolveImageAlt(model.content).orEmpty()} (image reference preserved; automatic loading is disabled)") },
-                inlineImage = { model -> Text("Image: ${model.node.resolveImageAlt(model.content).orEmpty()} (image reference)") },
+                image = { model ->
+                    val id = model.node.resolveImageLink(model.content, LocalReferenceLinkHandler.current)?.let(::noteAttachmentId)
+                    val name = model.node.resolveImageAlt(model.content).orEmpty()
+                    if (id != null && readAttachment != null) NoteAttachmentImage(id, name, { readAttachment(id) }, images)
+                    else Text("Image: $name (only managed attachments are loaded)")
+                },
+                inlineImage = { model ->
+                    val id = model.node.resolveImageLink(model.content, LocalReferenceLinkHandler.current)?.let(::noteAttachmentId)
+                    val name = model.node.resolveImageAlt(model.content).orEmpty()
+                    if (id != null && readAttachment != null) NoteAttachmentImage(id, name, { readAttachment(id) }, images)
+                    else Text("Image: $name (only managed attachments are loaded)")
+                },
                 checkbox = { model ->
                     val start = model.node.startOffset
                     val end = model.node.endOffset

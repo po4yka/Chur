@@ -344,6 +344,10 @@ private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> U
             writeFailed = writeFailureId == open.note.id,
             systemBack = { onBack -> BackHandler(onBack = onBack) },
             onSave = controller::putNote,
+            onAddAttachment = controller::addPublicNoteAttachment,
+            onReadAttachment = { id -> controller.readPublicNoteAttachment(open.note.id, id) },
+            onRemoveAttachment = { id -> controller.removePublicNoteAttachment(open.note.id, id) },
+            onExportPackage = controller::exportPublicNotePackage,
             onRemove = controller::removeNote,
             onBack = { editing = null },
             onOpenSettings = {
@@ -359,6 +363,10 @@ private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> U
         onImport = { title, body ->
             val imported = Note(id = "note-${System.nanoTime()}", title = title, body = body, updatedMs = System.currentTimeMillis())
             controller.putNote(imported)
+            editing = OpenNote(imported, isNew = false)
+        },
+        onImportPackage = { bytes ->
+            val imported = controller.importPublicNotePackage(bytes, "note-${System.nanoTime()}")
             editing = OpenNote(imported, isNew = false)
         },
         query = query,
@@ -819,10 +827,14 @@ private fun VaultRoute(controller: ChurController) {
                 controller.endHostActivity()
             }
             if (uri != null) controller.exportPrivateNote(request, ExportTarget.FILES, uri.toString())
+        } else if (uri != null) {
+            // This launcher created the destination, even if its session ended before delivery.
+            scope.launch(Dispatchers.IO) { runCatching { context.contentResolver.delete(uri, null, null) } }
         }
     }
-    val privateNoteFilePicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain"), onPrivateNoteFilePicked)
-    val privateMarkdownFilePicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/markdown"), onPrivateNoteFilePicked)
+    val privateNoteFilePicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        onPrivateNoteFilePicked(if (result.resultCode == android.app.Activity.RESULT_OK) result.data?.data else null)
+    }
     val albumExportPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         val albumId = pendingAlbumExport
         pendingAlbumExport = null
@@ -1152,6 +1164,7 @@ private fun VaultRoute(controller: ChurController) {
                 }
             },
             onExport = { choosingPrivateNoteExport = PrivateNoteExportRequest.from(it, generation) },
+            onAttachmentExport = { note, attachment -> choosingPrivateNoteExport = PrivateNoteExportRequest.fromAttachment(note, attachment, generation) },
             systemBack = { enabled, back -> BackHandler(enabled = enabled, onBack = back) },
             operation = operation, onCancelOperation = controller::cancelActiveOperation,
             notice = notice, onNoticeShown = controller::consume,
@@ -1164,7 +1177,11 @@ private fun VaultRoute(controller: ChurController) {
                     if (target == ExportTarget.FILES) {
                         pendingPrivateNoteExport = request
                         controller.beginHostActivity()
-                        try { if (request.contentType == "text/markdown") privateMarkdownFilePicker.launch(request.filename) else privateNoteFilePicker.launch(request.filename) } catch (_: Exception) {
+                        try { privateNoteFilePicker.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = request.contentType
+                            putExtra(Intent.EXTRA_TITLE, request.filename)
+                        }) } catch (_: Exception) {
                             pendingPrivateNoteExport = null
                             controller.endHostActivity()
                             controller.report("The file picker could not be opened.")

@@ -1,6 +1,6 @@
 # Catalog schema v12: explicit private note format
 
-> **Status:** Accepted implementation contract; device and release gates remain separate
+> **Status:** Accepted migration contract. Current writers use [v13](CATALOG_SCHEMA_V13.md), which adds note-owned encrypted attachments and ABI 5.0; device and release gates remain separate.
 
 Version `0x000c` adds `private_notes.format INTEGER NOT NULL DEFAULT 0 CHECK(format IN (0,1))` to the Rust-owned SQLCipher catalog. `0` means literal UTF-8 plain text; `1` means UTF-8 Markdown source. Format is never inferred from punctuation, filename, or content. All existing v11 rows retain their exact source and receive `0`.
 

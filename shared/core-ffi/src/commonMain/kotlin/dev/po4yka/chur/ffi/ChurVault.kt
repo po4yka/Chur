@@ -1019,9 +1019,139 @@ object ChurVault {
         return try { if (bytes.isEmpty()) null else decodePrivateNote(bytes) } finally { bytes.fill(0) }
     }
 
+
+    private fun attachmentControl(
+        session: Long,
+        request: ByteArray,
+        capacity: Int = 1_048_576,
+    ): ByteArray = try {
+        requireCurrentAbi()
+        withChurBuffer(capacity) { buffer ->
+            val written = IntArray(1)
+            ChurFailure.check(
+                ChurNative.privateNoteAttachments(session, request, buffer, written),
+                "private note attachment",
+            )
+            buffer.copyOut(written[0])
+        }
+    } finally {
+        request.fill(0)
+    }
+
+    fun privateNoteAttachments(session: Long, id: ByteArray): List<PrivateNoteAttachment> {
+        require(id.size == 16)
+        val request = PrivateNoteWriter(17).apply { byte(1); raw(id) }.bytes
+        val bytes = attachmentControl(session, request)
+        return try {
+            val reader = PrivateNoteReader(bytes)
+            val count = reader.count()
+            require(count in 0..32)
+            List(count) {
+                PrivateNoteAttachment(reader.raw(16), reader.text(240), reader.text(128), reader.number())
+                    .also { require(it.size in 0..8_388_608) }
+            }.also { reader.end() }
+        } finally {
+            bytes.fill(0)
+        }
+    }
+
+    fun readPrivateNoteAttachment(session: Long, id: ByteArray, attachmentId: ByteArray): ByteArray {
+        require(id.size == 16 && attachmentId.size == 16)
+        val request = PrivateNoteWriter(33).apply { byte(3); raw(id); raw(attachmentId) }.bytes
+        return attachmentControl(session, request, 8_388_608)
+    }
+
+    private fun attachmentSize(attachment: PrivateNoteAttachmentData): Int {
+        require(attachment.attachmentId.size == 16 && attachment.attachmentId.any { it != 0.toByte() })
+        require(attachment.data.size <= 8_388_608)
+        val name = attachment.name.encodeToByteArray()
+        val mime = attachment.mimeType.encodeToByteArray()
+        return try {
+            require(name.size in 1..240 && mime.size <= 128)
+            16 + 4 + name.size + 4 + mime.size + 4 + attachment.data.size
+        } finally {
+            name.fill(0)
+            mime.fill(0)
+        }
+    }
+
+    private fun PrivateNoteWriter.attachment(attachment: PrivateNoteAttachmentData) {
+        raw(attachment.attachmentId)
+        val name = attachment.name.encodeToByteArray()
+        val mime = attachment.mimeType.encodeToByteArray()
+        try {
+            sized(name)
+            sized(mime)
+            sized(attachment.data)
+        } finally {
+            name.fill(0)
+            mime.fill(0)
+        }
+    }
+
+    fun putPrivateNoteAttachment(
+        session: Long,
+        id: ByteArray,
+        expectedRevision: Long,
+        attachment: PrivateNoteAttachmentData,
+    ): PrivateNote {
+        require(id.size == 16 && expectedRevision > 0)
+        val writer = PrivateNoteWriter(25 + attachmentSize(attachment))
+        writer.byte(2)
+        writer.raw(id)
+        writer.number(expectedRevision)
+        writer.attachment(attachment)
+        val bytes = attachmentControl(session, writer.bytes)
+        return try { decodePrivateNote(bytes) } finally { bytes.fill(0) }
+    }
+
+    fun removePrivateNoteAttachment(
+        session: Long,
+        id: ByteArray,
+        expectedRevision: Long,
+        attachmentId: ByteArray,
+    ): PrivateNote {
+        require(id.size == 16 && attachmentId.size == 16 && expectedRevision > 0)
+        val writer = PrivateNoteWriter(41)
+        writer.byte(4)
+        writer.raw(id)
+        writer.number(expectedRevision)
+        writer.raw(attachmentId)
+        val bytes = attachmentControl(session, writer.bytes)
+        return try { decodePrivateNote(bytes) } finally { bytes.fill(0) }
+    }
+
+    fun importPrivateNotePackage(
+        session: Long,
+        title: String,
+        body: String,
+        format: PrivateNoteFormat,
+        attachments: List<PrivateNoteAttachmentData>,
+    ): PrivateNote {
+        val titleBytes = title.encodeToByteArray()
+        val bodyBytes = body.encodeToByteArray()
+        try {
+            require(titleBytes.size <= 256 && bodyBytes.size <= 262144 && attachments.size <= 32)
+            require(attachments.sumOf { it.data.size.toLong() } <= 16_777_216)
+            val sizes = attachments.map(::attachmentSize)
+            val writer = PrivateNoteWriter(2 + 4 + titleBytes.size + 4 + bodyBytes.size + 4 + sizes.sum())
+            writer.byte(5)
+            writer.byte(format.ordinal)
+            writer.sized(titleBytes)
+            writer.sized(bodyBytes)
+            writer.count(attachments.size)
+            attachments.forEach { writer.attachment(it) }
+            val bytes = attachmentControl(session, writer.bytes)
+            return try { decodePrivateNote(bytes) } finally { bytes.fill(0) }
+        } finally {
+            titleBytes.fill(0)
+            bodyBytes.fill(0)
+        }
+    }
+
     private fun requireCurrentAbi() {
-        if (ChurNative.abiVersionMajor() != 4) {
-            throw ChurFailure(ChurStatus.ABI_INCOMPATIBLE, "native ABI 4 is required")
+        if (ChurNative.abiVersionMajor() != 5) {
+            throw ChurFailure(ChurStatus.ABI_INCOMPATIBLE, "native ABI 5 is required")
         }
     }
 
@@ -1030,6 +1160,23 @@ object ChurVault {
         require(id.size == 16 && expectedRevision > 0)
         val out = LongArray(1)
         ChurFailure.check(ChurNative.privateNoteExportBegin(session, id, expectedRevision, destinationFd, out), "export private note")
+        return out[0]
+    }
+
+    fun beginPrivateNoteAttachmentExport(
+        session: Long,
+        id: ByteArray,
+        expectedRevision: Long,
+        attachmentId: ByteArray,
+        destinationFd: Int,
+    ): Long {
+        requireCurrentAbi()
+        require(id.size == 16 && attachmentId.size == 16 && expectedRevision > 0)
+        val out = LongArray(1)
+        ChurFailure.check(
+            ChurNative.privateNoteAttachmentExportBegin(session, id, expectedRevision, attachmentId, destinationFd, out),
+            "export private note attachment",
+        )
         return out[0]
     }
 

@@ -39,6 +39,8 @@ pub struct Note {
     pub body: String,
     /// Explicit body format, committed with its revision.
     pub format: NoteFormat,
+    /// Number of note-owned files, including files retained in Trash.
+    pub attachment_count: u32,
     /// Native creation time in milliseconds.
     pub created_ms: u64,
     /// Monotonic update time in milliseconds.
@@ -84,13 +86,14 @@ pub struct Page {
     /// Opaque cursor, absent at the end.
     pub next_cursor: Option<Vec<u8>>,
 }
-const COLUMNS: &str = "note_id,revision,title,body,created_ms,updated_ms,pinned,deleted_ms,format";
+const COLUMNS: &str = "note_id,revision,title,body,created_ms,updated_ms,pinned,deleted_ms,format,(SELECT count(*) FROM private_note_attachments a WHERE a.note_id=private_notes.note_id)";
 fn decode(row: &rusqlite::Row<'_>) -> rusqlite::Result<Note> {
     let bytes: Vec<u8> = row.get(0)?;
     let id = Id::from_slice(&bytes).map_err(|_| rusqlite::Error::InvalidQuery)?;
     Ok(Note {
         id,
         revision: row.get::<_, i64>(1)? as u64,
+        attachment_count: row.get(9)?,
         title: row.get(2)?,
         body: row.get(3)?,
         created_ms: row.get::<_, i64>(4)? as u64,
@@ -101,7 +104,7 @@ fn decode(row: &rusqlite::Row<'_>) -> rusqlite::Result<Note> {
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
     })
 }
-fn get_conn(conn: &Connection, id: &Id) -> Result<Note> {
+pub(crate) fn get_conn(conn: &Connection, id: &Id) -> Result<Note> {
     conn.query_row(
         &format!("SELECT {COLUMNS} FROM private_notes WHERE note_id=?1"),
         [id.as_bytes().as_slice()],
@@ -169,7 +172,7 @@ pub fn save(
         reindex(tx,&note_id)?;schema::bump_generation(tx)?;get_conn(tx,&note_id)
     })
 }
-fn reindex(conn: &Connection, id: &Id) -> Result<()> {
+pub(crate) fn reindex(conn: &Connection, id: &Id) -> Result<()> {
     let rowid: i64 = conn
         .query_row(
             "SELECT rowid FROM private_notes WHERE note_id=?1",
@@ -294,7 +297,7 @@ pub fn page(
     } else {
         (2, i64::MAX, vec![255; 16])
     };
-    let sql = "SELECT n.note_id,n.revision,n.title,substr(n.body,1,160),n.created_ms,n.updated_ms,n.pinned,n.deleted_ms,n.format,CASE WHEN n.format=0 THEN length(CAST(n.title AS BLOB))+2 ELSE 0 END+length(CAST(n.body AS BLOB)) FROM private_notes n WHERE (n.deleted_ms IS NOT NULL)=?1 AND (?2='' OR n.rowid IN (SELECT rowid FROM private_note_search WHERE private_note_search MATCH ?3)) AND (n.pinned,n.updated_ms,n.note_id)<(?4,?5,?6) ORDER BY n.pinned DESC,n.updated_ms DESC,n.note_id DESC LIMIT ?7";
+    let sql = "SELECT n.note_id,n.revision,n.title,substr(n.body,1,160),n.created_ms,n.updated_ms,n.pinned,n.deleted_ms,n.format,(SELECT count(*) FROM private_note_attachments a WHERE a.note_id=n.note_id),CASE WHEN n.format=0 THEN length(CAST(n.title AS BLOB))+2 ELSE 0 END+length(CAST(n.body AS BLOB)) FROM private_notes n WHERE (n.deleted_ms IS NOT NULL)=?1 AND (?2='' OR n.rowid IN (SELECT rowid FROM private_note_search WHERE private_note_search MATCH ?3)) AND (n.pinned,n.updated_ms,n.note_id)<(?4,?5,?6) ORDER BY n.pinned DESC,n.updated_ms DESC,n.note_id DESC LIMIT ?7";
     let mut stmt = db
         .connection()
         .prepare(sql)
@@ -317,7 +320,7 @@ pub fn page(
             |row| {
                 Ok(Summary {
                     note: decode(row)?,
-                    export_size: row.get::<_, i64>(9)? as u64,
+                    export_size: row.get::<_, i64>(10)? as u64,
                 })
             },
         )
@@ -325,6 +328,12 @@ pub fn page(
     let mut notes = rows
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| map_sqlite(e, "the notes query could not be read"))?;
+    for summary in &mut notes {
+        if summary.note.attachment_count > 0 {
+            let full = get(db, &summary.note.id)?;
+            summary.export_size = crate::note_attachments::export_size(db, &full)?;
+        }
+    }
     let next_cursor = if notes.len() > usize::from(limit) {
         notes.pop();
         notes.last().map(|last| {
@@ -418,7 +427,7 @@ mod tests {
             .expect("restore")
             .expect("note");
         let mut target = self::db();
-        let fresh = crate::transfer::copy_note(&mut target, &restored).expect("archive copy");
+        let fresh = crate::transfer::copy_note(&mut target, &restored, &[]).expect("archive copy");
         assert_ne!(fresh, plain.id);
         let copied = get(&target, &fresh).expect("copied");
         assert_eq!(copied.format, NoteFormat::Markdown);

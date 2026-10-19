@@ -277,6 +277,10 @@ private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> U
             savedNote = notes.firstOrNull { it.id == open.note.id },
             writeFailed = writeFailureId == open.note.id,
             onSave = controller::putNote,
+            onAddAttachment = controller::addPublicNoteAttachment,
+            onReadAttachment = { id -> controller.readPublicNoteAttachment(open.note.id, id) },
+            onRemoveAttachment = { id -> controller.removePublicNoteAttachment(open.note.id, id) },
+            onExportPackage = controller::exportPublicNotePackage,
             onRemove = controller::removeNote,
             onBack = { editing = null },
             onOpenSettings = {
@@ -292,6 +296,10 @@ private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> U
         onImport = { title, body ->
             val imported = Note(id = "note-${(NSDate().timeIntervalSince1970 * 1_000_000).toLong()}", title = title, body = body, updatedMs = (NSDate().timeIntervalSince1970 * 1000).toLong())
             controller.putNote(imported)
+            editing = OpenNote(imported, isNew = false)
+        },
+        onImportPackage = { bytes ->
+            val imported = controller.importPublicNotePackage(bytes, "note-${(NSDate().timeIntervalSince1970 * 1_000_000).toLong()}")
             editing = OpenNote(imported, isNew = false)
         },
         query = query,
@@ -931,6 +939,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 }
             },
             onExport = { choosingPrivateNoteExport = PrivateNoteExportRequest.from(it, generation) },
+            onAttachmentExport = { note, attachment -> choosingPrivateNoteExport = PrivateNoteExportRequest.fromAttachment(note, attachment, generation) },
             systemBack = { _, _ -> }, operation = operation,
             onCancelOperation = controller::cancelActiveOperation,
             notice = notice, onNoticeShown = controller::consume,

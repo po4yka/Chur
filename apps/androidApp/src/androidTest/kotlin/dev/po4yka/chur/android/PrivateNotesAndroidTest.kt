@@ -61,6 +61,42 @@ class PrivateNotesAndroidTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
 
     @Test
+    fun encrypted_attachment_renders_from_native_storage_and_lock_removes_its_pixels_and_labels() {
+        val id = ByteArray(16) { (it + 1).toByte() }
+        val hex = id.joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
+        val bitmap = Bitmap.createBitmap(64, 48, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.rgb(30, 160, 130)) }
+        val bytes = java.io.ByteArrayOutputStream().use { out ->
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out); out.toByteArray()
+        }
+        bitmap.recycle()
+        try {
+            present(prepare = { vault ->
+                val generation = (vault.state.value as VaultState.Unlocked).generation
+                vault.importPrivateNotePackage(generation, "Public attachment sample",
+                    "# Local image\n\n![Public sample image](attachment:$hex)\n\n![Remote image](https://example.invalid/image.png)",
+                    dev.po4yka.chur.ffi.PrivateNoteFormat.MARKDOWN,
+                    listOf(dev.po4yka.chur.ffi.PrivateNoteAttachmentData(id, "fixture.png", "image/png", bytes)))
+            }) { fixture ->
+                fixture.clickText("Public attachment sample")
+                fixture.clickText("Preview")
+                assertTrue("the managed image is decoded by the actual platform renderer", fixture.await {
+                    fixture.nodes().any { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Public sample image") == true && it.size.width > 0 && it.size.height > 0 }
+                })
+                assertTrue(fixture.await { fixture.hasText("only managed attachments are loaded") })
+                assertTrue(fixture.savedState().isEmpty())
+                fixture.capture("private-note-managed-image-public-fixture.png")
+                assertFalse(fixture.publicFile.readText().contains("fixture.png"))
+                runBlocking { fixture.vault.lock(LockReason.PANIC) }
+                assertTrue(fixture.await { fixture.hasText("Public fixture note") })
+                assertFalse(fixture.nodes().any { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Public sample image") == true })
+                runBlocking { fixture.vault.unlock(PASSWORD.encodeToByteArray()) }
+                val note = runBlocking { fixture.vault.privateNotes(fixture.generation).notes.single() }
+                org.junit.Assert.assertArrayEquals(bytes, runBlocking { fixture.vault.readPrivateNoteAttachment(fixture.generation, note.noteId, id) })
+            }
+        } finally { bytes.fill(0) }
+    }
+
+    @Test
     fun explicit_save_routes_to_native_notes_without_changing_public_notes_or_saved_state() = present { fixture ->
         fixture.create("Public synthetic title", "Public synthetic body for native notes")
         assertTrue(fixture.await { fixture.hasText("Unsaved changes are cleared") })
@@ -130,12 +166,12 @@ class PrivateNotesAndroidTest {
         assertTrue(runBlocking { fixture.vault.privateNotes(fixture.generation).notes.isEmpty() })
     }
 
-    private fun present(fontScale: Float = 1f, test: (Fixture) -> Unit) {
+    private fun present(fontScale: Float = 1f, prepare: suspend (VaultRepository) -> Unit = {}, test: (Fixture) -> Unit) {
         val root = File(instrumentation.targetContext.cacheDir, "private-notes-ui-${System.nanoTime()}").apply { mkdirs() }
         val vault = VaultRepository(File(root, "vault").path, { System.currentTimeMillis() })
         val publicFile = File(root, "public/notes.json")
         val publicStore = FileNoteStore(publicFile.path)
-        runBlocking { publicStore.put(PUBLIC_NOTE); vault.start(); vault.create(PASSWORD.encodeToByteArray(), false) }
+        runBlocking { publicStore.put(PUBLIC_NOTE); vault.start(); vault.create(PASSWORD.encodeToByteArray(), false); prepare(vault) }
         val activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         val fixture = Fixture(activity, vault, publicFile, publicStore)
@@ -185,6 +221,14 @@ class PrivateNotesAndroidTest {
                     SemanticsActions.OnClick in it.config && SemanticsProperties.Disabled !in it.config
             }
             assertTrue("enabled button with description: $text", await { clickable() != null })
+            main { assertTrue(requireNotNull(clickable()).config[SemanticsActions.OnClick].action?.invoke() == true) }
+        }
+        fun clickText(text: String) {
+            fun clickable() = nodes(merged = true).firstOrNull {
+                it.config.getOrNull(SemanticsProperties.Text)?.any { label -> label.text == text } == true &&
+                    SemanticsActions.OnClick in it.config && SemanticsProperties.Disabled !in it.config
+            }
+            assertTrue("enabled button or row: $text", await { clickable() != null })
             main { assertTrue(requireNotNull(clickable()).config[SemanticsActions.OnClick].action?.invoke() == true) }
         }
         fun clickTag(tag: String) {

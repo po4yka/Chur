@@ -30,6 +30,7 @@ import dev.po4yka.chur.ffi.TagSummary
 import dev.po4yka.chur.notes.InMemoryNoteStore
 import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.notes.NoteStore
+import dev.po4yka.chur.notes.NoteAttachment
 import dev.po4yka.chur.vault.LockPolicy
 import dev.po4yka.chur.vault.VaultRepository
 import dev.po4yka.chur.vault.VaultState
@@ -2023,7 +2024,9 @@ class ChurController(
                 destination = output
                 checkSession()
                 val nativeOperation = withContext(Dispatchers.Default) {
-                    repository.beginPrivateNoteExport(request.generation, request.noteId, request.revision, output.descriptor)
+                    val attachmentId = request.attachmentId
+                    if (attachmentId == null) repository.beginPrivateNoteExport(request.generation, request.noteId, request.revision, output.descriptor)
+                    else repository.beginPrivateNoteAttachmentExport(request.generation, request.noteId, request.revision, attachmentId, output.descriptor)
                 }
                 val terminal = try { drain(nativeOperation, token) } finally { closeOperation(nativeOperation) }
                 if (terminal != 0) throw ChurFailure(ChurStatus.fromValue(terminal), "the private note export")
@@ -2688,26 +2691,68 @@ class ChurController(
     fun putNote(note: Note) = guarded {
         publicNoteWrites.withLock {
             try {
-                val all = notes.all()
-                val stored = all.firstOrNull { it.id == note.id }
-                if (stored == null && note.title.isBlank() && note.body.isBlank()) return@withLock
-                if (stored != null && stored.copy(updatedMs = note.updatedMs) == note) {
-                    _notes.value = all
-                    if (_publicNoteWriteFailureId.value == note.id) _publicNoteWriteFailureId.value = null
-                    return@withLock
-                }
-                val first = !notes.disclosureAcknowledged()
-                notes.put(note.copy(updatedMs = clock()))
-                _notes.value = notes.all()
-                if (_publicNoteWriteFailureId.value == note.id) _publicNoteWriteFailureId.value = null
-                // The disclosure follows the first successful public write.
-                if (first) _disclosureDue.value = true
+                persistPublicNote(note)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
                 _publicNoteWriteFailureId.value = note.id
                 throw failure
             }
+        }
+    }
+
+    /** The store owns attachment membership; queued text saves cannot resurrect deleted files. */
+    private suspend fun persistPublicNote(note: Note, allowBlank: Boolean = false) {
+        val all = notes.all()
+        val stored = all.firstOrNull { it.id == note.id }
+        if (!allowBlank && stored == null && note.title.isBlank() && note.body.isBlank()) return
+        val current = note.copy(attachments = stored?.attachments.orEmpty())
+        if (stored != null && stored.copy(updatedMs = current.updatedMs) == current) {
+            _notes.value = all
+            if (_publicNoteWriteFailureId.value == current.id) _publicNoteWriteFailureId.value = null
+            return
+        }
+        val first = !notes.disclosureAcknowledged()
+        notes.put(current.copy(updatedMs = clock()))
+        _notes.value = notes.all()
+        if (_publicNoteWriteFailureId.value == current.id) _publicNoteWriteFailureId.value = null
+        if (first) _disclosureDue.value = true
+    }
+
+    suspend fun addPublicNoteAttachment(note: Note, name: String, data: ByteArray): NoteAttachment =
+        withContext(Dispatchers.Default) {
+            publicNoteWrites.withLock {
+                persistPublicNote(note, allowBlank = true)
+                val added = notes.addAttachment(note.id, name, data)
+                _notes.value = notes.all()
+                added
+            }
+        }
+
+    suspend fun readPublicNoteAttachment(noteId: String, attachmentId: String): ByteArray =
+        withContext(Dispatchers.Default) { notes.readAttachment(noteId, attachmentId) }
+
+    suspend fun removePublicNoteAttachment(noteId: String, attachmentId: String) = withContext(Dispatchers.Default) {
+        publicNoteWrites.withLock {
+            notes.removeAttachment(noteId, attachmentId)
+            _notes.value = notes.all()
+        }
+    }
+
+    suspend fun exportPublicNotePackage(note: Note): ByteArray = withContext(Dispatchers.Default) {
+        publicNoteWrites.withLock {
+            persistPublicNote(note, allowBlank = true)
+            notes.exportPackage(note.id)
+        }
+    }
+
+    suspend fun importPublicNotePackage(data: ByteArray, noteId: String): Note = withContext(Dispatchers.Default) {
+        publicNoteWrites.withLock {
+            val first = !notes.disclosureAcknowledged()
+            val imported = notes.importPackage(data, noteId, clock())
+            _notes.value = notes.all()
+            if (first) _disclosureDue.value = true
+            imported
         }
     }
 

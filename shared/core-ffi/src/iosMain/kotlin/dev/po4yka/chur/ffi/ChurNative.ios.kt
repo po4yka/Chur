@@ -1509,6 +1509,12 @@ internal actual object ChurNative {
         if (status == 0) outWritten[0] = written.value.toInt()
         status
     }
+    actual fun privateNoteAttachments(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        val written = alloc<ULongVar>()
+        val status = request.usePinned { pin -> chur_private_note_attachments(session.toULong(), pin.addressOf(0).reinterpret(), request.size.toULong(), destination.pointer, destination.size.toULong(), written.ptr) }
+        if (status == 0) outWritten[0] = written.value.toInt()
+        status
+    }
     actual fun privateNoteGet(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
         val written = alloc<ULongVar>()
         val status = request.usePinned { pin -> chur_private_note_get(session.toULong(), pin.addressOf(0).reinterpret(), request.size.toULong(), destination.pointer, destination.size.toULong(), written.ptr) }
@@ -1531,6 +1537,18 @@ internal actual object ChurNative {
         require(noteId.size == 16)
         val operation = alloc<chur_handle_tVar>()
         val status = noteId.usePinned { pin -> chur_private_note_export_begin(session.toULong(), pin.addressOf(0).reinterpret(), expectedRevision.toULong(), destinationFd, operation.ptr) }
+        if (status == 0) outOperation[0] = operation.value.toLong()
+        status
+    }
+
+    actual fun privateNoteAttachmentExportBegin(session: Long, noteId: ByteArray, expectedRevision: Long, attachmentId: ByteArray, destinationFd: Int, outOperation: LongArray): Int = memScoped {
+        require(noteId.size == 16 && attachmentId.size == 16)
+        val operation = alloc<chur_handle_tVar>()
+        val status = noteId.usePinned { note ->
+            attachmentId.usePinned { attachment ->
+                chur_private_note_attachment_export_begin(session.toULong(), note.addressOf(0).reinterpret(), attachment.addressOf(0).reinterpret(), expectedRevision.toULong(), destinationFd, operation.ptr)
+            }
+        }
         if (status == 0) outOperation[0] = operation.value.toLong()
         status
     }

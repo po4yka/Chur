@@ -3401,6 +3401,46 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_privateNotesQuery<'local
 
 /// Bounded private-note control call. Payload copies are zeroed before return.
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_privateNoteAttachments<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    request: JByteArray<'local>,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Ok(length) = request.len(env) else {
+            return INVALID_INPUT;
+        };
+        if length > 16 * 1024 * 1024 + 524288 {
+            return INVALID_INPUT;
+        }
+        let Some(input) = byte_array(env, &request) else {
+            return INVALID_INPUT;
+        };
+        let input = zeroize::Zeroizing::new(input);
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let mut written = 0usize;
+        // SAFETY: copied request, direct output buffer, and local written live through this call.
+        let status = unsafe {
+            chur_ffi::private_notes::chur_private_note_attachments(
+                handle_of(session),
+                input.as_ptr(),
+                input.len(),
+                address,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}
+
+/// Bounded private-note control call. Payload copies are zeroed before return.
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_privateNoteGet<'local>(
     env: EnvUnowned<'local>,
     _class: JClass<'local>,
@@ -3525,6 +3565,51 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_privateNoteExportBegin<'
             chur_ffi::private_notes::chur_private_note_export_begin(
                 handle_of(session),
                 id.as_ptr(),
+                expected as u64,
+                fd,
+                &mut operation,
+            )
+        };
+        if status != 0 {
+            return status;
+        }
+        if write_long(env, &out, 0, operation as jlong) {
+            0
+        } else {
+            INVALID_INPUT
+        }
+    })
+}
+
+/// Starts a cancellable private-note export without returning its body to Java.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_privateNoteAttachmentExportBegin<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    note_id: JByteArray<'local>,
+    expected: jlong,
+    attachment_id: JByteArray<'local>,
+    fd: jint,
+    out: JLongArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(id) = fixed_array(env, &note_id, 16) else {
+            return INVALID_INPUT;
+        };
+        let Some(attachment) = fixed_array(env, &attachment_id, 16) else {
+            return INVALID_INPUT;
+        };
+        if expected <= 0 {
+            return INVALID_INPUT;
+        }
+        let mut operation = 0;
+        // SAFETY: id and operation are live locals; the C ABI duplicates fd.
+        let status = unsafe {
+            chur_ffi::private_notes::chur_private_note_attachment_export_begin(
+                handle_of(session),
+                id.as_ptr(),
+                attachment.as_ptr(),
                 expected as u64,
                 fd,
                 &mut operation,

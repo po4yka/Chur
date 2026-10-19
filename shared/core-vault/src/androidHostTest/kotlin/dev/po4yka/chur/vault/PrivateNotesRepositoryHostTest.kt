@@ -2,6 +2,7 @@ package dev.po4yka.chur.vault
 
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.ffi.LockReason
+import dev.po4yka.chur.ffi.PrivateNoteAttachmentData
 import dev.po4yka.chur.ffi.PrivateNoteFormat
 import dev.po4yka.chur.ffi.PrivateNoteSelection
 import dev.po4yka.chur.ffi.PrivateNoteAction
@@ -191,6 +192,36 @@ class PrivateNotesRepositoryHostTest {
         val imported = target.privateNote(generation(target), selected.noteId)
         assertEquals(body, imported.body)
         assertEquals(PrivateNoteFormat.MARKDOWN, imported.format)
+    }
+
+    @Test
+    fun attachment_bytes_survive_encrypted_backup_selective_archive_and_revision_checked_export(): Unit = runBlocking {
+        val sourceRoot=root();val source=repository(sourceRoot);source.start();source.create(PASSWORD,false)
+        val generation=generation(source);val attachmentId=ByteArray(16) { (it+1).toByte() }
+        val data=("%PDF-1.7\n"+CANARY).encodeToByteArray()
+        val body="[Document](attachment:0102030405060708090a0b0c0d0e0f10)\n"
+        val note=source.importPrivateNotePackage(generation,"Package",body,PrivateNoteFormat.MARKDOWN,listOf(PrivateNoteAttachmentData(attachmentId,"document.pdf","application/pdf",data)))
+        assertEquals(1,note.attachmentCount);assertEquals(1,source.privateNoteAttachments(generation,note.noteId).size)
+        assertTrue(data.contentEquals(source.readPrivateNoteAttachment(generation,note.noteId,attachmentId)))
+        assertFailsWith<ChurFailure> { source.removePrivateNoteAttachment(generation,note.noteId,note.revision+1,attachmentId) }
+        val fileOutput=File(sourceRoot,"explicit.pdf")
+        FileOutputStream(fileOutput).use { finish(source,source.beginPrivateNoteAttachmentExport(generation,note.noteId,note.revision,attachmentId,descriptor(it.fd))) }
+        assertTrue(data.contentEquals(fileOutput.readBytes()));fileOutput.delete()
+        val staleFile=File(sourceRoot,"stale.pdf")
+        FileOutputStream(staleFile).use { output -> assertFailsWith<ChurFailure> { source.beginPrivateNoteAttachmentExport(generation,note.noteId,note.revision+1,attachmentId,descriptor(output.fd)) } }
+        assertEquals(0L,staleFile.length());staleFile.delete()
+        val output=File(sourceRoot,"explicit.churnote");FileOutputStream(output).use { finish(source,source.beginPrivateNoteExport(generation,note.noteId,note.revision,descriptor(it.fd))) }
+        assertEquals(note.exportSize,output.length());assertTrue(output.readText().contains("\"mimeType\":\"application/pdf\""));assertTrue(output.readText().contains(body.trim()))
+        output.delete();assertNoPlaintext(sourceRoot,CANARY)
+        val backup=File(sourceRoot,"backup.chur");FileOutputStream(backup).use { finish(source,source.beginBackup(descriptor(it.fd))) };assertNoPlaintext(backup,CANARY)
+        val restored=repository(root());restored.start();FileInputStream(backup).use { finish(restored,restored.beginRestore(descriptor(it.fd),PASSWORD)) };restored.unlock(PASSWORD)
+        assertTrue(data.contentEquals(restored.readPrivateNoteAttachment(generation(restored),note.noteId,attachmentId)))
+        val archive=File(sourceRoot,"selected.chur");FileOutputStream(archive).use { finish(source,source.beginSelectiveExport(generation,emptyList(),emptyList(),listOf(PrivateNoteSelection(note.noteId,note.revision)),OTHER_PASSWORD,descriptor(it.fd))) }
+        val target=repository(root());target.start();target.create(PASSWORD,false);FileInputStream(archive).use { finish(target,target.beginSelectiveImport(generation(target),descriptor(it.fd),OTHER_PASSWORD)) }
+        val imported=target.privateNotes(generation(target)).notes.single();assertEquals(1,imported.attachmentCount);assertTrue(data.contentEquals(target.readPrivateNoteAttachment(generation(target),imported.noteId,attachmentId)))
+        val trash=requireNotNull(source.changePrivateNote(generation,note.noteId,note.revision,PrivateNoteAction.TRASH));assertTrue(data.contentEquals(source.readPrivateNoteAttachment(generation,note.noteId,attachmentId)))
+        source.changePrivateNote(generation,note.noteId,trash.revision,PrivateNoteAction.PURGE);assertFailsWith<ChurFailure> { source.readPrivateNoteAttachment(generation,note.noteId,attachmentId) }
+        source.lock(LockReason.BACKGROUND);assertFailsWith<ChurFailure> { source.readPrivateNoteAttachment(generation,note.noteId,attachmentId) };data.fill(0)
     }
 
     private suspend fun finish(vault: VaultRepository, operation: Long) {

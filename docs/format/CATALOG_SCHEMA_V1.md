@@ -2,7 +2,7 @@
 
 > **Status:** Proposed normative logical schema. The v1 catalog has two representations and no third: a physical SQLCipher schema for the live local database, and the canonical serialization of [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) when exported into a portable backup. The engine is decided in [ADR-0038](../adr/0038-adopt-sqlcipher-as-the-v1-catalog-engine.md), which records the build, linkage, WAL, and migration evidence; performance on a device from [ADR-0017](../adr/0017-freeze-the-supported-device-set.md) and backup correctness remain outstanding.
 
-This is the base schema. Physical extensions through [v12](CATALOG_SCHEMA_V12.md) add sharing indexes, album organization, Trash, private notes, local content search, pending album additions, and explicit note format. Current writers use v12; this document retains the base records and query contract.
+This is the base schema. Physical extensions through [v13](CATALOG_SCHEMA_V13.md) add sharing indexes, album organization, Trash, private notes, local content search, pending album additions, explicit note format, and note-owned attachments. Current writers use v13; this document retains the base records and query contract.
 
 The private catalog is Rust-owned. It stores queryable private metadata, object and collection relationships, key envelopes, journals, integrity state, and synchronization projections. Room and DataStore never open or mirror it.
 

@@ -48,8 +48,8 @@ class PrivateNoteRecordsTest {
 
     private fun record(title: String, body: String, format: PrivateNoteFormat = PrivateNoteFormat.MARKDOWN): ByteArray {
         val titleBytes = title.encodeToByteArray(); val bodyBytes = body.encodeToByteArray()
-        return PrivateNoteWriter(66 + titleBytes.size + bodyBytes.size).apply {
-            raw(ByteArray(16) { 1 }); number(1); number(2); number(3); number(-1); byte(0); byte(format.ordinal)
+        return PrivateNoteWriter(70 + titleBytes.size + bodyBytes.size).apply {
+            raw(ByteArray(16) { 1 }); number(1); number(2); number(3); number(-1); byte(0); byte(format.ordinal);count(0)
             number((bodyBytes.size + if (format == PrivateNoteFormat.PLAIN_TEXT) titleBytes.size + 2 else 0).toLong()); sized(titleBytes); sized(bodyBytes)
         }.bytes
     }

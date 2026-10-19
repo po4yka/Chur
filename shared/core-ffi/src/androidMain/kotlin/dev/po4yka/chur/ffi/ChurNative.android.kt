@@ -597,9 +597,11 @@ internal actual object ChurNative {
     actual fun contentIndexClear(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int = ChurJni.contentIndexClear(session, request, destination.buffer, outWritten)
     actual fun privateNotesQuery(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int = ChurJni.privateNotesQuery(session, request, destination.buffer, outWritten)
     actual fun privateNoteGet(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int = ChurJni.privateNoteGet(session, request, destination.buffer, outWritten)
+    actual fun privateNoteAttachments(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int = ChurJni.privateNoteAttachments(session, request, destination.buffer, outWritten)
     actual fun privateNoteSave(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int = ChurJni.privateNoteSave(session, request, destination.buffer, outWritten)
     actual fun privateNoteChange(session: Long, request: ByteArray, destination: ChurBuffer, outWritten: IntArray): Int = ChurJni.privateNoteChange(session, request, destination.buffer, outWritten)
     actual fun privateNoteExportBegin(session: Long, noteId: ByteArray, expectedRevision: Long, destinationFd: Int, outOperation: LongArray): Int = ChurJni.privateNoteExportBegin(session, noteId, expectedRevision, destinationFd, outOperation)
+    actual fun privateNoteAttachmentExportBegin(session: Long, noteId: ByteArray, expectedRevision: Long, attachmentId: ByteArray, destinationFd: Int, outOperation: LongArray): Int = ChurJni.privateNoteAttachmentExportBegin(session, noteId, expectedRevision, attachmentId, destinationFd, outOperation)
 
     actual fun externalArchiveBegin(runtime: Long, request: ByteArray, sourceFds: IntArray, destinationFd: Int, outOperation: LongArray): Int = ChurJni.externalArchiveBegin(runtime, request, sourceFds, destinationFd, outOperation)
     actual fun selectiveExportBegin(session: Long, request: ByteArray, descriptor: Int, outOperation: LongArray): Int = ChurJni.selectiveExportBegin(session, request, descriptor, outOperation)

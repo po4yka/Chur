@@ -42,3 +42,32 @@ internal actual fun writeNoteFile(path: String, text: String) {
         error("cannot replace the note file at $path")
     }
 }
+
+internal actual fun readNoteBlob(path: String, maxBytes: Int): ByteArray? {
+    val manager = platform.Foundation.NSFileManager.defaultManager
+    val attributes = manager.attributesOfItemAtPath(path, null) ?: return null
+    val size = (attributes[platform.Foundation.NSFileSize] as? platform.Foundation.NSNumber)?.longLongValue
+        ?: error("cannot read attachment size")
+    require(size in 0..maxBytes.toLong()) { "attachment content is too large" }
+    val data = NSData.dataWithContentsOfFile(path) ?: error("cannot read attachment content")
+    require(data.length <= maxBytes.toULong()) { "attachment content is too large" }
+    val bytes = ByteArray(data.length.toInt())
+    if (bytes.isNotEmpty()) bytes.usePinned { pinned -> memcpy(pinned.addressOf(0), data.bytes, data.length) }
+    return bytes
+}
+
+internal actual fun writeNoteBlob(path: String, bytes: ByteArray) {
+    val directory = path.substringBeforeLast('/')
+    check(platform.Foundation.NSFileManager.defaultManager.createDirectoryAtPath(directory, true, null, null)) {
+        "cannot create attachment directory"
+    }
+    val data = if (bytes.isEmpty()) NSData() else bytes.usePinned {
+        NSData.create(bytes = it.addressOf(0), length = bytes.size.toULong())
+    }
+    check(data.writeToFile(path, atomically = true)) { "cannot store attachment content" }
+}
+
+internal actual fun deleteNoteBlob(path: String) {
+    val manager = platform.Foundation.NSFileManager.defaultManager
+    check(!manager.fileExistsAtPath(path) || manager.removeItemAtPath(path, null)) { "cannot delete attachment content" }
+}
