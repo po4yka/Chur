@@ -262,6 +262,7 @@ private fun PrivateNoteEditor(editor: PrivateNoteEditorState, actions: PrivateNo
     var attachmentFailed by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf<String?>(null) }
     val readAttachment: suspend (String) -> ByteArray = { actions.readAttachment(it) }
+    val attachmentIds = editor.attachments.map { it.id }.toSet()
     removing?.let { id -> PrivateAlertDialog(
         onDismissRequest = { removing = null }, title = { Text("Remove attachment?") },
         text = { Text("The file is removed from this note. Existing references remain in the source text.") },
@@ -278,7 +279,7 @@ private fun PrivateNoteEditor(editor: PrivateNoteEditorState, actions: PrivateNo
             verticalArrangement = Arrangement.spacedBy(ChurSpacing.one)) {
             if (editor.trashed && editor.format == PrivateNoteFormat.MARKDOWN) {
                 Text(editor.title.ifBlank { "Untitled note" }, style = MaterialTheme.typography.titleLarge, color = colors.ink)
-                dev.po4yka.chur.app.notes.MarkdownPreview(editor.body, Modifier.height(editorHeight).fillMaxWidth(), readAttachment = readAttachment)
+                dev.po4yka.chur.app.notes.MarkdownPreview(editor.body, Modifier.height(editorHeight).fillMaxWidth(), readAttachment = readAttachment, attachmentIds = attachmentIds)
             } else if (editor.trashed) {
                 LazyColumn(Modifier.height(editorHeight), verticalArrangement = Arrangement.spacedBy(ChurSpacing.two)) {
                     item { Text(editor.title.ifBlank { "Untitled note" }, style = MaterialTheme.typography.titleLarge, color = colors.ink) }
@@ -291,7 +292,7 @@ private fun PrivateNoteEditor(editor: PrivateNoteEditorState, actions: PrivateNo
                     colors = churOutlinedTextFieldColors())
                 MarkdownEditor(editor.body, actions::body, editor.format == PrivateNoteFormat.MARKDOWN,
                     { actions.format(if (it) PrivateNoteFormat.MARKDOWN else PrivateNoteFormat.PLAIN_TEXT) },
-                    Modifier.fillMaxWidth().height(editorHeight), private = true, enabled = !busy, readAttachment = readAttachment)
+                    Modifier.fillMaxWidth().height(editorHeight), private = true, enabled = !busy, readAttachment = readAttachment, attachmentIds = attachmentIds)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = editor.pinned, onCheckedChange = actions::pinned, enabled = !busy)
                     Text("Pinned", color = colors.ink)

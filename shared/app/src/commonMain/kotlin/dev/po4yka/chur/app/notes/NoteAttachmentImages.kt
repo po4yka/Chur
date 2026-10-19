@@ -49,16 +49,16 @@ internal class NoteAttachmentImageCache(private val scope: CoroutineScope) {
 }
 
 @Composable
-internal fun rememberNoteAttachmentImageCache(): NoteAttachmentImageCache {
+internal fun rememberNoteAttachmentImageCache(attachmentIds: Set<String>): NoteAttachmentImageCache {
     val scope = rememberCoroutineScope()
-    val cache = remember { NoteAttachmentImageCache(scope) }
+    val cache = remember(attachmentIds) { NoteAttachmentImageCache(scope) }
     DisposableEffect(cache) { onDispose { cache.clear() } }
     return cache
 }
 
 @Composable
 internal fun NoteAttachmentImage(id: String, name: String, read: suspend () -> ByteArray,
-    cache: NoteAttachmentImageCache = rememberNoteAttachmentImageCache()) {
+    cache: NoteAttachmentImageCache = rememberNoteAttachmentImageCache(setOf(id))) {
     val loader by rememberUpdatedState(read)
     var image by remember(id, cache) { mutableStateOf<ImageBitmap?>(null) }
     var finished by remember(id, cache) { mutableStateOf(false) }

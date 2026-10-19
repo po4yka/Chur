@@ -97,6 +97,28 @@ class PrivateNotesAndroidTest {
                 runBlocking { fixture.vault.unlock(PASSWORD.encodeToByteArray()) }
                 val note = runBlocking { fixture.vault.privateNotes(fixture.generation).notes.single() }
                 org.junit.Assert.assertArrayEquals(bytes, runBlocking { fixture.vault.readPrivateNoteAttachment(fixture.generation, note.noteId, id) })
+                fixture.clickText("Public attachment sample")
+                fixture.clickText("Preview")
+                assertTrue(fixture.await { fixture.nodes().any {
+                    it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Public sample image") == true
+                } })
+                val originalSource = runBlocking { fixture.vault.privateNote(fixture.generation, note.noteId).body }
+                // Remove through the production controller while the same preview stays open.
+                fixture.fieldAction("private-note-editor-scroll") {
+                    assertTrue(it.config.getOrNull(SemanticsActions.ScrollBy)?.action?.invoke(0f, 20_000f) == true)
+                }
+                fixture.clickText("Remove file")
+                fixture.clickText("Remove")
+                assertTrue("removing a native attachment invalidates its existing inline previews", fixture.await {
+                    fixture.hasText("Image unavailable") && fixture.nodes().none {
+                        val labels = it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty()
+                        "Public sample image" in labels || "Inline reference image" in labels
+                    }
+                })
+                val detached = runBlocking { fixture.vault.privateNote(fixture.generation, note.noteId) }
+                assertEquals(originalSource, detached.body)
+                assertTrue(runBlocking { fixture.vault.privateNoteAttachments(fixture.generation, note.noteId).isEmpty() })
+                fixture.capture("private-note-detached-image-public-fixture.png")
             }
         } finally { bytes.fill(0) }
     }

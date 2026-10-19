@@ -433,6 +433,7 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
             if (exportFailed) Text("The file could not be exported. Try again.", color = colors.error)
             MarkdownEditor(body, { changed -> draft?.let { draft = it.first to changed } }, format == NoteFormat.MARKDOWN,
                 { formatName = if (it) NoteFormat.MARKDOWN.name else NoteFormat.PLAIN_TEXT.name }, Modifier.fillMaxWidth().height(400.dp), enabled = !exit.requested && !attachmentBusy,
+                attachmentIds = attachments.map { it.id }.toSet(),
                 readAttachment = { id ->
                     require(attachments.any { it.id == id }) { "attachment not found" }
                     onReadAttachment(id)

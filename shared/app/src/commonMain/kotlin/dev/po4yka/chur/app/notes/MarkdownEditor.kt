@@ -84,6 +84,7 @@ internal fun MarkdownEditor(
     enabled: Boolean = true,
     readOnly: Boolean = false,
     readAttachment: (suspend (String) -> ByteArray)? = null,
+    attachmentIds: Set<String> = emptySet(),
 ) {
     var value by remember { mutableStateOf(TextFieldValue(body)) }
     val history = remember { MarkdownHistory(value) }
@@ -167,7 +168,7 @@ internal fun MarkdownEditor(
             }
             if (outline && markdown) MarkdownOutline(value.text) { offset -> preview = false; value = value.copy(selection = TextRange(offset)); outline = false }
             if (preview && markdown) {
-                MarkdownPreview(value.text, readAttachment = readAttachment, modifier = Modifier.height(documentHeight).fillMaxWidth(), onToggleTask = if (!enabled || readOnly) null else { start, end ->
+                MarkdownPreview(value.text, readAttachment = readAttachment, attachmentIds = attachmentIds, modifier = Modifier.height(documentHeight).fillMaxWidth(), onToggleTask = if (!enabled || readOnly) null else { start, end ->
                     toggleMarkdownTask(value.text, start, end)?.let { publish(TextFieldValue(it, TextRange(start))) }
                 })
             } else {
@@ -226,8 +227,8 @@ internal fun markdownInlineImageAlt(source: String, node: ASTNode, link: String,
 
 @Composable
 internal fun MarkdownPreview(body: String, modifier: Modifier = Modifier, onToggleTask: ((Int, Int) -> Unit)? = null,
-    readAttachment: (suspend (String) -> ByteArray)? = null) {
-    val images = rememberNoteAttachmentImageCache()
+    readAttachment: (suspend (String) -> ByteArray)? = null, attachmentIds: Set<String> = emptySet()) {
+    val images = rememberNoteAttachmentImageCache(attachmentIds)
     val host = LocalUriHandler.current
     var link by remember { mutableStateOf<String?>(null) }
     var openFailed by remember { mutableStateOf(false) }
@@ -249,7 +250,8 @@ internal fun MarkdownPreview(body: String, modifier: Modifier = Modifier, onTogg
                 image = { model ->
                     val id = model.node.resolveImageLink(model.content, LocalReferenceLinkHandler.current)?.let(::noteAttachmentId)
                     val name = model.node.resolveImageAlt(model.content).orEmpty()
-                    if (id != null && readAttachment != null) NoteAttachmentImage(id, name, { readAttachment(id) }, images)
+                    if (id != null && readAttachment != null && id in attachmentIds) NoteAttachmentImage(id, name, { readAttachment(id) }, images)
+                    else if (id != null) Text("Image unavailable: $name")
                     else Text("Image: $name (only managed attachments are loaded)")
                 },
                 inlineImage = { model ->
@@ -257,7 +259,8 @@ internal fun MarkdownPreview(body: String, modifier: Modifier = Modifier, onTogg
                     val id = noteAttachmentId(model.content)
                     val name = markdownInlineImageAlt(LocalRenderedMarkdownSource.current, model.node,
                         model.content, LocalReferenceLinkHandler.current) ?: "Image"
-                    if (id != null && readAttachment != null) NoteAttachmentImage(id, name, { readAttachment(id) }, images)
+                    if (id != null && readAttachment != null && id in attachmentIds) NoteAttachmentImage(id, name, { readAttachment(id) }, images)
+                    else if (id != null) Text("Image unavailable: $name")
                     else Text("Image: $name (only managed attachments are loaded)")
                 },
                 checkbox = { model ->
