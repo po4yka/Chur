@@ -1855,8 +1855,8 @@ fn private_workspace_commands_are_bounded_cas_and_restore_saved_source() {
     set.fill(0);
     assert_eq!(unsafe { chur_session_close(session) }, OK);
     assert_eq!(
-        call(session, &get, &mut output).0,
-        ChurStatus::InvalidInput as i32
+        call(session, &get, &mut output),
+        (ChurStatus::SessionExpired as i32, 0)
     );
     assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
     std::fs::remove_dir_all(root).unwrap();
