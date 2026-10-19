@@ -48,4 +48,17 @@ class NoteSavedStateTest {
         }
     }
 
+    @Test
+    fun a_recovered_note_keeps_its_stale_editor_fence_across_recreation() = kotlinx.coroutines.test.runTest {
+        val store = dev.po4yka.chur.notes.InMemoryNoteStore()
+        val original = store.put(Note("recovered", "Title", "original", 1))
+        store.put(original.copy(body = "changed", updatedMs = 2))
+        val recovered = store.restoreRevision(original.id, store.history(original.id).last().id)
+        val saved = with(OpenNoteSaver) { scope.save(OpenNote(recovered, false)) }!!
+        val reopened = requireNotNull(OpenNoteSaver.restore(saved))
+        assertEquals(recovered.recoveryEpoch, reopened.note.recoveryEpoch)
+        store.put(reopened.note.copy(title = "Edited after recreation", body = recovered.body, updatedMs = 3))
+        assertEquals("Edited after recreation", store.all().single().title)
+    }
+
 }

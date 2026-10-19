@@ -62,6 +62,8 @@ import dev.po4yka.chur.app.notes.MarkdownEditor
 import dev.po4yka.chur.app.notes.NoteImportAction
 import dev.po4yka.chur.app.notes.NoteBinaryImportAction
 import dev.po4yka.chur.app.notes.NoteAttachmentImage
+import dev.po4yka.chur.app.notes.NoteOrganizationFields
+import dev.po4yka.chur.app.notes.NoteFilterFields
 import dev.po4yka.chur.app.notes.attachmentMarkdownReference
 import dev.po4yka.chur.notes.NoteAttachments
 import dev.po4yka.chur.ffi.PrivateNoteFormat
@@ -137,6 +139,8 @@ private fun PrivateNotesContent(
         Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
             if (editor == null) {
                 PrivateNotesList(state, actions, busy, Modifier.weight(1f), onImportActivity)
+            } else if (state.history != null) {
+                PrivateNoteHistory(state, actions, busy, Modifier.weight(1f))
             } else {
                 PrivateNoteEditor(editor, actions, busy, Modifier.weight(1f), onImportActivity)
             }
@@ -193,6 +197,7 @@ private fun PrivateNotesContent(
 @Composable
 private fun PrivateNotesList(state: PrivateNotesUiState, actions: PrivateNotesActions, busy: Boolean, modifier: Modifier, onImportActivity: (Boolean) -> Unit) {
     var importFailed by remember { mutableStateOf(false) }
+    var filters by remember { mutableStateOf(false) }
     val colors = LocalChurColors.current
     val selecting = state.selection.isNotEmpty()
     Column(modifier.padding(horizontal = ChurSpacing.gutter), verticalArrangement = Arrangement.spacedBy(ChurSpacing.one)) {
@@ -206,10 +211,12 @@ private fun PrivateNotesList(state: PrivateNotesUiState, actions: PrivateNotesAc
                 Text(if (state.trash) "Active notes" else "Trash")
             }
             if (!selecting) TextButton(enabled = !busy && !state.loading, onClick = actions::refresh) { Text("Refresh") }
+            if (!selecting) TextButton(enabled = !busy, onClick = { filters = !filters }) { Text("Folders and tags") }
             if (!state.trash) TextButton(enabled = !busy && !state.loading && state.notes.isNotEmpty(),
                 onClick = actions::selectPage) { Text("Select page") }
         }
         if (importFailed) Text("Import failed. Use UTF-8 Markdown up to 256 KiB or a .churnote package up to 24 MiB.", color = colors.error)
+        if (filters) NoteFilterFields(state.folderFilter, state.tagFilter, !busy, private = true, onActivity = actions::activity, onApply = actions::filter)
         OutlinedTextField(value = state.terms, onValueChange = actions::search, enabled = !busy, singleLine = true,
             label = { Text(if (state.trash) "Search Trash" else "Search private notes") },
             keyboardOptions = privateKeyboardOptions().copy(imeAction = ImeAction.Search),
@@ -217,7 +224,7 @@ private fun PrivateNotesList(state: PrivateNotesUiState, actions: PrivateNotesAc
             colors = churOutlinedTextFieldColors())
         when {
             state.loading -> Text("Loading private notes…", color = colors.inkMuted)
-            state.notes.isEmpty() && state.error == null -> Text(if (state.terms.isNotBlank()) "No matching private notes."
+            state.notes.isEmpty() && state.error == null -> Text(if (state.terms.isNotBlank() || state.folderFilter.isNotEmpty() || state.tagFilter.isNotEmpty()) "No matching private notes."
                 else if (state.trash) "Trash is empty." else "No private notes yet. Create one to keep text in this vault.",
                 color = colors.inkMuted)
         }
@@ -240,6 +247,10 @@ private fun PrivateNotesList(state: PrivateNotesUiState, actions: PrivateNotesAc
                             if (note.preview.isNotBlank()) Text(note.preview, maxLines = 2, overflow = TextOverflow.Ellipsis,
                                 color = colors.inkMuted, style = MaterialTheme.typography.bodyMedium)
                             if (note.pinned) Text("Pinned", color = colors.inkMuted, style = MaterialTheme.typography.labelSmall)
+                            state.organization[note.id]?.let { organization ->
+                                if (organization.folder.isNotEmpty()) Text("Folder: ${organization.folder}", style = MaterialTheme.typography.labelSmall)
+                                if (organization.tags.isNotEmpty()) Text(organization.tags.joinToString(" · ") { "#$it" }, style = MaterialTheme.typography.labelSmall)
+                            }
                         }
                         if (!state.trash && !selecting) TextButton(enabled = !busy, onClick = { actions.pin(note) }) {
                             Text(if (note.pinned) "Unpin" else "Pin")
@@ -265,7 +276,7 @@ private fun PrivateNoteEditor(editor: PrivateNoteEditorState, actions: PrivateNo
     val attachmentIds = editor.attachments.map { it.id }.toSet()
     removing?.let { id -> PrivateAlertDialog(
         onDismissRequest = { removing = null }, title = { Text("Remove attachment?") },
-        text = { Text("The file is removed from this note. Existing references remain in the source text.") },
+        text = { Text("The file is removed from the current version. Earlier versions may retain it until history expires or the note is permanently deleted. Source references remain.") },
         confirmButton = { TextButton(enabled = !busy && !editor.dirty, onClick = { removing = null; actions.removeAttachment(id) }) { Text("Remove") } },
         dismissButton = { TextButton(onClick = { removing = null }) { Text("Cancel") } }) }
 
@@ -301,6 +312,9 @@ private fun PrivateNoteEditor(editor: PrivateNoteEditorState, actions: PrivateNo
                     else if (editor.saved != null) "Saved in this vault." else "Save to keep this note in the vault.",
                     style = MaterialTheme.typography.bodySmall, color = colors.inkMuted)
             }
+            if (!editor.trashed) NoteOrganizationFields(editor.organization.folder, editor.organization.tags,
+                enabled = !busy && editor.saved != null && !editor.dirty, private = true, onActivity = actions::activity, onApply = actions::organize)
+            if (editor.saved != null) TextButton(enabled = !busy && !editor.dirty, onClick = actions::showHistory) { Text("Version history") }
             Text("Attachments (${editor.attachments.size}/32)", style = MaterialTheme.typography.titleSmall)
             if (!editor.trashed) {
                 NoteBinaryImportAction("Add image or file", NoteAttachments.MAX_FILE_BYTES,
@@ -342,6 +356,41 @@ private fun PrivateNoteEditor(editor: PrivateNoteEditorState, actions: PrivateNo
                 if (!editor.trashed) TextButton(enabled = !busy && (editor.saved != null || editor.canSave),
                     onClick = actions::exportEncrypted) { Text("Encrypted archive") }
             }
+        }
+    }
+}
+
+@Composable
+private fun PrivateNoteHistory(state: PrivateNotesUiState, actions: PrivateNotesActions, busy: Boolean, modifier: Modifier) {
+    var confirming by remember { mutableStateOf(false) }
+    val detail = state.historical
+    if (confirming && detail != null) PrivateAlertDialog(onDismissRequest = { if (!busy) confirming = false },
+        title = { Text("Restore this version?") },
+        text = { Text("Its saved text, folder, tags and original files become current. The current version remains in history within retention limits.") },
+        confirmButton = { TextButton(enabled = !busy, onClick = { confirming = false; actions.restoreRevision() }) { Text("Restore version") } },
+        dismissButton = { TextButton(enabled = !busy, onClick = { confirming = false }) { Text("Cancel") } })
+    LazyColumn(modifier.fillMaxWidth().padding(ChurSpacing.gutter), verticalArrangement = Arrangement.spacedBy(ChurSpacing.one)) {
+        item {
+            Text("Version history", style = MaterialTheme.typography.titleLarge)
+            Text("History is encrypted in this vault. Up to 20 previous versions and 64 MiB of historical files are retained.")
+            TextButton(enabled = !busy, onClick = actions::closeHistory) { Text("Back to current note") }
+        }
+        if (state.history.orEmpty().isEmpty()) item { Text("No previous versions yet.") }
+        items(state.history.orEmpty(), key = { it.revision }) { version ->
+            TextButton(enabled = !busy, onClick = { actions.previewRevision(version.revision) }) {
+                Text("Revision ${version.revision} · ${version.title.ifBlank { "Untitled" }} · ${version.attachmentCount} files")
+            }
+        }
+        detail?.let { selected ->
+            item {
+                Text("Selected revision ${selected.note.revision}", style = MaterialTheme.typography.titleMedium)
+                Text(selected.note.title)
+                Text("Folder: ${selected.organization.folder} · ${selected.organization.tags.joinToString(", ")}")
+                Text("${selected.attachments.size} original files")
+                if (state.editor?.trashed == false) TextButton(enabled = !busy, onClick = { confirming = true }) { Text("Restore this version") }
+                else Text("Restore the note from Trash before restoring a previous version.")
+            }
+            items(documentTextChunks(selected.note.body)) { Text(it) }
         }
     }
 }

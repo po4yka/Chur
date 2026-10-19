@@ -120,6 +120,21 @@ class PrivateNotesAndroidTest {
                 assertEquals(originalSource, detached.body)
                 assertTrue(runBlocking { fixture.vault.privateNoteAttachments(fixture.generation, note.noteId).isEmpty() })
                 fixture.capture("private-note-detached-image-public-fixture.png")
+                fixture.clickText("Version history")
+                val previousRevision = detached.revision - 1
+                fixture.clickText("Revision $previousRevision · Public attachment sample · 1 files")
+                fixture.clickText("Restore this version")
+                fixture.clickText("Restore version")
+                assertTrue(fixture.await { fixture.hasText("Attachments (1/32)") })
+                fixture.clickText("Preview")
+                assertTrue("history restores the original bytes into the actual image renderer", fixture.await {
+                    fixture.nodes().any { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Public sample image") == true }
+                })
+                org.junit.Assert.assertArrayEquals(bytes, runBlocking { fixture.vault.readPrivateNoteAttachment(fixture.generation, note.noteId, id) })
+                assertEquals(originalSource, runBlocking { fixture.vault.privateNote(fixture.generation, note.noteId).body })
+                assertTrue(fixture.savedState().isEmpty())
+                fixture.capture("private-note-restored-image-public-fixture.png")
+
             }
         } finally { bytes.fill(0) }
     }
@@ -137,7 +152,27 @@ class PrivateNotesAndroidTest {
         assertEquals("Public synthetic body for native notes", runBlocking {
             fixture.vault.privateNote(fixture.generation, notes.single().noteId).body
         })
+        fixture.fieldAction("private-note-editor-scroll") {
+            assertTrue(it.config.getOrNull(SemanticsActions.ScrollBy)?.action?.invoke(0f, 20_000f) == true)
+        }
+        fixture.fieldAction("note-folder") { assertTrue(it.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(androidx.compose.ui.text.AnnotatedString("Projects")) == true) }
+        fixture.fieldAction("note-tags") { assertTrue(it.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(androidx.compose.ui.text.AnnotatedString("todo\nPlan, do")) == true) }
+        fixture.clickText("Apply organization")
+        assertTrue(fixture.await { runBlocking { fixture.vault.privateNoteOrganization(fixture.generation, notes.single().noteId).folder == "Projects" } })
+        assertEquals(listOf("Plan, do", "todo"), runBlocking { fixture.vault.privateNoteOrganization(fixture.generation, notes.single().noteId).tags })
         fixture.clickDescription("Back")
+        assertTrue(fixture.await { fixture.hasText("Public synthetic title") })
+        assertTrue(fixture.await { fixture.hasText("Folder: Projects") })
+        fixture.clickText("Folders and tags")
+        fixture.fieldAction("note-filter-folder") { assertTrue(it.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(androidx.compose.ui.text.AnnotatedString("Projects")) == true) }
+        fixture.fieldAction("note-filter-tag") { assertTrue(it.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(androidx.compose.ui.text.AnnotatedString("todo")) == true) }
+        fixture.clickText("Apply filters")
+        assertTrue(fixture.await { fixture.hasText("Public synthetic title") })
+        fixture.capture("private-notes-organization-public-fixture.png")
+        fixture.fieldAction("note-filter-tag") { assertTrue(it.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(androidx.compose.ui.text.AnnotatedString("absent")) == true) }
+        fixture.clickText("Apply filters")
+        assertTrue(fixture.await { fixture.hasText("No matching private notes.") })
+        fixture.clickText("Clear filters")
         assertTrue(fixture.await { fixture.hasText("Public synthetic title") })
         assertEquals(listOf(PUBLIC_NOTE), runBlocking { fixture.publicStore.all() })
         assertFalse(fixture.publicFile.readText().contains("Public synthetic title"))

@@ -181,8 +181,11 @@ class ChurController(
     private val _launcherRequest = MutableStateFlow<LauncherRequest?>(null)
     val launcherRequest: StateFlow<LauncherRequest?> = _launcherRequest.asStateFlow()
     private val _notes = MutableStateFlow<List<Note>>(emptyList())
+    private val _trashedNotes = MutableStateFlow<List<Note>>(emptyList())
     private val _publicNoteWriteFailureId = MutableStateFlow<String?>(null)
     private val publicNoteWrites = kotlinx.coroutines.sync.Mutex()
+    /** Late callbacks cannot recreate an identifier purged during this process. */
+    private val retiredPublicNoteIds = mutableSetOf<String>()
     private val _disclosureDue = MutableStateFlow(false)
     private val _publicDisclosureRequired = MutableStateFlow(true)
     /** Camera must show the public-data statement before its first file write. */
@@ -333,6 +336,7 @@ class ChurController(
 
     /** The public notes. */
     val notesState: StateFlow<List<Note>> = _notes.asStateFlow()
+    val trashedNotesState: StateFlow<List<Note>> = _trashedNotes.asStateFlow()
     val publicNoteWriteFailureId: StateFlow<String?> = _publicNoteWriteFailureId.asStateFlow()
 
     /** The current library page. */
@@ -2703,10 +2707,12 @@ class ChurController(
 
     /** The store owns attachment membership; queued text saves cannot resurrect deleted files. */
     private suspend fun persistPublicNote(note: Note, allowBlank: Boolean = false) {
+        check(note.id !in retiredPublicNoteIds) { "note is no longer editable; reopen it" }
         val all = notes.all()
         val stored = all.firstOrNull { it.id == note.id }
         if (!allowBlank && stored == null && note.title.isBlank() && note.body.isBlank()) return
-        val current = note.copy(attachments = stored?.attachments.orEmpty())
+        val current = note.copy(attachments = stored?.attachments.orEmpty(), folder = stored?.folder, tags = stored?.tags.orEmpty(),
+            revision = stored?.revision ?: note.revision)
         if (stored != null && stored.copy(updatedMs = current.updatedMs) == current) {
             _notes.value = all
             if (_publicNoteWriteFailureId.value == current.id) _publicNoteWriteFailureId.value = null
@@ -2756,6 +2762,48 @@ class ChurController(
         }
     }
 
+    suspend fun publicNoteHistory(id: String): List<dev.po4yka.chur.notes.NoteRevision> =
+        withContext(Dispatchers.Default) { publicNoteWrites.withLock { notes.history(id) } }
+    suspend fun organizePublicNote(id: String, folder: String?, tags: List<String>) = withContext(Dispatchers.Default) {
+        publicNoteWrites.withLock { withContext(NonCancellable) {
+            notes.updateOrganization(id, folder, tags)
+            _notes.value = notes.all()
+        } }
+    }
+    suspend fun restorePublicNoteRevision(id: String, revision: String): Note = withContext(Dispatchers.Default) {
+        publicNoteWrites.withLock { withContext(NonCancellable) {
+            val restored = notes.restoreRevision(id, revision)
+            _notes.value = notes.all()
+            restored
+        } }
+    }
+    fun refreshPublicTrash() = guarded {
+        publicNoteWrites.withLock { _trashedNotes.value = notes.trash() }
+    }
+    suspend fun restorePublicNote(id: String) = withContext(Dispatchers.Default) {
+        publicNoteWrites.withLock { withContext(NonCancellable) {
+            notes.restore(id, clock())
+            retiredPublicNoteIds.remove(id)
+            _notes.value = notes.all(); _trashedNotes.value = notes.trash()
+        } }
+    }
+    suspend fun purgePublicNote(id: String) = withContext(Dispatchers.Default) {
+        publicNoteWrites.withLock { withContext(NonCancellable) {
+            notes.purge(id)
+            retiredPublicNoteIds.add(id)
+            _trashedNotes.value = notes.trash()
+        } }
+    }
+
+    suspend fun trashPublicNote(note: Note) = withContext(Dispatchers.Default) {
+        publicNoteWrites.withLock { withContext(NonCancellable) {
+            persistPublicNote(note, allowBlank = true)
+            notes.remove(note.id)
+            retiredPublicNoteIds.add(note.id)
+            _notes.value = notes.all(); _trashedNotes.value = notes.trash()
+        } }
+    }
+
     /**
      * Records that the public-shell disclosure has been shown.
      *
@@ -2778,7 +2826,9 @@ class ChurController(
     fun removeNote(id: String) = guarded {
         publicNoteWrites.withLock {
             notes.remove(id)
+            retiredPublicNoteIds.add(id)
             _notes.value = notes.all()
+            _trashedNotes.value = notes.trash()
             if (_publicNoteWriteFailureId.value == id) _publicNoteWriteFailureId.value = null
         }
     }

@@ -17,7 +17,7 @@ use chur_format::{
         CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V5, CATALOG_FORMAT_VERSION_V6,
         CATALOG_FORMAT_VERSION_V7, CATALOG_FORMAT_VERSION_V8, CATALOG_FORMAT_VERSION_V9,
         CATALOG_FORMAT_VERSION_V10, CATALOG_FORMAT_VERSION_V11, CATALOG_FORMAT_VERSION_V12,
-        CATALOG_FORMAT_VERSION_V13,
+        CATALOG_FORMAT_VERSION_V13, CATALOG_FORMAT_VERSION_V14,
     },
     envelope::ObjectKeyEnvelope,
 };
@@ -72,6 +72,9 @@ const STEPS: &[Step] = &[
     },
     Step {
         version: CATALOG_FORMAT_VERSION_V13,
+    },
+    Step {
+        version: CATALOG_FORMAT_VERSION_V14,
     },
 ];
 
@@ -733,6 +736,58 @@ CREATE TABLE private_note_attachments (
  PRIMARY KEY(note_id,attachment_id)
 ) STRICT;
 "#;
+/// Organization and bounded historical snapshots live entirely inside SQLCipher.
+const V14_DDL: &str = r#"
+CREATE TABLE private_note_organization (
+ note_id BLOB PRIMARY KEY REFERENCES private_notes(note_id) ON DELETE CASCADE,
+ folder TEXT NOT NULL CHECK(length(CAST(folder AS BLOB))<=64),
+ tags TEXT NOT NULL CHECK(length(CAST(tags AS BLOB))<=4096)
+) STRICT;
+CREATE TABLE private_note_history (
+ note_id BLOB NOT NULL REFERENCES private_notes(note_id) ON DELETE CASCADE,
+ revision INTEGER NOT NULL CHECK(revision>0),
+ title TEXT NOT NULL CHECK(length(CAST(title AS BLOB))<=256),
+ body TEXT NOT NULL CHECK(length(CAST(body AS BLOB))<=262144),
+ format INTEGER NOT NULL CHECK(format IN (0,1)),
+ updated_ms INTEGER NOT NULL CHECK(updated_ms>=0),
+ pinned INTEGER NOT NULL CHECK(pinned IN (0,1)),
+ folder TEXT NOT NULL CHECK(length(CAST(folder AS BLOB))<=64),
+ tags TEXT NOT NULL CHECK(length(CAST(tags AS BLOB))<=4096),
+ PRIMARY KEY(note_id,revision)
+) STRICT;
+CREATE TABLE private_note_history_blobs (
+ note_id BLOB NOT NULL REFERENCES private_notes(note_id) ON DELETE CASCADE,
+ blob_id BLOB NOT NULL CHECK(length(blob_id)=16),
+ data BLOB NOT NULL CHECK(length(data)<=8388608),
+ PRIMARY KEY(note_id,blob_id)
+) STRICT;
+CREATE TABLE private_note_history_files (
+ note_id BLOB NOT NULL,
+ revision INTEGER NOT NULL,
+ attachment_id BLOB NOT NULL CHECK(length(attachment_id)=16),
+ name TEXT NOT NULL CHECK(length(CAST(name AS BLOB)) BETWEEN 1 AND 240),
+ mime_type TEXT NOT NULL,
+ blob_id BLOB NOT NULL,
+ PRIMARY KEY(note_id,revision,attachment_id),
+ FOREIGN KEY(note_id,revision) REFERENCES private_note_history(note_id,revision) ON DELETE CASCADE,
+ FOREIGN KEY(note_id,blob_id) REFERENCES private_note_history_blobs(note_id,blob_id)
+) STRICT;
+"#;
+/// Atomically adds organization and historical recovery after descriptor authentication.
+pub fn migrate_v13_to_v14(db: &mut CatalogDb) -> Result<()> {
+    ensure!(
+        recorded_version(db.connection())? == Some(CATALOG_FORMAT_VERSION_V13),
+        MigrationRequired,
+        "the catalog is not version thirteen"
+    );
+    db.transaction(|tx| {
+  tx.execute("UPDATE vault_state SET active_migration_target=14 WHERE only_row=1",[]).map_err(|e|map_sqlite(e,"the note workspace migration target could not be written"))?;
+  tx.execute_batch(V14_DDL).map_err(|e|map_sqlite(e,"the note workspace migration failed"))?;
+  tx.execute("UPDATE vault_state SET catalog_format_version=14,active_migration_target=NULL WHERE only_row=1",[]).map_err(|e|map_sqlite(e,"the note workspace version could not be written"))?;
+  Ok(())
+ })
+}
+
 /// Adds bounded encrypted attachment storage after the authenticated descriptor transition.
 pub fn migrate_v12_to_v13(db: &mut CatalogDb) -> Result<()> {
     ensure!(
@@ -818,15 +873,15 @@ pub fn open_at_current_version(db: &mut CatalogDb, now_ms: u64) -> Result<u16> {
     let present = recorded_version(db.connection())?;
     let Some(present) = present else {
         install(db, now_ms)?;
-        return Ok(CATALOG_FORMAT_VERSION_V13);
+        return Ok(CATALOG_FORMAT_VERSION_V14);
     };
-    if present != CATALOG_FORMAT_VERSION_V13 {
+    if present != CATALOG_FORMAT_VERSION_V14 {
         bail!(
             MigrationRequired,
             "the catalog requires an authenticated schema migration"
         );
     }
-    Ok(CATALOG_FORMAT_VERSION_V13)
+    Ok(CATALOG_FORMAT_VERSION_V14)
 }
 
 /// The version the database records, or `None` when the schema is absent.
@@ -900,13 +955,16 @@ fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
             .execute_batch(V13_DDL)
             .map_err(|e| map_sqlite(e, "the attachment schema could not be created"))?;
         transaction
+            .execute_batch(V14_DDL)
+            .map_err(|e| map_sqlite(e, "the note workspace schema could not be created"))?;
+        transaction
             .execute(
                 "INSERT INTO vault_state (
                      only_row, catalog_format_version, catalog_generation,
                      active_migration_target, object_store_checkpoint,
                      integrity_checkpoint_ms, capability_flags
                  ) VALUES (1, ?1, 1, NULL, 0, ?2, 0)",
-                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V13), checkpoint],
+                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V14), checkpoint],
             )
             .map_err(|error| map_sqlite(error, "the catalog state row could not be written"))?;
         Ok(())
@@ -934,6 +992,10 @@ const RESET_V7_DDL: &str = "
 DROP TABLE IF EXISTS own_sync_pending_album_memberships;
 DROP TABLE IF EXISTS content_index;
 DROP TABLE IF EXISTS private_note_search;
+DROP TABLE IF EXISTS private_note_history_files;
+DROP TABLE IF EXISTS private_note_history_blobs;
+DROP TABLE IF EXISTS private_note_history;
+DROP TABLE IF EXISTS private_note_organization;
 DROP TABLE IF EXISTS private_note_attachments;
 DROP TABLE IF EXISTS private_notes;
 DROP TABLE trash_entries;
@@ -1509,11 +1571,51 @@ mod tests {
     }
 
     #[test]
-    fn a_new_catalog_installs_version_thirteen() {
+    fn v13_workspace_migration_rolls_back_and_preserves_current_notes() {
+        let mut db = open();
+        open_at_current_version(&mut db, 1).expect("current");
+        let n = crate::notes::save(
+            &mut db,
+            None,
+            0,
+            "Legacy",
+            "# exact",
+            false,
+            crate::notes::NoteFormat::Markdown,
+            2,
+        )
+        .expect("note");
+        db.connection().execute_batch("DROP TABLE private_note_history_files; DROP TABLE private_note_history_blobs; DROP TABLE private_note_history; DROP TABLE private_note_organization; UPDATE vault_state SET catalog_format_version=13; CREATE TRIGGER refuse_v14 BEFORE UPDATE OF catalog_format_version ON vault_state WHEN NEW.catalog_format_version=14 BEGIN SELECT RAISE(ABORT,'version refused'); END;").expect("v13 fixture");
+        assert!(migrate_v13_to_v14(&mut db).is_err());
+        let state:(i64,Option<i64>,i64)=db.connection().query_row("SELECT catalog_format_version,active_migration_target,(SELECT count(*) FROM sqlite_schema WHERE name LIKE 'private_note_history%') FROM vault_state",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).expect("rollback state");
+        assert_eq!(state, (13, None, 0));
+        db.connection()
+            .execute_batch("DROP TRIGGER refuse_v14")
+            .expect("clear injected failure");
+        migrate_v13_to_v14(&mut db).expect("complete migration");
+        assert_eq!(
+            crate::notes::get(&db, &n.id).expect("preserved").body,
+            "# exact"
+        );
+        assert!(
+            crate::note_workspace::history(&db, &n.id)
+                .expect("new empty history")
+                .is_empty()
+        );
+        assert!(
+            crate::note_workspace::get_organization(&db, &n.id)
+                .expect("new organization")
+                .folder
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_new_catalog_installs_version_fourteen() {
         let mut db = open();
         assert_eq!(
             open_at_current_version(&mut db, 1_700_000_000_000).expect("install"),
-            CATALOG_FORMAT_VERSION_V13
+            CATALOG_FORMAT_VERSION_V14
         );
         let sharing_tables: i64 = db
             .connection()
@@ -1585,7 +1687,7 @@ mod tests {
         }
         assert_eq!(
             STEPS.last().map(|step| step.version),
-            Some(CATALOG_FORMAT_VERSION_V13)
+            Some(CATALOG_FORMAT_VERSION_V14)
         );
     }
 

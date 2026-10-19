@@ -63,6 +63,8 @@ pub const CATALOG_FORMAT_VERSION_V11: u16 = 0x000b;
 pub const CATALOG_FORMAT_VERSION_V12: u16 = 0x000c;
 /// Bounded note-owned encrypted attachments.
 pub const CATALOG_FORMAT_VERSION_V13: u16 = 0x000d;
+/// Encrypted note organization and retained revisions.
+pub const CATALOG_FORMAT_VERSION_V14: u16 = 0x000e;
 /// §15.2: `object_store_format_version`.
 pub const OBJECT_STORE_FORMAT_VERSION_V1: u16 = 0x0001;
 /// §15.2: `slot_version` of the v1 key-slot families.

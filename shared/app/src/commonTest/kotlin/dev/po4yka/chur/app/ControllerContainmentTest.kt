@@ -7,6 +7,7 @@ import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.notes.NoteStore
 import dev.po4yka.chur.notes.NotePackages
 import dev.po4yka.chur.sync.SyncTransportFailure
+import kotlinx.coroutines.async
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -290,9 +291,9 @@ class ControllerContainmentTest {
         val memory = InMemoryNoteStore(listOf(original, other))
         var failWrites = true
         val store = object : NoteStore by memory {
-            override suspend fun put(note: Note) {
+            override suspend fun put(note: Note): Note {
                 if (failWrites) error("write failure")
-                memory.put(note)
+                return memory.put(note)
             }
         }
         val controller = controllerOver(store, clock = { 9 })
@@ -316,7 +317,7 @@ class ControllerContainmentTest {
         controller.putNote(changed)
         advanceUntilIdle()
         assertEquals(null, controller.publicNoteWriteFailureId.value)
-        assertEquals(changed.copy(updatedMs = 9), controller.notesState.value.first { it.id == "a" })
+        assertEquals(changed.copy(updatedMs = 9, revision = 1), controller.notesState.value.first { it.id == "a" })
     }
 
     @Test
@@ -370,10 +371,52 @@ class ControllerContainmentTest {
         notes = notes,
     )
 
+    @Test
+    fun public_trash_keeps_latest_draft_and_old_callbacks_cannot_recreate_a_purged_note() = runTest(dispatcher) {
+        val original = Note("recover", "Title", "saved", 1)
+        val store = InMemoryNoteStore(listOf(original))
+        val controller = controllerOver(store, clock = { 9 })
+        advanceUntilIdle()
+        controller.trashPublicNote(original.copy(body = "latest unsaved text"))
+        assertEquals("latest unsaved text", store.trash().single().body)
+        controller.purgePublicNote(original.id)
+        controller.putNote(original)
+        advanceUntilIdle()
+        assertTrue(store.all().isEmpty())
+        assertTrue(store.trash().isEmpty())
+    }
+
+    @Test
+    fun cancelling_the_public_route_after_restore_commit_still_publishes_the_recovered_note() = runTest(dispatcher) {
+        val original = Note("cancel-recover", "Title", "original", 1)
+        val memory = InMemoryNoteStore(listOf(original))
+        memory.put(original.copy(body = "changed", updatedMs = 2))
+        val version = memory.history(original.id).single().id
+        val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val store = object : NoteStore by memory {
+            override suspend fun restoreRevision(noteId: String, revisionId: String): Note {
+                val restored = memory.restoreRevision(noteId, revisionId)
+                entered.complete(Unit)
+                release.await()
+                return restored
+            }
+        }
+        val controller = controllerOver(store)
+        advanceUntilIdle()
+        val restoring = async { controller.restorePublicNoteRevision(original.id, version) }
+        entered.await()
+        restoring.cancel()
+        release.complete(Unit)
+        restoring.join()
+        assertEquals("original", memory.all().single().body)
+        assertEquals(memory.all(), controller.notesState.value)
+    }
+
     private fun note() = Note(id = "n", title = "t", body = "b", updatedMs = 0L)
 
     /** A store whose every read and write fails the way [raise] says. */
-    private class FailingNotes(private val raise: suspend () -> Nothing) : NoteStore {
+    private class FailingNotes(private val raise: suspend () -> Nothing) : NoteStore by InMemoryNoteStore() {
         override suspend fun all(): List<Note> = raise()
 
         override suspend fun put(note: Note) = raise()
@@ -391,10 +434,10 @@ class ControllerContainmentTest {
     }
 
     /** A store that answers rather than fails, for the tests that need no failure. */
-    private object InertNotes : NoteStore {
+    private object InertNotes : NoteStore by InMemoryNoteStore() {
         override suspend fun all(): List<Note> = emptyList()
 
-        override suspend fun put(note: Note) = Unit
+        override suspend fun put(note: Note): Note = note
 
         override suspend fun remove(id: String) = Unit
         override suspend fun addAttachment(noteId: String, name: String, data: ByteArray): dev.po4yka.chur.notes.NoteAttachment = error("unused")

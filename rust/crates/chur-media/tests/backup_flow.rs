@@ -109,6 +109,53 @@ fn a_package_restores_a_vault_whose_objects_export_the_original_bytes() {
     let (first, first_bytes) = import_one(&mut session, 300_000, "a.jpg", 0x1111);
     let (second, second_bytes) = import_one(&mut session, 4_096, "b.jpg", 0x2222);
     let source_vault = session.vault_id();
+    use chur_catalog::{note_attachments as files, note_workspace as workspace, notes};
+    let n = notes::save(
+        session.catalog().unwrap(),
+        None,
+        0,
+        "Note backup",
+        "# original source",
+        false,
+        notes::NoteFormat::Markdown,
+        NOW,
+    )
+    .unwrap();
+    let attachment = random::id().unwrap();
+    let n = files::put(
+        session.catalog().unwrap(),
+        &n.id,
+        n.revision,
+        files::AttachmentData {
+            attachment: files::Attachment {
+                id: attachment,
+                name: "historical.bin".into(),
+                mime_type: "application/octet-stream".into(),
+                size: b"HISTORICAL_BACKUP_SECRET".len() as u64,
+            },
+            data: Zeroizing::new(b"HISTORICAL_BACKUP_SECRET".to_vec()),
+        },
+        NOW,
+    )
+    .unwrap();
+    let n = workspace::set_organization(
+        session.catalog().unwrap(),
+        &n.id,
+        n.revision,
+        "Backup folder",
+        &["private"],
+        NOW,
+    )
+    .unwrap();
+    let original_revision = n.revision;
+    let n = files::remove(
+        session.catalog().unwrap(),
+        &n.id,
+        n.revision,
+        &attachment,
+        NOW,
+    )
+    .unwrap();
 
     let mut package = Cursor::new(Vec::new());
     let summary =
@@ -119,6 +166,12 @@ fn a_package_restores_a_vault_whose_objects_export_the_original_bytes() {
     // The manifest, the descriptor, the catalog, two containers, the commit.
     assert_eq!(summary.record_count, 6);
     assert_eq!(summary.package_length, package.get_ref().len() as u64);
+    assert!(
+        !package
+            .get_ref()
+            .windows(b"HISTORICAL_BACKUP_SECRET".len())
+            .any(|w| w == b"HISTORICAL_BACKUP_SECRET")
+    );
     session.lock().expect("lock");
 
     let destination = scratch_root();
@@ -128,12 +181,34 @@ fn a_package_restores_a_vault_whose_objects_export_the_original_bytes() {
     assert_eq!(restored.backup_id, summary.backup_id);
     assert_eq!(restored.stream_count, 2);
 
-    let opened = vault::unlock_with_password(&destination, PASSWORD, NOW + 2_000).expect("unlock");
+    let mut opened =
+        vault::unlock_with_password(&destination, PASSWORD, NOW + 2_000).expect("unlock");
     assert_eq!(opened.vault_id(), source_vault);
     let listed = page(opened.catalog_ref().unwrap(), &ObjectQuery::timeline()).expect("page");
     assert_eq!(listed.total_count, 2);
     assert_eq!(exported(&opened, &first), first_bytes);
     assert_eq!(exported(&opened, &second), second_bytes);
+    assert_eq!(
+        workspace::get_organization(opened.catalog_ref().unwrap(), &n.id)
+            .unwrap()
+            .folder,
+        "Backup folder"
+    );
+    let current = notes::get(opened.catalog_ref().unwrap(), &n.id).unwrap();
+    assert_eq!(current.attachment_count, 0);
+    let recovered = workspace::restore(
+        opened.catalog().unwrap(),
+        &n.id,
+        current.revision,
+        original_revision,
+        NOW + 2001,
+    )
+    .unwrap();
+    assert_eq!(recovered.body, "# original source");
+    assert_eq!(
+        &*files::read(opened.catalog_ref().unwrap(), &n.id, &attachment).unwrap(),
+        b"HISTORICAL_BACKUP_SECRET"
+    );
 }
 
 #[test]

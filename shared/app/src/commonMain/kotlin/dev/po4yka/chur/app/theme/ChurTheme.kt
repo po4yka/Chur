@@ -214,11 +214,13 @@ fun churOutlinedTextFieldColors(): TextFieldColors {
 fun DestructiveButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     content: @Composable RowScope.() -> Unit,
 ) {
     val colors = LocalChurColors.current
     val haptics = LocalHapticFeedback.current
     Button(
+        enabled = enabled,
         onClick = {
             haptics.performHapticFeedback(HapticFeedbackType.Confirm)
             onClick()

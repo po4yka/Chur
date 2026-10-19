@@ -224,6 +224,60 @@ class PrivateNotesRepositoryHostTest {
         source.lock(LockReason.BACKGROUND);assertFailsWith<ChurFailure> { source.readPrivateNoteAttachment(generation,note.noteId,attachmentId) };data.fill(0)
     }
 
+    @Test
+    fun workspace_filters_and_encrypted_history_restore_original_files_through_real_JNI_and_archives(): Unit = runBlocking {
+        val sourceRoot = root()
+        val source = repository(sourceRoot); source.start(); source.create(PASSWORD, false)
+        val generation = generation(source)
+        val fileId = ByteArray(16) { (it + 1).toByte() }
+        val data = ("%PDF-1.7\n" + CANARY).encodeToByteArray()
+        val initial = source.importPrivateNotePackage(generation, "History", CANARY, PrivateNoteFormat.MARKDOWN,
+            listOf(PrivateNoteAttachmentData(fileId, "history.pdf", "application/pdf", data)))
+        val organization = dev.po4yka.chur.ffi.PrivateNoteOrganization("Проекты", listOf("Plan, do", "важное"))
+        val organized = source.organizePrivateNote(generation, initial.noteId, initial.revision, organization)
+        val changed = source.savePrivateNote(generation, initial.noteId, organized.revision, "Changed", "new text", format = PrivateNoteFormat.MARKDOWN)
+        val removed = source.removePrivateNoteAttachment(generation, initial.noteId, changed.revision, fileId)
+        val page = source.privateNoteWorkspace(generation, "", false, 1, null, "Проекты", "важное")
+        assertEquals(listOf(initial.id), page.page.notes.map { it.id })
+        assertEquals(organization, page.organization[initial.id])
+        assertTrue(source.privateNoteWorkspace(generation, "", false, 1, null, "other", "").page.notes.isEmpty())
+        val detail = source.privateNoteRevision(generation, initial.noteId, organized.revision)
+        assertEquals(CANARY, detail.note.body)
+        assertEquals(organization, detail.organization)
+        assertEquals(1, detail.attachments.size)
+        val recovered = source.restorePrivateNoteRevision(generation, initial.noteId, removed.revision, organized.revision)
+        assertTrue(recovered.revision > removed.revision)
+        assertEquals(CANARY, recovered.body)
+        assertTrue(data.contentEquals(source.readPrivateNoteAttachment(generation, initial.noteId, fileId)))
+        assertTrue(source.privateNoteHistory(generation, initial.noteId).any { it.revision == removed.revision })
+        assertFailsWith<ChurFailure> { source.restorePrivateNoteRevision(generation, initial.noteId, removed.revision, organized.revision) }
+        val backup = File(sourceRoot, "workspace-backup.chur")
+        FileOutputStream(backup).use { finish(source, source.beginBackup(descriptor(it.fd))) }
+        val restored = repository(root()); restored.start()
+        FileInputStream(backup).use { finish(restored, restored.beginRestore(descriptor(it.fd), PASSWORD)) }
+        restored.unlock(PASSWORD)
+        assertEquals(organization, restored.privateNoteOrganization(generation(restored), initial.noteId))
+        assertEquals(CANARY, restored.privateNoteRevision(generation(restored), initial.noteId, organized.revision).note.body)
+        val archive = File(sourceRoot, "workspace-selected.chur")
+        FileOutputStream(archive).use { finish(source, source.beginSelectiveExport(generation, emptyList(), emptyList(),
+            listOf(PrivateNoteSelection(initial.noteId, recovered.revision)), OTHER_PASSWORD, descriptor(it.fd))) }
+        val target = repository(root()); target.start(); target.create(PASSWORD, false)
+        FileInputStream(archive).use { finish(target, target.beginSelectiveImport(generation(target), descriptor(it.fd), OTHER_PASSWORD)) }
+        val selected = target.privateNotes(generation(target)).notes.single()
+        assertEquals(organization, target.privateNoteOrganization(generation(target), selected.noteId))
+        val old = target.privateNoteHistory(generation(target), selected.noteId).first { it.attachmentCount == 0 }
+        val withoutFile = target.restorePrivateNoteRevision(generation(target), selected.noteId, selected.revision, old.revision)
+        assertEquals(0, withoutFile.attachmentCount)
+        val original = target.privateNoteHistory(generation(target), selected.noteId).first { it.attachmentCount == 1 }
+        target.restorePrivateNoteRevision(generation(target), selected.noteId, withoutFile.revision, original.revision)
+        assertTrue(data.contentEquals(target.readPrivateNoteAttachment(generation(target), selected.noteId, fileId)))
+        source.lock(LockReason.PANIC)
+        assertFailsWith<ChurFailure> { source.privateNoteHistory(generation, initial.noteId) }
+        assertFailsWith<ChurFailure> { source.privateNoteWorkspace(generation, "", false, 1, null, "", "") }
+        assertNoPlaintext(sourceRoot, CANARY)
+        data.fill(0)
+    }
+
     private suspend fun finish(vault: VaultRepository, operation: Long) {
         try {
             withTimeout(30_000) {

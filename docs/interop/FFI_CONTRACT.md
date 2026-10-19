@@ -685,6 +685,20 @@ The byte count is exact for the checked saved revision. Files and source are sna
 | 4 remove | note ID, expected revision u64, attachment ID | committed note record |
 | 5 import | format u8, title/body strings, file count u32, files | new committed note record |
 
+The same command entry point adds encrypted organization and history without changing the ABI 5 note record:
+
+| Command | Request after command byte | Response |
+| --- | --- | --- |
+| `6` | `note_id:16` | organization |
+| `7` | `note_id:16, expected_revision:u64, organization` | current note record |
+| `8` | `note_id:16` | `count:u32`, then `revision:u64, updated_ms:u64, title:string, format:u8, attachment_count:u32` for each previous version, newest first |
+| `9` | `note_id:16, expected_revision:u64, historical_revision:u64` | new current note record after atomic restoration |
+| `10` | `note_id:16, historical_revision:u64, attachment_id:16` | original historical file bytes; requires 8 MiB output capacity |
+| `11` | `note_id:16, historical_revision:u64` | historical note record (export size is source-only), organization, attachment metadata list using command 1 encoding |
+| `12` | `trash:u8, limit:u64, terms:string, cursor:bytes, folder:string, tag:string` | existing note page encoding (count, records, cursor), then one organization per returned note in the same order |
+
+Organization is `folder:string, tag_count:u32, tags:string[tag_count]`. Folder and tags are trimmed labels of at most 64 UTF-8 bytes without controls; folder may be empty, at most sixteen tags are sorted and deduplicated. Empty query folder/tag means any. Command 12 filters in SQL before pagination and binds both exact filters into its 65-byte cursor. Stored malformed or oversized metadata is rejected, including in authenticated archive catalogs. History keeps at most twenty prior versions and 64 MiB of deduplicated encrypted original file bytes per note. Command 9 commits the displaced state to history before recovering exact source/format, organization, and original files as a fresh CAS revision; Trash must be restored before a historical version can replace current content. Every command requires the unlocked session, rejects trailing bytes before mutation, and leaves caller output untouched on failure.
+
 A file is attachment ID, filename string, MIME string, data bytes. Read requires an 8 MiB destination; other calls require at least 1 MiB before mutations. Maximum output capacity is 9 MiB. Native code independently validates 32 files, 8 MiB per file, 16 MiB total per note, basename-only filenames of at most 240 UTF-8 bytes, unique note-scoped IDs and byte-sniffed MIME. Import is one SQL transaction, including the note and all files. Attach/remove require an active note and its displayed revision; Trash retains readable files until purge/expiry. Outputs and temporary native copies are erased; hosts must erase file bytes after rendering or explicit export and must not persist private thumbnails. See [catalog v13](../format/CATALOG_SCHEMA_V13.md).
 
 ### 6.26 Selective encrypted archives, ABI 2.22

@@ -325,6 +325,7 @@ private fun PublicShellRoute(controller: ChurController, route: AppRoute) {
 private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> Unit) {
     val focus = LocalFocusManager.current
     val notes by controller.notesState.collectAsState()
+    val trashedNotes by controller.trashedNotesState.collectAsState()
     val writeFailureId by controller.publicNoteWriteFailureId.collectAsState()
     val disclosureDue by controller.disclosureDue.collectAsState()
     var query by remember { mutableStateOf("") }
@@ -348,7 +349,11 @@ private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> U
             onReadAttachment = { id -> controller.readPublicNoteAttachment(open.note.id, id) },
             onRemoveAttachment = { id -> controller.removePublicNoteAttachment(open.note.id, id) },
             onExportPackage = controller::exportPublicNotePackage,
+            onOrganize = { folder, tags -> controller.organizePublicNote(open.note.id, folder, tags) },
+            onHistory = { controller.publicNoteHistory(open.note.id) },
+            onRestoreRevision = { revision -> controller.restorePublicNoteRevision(open.note.id, revision) },
             onRemove = controller::removeNote,
+            onTrash = controller::trashPublicNote,
             onBack = { editing = null },
             onOpenSettings = {
                 focus.clearFocus(force = true)
@@ -360,6 +365,10 @@ private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> U
 
     NotesScreen(
         notes = notes,
+        trashedNotes = trashedNotes,
+        onRefreshTrash = controller::refreshPublicTrash,
+        onRestore = controller::restorePublicNote,
+        onPurge = controller::purgePublicNote,
         onImport = { title, body ->
             val imported = Note(id = "note-${System.nanoTime()}", title = title, body = body, updatedMs = System.currentTimeMillis())
             controller.putNote(imported)

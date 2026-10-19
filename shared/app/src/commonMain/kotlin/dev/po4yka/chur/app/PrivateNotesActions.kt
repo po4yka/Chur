@@ -5,8 +5,15 @@ import dev.po4yka.chur.ffi.PrivateNoteFormat
 
 /** Events from the pure private-notes screen. Storage remains in the session controller. */
 interface PrivateNotesActions {
+    fun activity() {}
     fun refresh()
     fun search(terms: String)
+    fun filter(folder: String, tag: String) {}
+    fun organize(folder: String, tags: List<String>) {}
+    fun showHistory() {}
+    fun previewRevision(revision: Long) {}
+    fun restoreRevision() {}
+    fun closeHistory() {}
     fun showTrash(trash: Boolean)
     fun nextPage()
     fun previousPage()

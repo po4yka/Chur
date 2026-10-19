@@ -33,37 +33,83 @@ class FileNoteStore internal constructor(
     constructor(path: String) : this(path, ::readNoteFile, ::writeNoteFile)
 
     private val mutex = Mutex()
-    private var cache: State? = null
+    private var cache: NoteState? = null
 
     override suspend fun all(): List<Note> = mutex.withLock {
-        Notes.ordered(load().notes.values.toList())
+        Notes.ordered(load().notes.values.filter { it.trashedAtMs == null })
     }
 
-    override suspend fun put(note: Note): Unit = mutate {
-        val state = load()
-        require(note.attachments == state.notes[note.id]?.attachments.orEmpty()) {
-            "use attachment operations to change attachments"
-        }
-        save(state.copy(notes = state.notes + (note.id to note)))
+    override suspend fun trash(): List<Note> = mutex.withLock {
+        Notes.ordered(load().notes.values.filter { it.trashedAtMs != null })
+    }
+
+    override suspend fun put(note: Note): Note = mutate {
+        val next = load().put(note)
+        commit(next)
+        next.current(note.id)
     }
 
     override suspend fun remove(id: String): Unit = mutate {
         val state = load()
-        val removed = state.notes[id]
-        if (removed != null) {
-            save(state.copy(notes = state.notes - id))
-            removed.attachments.forEach { deleteBlob(it.storageId) }
-        }
+        val note = state.notes[id] ?: return@mutate
+        if (note.trashedAtMs == null) commit(state.replace(note.copy(trashedAtMs = nowMs(),
+            revision = nextRevision(note), recoveryEpoch = nextEpoch(note))))
+    }
+
+    override suspend fun restore(id: String, updatedMs: Long): Note = mutate {
+        val state = load()
+        val note = state.current(id, allowTrashed = true)
+        check(note.trashedAtMs != null) { "note is not in Trash" }
+        val restored = note.copy(trashedAtMs = null, updatedMs = updatedMs,
+            revision = nextRevision(note), recoveryEpoch = nextEpoch(note))
+        commit(state.replace(restored))
+        restored
+    }
+
+    override suspend fun purge(id: String): Unit = mutate {
+        val state = load()
+        val note = state.current(id, allowTrashed = true)
+        check(note.trashedAtMs != null) { "only trashed notes can be purged" }
+        commit(state.copy(notes = state.notes - id, history = state.history - id))
+    }
+
+    override suspend fun updateOrganization(id: String, folder: String?, tags: List<String>): Note = mutate {
+        val state = load()
+        val note = state.current(id)
+        val organized = note.copy(folder = NoteOrganization.folder(folder), tags = NoteOrganization.tags(tags))
+        if (organized == note) return@mutate note
+        val next = organized.copy(revision = nextRevision(note), updatedMs = nowMs())
+        commit(state.replace(next))
+        next
+    }
+
+    override suspend fun history(id: String): List<NoteRevision> = mutex.withLock {
+        val state = load()
+        state.current(id, allowTrashed = true)
+        state.history[id].orEmpty()
+    }
+
+    override suspend fun restoreRevision(noteId: String, revisionId: String): Note = mutate {
+        val state = load()
+        val note = state.current(noteId)
+        val version = state.history[noteId].orEmpty().singleOrNull { it.id == revisionId } ?: error("revision not found")
+        // Verify retained payloads before making the snapshot current. A corrupt or missing
+        // payload must fail without changing either current state or history.
+        version.note.attachments.forEach { readBlob(it).fill(0) }
+        val restored = version.note.copy(updatedMs = nowMs(), trashedAtMs = null,
+            revision = nextRevision(note), recoveryEpoch = nextEpoch(note))
+        commit(state.replace(restored))
+        restored
     }
 
     override suspend fun addAttachment(noteId: String, name: String, data: ByteArray): NoteAttachment = mutate {
         val state = load()
-        val note = state.notes[noteId] ?: error("note not found")
+        val note = state.current(noteId)
         val attachment = NoteAttachment(newAttachmentId(), name, NoteAttachments.validate(name, data), data.size)
         NoteAttachments.validateList(note.attachments + attachment)
         writeBlob(attachment.storageId, data)
         try {
-            save(state.copy(notes = state.notes + (noteId to note.copy(attachments = note.attachments + attachment))))
+            commit(state.replace(note.copy(attachments = note.attachments + attachment, revision = nextRevision(note), updatedMs = nowMs())))
         } catch (cause: Throwable) {
             deleteBlob(attachment.storageId)
             throw cause
@@ -72,21 +118,20 @@ class FileNoteStore internal constructor(
     }
 
     override suspend fun readAttachment(noteId: String, attachmentId: String): ByteArray = mutex.withLock {
-        val note = load().notes[noteId] ?: error("note not found")
+        val note = load().current(noteId, allowTrashed = true)
         val attachment = note.attachments.singleOrNull { it.id == attachmentId } ?: error("attachment not found")
         readBlob(attachment)
     }
 
     override suspend fun removeAttachment(noteId: String, attachmentId: String): Unit = mutate {
         val state = load()
-        val note = state.notes[noteId] ?: error("note not found")
+        val note = state.current(noteId)
         val attachment = note.attachments.singleOrNull { it.id == attachmentId } ?: return@mutate
-        save(state.copy(notes = state.notes + (noteId to note.copy(attachments = note.attachments - attachment))))
-        deleteBlob(attachment.storageId)
+        commit(state.replace(note.copy(attachments = note.attachments - attachment, revision = nextRevision(note), updatedMs = nowMs())))
     }
 
     override suspend fun exportPackage(noteId: String): ByteArray = mutex.withLock {
-        val note = load().notes[noteId] ?: error("note not found")
+        val note = load().current(noteId, allowTrashed = true)
         val contents = mutableListOf<NotePackageAttachment>()
         try {
             note.attachments.forEach {
@@ -113,7 +158,7 @@ class FileNoteStore internal constructor(
                     writeBlob(descriptor.storageId, content.data)
                     written += descriptor.storageId
                 }
-                save(state.copy(notes = state.notes + (noteId to note)))
+                commit(state.replace(note))
             } catch (cause: Throwable) {
                 written.forEach { deleteBlob(it) }
                 throw cause
@@ -176,46 +221,69 @@ class FileNoteStore internal constructor(
      * An unreadable or unsupported file is an error, never an empty store that
      * a subsequent write could overwrite. Failed reads do not populate cache.
      */
-    private suspend fun load(): State {
+    private suspend fun load(): NoteState {
         cache?.let { return it }
         val text = withContext(Dispatchers.Default) { readFile(path) }
-        val state = if (text != null && text.isNotBlank()) {
+        require(text == null || text.encodeToByteArray(throwOnInvalidSequence = true).size <= NoteState.MAX_STORE_BYTES) { "note store is too large" }
+        val state = if (text != null) {
             val file = try {
                 val document = json.parseToJsonElement(text).jsonObject
                 val version = document["version"]?.let {
                     it.jsonPrimitive.intOrNull ?: error("invalid note file version")
                 } ?: 1
-                check(version in 1..3) { "unsupported note file version $version" }
+                check(version in 1..4) { "unsupported note file version $version" }
                 json.decodeFromJsonElement(NoteFile.serializer(), document)
             } catch (cause: Exception) {
                 throw IllegalStateException("the note file at $path is not readable", cause)
             }
             check(file.notes.map { it.id }.toSet().size == file.notes.size) { "duplicate note identifier" }
-            file.notes.forEach { NoteAttachments.validateList(it.attachments) }
-            check(file.notes.flatMap { it.attachments }.map { it.storageId }.let { it.size == it.toSet().size }) {
-                "duplicate attachment storage identifier"
-            }
-            State(file.notes.associateBy { it.id }, file.disclosureAcknowledged)
+            NoteState(file.notes.associateBy { it.id }, file.disclosureAcknowledged, file.history).also { it.validate() }
         } else {
-            State(emptyMap(), false)
+            NoteState()
         }
         cache = state
         return state
     }
 
     /** Publish the new in-memory state only after its atomic write succeeds. */
-    private suspend fun save(state: State) {
+    private suspend fun save(state: NoteState) {
+        // Preflight an upper bound before asking the serializer to allocate one full document.
+        // Count UTF-8 plus JSON escaping without materializing a second encoded document.
+        val versions = state.notes.values.toList() + state.history.values.flatten().map { it.note }
+        val upperBound = versions.sumOf { note ->
+            2048L + jsonStringBytes(note.title) + jsonStringBytes(note.body) + jsonStringBytes(note.id) +
+                jsonStringBytes(note.folder.orEmpty()) + note.tags.sumOf(::jsonStringBytes) +
+                note.attachments.sumOf { 512L + jsonStringBytes(it.name) + jsonStringBytes(it.mimeType) }
+        }
+        require(upperBound <= NoteState.MAX_STORE_BYTES) { "note store is too large" }
         val text = json.encodeToString(
             NoteFile.serializer(),
-            NoteFile(version = 3, notes = state.notes.values.toList(), disclosureAcknowledged = state.acknowledged),
+            NoteFile(version = 4, notes = state.notes.values.toList(), disclosureAcknowledged = state.acknowledged, history = state.history),
         )
+        require(text.encodeToByteArray(throwOnInvalidSequence = true).size <= NoteState.MAX_STORE_BYTES) { "note store is too large" }
         withContext(Dispatchers.Default) { writeFile(path, text) }
         cache = state
     }
 
-    private data class State(val notes: Map<String, Note>, val acknowledged: Boolean)
+    private suspend fun commit(next: NoteState) {
+        val old = load()
+        if (old == next) return
+        next.validate()
+        save(next)
+        val live = next.blobs().keys
+        old.blobs().keys.filterNot { it in live }.forEach { deleteBlob(it) }
+    }
 
     private companion object {
+        fun jsonStringBytes(value: String): Long = value.encodeToByteArray(throwOnInvalidSequence = true).size.toLong() +
+            value.sumOf { character ->
+                when (character) {
+                    '"', '\\', '\b', '\u000C', '\n', '\r', '\t' -> 1L
+                    in '\u0000'..'\u001F' -> 5L
+                    else -> 0L
+                }
+            }
+
         val json: Json = Json { encodeDefaults = true }
     }
 }
@@ -226,6 +294,7 @@ private data class NoteFile(
     val version: Int = 1,
     val notes: List<Note>,
     val disclosureAcknowledged: Boolean = false,
+    val history: Map<String, List<NoteRevision>> = emptyMap(),
 )
 
 /** The file's text, or `null` when no file is there yet. */

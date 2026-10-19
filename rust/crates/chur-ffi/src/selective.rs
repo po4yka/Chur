@@ -464,7 +464,10 @@ fn copy(
         );
         let attachments =
             source.with(|s| chur_catalog::note_attachments::all(s.catalog_ref()?, id))?;
-        target.with(|s| transfer::copy_note(s.catalog()?, &note, &attachments))?;
+        let workspace =
+            source.with(|s| chur_catalog::note_workspace::archive(s.catalog_ref()?, id))?;
+        target
+            .with(|s| transfer::copy_note(s.catalog()?, &note, &attachments, Some(&workspace)))?;
         completed += 1;
         shared.advance(completed, Stage::Running);
     }
@@ -1227,5 +1230,184 @@ mod tests {
         std::fs::remove_dir_all(source_root.base()).unwrap();
         std::fs::remove_dir_all(target_root.base()).unwrap();
         std::fs::remove_dir_all(restored_root.base()).unwrap();
+    }
+    #[test]
+    fn encrypted_selective_note_archive_and_import_recover_historical_files() {
+        use chur_catalog::{note_attachments as files, note_workspace as workspace, notes};
+        let source_root = root();
+        let restored_root = root();
+        let target_root = root();
+        let mut source = session(&source_root);
+        let n = notes::save(
+            source.catalog().unwrap(),
+            None,
+            0,
+            "Private note",
+            "# exact source",
+            false,
+            notes::NoteFormat::Markdown,
+            api::now_ms(),
+        )
+        .unwrap();
+        let aid = random::id().unwrap();
+        let bytes = b"SELECTIVE_HISTORICAL_FILE_CANARY";
+        let n = files::put(
+            source.catalog().unwrap(),
+            &n.id,
+            n.revision,
+            files::AttachmentData {
+                attachment: files::Attachment {
+                    id: aid,
+                    name: "history.bin".into(),
+                    mime_type: "application/octet-stream".into(),
+                    size: bytes.len() as u64,
+                },
+                data: Zeroizing::new(bytes.to_vec()),
+            },
+            api::now_ms(),
+        )
+        .unwrap();
+        let n = workspace::set_organization(
+            source.catalog().unwrap(),
+            &n.id,
+            n.revision,
+            "Folder",
+            &["tag"],
+            api::now_ms(),
+        )
+        .unwrap();
+        let n = files::remove(
+            source.catalog().unwrap(),
+            &n.id,
+            n.revision,
+            &aid,
+            api::now_ms(),
+        )
+        .unwrap();
+        let path = source_root.base().join("note-selection.churbak");
+        let output = std::fs::OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        let password = b"independent historical note archive password";
+        let request = Request {
+            password: Zeroizing::new(password.to_vec()),
+            objects: Vec::new(),
+            albums: Vec::new(),
+            notes: vec![(n.id, n.revision)],
+            max_output_bytes: i64::MAX as u64,
+        };
+        let operation = Operation::spawn(OperationKind::Export, 0, move |shared| {
+            run_export(Access::Local(Box::new(source)), request, output, shared)
+        })
+        .unwrap();
+        operation.join();
+        assert_eq!(operation.poll().status, 0);
+        drop(operation);
+        assert!(
+            !std::fs::read(&path)
+                .unwrap()
+                .windows(bytes.len())
+                .any(|w| w == bytes)
+        );
+        let mut input = std::fs::File::open(&path).unwrap();
+        backup::restore(
+            &restored_root,
+            &mut input,
+            password,
+            &mut chur_media::progress::Uninterrupted,
+        )
+        .unwrap();
+        let mut restored =
+            vault::unlock_with_password(&restored_root, password, api::now_ms()).unwrap();
+        let copied = notes::page(restored.catalog_ref().unwrap(), "", false, 50, None)
+            .unwrap()
+            .notes
+            .remove(0)
+            .note;
+        assert_ne!(copied.id, n.id);
+        assert_eq!(copied.attachment_count, 0);
+        assert_eq!(
+            workspace::get_organization(restored.catalog_ref().unwrap(), &copied.id)
+                .unwrap()
+                .folder,
+            "Folder"
+        );
+        let revision = workspace::history(restored.catalog_ref().unwrap(), &copied.id)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.note.attachment_count == 1)
+            .unwrap()
+            .note
+            .revision;
+        workspace::restore(
+            restored.catalog().unwrap(),
+            &copied.id,
+            copied.revision,
+            revision,
+            api::now_ms(),
+        )
+        .unwrap();
+        assert_eq!(
+            &*files::read(restored.catalog_ref().unwrap(), &copied.id, &aid).unwrap(),
+            bytes
+        );
+        restored.lock().unwrap();
+        drop(restored);
+        let target = session(&target_root);
+        let input = std::fs::File::open(&path).unwrap();
+        let request = Request {
+            password: Zeroizing::new(password.to_vec()),
+            objects: Vec::new(),
+            albums: Vec::new(),
+            notes: Vec::new(),
+            max_output_bytes: i64::MAX as u64,
+        };
+        let operation = Operation::spawn(OperationKind::Import, 0, move |shared| {
+            run_import(Access::Local(Box::new(target)), request, input, shared)
+        })
+        .unwrap();
+        operation.join();
+        assert_eq!(operation.poll().status, 0);
+        drop(operation);
+        let mut target =
+            vault::unlock_with_password(&target_root, PASSWORD, api::now_ms()).unwrap();
+        let copied = notes::page(target.catalog_ref().unwrap(), "", false, 50, None)
+            .unwrap()
+            .notes
+            .remove(0)
+            .note;
+        let revision = workspace::history(target.catalog_ref().unwrap(), &copied.id)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.note.attachment_count == 1)
+            .unwrap()
+            .note
+            .revision;
+        workspace::restore(
+            target.catalog().unwrap(),
+            &copied.id,
+            copied.revision,
+            revision,
+            api::now_ms(),
+        )
+        .unwrap();
+        assert_eq!(
+            &*files::read(target.catalog_ref().unwrap(), &copied.id, &aid).unwrap(),
+            bytes
+        );
+        assert_eq!(
+            workspace::get_organization(target.catalog_ref().unwrap(), &copied.id)
+                .unwrap()
+                .tags,
+            vec!["tag"]
+        );
+        target.lock().unwrap();
+        drop(target);
+        std::fs::remove_dir_all(source_root.base()).unwrap();
+        std::fs::remove_dir_all(restored_root.base()).unwrap();
+        std::fs::remove_dir_all(target_root.base()).unwrap();
     }
 }

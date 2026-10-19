@@ -220,7 +220,7 @@ The checked-in version catalog, wrapper, and Cargo manifests are the version sou
 | Navigation and state | shared route state, `ChurController`, StateFlow, coroutines |
 | Composition | explicit host construction and session-scoped owners |
 | Public persistence | JSON Notes, platform preferences, local public camera files |
-| Private persistence | Rust-owned SQLCipher catalog, schema v13 |
+| Private persistence | Rust-owned SQLCipher catalog, schema v14 |
 | Images and media | bounded session cache, platform decoders, Media3 and AVFoundation |
 | Local recognition | bundled Tesseract4Android 4.9.0 English/Russian models; Apple Vision |
 | Network | Ktor 3.6.0, OkHttp on Android, Darwin on iOS |
@@ -325,7 +325,7 @@ Private vault
 
 The public stores are independent of the private catalog. Public Notes is not the private-notes feature, and the public camera album is not encrypted storage.
 
-The private catalog is a **Rust-owned SQLCipher database**, currently schema v13. Rust owns the connection, key, schema, queries, migrations, and close/zeroization lifecycle. Object keys remain individually wrapped even when stored inside SQLCipher; database encryption is defense in depth, not a replacement for envelope encryption.
+The private catalog is a **Rust-owned SQLCipher database**, currently schema v14. Rust owns the connection, key, schema, queries, migrations, and close/zeroization lifecycle. Object keys remain individually wrapped even when stored inside SQLCipher; database encryption is defense in depth, not a replacement for envelope encryption.
 
 The private catalog can contain queryable plaintext only while the database is open inside the unlocked Rust runtime. Its file, WAL, and related storage must remain encrypted at rest.
 

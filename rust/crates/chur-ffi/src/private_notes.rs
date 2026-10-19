@@ -409,7 +409,7 @@ pub unsafe extern "C" fn chur_private_note_attachments(
         let command = r.byte()?;
         ensure!(
             capacity
-                >= if command == 3 {
+                >= if command == 3 || command == 10 {
                     chur_catalog::note_attachments::FILE_MAX
                 } else {
                     CAPACITY
@@ -475,6 +475,133 @@ pub unsafe extern "C" fn chur_private_note_attachments(
                     let n = files::import(db, title, body, format, &all, api::now_ms())?;
                     encode(&mut out, &n, &n.body, files::export_size(db, &n)?);
                 }
+                6 => {
+                    let id = Id::from_slice(r.take(16)?)?;
+                    r.finished()?;
+                    encode_organization(
+                        &mut out,
+                        &chur_catalog::note_workspace::get_organization(db, &id)?,
+                    );
+                }
+                7 => {
+                    let id = Id::from_slice(r.take(16)?)?;
+                    let expected = r.number()?;
+                    let folder = r.string(64)?;
+                    let count = r.count()?;
+                    ensure!(
+                        count <= 16,
+                        ResourceLimitExceeded,
+                        "the note has too many tags"
+                    );
+                    let mut tags = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        tags.push(r.string(64)?);
+                    }
+                    r.finished()?;
+                    let n = chur_catalog::note_workspace::set_organization(
+                        db,
+                        &id,
+                        expected,
+                        folder,
+                        &tags,
+                        api::now_ms(),
+                    )?;
+                    encode(&mut out, &n, &n.body, files::export_size(db, &n)?);
+                }
+                8 => {
+                    let id = Id::from_slice(r.take(16)?)?;
+                    r.finished()?;
+                    let versions = chur_catalog::note_workspace::history(db, &id)?;
+                    out.extend_from_slice(&(versions.len() as u32).to_be_bytes());
+                    for v in versions {
+                        out.extend_from_slice(&v.note.revision.to_be_bytes());
+                        out.extend_from_slice(&v.note.updated_ms.to_be_bytes());
+                        string(&mut out, &v.note.title);
+                        out.push(v.note.format as u8);
+                        out.extend_from_slice(&v.note.attachment_count.to_be_bytes());
+                    }
+                }
+                9 => {
+                    let id = Id::from_slice(r.take(16)?)?;
+                    let expected = r.number()?;
+                    let revision = r.number()?;
+                    r.finished()?;
+                    let n = chur_catalog::note_workspace::restore(
+                        db,
+                        &id,
+                        expected,
+                        revision,
+                        api::now_ms(),
+                    )?;
+                    encode(&mut out, &n, &n.body, files::export_size(db, &n)?);
+                }
+                10 => {
+                    let id = Id::from_slice(r.take(16)?)?;
+                    let revision = r.number()?;
+                    let attachment = Id::from_slice(r.take(16)?)?;
+                    r.finished()?;
+                    out.extend_from_slice(&chur_catalog::note_workspace::read_revision_file(
+                        db,
+                        &id,
+                        revision,
+                        &attachment,
+                    )?);
+                }
+                11 => {
+                    let id = Id::from_slice(r.take(16)?)?;
+                    let revision = r.number()?;
+                    r.finished()?;
+                    let v = chur_catalog::note_workspace::get_revision(db, &id, revision)?;
+                    encode(&mut out, &v.note, &v.note.body, v.note.export_size());
+                    encode_organization(&mut out, &v.organization);
+                    out.extend_from_slice(&(v.attachments.len() as u32).to_be_bytes());
+                    for a in v.attachments {
+                        out.extend_from_slice(a.id.as_bytes());
+                        string(&mut out, &a.name);
+                        string(&mut out, &a.mime_type);
+                        out.extend_from_slice(&a.size.to_be_bytes());
+                    }
+                }
+                12 => {
+                    let trash = r.byte()?;
+                    ensure!(trash <= 1, InvalidInput, "the note trash flag is invalid");
+                    let limit = u16::try_from(r.number()?).map_err(|_| {
+                        chur_core::err!(InvalidInput, "the note page limit is invalid")
+                    })?;
+                    let terms = r.string(256)?;
+                    let len = r.count()?;
+                    ensure!(
+                        len == 0 || len == 65,
+                        InvalidInput,
+                        "the note cursor is malformed"
+                    );
+                    let cursor = r.take(len)?;
+                    let folder = r.string(64)?;
+                    let tag = r.string(64)?;
+                    r.finished()?;
+                    let page = notes::page_filtered(
+                        db,
+                        terms,
+                        trash == 1,
+                        limit,
+                        if len == 0 { None } else { Some(cursor) },
+                        folder,
+                        tag,
+                    )?;
+                    out.extend_from_slice(&(page.notes.len() as u32).to_be_bytes());
+                    for item in &page.notes {
+                        encode(&mut out, &item.note, &item.note.body, item.export_size);
+                    }
+                    let cursor = page.next_cursor.unwrap_or_default();
+                    out.extend_from_slice(&(cursor.len() as u32).to_be_bytes());
+                    out.extend_from_slice(&cursor);
+                    for item in &page.notes {
+                        encode_organization(
+                            &mut out,
+                            &chur_catalog::note_workspace::get_organization(db, &item.note.id)?,
+                        );
+                    }
+                }
                 _ => {
                     return Err(chur_core::err!(
                         InvalidInput,
@@ -492,6 +619,13 @@ pub unsafe extern "C" fn chur_private_note_attachments(
         output[..out.len()].copy_from_slice(&out);
         unsafe { api::write_out(written, out.len()) }
     })
+}
+fn encode_organization(out: &mut Vec<u8>, org: &chur_catalog::note_workspace::Organization) {
+    string(out, &org.folder);
+    out.extend_from_slice(&(org.tags.len() as u32).to_be_bytes());
+    for tag in &org.tags {
+        string(out, tag);
+    }
 }
 fn attachment(r: &mut Reader<'_>) -> Result<chur_catalog::note_attachments::AttachmentData> {
     let id = Id::from_slice(r.take(16)?)?;
