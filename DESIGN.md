@@ -882,16 +882,20 @@ Avoid security marketing copy after onboarding.
 
 ### 11.4 Selection mode
 
-Selection replaces ordinary top actions with:
+Selection replaces ordinary navigation chrome. The top bar contains the count,
+Clear selection and Lock. A bottom action panel replaces the destination tabs
+until selection ends. It exposes Export, Add to album and Move to Trash directly;
+Trash selection exposes Restore and Delete permanently. More contains Select
+loaded items, encrypted export, tags, favorites and album-specific move/removal
+commands, without duplicating the direct actions. UIKit owns the native toolbar
+on iOS; Android uses the shared Compose action panel over its Haze material.
 
-- count;
-- select all where safe;
-- album/move;
-- export;
-- delete;
-- more.
+During an operation, ordinary selection actions, Clear selection and Back are
+blocked while Lock and panic remain available. Menus and dialogs retain a direct
+privacy exit. Native actions belong to the exact current selection and are
+retired when that selection or its blocking state changes.
 
-The lock control stays in the selection bar: [`docs/product/DISCREET_MODE.md`](docs/product/DISCREET_MODE.md#the-panic-gesture), "The panic gesture", makes the panic reachable from every private screen without a step first, and "Clear selection" would be that step.
+The lock control stays in the top selection bar: [`docs/product/DISCREET_MODE.md`](docs/product/DISCREET_MODE.md#the-panic-gesture), "The panic gesture", makes the panic reachable from every private screen without a step first, and "Clear selection" would be that step.
 
 A long press on an item that does not move starts selection mode with that item selected, with the haptic of §22.4. While a selection runs, a tap adds or removes an item. A long press that moves drags the item, or the selection that contains it, to the album tray, or reorders a manually sorted album. Each item gives a screen reader or a switch the same choice as its long-click action, named `Select` or `Deselect`.
 

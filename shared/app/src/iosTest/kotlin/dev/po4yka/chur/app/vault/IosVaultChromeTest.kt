@@ -11,6 +11,7 @@ import kotlin.native.runtime.GC
 import platform.UIKit.accessibilityCustomActions
 import platform.UIKit.accessibilityElementsHidden
 import platform.UIKit.accessibilityLabel
+import platform.UIKit.toolbarItems
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -213,7 +214,9 @@ class IosVaultChromeTest {
             .filterIsInstance<platform.UIKit.UIBarButtonItem>().any { it.title == "Import" })
         chrome.update(VaultUiState(selectedCount = 2), actions().copy(onExportSelection = { exports++ }), Color.Blue, false)
         assertEquals("2 selected", chrome.navigationBar.topItem?.title)
-        chrome.performPrimary()
+        val export = chrome.navigationControllers.first().topViewController!!.toolbarItems!!
+            .filterIsInstance<platform.UIKit.UIBarButtonItem>().single { it.title == "Export" }.primaryAction!!
+        platform.UIKit.UIButton.buttonWithType(platform.UIKit.UIButtonTypeSystem).sendAction(export)
         assertEquals(1, exports)
         chrome.clear()
     }

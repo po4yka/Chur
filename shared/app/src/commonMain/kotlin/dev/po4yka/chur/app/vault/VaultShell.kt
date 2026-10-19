@@ -12,6 +12,11 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -68,6 +73,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -82,6 +88,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.ActiveOperation
 import dev.po4yka.chur.app.AutoLock
@@ -92,6 +99,8 @@ import dev.po4yka.chur.app.syncCopy
 import dev.po4yka.chur.app.theme.AlbumsGlyph
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.DestructiveButton
+import dev.po4yka.chur.app.theme.DeleteGlyph
+import dev.po4yka.chur.app.theme.ExportGlyph
 import dev.po4yka.chur.app.theme.IntegrityGlyph
 import dev.po4yka.chur.app.theme.LibraryGlyph
 import dev.po4yka.chur.app.theme.LocalChurColors
@@ -182,6 +191,8 @@ data class VaultUiState(
     val quickSettingsLockMessage: String? = null,
     /** How many tiles the selection holds, §11.4. */
     val selectedCount: Int = 0,
+    /** Exact session-only identity; equal counts must not reuse a retained action. */
+    val selectionIds: Set<String> = emptySet(),
     val canLoadMore: Boolean = false,
     /**
      * The sync engine's state, or `null` when the host bound no engine.
@@ -352,6 +363,9 @@ data class VaultActions(
  * platform's back behavior, and §25.4 lets the gesture differ per platform.
  */
 internal fun VaultUiState.backStep(actions: VaultActions): (() -> Unit)? = when {
+    // Consume Back while an operation owns the selection: falling through to
+    // the host would background and lock the app instead of keeping progress.
+    selectedCount > 0 && operation != null -> ({})
     selectedCount > 0 -> actions.onClearSelection
     openAlbum != null -> actions.onCloseAlbum
     libraryScopeTitle != null -> actions.onShowAllMedia
@@ -387,12 +401,27 @@ fun VaultShell(
 ) {
     var scopesExpanded by remember(state.destination, state.openAlbum?.id, state.selectedCount) { mutableStateOf(false) }
     var albumExportExpanded by remember(state.openAlbum?.id, state.selectedCount) { mutableStateOf(false) }
+    val selectionIdentity = state.selectionIdentity()
+    var selectionMenuExpanded by remember(selectionIdentity, state.operation != null) { mutableStateOf(false) }
+    val selectionLease = remember(selectionIdentity, state.operation != null) { SelectionActionLease(selectionIdentity) }
+    DisposableEffect(selectionLease) { onDispose { selectionLease.retire() } }
+    val currentState by rememberUpdatedState(state)
+    val currentActions by rememberUpdatedState(actions)
+    fun selectionAction(command: (VaultActions) -> Unit) {
+        if (!selectionMenuExpanded && selectionLease.canAct(currentState)) command(currentActions)
+    }
     var settingsBusy by remember { mutableStateOf(false) }
     var albumsBusy by remember { mutableStateOf(false) }
-    NavigationBusyEffect(scopesExpanded || albumExportExpanded || settingsBusy || albumsBusy, onNavigationBusyChange)
+    NavigationBusyEffect(scopesExpanded || albumExportExpanded || selectionMenuExpanded || settingsBusy || albumsBusy, onNavigationBusyChange)
     val colors = LocalChurColors.current
     val back = state.backStep(actions)
-    systemBack(back != null) { back?.invoke() }
+    systemBack(back != null) {
+        when {
+            selectionMenuExpanded -> selectionMenuExpanded = false
+            state.selectedCount > 0 -> selectionAction { it.onClearSelection() }
+            else -> back?.invoke()
+        }
+    }
     // §26: a notice that only sends the user to Settings has said its part
     // once Settings is on screen, where the banner says the same and stays.
     val notice = state.notice
@@ -408,7 +437,8 @@ fun VaultShell(
             // §11.4: selection replaces the ordinary top actions rather than
             // adding to them, so only the lock control is in both modes.
             if (state.selectedCount > 0) {
-                SelectionBar(state, actions)
+                SelectionHeader(state, actions, enabled = state.operation == null && !selectionMenuExpanded,
+                    onClearSelection = { selectionAction { it.onClearSelection() } })
             } else {
                 TopAppBar(
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent, scrolledContainerColor = Color.Transparent),
@@ -491,7 +521,14 @@ fun VaultShell(
             }
         },
         bottomBar = {
-            NavigationBar(containerColor = Color.Transparent, tonalElevation = 0.dp) {
+            if (state.selectedCount > 0) {
+                SelectionActions(state, selectionMenuExpanded,
+                    onExpandedChange = { expanded ->
+                        if (!expanded || selectionLease.canAct(currentState)) selectionMenuExpanded = expanded
+                    },
+                    onAction = { command -> selectionAction(command) },
+                )
+            } else NavigationBar(containerColor = Color.Transparent, tonalElevation = 0.dp) {
                 VaultDestination.entries.forEach { destination ->
                     NavigationBarItem(
                         selected = state.destination == destination && state.openAlbum == null,
@@ -720,91 +757,118 @@ internal fun LockControl(
     }
 }
 
-/**
- * The selection bar of `DESIGN.md` §11.4.
- *
- * §11.4 fixes both the contents and the wording. The count comes first; the
- * destructive actions name their scope, so "Move to Trash" and "Remove
- * from album" are two actions and never one ambiguous `Delete`; and the album
- * action appears only where it has a scope to act in.
- *
- * The menu keeps the destructive actions reachable on narrow screens.
- *
- * The bar replaces the shell's top bar, so it draws [LockControl] itself:
- * `DISCREET_MODE.md` "The panic gesture" holds on every private screen, and
- * a selection that asked for "Clear selection" before the panic would put a
- * step in front of it.
- */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+/** A retained menu action belongs to these exact objects and this visible scope. */
+internal data class SelectionIdentity(
+    val ids: Set<String>,
+    val destination: VaultDestination,
+    val album: String?,
+    val scope: String?,
+    val trash: Boolean,
+    val search: String,
+)
+
+internal fun VaultUiState.selectionIdentity() = SelectionIdentity(
+    selectionIds, destination, openAlbum?.id, libraryScopeTitle, trashOpen, searchTerms,
+)
+
+internal class SelectionActionLease(private val identity: SelectionIdentity) {
+    private var active = true
+    fun retire() { active = false }
+    fun canAct(state: VaultUiState): Boolean = active && state.selectedCount > 0 &&
+        state.operation == null && state.selectionIdentity() == identity
+}
+
+/** Count, exit and the direct concealment control stay above the shared content. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SelectionBar(state: VaultUiState, actions: VaultActions) {
-    var expanded by remember { mutableStateOf(false) }
+private fun SelectionHeader(
+    state: VaultUiState,
+    actions: VaultActions,
+    enabled: Boolean,
+    onClearSelection: () -> Unit,
+) {
     TopAppBar(
         colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent, scrolledContainerColor = Color.Transparent),
-        title = {
-            IncomingContent(true, LocalChurMotion.current.stateDurationMillis) {
-                Text("${state.selectedCount} selected")
-            }
-        },
+        title = { Text("${state.selectedCount} selected", maxLines = 1, overflow = TextOverflow.Ellipsis) },
         navigationIcon = {
-            IconButton(onClick = actions.onClearSelection) {
+            IconButton(onClick = onClearSelection, enabled = enabled) {
                 Icon(dev.po4yka.chur.app.theme.BackGlyph, contentDescription = "Clear selection")
             }
         },
-        actions = {
-            if (!state.trashOpen) TextButton(onClick = actions.onExportSelection,
-                enabled = state.operation == null) { Text("Export") }
-            Box {
-                TextButton(onClick = { expanded = true }) { Text("More") }
-                PrivateDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                    DropdownMenuItem(
-                        text = { Text("Select loaded items") },
-                        onClick = { expanded = false; actions.onSelectLoadedItems() },
-                    )
-                    if (!state.trashOpen) DropdownMenuItem(
-                        text = { Text("Encrypted archive…") },
-                        enabled = state.operation == null,
-                        onClick = { expanded = false; actions.onEncryptedExportSelection() },
-                    )
-                    if (!state.trashOpen) DropdownMenuItem(
-                        text = { Text("Add to album") },
-                        onClick = { expanded = false; actions.onAddSelectionToAlbum() },
-                    )
-                    if (state.openAlbum != null && !state.trashOpen) {
-                        DropdownMenuItem(
-                            text = { Text("Move to album") },
-                            onClick = { expanded = false; actions.onMoveSelectionToAlbum() },
-                        )
-                    }
-                    if (!state.trashOpen) DropdownMenuItem(
-                        text = { Text("Tags") },
-                        onClick = { expanded = false; actions.onTagSelection() },
-                    )
-                    if (!state.trashOpen) DropdownMenuItem(text = { Text("Add to favorites") }, onClick = {
-                        expanded = false; actions.onSetSelectionFavorite(true)
-                    })
-                    if (!state.trashOpen) DropdownMenuItem(text = { Text("Remove from favorites") }, onClick = {
-                        expanded = false; actions.onSetSelectionFavorite(false)
-                    })
-                    if (state.openAlbum != null && !state.trashOpen) {
-                        DropdownMenuItem(
-                            text = { Text("Remove from album") },
-                            onClick = { expanded = false; actions.onRemoveSelectionFromAlbum() },
-                        )
-                    }
-                    if (state.trashOpen) DropdownMenuItem(
-                        text = { Text("Restore") },
-                        onClick = { expanded = false; actions.onRestoreSelection() },
-                    )
-                    DropdownMenuItem(
-                        text = { Text(if (state.trashOpen) "Delete permanently" else "Move to Trash") },
-                        onClick = { expanded = false; actions.onDeleteSelection() },
-                    )
+        actions = { LockControl(onLock = actions.onLock, onPanic = actions.onPanic) },
+    )
+}
+
+/**
+ * Replaces destination tabs during selection. Height follows wrapped labels and
+ * system insets so large text never requires clipping or fixed content padding.
+ */
+@Composable
+private fun SelectionActions(
+    state: VaultUiState,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onAction: ((VaultActions) -> Unit) -> Unit,
+) {
+    val enabled = state.operation == null
+    Row(
+        Modifier.fillMaxWidth()
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
+            .padding(horizontal = ChurSpacing.two, vertical = ChurSpacing.one),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        @Composable
+        fun Action(label: String, icon: ImageVector? = null, command: (VaultActions) -> Unit) {
+            TextButton(
+                enabled = enabled && !expanded,
+                onClick = { onAction(command) },
+                modifier = Modifier.weight(1f).heightIn(min = 56.dp),
+                contentPadding = PaddingValues(horizontal = ChurSpacing.one, vertical = ChurSpacing.two),
+            ) {
+                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                    if (icon != null) Icon(icon, contentDescription = null)
+                    Text(label, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
+                        style = MaterialTheme.typography.labelMedium)
                 }
             }
-            LockControl(onLock = actions.onLock, onPanic = actions.onPanic)
-        },
-    )
+        }
+        if (!state.trashOpen) {
+            Action("Export", ExportGlyph) { it.onExportSelection() }
+            Action("Add to album", AlbumsGlyph) { it.onAddSelectionToAlbum() }
+        } else Action("Restore") { it.onRestoreSelection() }
+        Action(if (state.trashOpen) "Delete permanently" else "Move to Trash", DeleteGlyph) { it.onDeleteSelection() }
+        Box(Modifier.weight(1f)) {
+            TextButton(
+                enabled = enabled && !expanded,
+                onClick = { onExpandedChange(true) },
+                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                contentPadding = PaddingValues(horizontal = ChurSpacing.one, vertical = ChurSpacing.two),
+            ) { Text("More", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.labelMedium) }
+            PrivateDropdownMenu(expanded = expanded && enabled, onDismissRequest = { onExpandedChange(false) }) {
+                fun choose(command: (VaultActions) -> Unit) {
+                    onExpandedChange(false)
+                    onAction(command)
+                }
+                DropdownMenuItem(text = { Text("Select loaded items") },
+                    onClick = { choose { it.onSelectLoadedItems() } })
+                if (!state.trashOpen) {
+                    DropdownMenuItem(text = { Text("Encrypted archive…") },
+                        onClick = { choose { it.onEncryptedExportSelection() } })
+                    if (state.openAlbum != null) DropdownMenuItem(text = { Text("Move to album") },
+                        onClick = { choose { it.onMoveSelectionToAlbum() } })
+                    DropdownMenuItem(text = { Text("Tags") }, onClick = { choose { it.onTagSelection() } })
+                    DropdownMenuItem(text = { Text("Add to favorites") },
+                        onClick = { choose { it.onSetSelectionFavorite(true) } })
+                    DropdownMenuItem(text = { Text("Remove from favorites") },
+                        onClick = { choose { it.onSetSelectionFavorite(false) } })
+                    if (state.openAlbum != null) DropdownMenuItem(text = { Text("Remove from album") },
+                        onClick = { choose { it.onRemoveSelectionFromAlbum() } })
+                }
+            }
+        }
+    }
 }
 
 private fun glyphFor(destination: VaultDestination) = when (destination) {

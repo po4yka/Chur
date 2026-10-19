@@ -1029,6 +1029,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         notice = notice.takeIf { viewing == null },
         operation = operation,
         selectedCount = selection.size,
+        selectionIds = selection,
         canLoadMore = currentPage.nextCursor != null,
         deviceSlotAvailable = controller.deviceUnlockAvailable,
         deviceSlotStrict = deviceSlotStrict,
@@ -1040,6 +1041,17 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         sharingOverview = sharingOverview,
         sharingRecipient = sharingRecipient,
     )
+    // Callbacks can outlive this rendered selection until Compose publishes
+    // the next frame. Never let that interval retarget an old action.
+    val renderedSelection = selection.toSet()
+    fun selectionCommandsBlocked(): Boolean = controller.activeOperation.value != null ||
+        choosingExport || choosingAlbum || choosingTag || confirmingDelete || choosingArchive != null
+    fun selectionAction(block: () -> Unit) {
+        if (renderedSelection.isNotEmpty() && selection == renderedSelection &&
+            !selectionCommandsBlocked() && controller.route.value == AppRoute.Vault &&
+            (controller.vaultState.value as? VaultState.Unlocked)?.generation == generation
+        ) block()
+    }
     val shellActions = VaultActions(
         onThumbnailsConcealedChange = { thumbnailsConcealed = it },
         onDestination = {
@@ -1056,7 +1068,9 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         // Opening is opening. Before the viewer existed on this host it
         // toggled selection, which made a video unreachable and a tap on a
         // photograph mean two things.
-        onOpen = { projection ->
+        onOpen = open@{ projection ->
+            // A tile cannot change the selection owned by an operation or dialog.
+            if (selection.isNotEmpty() && selectionCommandsBlocked()) return@open
             if (selection.isEmpty()) {
                 controller.report(null)
                 // A text field of the shell left focused would keep
@@ -1071,7 +1085,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             }
         },
         onToggleSelection = { projection ->
-            selection = selection.toggle(projection.id)
+            if (!selectionCommandsBlocked()) selection = selection.toggle(projection.id)
         },
         onOpenPrivateNotes = { focusManager.clearFocus(); searchFocusRequest = null; selection = emptySet(); recentlyAdded = false; initialCreateRequest = null; showingPrivateNotes = true },
         onImport = { choosingImportSource = true },
@@ -1164,46 +1178,62 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         onImportArchive = { choosingArchiveImport = true },
         onRestoreArchive = controller::restoreArchiveAsSeparateVault,
         onCreateSecondIdentity = controller::createSecondIdentity,
-        onSelectLoadedItems = { selection = loadedObjectSelection(page) },
-        onClearSelection = { selection = emptySet() },
-        onExportSelection = { choosingExport = true },
+        onSelectLoadedItems = { selectionAction { selection = loadedObjectSelection(page) } },
+        onClearSelection = { selectionAction { selection = emptySet() } },
+        onExportSelection = { selectionAction { choosingExport = true } },
         onEncryptedExportSelection = {
-            if (selection.size > 1000) controller.report("Select at most 1000 items for one encrypted archive.")
-            else choosingArchive = SelectiveExportRequest(generation, objectIds = selection.sorted().map { it.fromHex() })
-        },
-        onAddSelectionToAlbum = {
-            controller.loadAlbums()
-            organizingIds = selection.sorted().map { it.fromHex() }
-            movingSelection = false
-            choosingAlbum = true
-        },
-        onMoveSelectionToAlbum = {
-            controller.loadAlbums()
-            organizingIds = selection.sorted().map { it.fromHex() }
-            movingSelection = true
-            choosingAlbum = true
-        },
-        onTagSelection = {
-            controller.loadTags()
-            taggingIds = selection.sorted().map { it.fromHex() }
-            choosingTag = true
-        },
-        onSetSelectionFavorite = { favorite ->
-            controller.setFavoritesForAll(selection.sorted().map { it.fromHex() }, favorite) {
-                selection = emptySet()
+            selectionAction {
+                if (renderedSelection.size > 1000) controller.report("Select at most 1000 items for one encrypted archive.")
+                else choosingArchive = SelectiveExportRequest(generation, objectIds = renderedSelection.sorted().map { it.fromHex() })
             }
         },
-        onRemoveSelectionFromAlbum = {
-            openAlbum?.let { album ->
-                controller.removeAllFromAlbum(album.albumId, selectedObjects(page, selection)) {
+        onAddSelectionToAlbum = {
+            selectionAction {
+                controller.loadAlbums()
+                organizingIds = renderedSelection.sorted().map { it.fromHex() }
+                movingSelection = false
+                choosingAlbum = true
+            }
+        },
+        onMoveSelectionToAlbum = {
+            selectionAction {
+                controller.loadAlbums()
+                organizingIds = renderedSelection.sorted().map { it.fromHex() }
+                movingSelection = true
+                choosingAlbum = true
+            }
+        },
+        onTagSelection = {
+            selectionAction {
+                controller.loadTags()
+                taggingIds = renderedSelection.sorted().map { it.fromHex() }
+                choosingTag = true
+            }
+        },
+        onSetSelectionFavorite = { favorite ->
+            selectionAction {
+                controller.setFavoritesForAll(renderedSelection.sorted().map { it.fromHex() }, favorite) {
                     selection = emptySet()
                 }
             }
         },
-        onDeleteSelection = { confirmingDelete = true },
-        onRestoreSelection = { controller.restoreAll(selectedObjects(page, selection)) {
-            selection = emptySet()
-        } },
+        onRemoveSelectionFromAlbum = {
+            selectionAction {
+                openAlbum?.let { album ->
+                    controller.removeAllFromAlbum(album.albumId, selectedObjects(page, renderedSelection)) {
+                        selection = emptySet()
+                    }
+                }
+            }
+        },
+        onDeleteSelection = { selectionAction { confirmingDelete = true } },
+        onRestoreSelection = {
+            selectionAction {
+                controller.restoreAll(selectedObjects(page, renderedSelection)) {
+                    selection = emptySet()
+                }
+            }
+        },
         onCancelOperation = controller::cancelActiveOperation,
         onNoticeShown = controller::consume,
         // iOS asks for local network access by itself, as the first
