@@ -62,6 +62,25 @@ pub fn mime_type(data: &[u8]) -> &'static str {
         "application/octet-stream"
     }
 }
+fn valid_name(name: &str) -> bool {
+    !name.trim().is_empty()
+        && name.len() <= 240
+        && !name.contains(['/', '\\', ':'])
+        && !name.chars().any(char::is_control)
+        && name != "."
+        && name != ".."
+}
+fn supported_mime(mime: &str) -> bool {
+    matches!(
+        mime,
+        "image/png"
+            | "image/jpeg"
+            | "image/gif"
+            | "image/webp"
+            | "application/pdf"
+            | "application/octet-stream"
+    )
+}
 /// Applies the same basename, MIME and aggregate bounds to direct and portable imports.
 pub fn validate(all: &[AttachmentData]) -> Result<()> {
     ensure!(
@@ -79,12 +98,7 @@ pub fn validate(all: &[AttachmentData]) -> Result<()> {
             "the note repeats an attachment identity"
         );
         ensure!(
-            !a.name.trim().is_empty()
-                && a.name.len() <= 240
-                && !a.name.contains(['/', '\\', ':'])
-                && !a.name.chars().any(char::is_control)
-                && a.name != "."
-                && a.name != "..",
+            valid_name(&a.name),
             InvalidInput,
             "the attachment filename is invalid"
         );
@@ -130,7 +144,9 @@ fn list_conn(c: &Connection, id: &Id) -> Result<Vec<Attachment>> {
         .map_err(|e| map_sqlite(e, "the attachments could not be read"))?;
     ensure!(
         result.len() <= COUNT_MAX
-            && result.iter().all(|a| a.size <= FILE_MAX as u64)
+            && result.iter().all(|a| valid_name(&a.name)
+                && supported_mime(&a.mime_type)
+                && a.size <= FILE_MAX as u64)
             && result.iter().map(|a| a.size).sum::<u64>() <= TOTAL_MAX as u64,
         CatalogCorrupt,
         "the stored attachments exceed their bounds"
@@ -574,6 +590,24 @@ mod tests {
         for number in 1..=33u8 {
             db.connection().execute("INSERT INTO private_note_attachments(note_id,attachment_id,name,mime_type,data) VALUES(?1,?2,'file.bin','application/octet-stream',x'')",params![n.id.as_bytes().as_slice(),vec![number;16]]).unwrap();
         }
+        assert_eq!(
+            list(&db, &n.id).err().unwrap().status(),
+            chur_core::ChurStatus::CatalogCorrupt
+        );
+        db.connection()
+            .execute("DELETE FROM private_note_attachments", [])
+            .unwrap();
+        db.connection().execute("INSERT INTO private_note_attachments(note_id,attachment_id,name,mime_type,data) VALUES(?1,?2,'../escape.pdf','application/pdf',x'')",params![n.id.as_bytes().as_slice(),id.as_bytes().as_slice()]).unwrap();
+        assert_eq!(
+            list(&db, &n.id).err().unwrap().status(),
+            chur_core::ChurStatus::CatalogCorrupt
+        );
+        db.connection()
+            .execute(
+                "UPDATE private_note_attachments SET name='file.bin',mime_type='text/html'",
+                [],
+            )
+            .unwrap();
         assert_eq!(
             list(&db, &n.id).err().unwrap().status(),
             chur_core::ChurStatus::CatalogCorrupt

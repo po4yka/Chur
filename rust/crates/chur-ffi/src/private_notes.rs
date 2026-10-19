@@ -151,7 +151,7 @@ unsafe fn control(
             bytes: input,
             at: 0,
         };
-        let mut record = Zeroizing::new(Vec::new());
+        let mut record = Zeroizing::new(Vec::with_capacity(CAPACITY));
         with_catalog(session, |db| {
             notes::purge_expired(db, api::now_ms())?;
             body(db, &mut reader, &mut record)
@@ -412,7 +412,7 @@ pub unsafe extern "C" fn chur_private_note_attachments(
             "the attachment output buffer is too small"
         );
         let output = unsafe { api::borrow_bytes_mut(destination, capacity)? };
-        let mut out = Zeroizing::new(Vec::new());
+        let mut out = Zeroizing::new(Vec::with_capacity(capacity));
         with_catalog(session, |db| {
             use chur_catalog::note_attachments as files;
             notes::purge_expired(db, api::now_ms())?;
