@@ -73,7 +73,9 @@ class PrivateNotesAndroidTest {
             present(prepare = { vault ->
                 val generation = (vault.state.value as VaultState.Unlocked).generation
                 vault.importPrivateNotePackage(generation, "Public attachment sample",
-                    "# Local image\n\n![Public sample image](attachment:$hex)\n\n![Remote image](https://example.invalid/image.png)",
+                    "# Local image\n\n![Public sample image](attachment:$hex)\n\n" +
+                        "Text with ![Inline reference image][local] after it.\n\n" +
+                        "[local]: attachment:$hex\n\n![Remote image](https://example.invalid/image.png)",
                     dev.po4yka.chur.ffi.PrivateNoteFormat.MARKDOWN,
                     listOf(dev.po4yka.chur.ffi.PrivateNoteAttachmentData(id, "fixture.png", "image/png", bytes)))
             }) { fixture ->
@@ -81,6 +83,9 @@ class PrivateNotesAndroidTest {
                 fixture.clickText("Preview")
                 assertTrue("the managed image is decoded by the actual platform renderer", fixture.await {
                     fixture.nodes().any { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Public sample image") == true && it.size.width > 0 && it.size.height > 0 }
+                })
+                assertTrue("reference-style inline images retain their own alt text and decode from the same native attachment", fixture.await {
+                    fixture.nodes().any { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Inline reference image") == true && it.size.width > 0 && it.size.height > 0 }
                 })
                 assertTrue(fixture.await { fixture.hasText("only managed attachments are loaded") })
                 assertTrue(fixture.savedState().isEmpty())
