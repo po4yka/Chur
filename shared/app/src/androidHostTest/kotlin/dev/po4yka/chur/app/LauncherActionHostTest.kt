@@ -4,6 +4,7 @@ import dev.po4yka.chur.notes.InMemoryNoteStore
 import dev.po4yka.chur.vault.VaultState
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.resetMain
@@ -127,7 +128,7 @@ class LauncherActionHostTest {
         controller.toggleAppLock()
         withTimeout(10_000) { controller.appLockEnabled.first { it } }
         lock()
-        controller.requestLauncherAction(LauncherAction.NEW_PRIVATE_NOTE)
+        assertTrue(controller.requestLauncherAction(LauncherAction.NEW_PRIVATE_NOTE))
         controller.goTo(AppRoute.AppRecover)
         controller.recover(phrase)
         waitForAttempt()
@@ -224,7 +225,7 @@ class LauncherActionHostTest {
     fun an_undispatched_gate_request_can_be_replaced_but_never_crosses_an_identity_change() = scenario {
         create()
         lock()
-        controller.requestLauncherAction(LauncherAction.IMPORT)
+        assertTrue(controller.requestLauncherAction(LauncherAction.IMPORT))
         controller.requestLauncherAction(LauncherAction.NEW_PRIVATE_NOTE)
         controller.unlock(PASSWORD)
         waitForAttempt()
@@ -275,6 +276,12 @@ class LauncherActionHostTest {
 
         suspend fun lock() {
             controller.lock()
+            // Locked is published by the repository before Main finishes projection
+            // cleanup and reopens launcher admission. Await that operation, not its first state.
+            val cleanup = checkNotNull(controller.javaClass.getDeclaredField("pendingLock")
+                .apply { isAccessible = true }.get(controller) as? Job)
+            withTimeout(10_000) { cleanup.join() }
+            assertFalse(cleanup.isCancelled, "lock cleanup must complete successfully")
             withTimeout(10_000) { controller.vaultState.first { it is VaultState.Locked } }
             withTimeout(10_000) { controller.route.first { it == AppRoute.PublicShell || it == AppRoute.AppUnlock } }
         }

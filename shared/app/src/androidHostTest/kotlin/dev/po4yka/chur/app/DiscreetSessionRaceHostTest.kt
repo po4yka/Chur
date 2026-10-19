@@ -26,6 +26,7 @@ import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -49,6 +50,29 @@ class DiscreetSessionRaceHostTest {
         // Its coroutine has not even started; concealment cannot depend on the native mutex.
         assertIs<VaultState.Unlocked>(controller.vaultState.value)
         finishLock()
+    }
+
+    @Test
+    fun launcher_admission_waits_for_cleanup_after_the_native_locked_state_is_published() = scenario {
+        controller.start()
+        create()
+        val cleanup = withRepositoryBlocked {
+            controller.lock()
+            pendingLock().also { main.take(it).run() }
+        }
+        // The repository mutex forced a real suspension. Native teardown has now
+        // returned, but its Main continuation is held before projection cleanup.
+        val nativeCompletion = main.take(cleanup)
+        assertIs<VaultState.Locked>(controller.vaultState.value)
+        assertFalse(cleanup.isCompleted)
+        assertFalse(controller.requestLauncherAction(LauncherAction.SEARCH))
+        assertNull(controller.launcherRequest.value)
+        nativeCompletion.run()
+        finishLock()
+        assertFalse(cleanup.isCancelled)
+        assertTrue(controller.requestLauncherAction(LauncherAction.SEARCH))
+        assertEquals(AppRoute.Unlock, controller.route.value)
+        assertNull(controller.launcherRequest.value, "a locked session still requires authentication")
     }
 
     @Test
