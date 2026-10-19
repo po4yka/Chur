@@ -17,6 +17,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -49,6 +50,9 @@ internal class IosVaultScene(
         private set
     internal var content by mutableStateOf<(@Composable (IosVaultScene) -> Unit)?>(null)
 
+    internal var scrollAllowed: (() -> Boolean)? = null
+    internal var scrollScope: Any? by mutableStateOf(null)
+
     private fun currentOwner(): Boolean {
         val owner = controller.get() ?: return false
         return !retired && owner.route.value == AppRoute.Vault &&
@@ -63,6 +67,8 @@ internal class IosVaultScene(
         retired = true
         active = false
         content = null
+        scrollAllowed = null
+        scrollScope = null
     }
 }
 
@@ -93,8 +99,8 @@ internal class IosVaultScenes(
         }
     }
 
-    fun publish(screen: IosVaultScreen, content: @Composable (IosVaultScene) -> Unit) {
-        scene(screen).content = content
+    fun publish(screen: IosVaultScreen, scrollAllowed: (() -> Boolean)? = null, scrollScope: Any? = null, content: @Composable (IosVaultScene) -> Unit) {
+        scene(screen).also { it.scrollAllowed = scrollAllowed; it.scrollScope = scrollScope; it.content = content }
     }
 
     fun activate(screen: IosVaultScreen?) {
@@ -130,6 +136,15 @@ internal class IosVaultScenes(
             val route = owner?.route?.collectAsState()?.value
             val state = owner?.vaultState?.collectAsState()?.value
             val focus = LocalFocusManager.current
+            val chrome = chromeOwner.get()
+            val scrollEnabled = lease.active && lease.scrollAllowed?.invoke() == true && chrome?.scrollInteractionEnabled == true
+            val scrollObserver = remember(lease, lease.scrollScope, scrollEnabled) {
+                if (!scrollEnabled || !lease.canObserve()) return@remember null
+                val sceneOwner = WeakReference(lease)
+                chrome?.scrollObserver(lease.generation, screen) {
+                    sceneOwner.get()?.let { it.canObserve() && it.scrollAllowed?.invoke() == true } == true
+                }
+            }
             DisposableEffect(lease.active) {
                 if (!lease.active) focus.clearFocus(force = true)
                 onDispose { focus.clearFocus(force = true) }
@@ -139,6 +154,7 @@ internal class IosVaultScenes(
                     LocalIosVaultScenes provides currentStore,
                     LocalIosVaultScene provides lease,
                     LocalIosVaultChrome provides chromeOwner.get(),
+                    LocalVaultScrollObserver provides scrollObserver,
                     LocalPrivateModalPresenter provides modalPresenter,
                     LocalPrivatePanic provides {
                         if (lease.canEscape()) chromeOwner.get()?.requestPanic()

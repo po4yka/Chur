@@ -1374,7 +1374,10 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                     (destination == VaultDestination.LIBRARY || openAlbum != null) && !searchCommandsBlocked())
             return@SideEffect
         }
-        scenes.publish(shellScreen) { scene ->
+        scenes.publish(shellScreen, scrollScope = browseLocation, scrollAllowed = {
+            renderedMediaIsCurrent() && !searchCommandsBlocked() &&
+                BrowseQueryLocation(currentSearchScope(), terms, mediaSort, albumSort, mediaKinds) == browseLocation
+        }) { scene ->
             VaultShell(
                 state = shellState,
                 actions = shellActions.forScene(scene),

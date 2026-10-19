@@ -293,6 +293,7 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
                 .onGloballyPositioned { viewport = it.boundsInWindow() }
                 .then(dragGestureModifier)) {
             if (grid) {
+                ObserveVaultScroll(gridState)
                 LazyVerticalGrid(
                     columns = GridCells.Adaptive(150.dp),
                     state = gridState,
@@ -307,6 +308,7 @@ fun AlbumOrganizer(albums: List<AlbumSummary>, actions: VaultActions,
                     }
                 }
             } else {
+                ObserveVaultScroll(listState)
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),

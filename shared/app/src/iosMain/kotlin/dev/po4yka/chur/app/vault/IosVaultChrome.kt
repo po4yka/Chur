@@ -3,6 +3,9 @@
 package dev.po4yka.chur.app.vault
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import kotlinx.cinterop.ObjCAction
 import kotlinx.cinterop.ObjCSignatureOverride
 import kotlinx.cinterop.objcPtr
@@ -18,6 +21,7 @@ import platform.UIKit.toolbarItems
 import platform.UIKit.UIButton
 import platform.UIKit.UIButtonTypeSystem
 import platform.UIKit.UIColor
+import platform.UIKit.separatorColor
 import platform.UIKit.UIContextMenuInteraction
 import platform.UIKit.UIContextMenuInteractionAppearanceUnknown
 import platform.UIKit.UIControlEventTouchUpInside
@@ -39,6 +43,9 @@ import platform.UIKit.UILongPressGestureRecognizer
 import platform.UIKit.UIMenu
 import platform.UIKit.UIMenuElementAttributesDisabled
 import platform.UIKit.UINavigationBar
+import platform.UIKit.UINavigationBarAppearance
+import platform.UIKit.UITabBarAppearance
+import platform.UIKit.UISearchControllerDelegateProtocol
 import platform.UIKit.UINavigationItem
 import platform.UIKit.UINavigationItemSearchBarPlacement.UINavigationItemSearchBarPlacementStacked
 import platform.UIKit.UITabBar
@@ -77,7 +84,125 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
     internal val navigationBar: UINavigationBar get() = selectedNavigation.navigationBar
     internal val tabBar: UITabBar get() = controller.tabBar
     private val navigationItem: UINavigationItem? get() = selectedNavigation.topViewController?.navigationItem
-    private data class Frame(val screen: IosVaultScreen, val content: UIViewController, val controls: ChromeControls)
+    private data class Frame(val screen: IosVaultScreen, val content: UIViewController, val controls: ChromeControls) {
+        var scroll: ScrollSource? = null
+    }
+    /** Only an attached real Compose viewport can publish its current edges. */
+    private class ScrollSource(
+        chrome: IosVaultChrome?,
+        val generation: Long,
+        val screen: IosVaultScreen,
+        val observerToken: Any,
+        content: UIViewController?,
+        canPublish: () -> Boolean,
+    ) : VaultScrollObservation {
+        val owner = chrome?.let(::WeakReference)
+        var content = content?.let(::WeakReference)
+        var canPublish: (() -> Boolean)? = canPublish
+        var edges: VaultScrollEdges? = null
+        override fun update(edges: VaultScrollEdges) { owner?.get()?.updateScroll(this, edges) }
+        override fun dispose() { owner?.get()?.detachScroll(this); retire() }
+        fun retire() { canPublish = null; edges = null }
+    }
+    private var scrollOperationActive = false
+    internal var scrollInteractionEnabled by mutableStateOf(false)
+        private set
+    private val pendingScroll = mutableMapOf<IosVaultScreen, ScrollSource>()
+    private val scrollObservers = mutableMapOf<IosVaultScreen, Any>()
+
+    internal fun scrollObserver(generation: Long, screen: IosVaultScreen, canPublish: () -> Boolean): VaultScrollObserver {
+        val owner = WeakReference(this)
+        val observerToken = Any()
+        if (this.generation == generation && !lockRequested) scrollObservers[screen] = observerToken
+        return object : VaultScrollObserver {
+            override fun attach(): VaultScrollObservation {
+                val chrome = owner.get()
+                val frame = chrome?.stacks?.values?.flatten()?.firstOrNull { it.screen == screen }
+                val source = ScrollSource(chrome, generation, screen, observerToken, frame?.content, canPublish)
+                if (chrome != null && chrome.generation == generation && !chrome.lockRequested &&
+                    chrome.scrollObservers[screen] === observerToken) {
+                    if (frame != null) {
+                        frame.scroll?.retire()
+                        frame.scroll = source
+                        chrome.renderScrollAppearance()
+                    } else {
+                        // A Compose child may lay out while its factory is still
+                        // creating the native Frame. Adopt only this exact lease.
+                        chrome.pendingScroll.put(screen, source)?.retire()
+                    }
+                } else source.retire()
+                return source
+            }
+        }
+    }
+
+    private fun scrollFrame(source: ScrollSource): Frame? = stacks.values.flatten().firstOrNull {
+        it.scroll === source && it.content.objcPtr() == source.content?.get()?.objcPtr()
+    }
+
+    private fun scrollCanPublish(source: ScrollSource): Boolean {
+        val frame = scrollFrame(source) ?: return false
+        return source.generation == generation && scrollObservers[source.screen] === source.observerToken && nativeScrollEnabled() &&
+            frame == stacks[selectedNavigation]?.lastOrNull() && selectedNavigation.topViewController == frame.content &&
+            frame.screen !is IosVaultScreen.Viewer && source.canPublish?.invoke() == true
+    }
+
+    private fun updateScroll(source: ScrollSource, edges: VaultScrollEdges) {
+        if (!scrollCanPublish(source)) return
+        if (source.edges == edges) return
+        source.edges = edges
+        renderScrollAppearance()
+    }
+
+    private fun detachScroll(source: ScrollSource) {
+        if (pendingScroll[source.screen] === source) pendingScroll.remove(source.screen)
+        val frame = scrollFrame(source) ?: return
+        frame.scroll = null
+        renderScrollAppearance()
+    }
+
+    private fun nativeScrollEnabled(): Boolean {
+        val frame = stacks[selectedNavigation]?.lastOrNull() ?: return false
+        return frame.content == selectedNavigation.topViewController && frame.screen !is IosVaultScreen.Viewer &&
+            generation != 0L && !lockRequested && !navigationBlocked && !covered &&
+            !privateModalActive && !selectionBlocksPop && !scrollOperationActive && !transitionInFlight &&
+            search?.controller?.active != true && search?.engaged != true
+    }
+
+    private var renderedScroll: Pair<UINavigationController, VaultScrollEdges?>? = null
+    private fun renderScrollAppearance() {
+        // Reattaching the Compose observer on resume republishes actual edges:
+        // the content can keep scrolling while selection or search is active.
+        val enabled = nativeScrollEnabled()
+        if (scrollInteractionEnabled && !enabled) stacks[selectedNavigation]?.lastOrNull()?.scroll?.edges = null
+        scrollInteractionEnabled = enabled
+        val source = stacks[selectedNavigation]?.lastOrNull()?.scroll
+        val edges = source?.takeIf(::scrollCanPublish)?.edges
+        val projection = selectedNavigation to edges
+        if (renderedScroll == projection) return
+        renderedScroll = projection
+        // Compose does not expose a UIScrollView. Project real viewport edges
+        // into public UIKit appearance APIs without a dummy scroll view, moving
+        // controls, changing insets or claiming automatic UIKit scroll tracking.
+        val navigation = UINavigationBarAppearance().apply {
+            if (edges?.atTop == true) configureWithTransparentBackground() else configureWithDefaultBackground()
+            // On iOS 26 the default navigation background is already hidden,
+            // identical to transparent. A system separator supplies a real
+            // scroll boundary while retaining the native floating glass groups.
+            if (edges != null && !edges.atTop) shadowColor = UIColor.separatorColor
+        }
+        selectedNavigation.navigationBar.apply {
+            standardAppearance = navigation
+            compactAppearance = navigation
+            scrollEdgeAppearance = navigation
+            compactScrollEdgeAppearance = navigation
+        }
+        val tabs = UITabBarAppearance().apply {
+            if (edges?.atBottom == true) configureWithTransparentBackground() else configureWithDefaultBackground()
+        }
+        tabBar.standardAppearance = tabs
+        tabBar.scrollEdgeAppearance = tabs
+    }
     /** UIKit bars must never share a UIBarButtonItem or its custom UIView. */
     private class ChromeControls(owner: IosVaultChrome) : NSObject() {
         private val presenter = WeakReference(owner)
@@ -210,18 +335,28 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
 
     /** A fresh delegate object is a visit lease, including same-screen re-entry. */
     private class NativeSearch(owner: IosVaultChrome, frame: Frame, val generation: Long, scope: SearchScope) :
-        NSObject(), UISearchResultsUpdatingProtocol, UISearchBarDelegateProtocol {
+        NSObject(), UISearchResultsUpdatingProtocol, UISearchBarDelegateProtocol, UISearchControllerDelegateProtocol {
         private val owner = WeakReference(owner)
         var frame: Frame? = frame
         var scope: SearchScope? = scope
         val controller = UISearchController(searchResultsController = null)
         var publishedText = ""
         var syncing = false
+        var engaged = false
+        override fun willPresentSearchController(searchController: UISearchController) {
+            if (searchController == controller) { engaged = true; owner.get()?.renderScrollAppearance() }
+        }
+        override fun didDismissSearchController(searchController: UISearchController) {
+            if (searchController == controller) { engaged = false; owner.get()?.renderScrollAppearance() }
+        }
         override fun updateSearchResultsForSearchController(searchController: UISearchController) {
             if (searchController == controller && !syncing) owner.get()?.searchChanged(this)
         }
-        override fun searchBarShouldBeginEditing(searchBar: UISearchBar): Boolean =
-            searchBar == controller.searchBar && owner.get()?.searchCanAct(this) == true
+        override fun searchBarShouldBeginEditing(searchBar: UISearchBar): Boolean {
+            val allowed = searchBar == controller.searchBar && owner.get()?.searchCanAct(this) == true
+            if (allowed) { engaged = true; owner.get()?.renderScrollAppearance() }
+            return allowed
+        }
         override fun searchBarCancelButtonClicked(searchBar: UISearchBar) {
             if (searchBar == controller.searchBar) owner.get()?.cancelSearch(this)
         }
@@ -295,6 +430,10 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
                     val next = desired.map { screen -> candidates.firstOrNull { it.screen == screen }
                         ?: Frame(screen, checkNotNull(screenFactory).invoke(screen), ChromeControls(this)).also {
                             it.content.hidesBottomBarWhenPushed = screen is IosVaultScreen.Viewer
+                            pendingScroll.remove(screen)?.let { source ->
+                                source.content = WeakReference(it.content)
+                                it.scroll = source
+                            }
                         }
                     }
                     val animate = animated && old.isNotEmpty() && tab == destination && controller.view.window != null
@@ -322,6 +461,9 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
     }
 
     private fun retire(frame: Frame) {
+        scrollObservers.remove(frame.screen)
+        frame.scroll?.retire()
+        frame.scroll = null
         frame.controls.retire()
         if (search?.frame == frame || searchPresentation?.frame == frame) retireSearch()
         // Retire the Compose slot before releasing UIKit's reference to it.
@@ -337,6 +479,9 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
     }
 
     private fun retireStacks() {
+        pendingScroll.values.forEach(ScrollSource::retire)
+        pendingScroll.clear()
+        scrollObservers.clear()
         (stacks.values.flatten() + retiring.values.flatten()).distinct().forEach(::retire)
         stacks.clear()
         retiring.clear()
@@ -376,6 +521,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         navigationBar.accessibilityElementsHidden = (viewer && !nativeViewer) || covered
         toolbar.accessibilityElementsHidden = covered || selected.toolbarHidden
         tabBar.accessibilityElementsHidden = viewer || selectionBlocksPop || covered
+        renderScrollAppearance()
         navigationControllers.forEach { nav ->
             val canPop = !navigationBlocked && !covered && !selectionBlocksPop && !viewerBlocksNavigation(nav)
             nav.interactivePopGestureRecognizer?.enabled = canPop
@@ -432,6 +578,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
             return
         }
         this.covered = covered
+        scrollOperationActive = state.operation != null
         accentTint = UIColor(red = accent.red.toDouble(), green = accent.green.toDouble(), blue = accent.blue.toDouble(), alpha = 1.0)
         selectionBlocksPop = state.selectedCount > 0
         // Selection actions share one operation owner. Progress can arrive
@@ -541,6 +688,9 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         controller.view.accessibilityElementsHidden = true
         controller.view.userInteractionEnabled = false
         lockRequested = true
+        renderedScroll = null
+        scrollInteractionEnabled = false
+        scrollOperationActive = false
         onClearPrivateModals?.invoke()
         pendingModalPresentation = null
         chromeUpdateEpoch++
@@ -611,6 +761,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         applyBarAppearance(navigationController, viewer)
         navigationController.setNavigationBarHidden((viewer && viewerState?.token != (frame.screen as? IosVaultScreen.Viewer)?.token) || covered, animated)
         navigationController.setToolbarHidden(covered || if (viewer) viewerState?.visible != true else !selectionBlocksPop, animated)
+        renderScrollAppearance()
     }
 
     @ObjCSignatureOverride
@@ -691,6 +842,8 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         previous.frame = null
         previous.scope = null
         native.searchResultsUpdater = null
+        native.delegate = null
+        previous.engaged = false
         native.searchBar.delegate = null
         native.searchBar.resignFirstResponder()
         native.searchBar.searchTextField.resignFirstResponder()
@@ -766,6 +919,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
             native.obscuresBackgroundDuringPresentation = false
             native.hidesNavigationBarDuringPresentation = false
             native.searchResultsUpdater = binding
+            native.delegate = binding
             native.searchBar.delegate = binding
             native.searchBar.placeholder = if (frame.screen is IosVaultScreen.Album) "Search album" else "Search Library"
             native.searchBar.searchTextField.apply {

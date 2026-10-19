@@ -382,6 +382,7 @@ fun MediaBrowser(
         .onGloballyPositioned { viewport = it.boundsInWindow() }
         .then(dragGestureModifier)) {
         if (view == ContentView.GRID) {
+            ObserveVaultScroll(gridState)
             val geometry = gridGeometry(maxWidth.value.toInt())
             LazyVerticalGrid(
                 state = gridState,
@@ -408,6 +409,7 @@ fun MediaBrowser(
                 }
             }
         } else {
+        ObserveVaultScroll(listState)
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),

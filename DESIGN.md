@@ -1028,6 +1028,28 @@ layout guides, without inheriting the originating controller's window insets.
 Navigation frames own their bar items and Lock/Back controls; inactive or retired
 control targets cannot dispatch into the current frame.
 
+### 13.6 Scroll-reactive native chrome on iOS
+
+Library, Album, Albums and media search report the actual edges of their main
+Compose grid or list. At the top, the native navigation background is transparent;
+away from the top it adds a native separator using the system separator color.
+Its command groups retain their native Liquid Glass. The tab bar uses
+its system background while more content follows and becomes transparent at the
+bottom. Short, non-scrolling content is at both edges. Header filters, album drop
+trays and modal forms do not drive these appearances.
+
+This changes only UIKit bar appearances: controls, titles, safe areas and scroll
+positions remain fixed. Lock stays directly available, and selection, operations,
+active native search, private presentations and native transitions retain their
+ordinary system appearance. Unblocking reads the current viewport again. Each
+observer belongs to one scene, query and viewport visit; inactive or retired
+observers cannot change another screen or a freshly unlocked session. Android
+keeps its existing Compose/Haze chrome without installing a scroll observer.
+
+Compose owns the actual scrolling. Do not manufacture a hidden UIScrollView to
+drive UIKit's automatic scroll tracking, or describe this explicit appearance
+projection as native tab-bar minimization or automatic scroll-edge effects.
+
 ## 14. Unlock and session gate
 
 ### 14.1 Unlock screen
