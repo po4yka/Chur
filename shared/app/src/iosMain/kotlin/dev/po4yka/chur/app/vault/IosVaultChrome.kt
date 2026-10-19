@@ -12,6 +12,8 @@ import platform.Foundation.NSSelectorFromString
 import platform.UIKit.UIAccessibilityCustomAction
 import platform.UIKit.UIAction
 import platform.UIKit.UIBarButtonItem
+import platform.UIKit.UIBarButtonSystemItem.UIBarButtonSystemItemFlexibleSpace
+import platform.UIKit.toolbarItems
 import platform.UIKit.UIBarButtonItemStyle.UIBarButtonItemStylePlain
 import platform.UIKit.UIButton
 import platform.UIKit.UIButtonTypeSystem
@@ -34,6 +36,8 @@ import platform.UIKit.UINavigationController
 import platform.UIKit.UINavigationControllerDelegateProtocol
 import platform.UIKit.UIDevice
 import platform.UIKit.UIViewController
+import platform.UIKit.UIUserInterfaceStyle.UIUserInterfaceStyleDark
+import platform.UIKit.UIUserInterfaceStyle.UIUserInterfaceStyleUnspecified
 import platform.UIKit.UITabBarItem
 import platform.UIKit.UIView
 import platform.UIKit.accessibilityCustomActions
@@ -84,16 +88,25 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
     private var backCommand: ((VaultActions) -> Unit)? = null
     private var menuEpoch = 0L
     private val menuCommands = mutableListOf<Command>()
+    private var accentTint: UIColor = UIColor(red = 0.0, green = 0.0, blue = 1.0, alpha = 1.0)
+    private var viewerState: IosViewerPanelState? = null
+    private var viewerActions: IosViewerPanelActions? = null
+    private var viewerEpoch = 0L
+    private var renderedViewer: Triple<IosViewerPanelState, Boolean, Boolean>? = null
+    internal val toolbar get() = selectedNavigation.toolbar
+    private val viewerIsTop: Boolean get() = viewerState != null &&
+        (stacks[selectedNavigation]?.lastOrNull()?.screen as? IosVaultScreen.Viewer)?.token == viewerState?.token &&
+            selectedNavigation.topViewController == stacks[selectedNavigation]?.lastOrNull()?.content
 
     init {
         navigationBar.translucent = true
         tabBar.translucent = true
         controller.delegate = this
-        navigationControllers.forEach { it.delegate = this; it.navigationBar.translucent = true }
+        navigationControllers.forEach { it.delegate = this; it.navigationBar.translucent = true; it.toolbar.translucent = true }
         lock.addTarget(this, NSSelectorFromString("lockNow"), UIControlEventTouchUpInside)
         lock.addGestureRecognizer(UILongPressGestureRecognizer(this, NSSelectorFromString("panic:")))
         // Objective-C blocks must not retain the Kotlin presenter that owns them.
-        val owner = WeakReference(this)
+        val owner = WeakReference(this@IosVaultChrome)
         lock.accessibilityCustomActions = listOf(
             UIAccessibilityCustomAction(name = "Lock immediately", actionHandler = {
                 owner.get()?.let { it.panicNow(); true } ?: false
@@ -183,6 +196,8 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         frame.content.navigationItem.title = null
         frame.content.navigationItem.leftBarButtonItem = null
         frame.content.navigationItem.rightBarButtonItems = null
+        frame.content.toolbarItems = null
+        if ((frame.screen as? IosVaultScreen.Viewer)?.token == viewerState?.token) resetViewer()
     }
 
     private fun retireStacks() {
@@ -206,12 +221,21 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         val viewer = stacks[selected]?.lastOrNull()?.screen is IosVaultScreen.Viewer
         // UIKit's willShow controls bar interpolation during a native transition.
         // Ordinary content updates must not snap a Viewer pop back to hidden.
-        if (selected !in transitioning || covered) selected.setNavigationBarHidden(viewer || covered, animated = false)
-        if (selected !in transitioning || covered) tabBar.hidden = viewer || covered
-        navigationBar.accessibilityElementsHidden = viewer || covered
-        tabBar.accessibilityElementsHidden = viewer || covered
+        val nativeViewer = viewer && viewerState != null
+        if (selected !in transitioning) applyBarAppearance(selected, viewer)
+        if (selected !in transitioning || covered) selected.setNavigationBarHidden((viewer && !nativeViewer) || covered, animated = false)
+        if (selected !in transitioning || covered) selected.setToolbarHidden(
+            covered || if (viewer) !nativeViewer || viewerState?.visible != true else selectionBlocksPop.not(), animated = false)
+        if (selected !in transitioning || covered) {
+            // The system owns the floating tab bar's content layout. Selection
+            // replaces tabs with the navigation controller's action toolbar.
+            controller.setTabBarHidden(viewer || selectionBlocksPop || covered, animated = false)
+        }
+        navigationBar.accessibilityElementsHidden = (viewer && !nativeViewer) || covered
+        toolbar.accessibilityElementsHidden = covered || selected.toolbarHidden
+        tabBar.accessibilityElementsHidden = viewer || selectionBlocksPop || covered
         navigationControllers.forEach { nav ->
-            val canPop = !navigationBlocked && !covered && !selectionBlocksPop
+            val canPop = !navigationBlocked && !covered && !selectionBlocksPop && !viewerBlocksNavigation(nav)
             nav.interactivePopGestureRecognizer?.enabled = canPop
             if ((UIDevice.currentDevice.systemVersion.substringBefore('.').toIntOrNull() ?: 0) >= 26) {
                 // ViewerPager owns horizontal drags across the media body.
@@ -234,9 +258,10 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         secondary.enabled = false
         navigationItem?.setHidesBackButton(true, animated = false)
         navigationItem?.leftBarButtonItem?.enabled = false
+        selectedNavigation.topViewController?.toolbarItems?.filterIsInstance<UIBarButtonItem>()?.forEach { it.enabled = false }
         tabBar.userInteractionEnabled = false
         tabBar.items?.filterIsInstance<UITabBarItem>()?.forEach { it.enabled = false }
-        navigationControllers.forEach { dismissMenus(it.navigationBar) }
+        navigationControllers.forEach { dismissMenus(it.navigationBar); dismissMenus(it.toolbar) }
         // Reuse the ordinary busy policy without replacing the displayed
         // title, selected destination or callbacks; Lock remains available.
         reconcileVisibility()
@@ -245,28 +270,37 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
     fun update(state: VaultUiState, actions: VaultActions, accent: Color, navigationBusy: Boolean, covered: Boolean = false) {
         if (lockRequested) return
         this.covered = covered
+        accentTint = UIColor(red = accent.red.toDouble(), green = accent.green.toDouble(), blue = accent.blue.toDouble(), alpha = 1.0)
         selectionBlocksPop = state.selectedCount > 0
-        navigationBlocked = covered || navigationBusy
-        if (navigationBlocked) dismissMenus(navigationBar)
+        // Selection actions share one operation owner. Progress can arrive
+        // without a modal/navigation-busy report from the Compose shell.
+        navigationBlocked = covered || navigationBusy || (selectionBlocksPop && state.operation != null)
+        if (navigationBlocked) { dismissMenus(navigationBar); dismissMenus(toolbar) }
+        this.actions = actions
+        if (viewerIsTop) {
+            tabBar.userInteractionEnabled = !navigationBlocked
+            tabBar.items?.filterIsInstance<UITabBarItem>()?.forEach { it.enabled = !navigationBlocked }
+            renderViewer()
+            return
+        }
         navigationItem?.setHidesBackButton(navigationBlocked || selectionBlocksPop, animated = false)
         navigationItem?.leftBarButtonItem?.enabled = !navigationBlocked
         back.enabled = !navigationBlocked
         primary.enabled = !navigationBlocked && (state.operation == null ||
             (state.destination == VaultDestination.ALBUMS && state.openAlbum == null && state.selectedCount == 0))
         secondary.enabled = !navigationBlocked
+        selectedNavigation.topViewController?.toolbarItems?.filterIsInstance<UIBarButtonItem>()?.forEach { it.enabled = !navigationBlocked }
         tabBar.userInteractionEnabled = !navigationBlocked
         tabBar.items?.filterIsInstance<UITabBarItem>()?.forEach { it.enabled = !navigationBlocked }
         reconcileVisibility()
-        this.actions = actions
         val next = ChromeKey(
             state.destination, state.openAlbum?.id,
             state.openAlbum?.name ?: state.libraryScopeTitle ?: state.destination.label,
             state.selectedCount, state.operation != null, state.trashOpen,
             state.libraryScopeTitle != null, state.recentlyAdded, actions.onOpenPrivateNotes != null, state.tiles.isNotEmpty(),
         )
-        val tint = UIColor(red = accent.red.toDouble(), green = accent.green.toDouble(), blue = accent.blue.toDouble(), alpha = 1.0)
-        navigationBar.tintColor = tint
-        tabBar.tintColor = tint
+        navigationBar.tintColor = accentTint
+        tabBar.tintColor = accentTint
         if (key == next) {
             // UIKit selects before its delegate runs; shared state is authoritative
             // even when a navigation request was rejected while becoming busy.
@@ -291,7 +325,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         val right = mutableListOf(UIBarButtonItem(customView = lock))
         val openAlbum = state.openAlbum
         val menu = when {
-            state.selectedCount > 0 -> selectionMenu(state)
+            state.selectedCount > 0 -> emptyList()
             openAlbum != null -> listOf(
                 Command("Unencrypted folder", !next.busy) { it.onExportAlbum(openAlbum) },
                 Command("Encrypted archive…", !next.busy) { it.onEncryptedExportAlbum(openAlbum) },
@@ -323,9 +357,10 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
                 "New album" -> { a -> a.onCreateAlbum() }
                 else -> { a -> a.onImport() }
             }
-            right += primary
+            if (state.selectedCount == 0) right += primary
         }
         navigationItem?.rightBarButtonItems = right
+        selectedNavigation.topViewController?.toolbarItems = if (state.selectedCount > 0) selectionToolbar(state) else null
         controller.selectedIndex = state.destination.ordinal.toULong()
         reconcileVisibility()
     }
@@ -339,9 +374,10 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         controller.view.userInteractionEnabled = false
         lockRequested = true
         actions = null
+        resetViewer()
         navigationBlocked = true
         retireMenu()
-        navigationControllers.forEach { dismissMenus(it.navigationBar) }
+        navigationControllers.forEach { dismissMenus(it.navigationBar); dismissMenus(it.toolbar) }
         key = null
         primaryCommand = null
         backCommand = null
@@ -369,8 +405,12 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         // Keep UINavigationController's own visibility state coherent. Directly
         // hiding only its bar leaves navigationBarHidden=false; a fresh visit's
         // setNavigationBarHidden(false) can then be a no-op and strand the bar.
-        navigationControllers.forEach { it.setNavigationBarHidden(true, animated = false) }
-        tabBar.hidden = true
+        navigationControllers.forEach {
+            applyBarAppearance(it, viewer = false)
+            it.setNavigationBarHidden(true, animated = false)
+            it.setToolbarHidden(true, animated = false)
+        }
+        controller.setTabBarHidden(true, animated = false)
         navigationBar.accessibilityElementsHidden = true
         tabBar.accessibilityElementsHidden = true
     }
@@ -390,11 +430,15 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         val frame = stacks[navigationController]?.firstOrNull { it.content == willShowViewController } ?: return
         if (animated) {
             transitioning += navigationController
-            // The navigation controller animates its hidesBottomBarWhenPushed
-            // geometry; do not leave our settled Viewer concealment on top.
-            if (!covered) tabBar.hidden = false
         }
-        navigationController.setNavigationBarHidden(frame.screen is IosVaultScreen.Viewer || covered, animated)
+        val viewer = frame.screen is IosVaultScreen.Viewer
+        if (navigationController == selectedNavigation) {
+            controller.setTabBarHidden(viewer || selectionBlocksPop || covered, animated)
+            tabBar.accessibilityElementsHidden = viewer || selectionBlocksPop || covered
+        }
+        applyBarAppearance(navigationController, viewer)
+        navigationController.setNavigationBarHidden((viewer && viewerState?.token != (frame.screen as? IosVaultScreen.Viewer)?.token) || covered, animated)
+        navigationController.setToolbarHidden(covered || if (viewer) viewerState?.visible != true else !selectionBlocksPop, animated)
     }
 
     @ObjCSignatureOverride
@@ -411,7 +455,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         // Cancelled interactive pops show the original top. A completed native
         // pop alone commits shared state; willShow never changes navigation.
         if (index == frames.lastIndex) { reconcileVisibility(); return }
-        if (navigationBlocked || selectionBlocksPop) {
+        if (navigationBlocked || selectionBlocksPop || viewerBlocksNavigation(navigationController)) {
             reconciling = true
             try { navigationController.setViewControllers(frames.map { it.content }, animated = false) }
             finally { reconciling = false }
@@ -437,7 +481,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
     @ObjCAction fun performPrimary() { if (!navigationBlocked && !transitionInFlight) actions?.let { primaryCommand?.invoke(it) } }
     @ObjCAction fun goBack() { if (!navigationBlocked && !transitionInFlight) actions?.let { backCommand?.invoke(it) } }
 
-    fun hasVisibleMenu(): Boolean = menuInteractions(navigationBar).any {
+    fun hasVisibleMenu(): Boolean = (menuInteractions(navigationBar) + menuInteractions(toolbar)).any {
         it.menuAppearance != UIContextMenuInteractionAppearanceUnknown
     }
 
@@ -459,9 +503,10 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
     }
 
     private fun nativeMenu(commands: List<Command>): UIMenu {
+        val start = menuCommands.size
         menuCommands.addAll(commands)
         val epoch = menuEpoch
-        val owner = WeakReference(this)
+        val owner = WeakReference(this@IosVaultChrome)
         val escape = UIAction.actionWithTitle("Lock and hide", image = null, identifier = null) { _ ->
             val presenter = owner.get()
             // Privacy remains available while ordinary navigation is blocked.
@@ -471,7 +516,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
             UIAction.actionWithTitle(command.title, image = null, identifier = null) { _ ->
                 val presenter = owner.get()
                 if (presenter != null && epoch == presenter.menuEpoch && !presenter.navigationBlocked && !presenter.transitionInFlight) {
-                    val current = presenter.menuCommands.getOrNull(index)
+                    val current = presenter.menuCommands.getOrNull(start + index)
                     if (current?.enabled == true) presenter.actions?.let(current.run)
                 }
             }.also { if (!command.enabled) it.attributes = UIMenuElementAttributesDisabled }
@@ -493,18 +538,168 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         }
     }
 
+    private fun flexibleSpace() = UIBarButtonItem(barButtonSystemItem = UIBarButtonSystemItemFlexibleSpace, target = null, action = null).also { it.enabled = false }
+
+    private fun selectionItem(command: Command, symbol: String): UIBarButtonItem {
+        val index = menuCommands.size
+        menuCommands += command
+        val epoch = menuEpoch
+        val owner = WeakReference(this@IosVaultChrome)
+        val action = UIAction.actionWithTitle(command.title, image = UIImage.systemImageNamed(symbol), identifier = null) { _ ->
+            val presenter = owner.get()
+            if (presenter != null && epoch == presenter.menuEpoch && !presenter.navigationBlocked &&
+                !presenter.transitionInFlight && !presenter.viewerIsTop) {
+                presenter.menuCommands.getOrNull(index)?.takeIf { it.enabled }?.let { current -> presenter.actions?.let(current.run) }
+            }
+        }
+        return UIBarButtonItem(primaryAction = action)
+            .also { it.enabled = !navigationBlocked && command.enabled }
+    }
+
+    private fun selectionToolbar(state: VaultUiState): List<UIBarButtonItem> = buildList {
+        if (!state.trashOpen) {
+            add(primary)
+            add(flexibleSpace())
+            add(selectionItem(Command("Add to album") { it.onAddSelectionToAlbum() }, "rectangle.stack.badge.plus"))
+        } else add(selectionItem(Command("Restore") { it.onRestoreSelection() }, "arrow.uturn.backward"))
+        add(flexibleSpace())
+        add(selectionItem(Command(if (state.trashOpen) "Delete permanently" else "Move to Trash") { it.onDeleteSelection() }, "trash"))
+        add(flexibleSpace())
+        add(UIBarButtonItem(image = UIImage.systemImageNamed("ellipsis"),
+            menu = nativeMenu(selectionMenu(state))).also { it.title = "More"; it.enabled = !navigationBlocked })
+    }
+
+    /** Published only by the active shared Viewer scene; paging rotates the native action epoch. */
+    fun updateViewer(state: IosViewerPanelState, actions: IosViewerPanelActions, accent: Color) {
+        if (lockRequested || state.generation != generation || (stacks[selectedNavigation]?.lastOrNull()?.screen as? IosVaultScreen.Viewer)?.token != state.token) return
+        if (viewerState != state) {
+            viewerEpoch++
+            dismissMenus(navigationBar)
+            dismissMenus(toolbar)
+        }
+        viewerState = state
+        viewerActions = actions
+        accentTint = UIColor(red = accent.red.toDouble(), green = accent.green.toDouble(), blue = accent.blue.toDouble(), alpha = 1.0)
+        key = null
+        renderViewer()
+    }
+
+    fun clearViewer(generation: Long, token: Long) {
+        if (viewerState?.generation != generation || viewerState?.token != token) return
+        resetViewer()
+        key = null
+        reconcileVisibility()
+    }
+
+    private fun resetViewer() {
+        viewerEpoch++
+        viewerState = null
+        viewerActions = null
+        renderedViewer = null
+        navigationControllers.forEach { nav ->
+            dismissMenus(nav.toolbar)
+            nav.viewControllers?.filterIsInstance<UIViewController>()?.filter {
+                stacks[nav]?.firstOrNull { frame -> frame.content == it }?.screen is IosVaultScreen.Viewer
+            }?.forEach { content ->
+                content.navigationItem.title = null
+                content.navigationItem.leftBarButtonItem = null
+                content.navigationItem.rightBarButtonItems = null
+                content.toolbarItems = null
+            }
+        }
+    }
+
+    private fun applyBarAppearance(nav: UINavigationController, viewer: Boolean) {
+        // Media always uses the black canvas/white controls ladder. A custom
+        // Lock UIButton does not receive UIBarButtonItem's adaptive foreground;
+        // an explicit white tint keeps the privacy escape legible on media.
+        val style = if (viewer) UIUserInterfaceStyleDark else UIUserInterfaceStyleUnspecified
+        val tint = if (viewer) UIColor.whiteColor else accentTint
+        nav.navigationBar.overrideUserInterfaceStyle = style
+        nav.toolbar.overrideUserInterfaceStyle = style
+        nav.navigationBar.tintColor = tint
+        nav.toolbar.tintColor = tint
+        lock.tintColor = tint
+    }
+
+    /** Local publication closes the gap before the shared busy effect reaches its owner. */
+    private val viewerControlsBlocked: Boolean
+        get() = navigationBlocked || viewerState?.busy == true || viewerState?.infoVisible == true
+
+    private fun viewerBlocksNavigation(nav: UINavigationController): Boolean {
+        val state = viewerState ?: return false
+        val top = stacks[nav]?.lastOrNull()?.screen as? IosVaultScreen.Viewer ?: return false
+        return top.token == state.token && (state.busy || state.infoVisible)
+    }
+
+    private fun viewerAction(title: String, symbol: String, allowsDetailClose: Boolean = false, run: (IosViewerPanelActions) -> Unit): UIAction {
+        val epoch = viewerEpoch
+        val owner = WeakReference(this@IosVaultChrome)
+        return UIAction.actionWithTitle(title, image = UIImage.systemImageNamed(symbol), identifier = null) { _ ->
+            val presenter = owner.get()
+            val state = presenter?.viewerState
+            if (presenter != null && state != null && epoch == presenter.viewerEpoch && presenter.viewerIsTop &&
+                !presenter.lockRequested && (!presenter.viewerControlsBlocked ||
+                    (allowsDetailClose && state.infoVisible && !state.busy && !presenter.covered)) && !presenter.transitionInFlight) {
+                presenter.viewerActions?.let { current -> current.onTouch(); run(current) }
+            }
+        }
+    }
+
+    private fun viewerItem(title: String, symbol: String, allowsDetailClose: Boolean = false, run: (IosViewerPanelActions) -> Unit): UIBarButtonItem =
+        UIBarButtonItem(primaryAction = viewerAction(title, symbol, allowsDetailClose, run))
+            .also { it.enabled = !viewerControlsBlocked ||
+                (allowsDetailClose && viewerState?.infoVisible == true && viewerState?.busy == false && !covered) }
+
+    private fun renderViewer() {
+        if (!viewerIsTop) return
+        val state = viewerState ?: return
+        val content = selectedNavigation.topViewController ?: return
+        val renderKey = Triple(state, navigationBlocked, covered)
+        if (renderedViewer == renderKey) { reconcileVisibility(); return }
+        renderedViewer = renderKey
+        // The emergency escape stays reachable when media controls auto-hide or are busy.
+        content.navigationItem.title = state.title.takeIf { state.visible }
+        content.navigationItem.setHidesBackButton(true, animated = false)
+        content.navigationItem.leftBarButtonItem = if (state.visible) viewerItem("Back", "chevron.backward") { it.onBack() } else null
+        content.navigationItem.rightBarButtonItems = buildList {
+            add(UIBarButtonItem(customView = lock))
+            if (state.visible) add(viewerItem(if (state.infoVisible) "Hide info" else "Info", "info.circle", allowsDetailClose = true) { it.onInfo() })
+        }
+        content.toolbarItems = if (!state.visible) null else buildList {
+            if (state.trashed) add(viewerItem("Restore", "arrow.uturn.backward") { it.onRestore() })
+            else {
+                add(viewerItem(if (state.favorite) "Remove from favorites" else "Add to favorites",
+                    if (state.favorite) "heart.fill" else "heart") { it.onFavorite() })
+                add(flexibleSpace())
+                add(viewerItem("Export", "square.and.arrow.up") { it.onExport() })
+                add(flexibleSpace())
+                val epoch = viewerEpoch
+                val owner = WeakReference(this@IosVaultChrome)
+                val escape = UIAction.actionWithTitle("Lock and hide", image = UIImage.systemImageNamed("lock"), identifier = null) { _ ->
+                    val presenter = owner.get()
+                    if (presenter != null && epoch == presenter.viewerEpoch && presenter.viewerIsTop) presenter.panicNow()
+                }
+                val menu = UIMenu.menuWithTitle("", children = listOf(escape, viewerAction("Tags", "tag") { it.onTags() }))
+                add(UIBarButtonItem(image = UIImage.systemImageNamed("ellipsis"), menu = menu)
+                    .also { it.title = "More"; it.enabled = !viewerControlsBlocked })
+            }
+            add(flexibleSpace())
+            add(viewerItem(if (state.trashed) "Delete permanently" else "Move to Trash", "trash") { it.onDelete() })
+        }
+        reconcileVisibility()
+    }
+
     private fun selectionMenu(state: VaultUiState): List<Command> = buildList {
         add(Command("Select loaded items") { it.onSelectLoadedItems() })
         if (!state.trashOpen) {
             add(Command("Encrypted archive…", state.operation == null) { it.onEncryptedExportSelection() })
-            add(Command("Add to album") { it.onAddSelectionToAlbum() })
             if (state.openAlbum != null) add(Command("Move to album") { it.onMoveSelectionToAlbum() })
             add(Command("Tags") { it.onTagSelection() })
             add(Command("Add to favorites") { it.onSetSelectionFavorite(true) })
             add(Command("Remove from favorites") { it.onSetSelectionFavorite(false) })
             if (state.openAlbum != null) add(Command("Remove from album") { it.onRemoveSelectionFromAlbum() })
-        } else add(Command("Restore") { it.onRestoreSelection() })
-        add(Command(if (state.trashOpen) "Delete permanently" else "Move to Trash") { it.onDeleteSelection() })
+        }
     }
 
     private data class Command(val title: String, val enabled: Boolean = true, val run: (VaultActions) -> Unit)

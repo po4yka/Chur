@@ -12,6 +12,8 @@ import dev.po4yka.chur.app.vault.LocalIosVaultChrome
 import dev.po4yka.chur.app.vault.LocalIosVaultScenes
 import dev.po4yka.chur.app.vault.LocalIosVaultScene
 import dev.po4yka.chur.app.vault.IosVaultScreen
+import dev.po4yka.chur.app.vault.IosViewerPanelState
+import dev.po4yka.chur.app.vault.IosViewerPanelActions
 import dev.po4yka.chur.app.vault.forScene
 import dev.po4yka.chur.app.theme.LocalChurColors
 import androidx.compose.runtime.SideEffect
@@ -74,6 +76,8 @@ import dev.po4yka.chur.app.vault.albumParent
 import dev.po4yka.chur.app.vault.albumPath
 import dev.po4yka.chur.app.vault.VaultShell
 import dev.po4yka.chur.app.vault.MEDIA_CLASS_AUDIO
+import dev.po4yka.chur.app.vault.MEDIA_CLASS_IMAGE
+import dev.po4yka.chur.app.vault.MEDIA_CLASS_VIDEO
 import dev.po4yka.chur.app.vault.viewerPages
 import dev.po4yka.chur.app.vault.ViewerStillState
 import dev.po4yka.chur.app.vault.viewerStill
@@ -1221,6 +1225,10 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     val viewerScreen = projection?.let { IosVaultScreen.Viewer(viewerVisit) }
     val viewerPage = projection?.let { viewerPages(currentPage.objects, it) }.orEmpty()
     val screenStack = listOf(IosVaultScreen.Root(destination)) + albumScreens + listOfNotNull(viewerScreen)
+    // Read child-owned busy state during composition. A read made only inside
+    // SideEffect is not observed by this composition, so opening Viewer Info
+    // would otherwise leave UIKit Back and toolbar commands enabled.
+    val nativeNavigationBusy = modalNavigationBusy || shellNavigationBusy || viewerNavigationBusy
     SideEffect {
         if (controller.route.value != AppRoute.Vault ||
             (controller.vaultState.value as? VaultState.Unlocked)?.generation != generation
@@ -1244,6 +1252,8 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 IosViewerRoute(
                     controller = controller, operation = operation, notice = notice,
                     cache = cache, generation = generation, projection = projection,
+                    viewerToken = viewerScreen.token,
+                    isCurrentItem = { viewing?.id == projection.id },
                     pages = viewerPage, thumbnails = viewerThumbnails,
                     canLoadMore = currentPage.nextCursor != null, trashOpen = shellState.trashOpen,
                     onSettled = { if (scene.canAct()) viewing = it },
@@ -1281,7 +1291,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         }, onRetire = scenes::retire)
         nativeChrome.reconcile(generation, screenStack, destination)
         nativeChrome.update(shellState, shellActions, colors.accent,
-            navigationBusy = modalNavigationBusy || shellNavigationBusy || viewerNavigationBusy,
+            navigationBusy = nativeNavigationBusy,
             covered = modalNavigationBusy)
     }
 
@@ -1308,6 +1318,8 @@ private fun IosViewerRoute(
     cache: ThumbnailCache,
     generation: Long,
     projection: ObjectProjection,
+    viewerToken: Long,
+    isCurrentItem: () -> Boolean,
     pages: List<ObjectProjection>,
     thumbnails: Map<String, ImageBitmap>,
     canLoadMore: Boolean,
@@ -1320,6 +1332,14 @@ private fun IosViewerRoute(
 ) {
     val scene = checkNotNull(LocalIosVaultScene.current)
     val nativeChrome = checkNotNull(LocalIosVaultChrome.current)
+    val colors = LocalChurColors.current
+    // A scene survives paging. A never-reused identity also rejects an old A
+    // callback after paging A → B → A; the parent predicate closes the gap
+    // between a settled page changing and this composition being refreshed.
+    val itemVisit = remember(projection.id, generation) { Any() }
+    val currentItemVisit by rememberUpdatedState(itemVisit)
+    fun canAct(): Boolean = scene.canAct() && isCurrentItem() && currentItemVisit === itemVisit
+    fun canObserve(): Boolean = scene.canObserve() && isCurrentItem() && currentItemVisit === itemVisit
     val currentChromeChanged by rememberUpdatedState(onChromeChanged)
     val currentNavigationBusyChanged by rememberUpdatedState(onNavigationBusyChange)
     var detail by remember(projection.id) { mutableStateOf<ObjectDetail?>(null) }
@@ -1341,15 +1361,16 @@ private fun IosViewerRoute(
     // with the chrome, and it gets the theme's style back when the viewer goes.
     val navigationBusy = showDetail || choosingTags || choosingExport || confirmingDelete || operation != null
     LaunchedEffect(scene, scene.active, chromeVisible) {
-        if (scene.canObserve()) currentChromeChanged(chromeVisible)
+        if (canObserve()) currentChromeChanged(chromeVisible)
     }
     LaunchedEffect(scene, scene.active, navigationBusy) {
-        if (scene.canObserve()) currentNavigationBusyChanged(navigationBusy)
+        if (canObserve()) currentNavigationBusyChanged(navigationBusy)
     }
     DisposableEffect(scene) {
         onDispose {
+            nativeChrome.clearViewer(generation, viewerToken)
             // A retired outgoing scene must not reset a newer Viewer's status.
-            if (scene.canObserve()) {
+            if (canObserve()) {
                 currentChromeChanged(null)
                 currentNavigationBusyChanged(false)
             }
@@ -1359,30 +1380,30 @@ private fun IosViewerRoute(
     var zoomedPhoto by remember(projection.id, generation) { mutableStateOf(false) }
     val animation = rememberViewerAnimation(controller.vault, projection, generation, detail?.contentType)
     LaunchedEffect(projection.id, generation, zoomedPhoto, scene.active) {
-        if (!scene.canObserve()) return@LaunchedEffect
+        if (!canObserve()) return@LaunchedEffect
         // `IOS.md` §18: a preview before full-resolution ranges. A retired
         // native scene must never accept a late decrypted result.
         val cached = cache.load(controller.vault, generation, projection.objectId, projection.id)
-        if (!scene.canObserve()) return@LaunchedEffect
+        if (!canObserve()) return@LaunchedEffect
         preview = cached
         if (projection.mediaKind == MEDIA_CLASS_AUDIO) {
             val loaded = controller.derivativeOf(projection.objectId, StreamKind.AUDIO_WAVEFORM)
-            if (!scene.canObserve()) return@LaunchedEffect
+            if (!canObserve()) return@LaunchedEffect
             waveform = loaded
         }
         val loadedDetail = controller.detailOf(projection.objectId)
-        if (!scene.canObserve()) return@LaunchedEffect
+        if (!canObserve()) return@LaunchedEffect
         detail = loadedDetail
         if (loadedDetail?.contentType == dev.po4yka.chur.imports.LivePhotoBundle.CONTENT_TYPE) {
             val loaded = dev.po4yka.chur.app.vault.livePhotoPlaybackFor(
                 controller.vault, projection.objectId,
-                onVerify = { if (scene.canAct()) controller.verifyEverything() })
-            if (!scene.canObserve()) return@LaunchedEffect
+                onVerify = { if (canAct()) controller.verifyEverything() })
+            if (!canObserve()) return@LaunchedEffect
             livePlayback = loaded
         }
         val still = viewerStill(controller.vault, cache, generation, projection,
             highResolution = zoomedPhoto && animation == null)
-        if (!scene.canObserve()) return@LaunchedEffect
+        if (!canObserve()) return@LaunchedEffect
         still?.let { preview = it }
         stillState = if (preview != null || thumbnails[projection.id] != null) {
             ViewerStillState.Ready
@@ -1403,7 +1424,54 @@ private fun IosViewerRoute(
             objectId = projection.objectId,
             mediaKind = projection.mediaKind,
             detail = detail,
-            onVerify = { if (scene.canAct()) controller.verifyEverything() },
+            onVerify = { if (canAct()) controller.verifyEverything() },
+        )
+    }
+
+    val touch: () -> Unit = { if (canAct()) chrome.touched() }
+    val back: () -> Unit = { if (canAct()) onBack() }
+    val toggleFavorite: () -> Unit = {
+        if (canAct()) {
+            val next = !favorite
+            controller.setFavorite(projection.objectId, next) { if (canObserve()) favorite = next }
+        }
+    }
+    val editTags: () -> Unit = { if (canAct()) { controller.loadTags(); choosingTags = true } }
+    val export: () -> Unit = { if (canAct()) choosingExport = true }
+    val delete: () -> Unit = { if (canAct()) confirmingDelete = true }
+    val restore: () -> Unit = {
+        if (canAct()) controller.restoreAll(listOf(projection.objectId)) { if (canObserve()) onDeleted() }
+    }
+    val toggleDetail: () -> Unit = { if (canAct()) showDetail = !showDetail }
+    SideEffect {
+        if (canObserve()) nativeChrome.updateViewer(
+            IosViewerPanelState(
+                generation = generation,
+                token = viewerToken,
+                itemId = projection.id,
+                title = when (projection.mediaKind) {
+                    MEDIA_CLASS_IMAGE -> "Photo"
+                    MEDIA_CLASS_VIDEO -> "Video"
+                    MEDIA_CLASS_AUDIO -> "Audio"
+                    else -> "File"
+                },
+                favorite = favorite,
+                trashed = trashOpen,
+                busy = choosingTags || choosingExport || confirmingDelete || operation != null,
+                visible = chromeVisible,
+                infoVisible = showDetail,
+            ),
+            IosViewerPanelActions(
+                onBack = back,
+                onTouch = touch,
+                onFavorite = toggleFavorite,
+                onInfo = toggleDetail,
+                onExport = export,
+                onTags = editTags,
+                onDelete = delete,
+                onRestore = restore,
+            ),
+            colors.accent,
         )
     }
 
@@ -1412,33 +1480,29 @@ private fun IosViewerRoute(
         pages = pages,
         thumbnails = thumbnails,
         canLoadMore = canLoadMore,
-        onLoadMore = { if (scene.canObserve()) controller.loadNextPage() },
-        onSettled = onSettled,
+        onLoadMore = { if (canObserve()) controller.loadNextPage() },
+        onSettled = { if (canAct()) onSettled(it) },
         detail = detail,
         preview = preview,
         stillState = stillState,
-        onVerifyStill = { if (scene.canAct()) controller.verifyEverything() },
-        onZoomChanged = { if (scene.canAct()) zoomedPhoto = it },
+        onVerifyStill = { if (canAct()) controller.verifyEverything() },
+        onZoomChanged = { if (canAct()) zoomedPhoto = it },
         animation = animation,
         showDetail = showDetail,
         chromeVisible = chromeVisible,
-        onToggleChrome = { if (scene.canAct()) chrome.toggle(chromePinned) },
-        onTouch = { if (scene.canAct()) chrome.touched() },
-        onBack = onBack,
+        onToggleChrome = { if (canAct()) chrome.toggle(chromePinned) },
+        onTouch = touch,
+        onBack = back,
         onLock = { if (scene.canEscape()) nativeChrome.lockNow() },
         onPanic = { if (scene.canEscape()) nativeChrome.requestPanic() },
-        onToggleFavorite = {
-            if (scene.canAct()) {
-                val next = !favorite
-                controller.setFavorite(projection.objectId, next) { if (scene.canObserve()) favorite = next }
-            }
-        },
-        onEditTags = { if (scene.canAct()) { controller.loadTags(); choosingTags = true } },
-        onExport = { if (scene.canAct()) choosingExport = true },
-        onDelete = { if (scene.canAct()) confirmingDelete = true },
+        onToggleFavorite = toggleFavorite,
+        onEditTags = editTags,
+        onExport = export,
+        onDelete = delete,
         trashOpen = trashOpen,
-        onRestore = { if (scene.canAct()) controller.restoreAll(listOf(projection.objectId), onDeleted) },
-        onToggleDetail = { if (scene.canAct()) showDetail = !showDetail },
+        onRestore = restore,
+        onToggleDetail = toggleDetail,
+        nativeControls = true,
         player = playback?.let { source ->
             { modifier, controlsPadding ->
                 // `DESIGN.md` §13.1 and §13.2: the video opens on its poster,
@@ -1449,7 +1513,7 @@ private fun IosViewerRoute(
                     poster = preview,
                     controlsVisible = chromeVisible,
                     controlsPinned = chromePinned,
-                    onControlsVisibleChange = { if (scene.canObserve()) chrome.follow(it, chromePinned) },
+                    onControlsVisibleChange = { if (canObserve()) chrome.follow(it, chromePinned) },
                     controlsPadding = controlsPadding,
                     touches = chrome.touches,
                 )
@@ -1462,36 +1526,36 @@ private fun IosViewerRoute(
         } else null,
         waveform = waveform,
         operation = operation,
-        onCancelOperation = { if (scene.canAct()) controller.cancelActiveOperation() },
+        onCancelOperation = { if (canAct()) controller.cancelActiveOperation() },
         notice = notice,
-        onNoticeShown = { if (scene.canObserve()) controller.consume(it) },
+        onNoticeShown = { if (canObserve()) controller.consume(it) },
     )
     if (choosingTags) {
         val selected = listOf(projection.objectId)
         val refresh: () -> Unit = {
-            if (scene.canObserve()) viewerScope.launch {
+            if (canObserve()) viewerScope.launch {
                 val loaded = controller.detailOf(projection.objectId)
-                if (scene.canObserve()) detail = loaded
+                if (canObserve()) detail = loaded
             }
         }
         TagPickerDialog(tags = tags,
-            onAdd = { tag -> if (scene.canAct()) { choosingTags = false; controller.setTagForAll(tag.tagId, selected, true, refresh) } },
-            onRemove = { tag -> if (scene.canAct()) { choosingTags = false; controller.setTagForAll(tag.tagId, selected, false, refresh) } },
-            onCreate = { name -> if (scene.canAct()) { choosingTags = false; controller.createTagWithObjects(name, selected, refresh) } },
-            onDismiss = { if (scene.canAct()) choosingTags = false })
+            onAdd = { tag -> if (canAct()) { choosingTags = false; controller.setTagForAll(tag.tagId, selected, true, refresh) } },
+            onRemove = { tag -> if (canAct()) { choosingTags = false; controller.setTagForAll(tag.tagId, selected, false, refresh) } },
+            onCreate = { name -> if (canAct()) { choosingTags = false; controller.createTagWithObjects(name, selected, refresh) } },
+            onDismiss = { if (canAct()) choosingTags = false })
     }
     if (confirmingDelete) {
         DeleteSelectionDialog(
             count = 1,
             permanent = trashOpen,
             onDelete = {
-                if (scene.canAct()) {
+                if (canAct()) {
                     confirmingDelete = false
-                    if (trashOpen) controller.permanentlyDeleteAll(listOf(projection.objectId), onDeleted)
-                    else controller.delete(projection.objectId, onDeleted)
+                    if (trashOpen) controller.permanentlyDeleteAll(listOf(projection.objectId)) { if (canObserve()) onDeleted() }
+                    else controller.delete(projection.objectId) { if (canObserve()) onDeleted() }
                 }
             },
-            onDismiss = { if (scene.canAct()) confirmingDelete = false },
+            onDismiss = { if (canAct()) confirmingDelete = false },
         )
     }
     if (choosingExport) {
@@ -1500,12 +1564,12 @@ private fun IosViewerRoute(
             files = true,
             share = true,
             onChoose = { target ->
-                if (scene.canAct()) {
+                if (canAct()) {
                     choosingExport = false
                     controller.export(projection.objectId, target)
                 }
             },
-            onDismiss = { if (scene.canAct()) choosingExport = false },
+            onDismiss = { if (canAct()) choosingExport = false },
         )
     }
 }
