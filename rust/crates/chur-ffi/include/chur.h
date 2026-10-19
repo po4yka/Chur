@@ -803,7 +803,11 @@ chur_status_t chur_private_notes_query(chur_handle_t session, const uint8_t *req
 chur_status_t chur_private_note_get(chur_handle_t session, const uint8_t *request, size_t request_len, uint8_t *destination, size_t capacity, size_t *written);
 chur_status_t chur_private_note_save(chur_handle_t session, const uint8_t *request, size_t request_len, uint8_t *destination, size_t capacity, size_t *written);
 chur_status_t chur_private_note_change(chur_handle_t session, const uint8_t *request, size_t request_len, uint8_t *destination, size_t capacity, size_t *written);
-/* Attachment requests are <=16 MiB +512 KiB; read output <=8 MiB. See native command contract. */
+/* Attachments/workspace: requests <=16 MiB +512 KiB, byte reads <=8 MiB.
+ * Commands 6 get organization, 7 CAS set organization, 8 list history, 9 CAS restore,
+ * 10 read historical file, 11 historical detail, 12 folder/tag filtered page.
+ * Organization: folder:string, count:u32, tags:string[count], <=16 tags, labels<=64 UTF8.
+ * See FFI_CONTRACT 6.25 for exact additive command framing and retention guarantees. */
 chur_status_t chur_private_note_attachments(chur_handle_t session, const uint8_t *request, size_t request_len, uint8_t *destination, size_t capacity, size_t *written);
 chur_status_t chur_private_note_export_begin(chur_handle_t session, const uint8_t *note_id, uint64_t expected_revision, int32_t destination_fd, chur_handle_t *out_operation);
 /* Exports the exact bytes of one saved note-owned file; same snapshot/cancellation rules. */

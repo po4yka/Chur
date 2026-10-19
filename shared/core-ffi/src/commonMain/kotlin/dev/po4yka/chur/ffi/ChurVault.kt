@@ -1055,6 +1055,71 @@ object ChurVault {
         }
     }
 
+    fun privateNoteOrganization(session: Long, id: ByteArray): PrivateNoteOrganization {
+        require(id.size == 16)
+        val bytes = attachmentControl(session, PrivateNoteWriter(17).apply { byte(6); raw(id) }.bytes)
+        return try { PrivateNoteReader(bytes).let { r -> r.organization().also { r.end() } } } finally { bytes.fill(0) }
+    }
+
+    fun organizePrivateNote(session: Long, id: ByteArray, revision: Long, organization: PrivateNoteOrganization): PrivateNote {
+        require(id.size == 16 && revision > 0)
+        val labels = (listOf(organization.folder) + organization.tags).map { it.encodeToByteArray() }
+        try {
+            require(organization.tags.size <= 16 && labels.all { it.size <= 64 })
+            val writer = PrivateNoteWriter(25 + 4 + labels[0].size + 4 + labels.drop(1).sumOf { 4 + it.size })
+            writer.byte(7); writer.raw(id); writer.number(revision); writer.sized(labels[0]); writer.count(organization.tags.size)
+            labels.drop(1).forEach(writer::sized)
+            val bytes = attachmentControl(session, writer.bytes)
+            return try { decodePrivateNote(bytes) } finally { bytes.fill(0) }
+        } finally { labels.forEach { it.fill(0) } }
+    }
+
+    fun privateNoteHistory(session: Long, id: ByteArray): List<PrivateNoteRevision> {
+        require(id.size == 16)
+        val bytes = attachmentControl(session, PrivateNoteWriter(17).apply { byte(8); raw(id) }.bytes)
+        return try {
+            val r = PrivateNoteReader(bytes); val count = r.count(); require(count in 0..20)
+            List(count) {
+                val revision = r.number(); val updated = r.number(); val title = r.text(256)
+                val format = r.byte(); val attachments = r.count()
+                require(revision > 0 && updated >= 0 && format in 0..1 && attachments in 0..32)
+                PrivateNoteRevision(revision, updated, title, PrivateNoteFormat.entries[format], attachments)
+            }.also { r.end() }
+        } finally { bytes.fill(0) }
+    }
+
+    fun privateNoteRevision(session: Long, id: ByteArray, revision: Long): PrivateNoteRevisionDetail {
+        require(id.size == 16 && revision > 0)
+        val bytes = attachmentControl(session, PrivateNoteWriter(25).apply { byte(11); raw(id); number(revision) }.bytes)
+        return try { PrivateNoteReader(bytes).let { r ->
+            PrivateNoteRevisionDetail(r.note(), r.organization(), r.attachments()).also { r.end() }
+        } } finally { bytes.fill(0) }
+    }
+
+    fun restorePrivateNoteRevision(session: Long, id: ByteArray, expectedRevision: Long, historicalRevision: Long): PrivateNote {
+        require(id.size == 16 && expectedRevision > 0 && historicalRevision > 0)
+        val bytes = attachmentControl(session, PrivateNoteWriter(33).apply {
+            byte(9); raw(id); number(expectedRevision); number(historicalRevision)
+        }.bytes)
+        return try { decodePrivateNote(bytes) } finally { bytes.fill(0) }
+    }
+
+    fun privateNoteWorkspace(session: Long, terms: String, trashed: Boolean, limit: Int, cursor: ByteArray?,
+        folder: String, tag: String): PrivateNoteWorkspacePage {
+        val labels = listOf(terms, folder, tag).map { it.encodeToByteArray() }
+        try {
+            require(labels[0].size <= 256 && labels.drop(1).all { it.size <= 64 } && limit in 1..100 && (cursor == null || cursor.size == 65))
+            val writer = PrivateNoteWriter(2 + 8 + labels.sumOf { 4 + it.size } + 4 + (cursor?.size ?: 0))
+            writer.byte(12); writer.byte(if (trashed) 1 else 0); writer.number(limit.toLong())
+            writer.sized(labels[0]); writer.sized(cursor ?: byteArrayOf()); writer.sized(labels[1]); writer.sized(labels[2])
+            val bytes = attachmentControl(session, writer.bytes)
+            return try { PrivateNoteReader(bytes).let { r ->
+                val page = r.page()
+                PrivateNoteWorkspacePage(page, page.notes.associate { it.id to r.organization() }).also { r.end() }
+            } } finally { bytes.fill(0) }
+        } finally { labels.forEach { it.fill(0) } }
+    }
+
     fun readPrivateNoteAttachment(session: Long, id: ByteArray, attachmentId: ByteArray): ByteArray {
         require(id.size == 16 && attachmentId.size == 16)
         val request = PrivateNoteWriter(33).apply { byte(3); raw(id); raw(attachmentId) }.bytes

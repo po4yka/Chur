@@ -36,6 +36,11 @@ data class Note(
     val pinned: Boolean = false,
     val format: NoteFormat = NoteFormat.MARKDOWN,
     val attachments: List<NoteAttachment> = emptyList(),
+    val folder: String? = null,
+    val tags: List<String> = emptyList(),
+    val trashedAtMs: Long? = null,
+    val revision: Long = 0,
+    val recoveryEpoch: Long = 0,
 ) {
     /** The first line, which the list shows when the title is empty. */
     val displayTitle: String
@@ -57,13 +62,13 @@ internal object NoteSerializer : KSerializer<Note> {
     override fun serialize(encoder: Encoder, value: Note) {
         encoder.encodeSerializableValue(
             StoredNote.serializer(),
-            StoredNote(value.id, value.title, value.body, value.updatedMs, value.pinned, value.format, value.attachments),
+            StoredNote(value.id, value.title, value.body, value.updatedMs, value.pinned, value.format, value.attachments, value.folder, value.tags, value.trashedAtMs, value.revision, value.recoveryEpoch),
         )
     }
 
     override fun deserialize(decoder: Decoder): Note {
         val stored = decoder.decodeSerializableValue(StoredNote.serializer())
-        return Note(stored.id, stored.title, stored.body, stored.updatedMs, stored.pinned, stored.format, stored.attachments)
+        return Note(stored.id, stored.title, stored.body, stored.updatedMs, stored.pinned, stored.format, stored.attachments, stored.folder, stored.tags, stored.trashedAtMs, stored.revision, stored.recoveryEpoch)
     }
 }
 
@@ -76,6 +81,11 @@ private data class StoredNote(
     val pinned: Boolean = false,
     val format: NoteFormat = NoteFormat.PLAIN_TEXT,
     val attachments: List<NoteAttachment> = emptyList(),
+    val folder: String? = null,
+    val tags: List<String> = emptyList(),
+    val trashedAtMs: Long? = null,
+    val revision: Long = 0,
+    val recoveryEpoch: Long = 0,
 )
 
 /**
@@ -90,9 +100,16 @@ interface NoteStore {
     suspend fun all(): List<Note>
 
     /** Writes a note, replacing one with the same identifier. */
-    suspend fun put(note: Note)
+    suspend fun put(note: Note): Note
 
-    /** Removes a note. */
+    suspend fun trash(): List<Note>
+    suspend fun restore(id: String, updatedMs: Long): Note
+    suspend fun purge(id: String)
+    suspend fun updateOrganization(id: String, folder: String?, tags: List<String>): Note
+    suspend fun history(id: String): List<NoteRevision>
+    suspend fun restoreRevision(noteId: String, revisionId: String): Note
+
+    /** Moves a note to durable Trash. */
     suspend fun remove(id: String)
 
     /** Adds content to the latest persisted note; never publishes metadata before bytes. */
@@ -151,86 +168,10 @@ object Notes {
         return ordered(
             notes.filter { note ->
                 note.title.contains(needle, ignoreCase = true) ||
-                    note.body.contains(needle, ignoreCase = true)
+                    note.body.contains(needle, ignoreCase = true) ||
+                    note.folder?.contains(needle, ignoreCase = true) == true ||
+                    note.tags.any { it.contains(needle, ignoreCase = true) }
             },
         )
-    }
-}
-
-/** An in-memory store, for a test and for a first run before a platform store. */
-class InMemoryNoteStore(initial: List<Note> = emptyList()) : NoteStore {
-    private val notes = LinkedHashMap<String, Note>()
-
-    init {
-        initial.forEach { notes[it.id] = it }
-    }
-
-    override suspend fun all(): List<Note> = Notes.ordered(notes.values.toList())
-
-    override suspend fun put(note: Note) {
-        require(note.attachments == notes[note.id]?.attachments.orEmpty()) { "use attachment operations to change attachments" }
-        notes[note.id] = note
-    }
-
-    override suspend fun remove(id: String) {
-        notes.remove(id)
-        attachmentData.keys.filter { it.first == id }.forEach { attachmentData.remove(it)?.fill(0) }
-    }
-
-    private val attachmentData = mutableMapOf<Pair<String, String>, ByteArray>()
-
-    override suspend fun addAttachment(noteId: String, name: String, data: ByteArray): NoteAttachment {
-        val note = notes[noteId] ?: error("note not found")
-        val attachment = NoteAttachment(newAttachmentId(), name, NoteAttachments.validate(name, data), data.size)
-        NoteAttachments.validateList(note.attachments + attachment)
-        attachmentData[noteId to attachment.id] = data.copyOf()
-        notes[noteId] = note.copy(attachments = note.attachments + attachment)
-        return attachment
-    }
-
-    override suspend fun readAttachment(noteId: String, attachmentId: String): ByteArray =
-        attachmentData[noteId to attachmentId]?.copyOf() ?: error("attachment not found")
-
-    override suspend fun removeAttachment(noteId: String, attachmentId: String) {
-        val note = notes[noteId] ?: error("note not found")
-        notes[noteId] = note.copy(attachments = note.attachments.filterNot { it.id == attachmentId })
-        attachmentData.remove(noteId to attachmentId)?.fill(0)
-    }
-
-    override suspend fun exportPackage(noteId: String): ByteArray {
-        val note = notes[noteId] ?: error("note not found")
-        val contents = mutableListOf<NotePackageAttachment>()
-        try {
-            note.attachments.forEach {
-                contents += NotePackageAttachment(it.id, it.name, it.mimeType, readAttachment(noteId, it.id))
-            }
-            return NotePackages.encode(NotePackage(note.title, note.body, note.format, contents))
-        } finally {
-            contents.forEach { it.data.fill(0) }
-        }
-    }
-
-    override suspend fun importPackage(data: ByteArray, noteId: String, updatedMs: Long): Note {
-        require(noteId !in notes) { "note already exists" }
-        val imported = NotePackages.decode(data)
-        try {
-            val attachments = imported.attachments.map {
-                NoteAttachment(it.id, it.name, it.mimeType, it.data.size)
-            }
-            val note = Note(noteId, imported.title, imported.body, updatedMs, format = imported.format, attachments = attachments)
-            imported.attachments.forEach { attachmentData[noteId to it.id] = it.data.copyOf() }
-            notes[noteId] = note
-            return note
-        } finally {
-            imported.attachments.forEach { it.data.fill(0) }
-        }
-    }
-
-    private var acknowledged = false
-
-    override suspend fun disclosureAcknowledged(): Boolean = acknowledged
-
-    override suspend fun acknowledgeDisclosure() {
-        acknowledged = true
     }
 }

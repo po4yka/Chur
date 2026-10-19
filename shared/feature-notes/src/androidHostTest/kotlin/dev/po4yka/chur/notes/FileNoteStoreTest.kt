@@ -92,8 +92,8 @@ class FileNoteStoreTest {
         assertEquals(listOf(original), FileNoteStore(path).all())
 
         store.put(changed)
-        assertEquals(listOf(changed), store.all())
-        assertEquals(listOf(changed), FileNoteStore(path).all())
+        assertEquals(listOf(changed.copy(revision = 1)), store.all())
+        assertEquals(listOf(changed.copy(revision = 1)), FileNoteStore(path).all())
     }
 
     @Test
@@ -144,14 +144,33 @@ class FileNoteStoreTest {
 
         val reopened = FileNoteStore(path).all()
         assertEquals(listOf(markdown, legacy), reopened)
-        assertTrue(File(path).readText().contains("\"version\":3"))
+        assertTrue(File(path).readText().contains("\"version\":4"))
         assertTrue(File(path).readText().contains("\"format\":\"PLAIN_TEXT\""))
         assertTrue(File(path).readText().contains("\"format\":\"MARKDOWN\""))
     }
 
     @Test
+    fun version_three_migrates_attachments_without_copying_or_losing_payloads() = runTest {
+        val id = "0123456789abcdef0123456789abcdef"
+        File("$path.attachments").mkdirs()
+        File("$path.attachments/$id").writeBytes(byteArrayOf(4, 5))
+        File(path).writeText("""{"version":3,"notes":[{"id":"a","title":"Old","body":"[file](attachment:$id)","updatedMs":1,"format":"MARKDOWN","attachments":[{"id":"$id","name":"file.bin","mimeType":"application/octet-stream","sizeBytes":2,"storageId":"$id"}]}]}""")
+        val store = FileNoteStore(path)
+        val old = store.all().single()
+        assertEquals(null, old.folder)
+        assertTrue(old.tags.isEmpty())
+        assertTrue(store.history("a").isEmpty())
+        store.put(old.copy(body = "new source"))
+        assertTrue(File(path).readText().contains("\"version\":4"))
+        val reopened = FileNoteStore(path)
+        assertEquals(old, reopened.history("a").single().note)
+        assertContentEquals(byteArrayOf(4, 5), reopened.readAttachment("a", id))
+        assertEquals(1, File("$path.attachments").listFiles().orEmpty().size)
+    }
+
+    @Test
     fun an_unsupported_version_cannot_be_read_or_overwritten() = runTest {
-        for (version in listOf(0, 4, 999)) {
+        for (version in listOf(0, 5, 999)) {
             val contents = """{"version":$version,"notes":[],"disclosureAcknowledged":false}"""
             File(path).writeText(contents)
             val store = FileNoteStore(path)
@@ -184,7 +203,7 @@ class FileNoteStoreTest {
 
         failing.removeAttachment(note.id, attachment.id)
         assertTrue(FileNoteStore(path).all().single().attachments.isEmpty())
-        assertFalse(File("$path.attachments/${attachment.storageId}").exists())
+        assertTrue(File("$path.attachments/${attachment.storageId}").exists(), "retained history owns the removed payload")
     }
 
     @Test
@@ -227,10 +246,10 @@ class FileNoteStoreTest {
         val note = Note("a", "Files", "source", 1)
         store.put(note)
         val attachment = store.addAttachment(note.id, "example.bin", byteArrayOf(1))
-        assertFailsWith<IllegalArgumentException> { store.put(note.copy(title = "stale")) }
-        assertFailsWith<IllegalArgumentException> {
-            store.put(store.all().single().copy(attachments = listOf(attachment.copy(name = "changed"))))
-        }
+        store.put(note.copy(title = "stale"))
+        assertEquals(listOf(attachment), store.all().single().attachments)
+        store.put(store.all().single().copy(attachments = listOf(attachment.copy(name = "changed"))))
+        assertEquals(listOf(attachment), store.all().single().attachments)
         File("$path.attachments/${attachment.storageId}").writeBytes(ByteArray(NoteAttachments.MAX_FILE_BYTES + 1))
         assertFailsWith<IllegalArgumentException> { store.readAttachment(note.id, attachment.id) }
         assertFailsWith<IllegalStateException> { store.readAttachment(note.id, "../notes.json") }
@@ -251,6 +270,174 @@ class FileNoteStoreTest {
         assertContentEquals(byteArrayOf(1, 2, 3), store.readAttachment("a", attachment.id))
         assertEquals(store.all(), FileNoteStore(path).all())
         assertContentEquals(byteArrayOf(1, 2, 3), FileNoteStore(path).readAttachment("a", attachment.id))
+    }
+
+    @Test
+    fun organization_is_canonical_durable_searchable_and_protected_from_queued_autosave() = runTest {
+        val store = FileNoteStore(path)
+        val stale = store.put(Note("a", "Title", "Body", 1))
+        store.updateOrganization("a", "  Work  ", listOf(" Travel ", "Travel", "Ideas"))
+        val saved = store.put(stale.copy(body = "typed before organization", updatedMs = 2))
+        assertEquals("Work", saved.folder)
+        assertEquals(listOf("Ideas", "Travel"), saved.tags)
+        assertEquals(saved, FileNoteStore(path).all().single())
+        assertEquals(listOf(saved), Notes.search(listOf(saved), "travel"))
+        assertEquals(listOf(saved), NoteOrganization.filter(listOf(saved), "Work", "Ideas"))
+        assertTrue(NoteOrganization.filter(listOf(saved), "Other").isEmpty())
+        assertFailsWith<IllegalArgumentException> { store.updateOrganization("a", "x".repeat(65), emptyList()) }
+        assertFailsWith<IllegalArgumentException> { store.updateOrganization("a", null, List(17) { "$it" }) }
+    }
+
+    @Test
+    fun history_restores_exact_source_organization_and_removed_attachment_across_restart() = runTest {
+        val store = FileNoteStore(path)
+        store.put(Note("a", "Original", "![x](attachment:pending)  ", 1))
+        store.updateOrganization("a", "Research", listOf("source"))
+        val attachment = store.addAttachment("a", "original.bin", byteArrayOf(1, 2, -1))
+        val original = store.all().single()
+        store.removeAttachment("a", attachment.id)
+        val changed = store.put(store.all().single().copy(title = "Changed", body = "new body", format = NoteFormat.PLAIN_TEXT))
+        val reopened = FileNoteStore(path)
+        val selected = reopened.history("a").single { it.note.revision == original.revision }
+        val restored = reopened.restoreRevision("a", selected.id)
+        assertEquals(original.title, restored.title)
+        assertEquals(original.body, restored.body)
+        assertEquals(original.folder, restored.folder)
+        assertEquals(original.tags, restored.tags)
+        assertEquals(original.format, restored.format)
+        assertContentEquals(byteArrayOf(1, 2, -1), reopened.readAttachment("a", attachment.id))
+        assertTrue(reopened.history("a").any { it.note == changed }, "restore retains the replaced current state")
+        assertTrue(reopened.history("a").any { it.id == selected.id }, "restore keeps selected history")
+        assertFailsWith<IllegalStateException> { reopened.put(changed.copy(body = "late autosave")) }
+        assertEquals(restored, FileNoteStore(path).all().single())
+    }
+
+    @Test
+    fun trash_restore_and_purge_preserve_then_collect_all_versions_and_payloads() = runTest {
+        val store = FileNoteStore(path)
+        val stale = store.put(Note("a", "Title", "Body", 1))
+        val attachment = store.addAttachment("a", "file.bin", byteArrayOf(1))
+        store.removeAttachment("a", attachment.id)
+        store.remove("a")
+        val reopened = FileNoteStore(path)
+        assertTrue(reopened.all().isEmpty())
+        assertEquals("a", reopened.trash().single().id)
+        assertTrue(reopened.history("a").isNotEmpty())
+        assertTrue(File("$path.attachments/${attachment.storageId}").exists())
+        assertFailsWith<IllegalStateException> { reopened.put(stale) }
+        val restored = reopened.restore("a", 22)
+        assertTrue(reopened.trash().isEmpty())
+        assertEquals(22L, restored.updatedMs)
+        assertFailsWith<IllegalStateException> { reopened.put(stale) }
+        assertFailsWith<IllegalStateException> { reopened.purge("a") }
+        reopened.remove("a")
+        reopened.purge("a")
+        assertTrue(FileNoteStore(path).trash().isEmpty())
+        assertTrue(File("$path.attachments").listFiles().orEmpty().isEmpty())
+    }
+
+    @Test
+    fun history_is_bounded_without_duplicating_attachment_payloads_and_gc_follows_retention() = runTest {
+        val store = FileNoteStore(path)
+        store.put(Note("a", "Title", "Body", 1))
+        val attachment = store.addAttachment("a", "file.bin", byteArrayOf(1))
+        repeat(25) { store.put(store.all().single().copy(pinned = it % 2 == 0)) }
+        assertEquals(20, store.history("a").size)
+        assertEquals(1, File("$path.attachments").listFiles().orEmpty().size)
+        store.removeAttachment("a", attachment.id)
+        repeat(20) { store.put(store.all().single().copy(pinned = it % 2 != 0)) }
+        assertEquals(20, FileNoteStore(path).history("a").size)
+        assertTrue(File("$path.attachments").listFiles().orEmpty().isEmpty())
+    }
+
+    @Test
+    fun failed_restore_and_purge_leave_cache_disk_and_retained_payloads_unchanged() = runTest {
+        val originalStore = FileNoteStore(path)
+        originalStore.put(Note("a", "Original", "Body", 1))
+        val attachment = originalStore.addAttachment("a", "file.bin", byteArrayOf(1))
+        originalStore.removeAttachment("a", attachment.id)
+        val writer = FailingWriter()
+        val store = FileNoteStore(path, ::readNoteFile, writer::write)
+        val before = store.all().single()
+        val history = store.history("a")
+        writer.failNext = true
+        assertFailsWith<IOException> { store.restoreRevision("a", history.first().id) }
+        assertEquals(before, store.all().single())
+        assertEquals(history, store.history("a"))
+        assertEquals(before, FileNoteStore(path).all().single())
+        store.remove("a")
+        val trash = store.trash()
+        writer.failNext = true
+        assertFailsWith<IOException> { store.purge("a") }
+        assertEquals(trash, store.trash())
+        assertEquals(trash, FileNoteStore(path).trash())
+        assertTrue(File("$path.attachments/${attachment.storageId}").exists())
+    }
+
+    @Test
+    fun missing_historical_payload_prevents_restore_without_changing_current_state() = runTest {
+        val store = FileNoteStore(path)
+        store.put(Note("a", "Title", "Body", 1))
+        val attachment = store.addAttachment("a", "file.bin", byteArrayOf(1))
+        store.removeAttachment("a", attachment.id)
+        val before = store.all().single()
+        val revision = store.history("a").first()
+        File("$path.attachments/${attachment.storageId}").delete()
+        assertFailsWith<IllegalStateException> { store.restoreRevision("a", revision.id) }
+        assertEquals(before, FileNoteStore(path).all().single())
+    }
+
+    @Test
+    fun corrupt_persisted_history_and_noncanonical_metadata_cannot_be_overwritten() = runTest {
+        for (extra in listOf("\"tags\":[\" x \" ]", "\"revision\":-1", "\"folder\":\"x\\ny\"")) {
+            val text = """{"version":4,"notes":[{"id":"a","title":"","body":"body","updatedMs":1,$extra}]}"""
+            File(path).writeText(text)
+            val store = FileNoteStore(path)
+            assertFailsWith<IllegalArgumentException> { store.all() }
+            assertFailsWith<IllegalArgumentException> { store.put(Note("new", "", "body", 1)) }
+            assertEquals(text, File(path).readText())
+        }
+    }
+
+    @Test
+    fun malformed_persisted_history_owner_or_revision_is_fail_safe() = runTest {
+        val current = """{"id":"a","title":"","body":"body","updatedMs":1,"revision":1}"""
+        val id = "0123456789abcdef0123456789abcdef"
+        val contents = listOf(
+            """{"version":4,"notes":[$current],"history":{"missing":[]}}""",
+            """{"version":4,"notes":[$current],"history":{"a":[{"id":"$id","savedAtMs":1,"note":$current}]}}""",
+        )
+        for (text in contents) {
+            File(path).writeText(text)
+            val store = FileNoteStore(path)
+            assertFailsWith<IllegalArgumentException> { store.all() }
+            assertFailsWith<IllegalArgumentException> { store.acknowledgeDisclosure() }
+            assertEquals(text, File(path).readText())
+        }
+    }
+
+    @Test
+    fun text_checkpoint_survives_restart_while_every_current_autosave_is_durable() = runTest {
+        val original = FileNoteStore(path).put(Note("a", "Title", "before burst", 1))
+        repeat(30) { index ->
+            val store = FileNoteStore(path)
+            store.put(store.all().single().copy(body = "typed $index"))
+            assertEquals("typed $index", FileNoteStore(path).all().single().body)
+        }
+        val reopened = FileNoteStore(path)
+        assertEquals(listOf(original), reopened.history("a").map { it.note })
+        val beforeOrganization = reopened.all().single()
+        reopened.updateOrganization("a", "Work", listOf("tag"))
+        assertEquals(beforeOrganization, reopened.history("a").first().note)
+        val beforeFile = reopened.all().single()
+        val attachment = reopened.addAttachment("a", "file.bin", byteArrayOf(1))
+        assertEquals(beforeFile, reopened.history("a").first().note)
+        val withFile = reopened.all().single()
+        reopened.removeAttachment("a", attachment.id)
+        assertEquals(withFile, reopened.history("a").first().note)
+        val beforeText = reopened.all().single()
+        reopened.put(beforeText.copy(body = "next text window after file removal"))
+        assertEquals(beforeText, reopened.history("a").first().note)
     }
 
     private class FailingWriter {

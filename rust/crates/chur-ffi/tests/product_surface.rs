@@ -1738,3 +1738,126 @@ fn caller_persisted_import_and_album_identities_survive_retry() {
     assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn private_workspace_commands_are_bounded_cas_and_restore_saved_source() {
+    use chur_ffi::private_notes::*;
+    fn text(out: &mut Vec<u8>, value: &str) {
+        out.extend_from_slice(&(value.len() as u32).to_be_bytes());
+        out.extend_from_slice(value.as_bytes());
+    }
+    fn call(session: u64, request: &[u8], output: &mut [u8]) -> (i32, usize) {
+        let mut written = usize::MAX;
+        let status = unsafe {
+            chur_private_note_attachments(
+                session,
+                request.as_ptr(),
+                request.len(),
+                output.as_mut_ptr(),
+                output.len(),
+                &mut written,
+            )
+        };
+        (status, written)
+    }
+    let root = scratch();
+    let runtime = open_runtime(&root);
+    let mut creation = 0;
+    let mut session = 0;
+    assert_eq!(
+        unsafe { chur_vault_create_begin(runtime, &create_request(PASSWORD), &mut creation) },
+        OK
+    );
+    assert_eq!(
+        unsafe { chur_vault_creation_activate(creation, &mut session) },
+        OK
+    );
+    let mut save = vec![0; 16];
+    save.extend_from_slice(&0u64.to_be_bytes());
+    save.extend_from_slice(&[0, 1]);
+    text(&mut save, "Title");
+    text(&mut save, "# source");
+    let mut output = vec![0u8; 1_048_576];
+    let mut written = 0;
+    assert_eq!(
+        unsafe {
+            chur_private_note_save(
+                session,
+                save.as_ptr(),
+                save.len(),
+                output.as_mut_ptr(),
+                output.len(),
+                &mut written,
+            )
+        },
+        OK
+    );
+    let id = output[..16].to_vec();
+    let mut set = vec![7];
+    set.extend_from_slice(&id);
+    set.extend_from_slice(&1u64.to_be_bytes());
+    text(&mut set, "Work");
+    set.extend_from_slice(&1u32.to_be_bytes());
+    text(&mut set, "tag");
+    let mut malformed = set.clone();
+    malformed.push(0);
+    output.fill(0x77);
+    assert_eq!(
+        call(session, &malformed, &mut output),
+        (ChurStatus::InvalidInput as i32, 0)
+    );
+    assert!(output.iter().all(|b| *b == 0x77));
+    let mut short = vec![0u8; 100];
+    assert_eq!(
+        call(session, &set, &mut short),
+        (ChurStatus::ResourceLimitExceeded as i32, 0)
+    );
+    assert_eq!(call(session, &set, &mut output).0, OK);
+    assert_eq!(&output[16..24], &2u64.to_be_bytes());
+    assert_eq!(
+        call(session, &set, &mut output),
+        (ChurStatus::Conflict as i32, 0)
+    );
+    let mut history = vec![8];
+    history.extend_from_slice(&id);
+    let (status, size) = call(session, &history, &mut output);
+    assert_eq!(status, OK);
+    assert!(size > 4);
+    assert_eq!(&output[..4], &1u32.to_be_bytes());
+    assert_eq!(&output[4..12], &1u64.to_be_bytes());
+    let mut detail = vec![11];
+    detail.extend_from_slice(&id);
+    detail.extend_from_slice(&1u64.to_be_bytes());
+    assert_eq!(call(session, &detail, &mut output).0, OK);
+    assert_eq!(&output[16..24], &1u64.to_be_bytes());
+    let mut query = vec![12, 0];
+    query.extend_from_slice(&1u64.to_be_bytes());
+    text(&mut query, "");
+    query.extend_from_slice(&0u32.to_be_bytes());
+    text(&mut query, "Work");
+    text(&mut query, "tag");
+    assert_eq!(call(session, &query, &mut output).0, OK);
+    assert_eq!(&output[..4], &1u32.to_be_bytes());
+    let mut restore = vec![9];
+    restore.extend_from_slice(&id);
+    restore.extend_from_slice(&2u64.to_be_bytes());
+    restore.extend_from_slice(&1u64.to_be_bytes());
+    assert_eq!(call(session, &restore, &mut output).0, OK);
+    assert_eq!(&output[16..24], &3u64.to_be_bytes());
+    assert_eq!(call(session, &query, &mut output).0, OK);
+    assert_eq!(&output[..4], &0u32.to_be_bytes());
+    let mut get = vec![6];
+    get.extend_from_slice(&id);
+    assert_eq!(call(session, &get, &mut output), (OK, 8));
+    assert_eq!(&output[..8], &[0; 8]);
+    output.fill(0);
+    save.fill(0);
+    set.fill(0);
+    assert_eq!(unsafe { chur_session_close(session) }, OK);
+    assert_eq!(
+        call(session, &get, &mut output),
+        (ChurStatus::SessionExpired as i32, 0)
+    );
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+    std::fs::remove_dir_all(root).unwrap();
+}

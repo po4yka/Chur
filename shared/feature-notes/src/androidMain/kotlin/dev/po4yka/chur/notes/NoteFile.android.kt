@@ -3,8 +3,7 @@ package dev.po4yka.chur.notes
 import java.io.File
 
 internal actual fun readNoteFile(path: String): String? {
-    val file = File(path)
-    return if (file.isFile) file.readText() else null
+    return readNoteBlob(path, NoteState.MAX_STORE_BYTES)?.decodeToString(throwOnInvalidSequence = true)
 }
 
 /**

@@ -52,8 +52,12 @@ The list and saved-note editor also offer [selective encrypted archives](SELECTI
 
 ## Storage and compatibility
 
-See [`../format/CATALOG_SCHEMA_V13.md`](../format/CATALOG_SCHEMA_V13.md), [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md) §6.25, and [`../adr/0061-local-private-notes.md`](../adr/0061-local-private-notes.md). The normal authenticated schema migration proceeds sequentially through v13. The v12 format discriminator preserves existing notes as plain text without reinterpreting their content; v13 adds note-scoped encrypted attachment metadata and BLOB content. Native callers require ABI 5.0. Format changes participate in the saved revision. Older clients fail closed on the newer catalog; no media container or sync record changes.
+See [`../format/CATALOG_SCHEMA_V14.md`](../format/CATALOG_SCHEMA_V14.md), [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md) §6.25, and [`../adr/0061-local-private-notes.md`](../adr/0061-local-private-notes.md). The normal authenticated schema migration proceeds sequentially through v13. The v12 format discriminator preserves existing notes as plain text without reinterpreting their content; v13 adds note-scoped encrypted attachment metadata and BLOB content. Native callers require ABI 5.0. Format changes participate in the saved revision. Older clients fail closed on the newer catalog; no media container or sync record changes.
 
 ## Validation
 
 Native tests cover atomic create/update, maximum UTF-8 size, conflicts, pin/search/paging, Trash, purge, encrypted persistence, session and identity isolation, export, and backup/restore. UI checks cover saved-state exclusion, clipboard and input policy, lock cleanup, save failure, dirty Back, and narrow screens with large fonts. Host and simulator results are separate from physical-device acceptance.
+
+## Organization and saved versions
+
+Folder/tag filters and **Apply organization** use the same flat, case-sensitive labels as public notes. Private filters are evaluated before the 50-row UI page, with labels bound into the cursor. **Version history** displays retained committed source and original file metadata; restoration requires the clean current saved revision and restores text, format, pin, labels and files atomically. All retained content remains in the encrypted catalog and in encrypted backups/selected archives. Trash retains history; purge and existing Trash expiry remove it through foreign-key cascades. Lock/panic drops the entire history UI and rejects late responses. See [Markdown notes](MARKDOWN_NOTES.md#organization-and-recovery) for limits and the separate current-only portable package contract.

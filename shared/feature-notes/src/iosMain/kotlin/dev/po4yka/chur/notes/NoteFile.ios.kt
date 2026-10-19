@@ -11,12 +11,7 @@ import platform.Foundation.writeToFile
 import platform.posix.memcpy
 
 internal actual fun readNoteFile(path: String): String? {
-    val data = NSData.dataWithContentsOfFile(path) ?: return null
-    val length = data.length.toInt()
-    if (length == 0) return ""
-    val bytes = ByteArray(length)
-    bytes.usePinned { pinned -> memcpy(pinned.addressOf(0), data.bytes, data.length) }
-    return bytes.decodeToString()
+    return readNoteBlob(path, NoteState.MAX_STORE_BYTES)?.decodeToString(throwOnInvalidSequence = true)
 }
 
 /**

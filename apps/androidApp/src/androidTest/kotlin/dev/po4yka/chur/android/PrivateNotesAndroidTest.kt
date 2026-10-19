@@ -6,9 +6,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.Rect
 import android.os.SystemClock
 import android.os.Looper
 import android.view.ContextThemeWrapper
+import android.view.Choreographer
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
@@ -43,6 +45,8 @@ import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.vault.VaultRepository
 import dev.po4yka.chur.vault.VaultState
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -120,6 +124,21 @@ class PrivateNotesAndroidTest {
                 assertEquals(originalSource, detached.body)
                 assertTrue(runBlocking { fixture.vault.privateNoteAttachments(fixture.generation, note.noteId).isEmpty() })
                 fixture.capture("private-note-detached-image-public-fixture.png")
+                fixture.clickText("Version history")
+                val previousRevision = detached.revision - 1
+                fixture.clickText("Revision $previousRevision · Public attachment sample · 1 files")
+                fixture.clickText("Restore this version")
+                fixture.clickText("Restore version")
+                assertTrue(fixture.await { fixture.hasText("Attachments (1/32)") })
+                fixture.clickText("Preview")
+                assertTrue("history restores the original bytes into the actual image renderer", fixture.await {
+                    fixture.nodes().any { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Public sample image") == true }
+                })
+                org.junit.Assert.assertArrayEquals(bytes, runBlocking { fixture.vault.readPrivateNoteAttachment(fixture.generation, note.noteId, id) })
+                assertEquals(originalSource, runBlocking { fixture.vault.privateNote(fixture.generation, note.noteId).body })
+                assertTrue(fixture.savedState().isEmpty())
+                fixture.capture("private-note-restored-image-public-fixture.png")
+
             }
         } finally { bytes.fill(0) }
     }
@@ -137,7 +156,38 @@ class PrivateNotesAndroidTest {
         assertEquals("Public synthetic body for native notes", runBlocking {
             fixture.vault.privateNote(fixture.generation, notes.single().noteId).body
         })
+        fixture.fieldAction("private-note-editor-scroll") {
+            assertTrue(it.config.getOrNull(SemanticsActions.ScrollBy)?.action?.invoke(0f, 20_000f) == true)
+        }
+        fixture.fieldAction("note-folder") { assertTrue(it.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(androidx.compose.ui.text.AnnotatedString("Projects")) == true) }
+        fixture.fieldAction("note-tags") { assertTrue(it.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(androidx.compose.ui.text.AnnotatedString("todo\nPlan, do")) == true) }
+        fixture.clickText("Apply organization")
+        assertTrue(fixture.await { runBlocking { fixture.vault.privateNoteOrganization(fixture.generation, notes.single().noteId).folder == "Projects" } })
+        assertEquals(listOf("Plan, do", "todo"), runBlocking { fixture.vault.privateNoteOrganization(fixture.generation, notes.single().noteId).tags })
         fixture.clickDescription("Back")
+        assertTrue(fixture.await { fixture.hasText("Public synthetic title") })
+        assertTrue(fixture.await { fixture.hasText("Folder: Projects") })
+        fixture.clickText("Folders and tags")
+        fixture.fieldAction("note-filter-folder") { assertTrue(it.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(androidx.compose.ui.text.AnnotatedString("Projects")) == true) }
+        fixture.fieldAction("note-filter-tag") { assertTrue(it.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(androidx.compose.ui.text.AnnotatedString("todo")) == true) }
+        fixture.capture("private-notes-filters-public-fixture.png", fullScreen = true)
+        assertTrue(fixture.savedState().isEmpty())
+        fixture.clickText("Lock and hide")
+        assertTrue(fixture.await { fixture.hasText("Public fixture note") })
+        assertFalse(fixture.nodes().any { it.config.getOrNull(SemanticsProperties.TestTag) == "note-filter-folder" })
+        runBlocking { fixture.vault.unlock(PASSWORD.encodeToByteArray()) }
+        assertTrue(fixture.await { fixture.hasText("Public synthetic title") })
+        fixture.clickText("Folders and tags")
+        fixture.fieldAction("note-filter-folder") { assertTrue(it.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(androidx.compose.ui.text.AnnotatedString("Projects")) == true) }
+        fixture.fieldAction("note-filter-tag") { assertTrue(it.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(androidx.compose.ui.text.AnnotatedString("todo")) == true) }
+        fixture.clickText("Apply filters")
+        assertTrue(fixture.await { fixture.hasText("Public synthetic title") })
+        fixture.capture("private-notes-organization-public-fixture.png")
+        fixture.clickText("Folders and tags")
+        fixture.fieldAction("note-filter-tag") { assertTrue(it.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(androidx.compose.ui.text.AnnotatedString("absent")) == true) }
+        fixture.clickText("Apply filters")
+        assertTrue(fixture.await { fixture.hasText("No matching private notes.") })
+        fixture.clickText("Clear filters")
         assertTrue(fixture.await { fixture.hasText("Public synthetic title") })
         assertEquals(listOf(PUBLIC_NOTE), runBlocking { fixture.publicStore.all() })
         assertFalse(fixture.publicFile.readText().contains("Public synthetic title"))
@@ -211,7 +261,8 @@ class PrivateNotesAndroidTest {
                 fixture.view = ComposeView(context).apply {
                     setContent {
                         CompositionLocalProvider(LocalDensity provides Density(density, fontScale), LocalConfiguration provides config,
-                            LocalSaveableStateRegistry provides fixture.registry) {
+                            LocalSaveableStateRegistry provides fixture.registry,
+                            dev.po4yka.chur.app.vault.LocalPrivatePanic provides { fixture.scope.launch { vault.lock(LockReason.PANIC) }; Unit }) {
                             val state by vault.state.collectAsState()
                             ChurApp(runGate(activity), if (state is VaultState.Unlocked) AppRoute.Vault else AppRoute.PublicShell) {
                                 if (state is VaultState.Unlocked) PrivateNotesRoute(vault, (state as VaultState.Unlocked).generation,
@@ -296,14 +347,54 @@ class PrivateNotesAndroidTest {
                 assertTrue(info.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING != 0)
             }
         }
-        fun capture(name: String) {
+        fun capture(name: String, fullScreen: Boolean = false) {
+            if (fullScreen) {
+                // Dialogs have their own full Activity window. Let their entrance and field
+                // label animations settle before checking geometry and capturing that window.
+                val frames = CountDownLatch(24)
+                main {
+                    val choreographer = Choreographer.getInstance()
+                    val callback = object : Choreographer.FrameCallback {
+                        override fun doFrame(frameTimeNanos: Long) {
+                            frames.countDown()
+                            if (frames.count > 0) choreographer.postFrameCallback(this)
+                        }
+                    }
+                    choreographer.postFrameCallback(callback)
+                }
+                assertTrue("dialog compositor frames must complete", frames.await(5, TimeUnit.SECONDS))
+            }
             instrumentation.waitForIdleSync()
             val screen = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
-            val position = IntArray(2); main { view.getLocationOnScreen(position) }
-            val crop = Bitmap.createBitmap(screen, position[0], position[1], view.width.coerceAtMost(screen.width - position[0]), view.height.coerceAtMost(screen.height - position[1]))
-            val output = File(activity.getExternalFilesDir(null), name)
-            output.outputStream().use { crop.compress(Bitmap.CompressFormat.PNG, 100, it) }
-            crop.recycle(); screen.recycle()
+            try {
+                if (fullScreen) main {
+                    val dialog = WindowInspector.getGlobalWindowViews().first { root ->
+                        root !== activity.window.decorView && roots(root).flatMap {
+                            it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false)
+                        }.any { it.config.getOrNull(SemanticsProperties.TestTag) == "note-filter-tag" }
+                    }
+                    val position = IntArray(2); dialog.getLocationOnScreen(position)
+                    val bounds = Rect(position[0], position[1], position[0] + dialog.width, position[1] + dialog.height)
+                    assertTrue("the full dialog must fit the actual display: $bounds in ${screen.width}x${screen.height}",
+                        bounds.width() > 0 && bounds.height() > 0 && Rect(0, 0, screen.width, screen.height).contains(bounds))
+                    val dialogNodes = roots(dialog).flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = true) }
+                    for (label in listOf("Lock and hide", "Apply filters", "Close")) {
+                        val control = requireNotNull(dialogNodes.firstOrNull { node ->
+                            node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == label } == true &&
+                                SemanticsActions.OnClick in node.config
+                        }) { "dialog control must exist: $label" }
+                        assertTrue("dialog control must be enabled and fully visible: $label",
+                            SemanticsProperties.Disabled !in control.config && control.size.width > 0 && control.size.height > 0 &&
+                                control.boundsInWindow.width + 1f >= control.size.width && control.boundsInWindow.height + 1f >= control.size.height)
+                    }
+                }
+                val position = IntArray(2); main { view.getLocationOnScreen(position) }
+                val capture = if (fullScreen) screen else Bitmap.createBitmap(screen, position[0], position[1],
+                    view.width.coerceAtMost(screen.width - position[0]), view.height.coerceAtMost(screen.height - position[1]))
+                try {
+                    File(activity.getExternalFilesDir(null), name).outputStream().use { capture.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                } finally { if (capture !== screen) capture.recycle() }
+            } finally { screen.recycle() }
         }
     }
     private fun roots(view: View): List<ViewRootForTest> = flatten(view).filterIsInstance<ViewRootForTest>()

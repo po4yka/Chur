@@ -389,6 +389,19 @@ class VaultRepository(
     }
     suspend fun privateNoteActivity(generation: Long) { withNoteSession(generation) { Unit } }
 
+    suspend fun privateNoteOrganization(generation: Long, id: ByteArray): dev.po4yka.chur.ffi.PrivateNoteOrganization =
+        withNoteSession(generation) { ChurVault.privateNoteOrganization(it, id) }
+    suspend fun organizePrivateNote(generation: Long, id: ByteArray, revision: Long, organization: dev.po4yka.chur.ffi.PrivateNoteOrganization): PrivateNote =
+        withNoteSession(generation) { ChurVault.organizePrivateNote(it, id, revision, organization) }
+    suspend fun privateNoteHistory(generation: Long, id: ByteArray): List<dev.po4yka.chur.ffi.PrivateNoteRevision> =
+        withNoteSession(generation) { ChurVault.privateNoteHistory(it, id) }
+    suspend fun privateNoteRevision(generation: Long, id: ByteArray, revision: Long): dev.po4yka.chur.ffi.PrivateNoteRevisionDetail =
+        withNoteSession(generation) { ChurVault.privateNoteRevision(it, id, revision) }
+    suspend fun restorePrivateNoteRevision(generation: Long, id: ByteArray, expectedRevision: Long, historicalRevision: Long): PrivateNote =
+        withNoteSession(generation) { ChurVault.restorePrivateNoteRevision(it, id, expectedRevision, historicalRevision) }
+    suspend fun privateNoteWorkspace(generation: Long, terms: String, trashed: Boolean, limit: Int, cursor: ByteArray?, folder: String, tag: String): dev.po4yka.chur.ffi.PrivateNoteWorkspacePage =
+        withNoteSession(generation) { ChurVault.privateNoteWorkspace(it, terms, trashed, limit, cursor, folder, tag) }
+
     /** An old indexing job must never read or write a later unlocked identity. */
     suspend fun contentIndexCandidates(generation: Long, afterId: ByteArray? = null, rebuild: Boolean = false, limit: Int = 25): List<ContentIndexCandidate> =
         withGenerationSession(generation) { ChurVault.contentIndexCandidates(it, afterId, rebuild, limit) }

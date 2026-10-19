@@ -163,6 +163,7 @@ pub fn save(
             ensure!(old.deleted_ms.is_none(),Conflict,"the private note is in trash");
             if old.title==title && old.body==body && old.pinned==pinned && old.format==format{return Ok(old)}
             ensure!(revision<i64::MAX,ResourceLimitExceeded,"the note revision is exhausted");
+            crate::note_workspace::snapshot(tx,&note_id)?;
             tx.execute("UPDATE private_notes SET title=?2,body=?3,pinned=?4,format=?6,revision=revision+1,updated_ms=max(updated_ms,?5) WHERE note_id=?1",params![note_id.as_bytes().as_slice(),title,body,pinned,now,format as u8]).map_err(|e|map_sqlite(e,"the private note could not be saved"))?;
         }else{
             let count:i64=tx.query_row("SELECT count(*) FROM private_notes",[],|r|r.get(0)).map_err(|e|map_sqlite(e,"the note count could not be read"))?;
@@ -209,6 +210,7 @@ pub fn change(
         match action{
             1|2=>{ensure!(old.deleted_ms.is_none(),Conflict,"the private note is in trash");
                 if old.pinned==(action==1){return Ok(Some(old))}
+                crate::note_workspace::snapshot(tx,id)?;
                 tx.execute("UPDATE private_notes SET pinned=?2,revision=revision+1,updated_ms=max(updated_ms,?3) WHERE note_id=?1",params![id.as_bytes().as_slice(),action==1,time]).map_err(|e|map_sqlite(e,"the private note could not be pinned"))?;},
             3=>{ensure!(old.deleted_ms.is_none(),Conflict,"the private note is already in trash");
                 let deadline=now.checked_add(crate::trash::RETENTION_MS).ok_or_else(||chur_core::err!(InvalidInput,"the trash deadline is out of range"))?;
@@ -253,6 +255,26 @@ pub fn page(
     limit: u16,
     cursor: Option<&[u8]>,
 ) -> Result<Page> {
+    page_filtered(db, terms, trashed, limit, cursor, "", "")
+}
+/// Queries exact folder/tag metadata before bounded keyset pagination.
+pub fn page_filtered(
+    db: &CatalogDb,
+    terms: &str,
+    trashed: bool,
+    limit: u16,
+    cursor: Option<&[u8]>,
+    folder: &str,
+    tag: &str,
+) -> Result<Page> {
+    crate::note_workspace::organization(
+        folder,
+        if tag.is_empty() {
+            &[]
+        } else {
+            core::slice::from_ref(&tag)
+        },
+    )?;
     ensure!(
         terms.len() <= 256 && (1..=100).contains(&limit),
         InvalidInput,
@@ -273,8 +295,16 @@ pub fn page(
     );
     let generation = schema::generation(db)?;
     let digest = chur_crypto::commit::commit(
-        b"CHUR\0PRIVATE-NOTES\0QUERY\0V1",
-        &[terms.as_bytes(), &[u8::from(trashed)]],
+        b"CHUR\0PRIVATE-NOTES\0QUERY\0V2",
+        &[
+            &(terms.len() as u32).to_be_bytes(),
+            terms.as_bytes(),
+            &[u8::from(trashed)],
+            &(folder.len() as u32).to_be_bytes(),
+            folder.as_bytes(),
+            &(tag.len() as u32).to_be_bytes(),
+            tag.as_bytes(),
+        ],
     );
     let (pin, time, id) = if let Some(c) = cursor {
         ensure!(c.len() == 65, InvalidInput, "the notes cursor is malformed");
@@ -297,7 +327,7 @@ pub fn page(
     } else {
         (2, i64::MAX, vec![255; 16])
     };
-    let sql = "SELECT n.note_id,n.revision,n.title,substr(n.body,1,160),n.created_ms,n.updated_ms,n.pinned,n.deleted_ms,n.format,(SELECT count(*) FROM private_note_attachments a WHERE a.note_id=n.note_id),CASE WHEN n.format=0 THEN length(CAST(n.title AS BLOB))+2 ELSE 0 END+length(CAST(n.body AS BLOB)) FROM private_notes n WHERE (n.deleted_ms IS NOT NULL)=?1 AND (?2='' OR n.rowid IN (SELECT rowid FROM private_note_search WHERE private_note_search MATCH ?3)) AND (n.pinned,n.updated_ms,n.note_id)<(?4,?5,?6) ORDER BY n.pinned DESC,n.updated_ms DESC,n.note_id DESC LIMIT ?7";
+    let sql = "SELECT n.note_id,n.revision,n.title,substr(n.body,1,160),n.created_ms,n.updated_ms,n.pinned,n.deleted_ms,n.format,(SELECT count(*) FROM private_note_attachments a WHERE a.note_id=n.note_id),CASE WHEN n.format=0 THEN length(CAST(n.title AS BLOB))+2 ELSE 0 END+length(CAST(n.body AS BLOB)) FROM private_notes n WHERE (n.deleted_ms IS NOT NULL)=?1 AND (?2='' OR n.rowid IN (SELECT rowid FROM private_note_search WHERE private_note_search MATCH ?3)) AND (?8='' OR EXISTS(SELECT 1 FROM private_note_organization o WHERE o.note_id=n.note_id AND o.folder=?8)) AND (?9='' OR EXISTS(SELECT 1 FROM private_note_organization o,json_each(o.tags) t WHERE o.note_id=n.note_id AND t.value=?9)) AND (n.pinned,n.updated_ms,n.note_id)<(?4,?5,?6) ORDER BY n.pinned DESC,n.updated_ms DESC,n.note_id DESC LIMIT ?7";
     let mut stmt = db
         .connection()
         .prepare(sql)
@@ -315,7 +345,9 @@ pub fn page(
                 pin,
                 time,
                 id,
-                i64::from(limit) + 1
+                i64::from(limit) + 1,
+                folder,
+                tag
             ],
             |row| {
                 Ok(Summary {
@@ -427,7 +459,8 @@ mod tests {
             .expect("restore")
             .expect("note");
         let mut target = self::db();
-        let fresh = crate::transfer::copy_note(&mut target, &restored, &[]).expect("archive copy");
+        let fresh =
+            crate::transfer::copy_note(&mut target, &restored, &[], None).expect("archive copy");
         assert_ne!(fresh, plain.id);
         let copied = get(&target, &fresh).expect("copied");
         assert_eq!(copied.format, NoteFormat::Markdown);

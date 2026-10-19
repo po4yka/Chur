@@ -62,7 +62,7 @@ pub fn mime_type(data: &[u8]) -> &'static str {
         "application/octet-stream"
     }
 }
-fn valid_name(name: &str) -> bool {
+pub(crate) fn valid_name(name: &str) -> bool {
     !name.trim().is_empty()
         && name.len() <= 240
         && !name.contains(['/', '\\', ':'])
@@ -70,7 +70,7 @@ fn valid_name(name: &str) -> bool {
         && name != "."
         && name != ".."
 }
-fn supported_mime(mime: &str) -> bool {
+pub(crate) fn supported_mime(mime: &str) -> bool {
     matches!(
         mime,
         "image/png"
@@ -126,7 +126,7 @@ pub fn validate(all: &[AttachmentData]) -> Result<()> {
     );
     Ok(())
 }
-fn list_conn(c: &Connection, id: &Id) -> Result<Vec<Attachment>> {
+pub(crate) fn list_conn(c: &Connection, id: &Id) -> Result<Vec<Attachment>> {
     let mut stmt=c.prepare("SELECT CASE WHEN length(attachment_id)=16 THEN attachment_id END, CASE WHEN length(CAST(name AS BLOB)) BETWEEN 1 AND 240 THEN name END, CASE WHEN length(CAST(mime_type AS BLOB))<=128 THEN mime_type END, length(data) FROM private_note_attachments WHERE note_id=?1 ORDER BY attachment_id LIMIT 33").map_err(|e|map_sqlite(e,"the attachments could not be listed"))?;
     let rows = stmt
         .query_map([id.as_bytes().as_slice()], |r| {
@@ -219,6 +219,7 @@ pub fn put(
             Conflict,
             "the attachment identity already exists"
         );
+        crate::note_workspace::snapshot(tx,id)?;
         insert(tx, id, &item)?;
         tx.execute(
             "UPDATE private_notes SET revision=revision+1,updated_ms=max(updated_ms,?2) WHERE note_id=?1",
@@ -245,6 +246,7 @@ pub fn remove(
             "the private note changed"
         );
         ensure!(expected < i64::MAX as u64, ResourceLimitExceeded, "the note revision is exhausted");
+        crate::note_workspace::snapshot(tx,id)?;
         let changed = tx.execute(
             "DELETE FROM private_note_attachments WHERE note_id=?1 AND attachment_id=?2",
             params![id.as_bytes().as_slice(), attachment.as_bytes().as_slice()],
@@ -559,7 +561,7 @@ mod tests {
         let id = f.attachment.id;
         let n = put(&mut source, &n.id, 1, f, 2).unwrap();
         let attachments = all(&source, &n.id).unwrap();
-        let new = crate::transfer::copy_note(&mut target, &n, &attachments).unwrap();
+        let new = crate::transfer::copy_note(&mut target, &n, &attachments, None).unwrap();
         let copy = notes::get(&target, &new).unwrap();
         assert_ne!(new, n.id);
         assert_eq!(copy.body, n.body);

@@ -356,7 +356,11 @@ class PrivateNotesControllerTest {
         advanceTimeBy(200_000)
         runCurrent()
         assertEquals(2, touches)
+        controller.activity() // Metadata IME/hardware editing reports activity explicitly.
+        assertEquals(3, touches)
         controller.close()
+        controller.activity()
+        assertEquals(3, touches)
     }
 
     @Test
@@ -500,7 +504,78 @@ class PrivateNotesControllerTest {
         onEncryptedExport: (List<PrivateNoteSelection>) -> Unit = {}): PrivateNotesController =
         PrivateNotesController(1, state, access, this, onLeave, onExport, StandardTestDispatcher(testScheduler), onActivity, onEncryptedExport)
 
+    @Test
+    fun organization_is_explicit_filters_reach_storage_and_history_restore_replaces_current_editor() = runTest {
+        val access = Access()
+        val controller = controller(access)
+        advanceUntilIdle()
+        controller.showFilters(true)
+        assertTrue(controller.state.value.filtersVisible)
+        controller.back()
+        assertFalse(controller.state.value.filtersVisible)
+        controller.showFilters(true)
+        controller.filter(" Projects ", " todo "); advanceUntilIdle()
+        assertFalse(controller.state.value.filtersVisible)
+        assertEquals("Projects" to "todo", access.filters)
+        controller.open(controller.state.value.notes.single()); advanceUntilIdle()
+        controller.organize(" Projects ", listOf("todo", "todo")); advanceUntilIdle()
+        assertEquals("Projects", controller.state.value.editor!!.organization.folder)
+        assertEquals(listOf("todo"), controller.state.value.editor!!.organization.tags)
+        access.historicalNote = access.record.copy(title = "Recovered", body = "Original source")
+        controller.showHistory(); advanceUntilIdle()
+        controller.previewRevision(access.historicalNote.revision); advanceUntilIdle()
+        assertNotNull(controller.state.value.historical)
+        controller.restoreRevision(); advanceUntilIdle()
+        assertEquals("Original source", controller.state.value.editor!!.body)
+        assertFalse(controller.state.value.editor!!.dirty)
+        assertNull(controller.state.value.history)
+        controller.close()
+    }
+
+    @Test
+    fun late_history_result_cannot_repopulate_a_locked_session() = runTest {
+        val state = MutableStateFlow<VaultState>(VaultState.Unlocked(1))
+        val access = Access()
+        val controller = controller(access, state)
+        advanceUntilIdle()
+        controller.open(controller.state.value.notes.single()); advanceUntilIdle()
+        access.historyGate = CompletableDeferred()
+        controller.showHistory(); runCurrent()
+        state.value = VaultState.Locked(); runCurrent()
+        access.historyGate!!.complete(Unit); advanceUntilIdle()
+        assertEquals(PrivateNotesUiState(), controller.state.value)
+    }
+
     private class Access : PrivateNotesAccess {
+        var noteOrganization = dev.po4yka.chur.ffi.PrivateNoteOrganization()
+        var historicalNote = note()
+        var historyGate: CompletableDeferred<Unit>? = null
+        var filters = "" to ""
+        override suspend fun workspace(generation: Long, terms: String, trash: Boolean, cursor: ByteArray?, folder: String, tag: String): dev.po4yka.chur.ffi.PrivateNoteWorkspacePage {
+            filters = folder to tag
+            val page = page(generation, terms, trash, cursor)
+            return dev.po4yka.chur.ffi.PrivateNoteWorkspacePage(page, page.notes.associate { it.id to noteOrganization })
+        }
+        override suspend fun organization(generation: Long, id: ByteArray) = noteOrganization
+        override suspend fun organize(generation: Long, saved: PrivateNote, organization: dev.po4yka.chur.ffi.PrivateNoteOrganization): PrivateNote {
+            check(saved.revision == record.revision)
+            noteOrganization = organization
+            record = record.copy(revision = record.revision + 1)
+            return record
+        }
+        override suspend fun history(generation: Long, id: ByteArray): List<dev.po4yka.chur.ffi.PrivateNoteRevision> {
+            historyGate?.let { withContext(NonCancellable) { it.await() } }
+            return listOf(dev.po4yka.chur.ffi.PrivateNoteRevision(historicalNote.revision, historicalNote.updatedMs,
+                historicalNote.title, historicalNote.format, historicalNote.attachmentCount))
+        }
+        override suspend fun historical(generation: Long, id: ByteArray, revision: Long) =
+            dev.po4yka.chur.ffi.PrivateNoteRevisionDetail(historicalNote, noteOrganization, emptyList())
+        override suspend fun restoreRevision(generation: Long, saved: PrivateNote, revision: Long): PrivateNote {
+            check(saved.revision == record.revision)
+            record = historicalNote.copy(revision = record.revision + 1)
+            return record
+        }
+
         var record = note()
         var saves = 0
         var loads = 0
@@ -512,7 +587,7 @@ class PrivateNotesControllerTest {
         val trashQueries = mutableListOf<Boolean>()
         val cursors = mutableListOf<ByteArray?>()
         val changes = mutableListOf<Pair<PrivateNoteAction, Long>>()
-        override suspend fun page(generation: Long, terms: String, trash: Boolean, cursor: ByteArray?): PrivateNotePage {
+        private suspend fun page(generation: Long, terms: String, trash: Boolean, cursor: ByteArray?): PrivateNotePage {
             queries += terms; trashQueries += trash; cursors += cursor
             return PrivateNotePage(listOf(summary(if (cursor != null) secondRecord ?: record else record)),
                 if (paged && cursor == null) byteArrayOf(1) else null)

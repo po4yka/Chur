@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -55,6 +57,8 @@ import dev.po4yka.chur.notes.NoteFormat
 import dev.po4yka.chur.notes.NoteAttachment
 import dev.po4yka.chur.notes.NoteAttachments
 import dev.po4yka.chur.notes.Notes
+import dev.po4yka.chur.notes.NoteOrganization
+import dev.po4yka.chur.notes.NoteRevision
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
@@ -83,11 +87,38 @@ fun NotesScreen(
     onAcknowledgeDisclosure: () -> Unit = {},
     onImport: (String, String) -> Unit = { _, _ -> },
     onImportPackage: suspend (ByteArray) -> Unit = { error("package import unavailable") },
+    trashedNotes: List<Note> = emptyList(),
+    onRefreshTrash: () -> Unit = {},
+    onRestore: suspend (String) -> Unit = { error("restore unavailable") },
+    onPurge: suspend (String) -> Unit = { error("purge unavailable") },
 ) {
     val scope = rememberCoroutineScope()
     var packageBusy by remember { mutableStateOf(false) }
     var packageFailed by remember { mutableStateOf(false) }
     var importFailed by remember { mutableStateOf(false) }
+    var trash by remember { mutableStateOf(false) }
+    var filters by remember { mutableStateOf(false) }
+    var folder by remember { mutableStateOf("") }
+    var tag by remember { mutableStateOf("") }
+    var pendingPurge by remember { mutableStateOf<Note?>(null) }
+    if (filters) AlertDialog(onDismissRequest = { filters = false },
+        title = { Text("Folders and tags") },
+        text = { Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+            NoteFilterFields(folder, tag, !packageBusy, onApply = { f, t -> folder = f; tag = t; filters = false })
+        } },
+        confirmButton = { TextButton(onClick = { filters = false }) { Text("Close") } })
+
+    pendingPurge?.let { note -> AlertDialog(onDismissRequest = { pendingPurge = null },
+        title = { Text("Delete this note permanently?") },
+        text = { Text("The note, its retained versions and all their files will be removed. You cannot undo this.") },
+        confirmButton = { TextButton(enabled = !packageBusy, onClick = {
+            packageBusy = true
+            scope.launch { try { onPurge(note.id); pendingPurge = null; packageFailed = false
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (_: Exception) { packageFailed = true
+            } finally { packageBusy = false } }
+        }) { Text("Delete permanently") } },
+        dismissButton = { TextButton(onClick = { pendingPurge = null }) { Text("Cancel") } }) }
     val colors = LocalChurColors.current
     Scaffold(
         containerColor = colors.canvas,
@@ -103,7 +134,7 @@ fun NotesScreen(
             )
         },
         floatingActionButton = {
-            if (notes.isNotEmpty()) {
+            if (!trash && notes.isNotEmpty()) {
                 FloatingActionButton(onClick = onCreate) {
                     Icon(PlusGlyph, contentDescription = "New note")
                 }
@@ -111,6 +142,13 @@ fun NotesScreen(
         },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            FlowRow {
+                TextButton(enabled = !packageBusy, onClick = { trash = !trash; if (trash) onRefreshTrash() }) {
+                    Text(if (trash) "Active notes" else "Trash")
+                }
+                TextButton(enabled = !packageBusy && !filters, onClick = { filters = true }) { Text("Folders and tags") }
+            }
+            NoteFilterSummary(folder, tag, !packageBusy && !filters) { folder = ""; tag = "" }
             if (importFailed) Text("The Markdown file could not be imported. Use UTF-8 text up to 256 KiB.", color = colors.error)
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                 NoteBinaryImportAction("Import note package", NoteAttachments.MAX_PACKAGE_BYTES, enabled = !packageBusy,
@@ -127,11 +165,12 @@ fun NotesScreen(
                     }, onFailure = { packageFailed = true })
                 if (packageBusy) Text("Importing…")
             }
-            if (packageFailed) Text("The note package could not be imported. Check its format and attachment limits.", color = colors.error)
+            if (packageFailed) Text("The note operation failed. Your saved notes are unchanged; try again.", color = colors.error)
             if (showFirstWriteDisclosure) {
                 FirstWriteDisclosure(onAcknowledge = onAcknowledgeDisclosure)
             }
-            if (notes.isEmpty()) {
+            val source = if (trash) trashedNotes else notes
+            if (source.isEmpty() && !trash) {
                 EmptyNotes(hasQuery = false, onCreate = {
                     onQueryChange("")
                     onCreate()
@@ -145,9 +184,10 @@ fun NotesScreen(
                     modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter),
                     colors = churOutlinedTextFieldColors(),
                 )
-                val visible = Notes.search(notes, query)
+                val visible = NoteOrganization.filter(Notes.search(source, query), folder.takeIf { it.isNotEmpty() }, tag.takeIf { it.isNotEmpty() })
                 if (visible.isEmpty()) {
-                    EmptyNotes(hasQuery = true)
+                    if (trash) Text("Trash is empty or no notes match these filters.", modifier = Modifier.padding(ChurSpacing.gutter))
+                    else EmptyNotes(hasQuery = true)
                 } else {
                     LazyColumn(
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(
@@ -157,7 +197,21 @@ fun NotesScreen(
                         verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
                     ) {
                         items(visible, key = { it.id }) { note ->
-                            NoteRow(note = note, onClick = { onOpen(note) })
+                            if (!trash) NoteRow(note = note, onClick = { onOpen(note) })
+                            else Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(ChurSpacing.two)) {
+                                Text(note.displayTitle.ifBlank { "Untitled" })
+                                Text(note.preview, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Row {
+                                    TextButton(enabled = !packageBusy, onClick = {
+                                        packageBusy = true
+                                        scope.launch { try { onRestore(note.id); packageFailed = false
+                                        } catch (cancelled: CancellationException) { throw cancelled
+                                        } catch (_: Exception) { packageFailed = true
+                                        } finally { packageBusy = false } }
+                                    }) { Text("Restore note") }
+                                    TextButton(enabled = !packageBusy, onClick = { pendingPurge = note }) { Text("Delete permanently") }
+                                }
+                            } }
                         }
                     }
                 }
@@ -219,6 +273,8 @@ private fun NoteRow(note: Note, onClick: () -> Unit) {
                 )
             }
             if (note.pinned) Text("Pinned", style = MaterialTheme.typography.labelSmall)
+            note.folder?.let { Text("Folder: $it", style = MaterialTheme.typography.labelSmall) }
+            if (note.tags.isNotEmpty()) Text(note.tags.joinToString(" · ") { "#$it" }, style = MaterialTheme.typography.labelSmall)
             if (note.attachments.isNotEmpty()) Text("${note.attachments.size} attachments", style = MaterialTheme.typography.labelSmall)
         }
     }
@@ -287,9 +343,8 @@ private fun EmptyNotes(hasQuery: Boolean, onCreate: (() -> Unit)? = null) {
  * note the store held when the editor opened, so opening a note the user
  * emptied earlier leaves it where it is.
  *
- * Delete asks first, because a public note has no Trash to come back from:
- * `DESIGN.md` §26 puts a short, high-consequence decision in a dialog, and §27
- * has its copy name the consequence. The question is saved state, so a
+ * Trash asks first and persists the latest text before moving the saved note.
+ * Permanent deletion is available separately from the public Trash list. The question is saved state, so a
  * rotation keeps it open. Confirming clears the draft, so the save on leaving
  * has nothing to write back into the note it has just removed.
  */
@@ -302,19 +357,27 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
     onReadAttachment: suspend (String) -> ByteArray = { error("attachments unavailable") },
     onRemoveAttachment: suspend (String) -> Unit = { error("attachments unavailable") },
     onExportPackage: suspend (Note) -> ByteArray = { error("package export unavailable") },
+    onOrganize: suspend (String?, List<String>) -> Unit = { _, _ -> error("organization unavailable") },
+    onHistory: suspend () -> List<NoteRevision> = { error("history unavailable") },
+    onRestoreRevision: suspend (String) -> Note = { error("history restore unavailable") },
+    onTrash: suspend (Note) -> Unit = { error("trash unavailable") },
     systemBack: @Composable (onBack: () -> Unit) -> Unit = {}) {
     var pinned by rememberSaveable(open.note.id) { mutableStateOf(open.note.pinned) }
     var formatName by rememberSaveable(open.note.id) { mutableStateOf(open.note.format.name) }
     val format = NoteFormat.valueOf(formatName)
     val attachments = savedNote?.attachments ?: open.note.attachments
+    var restoringHistory by remember { mutableStateOf(false) }
     val saveWithMetadata: (Note) -> Unit = {
-        onSave(it.copy(pinned = pinned, format = NoteFormat.valueOf(formatName), attachments = attachments))
+        if (!restoringHistory) onSave(it.copy(pinned = pinned, format = NoteFormat.valueOf(formatName), attachments = attachments))
     }
     var draft by rememberNoteDraft(open, saveWithMetadata, onRemove, { attachments.isNotEmpty() })
     val scope = rememberCoroutineScope()
     var attachmentBusy by remember(open.note.id) { mutableStateOf(false) }
     var attachmentFailed by remember(open.note.id) { mutableStateOf(false) }
     var pendingRemoval by remember { mutableStateOf<String?>(null) }
+    var history by remember { mutableStateOf<List<NoteRevision>?>(null) }
+    var selectedVersion by remember { mutableStateOf<NoteRevision?>(null) }
+    var restoreConfirm by remember { mutableStateOf(false) }
     val (title, body) = draft ?: run {
         LaunchedEffect(Unit) { onBack() }
         return
@@ -323,7 +386,8 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
     val exit = remember(open.note.id) { PublicNoteExitGuard() }
     fun currentDraftNote(): Note? = draft?.let { (currentTitle, currentBody) ->
         open.note.copy(title = currentTitle, body = currentBody, pinned = pinned,
-            format = NoteFormat.valueOf(formatName), attachments = attachments)
+            format = NoteFormat.valueOf(formatName), attachments = attachments,
+            folder = savedNote?.folder, tags = savedNote?.tags.orEmpty(), revision = savedNote?.revision ?: open.note.revision)
     }
     val current = requireNotNull(currentDraftNote())
     var leavingForSettings by remember(open.note.id) { mutableStateOf(false) }
@@ -362,24 +426,66 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
     if (confirmingDelete) {
         AlertDialog(
             onDismissRequest = { confirmingDelete = false },
-            title = { Text("Delete this note?") },
-            text = { Text("It is removed from this device. You cannot undo this.") },
+            title = { Text("Move this note to Trash?") },
+            text = { Text("You can restore the note and its retained versions from Trash.") },
             confirmButton = {
-                DestructiveButton(onClick = {
-                    confirmingDelete = false
-                    draft = null
-                    onRemove(open.note.id)
-                    onBack()
-                }) { Text("Delete note") }
+                DestructiveButton(enabled = !attachmentBusy, onClick = {
+                    val latest = currentDraftNote() ?: return@DestructiveButton
+                    attachmentBusy = true
+                    scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                        try {
+                            onTrash(latest)
+                            confirmingDelete = false; draft = null; onBack()
+                        } catch (cancelled: CancellationException) { throw cancelled
+                        } catch (_: Exception) { attachmentFailed = true
+                        } finally { attachmentBusy = false }
+                    }
+                }) { Text("Move to Trash") }
             },
             dismissButton = { TextButton(onClick = { confirmingDelete = false }) { Text("Cancel") } },
         )
     }
 
+    history?.let { versions -> AlertDialog(onDismissRequest = { if (!attachmentBusy) history = null },
+        title = { Text("Version history") },
+        text = { LazyColumn(Modifier.height(360.dp)) {
+            item { Text("Up to 20 previous versions and 64 MiB of historical files are retained. Restoring creates a new current version.") }
+            if (versions.isEmpty()) item { Text("No previous versions yet.") }
+            items(versions, key = { it.id }) { version ->
+                TextButton(enabled = !attachmentBusy, onClick = { selectedVersion = version }) {
+                    Text("Revision ${version.note.revision} · ${version.note.displayTitle.ifBlank { "Untitled" }} · ${version.note.attachments.size} files")
+                }
+            }
+            selectedVersion?.let { version -> item {
+                Text("Selected revision ${version.note.revision}", style = MaterialTheme.typography.titleSmall)
+                Text(version.note.body.take(4000))
+                if (version.note.body.length > 4000) Text("Preview shows the first 4000 characters. Restore includes the complete note and files.")
+                Text("Folder: ${version.note.folder.orEmpty()} · ${version.note.tags.joinToString(", ")}")
+                TextButton(enabled = !attachmentBusy, onClick = { restoreConfirm = true }) { Text("Restore this version") }
+            } }
+        } },
+        confirmButton = { TextButton(enabled = !attachmentBusy, onClick = { history = null; selectedVersion = null }) { Text("Close") } }) }
+    if (restoreConfirm) AlertDialog(onDismissRequest = { if (!attachmentBusy) restoreConfirm = false },
+        title = { Text("Restore this version?") },
+        text = { Text("Its text, folder, tags and files become current. The current version is retained within history limits.") },
+        confirmButton = { TextButton(enabled = !attachmentBusy, onClick = {
+            val version = selectedVersion ?: return@TextButton
+            attachmentBusy = true; restoringHistory = true
+            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                try {
+                    onRestoreRevision(version.id)
+                    draft = null; history = null; restoreConfirm = false; onBack()
+                } catch (cancelled: CancellationException) { throw cancelled
+                } catch (_: Exception) { attachmentFailed = true
+                } finally { attachmentBusy = false; restoringHistory = false }
+            }
+        }) { Text("Restore version") } },
+        dismissButton = { TextButton(enabled = !attachmentBusy, onClick = { restoreConfirm = false }) { Text("Cancel") } })
+
     pendingRemoval?.let { id ->
         AlertDialog(onDismissRequest = { if (!attachmentBusy) pendingRemoval = null },
             title = { Text("Remove this attachment?") },
-            text = { Text("The file is removed from this note. Export it first if you need a copy.") },
+            text = { Text("The file is removed from the current version. Earlier versions may retain it until history expires or the note is permanently deleted.") },
             confirmButton = { TextButton(enabled = !attachmentBusy, onClick = {
                 attachmentBusy = true
                 scope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -405,7 +511,7 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
                 actions = {
                     IconButton(enabled = !exit.requested && !attachmentBusy, onClick = { requestLeave(true) }) { Icon(SettingsGlyph, contentDescription = "Settings") }
                     PublicNoteExportAction(title, body, format == NoteFormat.MARKDOWN, enabled = !exit.requested && !attachmentBusy, onFailure = { exportFailed = true })
-                    TextButton(enabled = !exit.requested && !attachmentBusy, onClick = { confirmingDelete = true }) { Text("Delete") }
+                    TextButton(enabled = !exit.requested && !attachmentBusy, onClick = { confirmingDelete = true }) { Text("Trash") }
                 },
             )
         },
@@ -438,6 +544,24 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
                     require(attachments.any { it.id == id }) { "attachment not found" }
                     onReadAttachment(id)
                 })
+            val clean = samePublicNoteContent(current, savedNote)
+            NoteOrganizationFields(savedNote?.folder.orEmpty(), savedNote?.tags.orEmpty(), clean && !attachmentBusy && !exit.requested,
+                onApply = { folder, tags ->
+                    attachmentBusy = true
+                    scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                        try { onOrganize(folder.takeIf { it.isNotEmpty() }, tags); attachmentFailed = false
+                        } catch (cancelled: CancellationException) { throw cancelled
+                        } catch (_: Exception) { attachmentFailed = true
+                        } finally { attachmentBusy = false }
+                    }
+                })
+            TextButton(enabled = clean && !attachmentBusy && !exit.requested, onClick = {
+                attachmentBusy = true
+                scope.launch { try { history = onHistory(); selectedVersion = null; attachmentFailed = false
+                } catch (cancelled: CancellationException) { throw cancelled
+                } catch (_: Exception) { attachmentFailed = true
+                } finally { attachmentBusy = false } }
+            }) { Text("Version history") }
             Text("Images and attachments", style = MaterialTheme.typography.titleMedium)
             Text("Files in public notes are unencrypted.", style = MaterialTheme.typography.bodySmall)
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
@@ -639,16 +763,17 @@ fun rememberOpenNote(): MutableState<OpenNote?> =
     rememberSaveable(stateSaver = OpenNoteSaver) { mutableStateOf(null) }
 
 internal val OpenNoteSaver: Saver<OpenNote?, Any> = Saver(
-    save = { open -> open?.run { listOf(note.id, note.updatedMs, note.pinned, isNew, note.format.name) } },
+    save = { open -> open?.run { listOf(note.id, note.updatedMs, note.pinned, isNew, note.format.name, note.recoveryEpoch) } },
     restore = restoreNote@{ saved ->
         val fields = saved as? List<*> ?: return@restoreNote null
-        if (fields.size != 5) return@restoreNote null
+        if (fields.size != 6) return@restoreNote null
         val id = fields[0] as? String ?: return@restoreNote null
         val updatedMs = fields[1] as? Long ?: return@restoreNote null
         val pinned = fields[2] as? Boolean ?: return@restoreNote null
         val isNew = fields[3] as? Boolean ?: return@restoreNote null
         val format = NoteFormat.entries.firstOrNull { it.name == fields[4] } ?: return@restoreNote null
-        if (id.isBlank()) return@restoreNote null
-        OpenNote(Note(id, "", "", updatedMs, pinned, format), isNew = isNew, restored = true)
+        val epoch = fields[5] as? Long ?: return@restoreNote null
+        if (id.isBlank() || epoch < 0) return@restoreNote null
+        OpenNote(Note(id, "", "", updatedMs, pinned, format, recoveryEpoch = epoch), isNew = isNew, restored = true)
     },
 )

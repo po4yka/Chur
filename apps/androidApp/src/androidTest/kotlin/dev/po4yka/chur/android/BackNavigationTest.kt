@@ -318,8 +318,8 @@ class BackNavigationTest {
         typeNote(NOTE_TEXT)
         assertTrue("the autosave writes the draft", await { madeNotes().any { it.body == NOTE_TEXT } })
 
-        tap(label("Delete"))
-        tap(label("Delete note"))
+        tap(label("Trash"))
+        tap(label("Move to Trash"))
 
         assertTrue("the note is removed", await { madeNotes().isEmpty() })
         assertFalse("the save on leaving must not write it back", await(1_000) { madeNotes().isNotEmpty() })
@@ -330,12 +330,12 @@ class BackNavigationTest {
         typeNote(NOTE_TEXT)
         assertTrue("the autosave writes the draft", await { madeNotes().any { it.body == NOTE_TEXT } })
 
-        tap(label("Delete"))
-        assertTrue("Delete asks first", await { find(label("Delete note")) != null })
+        tap(label("Trash"))
+        assertTrue("Trash asks first", await { find(label("Move to Trash")) != null })
         assertTrue("the note is kept while it asks", madeNotes().any { it.body == NOTE_TEXT })
         tap(label("Cancel"))
 
-        assertTrue("the editor stays open", await { find(label("Delete")) != null })
+        assertTrue("the editor stays open", await { find(label("Trash")) != null })
         assertFalse("Cancel must not remove the note", await(1_000) { madeNotes().none { it.body == NOTE_TEXT } })
     }
 
@@ -2516,13 +2516,13 @@ class BackNavigationTest {
                 generateSequence(node) { it.parent }.firstOrNull { it.isClickable }
                     ?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             }
-            find(label("Delete"))?.let { delete ->
+            find(label("Trash"))?.let { delete ->
                 click(delete)
-                await { find(label("Delete note")) != null }
+                await { find(label("Move to Trash")) != null }
             }
-            find(label("Delete note"))?.let { confirm ->
+            find(label("Move to Trash"))?.let { confirm ->
                 click(confirm)
-                await { find(label("Delete note")) == null && find(label("Delete")) == null }
+                await { find(label("Move to Trash")) == null && find(label("Trash")) == null }
             }
             instrumentation.runOnMainSync { madeNotes().forEach { controller.removeNote(it.id) } }
         }

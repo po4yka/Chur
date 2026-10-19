@@ -41,6 +41,22 @@ data class PrivateNotePage(val notes: List<PrivateNoteSummary>, val nextCursor: 
     override fun toString(): String = "PrivateNotePage(<redacted>)"
 }
 
+/** Catalog metadata; like note text it belongs only to the unlocked session. */
+data class PrivateNoteOrganization(val folder: String = "", val tags: List<String> = emptyList()) {
+    override fun toString(): String = "PrivateNoteOrganization(<redacted>)"
+}
+data class PrivateNoteWorkspacePage(val page: PrivateNotePage, val organization: Map<String, PrivateNoteOrganization>) {
+    override fun toString(): String = "PrivateNoteWorkspacePage(<redacted>)"
+}
+data class PrivateNoteRevision(val revision: Long, val updatedMs: Long, val title: String,
+    val format: PrivateNoteFormat, val attachmentCount: Int) {
+    override fun toString(): String = "PrivateNoteRevision(<redacted>)"
+}
+data class PrivateNoteRevisionDetail(val note: PrivateNote, val organization: PrivateNoteOrganization,
+    val attachments: List<PrivateNoteAttachment>) {
+    override fun toString(): String = "PrivateNoteRevisionDetail(<redacted>)"
+}
+
 enum class PrivateNoteAction { PIN, UNPIN, TRASH, RESTORE, PURGE }
 
 internal class PrivateNoteWriter(size: Int) {
@@ -71,8 +87,8 @@ internal class PrivateNoteReader(private val bytes: ByteArray) {
 }
 
 internal fun decodePrivateNote(bytes: ByteArray): PrivateNote = PrivateNoteReader(bytes).let { r -> r.note().also { r.end() } }
-internal fun decodePrivateNotePage(bytes: ByteArray): PrivateNotePage {
-    val r = PrivateNoteReader(bytes)
+internal fun PrivateNoteReader.page(): PrivateNotePage {
+    val r = this
     val countBytes = r.raw(4)
     val count = countBytes.fold(0) { a, b -> (a shl 8) or (b.toInt() and 255) }
     require(count in 0..100)
@@ -81,8 +97,24 @@ internal fun decodePrivateNotePage(bytes: ByteArray): PrivateNotePage {
         PrivateNoteSummary(n.noteId, n.revision, n.title, n.body, n.createdMs, n.updatedMs, n.pinned, n.trashedAtMs, n.exportSize, n.format, n.attachmentCount)
     }
     val cursor = r.sized(65).takeIf { it.isNotEmpty() }
-    require(cursor == null || cursor.size == 65); r.end()
+    require(cursor == null || cursor.size == 65)
     return PrivateNotePage(notes, cursor)
+}
+internal fun decodePrivateNotePage(bytes: ByteArray): PrivateNotePage = PrivateNoteReader(bytes).let { r -> r.page().also { r.end() } }
+
+internal fun PrivateNoteReader.organization(): PrivateNoteOrganization {
+    val folder = text(64)
+    val count = count(); require(count in 0..16)
+    val tags = List(count) { text(64) }
+    require(folder == folder.trim() && '\u0000' !in folder && folder.none { it.isISOControl() })
+    require(tags.all { it.isNotBlank() && it == it.trim() && it.none { c -> c.isISOControl() } } && tags.distinct().size == tags.size)
+    return PrivateNoteOrganization(folder, tags)
+}
+internal fun PrivateNoteReader.attachments(): List<PrivateNoteAttachment> {
+    val count = count(); require(count in 0..32)
+    return List(count) {
+        PrivateNoteAttachment(raw(16), text(240), text(128), number()).also { require(it.size in 0..8_388_608) }
+    }
 }
 
 /** Metadata for a note-owned encrypted file. Never persist outside the unlocked session. */

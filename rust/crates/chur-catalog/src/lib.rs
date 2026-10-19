@@ -24,6 +24,7 @@ pub mod device_pairing;
 pub mod journal;
 pub mod model;
 pub mod note_attachments;
+pub mod note_workspace;
 pub mod notes;
 pub mod object_grants;
 pub mod own_sync;

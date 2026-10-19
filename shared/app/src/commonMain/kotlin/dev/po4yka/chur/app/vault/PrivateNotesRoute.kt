@@ -58,7 +58,7 @@ fun PrivateNotesRoute(
     val state by controller.state.collectAsState()
     if ((session as? VaultState.Unlocked)?.generation != generation) return
     NavigationBusyEffect(state.editor != null || state.busy || state.selection.isNotEmpty() ||
-        state.confirmation != null, onNavigationBusyChange)
+        state.confirmation != null || state.filtersVisible, onNavigationBusyChange)
     LaunchedEffect(controller, initialCreateRequest) {
         if (initialCreateRequest != null) controller.create()
     }

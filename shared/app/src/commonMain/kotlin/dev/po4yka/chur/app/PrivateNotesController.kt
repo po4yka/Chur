@@ -17,6 +17,10 @@ import dev.po4yka.chur.ffi.PrivateNoteAction
 import dev.po4yka.chur.ffi.PrivateNotePage
 import dev.po4yka.chur.ffi.PrivateNoteSelection
 import dev.po4yka.chur.ffi.PrivateNoteSummary
+import dev.po4yka.chur.ffi.PrivateNoteOrganization
+import dev.po4yka.chur.ffi.PrivateNoteRevision
+import dev.po4yka.chur.ffi.PrivateNoteRevisionDetail
+import dev.po4yka.chur.ffi.PrivateNoteWorkspacePage
 import dev.po4yka.chur.vault.VaultRepository
 import dev.po4yka.chur.vault.VaultState
 import kotlinx.coroutines.CancellationException
@@ -44,6 +48,7 @@ data class PrivateNoteEditorState(
     val pinned: Boolean = saved?.pinned ?: false,
     val format: PrivateNoteFormat = saved?.format ?: PrivateNoteFormat.MARKDOWN,
     val attachments: List<PrivateNoteAttachment> = emptyList(),
+    val organization: PrivateNoteOrganization = PrivateNoteOrganization(),
 ) {
     val trashed: Boolean get() = saved?.trashedAtMs != null
     val dirty: Boolean get() = if (saved == null) title.isNotEmpty() || body.isNotEmpty() || pinned
@@ -67,13 +72,18 @@ data class PrivateNotesUiState(
     val hasPrevious: Boolean = false,
     val hasNext: Boolean = false,
     val selection: Map<String, PrivateNoteSelection> = emptyMap(),
+    val folderFilter: String = "",
+    val tagFilter: String = "",
+    val filtersVisible: Boolean = false,
+    val organization: Map<String, PrivateNoteOrganization> = emptyMap(),
+    val history: List<PrivateNoteRevision>? = null,
+    val historical: PrivateNoteRevisionDetail? = null,
 ) {
     override fun toString(): String = "PrivateNotesUiState(<redacted>)"
 }
 
 /** Every storage method must validate [generation] while holding the repository mutex. */
 internal interface PrivateNotesAccess {
-    suspend fun page(generation: Long, terms: String, trash: Boolean, cursor: ByteArray?): PrivateNotePage
     suspend fun load(generation: Long, id: ByteArray): PrivateNote
     suspend fun save(generation: Long, saved: PrivateNote?, title: String, body: String, pinned: Boolean, format: PrivateNoteFormat): PrivateNote
     suspend fun change(generation: Long, id: ByteArray, revision: Long, action: PrivateNoteAction): PrivateNote?
@@ -82,11 +92,24 @@ internal interface PrivateNotesAccess {
     suspend fun putAttachment(generation: Long, saved: PrivateNote, attachment: PrivateNoteAttachmentData): PrivateNote
     suspend fun removeAttachment(generation: Long, saved: PrivateNote, attachmentId: ByteArray): PrivateNote
     suspend fun importPackage(generation: Long, title: String, body: String, format: PrivateNoteFormat, attachments: List<PrivateNoteAttachmentData>): PrivateNote
+    suspend fun workspace(generation: Long, terms: String, trash: Boolean, cursor: ByteArray?, folder: String, tag: String): PrivateNoteWorkspacePage
+    suspend fun organization(generation: Long, id: ByteArray): PrivateNoteOrganization
+    suspend fun organize(generation: Long, saved: PrivateNote, organization: PrivateNoteOrganization): PrivateNote
+    suspend fun history(generation: Long, id: ByteArray): List<PrivateNoteRevision>
+    suspend fun historical(generation: Long, id: ByteArray, revision: Long): PrivateNoteRevisionDetail
+    suspend fun restoreRevision(generation: Long, saved: PrivateNote, revision: Long): PrivateNote
 }
 
 private class VaultPrivateNotesAccess(private val vault: VaultRepository) : PrivateNotesAccess {
-    override suspend fun page(generation: Long, terms: String, trash: Boolean, cursor: ByteArray?) =
-        vault.privateNotes(generation, terms = terms, trashed = trash, limit = 50, cursor = cursor)
+    override suspend fun workspace(generation: Long, terms: String, trash: Boolean, cursor: ByteArray?, folder: String, tag: String) =
+        vault.privateNoteWorkspace(generation, terms, trash, 50, cursor, folder, tag)
+    override suspend fun organization(generation: Long, id: ByteArray) = vault.privateNoteOrganization(generation, id)
+    override suspend fun organize(generation: Long, saved: PrivateNote, organization: PrivateNoteOrganization) =
+        vault.organizePrivateNote(generation, saved.noteId, saved.revision, organization)
+    override suspend fun history(generation: Long, id: ByteArray) = vault.privateNoteHistory(generation, id)
+    override suspend fun historical(generation: Long, id: ByteArray, revision: Long) = vault.privateNoteRevision(generation, id, revision)
+    override suspend fun restoreRevision(generation: Long, saved: PrivateNote, revision: Long) =
+        vault.restorePrivateNoteRevision(generation, saved.noteId, saved.revision, revision)
     override suspend fun load(generation: Long, id: ByteArray) = vault.privateNote(generation, id)
     override suspend fun save(generation: Long, saved: PrivateNote?, title: String, body: String, pinned: Boolean, format: PrivateNoteFormat) =
         vault.savePrivateNote(generation, id = saved?.noteId, expectedRevision = saved?.revision ?: 0,
@@ -144,6 +167,7 @@ class PrivateNotesController internal constructor(
     }
 
     private fun current(): Boolean = !closed && (vaultState.value as? VaultState.Unlocked)?.generation == generation
+    override fun activity() { if (current()) onActivity() }
     private fun update(change: (PrivateNotesUiState) -> PrivateNotesUiState) {
         if (current()) mutableState.value = change(mutableState.value)
     }
@@ -178,6 +202,62 @@ class PrivateNotesController internal constructor(
         update { it.copy(trash = trash, terms = "", error = null, selection = emptyMap()) }
         loadPage(reset = true)
     }
+    override fun showFilters(visible: Boolean) {
+        if (!current() || state.value.editor != null || state.value.busy) return
+        onActivity()
+        update { it.copy(filtersVisible = visible) }
+    }
+    override fun filter(folder: String, tag: String) {
+        if (!current() || state.value.editor != null || state.value.busy) return
+        if (utf8Size(folder) > 64 || utf8Size(tag) > 64 || (folder + tag).any { it.isISOControl() }) {
+            update { it.copy(error = "Folder and tag filters must fit in 64 UTF-8 bytes each.") }; return
+        }
+        onActivity()
+        update { it.copy(folderFilter = folder.trim(), tagFilter = tag.trim(), filtersVisible = false, selection = emptyMap()) }
+        loadPage(reset = true)
+    }
+    override fun organize(folder: String, tags: List<String>) {
+        val editor = state.value.editor ?: return
+        val saved = editor.saved ?: return
+        if (editor.dirty || editor.trashed) return
+        runAction {
+            val organization = PrivateNoteOrganization(dev.po4yka.chur.notes.NoteOrganization.folder(folder).orEmpty(),
+                dev.po4yka.chur.notes.NoteOrganization.tags(tags))
+            val changed = withContext(dispatcher) { access.organize(generation, saved, organization) }
+            val authoritative = withContext(dispatcher) { access.organization(generation, changed.noteId) }
+            update { it.copy(editor = PrivateNoteEditorState(changed, attachments = editor.attachments, organization = authoritative), history = null, historical = null) }
+        }
+    }
+    override fun showHistory() {
+        val editor = state.value.editor ?: return
+        val saved = editor.saved ?: return
+        if (editor.dirty) return
+        runAction {
+            val history = withContext(dispatcher) { access.history(generation, saved.noteId) }
+            update { it.copy(history = history, historical = null) }
+        }
+    }
+    override fun previewRevision(revision: Long) {
+        val saved = state.value.editor?.saved ?: return
+        if (state.value.editor?.dirty != false || state.value.history?.none { it.revision == revision } != false) return
+        runAction {
+            val detail = withContext(dispatcher) { access.historical(generation, saved.noteId, revision) }
+            update { it.copy(historical = detail) }
+        }
+    }
+    override fun closeHistory() = update { it.copy(history = null, historical = null) }
+    override fun restoreRevision() {
+        val editor = state.value.editor ?: return
+        val saved = editor.saved ?: return
+        val historical = state.value.historical ?: return
+        if (editor.dirty || editor.trashed) return
+        runAction {
+            val restored = withContext(dispatcher) { access.restoreRevision(generation, saved, historical.note.revision) }
+            val attachments = withContext(dispatcher) { access.attachments(generation, restored.noteId) }
+            val organization = withContext(dispatcher) { access.organization(generation, restored.noteId) }
+            update { it.copy(editor = PrivateNoteEditorState(restored, attachments = attachments, organization = organization), history = null, historical = null) }
+        }
+    }
     override fun nextPage() {
         if (!current() || state.value.loading || nextCursor == null) return
         previous += cursor
@@ -201,10 +281,11 @@ class PrivateNotesController internal constructor(
         listing = scope.launch {
             try {
                 if (debounce) delay(200)
-                val result = withContext(dispatcher) { access.page(generation, snapshot.terms, snapshot.trash, pageCursor) }
+                val result = withContext(dispatcher) { access.workspace(generation, snapshot.terms, snapshot.trash, pageCursor,
+                    snapshot.folderFilter, snapshot.tagFilter) }
                 if (current() && request == revision) {
-                    nextCursor = result.nextCursor?.copyOf()
-                    update { it.copy(notes = result.notes, loading = false, hasNext = nextCursor != null) }
+                    nextCursor = result.page.nextCursor?.copyOf()
+                    update { it.copy(notes = result.page.notes, organization = result.organization, loading = false, hasNext = nextCursor != null) }
                 }
             } catch (cancelled: CancellationException) { throw cancelled
             } catch (failure: Exception) {
@@ -225,7 +306,8 @@ class PrivateNotesController internal constructor(
         request++
         val loaded = withContext(dispatcher) { access.load(generation, note.noteId) }
         val attachments = withContext(dispatcher) { access.attachments(generation, loaded.noteId) }
-        update { it.copy(editor = PrivateNoteEditorState(loaded, attachments = attachments), confirmation = null, loading = false) }
+        val organization = withContext(dispatcher) { access.organization(generation, loaded.noteId) }
+        update { it.copy(editor = PrivateNoteEditorState(loaded, attachments = attachments, organization = organization), history = null, historical = null, confirmation = null, loading = false) }
     }
     override fun title(value: String) = edit { copy(title = value) }
     override fun body(value: String) = edit { copy(body = value) }
@@ -266,7 +348,7 @@ class PrivateNotesController internal constructor(
             val body = if (editor.format == PrivateNoteFormat.MARKDOWN) editor.body +
                 (if (editor.body.isEmpty()) "" else "\n\n") + attachmentMarkdownReference(name, id, image) else editor.body
             val canInsert = utf8Size(body) <= PRIVATE_NOTE_BODY_MAX_BYTES
-            update { it.copy(editor = PrivateNoteEditorState(saved, body = if (canInsert) body else editor.body, attachments = attachments),
+            update { it.copy(editor = PrivateNoteEditorState(saved, body = if (canInsert) body else editor.body, attachments = attachments, organization = editor.organization), history = null, historical = null,
                 error = if (canInsert) null else "The attachment was saved. Its reference would exceed the 256 KiB text limit.") }
         }
     }
@@ -276,7 +358,7 @@ class PrivateNotesController internal constructor(
         if (!current() || state.value.busy || editor.saved == null || editor.dirty || editor.trashed) return
         runAction {
             val saved = withContext(dispatcher) { access.removeAttachment(generation, editor.saved, attachment.attachmentId) }
-            update { it.copy(editor = PrivateNoteEditorState(saved, attachments = editor.attachments.filterNot { it.id == id })) }
+            update { it.copy(editor = PrivateNoteEditorState(saved, attachments = editor.attachments.filterNot { it.id == id }, organization = editor.organization), history = null, historical = null) }
         }
     }
     override fun exportAttachment(id: String) {
@@ -306,11 +388,13 @@ class PrivateNotesController internal constructor(
             update { it.copy(error = "Use at most 256 UTF-8 bytes for the title and 256 KiB for the note.") }
             return
         }
-        update { it.copy(editor = changed, error = null) }
+        update { it.copy(editor = changed, history = null, historical = null, error = null) }
     }
 
     override fun back() {
         if (!current() || state.value.busy) return
+        if (state.value.filtersVisible) { showFilters(false); return }
+        if (state.value.history != null) { closeHistory(); return }
         val editor = state.value.editor
         when {
             editor == null && state.value.selection.isNotEmpty() -> clearSelection()
@@ -324,7 +408,7 @@ class PrivateNotesController internal constructor(
         if (state.value.confirmation == PrivateNoteConfirmation.LEAVE && !state.value.busy) leaveEditor()
     }
     private fun leaveEditor() {
-        update { it.copy(editor = null, confirmation = null, error = null) }
+        update { it.copy(editor = null, history = null, historical = null, confirmation = null, error = null) }
         // A saved or trashed note changes the native cursor generation.
         loadPage(reset = true)
     }
@@ -338,7 +422,7 @@ class PrivateNotesController internal constructor(
         update { it.copy(confirmation = null) }
         runAction {
             val saved = withContext(dispatcher) { access.save(generation, editor.saved, editor.title, editor.body, editor.pinned, editor.format) }
-            update { it.copy(editor = PrivateNoteEditorState(saved, attachments = editor.attachments)) }
+            update { it.copy(editor = PrivateNoteEditorState(saved, attachments = editor.attachments, organization = editor.organization), history = null, historical = null) }
             when {
                 export && current() -> if (encrypted) sendEncrypted(listOf(saved.selection())) else onExport(saved)
                 leave -> leaveEditor()
