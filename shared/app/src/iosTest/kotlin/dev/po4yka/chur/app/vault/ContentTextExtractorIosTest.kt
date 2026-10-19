@@ -144,16 +144,43 @@ class ContentTextExtractorIosTest {
         } finally { bytes.fill(0) }
     }
 
-    @Test fun page_limit_is_partial_and_extreme_page_bounds_stay_bounded() = runTest {
-        val bytes = pdf(List(CONTENT_PDF_MAX_PAGES + 1) { "" })
+    @Test fun page_limit_is_partial_and_blank_pages_do_not_invoke_vision() = runTest {
+        val bytes = pdf(List(CONTENT_PDF_MAX_PAGES + 1) { if (it == 0) "Invoice Alpha 4827" else "" })
         val progress = mutableListOf<Int>()
-        val result = IosContentTextExtractor().extract(source(bytes), "application/pdf", 4, { false }) { page, _ -> progress += page }
+        val requests = MutableStateFlow(0)
+        val extractor = IosContentTextExtractor(object : IosVisionObserver {
+            override fun progress(fraction: Double) = Unit
+            override fun finished(errorCode: Long?) { requests.value += 1 }
+        })
+        val result = extractor.extract(source(bytes), "application/pdf", 4, { false }) { page, _ -> progress += page }
         try {
+            val text = result.bytes.decodeToString().lowercase()
+            assertTrue("alpha" in text && "4827" in text, "PDF fixture text: $text")
+            assertEquals(1, requests.value, "only the nonblank page must invoke real Vision recognition")
             assertTrue(result.partial)
             assertEquals(CONTENT_PDF_MAX_PAGES, result.pages)
             assertEquals((1..CONTENT_PDF_MAX_PAGES).toList(), progress)
             assertTrue(result.bytes.size <= CONTENT_TEXT_MAX_BYTES)
         } finally { result.bytes.fill(0); bytes.fill(0) }
+    }
+
+    @Test fun near_white_pdf_page_still_invokes_real_vision() = runTest {
+        val bytes = pdf(listOf(""), backgroundGray = 0.99)
+        val requests = MutableStateFlow(0)
+        val extractor = IosContentTextExtractor(object : IosVisionObserver {
+            override fun progress(fraction: Double) = Unit
+            override fun finished(errorCode: Long?) { requests.value += 1 }
+        })
+        val result = extractor.extract(source(bytes), "application/pdf", 4, { false })
+        try {
+            assertEquals(1, requests.value, "near-white pixels must reach real Vision recognition")
+            assertEquals(1, result.pages)
+            assertFalse(result.partial)
+            assertTrue(result.bytes.isEmpty() || result.bytes.all { it == '\n'.code.toByte() })
+        } finally { result.bytes.fill(0); bytes.fill(0) }
+    }
+
+    @Test fun extreme_page_bounds_stay_bounded() = runTest {
         val huge = pdf(listOf(""), "1000000000 1000000000")
         val bounded = IosContentTextExtractor().extract(source(huge), "application/pdf", 4, { false })
         try { assertEquals(1, bounded.pages); assertTrue(bounded.bytes.isEmpty() || bounded.bytes.all { it == '\n'.code.toByte() }) }
@@ -198,7 +225,7 @@ class ContentTextExtractorIosTest {
     private fun source(bytes: ByteArray, ranges: MutableList<ByteArray> = mutableListOf()) =
         ContentTextSource(bytes.size.toLong(), { offset, length -> bytes.copyOfRange(offset.toInt(), offset.toInt() + length).also { ranges += it } }, { true })
 
-    private fun pdf(texts: List<String> = listOf("Invoice Alpha 4827", "Invoice Beta 4827"), box: String = "700 250"): ByteArray {
+    private fun pdf(texts: List<String> = listOf("Invoice Alpha 4827", "Invoice Beta 4827"), box: String = "700 250", backgroundGray: Double = 1.0): ByteArray {
         val font = texts.size + 3
         val objects = buildList {
             add("<< /Type /Catalog /Pages 2 0 R >>")
@@ -207,7 +234,10 @@ class ContentTextExtractorIosTest {
                 add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 $box] /Resources << /Font << /F1 $font 0 R >> >> /Contents ${font + 1 + index} 0 R >>")
             }
             add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
-            texts.forEach { add(stream(if (it.isEmpty()) "" else "BT /F1 44 Tf 35 135 Td ($it) Tj ET")) }
+            texts.forEach {
+                val background = if (backgroundGray == 1.0) "" else "$backgroundGray g 0 0 $box re f 0 g "
+                add(stream(background + if (it.isEmpty()) "" else "BT /F1 44 Tf 35 135 Td ($it) Tj ET"))
+            }
         }
         val out = StringBuilder("%PDF-1.4\n")
         val offsets = mutableListOf(0)

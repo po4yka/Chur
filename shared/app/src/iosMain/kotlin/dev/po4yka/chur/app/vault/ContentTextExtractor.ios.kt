@@ -12,6 +12,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -20,6 +21,7 @@ import platform.CoreGraphics.*
 import platform.ImageIO.*
 import platform.Vision.*
 import platform.posix.memcpy
+import platform.posix.memcmp
 
 /** Observes the real native request; it cannot supply results or replace Vision execution. */
 internal interface IosVisionObserver {
@@ -129,18 +131,44 @@ class IosContentTextExtractor internal constructor(private val observer: IosVisi
     private suspend fun recognizeRaster(raster: PdfPageRaster, cancelled: () -> Boolean): String {
         val bitmap = raster.bitmap
         val pixels = bitmap.peekPixels() ?: throw ContentExtractionException(ContentExtractionFailure.UNAVAILABLE)
-        val space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB)
-        val context = CGBitmapContextCreate(interpretCPointer<ByteVar>(pixels.addr), bitmap.width.toULong(), bitmap.height.toULong(),
-            8u, bitmap.rowBytes.toULong(), space,
-            CGImageAlphaInfo.kCGImageAlphaPremultipliedLast.value or kCGBitmapByteOrder32Big)
-        CGColorSpaceRelease(space)
         try {
-            if (context == null) throw ContentExtractionException(ContentExtractionFailure.UNAVAILABLE)
-            val image = CGBitmapContextCreateImage(context) ?: throw ContentExtractionException(ContentExtractionFailure.UNAVAILABLE)
-            // The viewer raster is in Skia's top-left coordinates. Tell Vision about
-            // its vertical mirror instead of changing the shared preview pixels.
-            try { return recognize(image, kCGImagePropertyOrientationDownMirrored, cancelled) } finally { CGImageRelease(image) }
-        } finally { if (context != null) CGContextRelease(context); pixels.close() }
+            val coroutine = currentCoroutineContext()
+            coroutine.ensureActive()
+            if (cancelled()) throw CancellationException("Content extraction ended")
+            // Rendering produces RGBA8888. Compare visible rows without stride padding;
+            // every nonwhite pixel continues through Vision, including faint text.
+            val visibleRowBytes = bitmap.width * 4
+            val whiteRow = ByteArray(visibleRowBytes) { 0xff.toByte() }
+            var opaqueWhite = true
+            whiteRow.usePinned { reference ->
+                for (row in 0 until bitmap.height) {
+                    coroutine.ensureActive()
+                    if (cancelled()) throw CancellationException("Content extraction ended")
+                    val address = interpretCPointer<ByteVar>(pixels.addr + row.toLong() * bitmap.rowBytes)
+                        ?: throw ContentExtractionException(ContentExtractionFailure.UNAVAILABLE)
+                    if (memcmp(address, reference.addressOf(0), visibleRowBytes.toULong()) != 0) {
+                        opaqueWhite = false
+                        break
+                    }
+                }
+            }
+            coroutine.ensureActive()
+            if (cancelled()) throw CancellationException("Content extraction ended")
+            if (opaqueWhite) return ""
+
+            val space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB)
+            val context = CGBitmapContextCreate(interpretCPointer<ByteVar>(pixels.addr), bitmap.width.toULong(), bitmap.height.toULong(),
+                8u, bitmap.rowBytes.toULong(), space,
+                CGImageAlphaInfo.kCGImageAlphaPremultipliedLast.value or kCGBitmapByteOrder32Big)
+            CGColorSpaceRelease(space)
+            try {
+                if (context == null) throw ContentExtractionException(ContentExtractionFailure.UNAVAILABLE)
+                val image = CGBitmapContextCreateImage(context) ?: throw ContentExtractionException(ContentExtractionFailure.UNAVAILABLE)
+                // The viewer raster is in Skia's top-left coordinates. Tell Vision about
+                // its vertical mirror instead of changing the shared preview pixels.
+                try { return recognize(image, kCGImagePropertyOrientationDownMirrored, cancelled) } finally { CGImageRelease(image) }
+            } finally { if (context != null) CGContextRelease(context) }
+        } finally { pixels.close() }
     }
 
     private suspend fun recognize(
