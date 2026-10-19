@@ -56,6 +56,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.center
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -356,7 +357,7 @@ fun ViewerScreen(
         }
 
         if (showDetail && detail != null) {
-            DetailSheet(
+            ViewerDetailContent(
                 detail = detail,
                 projection = projection,
                 modifier = Modifier.align(Alignment.BottomCenter)
@@ -621,55 +622,57 @@ class ViewerChrome {
 }
 
 /**
- * The one place a filename, a caption, and a tag reach the screen.
+ * The one place a filename, a caption, and a tag reach the screen, shared with native Info.
  *
  * §16.1 of the catalog is the reason it is one place: a caller that fetched
  * this record per row would be defeating the rule the projection exists for.
  */
 @Composable
-private fun DetailSheet(
+fun ViewerDetailContent(
     detail: ObjectDetail,
     projection: ObjectProjection,
     modifier: Modifier = Modifier,
+    containerColor: Color = ViewerColors.canvas,
+    contentColor: Color = ViewerColors.content,
 ) {
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(ViewerColors.canvas)
+            .background(containerColor)
             .verticalScroll(rememberScrollState())
             .padding(ChurSpacing.gutter),
         verticalArrangement = Arrangement.spacedBy(ChurSpacing.one),
     ) {
         Text(
             text = detail.filename.ifBlank { "No filename" },
-            color = ViewerColors.content,
+            color = contentColor,
             style = MaterialTheme.typography.titleMedium,
         )
         if (detail.caption.isNotBlank()) {
             Text(
                 detail.caption,
-                color = ViewerColors.content,
+                color = contentColor,
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
         Text(
             text = detailFacts(detail),
-            color = ViewerColors.content,
+            color = contentColor,
             style = DiagnosticTextStyle,
         )
         Text(
             text = captureLine(detail),
-            color = ViewerColors.content,
+            color = contentColor,
             style = MaterialTheme.typography.bodySmall,
         )
         val state = PresentedState.of(projection)
         if (state != PresentedState.ORDINARY) {
-            Text(state.label, color = ViewerColors.content, style = MaterialTheme.typography.bodySmall)
+            Text(state.label, color = contentColor, style = MaterialTheme.typography.bodySmall)
         }
         if (detail.tags.isNotEmpty()) {
             Text(
                 detail.tags.joinToString(", ") { it.second },
-                color = ViewerColors.content,
+                color = contentColor,
                 style = MaterialTheme.typography.bodySmall,
             )
         }

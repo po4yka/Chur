@@ -64,6 +64,11 @@ import dev.po4yka.chur.app.vault.thumbnailRendition
 import dev.po4yka.chur.app.vault.UnlockScreen
 import dev.po4yka.chur.app.vault.LocalPrivatePanic
 import dev.po4yka.chur.app.vault.PrivateAlertDialog
+import dev.po4yka.chur.app.vault.PrivateModalPresentation
+import dev.po4yka.chur.app.vault.PrivateModalAnchor
+import dev.po4yka.chur.app.vault.LocalPrivateModalGuard
+import dev.po4yka.chur.app.vault.privateModalAction
+import dev.po4yka.chur.app.vault.ViewerDetailContent
 import dev.po4yka.chur.app.vault.VaultActions
 import dev.po4yka.chur.app.vault.VaultDestination
 import dev.po4yka.chur.app.vault.ContentView
@@ -653,58 +658,97 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         )
     }
 
+    fun modalSessionCurrent(): Boolean = controller.route.value == AppRoute.Vault &&
+        (controller.vaultState.value as? VaultState.Unlocked)?.generation == generation &&
+        !showingPrivateNotes && viewing == null
+
     if (creatingAlbum) {
-        NewAlbumDialog(
-            onCreate = { name ->
-                creatingAlbum = false
-                controller.createAlbum(name)
-            },
-            onDismiss = { creatingAlbum = false },
-        )
+        val visit = rememberIosRouteModalVisit()
+        val sourceDestination = remember(visit) { destination }
+        val sourceAlbumId = remember(visit) { openAlbum?.id }
+        val sourceSelection = remember(visit) { selection.toSet() }
+        val sourceScope = remember(visit) { browseSearchScope(destination, openAlbum, openTag,
+            favoritesOnly, trashOpen, quarantineOpen, recentlyAdded) }
+        fun scopeCurrent(): Boolean = sourceScope == browseSearchScope(destination, openAlbum, openTag,
+            favoritesOnly, trashOpen, quarantineOpen, recentlyAdded)
+        fun canCreate(): Boolean = modalSessionCurrent() && creatingAlbum &&
+            controller.activeOperation.value == null && scopeCurrent() && destination == sourceDestination &&
+            openAlbum?.id == sourceAlbumId && selection == sourceSelection
+        CompositionLocalProvider(LocalPrivateModalGuard provides ::canCreate) {
+            NewAlbumDialog(
+                onCreate = { name -> visit.complete(canCreate()) {
+                    creatingAlbum = false
+                    controller.createAlbum(name)
+                } },
+                onDismiss = { visit.complete(modalSessionCurrent() && creatingAlbum) { creatingAlbum = false } },
+            )
+        }
     }
     if (choosingAlbum) {
-        AlbumPickerDialog(
-            albums = albums,
-            currentAlbum = openAlbum,
-            move = movingSelection,
-            onChoose = { album ->
-                choosingAlbum = false
-                controller.placeObjectsInAlbum(
-                    album.albumId, organizingIds, openAlbum?.albumId, movingSelection,
-                ) { selection = emptySet() }
-            },
-            onCreate = { name, parent ->
-                choosingAlbum = false
-                controller.createAlbumWithObjects(
-                    name, parent?.albumId, organizingIds, openAlbum?.albumId, movingSelection,
-                ) { selection = emptySet() }
-            },
-            onDismiss = { choosingAlbum = false },
-        )
+        val visit = rememberIosRouteModalVisit()
+        val sourceAlbum = remember(visit) { openAlbum }
+        val sourceSelection = remember(visit) { selection.toSet() }
+        val sourceScope = remember(visit) { browseSearchScope(destination, openAlbum, openTag,
+            favoritesOnly, trashOpen, quarantineOpen, recentlyAdded) }
+        fun scopeCurrent(): Boolean = sourceScope == browseSearchScope(destination, openAlbum, openTag,
+            favoritesOnly, trashOpen, quarantineOpen, recentlyAdded)
+        val objectIds = remember(visit) { organizingIds.map { it.copyOf() } }
+        val move = remember(visit) { movingSelection }
+        fun canPlace(): Boolean = modalSessionCurrent() && choosingAlbum &&
+            controller.activeOperation.value == null && scopeCurrent() && selection == sourceSelection &&
+            openAlbum?.id == sourceAlbum?.id && movingSelection == move
+        val clearSelection: () -> Unit = {
+            if (modalSessionCurrent() && selection == sourceSelection) selection = emptySet()
+        }
+        CompositionLocalProvider(LocalPrivateModalGuard provides ::canPlace) {
+            AlbumPickerDialog(
+                albums = albums,
+                currentAlbum = sourceAlbum,
+                move = move,
+                onChoose = { album -> visit.complete(canPlace()) {
+                    choosingAlbum = false
+                    controller.placeObjectsInAlbum(album.albumId, objectIds, sourceAlbum?.albumId, move, onSuccess = clearSelection)
+                } },
+                onCreate = { name, parent -> visit.complete(canPlace()) {
+                    choosingAlbum = false
+                    controller.createAlbumWithObjects(name, parent?.albumId, objectIds, sourceAlbum?.albumId, move, clearSelection)
+                } },
+                onDismiss = { visit.complete(modalSessionCurrent() && choosingAlbum) { choosingAlbum = false } },
+            )
+        }
     }
     if (choosingTag) {
-        TagPickerDialog(
-            tags = tags,
-            onAdd = { tag ->
-                choosingTag = false
-                controller.setTagForAll(tag.tagId, taggingIds, true) {
-                    selection = emptySet()
-                }
-            },
-            onRemove = { tag ->
-                choosingTag = false
-                controller.setTagForAll(tag.tagId, taggingIds, false) {
-                    selection = emptySet()
-                }
-            },
-            onCreate = { name ->
-                choosingTag = false
-                controller.createTagWithObjects(name, taggingIds) {
-                    selection = emptySet()
-                }
-            },
-            onDismiss = { choosingTag = false },
-        )
+        val visit = rememberIosRouteModalVisit()
+        val sourceSelection = remember(visit) { selection.toSet() }
+        val sourceScope = remember(visit) { browseSearchScope(destination, openAlbum, openTag,
+            favoritesOnly, trashOpen, quarantineOpen, recentlyAdded) }
+        fun scopeCurrent(): Boolean = sourceScope == browseSearchScope(destination, openAlbum, openTag,
+            favoritesOnly, trashOpen, quarantineOpen, recentlyAdded)
+        val objectIds = remember(visit) { taggingIds.map { it.copyOf() } }
+        val sourceAlbumId = remember(visit) { openAlbum?.id }
+        fun canTag(): Boolean = modalSessionCurrent() && choosingTag &&
+            controller.activeOperation.value == null && scopeCurrent() && selection == sourceSelection && openAlbum?.id == sourceAlbumId
+        val clearSelection: () -> Unit = {
+            if (modalSessionCurrent() && selection == sourceSelection) selection = emptySet()
+        }
+        CompositionLocalProvider(LocalPrivateModalGuard provides ::canTag) {
+            TagPickerDialog(
+                tags = tags,
+                onAdd = { tag -> visit.complete(canTag()) {
+                    choosingTag = false
+                    controller.setTagForAll(tag.tagId, objectIds, true, clearSelection)
+                } },
+                onRemove = { tag -> visit.complete(canTag()) {
+                    choosingTag = false
+                    controller.setTagForAll(tag.tagId, objectIds, false, clearSelection)
+                } },
+                onCreate = { name -> visit.complete(canTag()) {
+                    choosingTag = false
+                    controller.createTagWithObjects(name, objectIds, clearSelection)
+                } },
+                onDismiss = { visit.complete(modalSessionCurrent() && choosingTag) { choosingTag = false } },
+            )
+        }
     }
     if (managingTags) {
         TagBrowserDialog(tags = tags,
@@ -927,17 +971,29 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         )
     }
     if (choosingExport) {
-        val selected = page.objects.filter { it.id in selection }
-        ExportOptionsDialog(
-            media = selected.isNotEmpty() && selected.all { canSaveToPhotos(it.mediaKind) },
-            files = true,
-            share = true,
-            onChoose = { target ->
-                choosingExport = false
-                controller.exportAll(selectedObjects(page, selection), target) { selection = emptySet() }
-            },
-            onDismiss = { choosingExport = false },
-        )
+        val visit = rememberIosRouteModalVisit()
+        val sourceSelection = remember(visit) { selection.toSet() }
+        val sourceScope = remember(visit) { browseSearchScope(destination, openAlbum, openTag,
+            favoritesOnly, trashOpen, quarantineOpen, recentlyAdded) }
+        val selected = remember(visit) { page.objects.filter { it.id in sourceSelection } }
+        fun exportCurrent(): Boolean = modalSessionCurrent() && choosingExport &&
+            controller.activeOperation.value == null && selection == sourceSelection &&
+            sourceScope == browseSearchScope(destination, openAlbum, openTag,
+                favoritesOnly, trashOpen, quarantineOpen, recentlyAdded)
+        CompositionLocalProvider(LocalPrivateModalGuard provides ::exportCurrent) {
+            ExportOptionsDialog(
+                media = selected.isNotEmpty() && selected.all { canSaveToPhotos(it.mediaKind) },
+                files = true,
+                share = true,
+                onChoose = { target -> visit.complete(exportCurrent()) {
+                    choosingExport = false
+                    controller.exportAll(selected.map { it.objectId }, target) {
+                        if (modalSessionCurrent() && selection == sourceSelection) selection = emptySet()
+                    }
+                } },
+                onDismiss = { visit.complete(modalSessionCurrent() && choosingExport) { choosingExport = false } },
+            )
+        }
     }
 
     choosingArchive?.let { request ->
@@ -1002,6 +1058,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         )
         choosingPrivateNoteExport?.let { request ->
             ExportOptionsDialog(media = false, files = true, share = true,
+                presentation = PrivateModalPresentation.Dialog,
                 onChoose = { target ->
                     choosingPrivateNoteExport = null
                     controller.exportPrivateNote(request, target)
@@ -1067,12 +1124,21 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     fun renderedMediaIsCurrent(): Boolean = terms == renderedSearchTerms &&
         currentSearchScope() == renderedSearchScope && controller.route.value == AppRoute.Vault &&
         (controller.vaultState.value as? VaultState.Unlocked)?.generation == generation
-    fun searchCommandsBlocked(): Boolean = selection.isNotEmpty() || viewing != null || showingPrivateNotes ||
-        controller.activeOperation.value != null || shellNavigationBusy || privateNotesBusy ||
+    // Read the route's mutable flags when an event arrives, before UIKit or
+    // child NavigationBusyEffect has received the next Compose frame.
+    fun routeModalCommandsBlocked(): Boolean = viewing != null || showingPrivateNotes ||
+        controller.activeOperation.value != null ||
         choosingArchive != null || choosingArchiveImport || choosingPrivateNoteExport != null ||
         exportingAlbum != null || albumPickerPending || documentPickerPending || choosingImportSource ||
         creatingAlbum || choosingAlbum || choosingTag || managingTags || confirmingDelete ||
         confirmingEmptyTrash || choosingExport || originals != null || incomingShare != null
+    fun searchCommandsBlocked(): Boolean = selection.isNotEmpty() || shellNavigationBusy ||
+        privateNotesBusy || routeModalCommandsBlocked()
+    fun ordinaryShellAction(block: () -> Unit) {
+        if (!routeModalCommandsBlocked() && controller.route.value == AppRoute.Vault &&
+            (controller.vaultState.value as? VaultState.Unlocked)?.generation == generation
+        ) block()
+    }
     fun updateSearch(value: String) {
         if (!trashOpen && currentSearchScope() == renderedSearchScope &&
             (destination == VaultDestination.LIBRARY || destination == VaultDestination.SEARCH || openAlbum != null) &&
@@ -1081,17 +1147,15 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         ) terms = value
     }
     val renderedSelection = selection.toSet()
-    fun selectionCommandsBlocked(): Boolean = controller.activeOperation.value != null ||
-        choosingExport || choosingAlbum || choosingTag || confirmingDelete || choosingArchive != null
     fun selectionAction(block: () -> Unit) {
         if (renderedSelection.isNotEmpty() && selection == renderedSelection &&
-            !selectionCommandsBlocked() && controller.route.value == AppRoute.Vault &&
+            !routeModalCommandsBlocked() && controller.route.value == AppRoute.Vault &&
             (controller.vaultState.value as? VaultState.Unlocked)?.generation == generation
         ) block()
     }
     val shellActions = VaultActions(
         onThumbnailsConcealedChange = { thumbnailsConcealed = it },
-        onDestination = {
+        onDestination = { target -> ordinaryShellAction {
             terms = ""
             searchFocusRequest = null
             openAlbum = null
@@ -1101,16 +1165,14 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             quarantineOpen = false
             recentlyAdded = false
             selection = emptySet()
-            destination = it
-        },
+            destination = target
+        } },
         // Opening is opening. Before the viewer existed on this host it
         // toggled selection, which made a video unreachable and a tap on a
         // photograph mean two things.
         onOpen = open@{ projection ->
             // A queued tile event cannot open or select a result from the previous query.
-            if (!renderedMediaIsCurrent()) return@open
-            // A tile cannot change the selection owned by an operation or dialog.
-            if (selection.isNotEmpty() && selectionCommandsBlocked()) return@open
+            if (!renderedMediaIsCurrent() || routeModalCommandsBlocked()) return@open
             if (selection.isEmpty()) {
                 controller.report(null)
                 // A text field of the shell left focused would keep
@@ -1125,31 +1187,31 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             }
         },
         onToggleSelection = { projection ->
-            if (renderedMediaIsCurrent() && !selectionCommandsBlocked()) selection = selection.toggle(projection.id)
+            if (renderedMediaIsCurrent() && !routeModalCommandsBlocked()) selection = selection.toggle(projection.id)
         },
-        onOpenPrivateNotes = { terms = ""; focusManager.clearFocus(); searchFocusRequest = null; selection = emptySet(); recentlyAdded = false; initialCreateRequest = null; showingPrivateNotes = true },
-        onImport = { choosingImportSource = true },
+        onOpenPrivateNotes = { ordinaryShellAction { terms = ""; focusManager.clearFocus(); searchFocusRequest = null; selection = emptySet(); recentlyAdded = false; initialCreateRequest = null; showingPrivateNotes = true } },
+        onImport = { ordinaryShellAction { choosingImportSource = true } },
         onSearch = ::updateSearch,
         onIndexContent = { controller.indexContent() },
         onRebuildContentIndex = { controller.indexContent(rebuild = true) },
         onCancelContentIndex = controller::cancelContentIndex,
         onClearContentIndex = controller::clearContentIndex,
-        onExportAlbum = { exportingAlbum = it },
-        onEncryptedExportAlbum = { choosingArchive = SelectiveExportRequest(generation, albumIds = listOf(it.albumId)) },
-        onOpenAlbum = { navigateAlbum(it) },
-        onCloseAlbum = { navigateAlbum(albumParent(albums, openAlbum?.id)) },
-        onAlbumRoot = { navigateAlbum(null) },
-        onCreateAlbum = { creatingAlbum = true },
-        onMediaViewChange = { mediaView = it },
-        onAlbumViewChange = { albumView = it },
-        onSortChange = {
-            if (openAlbum != null) albumSort = it else if (!recentlyAdded) mediaSort = it
+        onExportAlbum = { album -> ordinaryShellAction { exportingAlbum = album } },
+        onEncryptedExportAlbum = { album -> ordinaryShellAction { choosingArchive = SelectiveExportRequest(generation, albumIds = listOf(album.albumId)) } },
+        onOpenAlbum = { album -> ordinaryShellAction { navigateAlbum(album) } },
+        onCloseAlbum = { ordinaryShellAction { navigateAlbum(albumParent(albums, openAlbum?.id)) } },
+        onAlbumRoot = { ordinaryShellAction { navigateAlbum(null) } },
+        onCreateAlbum = { ordinaryShellAction { creatingAlbum = true } },
+        onMediaViewChange = { view -> ordinaryShellAction { mediaView = view } },
+        onAlbumViewChange = { view -> ordinaryShellAction { albumView = view } },
+        onSortChange = { sort -> ordinaryShellAction {
+            if (openAlbum != null) albumSort = sort else if (!recentlyAdded) mediaSort = sort
             selection = emptySet()
-        },
-        onKindsChange = { mediaKinds = it; selection = emptySet() },
-        onAlbumOrderChange = { albumOrder = it },
-        onAlbumFilterChange = { albumFilter = it },
-        onShowRecentlyAdded = {
+        } },
+        onKindsChange = { kinds -> ordinaryShellAction { mediaKinds = kinds; selection = emptySet() } },
+        onAlbumOrderChange = { order -> ordinaryShellAction { albumOrder = order } },
+        onAlbumFilterChange = { filter -> ordinaryShellAction { albumFilter = filter } },
+        onShowRecentlyAdded = { ordinaryShellAction {
             terms = ""
             focusManager.clearFocus()
             openAlbum = null
@@ -1160,13 +1222,13 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             selection = emptySet()
             destination = VaultDestination.LIBRARY
             recentlyAdded = true
-        },
-        onShowAllMedia = { terms = ""; recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = false; selection = emptySet() },
-        onShowFavorites = { terms = ""; recentlyAdded = false; openTag = null; favoritesOnly = true; trashOpen = false; quarantineOpen = false; selection = emptySet() },
-        onShowTags = { controller.loadTags(); managingTags = true },
-        onShowTrash = { terms = ""; recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = true; quarantineOpen = false; selection = emptySet() },
-        onShowQuarantine = { terms = ""; recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = true; selection = emptySet() },
-        onEmptyTrash = { confirmingEmptyTrash = true },
+        } },
+        onShowAllMedia = { ordinaryShellAction { terms = ""; recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = false; selection = emptySet() } },
+        onShowFavorites = { ordinaryShellAction { terms = ""; recentlyAdded = false; openTag = null; favoritesOnly = true; trashOpen = false; quarantineOpen = false; selection = emptySet() } },
+        onShowTags = { ordinaryShellAction { controller.loadTags(); managingTags = true } },
+        onShowTrash = { ordinaryShellAction { terms = ""; recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = true; quarantineOpen = false; selection = emptySet() } },
+        onShowQuarantine = { ordinaryShellAction { terms = ""; recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = true; selection = emptySet() } },
+        onEmptyTrash = { ordinaryShellAction { confirmingEmptyTrash = true } },
         onRestoreTrash = { controller.restoreTrash { selection = emptySet() } },
         onRenameAlbum = { album, name -> controller.renameAlbum(album.albumId, name) },
         onDeleteAlbum = { album ->
@@ -1185,7 +1247,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 controller.moveAlbumMember(album.albumId, objectToMove.objectId, before?.objectId)
             }
         },
-        onDropMediaIntoAlbum = { objects, target ->
+        onDropMediaIntoAlbum = { objects, target -> ordinaryShellAction {
             if (target != null) {
                 controller.placeObjectsInAlbum(target.albumId, objects.map { it.objectId },
                     openAlbum?.albumId, openAlbum != null) { selection = emptySet() }
@@ -1195,7 +1257,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 movingSelection = openAlbum != null
                 choosingAlbum = true
             }
-        },
+        } },
         onLoadMore = controller::loadNextPage,
         onVisibleMediaChanged = { visibleMediaIds = it },
         onLock = { controller.lock() },
@@ -1429,6 +1491,8 @@ private fun IosViewerRoute(
     var waveform by remember(projection.id) { mutableStateOf<ByteArray?>(null) }
     var confirmingDelete by remember(projection.id) { mutableStateOf(false) }
     var choosingExport by remember(projection.id) { mutableStateOf(false) }
+    fun canInteract(): Boolean = canAct() && !showDetail && !choosingTags && !choosingExport &&
+        !confirmingDelete && controller.activeOperation.value == null
     val chrome = remember { ViewerChrome() }
     val chromePinned = projection.mediaKind == 4 || showDetail || choosingTags || choosingExport || confirmingDelete || operation != null
     val chromeVisible = chrome.visible(chromePinned)
@@ -1499,25 +1563,29 @@ private fun IosViewerRoute(
             objectId = projection.objectId,
             mediaKind = projection.mediaKind,
             detail = detail,
-            onVerify = { if (canAct()) controller.verifyEverything() },
+            onVerify = { if (canInteract()) controller.verifyEverything() },
         )
     }
 
-    val touch: () -> Unit = { if (canAct()) chrome.touched() }
-    val back: () -> Unit = { if (canAct()) onBack() }
+    val touch: () -> Unit = { if (canInteract()) chrome.touched() }
+    val back: () -> Unit = { if (canInteract()) onBack() }
     val toggleFavorite: () -> Unit = {
-        if (canAct()) {
+        if (canInteract()) {
             val next = !favorite
             controller.setFavorite(projection.objectId, next) { if (canObserve()) favorite = next }
         }
     }
-    val editTags: () -> Unit = { if (canAct()) { controller.loadTags(); choosingTags = true } }
-    val export: () -> Unit = { if (canAct()) choosingExport = true }
-    val delete: () -> Unit = { if (canAct()) confirmingDelete = true }
+    val editTags: () -> Unit = { if (canInteract()) { controller.loadTags(); choosingTags = true } }
+    val export: () -> Unit = { if (canInteract()) choosingExport = true }
+    val delete: () -> Unit = { if (canInteract()) confirmingDelete = true }
     val restore: () -> Unit = {
-        if (canAct()) controller.restoreAll(listOf(projection.objectId)) { if (canObserve()) onDeleted() }
+        if (canInteract()) controller.restoreAll(listOf(projection.objectId)) { if (canObserve()) onDeleted() }
     }
-    val toggleDetail: () -> Unit = { if (canAct()) showDetail = !showDetail }
+    val toggleDetail: () -> Unit = {
+        if (canObserve() && !nativeChrome.transitionInFlight && !choosingTags && !choosingExport &&
+            !confirmingDelete && controller.activeOperation.value == null
+        ) showDetail = !showDetail
+    }
     SideEffect {
         if (canObserve()) nativeChrome.updateViewer(
             IosViewerPanelState(
@@ -1556,16 +1624,16 @@ private fun IosViewerRoute(
         thumbnails = thumbnails,
         canLoadMore = canLoadMore,
         onLoadMore = { if (canObserve()) controller.loadNextPage() },
-        onSettled = { if (canAct()) onSettled(it) },
+        onSettled = { if (canInteract()) onSettled(it) },
         detail = detail,
         preview = preview,
         stillState = stillState,
-        onVerifyStill = { if (canAct()) controller.verifyEverything() },
-        onZoomChanged = { if (canAct()) zoomedPhoto = it },
+        onVerifyStill = { if (canInteract()) controller.verifyEverything() },
+        onZoomChanged = { if (canInteract()) zoomedPhoto = it },
         animation = animation,
-        showDetail = showDetail,
+        showDetail = false,
         chromeVisible = chromeVisible,
-        onToggleChrome = { if (canAct()) chrome.toggle(chromePinned) },
+        onToggleChrome = { if (canInteract()) chrome.toggle(chromePinned) },
         onTouch = touch,
         onBack = back,
         onLock = { if (scene.canEscape()) nativeChrome.lockNow() },
@@ -1605,7 +1673,31 @@ private fun IosViewerRoute(
         notice = notice,
         onNoticeShown = { if (canObserve()) controller.consume(it) },
     )
+    if (showDetail) {
+        val visit = rememberIosRouteModalVisit()
+        fun infoCurrent(): Boolean = canObserve() && showDetail && controller.activeOperation.value == null
+        CompositionLocalProvider(LocalPrivateModalGuard provides ::infoCurrent) {
+            PrivateAlertDialog(
+                presentation = PrivateModalPresentation.Popover,
+                anchor = PrivateModalAnchor.Info,
+                onDismissRequest = { visit.complete(canObserve() && showDetail) { showDetail = false } },
+                title = { Text("Info") },
+                text = {
+                    val facts = detail
+                    if (facts != null) ViewerDetailContent(facts, projection,
+                        containerColor = colors.surface, contentColor = colors.ink)
+                    else Text("Loading…")
+                },
+                confirmButton = {},
+                dismissButton = { TextButton(onClick = privateModalAction {
+                    visit.complete(canObserve() && showDetail) { showDetail = false }
+                }) { Text("Close") } },
+            )
+        }
+    }
     if (choosingTags) {
+        val visit = rememberIosRouteModalVisit()
+        fun tagsCurrent(): Boolean = canObserve() && choosingTags && controller.activeOperation.value == null
         val selected = listOf(projection.objectId)
         val refresh: () -> Unit = {
             if (canObserve()) viewerScope.launch {
@@ -1613,11 +1705,13 @@ private fun IosViewerRoute(
                 if (canObserve()) detail = loaded
             }
         }
-        TagPickerDialog(tags = tags,
-            onAdd = { tag -> if (canAct()) { choosingTags = false; controller.setTagForAll(tag.tagId, selected, true, refresh) } },
-            onRemove = { tag -> if (canAct()) { choosingTags = false; controller.setTagForAll(tag.tagId, selected, false, refresh) } },
-            onCreate = { name -> if (canAct()) { choosingTags = false; controller.createTagWithObjects(name, selected, refresh) } },
-            onDismiss = { if (canAct()) choosingTags = false })
+        CompositionLocalProvider(LocalPrivateModalGuard provides ::tagsCurrent) {
+            TagPickerDialog(tags = tags,
+                onAdd = { tag -> visit.complete(tagsCurrent()) { choosingTags = false; controller.setTagForAll(tag.tagId, selected, true, refresh) } },
+                onRemove = { tag -> visit.complete(tagsCurrent()) { choosingTags = false; controller.setTagForAll(tag.tagId, selected, false, refresh) } },
+                onCreate = { name -> visit.complete(tagsCurrent()) { choosingTags = false; controller.createTagWithObjects(name, selected, refresh) } },
+                onDismiss = { visit.complete(canObserve() && choosingTags) { choosingTags = false } })
+        }
     }
     if (confirmingDelete) {
         DeleteSelectionDialog(
@@ -1634,19 +1728,22 @@ private fun IosViewerRoute(
         )
     }
     if (choosingExport) {
-        ExportOptionsDialog(
-            media = canSaveToPhotos(projection.mediaKind) || detail?.contentType == dev.po4yka.chur.imports.LivePhotoBundle.CONTENT_TYPE,
-            files = true,
-            share = true,
-            onChoose = { target ->
-                if (canAct()) {
+        val visit = rememberIosRouteModalVisit()
+        fun exportCurrent(): Boolean = canObserve() && choosingExport && controller.activeOperation.value == null
+        CompositionLocalProvider(LocalPrivateModalGuard provides ::exportCurrent) {
+            ExportOptionsDialog(
+                media = canSaveToPhotos(projection.mediaKind) || detail?.contentType == dev.po4yka.chur.imports.LivePhotoBundle.CONTENT_TYPE,
+                files = true,
+                share = true,
+                onChoose = { target -> visit.complete(exportCurrent()) {
                     choosingExport = false
                     controller.export(projection.objectId, target)
-                }
-            },
-            onDismiss = { if (canAct()) choosingExport = false },
-        )
+                } },
+                onDismiss = { visit.complete(canObserve() && choosingExport) { choosingExport = false } },
+            )
+        }
     }
+
 }
 
 /** The object identifiers the selection names, in the page's order. */
@@ -1843,4 +1940,24 @@ public object IosLivePhotoFilesPicker {
         releaseSelection: () -> Unit,
     ) -> Unit) -> Unit)? = null
     public var cancel: (() -> Unit)? = null
+}
+
+/** One opening of a route modal; completing or disposing it can never revive it. */
+internal class IosRouteModalVisit {
+    private var active = true
+
+    fun complete(allowed: Boolean, action: () -> Unit) {
+        if (!active || !allowed) return
+        active = false
+        action()
+    }
+
+    fun retire() { active = false }
+}
+
+@Composable
+private fun rememberIosRouteModalVisit(): IosRouteModalVisit {
+    val visit = remember { IosRouteModalVisit() }
+    DisposableEffect(visit) { onDispose { visit.retire() } }
+    return visit
 }

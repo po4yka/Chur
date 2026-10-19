@@ -55,7 +55,7 @@ internal class IosVaultScene(
             (owner.vaultState.value as? VaultState.Unlocked)?.generation == generation
     }
 
-    fun canAct(): Boolean = active && currentOwner() && chrome.get()?.transitionInFlight == false
+    fun canAct(): Boolean = active && currentOwner() && chrome.get()?.let { !it.transitionInFlight && !it.privateModalActive } == true
     fun canObserve(): Boolean = active && currentOwner()
     fun canEscape(): Boolean = currentOwner()
 
@@ -71,6 +71,7 @@ internal class IosVaultScenes(
     controller: ChurController,
     private val gate: GateResult,
     chrome: IosVaultChrome,
+    private val modals: IosPrivateModalHost? = null,
 ) {
     private val controller = WeakReference(controller)
     private val chrome = WeakReference(chrome)
@@ -120,6 +121,7 @@ internal class IosVaultScenes(
         val controllerOwner = controller
         val chromeOwner = chrome
         val admissionGate = gate
+        val modalPresenter = modals
         // UIKit retains this block, not a controller owned by the store. Empty
         // retired leases may outlive a transition without retaining its body.
         return ComposeUIViewController(configure = { onFocusBehavior = OnFocusBehavior.DoNothing }) {
@@ -137,6 +139,7 @@ internal class IosVaultScenes(
                     LocalIosVaultScenes provides currentStore,
                     LocalIosVaultScene provides lease,
                     LocalIosVaultChrome provides chromeOwner.get(),
+                    LocalPrivateModalPresenter provides modalPresenter,
                     LocalPrivatePanic provides {
                         if (lease.canEscape()) chromeOwner.get()?.requestPanic()
                     },

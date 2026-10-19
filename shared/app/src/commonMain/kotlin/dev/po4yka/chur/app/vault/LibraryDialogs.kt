@@ -33,6 +33,7 @@ import dev.po4yka.chur.ffi.TagSummary
 fun NewAlbumDialog(onCreate: (String) -> Unit, onDismiss: () -> Unit) {
     var name by remember { mutableStateOf("") }
     PrivateAlertDialog(
+        presentation = PrivateModalPresentation.Sheet,
         onDismissRequest = onDismiss,
         title = { Text("New album") },
         text = {
@@ -46,11 +47,11 @@ fun NewAlbumDialog(onCreate: (String) -> Unit, onDismiss: () -> Unit) {
             )
         },
         confirmButton = {
-            TextButton(onClick = { onCreate(name.trim()) }, enabled = name.isNotBlank()) {
+            TextButton(onClick = privateModalAction { onCreate(name.trim()) }, enabled = name.isNotBlank()) {
                 Text("Create")
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = privateModalAction(onDismiss)) { Text("Cancel") } },
     )
 }
 
@@ -67,6 +68,7 @@ fun MoveAlbumDialog(
         destinations.filter { it.path.contains(filter.trim(), ignoreCase = true) }
     }
     PrivateAlertDialog(
+        presentation = PrivateModalPresentation.Sheet,
         onDismissRequest = onDismiss,
         title = { Text("Move album") },
         text = {
@@ -80,13 +82,13 @@ fun MoveAlbumDialog(
                 LazyColumn(modifier = Modifier.weight(1f, fill = false).fillMaxWidth()
                     .testTag("album-move-destinations")) {
                     item {
-                        TextButton(onClick = { onChoose(null) }, modifier = Modifier.fillMaxWidth()
+                        TextButton(onClick = privateModalAction { onChoose(null) }, modifier = Modifier.fillMaxWidth()
                             .semantics { contentDescription = "Move album to top level" }) {
                             Text("Top level", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start)
                         }
                     }
                     items(matches, key = { it.album.id }) { destination ->
-                        TextButton(onClick = { onChoose(destination.album) },
+                        TextButton(onClick = privateModalAction { onChoose(destination.album) },
                             modifier = Modifier.fillMaxWidth().testTag("album-move-${destination.album.id}")
                                 .semantics { contentDescription = "Move album to ${destination.path}" }) {
                             Text(destination.path, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start)
@@ -97,7 +99,7 @@ fun MoveAlbumDialog(
             }
         },
         confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = privateModalAction(onDismiss)) { Text("Cancel") } },
     )
 }
 
@@ -117,6 +119,7 @@ fun AlbumPickerDialog(
     val destinations = remember(albums) { albumDestinations(albums) }
     val verb = if (move) "Move" else "Add"
     PrivateAlertDialog(
+        presentation = PrivateModalPresentation.Sheet,
         onDismissRequest = onDismiss,
         title = { Text("$verb to album") },
         text = {
@@ -129,7 +132,7 @@ fun AlbumPickerDialog(
                 destinations.filter { it.album.id != currentAlbum?.id &&
                     it.path.contains(filter.trim(), ignoreCase = true) }.forEach { destination ->
                     TextButton(
-                        onClick = { onChoose(destination.album) },
+                        onClick = privateModalAction { onChoose(destination.album) },
                         modifier = Modifier.fillMaxWidth().semantics {
                             contentDescription = "$verb to ${destination.path}"
                         },
@@ -160,13 +163,13 @@ fun AlbumPickerDialog(
                         }
                     }
                 }
-                TextButton(onClick = { onCreate(name.trim(), parent) }, enabled = name.isNotBlank()) {
+                TextButton(onClick = privateModalAction { onCreate(name.trim(), parent) }, enabled = name.isNotBlank()) {
                     Text("Create and ${verb.lowercase()}")
                 }
             }
         },
         confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = privateModalAction(onDismiss)) { Text("Cancel") } },
     )
 }
 
@@ -182,6 +185,7 @@ fun TagPickerDialog(
     var filter by remember { mutableStateOf("") }
     val existing = tags.firstOrNull { it.name.equals(name.trim(), ignoreCase = true) }
     PrivateAlertDialog(
+        presentation = PrivateModalPresentation.Sheet,
         onDismissRequest = onDismiss,
         title = { Text("Tags") },
         text = {
@@ -192,8 +196,8 @@ fun TagPickerDialog(
                 LazyColumn(modifier = Modifier.heightIn(max = 220.dp)) {
                     items(tags.filter { it.name.contains(filter, ignoreCase = true) }, key = { it.id }) { tag ->
                     Column {
-                        TextButton(onClick = { onAdd(tag) }) { Text("Add ${tag.name}") }
-                        TextButton(onClick = { onRemove(tag) }) { Text("Remove") }
+                        TextButton(onClick = privateModalAction { onAdd(tag) }) { Text("Add ${tag.name}") }
+                        TextButton(onClick = privateModalAction { onRemove(tag) }) { Text("Remove") }
                     }
                     }
                 }
@@ -206,7 +210,7 @@ fun TagPickerDialog(
                     label = { Text("New tag name") },
                 )
                 TextButton(
-                    onClick = { if (existing == null) onCreate(name.trim()) else onAdd(existing) },
+                    onClick = privateModalAction { if (existing == null) onCreate(name.trim()) else onAdd(existing) },
                     enabled = name.isNotBlank(),
                 ) {
                     Text(if (existing == null) "Create and add" else "Add existing tag")
@@ -214,7 +218,7 @@ fun TagPickerDialog(
             }
         },
         confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = privateModalAction(onDismiss)) { Text("Cancel") } },
     )
 }
 

@@ -1007,6 +1007,27 @@ Do not auto-hide while:
 
 ---
 
+### 13.5 Native private presentations on iOS
+
+New album, Add/Move to album and Tags use UIKit sheets with medium and large
+detents. Viewer Info and Export original use a popover anchored to the native
+command on regular-width screens and a sheet on compact screens. Their forms,
+metadata and actions remain Compose content; Android retains its existing
+presentations. Delete confirmations and nested form menus retain their shared UI.
+
+The presentation keeps Lock and hide above its scrolling content and its closing
+actions below it. Swipe or outside dismissal closes only that presentation; it
+does not navigate or select a destination behind it. Underlying commands stay
+blocked until dismissal finishes. A chosen export destination opens the system
+picker only after UIKit closes the chooser and the route rechecks its current
+session, item or selection, and operation. Lock and background exit immediately
+conceal the presentation and revoke its content and queued actions.
+
+Each modal controller embeds its Compose child using UIKit safe-area and keyboard
+layout guides, without inheriting the originating controller's window insets.
+Navigation frames own their bar items and Lock/Back controls; inactive or retired
+control targets cannot dispatch into the current frame.
+
 ## 14. Unlock and session gate
 
 ### 14.1 Unlock screen

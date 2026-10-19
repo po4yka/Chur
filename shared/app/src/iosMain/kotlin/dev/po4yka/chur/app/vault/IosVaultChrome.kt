@@ -5,6 +5,7 @@ package dev.po4yka.chur.app.vault
 import androidx.compose.ui.graphics.Color
 import kotlinx.cinterop.ObjCAction
 import kotlinx.cinterop.ObjCSignatureOverride
+import kotlinx.cinterop.objcPtr
 import kotlin.native.ref.WeakReference
 import platform.CoreGraphics.CGRectMake
 import platform.darwin.NSObject
@@ -14,7 +15,6 @@ import platform.UIKit.UIAction
 import platform.UIKit.UIBarButtonItem
 import platform.UIKit.UIBarButtonSystemItem.UIBarButtonSystemItemFlexibleSpace
 import platform.UIKit.toolbarItems
-import platform.UIKit.UIBarButtonItemStyle.UIBarButtonItemStylePlain
 import platform.UIKit.UIButton
 import platform.UIKit.UIButtonTypeSystem
 import platform.UIKit.UIColor
@@ -77,7 +77,61 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
     internal val navigationBar: UINavigationBar get() = selectedNavigation.navigationBar
     internal val tabBar: UITabBar get() = controller.tabBar
     private val navigationItem: UINavigationItem? get() = selectedNavigation.topViewController?.navigationItem
-    private data class Frame(val screen: IosVaultScreen, val content: UIViewController)
+    private data class Frame(val screen: IosVaultScreen, val content: UIViewController, val controls: ChromeControls)
+    /** UIKit bars must never share a UIBarButtonItem or its custom UIView. */
+    private class ChromeControls(owner: IosVaultChrome) : NSObject() {
+        private val presenter = WeakReference(owner)
+        val lock = button("Lock now", "lock")
+        val primary: UIBarButtonItem
+        private val lockAction: UIAction
+        private val backAction: UIAction
+        val secondary = UIBarButtonItem(title = "", menu = null)
+        val back = button("Back", "chevron.backward")
+        private val panicGesture = UILongPressGestureRecognizer(this, NSSelectorFromString("panic:"))
+        private var active = true
+
+        private fun current(): IosVaultChrome? = presenter.get()?.takeIf {
+            active && !it.lockRequested && it.generation != 0L && it.currentControls?.objcPtr() == objcPtr()
+        }
+
+        init {
+            val controls = WeakReference(this)
+            primary = UIBarButtonItem(primaryAction = UIAction.actionWithTitle("", image = null, identifier = null) { _ ->
+                controls.get()?.current()?.performPrimary()
+            })
+            lockAction = UIAction.actionWithTitle("Lock now", image = null, identifier = null) { _ ->
+                controls.get()?.current()?.lockNow()
+            }
+            backAction = UIAction.actionWithTitle("Back", image = null, identifier = null) { _ ->
+                controls.get()?.current()?.goBack()
+            }
+            lock.addAction(lockAction, forControlEvents = UIControlEventTouchUpInside)
+            back.addAction(backAction, forControlEvents = UIControlEventTouchUpInside)
+            lock.addGestureRecognizer(panicGesture)
+            lock.accessibilityCustomActions = listOf(
+                UIAccessibilityCustomAction(name = "Lock immediately", actionHandler = {
+                    controls.get()?.current()?.let { it.panicNow(); true } ?: false
+                }),
+            )
+        }
+
+        @ObjCAction fun panic(recognizer: UILongPressGestureRecognizer) { current()?.panic(recognizer) }
+
+        fun retire() {
+            active = false
+            primary.primaryAction = null
+            primary.target = null
+            primary.action = null
+            primary.menu = null
+            primary.title = null
+            secondary.menu = null
+            secondary.title = null
+            lock.removeAction(lockAction, forControlEvents = UIControlEventTouchUpInside)
+            back.removeAction(backAction, forControlEvents = UIControlEventTouchUpInside)
+            lock.removeGestureRecognizer(panicGesture)
+        }
+    }
+    private val currentControls: ChromeControls? get() = stacks[selectedNavigation]?.lastOrNull()?.controls
     private val stacks = mutableMapOf<UINavigationController, List<Frame>>()
     private val retiring = mutableMapOf<UINavigationController, List<Frame>>()
     private var screenFactory: ((IosVaultScreen) -> UIViewController)? = null
@@ -95,11 +149,6 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
     private var key: ChromeKey? = null
     private var navigationBlocked = true
     private var lockRequested = false
-    private val lock = button("Lock now", "lock")
-    private val primary = UIBarButtonItem(title = "", style = UIBarButtonItemStylePlain,
-        target = this, action = NSSelectorFromString("performPrimary"))
-    private val secondary = UIBarButtonItem(title = "", menu = null)
-    private val back = button("Back", "chevron.backward")
     private var primaryCommand: ((VaultActions) -> Unit)? = null
     private var backCommand: ((VaultActions) -> Unit)? = null
     private var menuEpoch = 0L
@@ -116,6 +165,48 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
     private var search: NativeSearch? = null
     private var searchAllowed = false
     private var searchQueryLoading = false
+    private var pendingModalPresentation: (() -> Unit)? = null
+    internal var onClearPrivateModals: (() -> Unit)? = null
+    internal var privateModalActive = false
+        private set
+
+    internal fun setPrivateModalActive(active: Boolean) {
+        privateModalActive = active
+        key = null
+        if (active) suspendNavigation() else {
+            renderedViewer = null
+            renderViewer()
+            reconcileVisibility()
+        }
+    }
+
+    private fun freezeModalSourceItems() {
+        // UIPopoverPresentationController retains this exact sourceItem. Keep
+        // its mounted identity until dismissal has completed; state is still
+        // recorded below and the next ordinary projection rebuilds the bars.
+        navigationItem?.leftBarButtonItem?.enabled = false
+        navigationItem?.rightBarButtonItems?.filterIsInstance<UIBarButtonItem>()?.forEach {
+            it.enabled = it.customView == currentControls?.lock
+        }
+        selectedNavigation.topViewController?.toolbarItems?.filterIsInstance<UIBarButtonItem>()?.forEach { it.enabled = false }
+        tabBar.userInteractionEnabled = false
+        tabBar.items?.filterIsInstance<UITabBarItem>()?.forEach { it.enabled = false }
+        reconcileVisibility()
+    }
+
+    /** Search must finish its own dismissal before a modal can use the same root. */
+    internal fun preparePrivateModal(present: () -> Unit) {
+        retireSearch()
+        if (searchDismissal == null) present() else pendingModalPresentation = present
+    }
+
+    internal fun privateModalAnchor(anchor: PrivateModalAnchor): UIBarButtonItem? = when (anchor) {
+        PrivateModalAnchor.Automatic -> null
+        PrivateModalAnchor.Info -> navigationItem?.rightBarButtonItems?.filterIsInstance<UIBarButtonItem>()
+            ?.firstOrNull { it.title == "Info" || it.title == "Hide info" }
+        PrivateModalAnchor.Export -> selectedNavigation.topViewController?.toolbarItems?.filterIsInstance<UIBarButtonItem>()
+            ?.firstOrNull { it.title == "Export" }
+    }
 
     /** A fresh delegate object is a visit lease, including same-screen re-entry. */
     private class NativeSearch(owner: IosVaultChrome, frame: Frame, val generation: Long, scope: SearchScope) :
@@ -148,16 +239,6 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         tabBar.translucent = true
         controller.delegate = this
         navigationControllers.forEach { it.delegate = this; it.navigationBar.translucent = true; it.toolbar.translucent = true }
-        lock.addTarget(this, NSSelectorFromString("lockNow"), UIControlEventTouchUpInside)
-        lock.addGestureRecognizer(UILongPressGestureRecognizer(this, NSSelectorFromString("panic:")))
-        // Objective-C blocks must not retain the Kotlin presenter that owns them.
-        val owner = WeakReference(this@IosVaultChrome)
-        lock.accessibilityCustomActions = listOf(
-            UIAccessibilityCustomAction(name = "Lock immediately", actionHandler = {
-                owner.get()?.let { it.panicNow(); true } ?: false
-            }),
-        )
-        back.addTarget(this, NSSelectorFromString("goBack"), UIControlEventTouchUpInside)
         clear()
     }
 
@@ -212,7 +293,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
                     controller.view.endEditing(true)
                     val candidates = old + retiring[nav].orEmpty()
                     val next = desired.map { screen -> candidates.firstOrNull { it.screen == screen }
-                        ?: Frame(screen, checkNotNull(screenFactory).invoke(screen)).also {
+                        ?: Frame(screen, checkNotNull(screenFactory).invoke(screen), ChromeControls(this)).also {
                             it.content.hidesBottomBarWhenPushed = screen is IosVaultScreen.Viewer
                         }
                     }
@@ -241,6 +322,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
     }
 
     private fun retire(frame: Frame) {
+        frame.controls.retire()
         if (search?.frame == frame || searchPresentation?.frame == frame) retireSearch()
         // Retire the Compose slot before releasing UIKit's reference to it.
         retireCallback?.invoke(frame.screen)
@@ -271,6 +353,9 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
     }
 
     private fun reconcileVisibility() {
+        // Native modals cover these bars themselves and need their source items
+        // to stay mounted for regular-width popover positioning.
+        val covered = this.covered && !privateModalActive
         val selected = selectedNavigation
         stacks.forEach { (nav, frames) -> frames.forEach { frame ->
             frame.content.view.accessibilityElementsHidden = nav != selected || frame != frames.lastOrNull()
@@ -314,9 +399,11 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         retireMenu()
         key = null
         navigationBlocked = true
-        back.enabled = false
-        primary.enabled = false
-        secondary.enabled = false
+        currentControls?.let {
+            it.back.enabled = false
+            it.primary.enabled = false
+            it.secondary.enabled = false
+        }
         navigationItem?.setHidesBackButton(true, animated = false)
         navigationItem?.leftBarButtonItem?.enabled = false
         selectedNavigation.topViewController?.toolbarItems?.filterIsInstance<UIBarButtonItem>()?.forEach { it.enabled = false }
@@ -330,6 +417,11 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
 
     fun update(state: VaultUiState, actions: VaultActions, accent: Color, navigationBusy: Boolean, covered: Boolean = false) {
         if (lockRequested) return
+        val controls = currentControls ?: return
+        val lock = controls.lock
+        val primary = controls.primary
+        val secondary = controls.secondary
+        val back = controls.back
         val updateEpoch = ++chromeUpdateEpoch
         if (searchDismissal != null) {
             val owner = WeakReference(this@IosVaultChrome)
@@ -344,10 +436,11 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         selectionBlocksPop = state.selectedCount > 0
         // Selection actions share one operation owner. Progress can arrive
         // without a modal/navigation-busy report from the Compose shell.
-        navigationBlocked = covered || navigationBusy || (selectionBlocksPop && state.operation != null)
+        navigationBlocked = privateModalActive || covered || navigationBusy || (selectionBlocksPop && state.operation != null)
         if (navigationBlocked) { dismissMenus(navigationBar); dismissMenus(toolbar) }
         this.actions = actions
         updateSearch(state, navigationBusy)
+        if (privateModalActive) { freezeModalSourceItems(); return }
         if (viewerIsTop) {
             tabBar.userInteractionEnabled = !navigationBlocked
             tabBar.items?.filterIsInstance<UITabBarItem>()?.forEach { it.enabled = !navigationBlocked }
@@ -427,6 +520,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         }
         if (primaryTitle != null) {
             primary.title = primaryTitle
+            primary.primaryAction?.title = primaryTitle
             primaryCommand = when (primaryTitle) {
                 "New album" -> { a -> a.onCreateAlbum() }
                 else -> { a -> a.onImport() }
@@ -447,6 +541,8 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         controller.view.accessibilityElementsHidden = true
         controller.view.userInteractionEnabled = false
         lockRequested = true
+        onClearPrivateModals?.invoke()
+        pendingModalPresentation = null
         chromeUpdateEpoch++
         pendingReconcile = null
         pendingChromeUpdate = null
@@ -459,10 +555,6 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         key = null
         primaryCommand = null
         backCommand = null
-        primary.menu = null
-        secondary.menu = null
-        primary.title = null
-        secondary.title = null
         navigationItem?.title = null
         navigationItem?.leftBarButtonItem = null
         navigationItem?.rightBarButtonItems = null
@@ -631,6 +723,9 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
                         reconcile?.invoke()
                         update?.invoke()
                         chrome.resumeSearch()
+                        val present = chrome.pendingModalPresentation
+                        chrome.pendingModalPresentation = null
+                        present?.invoke()
                     }
                 }
             }
@@ -838,7 +933,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         nav.toolbar.overrideUserInterfaceStyle = style
         nav.navigationBar.tintColor = tint
         nav.toolbar.tintColor = tint
-        lock.tintColor = tint
+        (stacks[nav].orEmpty() + retiring[nav].orEmpty()).forEach { it.controls.lock.tintColor = tint }
     }
 
     /** Local publication closes the gap before the shared busy effect reaches its owner. */
@@ -858,7 +953,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
             val presenter = owner.get()
             val state = presenter?.viewerState
             if (presenter != null && state != null && epoch == presenter.viewerEpoch && presenter.viewerIsTop &&
-                !presenter.lockRequested && (!presenter.viewerControlsBlocked ||
+                !presenter.lockRequested && !presenter.privateModalActive && (!presenter.viewerControlsBlocked ||
                     (allowsDetailClose && state.infoVisible && !state.busy && !presenter.covered)) && !presenter.transitionInFlight) {
                 presenter.viewerActions?.let { current -> current.onTouch(); run(current) }
             }
@@ -872,8 +967,10 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
 
     private fun renderViewer() {
         if (!viewerIsTop) return
+        if (privateModalActive) { freezeModalSourceItems(); return }
         val state = viewerState ?: return
         val content = selectedNavigation.topViewController ?: return
+        val lock = currentControls?.lock ?: return
         val renderKey = Triple(state, navigationBlocked, covered)
         if (renderedViewer == renderKey) { reconcileVisibility(); return }
         renderedViewer = renderKey

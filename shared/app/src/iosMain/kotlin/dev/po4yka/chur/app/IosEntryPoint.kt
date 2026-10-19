@@ -3,6 +3,8 @@
 package dev.po4yka.chur.app
 
 import androidx.compose.runtime.CompositionLocalProvider
+import dev.po4yka.chur.app.vault.IosPrivateModalHost
+import dev.po4yka.chur.app.vault.LocalPrivateModalPresenter
 import dev.po4yka.chur.app.vault.IosVaultChrome
 import dev.po4yka.chur.app.vault.LocalIosVaultChrome
 import dev.po4yka.chur.app.vault.IosVaultScenes
@@ -56,17 +58,22 @@ import kotlin.native.ref.WeakReference
  */
 fun ChurViewController(controller: ChurController, gate: GateResult, privacy: IosPrivacyCover): UIViewController {
     val chrome = IosVaultChrome()
-    val scenes = IosVaultScenes(controller, gate, chrome)
+    val modals = IosPrivateModalHost(controller, chrome)
+    val scenes = IosVaultScenes(controller, gate, chrome, modals)
+    val modalReference = WeakReference(modals)
+    chrome.onClearPrivateModals = { modalReference.get()?.clear() }
     val compose = ComposeUIViewController(configure = { onFocusBehavior = OnFocusBehavior.DoNothing }) {
         val route by controller.route.collectAsState()
         val state by controller.vaultState.collectAsState()
-        CompositionLocalProvider(LocalIosVaultChrome provides chrome, LocalIosVaultScenes provides scenes) {
+        CompositionLocalProvider(LocalIosVaultChrome provides chrome, LocalIosVaultScenes provides scenes,
+            LocalPrivateModalPresenter provides modals) {
             ChurApp(gate = gate, route = route) {
                 IosRoutes(controller = controller, route = route, vaultState = state)
             }
         }
     }
     val root = ChurRootViewController(compose, chrome)
+    modals.attach(root)
     val rootReference = WeakReference(root)
     val controllerReference = WeakReference(controller)
     val chromeReference = WeakReference(chrome)

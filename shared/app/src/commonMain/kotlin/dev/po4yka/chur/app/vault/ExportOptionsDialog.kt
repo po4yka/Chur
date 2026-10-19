@@ -1,9 +1,12 @@
 package dev.po4yka.chur.app.vault
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import dev.po4yka.chur.app.ExportTarget
 
 /** The only media classes Photos accepts from the vault catalog. */
@@ -20,31 +23,34 @@ fun ExportOptionsDialog(
     onChoose: (ExportTarget) -> Unit,
     onDismiss: () -> Unit,
     onRestoreLivePhoto: (() -> Unit)? = null,
+    presentation: PrivateModalPresentation = PrivateModalPresentation.Popover,
 ) {
     PrivateAlertDialog(
+        presentation = presentation,
+        anchor = PrivateModalAnchor.Export,
         onDismissRequest = onDismiss,
         title = { Text("Export original") },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text("The destination or recipient may keep an unencrypted copy.")
-                if (onRestoreLivePhoto != null) TextButton(onClick = onRestoreLivePhoto) {
+                if (onRestoreLivePhoto != null) TextButton(onClick = privateModalAction(onRestoreLivePhoto)) {
                     Text("Restore Live Photo resources")
                 }
-                if (media) TextButton(onClick = { onChoose(ExportTarget.MEDIA_LIBRARY) }) {
+                if (media) TextButton(onClick = privateModalAction { onChoose(ExportTarget.MEDIA_LIBRARY) }) {
                     Text("Save to Photos")
                 }
-                if (downloads) TextButton(onClick = { onChoose(ExportTarget.DEFAULT) }) {
+                if (downloads) TextButton(onClick = privateModalAction { onChoose(ExportTarget.DEFAULT) }) {
                     Text("Save to Downloads")
                 }
-                if (files) TextButton(onClick = { onChoose(ExportTarget.FILES) }) {
+                if (files) TextButton(onClick = privateModalAction { onChoose(ExportTarget.FILES) }) {
                     Text("Save to Files")
                 }
-                if (share) TextButton(onClick = { onChoose(ExportTarget.SHARE) }) {
+                if (share) TextButton(onClick = privateModalAction { onChoose(ExportTarget.SHARE) }) {
                     Text("Share")
                 }
             }
         },
         confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = privateModalAction(onDismiss)) { Text("Cancel") } },
     )
 }

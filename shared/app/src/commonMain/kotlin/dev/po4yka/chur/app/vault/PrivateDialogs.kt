@@ -26,6 +26,37 @@ import dev.po4yka.chur.app.theme.ChurSpacing
 /** Bound only around private routes: a public dialog never advertises a private action. */
 val LocalPrivatePanic = staticCompositionLocalOf<(() -> Unit)?> { null }
 
+/** Only explicitly selected flows opt into a platform-owned presentation. */
+enum class PrivateModalPresentation { Dialog, Sheet, Popover }
+enum class PrivateModalAnchor { Automatic, Info, Export }
+
+/** Eligibility is supplied by the route that owns the form's actual operation. */
+val LocalPrivateModalGuard = staticCompositionLocalOf<() -> Boolean> { { true } }
+
+internal interface PrivateModalPresenter {
+    @Composable
+    fun Present(
+        onDismissRequest: () -> Unit,
+        confirmButton: @Composable () -> Unit,
+        modifier: Modifier,
+        dismissButton: (@Composable () -> Unit)?,
+        title: (@Composable () -> Unit)?,
+        text: (@Composable () -> Unit)?,
+        presentation: PrivateModalPresentation,
+        anchor: PrivateModalAnchor,
+    )
+}
+
+internal val LocalPrivateModalPresenter = staticCompositionLocalOf<PrivateModalPresenter?> { null }
+internal val LocalPrivateModalActionDispatcher = staticCompositionLocalOf<((() -> Unit) -> Unit)?> { null }
+
+/** Close UIKit before actions that may immediately present a Photos/Files picker. */
+@Composable
+fun privateModalAction(action: () -> Unit): () -> Unit {
+    val dispatch = LocalPrivateModalActionDispatcher.current
+    return if (dispatch == null) action else ({ dispatch(action) })
+}
+
 /** A modal owns its window's input; the covered screen's lock cannot receive it. */
 @Composable
 fun PrivateAlertDialog(
@@ -35,7 +66,14 @@ fun PrivateAlertDialog(
     dismissButton: (@Composable () -> Unit)? = null,
     title: (@Composable () -> Unit)? = null,
     text: (@Composable () -> Unit)? = null,
+    presentation: PrivateModalPresentation = PrivateModalPresentation.Dialog,
+    anchor: PrivateModalAnchor = PrivateModalAnchor.Automatic,
 ) {
+    val presenter = LocalPrivateModalPresenter.current
+    if (presentation != PrivateModalPresentation.Dialog && presenter != null && LocalPrivatePanic.current != null) {
+        presenter.Present(onDismissRequest, confirmButton, modifier, dismissButton, title, text, presentation, anchor)
+        return
+    }
     val panic = LocalPrivatePanic.current
     AlertDialog(
         onDismissRequest = onDismissRequest,
