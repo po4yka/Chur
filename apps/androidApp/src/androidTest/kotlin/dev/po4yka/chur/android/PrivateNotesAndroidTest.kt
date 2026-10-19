@@ -6,9 +6,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.Rect
 import android.os.SystemClock
 import android.os.Looper
 import android.view.ContextThemeWrapper
+import android.view.Choreographer
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
@@ -43,6 +45,8 @@ import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.vault.VaultRepository
 import dev.po4yka.chur.vault.VaultState
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -166,7 +170,7 @@ class PrivateNotesAndroidTest {
         fixture.clickText("Folders and tags")
         fixture.fieldAction("note-filter-folder") { assertTrue(it.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(androidx.compose.ui.text.AnnotatedString("Projects")) == true) }
         fixture.fieldAction("note-filter-tag") { assertTrue(it.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(androidx.compose.ui.text.AnnotatedString("todo")) == true) }
-        fixture.capture("private-notes-filters-public-fixture.png")
+        fixture.capture("private-notes-filters-public-fixture.png", fullScreen = true)
         assertTrue(fixture.savedState().isEmpty())
         fixture.clickText("Lock and hide")
         assertTrue(fixture.await { fixture.hasText("Public fixture note") })
@@ -343,14 +347,54 @@ class PrivateNotesAndroidTest {
                 assertTrue(info.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING != 0)
             }
         }
-        fun capture(name: String) {
+        fun capture(name: String, fullScreen: Boolean = false) {
+            if (fullScreen) {
+                // Dialogs have their own full Activity window. Let their entrance and field
+                // label animations settle before checking geometry and capturing that window.
+                val frames = CountDownLatch(24)
+                main {
+                    val choreographer = Choreographer.getInstance()
+                    val callback = object : Choreographer.FrameCallback {
+                        override fun doFrame(frameTimeNanos: Long) {
+                            frames.countDown()
+                            if (frames.count > 0) choreographer.postFrameCallback(this)
+                        }
+                    }
+                    choreographer.postFrameCallback(callback)
+                }
+                assertTrue("dialog compositor frames must complete", frames.await(5, TimeUnit.SECONDS))
+            }
             instrumentation.waitForIdleSync()
             val screen = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
-            val position = IntArray(2); main { view.getLocationOnScreen(position) }
-            val crop = Bitmap.createBitmap(screen, position[0], position[1], view.width.coerceAtMost(screen.width - position[0]), view.height.coerceAtMost(screen.height - position[1]))
-            val output = File(activity.getExternalFilesDir(null), name)
-            output.outputStream().use { crop.compress(Bitmap.CompressFormat.PNG, 100, it) }
-            crop.recycle(); screen.recycle()
+            try {
+                if (fullScreen) main {
+                    val dialog = WindowInspector.getGlobalWindowViews().first { root ->
+                        root !== activity.window.decorView && roots(root).flatMap {
+                            it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false)
+                        }.any { it.config.getOrNull(SemanticsProperties.TestTag) == "note-filter-tag" }
+                    }
+                    val position = IntArray(2); dialog.getLocationOnScreen(position)
+                    val bounds = Rect(position[0], position[1], position[0] + dialog.width, position[1] + dialog.height)
+                    assertTrue("the full dialog must fit the actual display: $bounds in ${screen.width}x${screen.height}",
+                        bounds.width() > 0 && bounds.height() > 0 && Rect(0, 0, screen.width, screen.height).contains(bounds))
+                    val dialogNodes = roots(dialog).flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = true) }
+                    for (label in listOf("Lock and hide", "Apply filters", "Close")) {
+                        val control = requireNotNull(dialogNodes.firstOrNull { node ->
+                            node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == label } == true &&
+                                SemanticsActions.OnClick in node.config
+                        }) { "dialog control must exist: $label" }
+                        assertTrue("dialog control must be enabled and fully visible: $label",
+                            SemanticsProperties.Disabled !in control.config && control.size.width > 0 && control.size.height > 0 &&
+                                control.boundsInWindow.width + 1f >= control.size.width && control.boundsInWindow.height + 1f >= control.size.height)
+                    }
+                }
+                val position = IntArray(2); main { view.getLocationOnScreen(position) }
+                val capture = if (fullScreen) screen else Bitmap.createBitmap(screen, position[0], position[1],
+                    view.width.coerceAtMost(screen.width - position[0]), view.height.coerceAtMost(screen.height - position[1]))
+                try {
+                    File(activity.getExternalFilesDir(null), name).outputStream().use { capture.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                } finally { if (capture !== screen) capture.recycle() }
+            } finally { screen.recycle() }
         }
     }
     private fun roots(view: View): List<ViewRootForTest> = flatten(view).filterIsInstance<ViewRootForTest>()
