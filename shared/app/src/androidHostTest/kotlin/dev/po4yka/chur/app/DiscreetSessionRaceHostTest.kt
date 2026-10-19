@@ -54,6 +54,7 @@ class DiscreetSessionRaceHostTest {
 
     @Test
     fun launcher_admission_waits_for_cleanup_after_the_native_locked_state_is_published() = scenario {
+        controller.start()
         create()
         val cleanup = withRepositoryBlocked {
             controller.lock()
