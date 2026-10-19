@@ -936,6 +936,10 @@ the same blue focus border, label, and cursor as other outlined fields.
 
 Search is local and private. The bounded query of [`docs/format/CATALOG_SCHEMA_V1.md`](docs/format/CATALOG_SCHEMA_V1.md) §16 uses the combined metadata/content FTS of [catalog v10](docs/format/CATALOG_SCHEMA_V10.md). [Content search](docs/product/CONTENT_SEARCH.md) owns foreground indexing, retry/rebuild/clear, partial results, and English/Russian OCR limits. Public Notes and private-note bodies are not part of this media Search screen.
 
+Library and an open Album offer search inside the current media scope. iOS uses a `UISearchController` attached to the current navigation item, with the shared Compose body displaying results; Android uses the shared private search field. The global Search tab remains available. A query is intersected with scope and kind filters by the catalog before counting or paging. Filtered album order cannot be rearranged.
+
+Clear or native Cancel restores the current scope. Viewer Back restores the searched list and its text; changing scope or destination clears the text. Selection, dialogs and operations retire or disable search input while Lock remains reachable. Native delegates are bound to the exact scope/session and retired before their text, focus and presentation are cleared. Lock and background exit clear query state and private native controls. Trash has erased its FTS entry and offers no text field.
+
 Rules:
 
 - query text is never persisted outside the unlocked session unless an explicit encrypted history feature is approved;

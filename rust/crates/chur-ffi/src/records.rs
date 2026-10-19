@@ -181,23 +181,21 @@ pub fn query_from(
     cursor: Option<&[u8]>,
     terms: Option<&[u8]>,
 ) -> Result<ObjectQuery> {
+    let bytes = terms.unwrap_or(&[]);
+    ensure!(
+        bytes.len() <= limits::SEARCH_TERMS_MAX,
+        ResourceLimitExceeded,
+        "the search query exceeds its catalog bound"
+    );
+    let text = core::str::from_utf8(bytes)
+        .map_err(|_| Error::new(ChurStatus::InvalidInput, "the search query is not UTF-8"))?;
+    let terms = (!text.trim().is_empty()).then(|| text.to_owned());
     let scope = match scope {
         1 => Scope::Timeline,
         2 => Scope::Album(Id::from_slice(scope_id)?),
         3 => Scope::Favorites,
         4 => Scope::Tag(Id::from_slice(scope_id)?),
-        5 => {
-            let bytes = terms.unwrap_or(&[]);
-            ensure!(
-                bytes.len() <= limits::SEARCH_TERMS_MAX,
-                ResourceLimitExceeded,
-                "the search query exceeds its catalog bound"
-            );
-            let text = core::str::from_utf8(bytes).map_err(|_| {
-                Error::new(ChurStatus::InvalidInput, "the search query is not UTF-8")
-            })?;
-            Scope::Search(text.to_owned())
-        }
+        5 => Scope::Search,
         6 => Scope::Quarantine,
         7 => Scope::Trash,
         _ => {
@@ -222,6 +220,7 @@ pub fn query_from(
     let cursor = cursor.map(Cursor::decode).transpose()?;
     Ok(ObjectQuery {
         scope,
+        terms,
         kinds,
         sort,
         cursor,

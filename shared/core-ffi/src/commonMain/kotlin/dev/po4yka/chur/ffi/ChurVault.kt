@@ -1215,8 +1215,8 @@ object ChurVault {
     }
 
     private fun requireCurrentAbi() {
-        if (ChurNative.abiVersionMajor() != 5) {
-            throw ChurFailure(ChurStatus.ABI_INCOMPATIBLE, "native ABI 5 is required")
+        if (ChurNative.abiVersionMajor() != 6) {
+            throw ChurFailure(ChurStatus.ABI_INCOMPATIBLE, "native ABI 6 is required")
         }
     }
 

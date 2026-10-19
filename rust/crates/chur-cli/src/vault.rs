@@ -202,11 +202,18 @@ pub fn import_file(session: &mut Session, path: &Path, content_type: &str) -> Re
 }
 
 /// Prints one page of a scope.
-pub fn list(session: &Session, scope: Scope, sort: Sort, limit: u32) -> Result<()> {
+pub fn list(
+    session: &Session,
+    scope: Scope,
+    terms: Option<String>,
+    sort: Sort,
+    limit: u32,
+) -> Result<()> {
     let result = page(
         session.catalog_ref()?,
         &ObjectQuery {
             scope,
+            terms,
             kinds: 0,
             sort,
             cursor: None,
@@ -417,7 +424,7 @@ pub fn parse_id(value: &str) -> Result<Id> {
 }
 
 /// Turns a scope name and an optional identifier into a query scope.
-pub fn parse_scope(name: &str, id: Option<&str>, terms: Option<&str>) -> Result<Scope> {
+pub fn parse_scope(name: &str, id: Option<&str>) -> Result<Scope> {
     Ok(match name {
         "timeline" => Scope::Timeline,
         "favorites" => Scope::Favorites,
@@ -429,11 +436,7 @@ pub fn parse_scope(name: &str, id: Option<&str>, terms: Option<&str>) -> Result<
         "tag" => Scope::Tag(parse_id(id.ok_or_else(|| {
             chur_core::err!(InvalidInput, "the tag scope names a tag")
         })?)?),
-        "search" => Scope::Search(
-            terms
-                .ok_or_else(|| chur_core::err!(InvalidInput, "the search scope names terms"))?
-                .to_owned(),
-        ),
+        "search" => Scope::Search,
         _ => bail!(InvalidInput, "the scope name is not one §16.2 allocates"),
     })
 }

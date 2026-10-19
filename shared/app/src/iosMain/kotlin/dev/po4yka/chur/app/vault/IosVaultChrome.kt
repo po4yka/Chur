@@ -24,11 +24,23 @@ import platform.UIKit.UIControlEventTouchUpInside
 import platform.UIKit.UIControlStateNormal
 import platform.UIKit.UIGestureRecognizerStateBegan
 import platform.UIKit.UIImage
+import platform.UIKit.UISearchBar
+import platform.UIKit.UISearchBarDelegateProtocol
+import platform.UIKit.UISearchController
+import platform.UIKit.UISearchResultsUpdatingProtocol
+import platform.UIKit.UITextAutocapitalizationType.UITextAutocapitalizationTypeNone
+import platform.UIKit.UITextAutocorrectionType.UITextAutocorrectionTypeNo
+import platform.UIKit.UITextSpellCheckingType.UITextSpellCheckingTypeNo
+import platform.UIKit.UITextInlinePredictionType.UITextInlinePredictionTypeNo
+import platform.UIKit.UITextSmartQuotesType.UITextSmartQuotesTypeNo
+import platform.UIKit.UITextSmartDashesType.UITextSmartDashesTypeNo
+import platform.UIKit.UITextSmartInsertDeleteType.UITextSmartInsertDeleteTypeNo
 import platform.UIKit.UILongPressGestureRecognizer
 import platform.UIKit.UIMenu
 import platform.UIKit.UIMenuElementAttributesDisabled
 import platform.UIKit.UINavigationBar
 import platform.UIKit.UINavigationItem
+import platform.UIKit.UINavigationItemSearchBarPlacement.UINavigationItemSearchBarPlacementStacked
 import platform.UIKit.UITabBar
 import platform.UIKit.UITabBarController
 import platform.UIKit.UITabBarControllerDelegateProtocol
@@ -74,7 +86,11 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
     private var generation = 0L
     private var reconciling = false
     private val transitioning = mutableSetOf<UINavigationController>()
-    internal val transitionInFlight: Boolean get() = transitioning.isNotEmpty()
+    private var searchDismissal: UISearchController? = null
+    private var pendingReconcile: (() -> Unit)? = null
+    private var pendingChromeUpdate: (() -> Unit)? = null
+    private var chromeUpdateEpoch = 0L
+    internal val transitionInFlight: Boolean get() = transitioning.isNotEmpty() || searchDismissal != null
     private var actions: VaultActions? = null
     private var key: ChromeKey? = null
     private var navigationBlocked = true
@@ -93,6 +109,35 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
     private var viewerActions: IosViewerPanelActions? = null
     private var viewerEpoch = 0L
     private var renderedViewer: Triple<IosViewerPanelState, Boolean, Boolean>? = null
+    private data class SearchScope(val destination: VaultDestination, val album: String?, val libraryScope: String?,
+        val trash: Boolean, val recentlyAdded: Boolean, val context: BrowseSearchScope?)
+    private data class SearchPresentation(val frame: Frame, val scope: SearchScope, val text: String)
+    private var searchPresentation: SearchPresentation? = null
+    private var search: NativeSearch? = null
+    private var searchAllowed = false
+    private var searchQueryLoading = false
+
+    /** A fresh delegate object is a visit lease, including same-screen re-entry. */
+    private class NativeSearch(owner: IosVaultChrome, frame: Frame, val generation: Long, scope: SearchScope) :
+        NSObject(), UISearchResultsUpdatingProtocol, UISearchBarDelegateProtocol {
+        private val owner = WeakReference(owner)
+        var frame: Frame? = frame
+        var scope: SearchScope? = scope
+        val controller = UISearchController(searchResultsController = null)
+        var publishedText = ""
+        var syncing = false
+        override fun updateSearchResultsForSearchController(searchController: UISearchController) {
+            if (searchController == controller && !syncing) owner.get()?.searchChanged(this)
+        }
+        override fun searchBarShouldBeginEditing(searchBar: UISearchBar): Boolean =
+            searchBar == controller.searchBar && owner.get()?.searchCanAct(this) == true
+        override fun searchBarCancelButtonClicked(searchBar: UISearchBar) {
+            if (searchBar == controller.searchBar) owner.get()?.cancelSearch(this)
+        }
+        override fun searchBarSearchButtonClicked(searchBar: UISearchBar) {
+            if (searchBar == controller.searchBar && owner.get()?.searchCanAct(this) == true) searchBar.resignFirstResponder()
+        }
+    }
     internal val toolbar get() = selectedNavigation.toolbar
     private val viewerIsTop: Boolean get() = viewerState != null &&
         (stacks[selectedNavigation]?.lastOrNull()?.screen as? IosVaultScreen.Viewer)?.token == viewerState?.token &&
@@ -148,6 +193,14 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
             lockRequested = false
         }
         if (lockRequested) return
+        searchPresentation?.let { current ->
+            if (current.frame.screen != screens.lastOrNull() || current.scope.destination != destination) retireSearch()
+        }
+        if (searchDismissal != null) {
+            val owner = WeakReference(this@IosVaultChrome)
+            pendingReconcile = { owner.get()?.reconcile(generation, screens, destination, animated) }
+            return
+        }
         require(screens.firstOrNull() == IosVaultScreen.Root(destination))
         reconciling = true
         try {
@@ -188,6 +241,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
     }
 
     private fun retire(frame: Frame) {
+        if (search?.frame == frame || searchPresentation?.frame == frame) retireSearch()
         // Retire the Compose slot before releasing UIKit's reference to it.
         retireCallback?.invoke(frame.screen)
         frame.content.view.endEditing(true)
@@ -205,6 +259,9 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         stacks.clear()
         retiring.clear()
         transitioning.clear()
+        // Concealment and slot retirement above are immediate. UIKit releases
+        // its stack after the owned search presentation has actually ended.
+        if (searchDismissal != null) return
         navigationControllers.forEach {
             it.delegate = null
             it.setViewControllers(emptyList<UIViewController>(), animated = false)
@@ -251,7 +308,9 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
     private var selectionBlocksPop = false
 
     /** Freeze ordinary input while the shared owner registers its next query. */
-    fun suspendNavigation() {
+    fun suspendNavigation(preserveSearch: Boolean = false) {
+        searchQueryLoading = preserveSearch && searchAllowed && search != null
+        if (!searchQueryLoading) retireSearch()
         retireMenu()
         key = null
         navigationBlocked = true
@@ -271,6 +330,15 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
 
     fun update(state: VaultUiState, actions: VaultActions, accent: Color, navigationBusy: Boolean, covered: Boolean = false) {
         if (lockRequested) return
+        val updateEpoch = ++chromeUpdateEpoch
+        if (searchDismissal != null) {
+            val owner = WeakReference(this@IosVaultChrome)
+            pendingChromeUpdate = {
+                owner.get()?.takeIf { it.chromeUpdateEpoch == updateEpoch }
+                    ?.update(state, actions, accent, navigationBusy, covered)
+            }
+            return
+        }
         this.covered = covered
         accentTint = UIColor(red = accent.red.toDouble(), green = accent.green.toDouble(), blue = accent.blue.toDouble(), alpha = 1.0)
         selectionBlocksPop = state.selectedCount > 0
@@ -279,6 +347,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         navigationBlocked = covered || navigationBusy || (selectionBlocksPop && state.operation != null)
         if (navigationBlocked) { dismissMenus(navigationBar); dismissMenus(toolbar) }
         this.actions = actions
+        updateSearch(state, navigationBusy)
         if (viewerIsTop) {
             tabBar.userInteractionEnabled = !navigationBlocked
             tabBar.items?.filterIsInstance<UITabBarItem>()?.forEach { it.enabled = !navigationBlocked }
@@ -378,6 +447,10 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         controller.view.accessibilityElementsHidden = true
         controller.view.userInteractionEnabled = false
         lockRequested = true
+        chromeUpdateEpoch++
+        pendingReconcile = null
+        pendingChromeUpdate = null
+        retireSearch()
         actions = null
         resetViewer()
         navigationBlocked = true
@@ -402,7 +475,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
             presented.view.accessibilityElementsHidden = true
             presented = presented.presentedViewController
         }
-        controller.dismissViewControllerAnimated(false, completion = null)
+        if (searchDismissal == null) controller.dismissViewControllerAnimated(false, completion = null)
         retireStacks()
         screenFactory = null
         popCallback = null
@@ -422,6 +495,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
 
     override fun tabBarController(tabBarController: UITabBarController, shouldSelectViewController: UIViewController): Boolean {
         if (!navigationBlocked && !lockRequested && !transitionInFlight) {
+            retireSearch()
             val index = navigationControllers.indexOf(shouldSelectViewController)
             VaultDestination.entries.getOrNull(index)?.let { actions?.onDestination?.invoke(it) }
         }
@@ -434,6 +508,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         if (lockRequested || generation == 0L || navigationController !in stacks) return
         val frame = stacks[navigationController]?.firstOrNull { it.content == willShowViewController } ?: return
         if (animated) {
+            retireSearch(preservePresentation = true)
             transitioning += navigationController
         }
         val viewer = frame.screen is IosVaultScreen.Viewer
@@ -459,7 +534,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         retiring.remove(navigationController)?.forEach(::retire)
         // Cancelled interactive pops show the original top. A completed native
         // pop alone commits shared state; willShow never changes navigation.
-        if (index == frames.lastIndex) { reconcileVisibility(); return }
+        if (index == frames.lastIndex) { resumeSearch(); reconcileVisibility(); return }
         if (navigationBlocked || selectionBlocksPop || viewerBlocksNavigation(navigationController)) {
             reconciling = true
             try { navigationController.setViewControllers(frames.map { it.content }, animated = false) }
@@ -485,6 +560,145 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
     private fun panicNow() { val panic = actions?.onPanic; clear(); lockRequested = true; panic?.invoke() }
     @ObjCAction fun performPrimary() { if (!navigationBlocked && !transitionInFlight) actions?.let { primaryCommand?.invoke(it) } }
     @ObjCAction fun goBack() { if (!navigationBlocked && !transitionInFlight) actions?.let { backCommand?.invoke(it) } }
+
+    private fun searchCanAct(binding: NativeSearch): Boolean {
+        val frame = binding.frame ?: return false
+        return search === binding && !lockRequested && binding.generation == generation &&
+            searchAllowed && !covered && !selectionBlocksPop && (!navigationBlocked || searchQueryLoading) &&
+            !transitionInFlight && stacks[selectedNavigation]?.lastOrNull() == frame &&
+            selectedNavigation.topViewController == frame.content &&
+            frame.content.navigationItem.searchController == binding.controller
+    }
+
+    private fun searchChanged(binding: NativeSearch) {
+        if (!searchCanAct(binding)) return
+        val text = binding.controller.searchBar.text.orEmpty()
+        if (text == binding.publishedText) return
+        binding.publishedText = text
+        searchPresentation = searchPresentation?.copy(text = text)
+        actions?.onSearch?.invoke(text)
+    }
+
+    private fun cancelSearch(binding: NativeSearch) {
+        if (!searchCanAct(binding)) return
+        val callback = actions?.onSearch
+        retireSearch()
+        callback?.invoke("")
+    }
+
+    private fun retireSearch(preservePresentation: Boolean = false) {
+        if (!preservePresentation) searchPresentation = null
+        // Revoke the delegate before UIKit's synchronous dismissal callbacks.
+        val previous = search
+        search = null
+        searchAllowed = false
+        searchQueryLoading = false
+        if (previous == null) return
+        val native = previous.controller
+        val frame = previous.frame
+        previous.frame = null
+        previous.scope = null
+        native.searchResultsUpdater = null
+        native.searchBar.delegate = null
+        native.searchBar.resignFirstResponder()
+        native.searchBar.searchTextField.resignFirstResponder()
+        native.searchBar.text = ""
+        previous.publishedText = ""
+        native.searchBar.hidden = true
+        native.searchBar.accessibilityElementsHidden = true
+        native.view.accessibilityElementsHidden = true
+        val presenter = native.presentingViewController
+        if (presenter != null) {
+            // UIKit rejects navigation-stack changes during this presentation.
+            // Dismiss once through its actual owner, then project the latest
+            // shared navigation instead of racing active=false with a push.
+            searchDismissal = native
+            val owner = WeakReference(this@IosVaultChrome)
+            presenter.dismissViewControllerAnimated(false) {
+                native.active = false
+                if (frame != null && frame.content.navigationItem.searchController == native) {
+                    frame.content.navigationItem.searchController = null
+                }
+                val chrome = owner.get()
+                if (chrome?.searchDismissal == native) {
+                    chrome.searchDismissal = null
+                    val reconcile = chrome.pendingReconcile
+                    val update = chrome.pendingChromeUpdate
+                    chrome.pendingReconcile = null
+                    chrome.pendingChromeUpdate = null
+                    if (chrome.lockRequested) chrome.retireStacks()
+                    else {
+                        reconcile?.invoke()
+                        update?.invoke()
+                        chrome.resumeSearch()
+                    }
+                }
+            }
+        } else {
+            native.active = false
+            if (frame != null && frame.content.navigationItem.searchController == native) {
+                frame.content.navigationItem.searchController = null
+            }
+        }
+    }
+
+    private fun updateSearch(state: VaultUiState, navigationBusy: Boolean) {
+        val frame = stacks[selectedNavigation]?.lastOrNull()
+        val eligible = frame?.screen == IosVaultScreen.Root(VaultDestination.LIBRARY) || frame?.screen is IosVaultScreen.Album
+        val allowed = eligible && frame?.content == selectedNavigation.topViewController &&
+            state.selectedCount == 0 && state.operation == null && !state.trashOpen && !covered && !navigationBusy
+        if (!allowed || frame == null) { retireSearch(); return }
+        val scope = SearchScope(state.destination, state.openAlbum?.id, state.libraryScopeTitle, state.trashOpen, state.recentlyAdded, state.searchContext)
+        searchPresentation = SearchPresentation(frame, scope, state.searchTerms)
+        if (transitionInFlight) { retireSearch(preservePresentation = true); return }
+        renderSearch(checkNotNull(searchPresentation))
+    }
+
+    private fun resumeSearch() {
+        val presentation = searchPresentation ?: return
+        if (!lockRequested && !navigationBlocked && !covered && !selectionBlocksPop && !transitionInFlight &&
+            stacks[selectedNavigation]?.lastOrNull() == presentation.frame &&
+            selectedNavigation.topViewController == presentation.frame.content) renderSearch(presentation)
+    }
+
+    private fun renderSearch(presentation: SearchPresentation) {
+        val (frame, scope, text) = presentation
+        if (search?.frame != frame || search?.scope != scope) {
+            retireSearch(preservePresentation = true)
+            if (searchDismissal != null) return
+            val binding = NativeSearch(this, frame, generation, scope)
+            val native = binding.controller
+            native.obscuresBackgroundDuringPresentation = false
+            native.hidesNavigationBarDuringPresentation = false
+            native.searchResultsUpdater = binding
+            native.searchBar.delegate = binding
+            native.searchBar.placeholder = if (frame.screen is IosVaultScreen.Album) "Search album" else "Search Library"
+            native.searchBar.searchTextField.apply {
+                autocapitalizationType = UITextAutocapitalizationTypeNone
+                autocorrectionType = UITextAutocorrectionTypeNo
+                spellCheckingType = UITextSpellCheckingTypeNo
+                inlinePredictionType = UITextInlinePredictionTypeNo
+                smartQuotesType = UITextSmartQuotesTypeNo
+                smartDashesType = UITextSmartDashesTypeNo
+                smartInsertDeleteType = UITextSmartInsertDeleteTypeNo
+                textContentType = null
+            }
+            frame.content.definesPresentationContext = true
+            frame.content.navigationItem.hidesSearchBarWhenScrolling = false
+            frame.content.navigationItem.preferredSearchBarPlacement = UINavigationItemSearchBarPlacementStacked
+            search = binding
+            frame.content.navigationItem.searchController = native
+        }
+        searchAllowed = true
+        searchQueryLoading = false
+        val binding = checkNotNull(search)
+        binding.syncing = true
+        try {
+            binding.publishedText = text
+            // Setting text unconditionally disrupts selection/marked text.
+            if (binding.controller.searchBar.text.orEmpty() != text) binding.controller.searchBar.text = text
+        } finally { binding.syncing = false }
+    }
 
     fun hasVisibleMenu(): Boolean = (menuInteractions(navigationBar) + menuInteractions(toolbar)).any {
         it.menuAppearance != UIContextMenuInteractionAppearanceUnknown

@@ -439,7 +439,7 @@ fn every_declared_function_is_exported() {
     );
 
     // Calling each one proves the list above is not a stale copy.
-    assert_eq!(chur_ffi::chur_abi_version_major(), 5);
+    assert_eq!(chur_ffi::chur_abi_version_major(), 6);
     assert_eq!(chur_ffi::chur_abi_version_minor(), 0);
     assert_eq!(
         chur_ffi::chur_capabilities(),
@@ -529,4 +529,20 @@ fn the_control_plane_vocabulary_matches_the_rust_side() {
     // above exhaustive rather than merely correct.
     assert!(chur_ffi::records::query_from(8, 1, 0, 0, &scope_id, None, None).is_err());
     assert!(chur_ffi::records::query_from(1, 5, 0, 0, &scope_id, None, None).is_err());
+}
+
+#[test]
+fn text_is_bounded_and_decoded_for_every_query_scope() {
+    for scope in 1..=7 {
+        let id = [1; 16];
+        let query = chur_ffi::records::query_from(scope, 1, 0, 0, &id, None, Some(b"needle"))
+            .expect("scope");
+        assert_eq!(query.terms.as_deref(), Some("needle"));
+        let malformed = chur_ffi::records::query_from(scope, 1, 0, 0, &id, None, Some(&[0xff]))
+            .expect_err("UTF-8");
+        assert_eq!(malformed.status(), chur_core::ChurStatus::InvalidInput);
+        let long = chur_ffi::records::query_from(scope, 1, 0, 0, &id, None, Some(&[b'a'; 513]))
+            .expect_err("bound");
+        assert_eq!(long.status(), chur_core::ChurStatus::ResourceLimitExceeded);
+    }
 }

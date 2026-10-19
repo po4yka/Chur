@@ -33,7 +33,7 @@ pub enum Scope {
     /// Every object carrying one tag.
     Tag(Id),
     /// The FTS5 query of §16.4.
-    Search(String),
+    Search,
     /// The objects §16.2 keeps out of the ordinary library.
     Quarantine,
     /// Recoverable objects awaiting purge.
@@ -48,13 +48,13 @@ impl Scope {
             Scope::Album(_) => 2,
             Scope::Favorites => 3,
             Scope::Tag(_) => 4,
-            Scope::Search(_) => 5,
+            Scope::Search => 5,
             Scope::Quarantine => 6,
             Scope::Trash => 7,
         }
     }
 
-    /// The `scope_id` field of the cursor: an album or tag, zero otherwise.
+    /// The scope identity included in the cursor context: album/tag, zero otherwise.
     const fn scope_id(&self) -> [u8; ID_LEN] {
         match self {
             Scope::Album(id) | Scope::Tag(id) => *id.as_bytes(),
@@ -116,7 +116,7 @@ pub struct Cursor {
     object_id: Id,
     sort: Sort,
     scope_kind: u8,
-    scope_id: [u8; ID_LEN],
+    query_key: [u8; ID_LEN],
 }
 
 impl Cursor {
@@ -128,7 +128,7 @@ impl Cursor {
         bytes[8..24].copy_from_slice(self.object_id.as_bytes());
         bytes[24] = self.sort.code();
         bytes[25] = self.scope_kind;
-        bytes[26..].copy_from_slice(&self.scope_id);
+        bytes[26..].copy_from_slice(&self.query_key);
         bytes
     }
 
@@ -149,25 +149,25 @@ impl Cursor {
         if bytes[25] == 0 || bytes[25] > 7 {
             bail!(InvalidInput, "the page cursor names an unallocated scope");
         }
-        let mut scope_id = [0u8; ID_LEN];
-        scope_id.copy_from_slice(&bytes[26..]);
+        let mut query_key = [0u8; ID_LEN];
+        query_key.copy_from_slice(&bytes[26..]);
         Ok(Self {
             sort_value: u64::from_be_bytes(sort_value),
             object_id: Id::new(object)?,
             sort,
             scope_kind: bytes[25],
-            scope_id,
+            query_key,
         })
     }
 
-    /// Rejects a cursor issued under another scope or sort, §16.2.
-    fn check(&self, scope: &Scope, sort: Sort) -> Result<()> {
+    /// Rejects a cursor issued for another scope, sort or filter, §16.2.
+    fn check(&self, query: &ObjectQuery) -> Result<()> {
         ensure!(
-            self.sort == sort
-                && self.scope_kind == scope.kind()
-                && self.scope_id == scope.scope_id(),
+            self.sort == query.sort
+                && self.scope_kind == query.scope.kind()
+                && self.query_key == query.context_key(),
             InvalidInput,
-            "the page cursor was issued for another scope or sort"
+            "the page cursor was issued for another query"
         );
         Ok(())
     }
@@ -178,6 +178,8 @@ impl Cursor {
 pub struct ObjectQuery {
     /// The scope the page is drawn from.
     pub scope: Scope,
+    /// Optional literal FTS text intersected with this scope before paging.
+    pub terms: Option<String>,
     /// A bitmask over the media classes, zero for every kind.
     pub kinds: u16,
     /// The order.
@@ -194,11 +196,34 @@ impl ObjectQuery {
     pub fn timeline() -> Self {
         Self {
             scope: Scope::Timeline,
+            terms: None,
             kinds: 0,
             sort: Sort::default(),
             cursor: None,
             limit: 0,
         }
+    }
+
+    fn search_terms(&self) -> Option<&str> {
+        self.terms
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+    }
+
+    /// An ephemeral cursor binds the complete filter, without carrying its text.
+    fn context_key(&self) -> [u8; ID_LEN] {
+        let mut digest = chur_crypto::sha256::ResourceSha256::default();
+        digest.update(b"chur-page-query-v1\0");
+        digest.update(&[self.scope.kind()]);
+        digest.update(&self.scope.scope_id());
+        digest.update(&self.kinds.to_be_bytes());
+        if let Some(terms) = self.search_terms() {
+            digest.update(escape_fts(terms).as_bytes());
+        }
+        let mut key = [0; ID_LEN];
+        key.copy_from_slice(&digest.finish()[..ID_LEN]);
+        key
     }
 
     /// The media classes this query admits, or `None` for every class.
@@ -358,25 +383,25 @@ pub fn page(db: &CatalogDb, query: &ObjectQuery) -> Result<Page> {
         InvalidInput,
         "manual order is available only inside an album"
     );
-    if let Some(cursor) = &query.cursor {
-        cursor.check(&query.scope, query.sort)?;
-    }
-    if let Scope::Search(terms) = &query.scope {
+    if let Some(terms) = &query.terms {
         ensure!(
             terms.len() <= limits::SEARCH_TERMS_MAX,
             ResourceLimitExceeded,
             "the search query exceeds its catalog bound"
         );
-        // An empty or whitespace-only term quotes into an empty FTS5 MATCH
-        // phrase, which SQLite refuses as a syntax error, and the refusal
-        // surfaced as INTERNAL_FAILURE. A search that names nothing to match
-        // is the caller's mistake, so it is rejected here, before any SQL
-        // runs, as INVALID_INPUT.
-        ensure!(
-            !terms.trim().is_empty(),
-            InvalidInput,
-            "the search terms name nothing to match"
-        );
+    }
+    ensure!(
+        !matches!(query.scope, Scope::Search) || query.search_terms().is_some(),
+        InvalidInput,
+        "the search terms name nothing to match"
+    );
+    ensure!(
+        !matches!(query.scope, Scope::Trash) || query.search_terms().is_none(),
+        InvalidInput,
+        "Trash has no retained text-search index"
+    );
+    if let Some(cursor) = &query.cursor {
+        cursor.check(query)?;
     }
 
     let catalog_generation = generation(db)?;
@@ -417,7 +442,7 @@ pub fn page(db: &CatalogDb, query: &ObjectQuery) -> Result<Page> {
             object_id: last.object_id,
             sort: query.sort,
             scope_kind: query.scope.kind(),
-            scope_id: query.scope.scope_id(),
+            query_key: query.context_key(),
         });
 
     Ok(Page {
@@ -462,7 +487,7 @@ impl Plan {
             "CROSS JOIN"
         };
         let (from, mut params): (String, Vec<Value>) = match &query.scope {
-            Scope::Timeline => (
+            Scope::Timeline | Scope::Search => (
                 format!(
                     "objects o WHERE o.state = {active} AND o.integrity_summary <> {quarantined}"
                 ),
@@ -504,17 +529,14 @@ impl Plan {
                 ),
                 vec![Value::Blob(tag_id.as_bytes().to_vec())],
             ),
-            Scope::Search(terms) => (
-                format!(
-                    "object_search s JOIN objects o ON o.search_key = s.rowid \
-                     WHERE object_search MATCH ? AND o.state = {active} \
-                       AND o.integrity_summary <> {quarantined}"
-                ),
-                vec![Value::Text(escape_fts(terms))],
-            ),
         };
 
         let mut filter = String::new();
+        if let Some(terms) = query.search_terms() {
+            filter.push_str(" AND o.search_key IN (SELECT rowid FROM object_search WHERE object_search MATCH ?)");
+            params.push(Value::Text(escape_fts(terms)));
+        }
+
         if let Some(classes) = query.classes() {
             if classes.is_empty() {
                 // Every set bit is above the allocated range, so the scope is
@@ -554,7 +576,7 @@ impl Plan {
                 Scope::Favorites => ("f.capture_time_ms", "f.object_id"),
                 Scope::Tag(_) => ("g.capture_time_ms", "g.object_id"),
                 Scope::Trash => ("t.deleted_ms", "t.object_id"),
-                Scope::Timeline | Scope::Quarantine | Scope::Search(_) => {
+                Scope::Timeline | Scope::Quarantine | Scope::Search => {
                     ("o.capture_time_ms", "o.object_id")
                 }
             }
@@ -871,29 +893,50 @@ mod tests {
     #[test]
     fn a_cursor_round_trips_and_binds_its_scope_and_sort() {
         let album = random::id().expect("id");
+        let query = ObjectQuery {
+            scope: Scope::Album(album),
+            sort: Sort::CaptureAsc,
+            ..ObjectQuery::timeline()
+        };
         let cursor = Cursor {
             sort_value: 42,
             object_id: random::id().expect("id"),
-            sort: Sort::CaptureAsc,
-            scope_kind: Scope::Album(album).kind(),
-            scope_id: *album.as_bytes(),
+            sort: query.sort,
+            scope_kind: query.scope.kind(),
+            query_key: query.context_key(),
         };
         let bytes = cursor.encode();
         assert_eq!(bytes.len(), 42);
         let decoded = Cursor::decode(&bytes).expect("decode");
         assert_eq!(decoded, cursor);
-        decoded
-            .check(&Scope::Album(album), Sort::CaptureAsc)
-            .expect("its own scope");
+        decoded.check(&query).expect("its own query");
         for wrong in [
-            decoded.check(&Scope::Timeline, Sort::CaptureAsc),
-            decoded.check(&Scope::Album(album), Sort::CaptureDesc),
-            decoded.check(&Scope::Album(random::id().expect("id")), Sort::CaptureAsc),
-            decoded.check(&Scope::Tag(album), Sort::CaptureAsc),
+            ObjectQuery {
+                scope: Scope::Timeline,
+                ..query.clone()
+            },
+            ObjectQuery {
+                sort: Sort::CaptureDesc,
+                ..query.clone()
+            },
+            ObjectQuery {
+                scope: Scope::Album(random::id().expect("id")),
+                ..query.clone()
+            },
+            ObjectQuery {
+                scope: Scope::Tag(album),
+                ..query.clone()
+            },
+            ObjectQuery {
+                kinds: 1,
+                ..query.clone()
+            },
+            ObjectQuery {
+                terms: Some("different".into()),
+                ..query.clone()
+            },
         ] {
-            let Err(error) = wrong else {
-                panic!("a cursor was accepted outside the scope it was issued for");
-            };
+            let error = decoded.check(&wrong).expect_err("another query is refused");
             assert_eq!(error.status(), ChurStatus::InvalidInput);
         }
     }
@@ -905,7 +948,7 @@ mod tests {
             object_id: random::id().expect("id"),
             sort: Sort::CaptureDesc,
             scope_kind: 1,
-            scope_id: [0u8; ID_LEN],
+            query_key: [0u8; ID_LEN],
         }
         .encode();
         for bad in [
@@ -1013,6 +1056,7 @@ mod tests {
         let query = ObjectQuery {
             scope: Scope::Album(album),
             sort: Sort::AlbumManual,
+            terms: None,
             kinds: 0,
             cursor: None,
             limit: 1,
@@ -1136,6 +1180,184 @@ mod tests {
     }
 
     #[test]
+    fn scoped_text_is_intersected_before_album_paging_and_counting() {
+        let mut vault = vault();
+        let first = import(&mut vault, 1_000, MediaClass::Image, "needle first.jpg");
+        let hidden = import(&mut vault, 2_000, MediaClass::Image, "other.jpg");
+        let last = import(&mut vault, 3_000, MediaClass::Image, "needle last.jpg");
+        let outside = import(&mut vault, 4_000, MediaClass::Image, "needle outside.jpg");
+        let album = random::id().expect("album");
+        store::put_album(
+            &mut vault.db,
+            &Album {
+                album_id: album,
+                name: "Scoped".into(),
+                created_ms: 1,
+                revision: 1,
+            },
+        )
+        .expect("album");
+        for id in [first, hidden, last] {
+            store::set_album_membership(&mut vault.db, &album, &id, true, 1).expect("member");
+        }
+        let request = ObjectQuery {
+            scope: Scope::Album(album),
+            terms: Some("needle".into()),
+            sort: Sort::AlbumManual,
+            limit: 1,
+            ..ObjectQuery::timeline()
+        };
+        let first_page = page(&vault.db, &request).expect("first page");
+        assert_eq!(first_page.total_count, 2);
+        assert_eq!(ids(&first_page), vec![first]);
+        assert_eq!(walk(&vault.db, request.clone()), vec![first, last]);
+        assert!(!walk(&vault.db, request.clone()).contains(&outside));
+        let cursor = first_page.next_cursor.expect("next page");
+        for changed in [
+            ObjectQuery {
+                terms: Some("other".into()),
+                ..request.clone()
+            },
+            ObjectQuery {
+                terms: None,
+                ..request.clone()
+            },
+            ObjectQuery {
+                kinds: 1,
+                ..request.clone()
+            },
+        ] {
+            let error = page(
+                &vault.db,
+                &ObjectQuery {
+                    cursor: Some(cursor),
+                    ..changed
+                },
+            )
+            .expect_err("a different text/filter cannot reuse a cursor");
+            assert_eq!(error.status(), ChurStatus::InvalidInput);
+        }
+        assert_eq!(
+            walk(
+                &vault.db,
+                ObjectQuery {
+                    terms: None,
+                    ..request
+                }
+            ),
+            vec![first, hidden, last]
+        );
+        let global = page(
+            &vault.db,
+            &ObjectQuery {
+                terms: Some("needle".into()),
+                ..ObjectQuery::timeline()
+            },
+        )
+        .expect("filtered library");
+        assert_eq!(global.total_count, 3);
+    }
+
+    #[test]
+    fn text_filters_keep_special_scope_lifecycle_boundaries() {
+        let mut vault = vault();
+        let member = import(&mut vault, 1_000, MediaClass::Image, "needle member.jpg");
+        let ordinary = import(&mut vault, 2_000, MediaClass::Image, "needle ordinary.jpg");
+        let held = import(
+            &mut vault,
+            3_000,
+            MediaClass::Image,
+            "needle quarantine.jpg",
+        );
+        let trashed = import(&mut vault, 4_000, MediaClass::Image, "needle trash.jpg");
+        store::set_integrity_summary(&mut vault.db, &held, IntegritySummary::Quarantined, 1)
+            .expect("quarantine");
+        crate::trash::set(&mut vault.db, &[trashed], false, 1).expect("trash");
+        store::set_favorite(&mut vault.db, &member, true, 1).expect("favorite");
+        let tag = random::id().expect("tag");
+        store::put_tag(
+            &mut vault.db,
+            &Tag {
+                tag_id: tag,
+                name: "Scope".into(),
+                created_ms: 1,
+            },
+        )
+        .expect("tag");
+        store::set_object_tag(&mut vault.db, &tag, &member, true).expect("tagged");
+        for (scope, expected) in [
+            (Scope::Timeline, vec![ordinary, member]),
+            (Scope::Favorites, vec![member]),
+            (Scope::Tag(tag), vec![member]),
+            (Scope::Quarantine, vec![held]),
+        ] {
+            let query = ObjectQuery {
+                scope,
+                terms: Some("needle".into()),
+                ..ObjectQuery::timeline()
+            };
+            let result = page(&vault.db, &query).expect("scoped text");
+            assert_eq!(ids(&result), expected, "{:?}", query.scope);
+            assert_eq!(result.total_count, expected.len() as u64);
+        }
+        let trash = ObjectQuery {
+            scope: Scope::Trash,
+            ..ObjectQuery::timeline()
+        };
+        assert_eq!(
+            ids(&page(&vault.db, &trash).expect("unfiltered trash")),
+            vec![trashed]
+        );
+        let error = page(
+            &vault.db,
+            &ObjectQuery {
+                terms: Some("needle".into()),
+                ..trash
+            },
+        )
+        .expect_err("Trash erased its text index instead of retaining private text for search");
+        assert_eq!(error.status(), ChurStatus::InvalidInput);
+    }
+
+    #[test]
+    fn scoped_text_validates_its_bound_and_treats_operators_literally() {
+        let mut vault = vault();
+        import(&mut vault, 1_000, MediaClass::Image, "needle.jpg");
+        for text in ["needle OR anything", "\"unbalanced", "filename:needle"] {
+            let result = page(
+                &vault.db,
+                &ObjectQuery {
+                    terms: Some(text.into()),
+                    ..ObjectQuery::timeline()
+                },
+            )
+            .expect("literal FTS text");
+            assert!(result.objects.is_empty());
+        }
+        let error = page(
+            &vault.db,
+            &ObjectQuery {
+                terms: Some("a".repeat(513)),
+                ..ObjectQuery::timeline()
+            },
+        )
+        .expect_err("bounded scoped query");
+        assert_eq!(error.status(), ChurStatus::ResourceLimitExceeded);
+        assert_eq!(
+            page(
+                &vault.db,
+                &ObjectQuery {
+                    terms: Some(" \t".into()),
+                    ..ObjectQuery::timeline()
+                }
+            )
+            .expect("blank clears filter")
+            .total_count,
+            1
+        );
+    }
+
+    #[test]
     fn search_matches_a_filename_a_caption_and_a_tag() {
         let mut vault = vault();
         let target = import(&mut vault, 1_000, MediaClass::Image, "Bäckerei.jpg");
@@ -1144,7 +1366,8 @@ mod tests {
             ids(&page(
                 db,
                 &ObjectQuery {
-                    scope: Scope::Search(String::from(terms)),
+                    scope: Scope::Search,
+                    terms: Some(String::from(terms)),
                     ..ObjectQuery::timeline()
                 },
             )
@@ -1178,7 +1401,8 @@ mod tests {
             let result = page(
                 &vault.db,
                 &ObjectQuery {
-                    scope: Scope::Search(String::from(hostile)),
+                    scope: Scope::Search,
+                    terms: Some(String::from(hostile)),
                     ..ObjectQuery::timeline()
                 },
             );
@@ -1187,7 +1411,8 @@ mod tests {
         let exact = page(
             &vault.db,
             &ObjectQuery {
-                scope: Scope::Search(String::from("holiday OR anything")),
+                scope: Scope::Search,
+                terms: Some(String::from("holiday OR anything")),
                 ..ObjectQuery::timeline()
             },
         )
@@ -1204,7 +1429,8 @@ mod tests {
         let Err(error) = page(
             &vault.db,
             &ObjectQuery {
-                scope: Scope::Search("a".repeat(513)),
+                scope: Scope::Search,
+                terms: Some("a".repeat(513)),
                 ..ObjectQuery::timeline()
             },
         ) else {
@@ -1220,7 +1446,8 @@ mod tests {
             let Err(error) = page(
                 &vault.db,
                 &ObjectQuery {
-                    scope: Scope::Search(String::from(terms)),
+                    scope: Scope::Search,
+                    terms: Some(String::from(terms)),
                     ..ObjectQuery::timeline()
                 },
             ) else {
@@ -1429,7 +1656,8 @@ mod tests {
         ids(&page(
             db,
             &ObjectQuery {
-                scope: Scope::Search(terms.into()),
+                scope: Scope::Search,
+                terms: Some(terms.into()),
                 ..ObjectQuery::timeline()
             },
         )

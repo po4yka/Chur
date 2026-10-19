@@ -931,7 +931,8 @@ fn encrypted_backup_restores_content_only_cyrillic_search_and_its_source_identit
     )
     .expect("encrypted content index");
     let query = ObjectQuery {
-        scope: Scope::Search("конфиденциальная расшифровка".into()),
+        scope: Scope::Search,
+        terms: Some("конфиденциальная расшифровка".into()),
         ..ObjectQuery::timeline()
     };
     assert_eq!(
@@ -1088,7 +1089,8 @@ fn permanently_deleted_ocr_stays_absent_after_restart_and_full_backup_restore() 
         ChurStatus::NotFound
     );
     let query = ObjectQuery {
-        scope: Scope::Search("healthyocrneighbor".into()),
+        scope: Scope::Search,
+        terms: Some("healthyocrneighbor".into()),
         ..ObjectQuery::timeline()
     };
     let hits = page(restored.catalog_ref().unwrap(), &query)
@@ -1134,7 +1136,8 @@ fn clearing_ocr_while_trashed_does_not_resurrect_text_on_restore_or_backup() {
     let mut restored = vault::unlock_with_password(&destination, PASSWORD, NOW + 5).unwrap();
     assert_content_absent(&mut restored, &object, "clearedtrashcanary");
     let query = ObjectQuery {
-        scope: Scope::Search("retainedmetadata".into()),
+        scope: Scope::Search,
+        terms: Some("retainedmetadata".into()),
         ..ObjectQuery::timeline()
     };
     let hits = page(restored.catalog_ref().unwrap(), &query)

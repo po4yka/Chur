@@ -538,11 +538,7 @@ pub unsafe extern "C" fn chur_catalog_query(
         let entry = registry::get(session, Kind::Session)?;
         // SAFETY: the caller guarantees the pointers above for the call.
         let request = unsafe { read_request(query)? };
-        let terms = if request.scope == 5 {
-            Some(unsafe { borrow_bytes(request.terms, request.terms_length)? })
-        } else {
-            None
-        };
+        let terms = Some(unsafe { borrow_bytes(request.terms, request.terms_length)? });
         let cursor = match request.cursor_present {
             0 => None,
             1 => Some(request.cursor.as_slice()),

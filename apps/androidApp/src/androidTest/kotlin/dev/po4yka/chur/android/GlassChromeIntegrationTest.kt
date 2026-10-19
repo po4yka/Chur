@@ -15,6 +15,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.AnnotatedString
 import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -96,7 +97,7 @@ class GlassChromeIntegrationTest {
         assertTrue("the imported photo has an accessible selection action", await {
             var selected = false
             main {
-                nodes().firstOrNull { SemanticsActions.OnLongClick in it.config && "Lock now" !in it.labels }
+                nodes().firstOrNull { SemanticsActions.OnLongClick in it.config && "Photo" in it.labels }
                     ?.let { selected = it.config[SemanticsActions.OnLongClick].action?.invoke() == true }
             }
             selected
@@ -221,7 +222,7 @@ class GlassChromeIntegrationTest {
                 blocked
             })
             main {
-                val tile = nodes().first { SemanticsActions.OnLongClick in it.config && "Lock now" !in it.labels }
+                val tile = nodes().first { SemanticsActions.OnLongClick in it.config && "Photo" in it.labels }
                 assertTrue(tile.config[SemanticsActions.OnClick].action?.invoke() == true)
                 assertTrue(tile.config[SemanticsActions.OnLongClick].action?.invoke() == true)
                 activity.onBackPressedDispatcher.onBackPressed()
@@ -251,6 +252,112 @@ class GlassChromeIntegrationTest {
         assertPrivateChromeGone()
         assertFalse(has("Add to album"))
         assertFalse(has("Move to Trash"))
+    }
+
+    @Test
+    fun library_search_keeps_filters_viewer_back_and_rejects_retained_input_during_private_barriers() {
+        val token = "librarysearch${System.nanoTime()}"
+        val first = importPhoto("$token-alpha.png")
+        val second = importPhoto("$token-beta.png")
+        setSearch("Search library", token)
+        assertPageIds(first, second)
+        main {
+            val input = searchNode("Search library").config[SemanticsActions.SetText].action!!
+            val oldTile = nodes().first { "Photo" in it.labels && SemanticsActions.OnLongClick in it.config }
+            assertTrue(input(AnnotatedString("$token-no-match-before-frame")))
+            assertTrue(oldTile.config[SemanticsActions.OnClick].action?.invoke() == true)
+            assertTrue(oldTile.config[SemanticsActions.OnLongClick].action?.invoke() == true)
+        }
+        assertTrue("queued tile events cannot escape the edited query", await {
+            searchValue("Search library") == "$token-no-match-before-frame" &&
+                controller.page.value.objects.isEmpty() && !has("Info") && !has("1 selected")
+        })
+        setSearch("Search library", token)
+        assertPageIds(first, second)
+        click("Videos")
+        assertTrue(await { controller.page.value.objects.isEmpty() && has("No matching items. Try another word or remove a filter.") })
+        click("Clear search")
+        assertTrue(await { searchValue("Search library") == "" })
+        click("All")
+        assertTrue(await { controller.page.value.objects.any { it.objectId.contentEquals(first) } })
+        click("Search")
+        setSearch("Search", token)
+        assertPageIds(first, second)
+        click("Library")
+        assertTrue(await { searchValue("Search library") == "" })
+        setSearch("Search library", "$token-alpha")
+        assertPageIds(first)
+        click("Photo")
+        assertTrue(await { has("Info") && !has("Search library") })
+        click("Back")
+        assertTrue(await { has("Search library") && !has("Info") && searchValue("Search library") == "$token-alpha" })
+        assertPageIds(first)
+        lateinit var retained: (AnnotatedString) -> Boolean
+        main {
+            retained = searchNode("Search library").config[SemanticsActions.SetText].action!!
+            val tile = nodes().single { "Photo" in it.labels && SemanticsActions.OnLongClick in it.config }
+            assertTrue(tile.config[SemanticsActions.OnLongClick].action?.invoke() == true)
+            assertTrue(retained(AnnotatedString("selection-must-ignore")))
+        }
+        assertSelectionPanel()
+        main {
+            val field = nodes().single { "Search library" in it.labels && SemanticsProperties.EditableText in it.config }
+            assertTrue("selection disables search input without dropping its text", SemanticsProperties.Disabled in field.config)
+        }
+        assertEquals("$token-alpha", searchValue("Search library"))
+        assertPageIds(first)
+        click("Clear selection")
+        click("Browse")
+        click("Tags…")
+        assertTrue(await { has("Close") && has("New tag") })
+        main { assertTrue(retained(AnnotatedString("dialog-must-ignore"))) }
+        assertEquals("$token-alpha", searchValue("Search library"))
+        click("Close")
+        assertPageIds(first)
+        click("Lock now")
+        main { assertTrue(retained(AnnotatedString("locked-must-ignore"))) }
+        assertPrivateChromeGone()
+        assertTrue(controller.page.value.objects.isEmpty())
+    }
+
+    @Test
+    fun album_search_filters_native_memberships_and_does_not_retarget_a_retired_scope() {
+        val token = "albumsearch${System.nanoTime()}"
+        val inside = importPhoto("$token-shared-inside.png")
+        val other = importPhoto("$token-other.png")
+        val outside = importPhoto("$token-shared-outside.png")
+        val name = "Album $token"
+        main { controller.createAlbum(name) }
+        assertTrue(await { controller.albums.value.any { it.name == name } })
+        val album = controller.albums.value.single { it.name == name }
+        main { controller.placeObjectsInAlbum(album.albumId, listOf(inside, other)) }
+        assertTrue(await { controller.albums.value.any { it.name == name && it.memberCount == 2L } })
+        click("Albums")
+        // The real vault retains earlier synthetic albums between device runs.
+        // Find this destination through its visible organizer filter instead
+        // of assuming its lazy row is already in the large-text viewport.
+        setSearch("Find album", name)
+        click(name)
+        assertTrue(await { has("Search album") })
+        assertPageIds(inside, other)
+        setSearch("Search album", "$token-shared")
+        assertPageIds(inside)
+        assertFalse(controller.page.value.objects.any { it.objectId.contentEquals(outside) })
+        setSearch("Search album", "$token-no-match")
+        assertTrue(await { controller.page.value.objects.isEmpty() && has("No matching items. Try another word or remove a filter.") })
+        click("Clear search")
+        assertPageIds(inside, other)
+        assertEquals("", searchValue("Search album"))
+        lateinit var retained: (AnnotatedString) -> Boolean
+        main { retained = searchNode("Search album").config[SemanticsActions.SetText].action!! }
+        click("Back")
+        assertTrue(await { !has("Search album") && has("New album") })
+        main { assertTrue(retained(AnnotatedString("retired-album"))) }
+        click("Library")
+        assertTrue(await { searchValue("Search library") == "" })
+        setSearch("Search library", "$token-shared")
+        assertPageIds(inside, outside)
+        assertSecure()
     }
 
     @Test
@@ -300,11 +407,43 @@ class GlassChromeIntegrationTest {
             activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
     }
 
+    private fun searchNode(label: String) = nodes().single { label in it.labels && SemanticsActions.SetText in it.config }
+
+    private fun searchValue(label: String): String? {
+        var value: String? = null
+        main { value = nodes().firstOrNull { label in it.labels && SemanticsProperties.EditableText in it.config }
+            ?.config?.getOrNull(SemanticsProperties.EditableText)?.text }
+        return value
+    }
+
+    private fun setSearch(label: String, value: String) {
+        assertTrue(await {
+            var ready = false
+            main { ready = nodes().any { label in it.labels && SemanticsActions.SetText in it.config &&
+                SemanticsProperties.Disabled !in it.config } }
+            ready
+        })
+        main {
+            val field = searchNode(label)
+            assertFalse(SemanticsProperties.Disabled in field.config)
+            assertTrue(field.config[SemanticsActions.SetText].action?.invoke(AnnotatedString(value)) == true)
+        }
+        assertTrue(await { searchValue(label) == value })
+    }
+
+    private fun assertPageIds(vararg expected: ByteArray) {
+        val ids = expected.map { it.toList() }.toSet()
+        assertTrue("the real scoped native query returns exactly the expected objects", await {
+            controller.page.value.objects.map { it.objectId.toList() }.toSet() == ids &&
+                controller.page.value.totalCount == ids.size.toLong()
+        })
+    }
+
     private fun selectFirstTile() {
         assertTrue("a real media tile starts selection", await {
             var selected = false
             main {
-                nodes().firstOrNull { SemanticsActions.OnLongClick in it.config && "Lock now" !in it.labels }
+                nodes().firstOrNull { SemanticsActions.OnLongClick in it.config && "Photo" in it.labels }
                     ?.let { selected = it.config[SemanticsActions.OnLongClick].action?.invoke() == true }
             }
             selected
@@ -357,9 +496,9 @@ class GlassChromeIntegrationTest {
         assertSecure()
     }
 
-    private fun importPhoto(beforeOpen: (() -> Unit)? = null): ByteArray {
+    private fun importPhoto(filename: String = "glass-chrome-synthetic.png", beforeOpen: (() -> Unit)? = null): ByteArray {
         val context = instrumentation.targetContext
-        val file = File(context.cacheDir, "export-scratch/glass-chrome-synthetic.png")
+        val file = File(context.cacheDir, "export-scratch/$filename")
         file.parentFile?.mkdirs()
         val bitmap = Bitmap.createBitmap(480, 480, Bitmap.Config.ARGB_8888)
         try {

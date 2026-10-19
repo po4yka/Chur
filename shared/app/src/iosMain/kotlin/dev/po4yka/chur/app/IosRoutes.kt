@@ -69,6 +69,8 @@ import dev.po4yka.chur.app.vault.VaultDestination
 import dev.po4yka.chur.app.vault.ContentView
 import dev.po4yka.chur.app.vault.AlbumOrder
 import dev.po4yka.chur.app.vault.browseQuery
+import dev.po4yka.chur.app.vault.browseSearchScope
+import dev.po4yka.chur.app.vault.BrowseQueryLocation
 import dev.po4yka.chur.app.vault.SelectiveExportDialog
 import dev.po4yka.chur.app.vault.SelectiveImportDialog
 import dev.po4yka.chur.app.vault.PrivateNotesRoute
@@ -452,7 +454,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     var mediaKinds by remember { mutableStateOf(0) }
     var albumOrder by remember { mutableStateOf(AlbumOrder.MANUAL) }
     var albumFilter by remember { mutableStateOf("") }
-    var terms by remember { mutableStateOf("") }
+    var terms by remember(generation) { mutableStateOf("") }
     var openAlbum by remember(generation) { mutableStateOf<AlbumSummary?>(null) }
     var exportingAlbum by remember(generation) { mutableStateOf<AlbumSummary?>(null) }
     var albumPickerPending by remember(generation) { mutableStateOf(false) }
@@ -495,6 +497,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         if (current != null) {
             val resolved = albumPath(albums, current.id).lastOrNull()
             if (resolved == null) {
+                terms = ""
                 selection = emptySet()
                 viewing = null
                 destination = VaultDestination.ALBUMS
@@ -504,6 +507,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     }
     fun navigateAlbum(target: AlbumSummary?) {
         focusManager.clearFocus()
+        terms = ""
         searchFocusRequest = null
         viewing = null
         selection = emptySet()
@@ -585,9 +589,11 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         }
     }
 
-    val browseLocation = listOf(destination, openAlbum, openTag, favoritesOnly, trashOpen,
-        quarantineOpen, recentlyAdded, terms, mediaSort, albumSort, mediaKinds)
-    var loadedLocation by remember(generation) { mutableStateOf<List<Any?>?>(null) }
+    val browseLocation = BrowseQueryLocation(
+        browseSearchScope(destination, openAlbum, openTag, favoritesOnly, trashOpen, quarantineOpen, recentlyAdded),
+        terms, mediaSort, albumSort, mediaKinds,
+    )
+    var loadedLocation by remember(generation) { mutableStateOf<BrowseQueryLocation?>(null) }
     LaunchedEffect(destination, openAlbum, openTag, favoritesOnly, trashOpen, quarantineOpen, recentlyAdded,
         terms, mediaSort, albumSort, mediaKinds) {
         val query = browseQuery(destination, openAlbum, openTag, favoritesOnly,
@@ -706,6 +712,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 managingTags = false
                 selection = emptySet()
                 openTag = tag
+                terms = ""
                 favoritesOnly = false
                 trashOpen = false
                 quarantineOpen = false
@@ -1020,6 +1027,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         },
         albums = albums,
         searchTerms = terms,
+        searchContext = browseLocation.scope,
         contentIndex = contentIndex,
         slots = slots,
         openAlbum = openAlbum,
@@ -1052,6 +1060,26 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     )
     // Callbacks can outlive this rendered selection until Compose publishes
     // the next frame. Never let that interval retarget an old action.
+    fun currentSearchScope() = browseSearchScope(destination, openAlbum, openTag,
+        favoritesOnly, trashOpen, quarantineOpen, recentlyAdded)
+    val renderedSearchScope = currentSearchScope()
+    val renderedSearchTerms = terms
+    fun renderedMediaIsCurrent(): Boolean = terms == renderedSearchTerms &&
+        currentSearchScope() == renderedSearchScope && controller.route.value == AppRoute.Vault &&
+        (controller.vaultState.value as? VaultState.Unlocked)?.generation == generation
+    fun searchCommandsBlocked(): Boolean = selection.isNotEmpty() || viewing != null || showingPrivateNotes ||
+        controller.activeOperation.value != null || shellNavigationBusy || privateNotesBusy ||
+        choosingArchive != null || choosingArchiveImport || choosingPrivateNoteExport != null ||
+        exportingAlbum != null || albumPickerPending || documentPickerPending || choosingImportSource ||
+        creatingAlbum || choosingAlbum || choosingTag || managingTags || confirmingDelete ||
+        confirmingEmptyTrash || choosingExport || originals != null || incomingShare != null
+    fun updateSearch(value: String) {
+        if (!trashOpen && currentSearchScope() == renderedSearchScope &&
+            (destination == VaultDestination.LIBRARY || destination == VaultDestination.SEARCH || openAlbum != null) &&
+            !searchCommandsBlocked() && controller.route.value == AppRoute.Vault &&
+            (controller.vaultState.value as? VaultState.Unlocked)?.generation == generation
+        ) terms = value
+    }
     val renderedSelection = selection.toSet()
     fun selectionCommandsBlocked(): Boolean = controller.activeOperation.value != null ||
         choosingExport || choosingAlbum || choosingTag || confirmingDelete || choosingArchive != null
@@ -1064,6 +1092,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     val shellActions = VaultActions(
         onThumbnailsConcealedChange = { thumbnailsConcealed = it },
         onDestination = {
+            terms = ""
             searchFocusRequest = null
             openAlbum = null
             openTag = null
@@ -1078,6 +1107,8 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         // toggled selection, which made a video unreachable and a tap on a
         // photograph mean two things.
         onOpen = open@{ projection ->
+            // A queued tile event cannot open or select a result from the previous query.
+            if (!renderedMediaIsCurrent()) return@open
             // A tile cannot change the selection owned by an operation or dialog.
             if (selection.isNotEmpty() && selectionCommandsBlocked()) return@open
             if (selection.isEmpty()) {
@@ -1094,13 +1125,11 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             }
         },
         onToggleSelection = { projection ->
-            if (!selectionCommandsBlocked()) selection = selection.toggle(projection.id)
+            if (renderedMediaIsCurrent() && !selectionCommandsBlocked()) selection = selection.toggle(projection.id)
         },
-        onOpenPrivateNotes = { focusManager.clearFocus(); searchFocusRequest = null; selection = emptySet(); recentlyAdded = false; initialCreateRequest = null; showingPrivateNotes = true },
+        onOpenPrivateNotes = { terms = ""; focusManager.clearFocus(); searchFocusRequest = null; selection = emptySet(); recentlyAdded = false; initialCreateRequest = null; showingPrivateNotes = true },
         onImport = { choosingImportSource = true },
-        onSearch = {
-            terms = it
-        },
+        onSearch = ::updateSearch,
         onIndexContent = { controller.indexContent() },
         onRebuildContentIndex = { controller.indexContent(rebuild = true) },
         onCancelContentIndex = controller::cancelContentIndex,
@@ -1121,6 +1150,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         onAlbumOrderChange = { albumOrder = it },
         onAlbumFilterChange = { albumFilter = it },
         onShowRecentlyAdded = {
+            terms = ""
             focusManager.clearFocus()
             openAlbum = null
             openTag = null
@@ -1131,11 +1161,11 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             destination = VaultDestination.LIBRARY
             recentlyAdded = true
         },
-        onShowAllMedia = { recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = false; selection = emptySet() },
-        onShowFavorites = { recentlyAdded = false; openTag = null; favoritesOnly = true; trashOpen = false; quarantineOpen = false; selection = emptySet() },
+        onShowAllMedia = { terms = ""; recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = false; selection = emptySet() },
+        onShowFavorites = { terms = ""; recentlyAdded = false; openTag = null; favoritesOnly = true; trashOpen = false; quarantineOpen = false; selection = emptySet() },
         onShowTags = { controller.loadTags(); managingTags = true },
-        onShowTrash = { recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = true; quarantineOpen = false; selection = emptySet() },
-        onShowQuarantine = { recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = true; selection = emptySet() },
+        onShowTrash = { terms = ""; recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = true; quarantineOpen = false; selection = emptySet() },
+        onShowQuarantine = { terms = ""; recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = true; selection = emptySet() },
         onEmptyTrash = { confirmingEmptyTrash = true },
         onRestoreTrash = { controller.restoreTrash { selection = emptySet() } },
         onRenameAlbum = { album, name -> controller.renameAlbum(album.albumId, name) },
@@ -1148,7 +1178,10 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             controller.moveAlbum(album.albumId, parent?.albumId, before?.albumId)
         },
         onMoveAlbumMember = { objectToMove, before ->
-            openAlbum?.let { album ->
+            if (terms.isBlank() && currentSearchScope() == renderedSearchScope &&
+                !searchCommandsBlocked() && controller.route.value == AppRoute.Vault &&
+                (controller.vaultState.value as? VaultState.Unlocked)?.generation == generation
+            ) openAlbum?.let { album ->
                 controller.moveAlbumMember(album.albumId, objectToMove.objectId, before?.objectId)
             }
         },
@@ -1274,7 +1307,9 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         ) return@SideEffect
         if (loadedLocation != browseLocation) {
             scenes.activate(null)
-            nativeChrome.suspendNavigation()
+            nativeChrome.suspendNavigation(preserveSearch =
+                browseLocation.isTextChangeFrom(loadedLocation) &&
+                    (destination == VaultDestination.LIBRARY || openAlbum != null) && !searchCommandsBlocked())
             return@SideEffect
         }
         scenes.publish(shellScreen) { scene ->
@@ -1283,6 +1318,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 actions = shellActions.forScene(scene),
                 searchFocusRequest = shellSearchFocusRequest,
                 onNavigationBusyChange = { if (scene.canObserve()) shellNavigationBusy = it },
+                browseSearchInPlatformChrome = true,
                 systemBack = { _, _ -> },
             )
         }

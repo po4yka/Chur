@@ -1,6 +1,8 @@
 package dev.po4yka.chur.app
 
 import dev.po4yka.chur.app.vault.MediaKindFilter
+import dev.po4yka.chur.app.vault.BrowseQueryLocation
+import dev.po4yka.chur.app.vault.browseSearchScope
 import dev.po4yka.chur.app.vault.ThumbnailRendition
 import dev.po4yka.chur.app.vault.VaultUiState
 import dev.po4yka.chur.app.vault.thumbnailRendition
@@ -15,6 +17,7 @@ import dev.po4yka.chur.ffi.QueryScope
 import dev.po4yka.chur.ffi.QuerySort
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -88,6 +91,66 @@ class MediaBrowseControlsTest {
         assertEquals(QuerySort.CAPTURE_ASC, ordinary.sort, "leaving the scope preserves the chosen library order")
         assertNull(browseQuery(VaultDestination.SEARCH, null, null, false, false,
             "", QuerySort.CAPTURE_ASC, QuerySort.ALBUM_MANUAL, 0, recentlyAdded = true))
+    }
+
+    @Test
+    fun search_terms_filter_the_original_scope_without_changing_album_identity_order_or_kinds() {
+        val album = AlbumSummary(ByteArray(16) { 7 }, 0, "Album")
+        val tag = TagSummary(ByteArray(16) { 8 }, "Tag")
+        val albumQuery = browseQuery(VaultDestination.ALBUMS, album, null, false, false,
+            "  indexed words  ", QuerySort.CAPTURE_ASC, QuerySort.ALBUM_MANUAL, 3)!!
+        assertEquals(QueryScope.ALBUM, albumQuery.scope)
+        assertTrue(album.albumId.contentEquals(albumQuery.scopeId))
+        assertEquals(QuerySort.ALBUM_MANUAL, albumQuery.sort)
+        assertEquals(3, albumQuery.kinds)
+        assertEquals("indexed words", albumQuery.terms)
+
+        fun query(favorites: Boolean = false, trash: Boolean = false,
+            quarantine: Boolean = false, recent: Boolean = false, withTag: Boolean = false) =
+            browseQuery(VaultDestination.LIBRARY, null, tag.takeIf { withTag }, favorites, trash,
+                "  indexed words  ", QuerySort.CAPTURE_ASC, QuerySort.ALBUM_MANUAL, 4,
+                quarantine = quarantine, recentlyAdded = recent)!!
+        listOf(
+            QueryScope.TIMELINE to query(), QueryScope.FAVORITES to query(favorites = true),
+            QueryScope.QUARANTINE to query(quarantine = true),
+            QueryScope.TAG to query(withTag = true), QueryScope.TIMELINE to query(recent = true),
+        ).forEach { (scope, scoped) ->
+            assertEquals(scope, scoped.scope)
+            assertEquals("indexed words", scoped.terms)
+            assertEquals(4, scoped.kinds)
+        }
+        assertEquals(QueryScope.TRASH, query(trash = true).scope)
+        assertNull(query(trash = true).terms, "Trash deliberately retains no searchable FTS rows")
+        assertTrue(tag.tagId.contentEquals(query(withTag = true).scopeId))
+        assertEquals(QuerySort.IMPORT_DESC, query(recent = true).sort)
+    }
+
+    @Test
+    fun clearing_a_scoped_search_restores_the_original_scope_but_blank_global_search_stays_empty() {
+        val album = AlbumSummary(ByteArray(16) { 7 }, 0, "Album")
+        val query = browseQuery(VaultDestination.ALBUMS, album, null, false, false,
+            "  ", QuerySort.CAPTURE_DESC, QuerySort.ALBUM_MANUAL, 0)!!
+        assertEquals(QueryScope.ALBUM, query.scope)
+        assertTrue(album.albumId.contentEquals(query.scopeId))
+        assertNull(query.terms)
+        assertNull(browseQuery(VaultDestination.SEARCH, null, null, false, false,
+            "  ", QuerySort.CAPTURE_DESC, QuerySort.ALBUM_MANUAL, 0))
+    }
+
+    @Test
+    fun only_text_edits_keep_the_native_search_responder_across_query_registration() {
+        val album = AlbumSummary(ByteArray(16) { 7 }, 0, "Album")
+        val scope = browseSearchScope(VaultDestination.ALBUMS, album, null, false, false, false, false)
+        val previous = BrowseQueryLocation(scope, "cat", QuerySort.CAPTURE_DESC, QuerySort.ALBUM_MANUAL, 0)
+        val edited = previous.copy(terms = "cats")
+        assertTrue(edited.isTextChangeFrom(previous))
+        assertTrue(previous.copy(terms = "").isTextChangeFrom(previous))
+        assertFalse(previous.isTextChangeFrom(previous))
+        assertFalse(edited.isTextChangeFrom(null))
+        assertFalse(edited.copy(kinds = 1).isTextChangeFrom(previous))
+        assertFalse(edited.copy(albumSort = QuerySort.IMPORT_DESC).isTextChangeFrom(previous))
+        assertFalse(edited.copy(scope = scope.copy(album = "another-album")).isTextChangeFrom(previous))
+        assertFalse(edited.copy(scope = scope.copy(destination = VaultDestination.SEARCH, album = null)).isTextChangeFrom(previous))
     }
 
 }

@@ -228,7 +228,7 @@ The checked-in version catalog, wrapper, and Cargo manifests are the version sou
 | Android host | API 29 minimum, API 37 compile/target, pinned NDK |
 | iOS host | UIKit, Compose framework, embedded Share Extension, iOS 18.0 minimum |
 | Build | Gradle 9.8.1, AGP 9.4.1, JDK 21, pinned Rust toolchain, Xcode 27 for local host builds |
-| Native boundary | hand-written C ABI 5.0, JNI on Android, cinterop and Swift C calls on iOS |
+| Native boundary | hand-written C ABI 6.0, JNI on Android, cinterop and Swift C calls on iOS |
 | Cryptography | XChaCha20-Poly1305, Argon2id, HKDF-SHA-256, HPKE, Ed25519 |
 
 Room, DataStore, Koin, Coil, Navigation 3, Kermit, and generated UniFFI bindings are not part of the current dependency graph. Do not infer a dependency from an illustrative interface in a design document.

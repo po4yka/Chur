@@ -1114,7 +1114,8 @@ mod tests {
         )
         .unwrap();
         let query = ObjectQuery {
-            scope: Scope::Search("уникальныйраспознанныйтекст".into()),
+            scope: Scope::Search,
+            terms: Some("уникальныйраспознанныйтекст".into()),
             ..ObjectQuery::timeline()
         };
         assert_eq!(

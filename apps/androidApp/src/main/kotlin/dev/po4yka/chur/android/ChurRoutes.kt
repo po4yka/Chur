@@ -106,6 +106,7 @@ import dev.po4yka.chur.app.vault.VaultDestination
 import dev.po4yka.chur.app.vault.ContentView
 import dev.po4yka.chur.app.vault.AlbumOrder
 import dev.po4yka.chur.app.vault.browseQuery
+import dev.po4yka.chur.app.vault.browseSearchScope
 import dev.po4yka.chur.app.ArchiveCredential
 import dev.po4yka.chur.app.ArchiveSource
 import dev.po4yka.chur.app.ArchiveTransferOwner
@@ -609,7 +610,7 @@ private fun VaultRoute(controller: ChurController) {
     var mediaKinds by remember { mutableStateOf(0) }
     var albumOrder by remember { mutableStateOf(AlbumOrder.MANUAL) }
     var albumFilter by remember { mutableStateOf("") }
-    var terms by remember { mutableStateOf("") }
+    var terms by remember(generation) { mutableStateOf("") }
     var openAlbum by remember(generation) { mutableStateOf<AlbumSummary?>(null) }
 
     var openTag by remember { mutableStateOf<TagSummary?>(null) }
@@ -629,6 +630,7 @@ private fun VaultRoute(controller: ChurController) {
         if (current != null) {
             val resolved = albumPath(albums, current.id).lastOrNull()
             if (resolved == null) {
+                terms = ""
                 selection = emptySet()
                 viewing = null
                 destination = VaultDestination.ALBUMS
@@ -638,6 +640,7 @@ private fun VaultRoute(controller: ChurController) {
     }
     fun navigateAlbum(target: AlbumSummary?) {
         focusManager.clearFocus()
+        terms = ""
         viewing = null
         selection = emptySet()
         openTag = null
@@ -1077,6 +1080,7 @@ private fun VaultRoute(controller: ChurController) {
                 managingTags = false
                 selection = emptySet()
                 openTag = tag
+                terms = ""
                 favoritesOnly = false
                 trashOpen = false
                 quarantineOpen = false
@@ -1203,6 +1207,27 @@ private fun VaultRoute(controller: ChurController) {
 
     // Callbacks can outlive this rendered selection until Compose publishes
     // the next frame. Never let that interval retarget an old action.
+    fun currentSearchScope() = browseSearchScope(destination, openAlbum, openTag,
+        favoritesOnly, trashOpen, quarantineOpen, recentlyAdded)
+    val renderedSearchScope = currentSearchScope()
+    val renderedSearchTerms = terms
+    fun renderedMediaIsCurrent(): Boolean = terms == renderedSearchTerms &&
+        currentSearchScope() == renderedSearchScope && controller.route.value == AppRoute.Vault &&
+        (controller.vaultState.value as? VaultState.Unlocked)?.generation == generation
+    fun searchCommandsBlocked(): Boolean = selection.isNotEmpty() || viewing != null || showingPrivateNotes ||
+        controller.activeOperation.value != null || shellNavigationBusy || privateNotesBusy ||
+        creatingAlbum || choosingAlbum || choosingTag || managingTags || confirmingDelete || confirmingEmptyTrash ||
+        choosingExport || choosingImport || choosingArchive != null || choosingArchiveImport ||
+        choosingPrivateNoteExport != null || pendingPrivateNoteExport != null || exportingAlbum != null ||
+        pendingAlbumExport != null || pendingDocumentImport != null || originals.isNotEmpty() ||
+        devicePairing != null || quickSettingsLockBusy || incomingShare != null
+    fun updateSearch(value: String) {
+        if (!trashOpen && currentSearchScope() == renderedSearchScope &&
+            (destination == VaultDestination.LIBRARY || destination == VaultDestination.SEARCH || openAlbum != null) &&
+            !searchCommandsBlocked() && controller.route.value == AppRoute.Vault &&
+            (controller.vaultState.value as? VaultState.Unlocked)?.generation == generation
+        ) terms = value
+    }
     val renderedSelection = selection.toSet()
     fun selectionCommandsBlocked(): Boolean = controller.activeOperation.value != null ||
         choosingExport || choosingAlbum || choosingTag || confirmingDelete || choosingArchive != null
@@ -1247,6 +1272,7 @@ private fun VaultRoute(controller: ChurController) {
                 },
                 albums = albums,
                 searchTerms = terms,
+                searchContext = renderedSearchScope,
                 contentIndex = contentIndex,
                 slots = slots,
                 openAlbum = openAlbum,
@@ -1285,6 +1311,7 @@ private fun VaultRoute(controller: ChurController) {
             actions = VaultActions(
                 onThumbnailsConcealedChange = { thumbnailsConcealed = it },
                 onDestination = {
+                    terms = ""
                     openAlbum = null
                     openTag = null
                     favoritesOnly = false
@@ -1295,6 +1322,8 @@ private fun VaultRoute(controller: ChurController) {
                     destination = it
                 },
                 onOpen = open@{ projection ->
+                    // A queued tile event cannot open or select a result from the previous query.
+                    if (!renderedMediaIsCurrent()) return@open
                     // §11.4: a tap opens the viewer, unless a selection is running,
                     // in which case it extends the selection. Selection is a mode
                     // and an open would leave it silently.
@@ -1312,13 +1341,11 @@ private fun VaultRoute(controller: ChurController) {
                     }
                 },
                 onToggleSelection = { projection ->
-                    if (!selectionCommandsBlocked()) selection = selection.toggle(projection.id)
+                    if (renderedMediaIsCurrent() && !selectionCommandsBlocked()) selection = selection.toggle(projection.id)
                 },
-                onOpenPrivateNotes = { focusManager.clearFocus(); selection = emptySet(); recentlyAdded = false; privateNoteCreateRequest = null; showingPrivateNotes = true },
+                onOpenPrivateNotes = { terms = ""; focusManager.clearFocus(); selection = emptySet(); recentlyAdded = false; privateNoteCreateRequest = null; showingPrivateNotes = true },
                 onImport = { choosingImport = true },
-                onSearch = {
-                    terms = it
-                },
+                onSearch = ::updateSearch,
                 onIndexContent = { controller.indexContent() },
                 onRebuildContentIndex = { controller.indexContent(rebuild = true) },
                 onCancelContentIndex = controller::cancelContentIndex,
@@ -1337,6 +1364,7 @@ private fun VaultRoute(controller: ChurController) {
                 onAlbumOrderChange = { albumOrder = it },
                 onAlbumFilterChange = { albumFilter = it },
                 onShowRecentlyAdded = {
+                    terms = ""
                     focusManager.clearFocus()
                     openAlbum = null
                     openTag = null
@@ -1347,11 +1375,11 @@ private fun VaultRoute(controller: ChurController) {
                     destination = VaultDestination.LIBRARY
                     recentlyAdded = true
                 },
-                onShowAllMedia = { recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = false; selection = emptySet() },
-                onShowFavorites = { recentlyAdded = false; openTag = null; favoritesOnly = true; trashOpen = false; quarantineOpen = false; selection = emptySet() },
+                onShowAllMedia = { terms = ""; recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = false; selection = emptySet() },
+                onShowFavorites = { terms = ""; recentlyAdded = false; openTag = null; favoritesOnly = true; trashOpen = false; quarantineOpen = false; selection = emptySet() },
                 onShowTags = { controller.loadTags(); managingTags = true },
-                onShowTrash = { recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = true; quarantineOpen = false; selection = emptySet() },
-                onShowQuarantine = { recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = true; selection = emptySet() },
+                onShowTrash = { terms = ""; recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = true; quarantineOpen = false; selection = emptySet() },
+                onShowQuarantine = { terms = ""; recentlyAdded = false; openTag = null; favoritesOnly = false; trashOpen = false; quarantineOpen = true; selection = emptySet() },
                 onEmptyTrash = { confirmingEmptyTrash = true },
                 onRestoreTrash = { controller.restoreTrash { selection = emptySet() } },
                 onRenameAlbum = { album, name -> controller.renameAlbum(album.albumId, name) },
@@ -1366,7 +1394,10 @@ private fun VaultRoute(controller: ChurController) {
                     controller.moveAlbum(album.albumId, parent?.albumId, before?.albumId)
                 },
                 onMoveAlbumMember = { objectToMove, before ->
-                    openAlbum?.let { album ->
+                    if (terms.isBlank() && currentSearchScope() == renderedSearchScope &&
+                        !searchCommandsBlocked() && controller.route.value == AppRoute.Vault &&
+                        (controller.vaultState.value as? VaultState.Unlocked)?.generation == generation
+                    ) openAlbum?.let { album ->
                         controller.moveAlbumMember(album.albumId, objectToMove.objectId, before?.objectId)
                     }
                 },

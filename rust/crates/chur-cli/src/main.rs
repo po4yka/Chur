@@ -144,7 +144,7 @@ enum VaultAction {
         /// The album or tag identifier, for those scopes.
         #[arg(long)]
         id: Option<String>,
-        /// The search terms, for the search scope.
+        /// Optional literal text within the selected scope; required for search, unavailable in Trash.
         #[arg(long)]
         terms: Option<String>,
         /// capture-desc, capture-asc, or import-desc.
@@ -373,8 +373,8 @@ fn run_vault(
             sort,
             limit,
         } => {
-            let scope = vault::parse_scope(&scope, id.as_deref(), terms.as_deref())?;
-            vault::list(&session, scope, vault::parse_sort(&sort)?, limit)
+            let scope = vault::parse_scope(&scope, id.as_deref())?;
+            vault::list(&session, scope, terms, vault::parse_sort(&sort)?, limit)
         }
         VaultAction::Show { object } => vault::inspect_object(&session, &vault::parse_id(&object)?),
         VaultAction::Export {

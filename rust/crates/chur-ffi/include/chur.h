@@ -272,6 +272,7 @@ typedef struct ChurQueryV1 {
   uint8_t scope_id[16];
   uint8_t cursor_present;
   uint8_t cursor[CHUR_CURSOR_LEN];
+  /* ABI 6: bounded UTF-8 filter; required in Search, forbidden in Trash. */
   const uint8_t *terms;
   uint32_t terms_length;
 } ChurQueryV1;

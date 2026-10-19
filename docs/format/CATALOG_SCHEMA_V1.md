@@ -296,7 +296,8 @@ Filename, caption, EXIF, GPS, album names, and tag names are not in the projecti
 
 ```text
 ObjectQueryV1
-    scope     timeline | album(album_id) | favorites | tag(tag_id) | search(terms) | quarantine
+    scope     timeline | album(album_id) | favorites | tag(tag_id) | search | quarantine | trash
+    terms     optional UTF-8 text intersected with any scope, required for search
     kinds     u16 bitmask of media kinds, 0 for every kind
     sort      capture_desc (default) | capture_asc | import_desc
     cursor    opaque, empty for the first page
@@ -314,13 +315,15 @@ CursorV1
     sort_value    u64          the sort column of the last row returned
     object_id     bytes[16]    that row's identifier
     sort          u8           the ObjectQueryV1 sort this cursor was issued under
-    scope_kind    u8           1 timeline, 2 album, 3 favorites, 4 tag, 5 search, 6 quarantine
-    scope_id      bytes[16]    the album or tag identifier, 16 zero bytes for every other scope
+    scope_kind    u8           1 timeline, 2 album, 3 favorites, 4 tag, 5 search, 6 quarantine, 7 trash
+    query_key     bytes[16]    first 16 bytes of the query-context SHA-256 digest
 ```
 
-The last three fields are what make "issued for a different scope or sort" detectable. Without them a cursor is an ordering key alone, and a caller that changed scope between pages would receive a page ordered correctly and drawn from the wrong set. A `search` cursor carries zero bytes in `scope_id` and binds no query text, so continuing a search whose terms changed returns rows from the new terms after the old cursor position; a caller that changes terms starts the scope again, exactly as it must after a `catalog_generation` change.
+The last three fields bind scope, sort and filters. `query_key` is the first 16 bytes of SHA-256 over `chur-page-query-v1` followed by NUL, `scope_kind:u8`, the album/tag ID (16 zero bytes otherwise), `kinds:u16` big-endian, and the escaped FTS phrase-and-prefix expression (empty without text). Scope identity and class mask therefore cannot be changed between pages, and changing text requires a new first page. The digest carries no plaintext query. It is an ephemeral context check, not an authentication token; cursors are never persisted. ABI 6 replaces the older scope-ID-only cursor interpretation; old cursors are refused.
 
-Paging is keyset, never offset. The cursor is the sort value of the last row returned followed by its `object_id`, and the next page selects the rows ordered strictly after that pair. Every page therefore costs the same whatever its position, and a page boundary stays valid while rows are inserted and deleted. The consequence is stated rather than hidden: a row whose sort key changes between two pages may be returned twice or skipped, so a caller whose page carries a `catalog_generation` different from the previous page's restarts the scope instead of continuing the cursor. A cursor that does not parse, or that was issued for a different scope or sort, is `INVALID_INPUT`.
+Optional text applies the same bounded literal FTS matching as §16.4 to the selected scope before count, keyset and limit. Empty/whitespace text clears a non-search scope's filter; the global search scope still requires nonblank text. Neither matching text in another album nor a trashed/quarantined object can escape the selected scope. Trash erases its FTS entry as part of recoverable deletion: nonblank text in Trash is `INVALID_INPUT`, and its UI does not offer a text field.
+
+Paging is keyset, never offset. The cursor is the sort value of the last row returned followed by its `object_id`, and the next page selects the rows ordered strictly after that pair. Every page therefore costs the same whatever its position, and a page boundary stays valid while rows are inserted and deleted. The consequence is stated rather than hidden: a row whose sort key changes between two pages may be returned twice or skipped, so a caller whose page carries a `catalog_generation` different from the previous page's restarts the scope instead of continuing the cursor. A cursor that does not parse, or that was issued for a different scope, sort, text or kind filter, is `INVALID_INPUT`.
 
 Rows with `state` `DELETING` or `TOMBSTONED` are never returned. Rows with `state` `TRASHED` are returned only in the `trash` scope. A row with `integrity_summary` `QUARANTINED` is returned only in the `quarantine` scope, which is what keeps it out of the ordinary library under [`../../DESIGN.md`](../../DESIGN.md) §20.3.
 

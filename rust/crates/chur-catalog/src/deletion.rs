@@ -630,7 +630,8 @@ mod tests {
         page(
             db,
             &ObjectQuery {
-                scope: Scope::Search(String::from("holiday")),
+                scope: Scope::Search,
+                terms: Some(String::from("holiday")),
                 ..ObjectQuery::timeline()
             },
         )

@@ -430,7 +430,8 @@ fn an_object_appears_in_the_timeline_and_in_search() {
     let found = page(
         session.catalog_ref().unwrap(),
         &ObjectQuery {
-            scope: Scope::Search(String::from("backerei")),
+            scope: Scope::Search,
+            terms: Some(String::from("backerei")),
             ..ObjectQuery::timeline()
         },
     )

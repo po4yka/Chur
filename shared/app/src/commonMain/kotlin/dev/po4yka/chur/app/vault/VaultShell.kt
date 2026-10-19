@@ -4,6 +4,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -153,6 +154,8 @@ data class VaultUiState(
     val albums: List<AlbumSummary> = emptyList(),
     /** The search text. */
     val searchTerms: String = "",
+    /** Exact query owner for native input callbacks; never persisted. */
+    val searchContext: BrowseSearchScope? = null,
     val contentIndex: dev.po4yka.chur.app.ContentIndexState = dev.po4yka.chur.app.ContentIndexState(available = false),
     /** The key slots, for settings. */
     val slots: List<SlotSummary> = emptyList(),
@@ -398,6 +401,7 @@ fun VaultShell(
     systemBack: @Composable (enabled: Boolean, onBack: () -> Unit) -> Unit,
     searchFocusRequest: Long? = null,
     onNavigationBusyChange: (Boolean) -> Unit = {},
+    browseSearchInPlatformChrome: Boolean = false,
 ) {
     var scopesExpanded by remember(state.destination, state.openAlbum?.id, state.selectedCount) { mutableStateOf(false) }
     var albumExportExpanded by remember(state.openAlbum?.id, state.selectedCount) { mutableStateOf(false) }
@@ -584,7 +588,7 @@ fun VaultShell(
                     when {
                         state.openAlbum != null || state.destination == VaultDestination.LIBRARY ->
                             androidx.compose.runtime.key(state.recentlyAdded) {
-                                LibraryBody(state, actions, state.mediaView, actions.onMediaViewChange)
+                                LibraryBody(state, actions, state.mediaView, actions.onMediaViewChange, browseSearchInPlatformChrome)
                             }
                         state.destination == VaultDestination.ALBUMS ->
                             AlbumOrganizer(state.albums, actions, state.albumView, actions.onAlbumViewChange,
@@ -880,7 +884,8 @@ private fun glyphFor(destination: VaultDestination) = when (destination) {
 
 @Composable
 private fun LibraryBody(state: VaultUiState, actions: VaultActions,
-    view: ContentView, onViewChange: (ContentView) -> Unit) {
+    view: ContentView, onViewChange: (ContentView) -> Unit, browseSearchInPlatformChrome: Boolean) {
+    val keyboard = LocalSoftwareKeyboardController.current
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val album = state.openAlbum
         val headerScroll = remember(album?.id) { ScrollState(0) }
@@ -889,10 +894,29 @@ private fun LibraryBody(state: VaultUiState, actions: VaultActions,
             if (album == null) emptyList() else albumChildren(state.albums, album.id, state.albumOrder)
         }
         // Large text and deep paths must not take all the media viewport.
-        val header = if (album != null) Modifier.fillMaxWidth().heightIn(max = maxHeight / 2)
-            .verticalScroll(headerScroll) else Modifier.fillMaxWidth()
+        val header = Modifier.fillMaxWidth().heightIn(max = maxHeight / 2).verticalScroll(headerScroll)
         Column(modifier = Modifier.fillMaxSize()) {
             Column(header) {
+                if (!browseSearchInPlatformChrome && !state.trashOpen) {
+                    OutlinedTextField(
+                        value = state.searchTerms,
+                        onValueChange = actions.onSearch,
+                        enabled = state.operation == null && state.selectedCount == 0,
+                        singleLine = true,
+                        label = { Text(if (album != null) "Search album" else "Search library") },
+                        placeholder = { Text("Names, tags, or indexed text", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        keyboardOptions = privateKeyboardOptions().copy(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
+                        trailingIcon = if (state.searchTerms.isNotEmpty()) ({
+                            IconButton(onClick = { actions.onSearch("") },
+                                enabled = state.operation == null && state.selectedCount == 0,
+                                modifier = Modifier.semantics { contentDescription = "Clear search" },
+                            ) { Text("×", style = MaterialTheme.typography.titleLarge) }
+                        }) else null,
+                        modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter),
+                        colors = churOutlinedTextFieldColors(),
+                    )
+                }
                 if (album != null && state.selectedCount == 0) {
                     AlbumBreadcrumbs(path, album, actions.onAlbumRoot, actions.onOpenAlbum, Modifier.fillMaxWidth())
                     AlbumChildren(children, actions.onOpenAlbum, Modifier.fillMaxWidth())
@@ -907,22 +931,25 @@ private fun LibraryBody(state: VaultUiState, actions: VaultActions,
                 )
             }
             if (state.tiles.isEmpty()) {
-                if (state.libraryScopeTitle == null && state.kinds == 0) EmptyLibrary(
+                if (state.searchTerms.isBlank() && state.libraryScopeTitle == null && state.kinds == 0) EmptyLibrary(
                     onImport = actions.onImport.takeIf { state.operation == null },
                     modifier = Modifier.weight(1f),
                 )
                 else EmptyBrowseResult(
                     message = when {
+                        state.searchTerms.isNotBlank() -> "No matching items. Try another word or remove a filter."
                         state.kinds != 0 -> "No media matches these filters"
                         state.recentlyAdded -> "No recently added media. Import files to see them here."
                         else -> "No media in ${state.libraryScopeTitle}"
                     },
                     actionLabel = when {
+                        state.searchTerms.isNotBlank() -> "Clear search"
                         state.kinds != 0 -> "Clear filters"
                         state.recentlyAdded -> "Import"
                         else -> "Show all media"
                     },
                     onAction = when {
+                        state.searchTerms.isNotBlank() -> ({ actions.onSearch("") })
                         state.kinds != 0 -> ({ actions.onKindsChange(0) })
                         state.recentlyAdded -> actions.onImport.takeIf { state.operation == null }
                         else -> actions.onShowAllMedia
@@ -936,7 +963,7 @@ private fun LibraryBody(state: VaultUiState, actions: VaultActions,
                     onOpen = actions.onOpen,
                     onToggleSelection = actions.onToggleSelection,
                     onMove = if (state.openAlbum != null && state.sort == QuerySort.ALBUM_MANUAL &&
-                        state.kinds == 0 && state.selectedCount == 0) actions.onMoveAlbumMember else null,
+                        state.kinds == 0 && state.selectedCount == 0 && state.searchTerms.isBlank()) actions.onMoveAlbumMember else null,
                     albumTargets = state.albums.filterNot { it.id == state.openAlbum?.id },
                     onDropIntoAlbum = if (state.trashOpen) null else actions.onDropMediaIntoAlbum,
                     onLoadMore = if (state.canLoadMore) actions.onLoadMore else null,
@@ -970,6 +997,7 @@ private fun SearchBody(state: VaultUiState, actions: VaultActions,
                 OutlinedTextField(
                     value = state.searchTerms,
                     onValueChange = actions.onSearch,
+                    enabled = state.selectedCount == 0 && state.operation == null,
                     singleLine = true,
                     label = { Text("Search") },
                     placeholder = { Text("Names, tags, or indexed text", maxLines = 1, overflow = TextOverflow.Ellipsis) },

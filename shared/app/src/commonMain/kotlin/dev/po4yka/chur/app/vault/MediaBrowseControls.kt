@@ -65,6 +65,34 @@ fun sortLabel(sort: QuerySort, trash: Boolean): String = when (sort) {
     QuerySort.IMPORT_DESC -> "Recently imported"
 }
 
+/** The visible search owner, excluding its text so consecutive edits share one scope. */
+data class BrowseSearchScope(
+    val destination: VaultDestination,
+    val album: String?,
+    val tag: String?,
+    val favorites: Boolean,
+    val trash: Boolean,
+    val quarantine: Boolean,
+    val recentlyAdded: Boolean,
+)
+
+fun browseSearchScope(
+    destination: VaultDestination, album: AlbumSummary?, tag: TagSummary?,
+    favorites: Boolean, trash: Boolean, quarantine: Boolean, recentlyAdded: Boolean,
+) = BrowseSearchScope(destination, album?.id, tag?.id, favorites, trash, quarantine, recentlyAdded)
+
+/** Keeps the same native search responder only while a text edit registers its query. */
+internal data class BrowseQueryLocation(
+    val scope: BrowseSearchScope,
+    val terms: String,
+    val mediaSort: QuerySort,
+    val albumSort: QuerySort,
+    val kinds: Int,
+) {
+    fun isTextChangeFrom(previous: BrowseQueryLocation?): Boolean = previous != null &&
+        previous.terms != terms && previous.copy(terms = terms) == this
+}
+
 /** One query builder for both hosts, so a filter always runs before paging. */
 fun browseQuery(
     destination: VaultDestination,
@@ -78,25 +106,31 @@ fun browseQuery(
     kinds: Int,
     quarantine: Boolean = false,
     recentlyAdded: Boolean = false,
-): ObjectQuery? = when {
-    album != null -> ObjectQuery(QueryScope.ALBUM, sort = albumSort,
-        kinds = kinds, scopeId = album.albumId)
-    destination == VaultDestination.LIBRARY && trash ->
-        ObjectQuery(QueryScope.TRASH, sort = mediaSort, kinds = kinds)
-    // `DESIGN.md` §20.3: quarantined objects stay out of the ordinary library; this is where they stay reachable.
-    destination == VaultDestination.LIBRARY && quarantine ->
-        ObjectQuery(QueryScope.QUARANTINE, sort = mediaSort, kinds = kinds)
-    destination == VaultDestination.LIBRARY && tag != null ->
-        ObjectQuery(QueryScope.TAG, sort = mediaSort, kinds = kinds, scopeId = tag.tagId)
-    destination == VaultDestination.LIBRARY && favorites ->
-        ObjectQuery(QueryScope.FAVORITES, sort = mediaSort, kinds = kinds)
-    destination == VaultDestination.LIBRARY && recentlyAdded ->
-        ObjectQuery(QueryScope.TIMELINE, sort = QuerySort.IMPORT_DESC, kinds = kinds)
-    destination == VaultDestination.LIBRARY ->
-        ObjectQuery(QueryScope.TIMELINE, sort = mediaSort, kinds = kinds)
-    destination == VaultDestination.SEARCH && terms.isNotBlank() ->
-        ObjectQuery(QueryScope.SEARCH, sort = mediaSort, kinds = kinds, terms = terms.trim())
-    else -> null
+): ObjectQuery? {
+    val normalizedTerms = terms.trim().takeIf { it.isNotEmpty() }
+    return when {
+        album != null -> ObjectQuery(QueryScope.ALBUM, sort = albumSort,
+            kinds = kinds, scopeId = album.albumId)
+        destination == VaultDestination.LIBRARY && trash ->
+            ObjectQuery(QueryScope.TRASH, sort = mediaSort, kinds = kinds)
+        // `DESIGN.md` §20.3: quarantined objects stay out of the ordinary library; this is where they stay reachable.
+        destination == VaultDestination.LIBRARY && quarantine ->
+            ObjectQuery(QueryScope.QUARANTINE, sort = mediaSort, kinds = kinds)
+        destination == VaultDestination.LIBRARY && tag != null ->
+            ObjectQuery(QueryScope.TAG, sort = mediaSort, kinds = kinds, scopeId = tag.tagId)
+        destination == VaultDestination.LIBRARY && favorites ->
+            ObjectQuery(QueryScope.FAVORITES, sort = mediaSort, kinds = kinds)
+        destination == VaultDestination.LIBRARY && recentlyAdded ->
+            ObjectQuery(QueryScope.TIMELINE, sort = QuerySort.IMPORT_DESC, kinds = kinds)
+        destination == VaultDestination.LIBRARY ->
+            ObjectQuery(QueryScope.TIMELINE, sort = mediaSort, kinds = kinds)
+        destination == VaultDestination.SEARCH && terms.isNotBlank() ->
+            ObjectQuery(QueryScope.SEARCH, sort = mediaSort, kinds = kinds)
+        else -> null
+    }?.let { query ->
+        // Trash has no retained FTS rows; its contents are deliberately not searchable.
+        query.copy(terms = normalizedTerms.takeUnless { query.scope == QueryScope.TRASH })
+    }
 }
 
 /** Controls query-backed ordering and class filtering before pagination occurs. */

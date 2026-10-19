@@ -173,7 +173,8 @@ fn assert_purged_ocr_and_healthy_neighbor(
         ChurStatus::NotFound
     );
     let query = chur_catalog::query::ObjectQuery {
-        scope: chur_catalog::query::Scope::Search("remotepreservedocrneighbor".into()),
+        scope: chur_catalog::query::Scope::Search,
+        terms: Some("remotepreservedocrneighbor".into()),
         ..chur_catalog::query::ObjectQuery::timeline()
     };
     let hits = chur_catalog::query::page(session.catalog_ref().unwrap(), &query)
@@ -469,7 +470,8 @@ fn foreign_purge_preserves_active_original(
 ) {
     use chur_catalog::query;
     let query = query::ObjectQuery {
-        scope: query::Scope::Search("private".into()),
+        scope: query::Scope::Search,
+        terms: Some("private".into()),
         ..query::ObjectQuery::timeline()
     };
     assert!(

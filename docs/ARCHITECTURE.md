@@ -347,7 +347,7 @@ Module boundaries MUST prevent feature modules from importing platform-native ke
 | Private persistence | Rust-owned SQLCipher, schema v14 |
 | Images | authenticated derivatives, platform decoders, bounded session cache |
 | Local OCR | bundled English/Russian Tesseract on Android; Vision on iOS |
-| Interop | hand-written C ABI 5.0, JNI/cinterop, direct Swift media reads |
+| Interop | hand-written C ABI 6.0, JNI/cinterop, direct Swift media reads |
 | Build | root Gradle scripts and version catalog; Cargo and Xcode host builds |
 
 Exact pins are in the manifests and lockfiles; [Development](../DEVELOPMENT.md) owns the commands. The interfaces below explain ownership; they are not a list of generated classes or dependencies. Room, Koin, Navigation 3, Coil, and Kermit are not used in the current build.
