@@ -13,6 +13,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
+import android.view.inspector.WindowInspector
 import android.widget.FrameLayout
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
@@ -240,7 +241,18 @@ class PrivateNotesAndroidTest {
         fun main(action: () -> Unit) { if (Looper.myLooper() == Looper.getMainLooper()) action() else instrumentation.runOnMainSync(action) }
         fun savedState(): Map<String, List<Any?>> { var saved = emptyMap<String, List<Any?>>() ; main { saved = registry.performSave() }; return saved }
         fun await(condition: () -> Boolean): Boolean { val until = SystemClock.uptimeMillis() + 5_000; while (SystemClock.uptimeMillis() < until) { if (condition()) return true; SystemClock.sleep(50) }; return condition() }
-        fun nodes(merged: Boolean = false): List<SemanticsNode> { var result = emptyList<SemanticsNode>(); main { result = roots(view).flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = merged) } }; return result }
+        fun nodes(merged: Boolean = false): List<SemanticsNode> {
+            var result = emptyList<SemanticsNode>()
+            main {
+                // Compose dialogs own a separate window, outside the fixture's ComposeView.
+                val dialogRoots = WindowInspector.getGlobalWindowViews()
+                    .filter { it !== activity.window.decorView }.flatMap(::roots)
+                result = (roots(view) + dialogRoots).flatMap {
+                    it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = merged)
+                }
+            }
+            return result
+        }
         fun hasText(text: String) = nodes().any { it.config.getOrNull(SemanticsProperties.Text)?.any { label -> text in label.text } == true }
         fun clickDescription(text: String) {
             fun clickable() = nodes(merged = true).firstOrNull {
