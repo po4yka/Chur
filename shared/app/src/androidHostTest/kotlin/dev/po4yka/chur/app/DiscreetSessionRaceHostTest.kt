@@ -446,16 +446,24 @@ class DiscreetSessionRaceHostTest {
     }
 
     @Test
-    fun a_recovery_phrase_returning_after_lock_is_never_published() = scenario {
-        create()
-        controller.addRecoverySlot()
-        main.runNext() // owner check succeeds; the native slot is staged off Main.
-        val lateResult = main.take()
-        controller.lock()
-        lateResult.run()
-        assertNull(controller.recoveryPhrase.value)
-        assertEquals(AppRoute.PublicShell, controller.route.value)
-        finishLock()
+    fun a_recovery_phrase_returning_after_lock_is_never_published() {
+        val entries = HeldEntry()
+        scenario(entryDispatcher = entries) {
+            create()
+            main.barrier()
+            val native = entries.holdNext()
+            controller.addRecoverySlot()
+            // Let the actual native slot creation finish only after withContext has
+            // suspended Main. A fast native call may otherwise resume inline and
+            // leave no Main continuation for the test to hold.
+            main.awaitSignal(native).run()
+            val lateResult = main.take()
+            controller.lock()
+            lateResult.run()
+            assertNull(controller.recoveryPhrase.value)
+            assertEquals(AppRoute.PublicShell, controller.route.value)
+            finishLock()
+        }
     }
 
     @Test
@@ -510,7 +518,8 @@ class DiscreetSessionRaceHostTest {
         assertTrue(controller.vaultState.value !is VaultState.Creating)
     }
 
-    private fun scenario(apple: AppleDeviceUnlock = NoAppleDeviceUnlock, test: suspend Fixture.() -> Unit) = runBlocking {
+    private fun scenario(apple: AppleDeviceUnlock = NoAppleDeviceUnlock,
+        entryDispatcher: CoroutineDispatcher = Dispatchers.Default, test: suspend Fixture.() -> Unit) = runBlocking {
         val main = HeldMain()
         Dispatchers.setMain(main)
         val root = File(System.getProperty("java.io.tmpdir"), "chur-discreet-race-${System.nanoTime()}").apply { mkdirs() }
@@ -518,7 +527,7 @@ class DiscreetSessionRaceHostTest {
         val exports = Exports()
         val clock = ManualClock()
         val controller = ChurController(root.path, cover, exports, deviceUnlock = Owner, appleDeviceUnlock = apple,
-            clock = { clock.now })
+            clock = { clock.now }, entryDispatcher = entryDispatcher)
         try {
             controller.vault.start()
             withTimeout(30_000) { Fixture(controller, main, cover, exports, clock).test() }
@@ -539,7 +548,9 @@ class DiscreetSessionRaceHostTest {
             controller.goTo(AppRoute.CreateVault)
             controller.create(PASSWORD, false)
             main.until { controller.route.value == AppRoute.Vault }
-            main.runNext() // enterVault's initial page returns.
+            // Finish the request, including its initial page. A count of dispatcher
+            // hops is not a barrier: fast withContext work need not suspend.
+            awaitPhraseRequestCompletion()
         }
         suspend fun completeRead(read: () -> Unit) { read(); main.runNext(); main.runNext() }
         suspend fun awaitPhraseRequestCompletion() {
@@ -555,6 +566,20 @@ class DiscreetSessionRaceHostTest {
             main.until { pending == null || pending.isCompleted }
             assertTrue(controller.vaultState.value !is VaultState.Unlocked)
             assertTrue(controller.vaultState.value !is VaultState.Creating)
+        }
+    }
+
+    /** Holds one real native dispatch; all other native calls use Default normally. */
+    private class HeldEntry : CoroutineDispatcher() {
+        private var next: CompletableDeferred<Runnable>? = null
+        fun holdNext(): Deferred<Runnable> {
+            check(next == null)
+            return CompletableDeferred<Runnable>().also { next = it }
+        }
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            val held = next
+            if (held == null) Dispatchers.Default.dispatch(context, block)
+            else { next = null; held.complete(block) }
         }
     }
 

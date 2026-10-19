@@ -51,12 +51,12 @@ cleanup() {
     if [[ -n "$emulator_pid" ]]; then
         # setsid gives this emulator its own group. Never stop the ADB server,
         # another serial, or a pre-existing emulator on the machine.
-        kill -TERM -- "-$emulator_pid" 2>/dev/null || true
+        kill -TERM -- "-$emulator_pid" 2>/dev/null || kill -TERM "$emulator_pid" 2>/dev/null || true
         for ((attempt = 0; attempt < 10; attempt++)); do
-            kill -0 -- "-$emulator_pid" 2>/dev/null || break
+            if ! kill -0 "$emulator_pid" 2>/dev/null && ! kill -0 -- "-$emulator_pid" 2>/dev/null; then break; fi
             sleep 1
         done
-        kill -KILL -- "-$emulator_pid" 2>/dev/null || true
+        kill -KILL -- "-$emulator_pid" 2>/dev/null || kill -KILL "$emulator_pid" 2>/dev/null || true
         wait "$emulator_pid" 2>/dev/null || true
     fi
     rm -rf -- "$owned_directory"
@@ -96,7 +96,12 @@ setsid "$emulator" -avd "$avd_name" -port "$port" -no-window -no-audio -no-boot-
 emulator_pid=$!
 boot_deadline=$((SECONDS + 300))
 while [[ "$(timeout 5 "$adb" -s "$serial" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)" != 1 ]]; do
-    kill -0 -- "-$emulator_pid" 2>/dev/null || { echo "The owned emulator exited during boot" >&2; exit 1; }
+    # The background launcher may still be starting setsid; its process group
+    # does not exist until that child has actually entered its new session.
+    if ! kill -0 "$emulator_pid" 2>/dev/null && ! kill -0 -- "-$emulator_pid" 2>/dev/null; then
+        echo "The owned emulator exited during boot" >&2
+        exit 1
+    fi
     ((SECONDS < boot_deadline)) || { echo "The owned emulator did not boot within five minutes" >&2; exit 1; }
     sleep 2
 done

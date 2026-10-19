@@ -20,6 +20,8 @@ import dev.po4yka.chur.native.chur_private_note_get
 import dev.po4yka.chur.native.chur_private_note_save
 import dev.po4yka.chur.native.chur_private_note_change
 import dev.po4yka.chur.native.chur_private_note_export_begin
+import dev.po4yka.chur.native.chur_private_note_attachments
+import dev.po4yka.chur.native.chur_private_note_attachment_export_begin
 import dev.po4yka.chur.native.chur_external_archive_begin
 import dev.po4yka.chur.native.chur_selective_export_begin
 import dev.po4yka.chur.native.chur_selective_import_begin

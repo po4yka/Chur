@@ -369,7 +369,9 @@ fn every_declared_function_is_exported() {
         "chur_private_note_get",
         "chur_private_note_save",
         "chur_private_note_change",
+        "chur_private_note_attachments",
         "chur_private_note_export_begin",
+        "chur_private_note_attachment_export_begin",
         "chur_tag_create",
         "chur_tag_list",
         "chur_object_set_tag",
@@ -437,7 +439,7 @@ fn every_declared_function_is_exported() {
     );
 
     // Calling each one proves the list above is not a stale copy.
-    assert_eq!(chur_ffi::chur_abi_version_major(), 4);
+    assert_eq!(chur_ffi::chur_abi_version_major(), 5);
     assert_eq!(chur_ffi::chur_abi_version_minor(), 0);
     assert_eq!(
         chur_ffi::chur_capabilities(),

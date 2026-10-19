@@ -40,6 +40,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -123,6 +124,8 @@ class ChurController(
      */
     private val localNetworkAlert: Boolean = false,
     private val contentExtractor: dev.po4yka.chur.app.vault.ContentTextExtractor? = null,
+    /** Native entry work runs off Main; tests can hold its real completion before UI delivery. */
+    private val entryDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
     /**
      * The last net under every coroutine this controller starts.
@@ -1046,7 +1049,7 @@ class ChurController(
         nativeEntries.update { it + completed }
         try {
             if (expectedEpoch != lockEpoch) throw CancellationException("entry authorization expired")
-            val result = withContext(Dispatchers.Default) { body() }
+            val result = withContext(entryDispatcher) { body() }
             if (expectedEpoch != lockEpoch) {
                 // Register stale-result teardown before releasing this ticket.
                 // It may wait for this ticket, so never join it from here.
