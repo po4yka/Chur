@@ -313,7 +313,20 @@ class GlassChromeIntegrationTest {
     }
 
     private fun assertSelectionPanel() {
-        assertTrue(await { has("1 selected") && has("Export") && has("Add to album") && has("Move to Trash") && has("More") })
+        // Controller completion can precede the Compose frame that releases
+        // input. Wait for the rendered controls, including selection exit.
+        assertTrue("the idle selection panel publishes enabled actions", await {
+            var ready = false
+            main {
+                val snapshot = nodes()
+                ready = snapshot.any { "1 selected" in it.labels } &&
+                    listOf("Export", "Add to album", "Move to Trash", "More", "Clear selection").all { label ->
+                        snapshot.firstOrNull { label in it.labels && SemanticsActions.OnClick in it.config }
+                            ?.let { SemanticsProperties.Disabled !in it.config } == true
+                    }
+            }
+            ready
+        })
         assertFalse("destination tabs are replaced during selection", has("Albums") || has("Search") || has("Settings"))
         main {
             val header = nodes().first { "1 selected" in it.labels }
