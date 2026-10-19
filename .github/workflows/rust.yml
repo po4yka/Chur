@@ -431,13 +431,6 @@ jobs:
       # All modules share this one device. Keep native tests and compilation
       # from competing with real AVPlayer/Vision requests on the simulator.
       - run: ./gradlew --no-daemon --no-parallel --max-workers=1 iosSimulatorArm64Test
-      - name: upload iOS test diagnostics
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: ios-test-results-${{ github.sha }}-${{ github.run_attempt }}
-          path: shared/**/build/test-results/iosSimulatorArm64Test/*.xml
-          if-no-files-found: warn
       - run: ./gradlew --no-daemon --no-parallel --max-workers=1 compileKotlinIosArm64
       # The Compose Multiplatform shell links as an iOS framework, statically
       # against `libchur_ffi.a`. The Xcode project that embeds it is the host
@@ -448,8 +441,15 @@ jobs:
       # configurations that only a macOS job resolves.
       - name: the Gradle lockfiles pin the resolution
         run: |
-          ./gradlew --no-daemon --no-parallel --max-workers=1 iosSimulatorArm64Test compileKotlinIosArm64 linkDebugFrameworkIosSimulatorArm64 --write-locks --quiet
+          ./gradlew --no-daemon --no-parallel --max-workers=1 iosSimulatorArm64Test compileKotlinIosArm64 linkDebugFrameworkIosSimulatorArm64 --write-locks
           git diff --exit-code -- '**/gradle.lockfile'
+      - name: upload iOS test diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-test-results-${{ github.sha }}-${{ github.run_attempt }}
+          path: shared/**/build/test-results/iosSimulatorArm64Test/*.xml
+          if-no-files-found: warn
       - name: remove the owned Vision test simulator
         if: always()
         run: |
