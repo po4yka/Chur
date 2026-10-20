@@ -21,7 +21,7 @@ Real and decoy must not share:
 - thumbnail/preview/player caches;
 - navigation restoration;
 - session generations and handle registries;
-- sync accounts or backup manifests by default.
+- peer sessions or backup manifests.
 
 ## 2. Session routing
 
@@ -78,9 +78,7 @@ A third residual signal is structural and is accepted here rather than in §10, 
 
 What that costs is bounded. A coercer inside a decoy session who provokes the refusal learns that two identities exist, which is the fact §10 protects. They learn nothing about the second one: not its credential, not its size, not its content, and not whether it is the real one — §11's storage rule and §2's session routing still hold. And they must already know the feature exists to try, which the "Assumed adversary knowledge" section below states they may.
 
-A fourth residual signal comes from sync setup, and it is also accepted here rather than in §10. The saved sync state is one file per device (§7), so a setup is refused while that file holds another identity's server or sharing changes that wait for upload. The setup validates the address and the bootstrap secret first, so a wrong entry gets its own message in every identity. Then it refuses with the status that a server gives for a bootstrap secret it does not accept, so the user reads the copy of an ordinary failed setup: "The sync server did not accept this device. Check the bootstrap secret and set up sync again." The refusal sends no request, and the sync status stays as it was, as after a failed first setup.
-
-The response timing still differs. A real failed setup waits for a network round trip, and the refusal answers at once. On iOS, the first request to a local server can also show the system local network alert, and the refusal shows none. The copy also matches only a server that refuses the secret: a server that accepts it, or one that cannot be reached, gives another result on a device with no sibling. So a coercer inside a decoy session who tries a setup can learn that another identity syncs from this device. They learn nothing else about it: not its server, not its sync status, not its integrity verdicts, and not its content, because §7 keeps these to the identity that configured the server. Removing this residual needs a sync state per identity.
+Direct P2P requires an explicit foreground action. Local network prompts, direct connection timing, and traffic volume can reveal that networking is being used; this is a residual signal. No persistent endpoint, account, invitation, or run projection may be shared between vault identities.
 
 ## 6. Public and decoy UI
 
@@ -94,16 +92,7 @@ The public shell remains separate from the decoy vault. A decoy session should b
 
 ## 7. Backup and sync
 
-Initial recommendation:
-
-- local-only decoy in Phase 2;
-- no shared backup package containing both identities unless a dedicated format and threat analysis exists;
-- no common remote account metadata that reveals a sibling identity;
-- user explicitly chooses whether the decoy has independent backup/recovery.
-
-A future server cannot be assumed to hide storage volume or account relationships.
-
-The saved sync state is one file per device. Only the identity that configured it sees its server, its runs, and its integrity verdicts; every other identity sees no server and starts no run. A setup in another identity is refused while that state exists, with the copy of an ordinary failed setup; §5 records the timing and the other signals that remain as accepted residuals.
+Real and decoy vaults have separate keys, device identities, backups, invitations, and active P2P sessions. There is no account or remote service metadata. Switching or locking a vault closes its peer socket and clears every run projection before a different identity can observe the screen. No background transfer or automatic network connection is allowed. Portable backups remain an explicit local export and carry only their own vault.
 
 ## 8. Recovery
 

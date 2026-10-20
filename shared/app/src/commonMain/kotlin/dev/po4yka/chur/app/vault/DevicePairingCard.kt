@@ -34,11 +34,11 @@ data class DevicePairingUiState(
     val busy: Boolean = false,
 )
 
-/** Explicit approval connects a restored vault without giving the server its root key. */
+/** Explicit approval connects a restored vault using signed peer approval. */
 @Composable
 internal fun DevicePairingCard(
     state: DevicePairingUiState,
-    configured: Boolean,
+    canApprove: Boolean,
     busy: Boolean,
     onPrepare: () -> Unit,
     onInspect: (String) -> Unit,
@@ -54,7 +54,7 @@ internal fun DevicePairingCard(
         PrivateAlertDialog(
             onDismissRequest = { revoke = null },
             title = { Text("Revoke this device?") },
-            text = { Text("Device fingerprint: ${peer.fingerprint}\n\nThis device loses server and new object-key access. Copies it already received cannot be recalled.") },
+            text = { Text("Device fingerprint: ${peer.fingerprint}\n\nThis device loses new object-key access after peers receive the revocation. Copies it already received cannot be recalled.") },
             confirmButton = {
                 TextButton(onClick = { revoke = null; onRevokeDevice(peer) }, enabled = !busy) { Text("Revoke device") }
             },
@@ -74,11 +74,11 @@ internal fun DevicePairingCard(
         ) {
             Text("Connect another device", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Restore an encrypted backup on the new device first. Keep this device connected to your sync server. " +
+                "Restore an encrypted backup on the new device first. Keep both apps open on a network where they can reach each other. " +
                     "Compare the new device fingerprint on both devices before you approve access to the whole vault.",
                 style = MaterialTheme.typography.bodySmall,
             )
-            if (!configured) {
+            if (!canApprove) {
                 Text("On the new device")
                 Button(onClick = onPrepare, enabled = !busy) { Text("Create pairing request") }
                 state.requestFingerprint?.let { Text("New device fingerprint: $it") }
@@ -86,7 +86,7 @@ internal fun DevicePairingCard(
                     Text("Send this request to your connected device:")
                     SelectionContainer { Text(code, style = MaterialTheme.typography.bodySmall) }
                 }
-                Text("Open the encrypted approval file from your connected device to complete the connection.")
+                Text("Open the encrypted approval file from your connected device then connect directly to finish pairing.")
                 Button(onClick = onOpenApproval, enabled = !busy) {
                     Text("Open approval file")
                 }
@@ -96,9 +96,9 @@ internal fun DevicePairingCard(
                 state.devices?.forEach { peer ->
                     Text(peer.fingerprint, style = MaterialTheme.typography.bodySmall)
                     Text(if (peer.current) "This device" else if (peer.active) "Access active" else "Access revoked locally")
-                    if (!peer.current && (peer.active || peer.retryAvailable)) {
+                    if (!peer.current && peer.active) {
                         Button(onClick = { revoke = peer }, enabled = !busy) {
-                            Text(if (peer.active) "Revoke access" else "Retry revocation upload")
+                            Text("Revoke access")
                         }
                     }
                 }

@@ -27,8 +27,8 @@ plugins {
  *
  * The Objective-C header gives each Kotlin declaration a `swift_name`, and
  * that name is what Swift writes. A declaration of a module the framework does
- * not export keeps its module prefix, so `SyncCoordinator` becomes
- * `Core_syncSyncCoordinator` and the line the README gives does not compile.
+ * not export keeps its module prefix, so `PeerSyncCoordinator` becomes
+ * `Core_syncPeerSyncCoordinator` and the line the README gives does not compile.
  * A declaration no exported signature refers to is absent from the header.
  */
 // The Apple triples and the Cargo output directory the framework links.
@@ -68,11 +68,7 @@ val iosHostSymbols =
         "IosDocumentPicker",
         "IosAudioPicker",
         "IosIncomingShares",
-        // Step 6: the background task and the sync engine it drives.
-        "IosSyncBackground",
-        "SyncCoordinator",
-        "churSyncStateStore",
-        "FileSyncStateStore",
+        "PeerSyncCoordinator",
         // Step 7: the document picker the restore route asks the host for.
         "IosBackupPicker",
         "IosAlbumExportPicker",
@@ -152,7 +148,7 @@ kotlin {
             export(project(":shared:core-vault"))
             // `NoteStore`, which `churNoteStore()` returns.
             export(project(":shared:feature-notes"))
-            // `SyncCoordinator` and `FileSyncStateStore`, which step 6 pairs.
+            // `PeerSyncCoordinator` drives foreground-only peer sessions.
             export(project(":shared:core-sync"))
             // `IosMediaCodec`, which step 5 gives the picked file URL. No
             // exported signature refers to it, so without this line it is
@@ -258,7 +254,6 @@ kotlin {
 
     sourceSets {
         iosTest {
-            kotlin.srcDir("src/liveSyncTest/kotlin")
         }
         commonMain.dependencies {
             implementation(project(":shared:core-model"))

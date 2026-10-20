@@ -1,6 +1,4 @@
-// Ciphertext-only Phase 3 transport, plus the engine that drives it: the
-// coordinator's bootstrap, pull, and bounded backoff. Canonical protocol
-// parsing remains Rust's, so every record this module moves is opaque bytes.
+// Foreground-only, direct encrypted peer synchronization. No service or account.
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
@@ -26,18 +24,10 @@ kotlin {
             implementation(project(":shared:core-ffi"))
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.json)
-            implementation(libs.ktor.client.core)
-        }
-        androidMain.dependencies {
-            implementation(libs.ktor.client.okhttp)
-        }
-        iosMain.dependencies {
-            implementation(libs.ktor.client.darwin)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
             implementation(libs.kotlinx.coroutines.test)
-            implementation(libs.ktor.client.mock)
         }
     }
 }

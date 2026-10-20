@@ -2,7 +2,7 @@
 
 > **Status:** Accepted normative byte-level specification
 
-This document defines the plaintext authenticated and encrypted by `OperationV1`. The server never receives these fields in plaintext. Encoding follows [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md), with fields in the listed order and no padding, compression, or trailing bytes.
+This document defines the plaintext authenticated and encrypted by `OperationV1`. The peer never receives these fields in plaintext. Encoding follows [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md), with fields in the listed order and no padding, compression, or trailing bytes.
 
 [`COLLECTION_OPERATION_LOG.md`](COLLECTION_OPERATION_LOG.md) reuses the same payload encoding for shared content kinds `0x01` through `0x0C`, `0x10`, and `0x14`. It uses its own outer AAD and signature contract.
 

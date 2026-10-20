@@ -2,10 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>BGTaskSchedulerPermittedIdentifiers</key>
-	<array>
-		<string>dev.po4yka.chur.sync.refresh</string>
-	</array>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
@@ -31,7 +27,7 @@
 	<key>NSFaceIDUsageDescription</key>
 	<string>Use Face ID to open your Chur vault and to confirm it's you before showing a recovery phrase.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Sync this vault with a server on your local network, when you connect to one.</string>
+	<string>Connect directly to your other device to sync this vault while both apps are open.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save selected vault media to your photo library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
@@ -88,10 +84,6 @@
 			</array>
 		</dict>
 	</dict>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>fetch</string>
-	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

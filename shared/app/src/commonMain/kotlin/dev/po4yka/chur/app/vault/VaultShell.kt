@@ -96,7 +96,6 @@ import dev.po4yka.chur.app.AutoLock
 import dev.po4yka.chur.app.Notice
 import dev.po4yka.chur.app.privateKeyboardOptions
 import dev.po4yka.chur.app.secretKeyboardOptions
-import dev.po4yka.chur.app.syncCopy
 import dev.po4yka.chur.app.theme.AlbumsGlyph
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.DestructiveButton
@@ -120,7 +119,7 @@ import dev.po4yka.chur.ffi.SharingMember
 import dev.po4yka.chur.ffi.SharingOverview
 import dev.po4yka.chur.ffi.SharingPermission
 import dev.po4yka.chur.ffi.SharingRecipient
-import dev.po4yka.chur.sync.SyncStatus
+import dev.po4yka.chur.sync.PeerSyncStatus
 
 /**
  * The four vault destinations of `DESIGN.md` §10.1.
@@ -204,10 +203,7 @@ data class VaultUiState(
      * surface that offered "Sync now" with no engine behind it would promise
      * something nothing can deliver.
      */
-    val sync: SyncStatus? = null,
-    val sharingIdentity: SharingIdentity? = null,
-    val sharingOverview: SharingOverview? = null,
-    val sharingRecipient: SharingRecipient? = null,
+    val sync: PeerSyncStatus? = null,
     val devicePairing: DevicePairingUiState = DevicePairingUiState(),
     /**
      * The system security patch line, `ANDROID.md` §25.1, or `null` where the
@@ -332,23 +328,16 @@ data class VaultActions(
      */
     val onNoticeShown: (Long) -> Unit = {},
     /** Connect the vault to the server the user named, `SYNC_PROTOCOL_V1.md` §6. */
-    val onConfigureSync: (serverUrl: String, bootstrapSecret: String) -> Unit = { _, _ -> },
-    val onLoadPairedDevices: () -> Unit = {},
-    val onRevokePairedDevice: (dev.po4yka.chur.ffi.PairedDevice) -> Unit = {},
+    val onListenPeer: (String) -> Unit = {},
+    val onConnectPeer: (String) -> Unit = {},
+    val onStopPeer: () -> Unit = {},
     val onPrepareDevicePairing: () -> Unit = {},
     val onInspectDevicePairing: (String) -> Unit = {},
     val onApproveDevicePairing: (String, String) -> Unit = { _, _ -> },
     val onSavePairingApproval: () -> Unit = {},
     val onOpenPairingApproval: () -> Unit = {},
-    /** Run one sync cycle now. */
-    val onSyncNow: () -> Unit = {},
-    /** Forget the configured server. */
-    val onDisconnectSync: () -> Unit = {},
-    /** Record that the user saw the sync stop, `ROLLBACK_PROTECTION.md` §4. */
-    val onAcknowledgeSyncStop: () -> Unit = {},
-    val onInspectSharingRecipient: (String) -> Unit = {},
-    val onShareWithRecipient: (SharingPermission) -> Unit = {},
-    val onRevokeSharingMember: (SharingMember) -> Unit = {},
+    val onLoadPairedDevices: () -> Unit = {},
+    val onRevokePairedDevice: (dev.po4yka.chur.ffi.PairedDevice) -> Unit = {},
     /** Open the Albums root from any level of an album path. */
     val onAlbumRoot: () -> Unit = {},
     /** Show active media in import order, newest first. */
@@ -1063,16 +1052,13 @@ private fun EmptyBrowseResult(message: String, actionLabel: String, onAction: ((
 private fun SettingsBody(state: VaultUiState, actions: VaultActions, onNavigationBusyChange: (Boolean) -> Unit) {
     val colors = LocalChurColors.current
     var changingPassword by remember { mutableStateOf(false) }
-    var confirmingDisconnect by remember { mutableStateOf(false) }
     var confirmingDamagedDeletion by remember { mutableStateOf(false) }
     var askingRecovery by remember { mutableStateOf(false) }
     val hasRecovery = state.slots.any { it.slotType == 4 }
     var choosingAutoLock by remember { mutableStateOf(false) }
     var pairingBusy by remember { mutableStateOf(false) }
-    var sharingBusy by remember { mutableStateOf(false) }
-    var syncSetupBusy by remember { mutableStateOf(false) }
-    NavigationBusyEffect(changingPassword || confirmingDisconnect || confirmingDamagedDeletion ||
-        askingRecovery || choosingAutoLock || pairingBusy || sharingBusy || syncSetupBusy, onNavigationBusyChange)
+    NavigationBusyEffect(changingPassword || confirmingDamagedDeletion ||
+        askingRecovery || choosingAutoLock || pairingBusy, onNavigationBusyChange)
     LazyColumn(
         contentPadding = PaddingValues(start = ChurSpacing.gutter, top = ChurSpacing.gutter, end = ChurSpacing.gutter,
             bottom = ChurSpacing.gutter + LocalVaultBottomInset.current),
@@ -1255,67 +1241,15 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions, onNavigatio
             }
         }
         state.sync?.let { sync ->
+            item { Text("Devices and P2P sync", style = MaterialTheme.typography.titleMedium) }
             item {
-                Text("Sync", style = MaterialTheme.typography.titleMedium)
-            }
-            item {
-                DevicePairingCard(
-                    state.devicePairing, sync.configured, sync.busy || state.devicePairing.busy,
+                DevicePairingCard(state.devicePairing, sync.canApprove, sync.busy || state.devicePairing.busy,
                     actions.onPrepareDevicePairing, actions.onInspectDevicePairing, actions.onApproveDevicePairing,
                     actions.onSavePairingApproval, actions.onOpenPairingApproval,
                     actions.onLoadPairedDevices, actions.onRevokePairedDevice,
-                    onNavigationBusyChange = { pairingBusy = it },
-                )
+                    onNavigationBusyChange = { pairingBusy = it })
             }
-            if (!sync.configured) {
-                item {
-                    SyncSetupCard(onConfigure = actions.onConfigureSync, onNavigationBusyChange = { syncSetupBusy = it })
-                }
-            } else {
-                if (sync.integrityStop != null) {
-                    item {
-                        SyncStoppedBanner(
-                            acknowledged = sync.integrityAcknowledged,
-                            onStop = { confirmingDisconnect = true },
-                            onAcknowledge = actions.onAcknowledgeSyncStop,
-                        )
-                    }
-                }
-                item {
-                    // A second run while one is in progress would only queue
-                    // behind the engine's lock, so the row waits for it.
-                    SettingsAction("Sync now", actions.onSyncNow, enabled = !sync.busy)
-                }
-                item {
-                    SharingCard(state, actions, onNavigationBusyChange = { sharingBusy = it })
-                }
-                // The engine reports a stop as a status, and the copy for it
-                // is this layer's, `ERROR_MODEL.md` "Layer mapping".
-                (sync.failure?.let(::syncCopy) ?: sync.message)?.let { message ->
-                    item {
-                        Text(
-                            message,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = colors.inkMuted,
-                            modifier = Modifier.padding(horizontal = ChurSpacing.three),
-                        )
-                    }
-                }
-                item {
-                    Text(
-                        // The address is the one fact of the configuration a
-                        // user needs to see; the token this hides is a bearer
-                        // credential and never reaches a surface.
-                        "Connected to ${sync.serverUrl}.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = colors.inkMuted,
-                        modifier = Modifier.padding(horizontal = ChurSpacing.three),
-                    )
-                }
-                item {
-                    SettingsAction("Stop using the server", { confirmingDisconnect = true })
-                }
-            }
+            item { PeerConnectionCard(sync, actions.onListenPeer, actions.onConnectPeer, actions.onStopPeer) }
         }
         // The entry is always here, and never conditional on whether a second
         // identity already exists. `DECOY_VAULT.md` §10 forbids a setting that
@@ -1373,25 +1307,6 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions, onNavigatio
                 }) { Text("Delete permanently") }
             },
             dismissButton = { TextButton(onClick = { confirmingDamagedDeletion = false }) { Text("Cancel") } },
-        )
-    }
-    if (confirmingDisconnect) {
-        // `DESIGN.md` §26: a dialog for a short, high-consequence decision.
-        // The disconnect forgets this device's transport token at once, and
-        // that cannot be taken back, so the confirm is destructive. §27: the
-        // copy says only what is true. Nothing on this device is deleted, and
-        // it promises nothing about connecting again.
-        PrivateAlertDialog(
-            onDismissRequest = { confirmingDisconnect = false },
-            title = { Text("Stop syncing with this server?") },
-            text = { Text("This device stops sending and receiving changes. Nothing is deleted from this device.") },
-            confirmButton = {
-                DestructiveButton(onClick = {
-                    confirmingDisconnect = false
-                    actions.onDisconnectSync()
-                }) { Text("Stop syncing") }
-            },
-            dismissButton = { TextButton(onClick = { confirmingDisconnect = false }) { Text("Cancel") } },
         )
     }
     if (askingRecovery) {
@@ -1592,56 +1507,6 @@ private fun ChangePasswordDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
-}
-
-/**
- * The `DESIGN.md` §20.2 banner for a fork or rollback verdict on one device.
- *
- * `ROLLBACK_PROTECTION.md` §4 has the user told, and its exits, reconciliation
- * and revoking the device, have no surface here yet. What the user can do is
- * stop using the server that delivered that history, so the action is the
- * disconnect, behind its own confirmation. The copy names no status and no
- * cryptography, §20.2, and the banner stays for as long as the engine reports
- * the verdict, as §26 keeps a security failure on screen. It is a polite live
- * region, so a reader hears it when a run on this screen finds the verdict.
- *
- * §4's `acknowledged` state is the secondary action: the chain stays frozen,
- * so the banner stays too and only its sentence changes, and an unlock stops
- * announcing it.
- */
-@Composable
-private fun SyncStoppedBanner(acknowledged: Boolean, onStop: () -> Unit, onAcknowledge: () -> Unit) {
-    val colors = LocalChurColors.current
-    Card(
-        colors = CardDefaults.cardColors(containerColor = colors.errorSoft, contentColor = colors.ink),
-        modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
-    ) {
-        Column(
-            modifier = Modifier.padding(ChurSpacing.three),
-            verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(ChurSpacing.two),
-            ) {
-                Icon(IntegrityGlyph, contentDescription = null, tint = colors.error)
-                Text("Sync stopped for one device", style = MaterialTheme.typography.titleSmall)
-            }
-            Text(
-                if (acknowledged) {
-                    "You acknowledged this. Chur still does not apply changes from that device."
-                } else {
-                    "Changes from that device do not match what this device already accepted, " +
-                        "so Chur does not apply them."
-                },
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Button(onClick = onStop) { Text("Stop using the server") }
-            if (!acknowledged) {
-                TextButton(onClick = onAcknowledge) { Text("Acknowledge") }
-            }
-        }
-    }
 }
 
 @Composable

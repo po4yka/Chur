@@ -76,8 +76,6 @@ fn restored_backup_prepares_a_new_identity_without_reusing_the_recovery_signer()
         &secret,
         vault_id,
         &request,
-        "https://sync.example",
-        &[88; 32],
         NOW + 2,
     )
     .expect("authorized device approves");
@@ -86,13 +84,10 @@ fn restored_backup_prepares_a_new_identity_without_reusing_the_recovery_signer()
         &secret,
         vault_id,
         &request,
-        "https://sync.example",
-        &[99; 32],
         NOW + 3,
     )
     .expect("approval replay");
     assert_eq!(prepared.approval, replay.approval);
-    assert_eq!(replay.transport_token, [88; 32]);
     let mut damaged = prepared.approval.clone();
     *damaged.last_mut().unwrap() ^= 1;
     assert!(
@@ -106,8 +101,9 @@ fn restored_backup_prepares_a_new_identity_without_reusing_the_recovery_signer()
         &prepared.approval,
     )
     .expect("authority verified before credentials leave native code");
-    assert_eq!(credentials.server_url, "https://sync.example");
-    assert_eq!(credentials.token, [88; 32]);
+    assert_eq!(credentials.device_id, *request.device_id());
+    assert_eq!(credentials.checkpoint, prepared.checkpoint);
+    assert_eq!(credentials.enrollment, prepared.enrollment);
     assert_eq!(
         device_pairing::finalize(target.catalog().unwrap(), &secret, vault_id, NOW + 4)
             .unwrap_err()
@@ -262,7 +258,9 @@ fn restored_backup_prepares_a_new_identity_without_reusing_the_recovery_signer()
         &prepared.approval,
     )
     .unwrap();
-    assert_eq!(retry.token, [88; 32]);
+    assert_eq!(retry.device_id, credentials.device_id);
+    assert_eq!(retry.checkpoint, credentials.checkpoint);
+    assert_eq!(retry.enrollment, credentials.enrollment);
     let mut replacement_backup = Cursor::new(Vec::new());
     backup::create(
         &mut target,
@@ -318,8 +316,6 @@ fn restored_backup_prepares_a_new_identity_without_reusing_the_recovery_signer()
             &chur_crypto::Key::new([44; 32]),
             vault_id,
             &another,
-            "https://sync.example",
-            &[90; 32],
             NOW + 9
         )
         .is_err()
@@ -329,8 +325,6 @@ fn restored_backup_prepares_a_new_identity_without_reusing_the_recovery_signer()
         &secret,
         vault_id,
         &another,
-        "https://sync.example",
-        &[90; 32],
         NOW + 9,
     )
     .unwrap();
@@ -439,8 +433,6 @@ fn approval_can_be_revoked_before_the_new_device_ever_authors() {
         &secret,
         vault_id,
         &request,
-        "https://sync.example",
-        &[88; 32],
         NOW + 2,
     )
     .unwrap();
@@ -532,8 +524,6 @@ fn approval_can_be_revoked_before_the_new_device_ever_authors() {
             &secret,
             vault_id,
             &request,
-            "https://sync.example",
-            &[88; 32],
             NOW + 5
         )
         .err()
@@ -577,8 +567,6 @@ fn first_approval_cannot_move_an_already_advanced_local_history_backwards() {
         &secret,
         vault_id,
         &request,
-        "https://sync.example",
-        &[88; 32],
         NOW + 2,
     )
     .unwrap();
@@ -634,8 +622,6 @@ fn a_concurrent_ready_before_genesis_revocation_preserves_history_and_other_devi
         &secret,
         vault_id,
         &target_request,
-        "https://sync.example",
-        &[80; 32],
         NOW + 2,
     )
     .unwrap();
@@ -655,8 +641,6 @@ fn a_concurrent_ready_before_genesis_revocation_preserves_history_and_other_devi
         &secret,
         vault_id,
         &neighbor_request,
-        "https://sync.example",
-        &[81; 32],
         NOW + 2,
     )
     .unwrap();

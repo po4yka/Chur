@@ -55,7 +55,6 @@ android {
         compose = true
     }
 
-    sourceSets.getByName("androidTest").kotlin.srcDir("../../shared/app/src/liveSyncTest/kotlin")
     sourceSets.getByName("androidTest").assets.srcDir(rootProject.file("tests/media"))
 
     signingConfigs {
@@ -95,7 +94,6 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     // The background schedule of `SYNC_PROTOCOL_V1.md` §7: the worker pulls
     // and stages while locked, and the next unlock applies what it staged.
-    implementation(libs.androidx.work.runtime.ktx)
     // The system security patch line of `ANDROID.md` §25.1, ADR-0059.
     implementation(libs.androidx.security.state)
     implementation(libs.compose.runtime)

@@ -101,7 +101,6 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0047](0047-resume-rewrap-from-the-next-missing-envelope.md) | Resume eager rewrap from the smallest missing target-epoch envelope | Accepted |
 | [0048](0048-recover-a-device-from-a-portable-identity-envelope.md) | Recover a lost sync device through a portable identity envelope and checkpoint | Accepted |
 | [0049](0049-add-sync-state-in-catalog-v2.md) | Add durable encrypted-sync state through catalog v2 and a crash-safe migration | Accepted |
-| [0050](0050-sign-server-deletion-authorizations.md) | Sign opaque object and account deletion authorizations with an active device key | Accepted |
 | [0051](0051-derive-sync-operation-keys-and-selectors.md) | Derive sync operation keys and opaque selectors from existing secret domains | Accepted |
 | [0052](0052-keep-v1-sync-history-uncompacted.md) | Commit collection epochs and keep v1 sync history uncompacted | Accepted |
 | [0053](0053-freeze-the-v1-collection-grant.md) | Freeze the v1 collection grant, permissions, and HPKE context | Accepted |
@@ -127,3 +126,5 @@ This list registers the decisions that still require an ADR. [`../ARCHITECTURE.m
 - Android Keystore and iOS Keychain exact policies, including the Apple slot representation that [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §5 leaves open between a protected `DeviceUnlockSecret` and wrapped root bytes held directly as the Keychain secret;
 - device identity portability, including whether the optional Secure Enclave or Android hardware identity keys of [`../sync/DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md) §6 become a second suite;
 - post-quantum recipient profile per [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §56 and [`../sync/COLLECTION_GRANTS.md`](../sync/COLLECTION_GRANTS.md) §11.
+
+- [ADR-0065: Peer-only sync without accounts](0065-peer-only-sync-without-accounts.md) — excludes every service backend and limits synchronization to explicit direct foreground connections.

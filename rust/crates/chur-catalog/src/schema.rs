@@ -17,7 +17,7 @@ use chur_format::{
         CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V5, CATALOG_FORMAT_VERSION_V6,
         CATALOG_FORMAT_VERSION_V7, CATALOG_FORMAT_VERSION_V8, CATALOG_FORMAT_VERSION_V9,
         CATALOG_FORMAT_VERSION_V10, CATALOG_FORMAT_VERSION_V11, CATALOG_FORMAT_VERSION_V12,
-        CATALOG_FORMAT_VERSION_V13, CATALOG_FORMAT_VERSION_V14,
+        CATALOG_FORMAT_VERSION_V13, CATALOG_FORMAT_VERSION_V14, CATALOG_FORMAT_VERSION_V15,
     },
     envelope::ObjectKeyEnvelope,
 };
@@ -75,6 +75,9 @@ const STEPS: &[Step] = &[
     },
     Step {
         version: CATALOG_FORMAT_VERSION_V14,
+    },
+    Step {
+        version: CATALOG_FORMAT_VERSION_V15,
     },
 ];
 
@@ -351,8 +354,6 @@ CREATE TABLE device_pairing_revocations (
 CREATE TABLE device_pairing_approvals (
     request_id BLOB PRIMARY KEY,
     request BLOB NOT NULL,
-    server_url TEXT NOT NULL,
-    transport_token BLOB NOT NULL CHECK(length(transport_token) = 32),
     checkpoint BLOB NOT NULL,
     enrollment BLOB NOT NULL,
     operation BLOB NOT NULL,
@@ -864,6 +865,27 @@ pub fn migrate_v9_to_v10(db: &mut CatalogDb) -> Result<()> {
     })
 }
 
+/// Removes obsolete network enrollment state while preserving vault data and device membership.
+/// An authenticated migration is required; old approval payloads are intentionally invalidated.
+pub fn migrate_v14_to_v15(db: &mut CatalogDb) -> Result<()> {
+    ensure!(
+        recorded_version(db.connection())? == Some(CATALOG_FORMAT_VERSION_V14),
+        MigrationRequired,
+        "the catalog is not version fourteen"
+    );
+    db.transaction(|tx| {
+        tx.execute_batch("DELETE FROM device_pairing_pending;
+            DROP TABLE device_pairing_approvals;
+            CREATE TABLE device_pairing_approvals (
+                request_id BLOB PRIMARY KEY, request BLOB NOT NULL, checkpoint BLOB NOT NULL,
+                enrollment BLOB NOT NULL, operation BLOB NOT NULL, approval BLOB NOT NULL
+            ) STRICT;
+            UPDATE vault_state SET catalog_format_version = 15, active_migration_target = NULL WHERE only_row = 1;")
+            .map_err(|error| map_sqlite(error, "peer-only catalog migration failed"))?;
+        Ok(())
+    })
+}
+
 /// Creates the current schema or opens it without performing an implicit migration.
 ///
 /// `docs/format/CATALOG_SCHEMA_V1.md` §18 forbids skipping an untested step, so
@@ -873,15 +895,15 @@ pub fn open_at_current_version(db: &mut CatalogDb, now_ms: u64) -> Result<u16> {
     let present = recorded_version(db.connection())?;
     let Some(present) = present else {
         install(db, now_ms)?;
-        return Ok(CATALOG_FORMAT_VERSION_V14);
+        return Ok(CATALOG_FORMAT_VERSION_V15);
     };
-    if present != CATALOG_FORMAT_VERSION_V14 {
+    if present != CATALOG_FORMAT_VERSION_V15 {
         bail!(
             MigrationRequired,
             "the catalog requires an authenticated schema migration"
         );
     }
-    Ok(CATALOG_FORMAT_VERSION_V14)
+    Ok(CATALOG_FORMAT_VERSION_V15)
 }
 
 /// The version the database records, or `None` when the schema is absent.
@@ -964,7 +986,7 @@ fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
                      active_migration_target, object_store_checkpoint,
                      integrity_checkpoint_ms, capability_flags
                  ) VALUES (1, ?1, 1, NULL, 0, ?2, 0)",
-                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V14), checkpoint],
+                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V15), checkpoint],
             )
             .map_err(|error| map_sqlite(error, "the catalog state row could not be written"))?;
         Ok(())
@@ -1611,11 +1633,48 @@ mod tests {
     }
 
     #[test]
-    fn a_new_catalog_installs_version_fourteen() {
+    fn peer_only_migration_removes_network_columns_and_rolls_back_failed_transitions() {
+        let mut db = open();
+        open_at_current_version(&mut db, 1_700_000_000_000).expect("install");
+        db.connection().execute_batch("ALTER TABLE device_pairing_approvals ADD COLUMN server_url TEXT;
+            ALTER TABLE device_pairing_approvals ADD COLUMN transport_token BLOB;
+            INSERT INTO device_pairing_approvals VALUES (zeroblob(16), X'01', X'02', X'03', X'04', X'05', 'obsolete', zeroblob(32));
+            UPDATE vault_state SET catalog_format_version = 14;
+            CREATE TRIGGER fail_peer_migration BEFORE UPDATE OF catalog_format_version ON vault_state
+                WHEN NEW.catalog_format_version = 15 BEGIN SELECT RAISE(ABORT, 'migration interrupted'); END;")
+            .expect("old enrollment fixture");
+        assert!(migrate_v14_to_v15(&mut db).is_err());
+        assert_eq!(
+            recorded_version(db.connection()).expect("version"),
+            Some(CATALOG_FORMAT_VERSION_V14)
+        );
+        let columns: i64 = db
+            .connection()
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('device_pairing_approvals')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("columns");
+        assert_eq!(columns, 8, "failed transaction retains its old schema");
+        db.connection()
+            .execute_batch("DROP TRIGGER fail_peer_migration")
+            .expect("remove interruption");
+        migrate_v14_to_v15(&mut db).expect("peer migration");
+        assert_eq!(
+            recorded_version(db.connection()).expect("version"),
+            Some(CATALOG_FORMAT_VERSION_V15)
+        );
+        let (columns, approvals): (i64, i64) = db.connection().query_row("SELECT (SELECT count(*) FROM pragma_table_info('device_pairing_approvals')), (SELECT count(*) FROM device_pairing_approvals)", [], |row| Ok((row.get(0)?, row.get(1)?))).expect("new schema");
+        assert_eq!((columns, approvals), (6, 0));
+    }
+
+    #[test]
+    fn a_new_catalog_installs_version_fifteen() {
         let mut db = open();
         assert_eq!(
             open_at_current_version(&mut db, 1_700_000_000_000).expect("install"),
-            CATALOG_FORMAT_VERSION_V14
+            CATALOG_FORMAT_VERSION_V15
         );
         let sharing_tables: i64 = db
             .connection()
@@ -1687,7 +1746,7 @@ mod tests {
         }
         assert_eq!(
             STEPS.last().map(|step| step.version),
-            Some(CATALOG_FORMAT_VERSION_V14)
+            Some(CATALOG_FORMAT_VERSION_V15)
         );
     }
 

@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-08-27
 - **Decision owners:** @po4yka
-- **Related:** [`../sync/OPERATION_LOG.md`](../sync/OPERATION_LOG.md), [`../sync/SERVER_TRUST_MODEL.md`](../sync/SERVER_TRUST_MODEL.md), [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md), [`0014`](0014-observed-heads-causality-vector.md)
+- **Related:** [`../sync/OPERATION_LOG.md`](../sync/OPERATION_LOG.md), [`../sync/PEER_TRUST_MODEL.md`](../sync/PEER_TRUST_MODEL.md), [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md), [`0014`](0014-observed-heads-causality-vector.md)
 
 ## Context
 
@@ -39,7 +39,7 @@ Rejected. Suite `0x0001` names BLAKE3-256 as the commitment primitive, and a sec
 
 ### Tradeoffs
 
-- a receiver must decrypt before it knows an operation's kind, so kind-based filtering is a post-decryption step, and the server can still group operations by `key_selector` and read the causal graph in `observed_heads`; both leaks are enumerated in `SERVER_TRUST_MODEL.md` §8.
+- a receiver must decrypt before it knows an operation's kind, so kind-based filtering is a post-decryption step, and the server can still group operations by `key_selector` and read the causal graph in `observed_heads`; both leaks are enumerated in `PEER_TRUST_MODEL.md` §8.
 
 ## Security impact
 

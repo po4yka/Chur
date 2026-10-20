@@ -22,3 +22,6 @@ pub mod progress;
 pub mod reader;
 pub mod store;
 pub mod sync_download;
+
+/// Ephemeral direct encrypted device transport.
+pub mod peer_transport;

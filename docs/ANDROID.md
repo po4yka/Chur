@@ -1022,29 +1022,11 @@ The AndroidX Security State library of §25.1 merges a `<queries>` element into 
 
 The media read permissions are declared for source deletion alone (§14.5): the use case is finding an imported original so that the system can delete it, the request is made when the user chooses Review source deletion, a denial leaves the import as it was and names where to delete, and import never requests them.
 
-`ACCESS_LOCAL_NETWORK` is declared for sync with a server on the user's own network. From Android 17, the API level Chur targets, a connection over the local link (Wi-Fi or Ethernet; never through a VPN) to a private (RFC 1918), shared (100.64.0.0/10), link-local, or unique local IPv6 address, to an IPv6 address on a directly connected route, or to a `.local` name needs it, and a blocked connection usually just times out. The owner chose to support such servers, including a split-DNS name that resolves to a local address, rather than refuse them:
+`ACCESS_LOCAL_NETWORK` is used only for a user-started direct P2P connection inside an unlocked vault. Android 17+ requests it at that action; a refusal leaves the vault local and explains how to allow access in app Settings. There is no service address, login, network credential store, or periodic worker. INTERNET permits the direct device socket. No local-network prompt appears at launch or unlock. The connection closes when the vault locks.
 
-- use case: reaching the sync server the user runs at home or at work, `SYNC_PROTOCOL_V1.md` §6;
-- request: when the user taps Connect or Sync now in the vault's Settings and the server's address resolves to a local address, after the setup card said why; never at launch, never for a public address, never while the active network is a VPN, which reaches such a server with no access, and never from the background worker, which has no screen to ask on;
-- denial: sync stays as it was, the snackbar says that local network access is off and where to allow it, with a way to the app's system settings, and while the grant is missing Settings shows the same line in place of the last run's status; an unlock starts no pull to that server, because the pull could only time out and its retries would keep Sync now, which asks, disabled;
-- privacy review: it is a runtime permission of the Nearby devices group, so the system's app info, which shows the public shell's name, lists it; it is requested only inside an unlocked vault, never touches vault content, and is not needed for a public server;
-- a grant revoked later is seen at the next check: the worker still does not ask, and Settings names the cause.
+## 25. Direct peer networking and public security data
 
-`ACCESS_NETWORK_STATE`, a normal permission that WorkManager declares as well, serves the same step: it reads whether the active network is a VPN and which IPv6 routes are directly connected. It has no prompt, and it reads nothing about the vault.
-
-Every permission must have:
-
-- an explicit use case;
-- an in-context request;
-- denial handling;
-- a privacy review;
-- no effect on ability to unlock through independent recovery paths unless technically required.
-
----
-
-## 25. Future networking and sync
-
-Ktor handles transport above platform networking. Android networking code sees opaque ciphertext and protocol envelopes only.
+Rust owns bounded direct TCP IO and encrypted peer frames. The shared coordinator exchanges native-verified signed operations, checkpoint evidence, addressed object-key grants, and ciphertext. There is no HTTP sync API or deployed service. See [ADR-0065](adr/0065-peer-only-sync-without-accounts.md).
 
 Android-specific responsibilities may include:
 

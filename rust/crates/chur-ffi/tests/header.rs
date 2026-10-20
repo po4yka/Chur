@@ -394,6 +394,7 @@ fn every_declared_function_is_exported() {
         "chur_device_pairing_checkpoint",
         "chur_device_pairing_overview",
         "chur_device_pairing_revoke",
+        "chur_peer_call",
         "chur_own_sync_collections",
         "chur_own_sync_operations",
         "chur_own_sync_plan",
@@ -439,7 +440,7 @@ fn every_declared_function_is_exported() {
     );
 
     // Calling each one proves the list above is not a stale copy.
-    assert_eq!(chur_ffi::chur_abi_version_major(), 6);
+    assert_eq!(chur_ffi::chur_abi_version_major(), 7);
     assert_eq!(chur_ffi::chur_abi_version_minor(), 0);
     assert_eq!(
         chur_ffi::chur_capabilities(),

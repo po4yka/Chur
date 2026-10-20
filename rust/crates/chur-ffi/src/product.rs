@@ -225,6 +225,7 @@ pub unsafe extern "C" fn chur_vault_creation_activate(
         let handle = registry::insert(Entry::Session {
             runtime: *runtime,
             session: std::sync::Mutex::new(session),
+            peer: std::sync::Mutex::new(None),
             publication_cache: std::sync::Mutex::new(
                 crate::sharing_publish::VerificationCache::default(),
             ),

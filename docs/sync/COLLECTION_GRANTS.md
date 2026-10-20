@@ -83,7 +83,7 @@ The signing tag is `CHUR\x00IDENTITY\x00SIGNING-KEY-ID\x00V1`; the HPKE tag is `
 
 ## 5. Recipient verification
 
-Recipient key trust follows [`SERVER_TRUST_MODEL.md`](SERVER_TRUST_MODEL.md) §7: an external recipient's keys are pinned on the first grant, and out-of-band verification before that first grant is offered but not required. Server-provided names/avatars are not sufficient cryptographic proof. The fingerprint the user compares is constructed in [`DEVICE_IDENTITY.md`](DEVICE_IDENTITY.md) §5.
+Recipient key trust follows [`PEER_TRUST_MODEL.md`](PEER_TRUST_MODEL.md): an external recipient's keys are pinned on the first grant, and out-of-band verification before that first grant is offered but not required. Peer-provided names/avatars are not sufficient cryptographic proof. The fingerprint the user compares is constructed in [`DEVICE_IDENTITY.md`](DEVICE_IDENTITY.md) §5.
 
 A change to a pinned recipient key blocks: no further grant is issued to that recipient until the user re-verifies the fingerprint, or until a signed identity rotation chaining to the pinned key authorizes the change. It is not a dismissible banner.
 
@@ -132,7 +132,7 @@ New recipient devices require new verified keys and grants. They do not copy ano
 
 ## 11. Post-quantum extension
 
-The `hpke_profile` field reserves future recipient types without changing local media containers. A hybrid X25519+ML-KEM profile requires a new allocated value, vectors, and audit; the server never negotiates it.
+The `hpke_profile` field reserves future recipient types without changing local media containers. A hybrid X25519+ML-KEM profile requires a new allocated value, vectors, and audit; the peer never negotiates it.
 
 ## 12. Excluded from v1
 

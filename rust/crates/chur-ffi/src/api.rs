@@ -430,6 +430,7 @@ pub unsafe extern "C" fn chur_vault_unlock(
         let handle = registry::insert(Entry::Session {
             runtime,
             session: std::sync::Mutex::new(session),
+            peer: std::sync::Mutex::new(None),
             publication_cache: std::sync::Mutex::new(
                 crate::sharing_publish::VerificationCache::default(),
             ),
@@ -472,6 +473,10 @@ pub unsafe extern "C" fn chur_vault_lock(session: Handle, reason: u32) -> Status
                 "the handle is of another type",
             ));
         };
+        // Stop peer IO before waiting for a bounded native catalog call to finish.
+        if let Entry::Session { peer, .. } = entry.as_ref() {
+            registry::lock(peer).take();
+        }
         let mut guard = registry::lock(guarded);
         // Steps 5, 6, and 8.
         let result = guard.lock();

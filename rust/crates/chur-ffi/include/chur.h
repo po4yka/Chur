@@ -18,7 +18,7 @@
  * recipient-device surface of section 6.13, and the sharing discovery surface
  * of section 6.14, and the private tag list of section 6.15. Adding an export raises the minor
  * ABI version; changing or removing one raises the major. The library reports
- * 2.20.
+ * 7.0. Pairing control payloads are version 2 and contain no service credentials.
  */
 
 #ifndef CHUR_H
@@ -364,6 +364,10 @@ chur_status_t chur_sync_heads(chur_handle_t session, uint8_t *destination,
 
 /* Own-device operation publication and verified media download plans. */
 chur_status_t chur_own_sync_collections(chur_handle_t session, const uint8_t *input,
+    uint32_t input_length, uint8_t *destination, size_t capacity, size_t *bytes_written);
+
+/* Bounded ephemeral direct peer IO, owned by an unlocked session. */
+chur_status_t chur_peer_call(chur_handle_t session, const uint8_t *input,
     uint32_t input_length, uint8_t *destination, size_t capacity, size_t *bytes_written);
 chur_status_t chur_own_sync_operations(chur_handle_t session, const uint8_t *input,
     uint32_t input_length, uint8_t *destination, size_t capacity, size_t *bytes_written);

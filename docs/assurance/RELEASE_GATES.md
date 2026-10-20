@@ -106,12 +106,12 @@ Two requirements remain open: the independent backup-construction review and sup
 
 Additional requirements:
 
-- server trust model;
+- direct peer trust model;
 - device identity and signed operation log;
 - device revocation, including the revocation point recorded in the operation log and the collection-epoch rotation that follows it;
 - sync protocol/conflict/tombstone specs;
 - checkpoint format and trust rule, with new-device bootstrap attested against a checkpoint commitment;
-- replay/rollback/fork malicious-server tests;
+- replay/rollback/fork malicious-peer tests;
 - ciphertext-only background verification;
 - recovery across multiple devices;
 - protocol-focused independent review.

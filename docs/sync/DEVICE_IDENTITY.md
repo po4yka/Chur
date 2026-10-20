@@ -13,7 +13,7 @@ Ed25519 signing key pair
 X25519 HPKE/key-agreement key pair
 ```
 
-Do not reuse one key pair across signature and KEM roles. Public keys are server-visible; private keys are wrapped under a root-derived identity key and optionally additionally gated by platform protection.
+Do not reuse one key pair across signature and KEM roles. Public keys are peer-visible; private keys are wrapped under a root-derived identity key and optionally additionally gated by platform protection.
 
 ## 2. Device identifier
 
@@ -23,22 +23,22 @@ Do not reuse one key pair across signature and KEM roles. Public keys are server
 
 Initial device:
 
-1. create vault/account and identity keys locally;
+1. create vault and identity keys locally;
 2. sign self-enrollment/root device record;
 3. publish public record;
 4. store private keys encrypted under root identity domain.
 
 Additional device:
 
-1. authenticate account transport;
+1. establish a direct authenticated peer connection;
 2. generate keys on new device;
 3. existing authorized device or recovery flow verifies new keys;
 4. authorized device signs enrollment including capabilities and sequence;
-5. server relays signed record;
+5. transfer the signed record directly;
 6. new device receives required encrypted root/collection state;
 7. all devices update accepted membership.
 
-Email/server login alone must not authorize a new decryption identity.
+There is no login. Only explicit fingerprint-verified enrollment authorizes a fresh decryption identity.
 
 ## 4. Enrollment record
 
@@ -46,7 +46,7 @@ Email/server login alone must not authorize a new decryption identity.
 
 ```text
 protocol_version:u16                         = 0x0001
-vault/account binding:bytes[16]
+vault binding:bytes[16]
 device_id:bytes[16]
 signing_suite:u16                            = 0x0001 (Ed25519)
 signing_public_key:bytes[32]
@@ -63,7 +63,7 @@ issuer_signature:bytes[64]
 
 The signature input is `CHUR\x00SYNC\x00ENROLLMENT\x00V1` followed by every field except `issuer_signature`. `created_sequence` equals the containing operation's `device_sequence`; the outer operation issuer and `issuer_device_id` must match. Generation 1 is self-enrollment: issuer equals enrolled device, `created_sequence` is 1, and both commitments are zero. Every later enrollment increments the accepted membership generation by one, names its current membership commitment, and carries a non-zero checkpoint commitment.
 
-`bootstrap_checkpoint_commitment` is BLAKE3-256 over the issuing device's current `CheckpointV1`, defined in [`ROLLBACK_PROTECTION.md`](ROLLBACK_PROTECTION.md) §6. Together with `membership_generation` it is the enrolling device's signed statement of what the vault's history was at enrollment, and it is what gives the new device a freshness floor before it has one of its own. It is 32 bytes, so it also fits the out-of-band payload of §5; the checkpoint record itself is fetched through the server and accepted only when it hashes to this value.
+`bootstrap_checkpoint_commitment` is BLAKE3-256 over the issuing device's current `CheckpointV1`, defined in [`ROLLBACK_PROTECTION.md`](ROLLBACK_PROTECTION.md) §6. Together with `membership_generation` it is the enrolling device's signed statement of what the vault's history was at enrollment, and it is what gives the new device a freshness floor before it has one of its own. It is 32 bytes, so it also fits the out-of-band payload of §5; the checkpoint record itself is fetched through the peer and accepted only when it hashes to this value.
 
 ### 4.1 Membership commitment
 
@@ -76,7 +76,7 @@ The device fingerprint is the one value every platform displays for a device:
 ```text
 device_fingerprint = BLAKE3-256(
       "CHUR\x00IDENTITY\x00FINGERPRINT\x00V1"
-   || vault/account binding:bytes[16]
+   || vault binding:bytes[16]
    || device_id:bytes[16]
    || signing_public_key:bytes[32]
    || hpke_public_key:bytes[32]
@@ -87,7 +87,7 @@ The domain tag is a fixed ASCII byte constant with no length prefix, allocated i
 
 Display is the leading 160 bits of the digest as 40 lowercase hexadecimal digits, most significant byte first, in ten groups of four separated by one space: a 49-character string, identical on Android, iOS, and the CLI, never truncated further and never re-grouped by locale.
 
-160 bits is the security parameter. A server substituting a device's keys must find a key pair whose leading 160 digest bits match those of the real device, a preimage search of about 2^160 operations. A birthday collision between two key pairs of the server's own choosing costs about 2^80 and does not help, because the user compares against a fixed real device. A shorter spoken string was rejected: one string per device removes the chance of comparing the weaker of two.
+160 bits is the security parameter. A peer substituting a device's keys must find a key pair whose leading 160 digest bits match those of the real device, a preimage search of about 2^160 operations. A birthday collision between two key pairs of the peer's own choosing costs about 2^80 and does not help, because the user compares against a fixed real device. A shorter spoken string was rejected: one string per device removes the chance of comparing the weaker of two.
 
 The QR payload is the same 96 bytes of digest input, encoded as binary. The scanner recomputes the fingerprint from those bytes and compares it against the enrollment record it holds; it never trusts a rendered string carried inside the code. An enrollment QR additionally carries the 32-byte `bootstrap_checkpoint_commitment` of §4, 128 bytes in total.
 
@@ -98,7 +98,7 @@ Users verify a device through:
 - comparison on an existing authorized device;
 - recovery-mediated approval.
 
-Server-displayed names alone are not proof. Which of these is required and which is optional is fixed by [`SERVER_TRUST_MODEL.md`](SERVER_TRUST_MODEL.md) §7.
+Peer-displayed names alone are not proof. Which of these is required and which is optional is fixed by [`PEER_TRUST_MODEL.md`](PEER_TRUST_MODEL.md).
 
 ## 6. Private-key protection
 
@@ -144,7 +144,7 @@ operation bytes
 protocol version
 ```
 
-Private key use must not sign arbitrary server-provided bytes without domain/context validation.
+Private key use must not sign arbitrary peer-provided bytes without domain/context validation.
 
 ## 8. Rotation
 
@@ -163,7 +163,7 @@ Revocation is a signed membership operation. `RevokeDeviceRecordV1` is the 194-b
 
 ```text
 protocol_version:u16                         = 0x0001
-vault/account identity binding:bytes[16]
+vault identity binding:bytes[16]
 revoked_device_id:bytes[16]
 final_accepted_device_sequence:u64
 final_accepted_operation_digest:bytes[32]
@@ -173,7 +173,7 @@ previous_membership_commitment:bytes[32]
 issuer_signature:bytes[64]
 ```
 
-The signature input is `CHUR\x00SYNC\x00REVOCATION\x00V1` followed by every field except `issuer_signature`. The generation is exactly one above the accepted membership state, the previous commitment must equal that state, the issuer is an active device other than the target, and the outer operation issuer must match it. Sequence and digest are both non-zero for an authored branch. An enrolled device with no accepted operation can instead be revoked at exactly `(0, zero32)`; the local author requires no accepted target head or trusted floor. Receivers and the server require the signed outer operation to omit the target from `observed_heads`; a concurrent relay copy is not the issuer's accepted history. Mixed zero/non-zero points are invalid. This closes a lost approval before the first `DeviceReady` operation.
+The signature input is `CHUR\x00SYNC\x00REVOCATION\x00V1` followed by every field except `issuer_signature`. The generation is exactly one above the accepted membership state, the previous commitment must equal that state, the issuer is an active device other than the target, and the outer operation issuer must match it. Sequence and digest are both non-zero for an authored branch. An enrolled device with no accepted operation can instead be revoked at exactly `(0, zero32)`; the local author requires no accepted target head or trusted floor. Receivers and the peer require the signed outer operation to omit the target from `observed_heads`; a concurrent relay copy is not the issuer's accepted history. Mixed zero/non-zero points are invalid. This closes a lost approval before the first `DeviceReady` operation.
 
 The pair (`final_accepted_device_sequence`, `final_accepted_operation_digest`) is the accepted revocation point. The sequence is the highest the issuer had accepted from the revoked device; the digest is that operation's `operation_digest` per [`OPERATION_LOG.md`](OPERATION_LOG.md) §4, so the point names one branch and not merely a length, and `membership_generation` fixes which membership state the point belongs to. Canonical encoding and signature domain are versioned with the enrollment record of §4. Acceptance of operations against this point is normative in [`REVOCATION.md`](REVOCATION.md) §7.
 
@@ -181,7 +181,7 @@ After acceptance:
 
 - future root/collection envelopes are not issued to device;
 - collection keys rotate per [`REVOCATION.md`](REVOCATION.md) §3;
-- server tokens are revoked;
+- subsequent direct sessions reject the revoked device once the revocation is known;
 - old signatures remain verifiable;
 - previously downloaded keys/plaintext remain outside enforceable deletion.
 
@@ -195,7 +195,7 @@ A backup without the envelope still restores local content but needs another act
 
 ## 11. Multi-vault/decoy
 
-Real and decoy identities do not share device private keys or membership by default. Correlating them through the same sync account would weaken decoy goals and requires a separate product decision.
+Real and decoy identities do not share device private keys or membership by default. Correlating them through shared invitations or active connections is forbidden.
 
 ## 12. Tests
 

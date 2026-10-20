@@ -65,7 +65,6 @@ class MainActivity : FragmentActivity() {
         // below has run, so the cover is set from the state here rather than
         // waiting for the first collection.
         host.privacy.setEnabled(host.controller.privacyCoverNeeded)
-        ChurSync.enqueue(this)
 
         val controller = host.controller
         val verdict = runGate(this)

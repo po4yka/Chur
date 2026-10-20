@@ -20,8 +20,7 @@ import androidx.compose.ui.window.ComposeUIViewController
 import dev.po4yka.chur.ffi.ChurVault
 import dev.po4yka.chur.notes.FileNoteStore
 import dev.po4yka.chur.notes.NoteStore
-import dev.po4yka.chur.sync.FileSyncStateStore
-import dev.po4yka.chur.sync.SyncCoordinator
+import dev.po4yka.chur.sync.PeerSyncCoordinator
 import platform.Foundation.NSDocumentDirectory
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSDate
@@ -188,10 +187,14 @@ fun churNativeGate(releaseApplication: Boolean): GateResult {
     )
 }
 
-/** Bind the one controller and sync engine used by the scene and background task. */
+/** Bind the one controller and foreground peer coordinator used by the scenes. */
 fun churController(privacy: IosPrivacyCover, exports: ExportSink): ChurController {
+    val documents = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, true).first() as String
+    val obsolete = "$documents/chur-sync"
+    if (NSFileManager.defaultManager.fileExistsAtPath(obsolete))
+        check(NSFileManager.defaultManager.removeItemAtPath(obsolete, error = null)) { "obsolete network state could not be removed" }
     val clock = { (NSDate().timeIntervalSince1970 * 1000).toLong() }
-    val sync = SyncCoordinator(store = churSyncStateStore(), clock = clock)
+    val sync = PeerSyncCoordinator(clock = clock)
     val controller = ChurController(
         storageRoot = churStorageRoot(),
         privacy = privacy,
@@ -217,8 +220,7 @@ fun churController(privacy: IosPrivacyCover, exports: ExportSink): ChurControlle
         notes = churNoteStore(),
         sync = sync,
         contentExtractor = dev.po4yka.chur.app.vault.IosContentTextExtractor(),
-        // iOS shows its local network alert as a run's first connection to a
-        // local server goes out. It has no link check, `IOS.md` §27.
+        // Protect the system local-network prompt during an explicit peer connection.
         localNetworkAlert = true,
     )
     sync.bind(RepositorySyncBoundary(controller.vault))
@@ -269,31 +271,3 @@ fun churNoteStore(): NoteStore {
     ).first() as String
     return FileNoteStore("$documents/notes.json")
 }
-
-/**
- * Where the sync engine keeps its configuration and pull cursors.
- *
- * It returns the bound store rather than the path, for the reason
- * [churNoteStore] does. The file holds the device's transport token — a bearer
- * credential — so it lives beside the vault root, in the directory the Xcode
- * project marks excluded from iCloud and iTunes backup, which
- * `SYNC_PROTOCOL_V1.md` §7 (SEC-034) requires of sync state. The store
- * applies Data Protection and backup exclusion when it accesses this path.
- */
-fun churSyncStateRoot(): String {
-    val documents = NSSearchPathForDirectoriesInDomains(
-        NSDocumentDirectory,
-        NSUserDomainMask,
-        true,
-    ).first() as String
-    val root = "$documents/chur-sync"
-    NSFileManager.defaultManager.createDirectoryAtPath(
-        path = root,
-        withIntermediateDirectories = true,
-        attributes = null,
-        error = null,
-    )
-    return root
-}
-
-fun churSyncStateStore(): FileSyncStateStore = FileSyncStateStore("${churSyncStateRoot()}/state.json")

@@ -2,7 +2,7 @@
 
 > **Status:** Accepted normative policy; Phase 3 implements device revocation and Phase 4 owns sharing revocation
 
-The types in §1 do not all ship together. Device revocation (§2), credential rotation, and server transport-token revocation are required by Gate 5 in [`../assurance/RELEASE_GATES.md`](../assurance/RELEASE_GATES.md) and ship with Phase 3, because a vault that can enrol a second device can lose one. Member revocation, permission downgrade, collection-grant revocation, and multi-recipient rewrap are required by Gate 6 and ship with Phase 4.
+The types in §1 do not all ship together. Device revocation (§2), credential rotation, and peer transport-token revocation are required by Gate 5 in [`../assurance/RELEASE_GATES.md`](../assurance/RELEASE_GATES.md) and ship with Phase 3, because a vault that can enrol a second device can lose one. Member revocation, permission downgrade, collection-grant revocation, and multi-recipient rewrap are required by Gate 6 and ship with Phase 4.
 
 Revocation prevents future authorized access and operation acceptance. It cannot force deletion of keys or plaintext already obtained by an authorized device or recipient.
 
@@ -14,7 +14,7 @@ Revocation prevents future authorized access and operation acceptance. It cannot
 - collection grant revocation;
 - recovery/credential rotation;
 - compromised object/collection/root key response;
-- server transport token revocation.
+- peer transport token revocation.
 
 These have different scopes and must not share ambiguous UI language.
 
@@ -23,10 +23,10 @@ These have different scopes and must not share ambiguous UI language.
 A signed membership operation removes the device. Clients then:
 
 - record the accepted revocation point defined in [`DEVICE_IDENTITY.md`](DEVICE_IDENTITY.md) §9 in the `RevokeDevice` operation, so later operations may omit the device from `observed_heads` per [`OPERATION_LOG.md`](OPERATION_LOG.md) §4.4;
-- reject every operation signed by it above the accepted revocation point, unconditionally and regardless of when the server delivers it;
+- reject every operation signed by it above the accepted revocation point, unconditionally and regardless of when the peer delivers it;
 - stop issuing root/collection envelopes;
 - rotate affected collection epochs according to policy;
-- revoke server auth tokens;
+- revoke peer auth tokens;
 - preserve old signatures for historical verification;
 - warn if forked unseen operations exist.
 
@@ -52,7 +52,7 @@ Rewrap is eager, and the device that signed the membership change owns it. Lazy 
 - the owning device repeatedly selects the smallest active `object_id` with no authenticated envelope at the target epoch and commits its rewrapped envelope in one catalog transaction. There is no cursor: after interruption or concurrent work, the same indexed query finds the next real hole. [ADR-0047](../adr/0047-resume-rewrap-from-the-next-missing-envelope.md) supersedes the unsafe highest-completed cursor of ADR-0024;
 - rewrap is idempotent per object. An envelope already at the target epoch is skipped, so a resumed, retried, or duplicated pass converges to the same result;
 - the revocation is presented to the user as complete only when the walk reaches the end. Until then the interface states that rotation is in progress and that objects not yet rewrapped remain readable by the removed member;
-- if the owning device has not finished within 24 hours of the accepted membership change according to this device's local accepted-at time, any other authorized device continues the same next-missing loop. The server supplies no trusted timestamp. Two devices running concurrently are safe because a target-epoch envelope is verified and skipped per object;
+- if the owning device has not finished within 24 hours of the accepted membership change according to this device's local accepted-at time, any other authorized device continues the same next-missing loop. The peer supplies no trusted timestamp. Two devices running concurrently are safe because a target-epoch envelope is verified and skipped per object;
 - an envelope that cannot be rewrapped, because its object key is unavailable to the rewrapping device, is reported to the user and never silently skipped.
 
 Throughput and completion targets are in [`../assurance/PERFORMANCE_BUDGETS.md`](../assurance/PERFORMANCE_BUDGETS.md) §3.
@@ -66,7 +66,7 @@ A revoked party may retain:
 - exported plaintext;
 - screenshots or backups.
 
-Chur must not claim retroactive deletion. Revocation protects new epochs/content and server-mediated future access.
+Chur must not claim retroactive deletion. Revocation protects new epochs/content and peer-mediated future access.
 
 ## 5. Permission downgrade
 
@@ -86,9 +86,9 @@ A stale device may return with old keys and operations. It must first obtain and
 
 Acceptance is decided by the revocation point of [`DEVICE_IDENTITY.md`](DEVICE_IDENTITY.md) §9, never by arrival time:
 
-- `device_sequence` above `final_accepted_device_sequence`: rejected unconditionally. No later delivery, no server claim, and no clock makes it acceptable;
+- `device_sequence` above `final_accepted_device_sequence`: rejected unconditionally. No later delivery, no peer claim, and no clock makes it acceptable;
 - `device_sequence` equal to it with any other `operation_digest`: a fork under [`ROLLBACK_PROTECTION.md`](ROLLBACK_PROTECTION.md) §4;
-- `device_sequence` at or below it: accepted only when the operation chains through `previous_operation_hash` to an operation of that device the receiver has already accepted, or is the first operation of that device, and when the chain running forward from it reaches `final_accepted_operation_digest`. The receiver tests the forward condition backwards, because the server delivers one operation at a time: it starts at `final_accepted_operation_digest` and follows `previous_operation_hash` down through the operations of that device it already holds. Each step is named by the digest of the operation that carries it, so the walk stays on the pinned branch. A receiver that cannot obtain the intervening operations holds the operation as a gap and does not accept it. The point pins one branch, so a revoked device cannot substitute a pre-revocation history the issuer never saw;
+- `device_sequence` at or below it: accepted only when the operation chains through `previous_operation_hash` to an operation of that device the receiver has already accepted, or is the first operation of that device, and when the chain running forward from it reaches `final_accepted_operation_digest`. The receiver tests the forward condition backwards, because the peer delivers one operation at a time: it starts at `final_accepted_operation_digest` and follows `previous_operation_hash` down through the operations of that device it already holds. Each step is named by the digest of the operation that carries it, so the walk stays on the pinned branch. A receiver that cannot obtain the intervening operations holds the operation as a gap and does not accept it. The point pins one branch, so a revoked device cannot substitute a pre-revocation history the issuer never saw;
 - an accepted below-point operation then applies under the ordinary rules of [`CONFLICT_RESOLUTION.md`](CONFLICT_RESOLUTION.md), with no special reconciliation, because its causal position is signed in `observed_heads`.
 
 A signed cutoff describes the issuer's accepted prefix. A relay can hold a concurrent operation above it; that operation is retained as signed history but is not returned by ordinary operation delivery. At cutoff zero the issuer's signed outer operation must not observe the target. A late revocation does not rewrite protected catalog history or checkpoints that this device authenticated before it received the revocation. Native catalog reconstruction verifies that retained history separately; this path is not exposed by FFI or used for untrusted operation or sharing-proof acceptance. Current membership still prevents the revoked device from signing through native APIs or issuing grants.
@@ -107,7 +107,7 @@ Old backups may contain revoked slots/grants/keys. Revocation does not rewrite t
 
 ## 9. Crypto-erasure
 
-Local key-envelope destruction can make local ciphertext inaccessible, but synced/recipient/backup copies remain outside guarantee. Server deletion is best-effort reliability/privacy behavior, not cryptographic proof.
+Local key-envelope destruction can make local ciphertext inaccessible, but synced/recipient/backup copies remain outside guarantee. Peer deletion is best-effort reliability/privacy behavior, not cryptographic proof.
 
 ## 10. UI language
 

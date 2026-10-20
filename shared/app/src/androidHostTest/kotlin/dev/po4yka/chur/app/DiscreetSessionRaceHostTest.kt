@@ -482,15 +482,13 @@ class DiscreetSessionRaceHostTest {
         create()
         controller.vault.createAlbum("Old identity album fixture")
         controller.vault.createTag("Old identity tag fixture")
-        for (read in listOf<() -> Unit>(controller::loadAlbums, controller::loadTags, controller::loadSlots, controller::loadSharing)) {
+        for (read in listOf<() -> Unit>(controller::loadAlbums, controller::loadTags, controller::loadSlots)) {
             val lateResult = holdNativeResult(read)
             controller.panic()
             lateResult.run()
             assertTrue(controller.albums.value.isEmpty())
             assertTrue(controller.tags.value.isEmpty())
             assertTrue(controller.slots.value.isEmpty())
-            assertNull(controller.sharingIdentity.value)
-            assertNull(controller.sharingOverview.value)
             finishLock()
             controller.goTo(AppRoute.Unlock)
             completeRead { controller.unlock(PASSWORD) }

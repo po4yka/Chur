@@ -113,7 +113,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         controller = IosEntryPointKt.churController(privacy: privacy, exports: exports)
 
         do {
-            for path in [IosEntryPointKt.churStorageRoot(), IosEntryPointKt.churSyncStateRoot()] {
+            for path in [IosEntryPointKt.churStorageRoot()] {
                 let url = NSURL(fileURLWithPath: path, isDirectory: true)
                 try url.setResourceValue(true, forKey: .isExcludedFromBackupKey)
             }
@@ -122,9 +122,6 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             storageReady = false
         }
 
-        if storageReady, gate is GateResultCompatible {
-            IosSyncBackground.shared.register(controller: controller)
-        }
         let publicCameraReady = publicCamera.prepare()
         IosPublicCamera.shared.capture = { [weak self] answer in
             guard publicCameraReady, let self, self.scene != nil else { _ = answer(nil, nil, "Camera is unavailable."); return }
@@ -320,7 +317,6 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         if host.controller.privacyCoverNeeded { host.privacy.attach() }
         guard host.storageReady, host.gate is GateResultCompatible else { return }
         host.controller.background()
-        IosSyncBackground.shared.schedule(earliestBeginDate: nil)
     }
 
     func sceneDidEnterBackground(_ scene: UIScene) {

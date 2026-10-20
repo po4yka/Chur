@@ -148,7 +148,7 @@ shared/feature-import/   platform codec/OCR and descriptor contracts
 shared/core-platform-keys/ Keychain and authentication adapters
 shared/core-ffi/          Kotlin/Native C interop and NativeVault adapter
 shared/core-vault/        private repository and session state
-shared/core-sync/         Ktor Darwin transport
+shared/core-sync/         foreground direct peer coordination
 ```
 
 The platform adapters are source sets in these modules, not separate `core-platform-ios/`, `core-media/`, or `ios/native/` directories.
@@ -457,7 +457,6 @@ Data Protection complements Chur encryption; it does not replace it.
 
 Private key-slot files, private catalog, and plaintext scratch target the strongest compatible protection, with `NSFileProtectionComplete` as the strict default direction.
 
-The sync state contains a bearer transport token. Its directory and JSON file use `NSFileProtectionCompleteUntilFirstUserAuthentication` so background sync can read them after the device's first unlock. Atomic replacement writes the auxiliary file with that protection class, and backup exclusion is reasserted on the directory and the replaced file.
 
 Strict profile behavior:
 
@@ -1045,33 +1044,13 @@ Public-shell widgets MAY be possible later. Private-vault widgets, search intent
 
 ---
 
-## 27. Networking and sync
+## 27. Direct peer networking
 
-Ktor handles shared protocol transport. Native iOS networking provides platform background capabilities where needed.
+Synchronization is a user-started direct connection between two unlocked foreground devices. Native Rust owns bounded TCP IO, transcript-bound invitation keys, authenticated frames, signed history, key delivery, and complete downloaded-object verification. The shared coordinator exchanges roles so both devices receive updates. No account, HTTP sync endpoint, cloud store, relay, background task, saved endpoint, or transport-token file exists.
 
-The iOS layer may own:
+`NSLocalNetworkUsageDescription` explains direct device synchronization. iOS may display its system local-network prompt during an explicit connection. The controller brackets that prompt; leaving the app still locks the vault and destroys the native connection. No network connection is started at launch or unlock. The app declares no sync refresh task or background fetch mode.
 
-- background session configuration;
-- connectivity and discretionary-transfer policy;
-- cellular/roaming settings;
-- task restoration;
-- TLS and endpoint configuration;
-- proxy/VPN compatibility;
-- user-visible transfer controls.
-
-It MUST NOT:
-
-- deserialize private metadata;
-- select cryptographic suites;
-- accept unbounded server-provided KDF/resource parameters;
-- decide catalog conflict semantics;
-- sign canonical operations outside Rust.
-
-The server remains untrusted for confidentiality and content integrity.
-
-A sync server on the user's local network is supported, as on Android (`ANDROID.md` §24). iOS asks for local network access by itself, once, when the first connection to a local address goes out, and shows `NSLocalNetworkUsageDescription` as the reason; there is no call to ask earlier or to read the answer. That first connection is usually sync setup's bootstrap, after the setup card said why. It can also be Sync now or the pull after an unlock, for example when the server's name resolved to a public address at setup and resolves to a local one later. The app cannot tell which connection is the first, and the alert makes the scene resign active. So every sync run that the app starts with the vault open, the setup's bootstrap, Sync now, and the pull after an unlock, to a server whose address resolves to a private, shared (100.64.0.0/10), link-local, or unique local address, or to a `.local` name, runs as a system prompt (§21.2), and the background lock does not close the vault under it. That prompt lasts for the whole run, because the alert gives no signal of its own. If the scene enters the background during the prompt, or after a prompt that was up when the scene resigned active has ended, the user left: the prompt ends and the vault locks at once, as leaving the app does (§21.2). A run to a server that is away can end while the user looks at the app switcher, and leaving from there still locks. A bootstrap still finishes; Sync now and the pull end with the session. A refusal fails the connection, and the user can allow access in Settings > Privacy & Security > Local Network. The app cannot read the answer, so when a setup or Sync now to such a server gets no answer, its notice names that place, as Android's line does (`ANDROID.md` §24). The pull after an unlock shows no such notice, because it also gets no answer each time the device is away from that network; Settings shows the run's status, and Sync now names the place. The iOS host does not check which addresses are on the device's own link, as Android does, so a server on a public address that iOS still counts as local, such as a global IPv6 address on the same network, can bring the alert outside a prompt. A sharing publish or revocation does not run as a prompt either, so it brings the alert outside a prompt when it is the first connection to a local address, for example after a network change since the last pull. The vault then locks under the run as for any other interruption, a bootstrap still finishes, and the user unlocks again to see the server.
-
----
+Invitations and connections are scoped to the current unlocked identity. File protection and platform backup exclusions continue to apply to the private vault and resumable ciphertext staging. See [SYNC_PROTOCOL_V1.md](sync/SYNC_PROTOCOL_V1.md).
 
 ## 28. Logging, analytics, and crash reporting
 
@@ -1413,12 +1392,12 @@ The application must maintain an accurate privacy manifest and required-reason A
 
 Store privacy answers must reflect:
 
-- whether sync/account features exist;
+- that synchronization is direct P2P and no account exists;
 - whether diagnostics leave the device;
 - whether any analytics are collected;
 - whether Photos access is selection-only, and that read-write access is requested only for source deletion (§15.4);
-- that local network access is asked for only when sync connects to or syncs with a server on the local network (§27);
-- whether user content is linked to an account;
+- that local network access is requested only for an explicit direct device connection (§27);
+- that user content is not linked to an account;
 - retention and deletion behavior.
 
 Private media and metadata are not used for tracking or advertising.

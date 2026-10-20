@@ -37,11 +37,10 @@ This is a phase-closeout snapshot. Counts, versions, and limitations below descr
 
 | Item | Evidence |
 | --- | --- |
-| self-controlled opaque server | `chur-sync-server` stores SQLite control state and ciphertext files, provides a runnable Axum service, and is documented by [`../sync/SERVER_OPERATOR.md`](../sync/SERVER_OPERATOR.md) |
 | ciphertext transport | `:shared:core-sync` covers every reference route with bounded raw-byte requests; `LockedSyncPullerTest` proves that locked pulls stage bytes and advance no accepted cursor |
 | device identity and recovery | `chur-sync-protocol::identity`, `chur-catalog::sync_keys`, and `chur-media` `tests/backup_flow.rs` separate Ed25519/X25519 keys, persist the root-wrapped portable identity, and restore its recovery form |
 | authenticated logs and checkpoints | `chur-sync-protocol::operation_log` and `checkpoint`, `chur-catalog::sync_log`, and `chur-sync-server::relay` implement canonical signing, durable heads, checkpoint floors, paging, and idempotent relay |
-| malicious server resistance | `chur-sync-protocol` `tests/malicious_server.rs` rejects replay conflicts, omission against a checkpoint, key substitution, rollback, and equivocation |
+| malicious server resistance | `chur-sync-protocol` `tests/malicious_peer.rs` rejects replay conflicts, omission against a checkpoint, key substitution, rollback, and equivocation |
 | convergence and materialization | `tests/convergence.rs`, `tests/materialization.rs`, and `chur-catalog` `tests/sync_receive.rs` cover causal maxima, observed-remove sets, deterministic presentation, atomic projection, and restart replay |
 | tombstones and garbage collection | `materialization::MaterializedState::gc_candidates`, durable checkpoint coverage, and catalog deletion tests prevent collection before authenticated causal and retention conditions hold |
 | revocation and rotation | signed membership revocation pins the final device head; the server revokes its transport token; catalog and protocol rotation tests cover epoch advance, bounded rewrap, restart, takeover, and completion |
@@ -65,7 +64,7 @@ This is a phase-closeout snapshot. Counts, versions, and limitations below descr
 - **two physical devices.** No job enrolls, revokes, recovers, and converges two supported phones through a deployed server;
 - **operating-system background execution.** The locked transfer primitive builds and is tested with a mock transport, but no Android scheduler or iOS background session runs on a device;
 - **an operator deployment.** No job tests reverse-proxy TLS, persistent-volume backup and restore, process supervision, disk exhaustion, or disaster recovery;
-- **global omission detection.** A checkpoint can prove rollback relative to known authenticated state, but an untrusted server can keep devices in separate consistent views without a trusted witness. [`../sync/SERVER_TRUST_MODEL.md`](../sync/SERVER_TRUST_MODEL.md) §5 states this limit;
+- **global omission detection.** A checkpoint can prove rollback relative to known authenticated state, but an untrusted server can keep devices in separate consistent views without a trusted witness. [`../sync/PEER_TRUST_MODEL.md`](../sync/PEER_TRUST_MODEL.md) §5 states this limit;
 - **deduplication design review, SEC-046.** The invariant that global deduplication never uses an unkeyed plaintext content hash has no automated evidence and no enforcing job; [`SECURITY_TEST_PLAN.md`](SECURITY_TEST_PLAN.md) §13 marks it audit-only, to be discharged by a design review of any deduplication proposal, and none has been commissioned;
 - **the claim half of SEC-045.** That revocation never claims to erase keys or plaintext already obtained is half behavior, tested by the malicious-server harness, and half product claim wording, which only the independent review can judge; [`SECURITY_TEST_PLAN.md`](SECURITY_TEST_PLAN.md) §13 marks that half audit-only;
 - **production approval.** Passing this package does not approve Gate 5 while independent review and the earlier release-gate gaps remain open.

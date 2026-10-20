@@ -223,7 +223,7 @@ The checked-in version catalog, wrapper, and Cargo manifests are the version sou
 | Private persistence | Rust-owned SQLCipher catalog, schema v14 |
 | Images and media | bounded session cache, platform decoders, Media3 and AVFoundation |
 | Local recognition | bundled Tesseract4Android 4.9.0 English/Russian models; Apple Vision |
-| Network | Ktor 3.6.0, OkHttp on Android, Darwin on iOS |
+| Device sync | Direct ephemeral TCP, native authenticated encryption |
 | Serialization | kotlinx.serialization for host/control records; Rust owns canonical bytes |
 | Android host | API 29 minimum, API 37 compile/target, pinned NDK |
 | iOS host | UIKit, Compose framework, embedded Share Extension, iOS 18.0 minimum |
@@ -257,7 +257,7 @@ shared/
   feature-import/     platform codecs, OCR, descriptor and export contracts
   feature-notes/      public Notes model and JSON persistence
 rust/
-  crates/             secure core, JNI/C ABI, CLI, protocol, reference server
+  crates/             secure core, JNI/C ABI, CLI, peer protocol
   fuzz/               separate fuzz workspace
 scripts/              native builds, device control, release and policy checks
 docs/                 contracts, architecture, assurance, ADRs
@@ -278,7 +278,6 @@ There is no `build-logic/` or separate `core-media/` module. [Architecture §9](
 | `chur-sync-protocol` | Canonical encrypted operations, device logs, grants, protocol versioning |
 | `chur-ffi` | Stable C ABI, handle registry, and panic containment |
 | `chur-jni` | Android/JVM adapter to the C ABI |
-| `chur-sync-server` | self-hosted ciphertext relay and reference server |
 | `chur-cli` | vectors, vault operations, backup, validation, and benchmarks |
 
 `chur-cli` is a first-class architecture component. The storage format must be testable and recoverable independently of Android and iOS UI code.
@@ -1044,7 +1043,7 @@ Secure Enclave is not used as a streaming video cipher. It may later protect asy
 
 Private catalogs, wrapped-key blobs, and unavoidable scratch files use the strongest compatible file-protection class. Strict mode favors complete protection and does not promise background plaintext access while the device is locked.
 
-Ciphertext-only background sync can be allowed without unlocking the vault root secret.
+Peer sync requires both vaults to remain unlocked in the foreground.
 
 ### Screenshots and snapshots
 
@@ -1061,79 +1060,11 @@ It cannot honestly guarantee screenshot prevention on every iOS version and devi
 
 ## Sync and sharing
 
-Encrypted synchronization is implemented in Phase 3. Phase 4 implements collection sharing through canonical grants, verified recipient devices, membership permissions, forward-only revocation, native/mobile bindings, and the reference self-hosted server. Gate 6 remains unapproved until its independent audit and physical-device evidence exist.
+Chur has no account, registration, hosted backend, user-operated service, relay, or cloud storage. Synchronization is exclusively direct P2P between two unlocked foreground apps. See [ADR-0065](docs/adr/0065-peer-only-sync-without-accounts.md).
 
-### Opaque server model
+Restore an encrypted backup on the new device, compare its fingerprint on both devices, approve it, and open the encrypted approval file. On the ordinary device, create a one-time invitation with its reachable IPv4 address. Enter that invitation on the other device and keep both apps open. Native validation checks signed history, checkpoint floors, device membership, object keys, and complete downloaded containers. Transfers exchange media and the supported album operations in both directions.
 
-The server should receive only:
-
-```text
-opaque object identifiers
-encrypted containers
-encrypted catalog operations
-wrapped collection keys
-opaque revisions
-signed device operations
-```
-
-It should not receive plaintext:
-
-- filenames;
-- MIME types;
-- EXIF or GPS;
-- album names;
-- thumbnails;
-- media hashes;
-- search terms;
-- object keys;
-- collection keys;
-- vault root secrets.
-
-### Immutable media, mutable metadata
-
-Media containers remain immutable. Favorites, captions, logical albums, tags, and other mutable state are independent encrypted revisions. Metadata changes do not rewrite a multi-gigabyte video.
-
-Album creation, names, and memberships use the ordinary signed device log. Local edits and their ready operation records commit together. A membership added before the first media upload is published after the object's signed history is ready. Received albums are visible before their files finish downloading; membership appears after local verification. Album parent links, manual order, and deletion remain local under the current sync contract.
-
-### Authenticated operation log
-
-AEAD alone does not prevent a malicious or broken server from replaying an older, valid ciphertext. The sync protocol therefore uses signed, chained device operations:
-
-The signed record's fields, the cleartext set, and the chain hash are defined in [`docs/sync/OPERATION_LOG.md`](docs/sync/OPERATION_LOG.md) §2, §4, and §6, and are not repeated here.
-
-Clients track accepted device heads and detect replay, rollback, and log forks where possible. Server omission remains a separate consistency problem and must be documented honestly.
-
-### Sharing keys
-
-Large media is never encrypted directly with a recipient public key.
-
-```text
-ObjectKey
-    wrapped by SecurityCollectionKey
-
-SecurityCollectionKey
-    wrapped separately for each authorized recipient/device
-```
-
-Implemented collection-grant suite:
-
-```text
-KEM  = DHKEM(X25519, HKDF-SHA256)
-KDF  = HKDF-SHA256
-AEAD = ChaCha20-Poly1305
-```
-
-XChaCha20-Poly1305 remains the local media-container AEAD; it is not substituted into an RFC 9180 suite that does not define it.
-
-Sender identity is provided separately through Ed25519 signatures over canonical collection grants and sync operations. HPKE Base mode alone does not authenticate the sender or provide replay protection.
-
-### Deduplication
-
-Global deduplication by an unkeyed plaintext hash is out of scope because it reveals content equality. Acceptable options are:
-
-- no deduplication;
-- local-only deduplication;
-- a user-specific keyed fingerprint under a dedicated derived key.
+There is no automatic discovery, relay, NAT traversal, background transfer, or delivery to offline devices. Both devices need a direct route. Local private notes and album parent/order/deletion remain local under the current operation contract. Revocations propagate when peers reconnect and cannot recall copies already received. [Protocol](docs/sync/SYNC_PROTOCOL_V1.md) · [Peer trust model](docs/sync/PEER_TRUST_MODEL.md).
 
 ---
 
@@ -1151,7 +1082,7 @@ Global deduplication by an unkeyed plaintext hash is out of scope because it rev
 | Password database extraction | Argon2id with random salt and bounded parameters |
 | Password change | Rewrap root secret without media re-encryption |
 | Collection access revocation | Collection epochs and object-key rewrapping |
-| Cloud/server compromise | Client-side encryption and opaque server model |
+| Untrusted peer or network | Client-side encryption and direct authenticated peers |
 | Casual observation of the app | Functional public shell, immediate lock, neutral UI surfaces |
 | Coercive UI inspection | Independent decoy vault, with explicit limitations |
 | Process death during import | Journaled temporary objects, fsync, atomic rename, catalog transaction |

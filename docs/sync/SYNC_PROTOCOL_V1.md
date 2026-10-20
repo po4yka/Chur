@@ -1,177 +1,41 @@
-# Chur Sync Protocol v1
+# Direct peer synchronization
 
-> **Status:** Accepted normative Phase 3 protocol; production use still requires Gate 5 review
+> **Status:** Accepted P2P transport contract; [ADR-0065](../adr/0065-peer-only-sync-without-accounts.md)
 
-Sync transports immutable encrypted objects and authenticated encrypted catalog operations between authorized devices through an untrusted server.
+## 1. Scope
 
-## 1. Preconditions
+Two unlocked Chur apps synchronize their own vault over a direct, ephemeral TCP connection. There is no account, backend deployment, HTTP API, bootstrap credential, durable network token, cloud store, relay, or background worker. The current UI takes literal IPv4 addresses. Both devices must have a direct route; automatic discovery and NAT traversal are not implemented.
 
-Before v1 sync ships:
+Signed operation, checkpoint, membership, and object-key formats retain their independently versioned canonical encodings. Rust alone validates them. This transport replaces all previous service-based synchronization behavior.
 
-- local object/catalog formats are stable;
-- device identity is implemented and reviewed;
-- operation log/conflict/tombstone rules are frozen;
-- rollback limitations are documented;
-- portable recovery exists;
-- protocol vectors and malicious-server tests pass.
+## 2. Pairing
 
-## 2. Components
+Restore an encrypted portable backup on the new device. Prepare its fresh pairing request. Transfer the request to an ordinary device, compare the device fingerprint on both screens, and explicitly approve whole-vault access. The approval is HPKE-encrypted for the requesting identity and contains no network address or transport token. Open the approval file on the new device, then connect directly to the approving device. Native finalization requires the pinned checkpoint and every signed ancestor before installing the ordinary identity. Recovery credentials are not remote accounts.
 
-```text
-Account transport authentication
-Device identity directory
-Signed membership state
-Immutable ciphertext object service
-Signed encrypted operation-log service
-Opaque transfer sessions
-Checkpoint/head exchange
-```
+## 3. Invitation and handshake
 
-Transport endpoints are implementation details; canonical records are protocol authority.
+The ordinary device enters its reachable IPv4 address and creates a one-time invitation `IPv4:port#secret_hex`. Rust chooses a temporary port and a fresh 32-byte OS-random secret. The other device enters the invitation and connects directly. The listener accepts one connection and stops listening. There is no DNS lookup, discovery registry, or external infrastructure.
 
-## 3. Object upload
+Each endpoint writes `CHURP2P1 || random_challenge[32]`. The salt is SHA-256 over `CHUR\0P2P\0TRANSCRIPT\0V1 || initiator_hello || responder_hello`. HKDF-SHA-256 extracts the invitation secret using that salt and expands under `CHUR\0P2P\0DIRECTION\0V1 || direction_byte`. Direction 1 is initiator to listener; direction 0 is listener to initiator. Keys are 32 bytes. No invitation or connection keys are saved.
 
-```text
-client commits immutable Chur object locally
-→ request opaque upload session
-→ upload ciphertext chunks/ranges with transport checksums
-→ server records incomplete upload
-→ client submits authenticated object finalization reference
-→ upload becomes available only when complete
-→ catalog CommitObject operation references object commitment
-```
+## 4. Frames
 
-Server transport checksums do not replace object AEAD/final-commit verification.
+A frame is `sealed_length:u32_be || XChaCha20Poly1305(plaintext, nonce, aad)`. Plaintext is bounded at 4 MiB and ciphertext at 4 MiB + 16 bytes. Each direction starts at sequence zero. Its nonce is sixteen zero bytes followed by its 64-bit big-endian sequence, and its AAD is that same sequence. Direction keys differ and are fresh for every handshake. Sequence exhaustion closes the session. Unauthenticated plaintext is never exposed. Native IO pumps are bounded and nonblocking; connection establishment has a three-second timeout, and idle IO has a two-minute timeout.
 
-## 4. Object download
+## 5. Exchange
 
-- fetch expected ciphertext metadata from authenticated operation/catalog state;
-- download resumably to temporary ciphertext;
-- verify container structure/final commit with local object key;
-- atomic install;
-- activate catalog reference only after validation;
-- retain incomplete transfer state without exposing media.
+Encrypted application frames contain bounded JSON `PeerMessage` control records. Binary canonical records remain opaque byte arrays. Both endpoints first exchange the vault ID and active device ID. Native membership checks reject unknown and revoked devices before any history, key, or object is served.
 
-For collection sharing, the source first uploads a complete ciphertext object, then associates its remote store identifier with one collection, and only then publishes the signed `CreateObject` and `CommitObject` collection operations. A recipient reads a source object with its own transport token only while its current collection membership and grant allow `READ`. The server checks the source-object association on every range request. The recipient takes the expected store identifier, length, and commitment from authenticated collection operations and verifies the complete container before it activates a local object. Revocation prevents further server reads; it cannot remove bytes already downloaded.
+The connector pulls from the listener, then the endpoints exchange roles. A source prepares signed ordinary media and album operations from native-verified committed local containers. A receiver requests device heads and bounded per-device signed history pages, stages records, and applies them through native causal validation. Wire pagination positions never advance durable accepted heads. Every advertised head must be reached, and a native-verified source checkpoint must have no pending dependencies.
 
-Enrolled devices of one vault use the ordinary device operation log for `CreateObject` and key-free `CommitObject`. Their source upload is verified before publication. A receive plan is rebuilt from accepted operations and current local tombstones; it does not trust server object metadata. Missing originals use the same complete container verification and atomic activation as shared objects. Object-bound disposable requests are authorized against current own-vault device membership, and stable device identities do not carry content keys. Before it approves a new device, the current device publishes existing media facts into its durable log and attests that log with a checkpoint.
+If initial pairing is pending, native finalization follows that signed-history verification. Missing originals are requested from native receive plans. Disposable prekey requests and addressed signed grants deliver object keys directly. Ciphertext transfers in ranges of at most 256 KiB, resumes from the locally retained prefix, and activates an object only after complete container verification. The existing deterministic conflict and tombstone rules remain in force. Private notes, album parent/order/deletion, and other local-only data remain outside the existing media/album operation contract.
 
-## 5. Operation synchronization
+The connector sends `turn` after its pull; the listener pulls while the connector handles requests. The listener then sends `complete`, and the connector acknowledges `complete`. Only this two-way completion reports success. Missing data, unresolved dependencies, failed authentication, interruption, and resource limits report failure or cancellation and preserve already committed local work.
 
-Devices exchange:
+## 6. Lifetime
 
-- known per-device heads;
-- signed operations after those heads;
-- membership/checkpoint state;
-- opaque pagination tokens not trusted as completeness proof.
+Connections run only on an explicit foreground action. Stop cancels the run and closes the native connection. Vault lock and session close destroy the socket and keys independently of app coroutine cleanup. No periodic Android work, iOS background task, locked transfer, persisted endpoint, or automatic unlock-time connection exists.
 
-Clients verify each device chain independently before applying operations, and apply an operation only when the heads it observes are already held; otherwise it is buffered under [`OPERATION_LOG.md`](OPERATION_LOG.md) §4.3.
+## 7. Limits
 
-## 6. Bootstrap new device
-
-1. authenticate account transport;
-2. generate/verify device identity, including the fingerprint comparison [`SERVER_TRUST_MODEL.md`](SERVER_TRUST_MODEL.md) §7 requires for own-device enrollment;
-3. obtain the signed enrollment record and take its `membership_generation` and `bootstrap_checkpoint_commitment` as the initial freshness floor, per [`DEVICE_IDENTITY.md`](DEVICE_IDENTITY.md) §4;
-4. authenticate recovery/enrollment path;
-5. fetch the checkpoint that commitment names, reject it unless it hashes to the commitment, then fetch operation chains from its heads;
-6. verify signatures/heads/forks, and reject any membership generation, collection epoch, or per-device head the server offers below the attested checkpoint;
-7. build temporary catalog;
-8. fetch ciphertext objects lazily/eagerly by policy;
-9. commit local vault and platform slot.
-
-Server-supplied state never sets the floor. The enrolling device's signature over the enrollment record is what makes the floor trustworthy at the one moment when the new device holds no accepted head of its own; see [`ROLLBACK_PROTECTION.md`](ROLLBACK_PROTECTION.md) §7.
-
-### 6.1 App pairing, own media, and device revocation
-
-On the new device, restore an encrypted backup and unlock it. Settings creates a durable pairing request for a fresh device identity. On a connected ordinary device, paste the request, compare its fingerprint on both screens, and explicitly approve access to the whole vault. The connected device publishes its signed checkpoint and AddDevice enrollment with a separate random transport token, then publishes a checkpoint for the new membership. It saves an encrypted approval file for the new device.
-
-The restored device authenticates that file locally before it uses the server URL or token. It downloads and verifies signed operation prefixes. Native code verifies the approval's pinned checkpoint and active membership before it replaces the recovery-only identity. It signs DeviceReady as the new ordinary device's first operation. Missing history leaves pairing retryable; failed enrollment, process restart, or a failed configuration write cannot create a different identity or token on retry. The exact trusted checkpoint can be replayed idempotently after enrollment. An unknown stale checkpoint still fails validation.
-
-An unlocked sync pass publishes ordinary operations and committed encrypted originals from local collections. It requests each missing object key through a disposable prekey. An active source device must sync to deliver that key; the recipient shows a waiting state until then. It destroys the private prekey after acceptance and verifies the downloaded complete container before it creates an active object. Own-device downloads use the same bounded streaming path as collection sharing. The server does not receive filenames, plaintext metadata, root keys, or object keys. Native work and full-container verification run off the UI thread.
-
-Settings lists authenticated device fingerprints, including approved devices that have not completed setup. The current device cannot revoke itself. An explicit confirmation revokes a peer at its latest accepted branch, or at the signed genesis position if it never authored an operation. Native state and retry records commit together. The app queues signed revocations before transport, retries queued changes on sync, and blocks disconnect while an upload is pending. It publishes the membership-compatible checkpoint after revocation. Revocation stops server and new key access; plaintext copies or keys already held by another device cannot be recalled. Keep encrypted backups separate from sync.
-
-## 7. Background mode
-
-While locked, clients may transfer already committed ciphertext and signed opaque records. They must not decrypt payloads, open private catalog, resolve conflicts, or generate derivatives. Decrypted application occurs after explicit unlock.
-
-A locked device cannot check an inbound record against membership or head state, because both live in the encrypted catalog it may not open. Inbound records are staged, not accepted:
-
-- the staging area holds ciphertext and signed bytes only. It is app-private, excluded from platform backup, and separate from the catalog, per SEC-034;
-- it is bounded at 4096 records, 64 MiB per vault, and 7 days per record, whichever bound is reached first. Past a bound the oldest record is dropped. Dropping is safe because nothing is acknowledged while locked, so a dropped record is fetched again;
-- staged records advance no accepted head, no membership generation, and no epoch. A locked device's freshness state is exactly what it was at lock;
-- transport pull cursors are read from authenticated native device heads after unlocked processing. A downloaded page does not advance a cursor, even if every record was staged. At unlock the host saves the verified heads; rejected, evicted, or expired records remain fetchable from the last accepted head;
-- at unlock every staged record is validated from the start under [`OPERATION_LOG.md`](OPERATION_LOG.md) §9: signature, sequence, previous hash, membership at its generation, and observed heads. Staging is not partial validation and grants a record nothing.
-
-## 8. Conflict resolution
-
-Defined in [`CONFLICT_RESOLUTION.md`](CONFLICT_RESOLUTION.md). The server never chooses semantic winner. Clients must converge from the same valid operation set.
-
-## 9. Deletion
-
-Deletion is a signed tombstone. The retention rule that server physical deletion follows is normative in [`OPERATION_LOG.md`](OPERATION_LOG.md) §11.
-
-The server deletes stored ciphertext only on an authenticated signed operation from an enrolled device. A transport session token authorizes fetch and upload, never deletion, so a stolen token alone destroys nothing. Server acknowledgment of a deletion is not proof of erasure. Key-envelope destruction and collection revocation are client-side decisions.
-
-### 9.1 Server deletion authorization
-
-The server never decrypts a tombstone, and the `store_id` it must remove is private payload data. The client therefore submits this separate canonical authorization after it has accepted the tombstone locally:
-
-```text
-ServerDeletionAuthorizationV1 =
-    protocol_version:u16 = 0x0001
-    request_id:bytes[16]
-    vault_id:bytes[16]
-    device_id:bytes[16]
-    target_kind:u8
-    target_id:bytes[16]
-    authorizing_operation_digest:bytes[32]
-    signature:bytes[64]
-```
-
-The signature input is `CHUR\x00SYNC\x00SERVER-DELETE\x00V1` followed by every field from `protocol_version` through `authorizing_operation_digest`. The exact record is 163 bytes. Identifiers are non-zero random `Id` values and the server scopes every lookup by `vault_id`.
-
-`target_kind` allocates `0x01` for one immutable object and `0x02` for the whole account. An object authorization names its opaque `store_id` and a non-zero digest of an operation already stored for the vault. The server verifies the operation exists and the authorization signer is currently active; it cannot decrypt the operation and does not claim to prove its semantic kind. An account authorization requires `target_id == vault_id` and an all-zero operation digest.
-
-The server stores `request_id` with the complete canonical bytes. An exact replay is idempotent; different bytes under the same identifier are rejected. Unknown versions and target kinds fail closed. A transport token cannot substitute for this signature.
-
-## 10. Error/retry
-
-- uploads/downloads are idempotent by opaque transfer/object IDs;
-- network failure uses bounded backoff;
-- authenticated corruption is not retried from the same bytes indefinitely;
-- fork/rollback stops affected chain and requires reconciliation;
-- unknown protocol/operation version fails closed;
-- server 2xx response never bypasses client verification.
-
-## 11. Metadata minimization
-
-Server routing fields are random/opaque. No plaintext filename, MIME, album, caption, EXIF, search term, or content hash. Batch/padding may be added later under a versioned transport profile.
-
-## 12. Protocol evolution
-
-- version canonical records independently from API endpoints;
-- server advertises capability, but client policy chooses approved suites;
-- maintain mixed object-container versions through explicit readers/migration;
-- no downgrade from authenticated newer membership/log state;
-- mandatory changes require minimum-client policy signed by authorized membership, not arbitrary server command.
-
-## 13. Test scenarios
-
-- interrupted/resumed upload/download;
-- server marks incomplete object complete;
-- chunk substitution/reorder/truncation;
-- operation replay/fork/omission;
-- stale checkpoint/newer local head;
-- new-device bootstrap and recovery;
-- revoked device uploading operations;
-- conflicting metadata/deletion;
-- locked background transfer;
-- account auth reset without vault access;
-- Android/iOS/CLI interoperability.
-
-Own-vault media uses a root-domain `DeclareCollection` before any new collection selector is used. This includes the first import after pairing from an empty backup. Unknown selectors from authenticated enrolled signers stay pending until the declaration is accepted. They cannot advance a head while pending. Collection metadata declarations and rotations carry no object content key.
-
-Accepted content can remain unresolved after a concurrent revocation cuts its cause. `ProcessReport.pending` includes both retained inbound records and these accepted unresolved payloads. An own-vault receive plan reports unresolved payloads for its collection in `pending_operations`. Healthy ready objects remain downloadable. A nonzero count requires a dependency warning and prevents an up-to-date result. The signed outer head can advance while the private effect remains pending; no new ABI field or wire record is required.
-
-An unlocked own-vault source caches its verified operation log, materialized metadata and immutable publication index. The catalog generation and the complete root operation domain bind the cache. Every publication still checks the current ordinary identity, membership and source row. Receipt, revocation, rotation or another catalog change invalidates the cache. Successful local publication updates the cache to the committed generation. A failed publication discards it. Lock closes the catalog and drops this cache. It stores no object content key and does not replace complete source-container verification.
+No third-device service supplies absent data. A missing original requires reconnecting to a peer that retains it. There is no delivery while a device is offline and no guarantee that a peer erased a copy. See [PEER_TRUST_MODEL.md](PEER_TRUST_MODEL.md).

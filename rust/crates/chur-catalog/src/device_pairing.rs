@@ -30,16 +30,10 @@ pub struct PreparedPair {
     pub operation: Vec<u8>,
     /// Signed HPKE approval code for the new device.
     pub approval: Vec<u8>,
-    /// Actual cached credential that the enrollment transport must install.
-    pub transport_token: [u8; 32],
 }
 
 /// Credentials released only after native authority and HPKE verification.
 pub struct PairCredentials {
-    /// Authorizing device's authenticated server address.
-    pub server_url: String,
-    /// New device's opaque transport credential.
-    pub token: [u8; 32],
     /// New ordinary device identifier.
     pub device_id: Id,
     /// Signed enrollment to verify during bootstrap.
@@ -280,14 +274,12 @@ pub fn approve(
     root: &Key,
     vault: Id,
     request: &PairingRequest,
-    server_url: &str,
-    token: &[u8; 32],
     now_ms: u64,
 ) -> Result<PreparedPair> {
     ensure!(
-        request.vault_id() == &vault && !server_url.is_empty() && server_url.len() <= 2_048,
+        request.vault_id() == &vault,
         InvalidInput,
-        "pairing request vault or server address differs"
+        "pairing request belongs to another vault"
     );
     request.verify_root(root)?;
     let membership = local_membership(db, vault)?;
@@ -299,13 +291,13 @@ pub fn approve(
             )
         })?;
     let cached = db.connection().query_row(
-        "SELECT request, server_url, transport_token, checkpoint, enrollment, operation, approval FROM device_pairing_approvals WHERE request_id = ?1",
-        [request.request_id().as_bytes().as_slice()], |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?, row.get::<_, Vec<u8>>(2)?,
-            row.get::<_, Vec<u8>>(3)?, row.get::<_, Vec<u8>>(4)?, row.get::<_, Vec<u8>>(5)?, row.get::<_, Vec<u8>>(6)?)),
+        "SELECT request, checkpoint, enrollment, operation, approval FROM device_pairing_approvals WHERE request_id = ?1",
+        [request.request_id().as_bytes().as_slice()], |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?, row.get::<_, Vec<u8>>(2)?,
+            row.get::<_, Vec<u8>>(3)?, row.get::<_, Vec<u8>>(4)?)),
     ).optional().map_err(|error| map_sqlite(error, "pairing approval cache could not be read"))?;
-    if let Some((previous, url, transport, checkpoint, enrollment, operation, approval)) = cached {
+    if let Some((previous, checkpoint, enrollment, operation, approval)) = cached {
         ensure!(
-            previous == request.encode() && url == server_url,
+            previous == request.encode(),
             Conflict,
             "pairing request was reused for another approval"
         );
@@ -319,7 +311,6 @@ pub fn approve(
             enrollment,
             operation,
             approval,
-            transport_token: token_array(&transport)?,
         });
     }
     ensure!(
@@ -391,8 +382,6 @@ pub fn approve(
     payload.validate_for_operation(&operation, &vault, 0)?;
     let credentials = encode_credentials(
         request,
-        server_url,
-        token,
         &checkpoint.encode(),
         &enrollment.encode(),
         &operation.encode(),
@@ -410,7 +399,6 @@ pub fn approve(
         enrollment: enrollment.encode(),
         operation: operation.encode(),
         approval,
-        transport_token: *token,
     };
     ensure!(
         log.accept_with(db, &operation, &membership, |tx| {
@@ -422,12 +410,10 @@ pub fn approve(
                 operation.device_sequence(),
             )?;
             tx.execute(
-                "INSERT INTO device_pairing_approvals VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO device_pairing_approvals VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     request.request_id().as_bytes().as_slice(),
                     request.encode(),
-                    server_url,
-                    token.as_slice(),
                     &prepared.checkpoint,
                     &prepared.enrollment,
                     &prepared.operation,
@@ -558,6 +544,24 @@ pub fn accept_start(
         Ok(())
     })?;
     Ok(credentials)
+}
+
+/// Revalidates an unfinished approval after a local lock or process restart.
+/// No transport endpoint or credential is recovered; only signed pairing evidence is retained.
+pub fn resume(db: &mut CatalogDb, root: &Key, vault: Id) -> Result<Option<PairCredentials>> {
+    let approval: Option<Vec<u8>> = db
+        .connection()
+        .query_row(
+            "SELECT approval FROM device_pairing_pending WHERE only_row = 1 AND finalized = 0",
+            [],
+            |row| row.get::<_, Option<Vec<u8>>>(0),
+        )
+        .optional()
+        .map_err(|error| map_sqlite(error, "pending peer approval could not be read"))?
+        .flatten();
+    approval
+        .map(|bytes| accept_start(db, root, vault, &bytes))
+        .transpose()
 }
 
 /// Installs the fresh ordinary identity only after downloaded signed prefixes
@@ -850,20 +854,16 @@ fn validate_authority(db: &CatalogDb, records: &[Vec<u8>]) -> Result<MembershipS
 
 fn encode_credentials(
     request: &PairingRequest,
-    url: &str,
-    token: &[u8; 32],
     checkpoint: &[u8],
     enrollment: &[u8],
     operation: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>> {
     let mut writer = Writer::new();
     writer
-        .u16(1)
+        .u16(2)
         .fixed(&request.digest())
-        .id(request.device_id())
-        .string(url)?;
+        .id(request.device_id());
     writer
-        .fixed(token)
         .variable(checkpoint)?
         .variable(enrollment)?
         .variable(operation)?;
@@ -875,22 +875,18 @@ fn decode_credentials(
 ) -> Result<(PairCredentials, Operation)> {
     let mut reader = Reader::new(bytes, ChurStatus::InvalidInput);
     ensure!(
-        reader.u16()? == 1
+        reader.u16()? == 2
             && reader.fixed::<32>()? == request.digest()
             && reader.id()? == *request.device_id(),
         AuthenticationFailed,
         "pairing credentials do not match their request"
     );
-    let server_url = reader.string(2_048)?.to_owned();
-    let token = reader.fixed()?;
     let checkpoint = reader.variable(APPROVAL_MAX as u32)?.to_vec();
     let enrollment = reader.variable(APPROVAL_MAX as u32)?.to_vec();
     let operation = Operation::decode(reader.variable(APPROVAL_MAX as u32)?)?;
     reader.finish()?;
     Ok((
         PairCredentials {
-            server_url,
-            token,
             device_id: *request.device_id(),
             enrollment,
             checkpoint,
@@ -952,12 +948,4 @@ fn validate_bootstrap(
         "pairing outer operation does not contain its enrollment"
     );
     Ok(())
-}
-fn token_array(bytes: &[u8]) -> Result<[u8; 32]> {
-    bytes.try_into().map_err(|_| {
-        Error::new(
-            ChurStatus::CatalogCorrupt,
-            "stored pairing token length differs",
-        )
-    })
 }

@@ -2519,3 +2519,7 @@ The resulting system provides:
 - one portable Rust cryptographic implementation across Android, iOS, and CLI.
 
 The design remains provisional until canonical encodings, parameters, vectors, fault tests, and an independent audit are complete.
+
+## Direct peer session keys
+
+The foreground peer transport has a separate `CHURP2P1` namespace. A one-use 256-bit invitation secret and two fresh 32-byte challenges derive direction-separated 32-byte keys with HKDF-SHA-256. The transcript hash, info labels, nonce construction, frame bound, and sequence AAD are specified in [SYNC_PROTOCOL_V1.md](sync/SYNC_PROTOCOL_V1.md). These keys are never used for vault, collection, or object encryption and never enter a portable backup. Disclosure of an invitation permits decryption of recorded transport traffic; this PSK transport does not claim forward secrecy. Object and operation encryption retain their independent native keys and verification requirements.

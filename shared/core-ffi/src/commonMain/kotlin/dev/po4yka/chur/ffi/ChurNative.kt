@@ -245,6 +245,8 @@ internal expect object ChurNative {
 
     fun ownSyncCollections(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int
 
+    fun peerCall(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int
+
     fun ownSyncOperations(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int
 
     fun ownSyncPlan(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int

@@ -39,7 +39,6 @@ internal class PairingApprovalActions(val save: () -> Unit, val open: () -> Unit
 @Composable
 internal fun rememberPairingApprovalFiles(
     controller: ChurController,
-    localNetwork: (String, () -> Unit) -> Unit,
 ): PairingApprovalActions {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -80,11 +79,8 @@ internal fun rememberPairingApprovalFiles(
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { controller.report("That connection file could not be read, or is too large."); return@launch }
-            if (current() == generation) controller.pairingApprovalServer(bytes) { server ->
-                if (current() == generation) localNetwork(server) {
-                    if (current() == generation) controller.acceptPairingApproval(bytes)
-                }
-            }
+            if (current() == generation) controller.acceptPairingApproval(bytes)
+            bytes.fill(0)
         }
     }
     return PairingApprovalActions(

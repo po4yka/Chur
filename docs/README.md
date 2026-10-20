@@ -126,6 +126,7 @@ Document status describes a whole document. Individual statements inside a docum
 - [`format/CATALOG_SCHEMA_V12.md`](format/CATALOG_SCHEMA_V12.md) — explicit private-note format.
 - [`format/CATALOG_SCHEMA_V13.md`](format/CATALOG_SCHEMA_V13.md) — note-owned encrypted attachments.
 - [`format/CATALOG_SCHEMA_V14.md`](format/CATALOG_SCHEMA_V14.md) — encrypted note organization and bounded revision/file recovery; current physical schema.
+- [`format/CATALOG_SCHEMA_V15.md`](format/CATALOG_SCHEMA_V15.md) — peer-only pairing state without network credentials.
 - [`format/NOTE_PACKAGE_V1.md`](format/NOTE_PACKAGE_V1.md) — portable plaintext note source and attachments.
 - [`format/BACKUP_FORMAT_V1.md`](format/BACKUP_FORMAT_V1.md)
 - [`format/TEST_VECTORS.md`](format/TEST_VECTORS.md)
@@ -159,13 +160,13 @@ The complete platform documents are [`ANDROID.md`](ANDROID.md) and [`IOS.md`](IO
 - [`assurance/SECURITY_FIXES_2026-10-16.md`](assurance/SECURITY_FIXES_2026-10-16.md) — dated security correction evidence.
 - [`assurance/P2_CORRECTIONS_2026-10-17.md`](assurance/P2_CORRECTIONS_2026-10-17.md) — five feature-review corrections and regression coverage.
 
-## Sync and sharing
+## Direct peer synchronization
 
-- [`sync/SERVER_OPERATOR.md`](sync/SERVER_OPERATOR.md) — reference self-hosted server deployment.
+- [`adr/0065-peer-only-sync-without-accounts.md`](adr/0065-peer-only-sync-without-accounts.md) — no accounts or services; direct foreground P2P only.
 - [`sync/DEVICE_PAIRING.md`](sync/DEVICE_PAIRING.md) — device enrollment and pairing.
 - [`sync/OBJECT_KEY_GRANTS.md`](sync/OBJECT_KEY_GRANTS.md) — current object-key grant protocol.
 
-- [`sync/SERVER_TRUST_MODEL.md`](sync/SERVER_TRUST_MODEL.md)
+- [`sync/PEER_TRUST_MODEL.md`](sync/PEER_TRUST_MODEL.md)
 - [`sync/DEVICE_IDENTITY.md`](sync/DEVICE_IDENTITY.md)
 - [`sync/OPERATION_LOG.md`](sync/OPERATION_LOG.md)
 - [`sync/SYNC_PROTOCOL_V1.md`](sync/SYNC_PROTOCOL_V1.md)
