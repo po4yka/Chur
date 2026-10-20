@@ -73,6 +73,8 @@ val iosHostSymbols =
         // Step 7: the document picker the restore route asks the host for.
         "IosBackupPicker",
         "IosAlbumExportPicker",
+        "IosSpiritRenderer",
+        "IosSpiritRendererHost",
     )
 
 kotlin {
@@ -284,6 +286,9 @@ kotlin {
             implementation(libs.haze.blur)
             implementation(libs.haze.glass)
             implementation(libs.androidx.activity.compose)
+            implementation(libs.filament.android)
+            implementation(libs.filament.gltfio)
+            implementation(libs.androidx.lifecycle.runtime.ktx)
             // The player of `MEDIA_PIPELINE.md` §9. It receives plaintext ranges
             // from a vault-backed `DataSource` and never sees a container, a
             // key, or a path, which is the split §1 fixes.

@@ -103,6 +103,9 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        #if CHUR_FILAMENT
+        ChurSpiritRendererInstaller.install()
+        #endif
         #if DEBUG
         let releaseApplication = false
         #else

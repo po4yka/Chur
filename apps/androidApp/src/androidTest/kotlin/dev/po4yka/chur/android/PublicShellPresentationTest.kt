@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.Density
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.po4yka.chur.app.PublicShell
+import dev.po4yka.chur.app.notes.NotesScreen
 import dev.po4yka.chur.app.notes.Disclosure
 import dev.po4yka.chur.app.notes.PublicSettingsScreen
 import dev.po4yka.chur.app.publicshell.CalculatorScreen
@@ -48,6 +49,31 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class PublicShellPresentationTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
+
+    @Test
+    fun spirit_is_opt_in_and_suppressed_during_search_disclosure_and_dialogs() {
+        val query = mutableStateOf("")
+        val disclosure = mutableStateOf(false)
+        val companion = "Chur companion. Drag to move, activate to greet."
+        present(content = { NotesScreen(emptyList(), query.value, { query.value = it }, {}, {}, {},
+            showFirstWriteDisclosure = disclosure.value) }) { f ->
+            assertFalse(f.has(companion))
+            f.click("Show Chur")
+            assertTrue(f.await { f.has(companion) })
+            f.click("Folders and tags")
+            assertTrue(f.await { !f.has(companion) })
+            f.click("Close")
+            assertTrue(f.await { f.has(companion) })
+            instrumentation.runOnMainSync { query.value = "search" }
+            assertTrue(f.await { !f.has(companion) })
+            instrumentation.runOnMainSync { query.value = ""; disclosure.value = true }
+            assertTrue(f.await { !f.has(companion) })
+            instrumentation.runOnMainSync { disclosure.value = false }
+            assertTrue(f.await { f.has(companion) })
+            f.click("Hide Chur")
+            assertTrue(f.await { !f.has(companion) })
+        }
+    }
 
     @Test
     fun narrow_double_font_calculator_keeps_keys_result_and_settings_reachable() {
