@@ -5,7 +5,7 @@ import dev.po4yka.chur.ffi.ImportRequest
 import dev.po4yka.chur.ffi.ObjectQuery
 import dev.po4yka.chur.ffi.QueryScope
 import dev.po4yka.chur.notes.InMemoryNoteStore
-import dev.po4yka.chur.sync.SyncTransportFailure
+import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.vault.VaultState
 import java.io.File
 import java.io.RandomAccessFile
@@ -59,8 +59,8 @@ class SyncCatalogRefreshHostTest {
         val album = controller.vault.createAlbum("Before receive")
         controller.loadAlbums()
         withTimeout(10_000) { controller.albums.first { it.isNotEmpty() } }
-        val failure = SyncTransportFailure(ChurStatus.NETWORK_FAILURE, "Public fixture connection failed")
-        val reported = assertFailsWith<SyncTransportFailure> {
+        val failure = ChurFailure(ChurStatus.NETWORK_FAILURE, "Public fixture connection failed")
+        val reported = assertFailsWith<ChurFailure> {
             controller.withSyncCatalogRefresh(generation(controller)) {
                 controller.vault.renameAlbum(album, "Committed before failure")
                 throw failure

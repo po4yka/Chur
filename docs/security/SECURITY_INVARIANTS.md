@@ -79,9 +79,9 @@ Security invariants are properties that implementation, migrations, platform ada
 
 | ID | Invariant | Primary owner | Required evidence |
 | --- | --- | --- | --- |
-| SEC-040 | The server receives no plaintext media, private metadata, root keys, or unwrapped collection keys. | sync protocol | protocol tests |
+| SEC-040 | The peer transport sends no plaintext media, private metadata, root keys, or unwrapped collection keys. | sync protocol | protocol tests |
 | SEC-041 | Sync operations are canonically encoded, authenticated, and bound to device identity. | `chur-sync-protocol` | signature vectors |
-| SEC-042 | Per-device sequence and hash-chain validation rejects replay and simple rollback. | sync client | malicious-server tests |
+| SEC-042 | Per-device sequence and hash-chain validation rejects replay and simple rollback. | sync client | malicious-peer tests |
 | SEC-043 | Collection grants encrypt only collection keys, never bulk media with public-key encryption. | sharing protocol | HPKE vectors |
 | SEC-044 | Sender/device identity is authenticated separately from HPKE confidentiality. | sharing protocol | signature tests |
 | SEC-045 | Revocation is forward-looking and never claims to erase keys/plaintext already obtained by a recipient. | product/protocol | documentation and tests |

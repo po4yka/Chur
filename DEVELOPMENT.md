@@ -32,10 +32,10 @@ shared/core-model/      error taxonomy and vector contract
 shared/core-ffi/        NativeVault and hand-written C ABI adapters
 shared/core-vault/      private repository and session/lock state
 shared/core-platform-keys/ Android Keystore and Apple Keychain slots
-shared/core-sync/       Ktor transport and synchronization orchestration
+shared/core-sync/       foreground direct peer transport and orchestration
 shared/feature-import/  codecs, OCR, descriptors, export contracts
 shared/feature-notes/   public Notes and JSON persistence
-rust/crates/            secure core, JNI/C ABI, CLI, reference server
+rust/crates/            secure core, JNI/C ABI, CLI, direct peer transport
 rust/fuzz/              separate Cargo workspace
 scripts/                native builds, device control, release/policy checks
 docs/

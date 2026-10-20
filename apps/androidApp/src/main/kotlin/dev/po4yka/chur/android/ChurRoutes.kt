@@ -568,9 +568,6 @@ private fun VaultRoute(controller: ChurController) {
     val operation by controller.activeOperation.collectAsState()
     val vaultState by controller.vaultState.collectAsState()
     val syncStatus by controller.syncStatus.collectAsState()
-    val sharingIdentity by controller.sharingIdentity.collectAsState()
-    val sharingOverview by controller.sharingOverview.collectAsState()
-    val sharingRecipient by controller.sharingRecipient.collectAsState()
     val vaultDevicePairing by controller.devicePairing.collectAsState()
     val deviceSlotStrict by controller.deviceSlotStrict.collectAsState()
     val appLockEnabled by controller.appLockEnabled.collectAsState()
@@ -746,13 +743,9 @@ private fun VaultRoute(controller: ChurController) {
     }
     val deleteOriginals = rememberOriginalDeletion(controller)
     val localNetwork = rememberLocalNetworkAccess(controller)
-    val pairingFiles = rememberPairingApprovalFiles(controller, localNetwork)
-    // A local server without the grant only times out, in the worker as in
-    // the app, so Settings names the cause, `ANDROID.md` §24. Each new status,
-    // and each unlock, checks again.
-    val localNetworkOff by produceState(false, syncStatus) {
-        value = syncStatus?.serverUrl?.let { localNetworkBlocked(context, it) } == true
-    }
+    val pairingFiles = rememberPairingApprovalFiles(controller)
+    // Request local-network access only when the user starts a peer connection.
+
     // `ANDROID.md` §25.1: the levels are read when Settings opens, over IPC
     // only. The published check is the user's tap, and a lock disposes of its
     // result with the route.
@@ -869,7 +862,6 @@ private fun VaultRoute(controller: ChurController) {
             destination == VaultDestination.ALBUMS -> controller.loadAlbums()
             destination == VaultDestination.SETTINGS -> {
                 controller.loadSlots()
-                controller.loadSharing()
             }
             else -> Unit
         }
@@ -1301,11 +1293,8 @@ private fun VaultRoute(controller: ChurController) {
                 quickSettingsLockAvailable = quickSettingsLockAvailable,
                 quickSettingsLockBusy = quickSettingsLockBusy,
                 quickSettingsLockMessage = quickSettingsLockMessage,
-                sync = if (localNetworkOff) syncStatus?.copy(message = LOCAL_NETWORK_OFF, failure = null) else syncStatus,
+                sync = syncStatus,
                 devicePairing = vaultDevicePairing,
-                sharingIdentity = sharingIdentity,
-                sharingOverview = sharingOverview,
-                sharingRecipient = sharingRecipient,
                 systemSecurity = systemSecurityLine(patchLevels, publishedCheck),
             ),
             actions = VaultActions(
@@ -1441,19 +1430,11 @@ private fun VaultRoute(controller: ChurController) {
                 },
                 onPrepareDevicePairing = { controller.prepareDevicePairing() },
                 onInspectDevicePairing = { controller.inspectDevicePairing(it) },
-                onApproveDevicePairing = { request, fingerprint ->
-                    syncStatus?.serverUrl?.let { server ->
-                        localNetwork(server) { controller.approveDevicePairing(request, fingerprint) }
-                    } ?: controller.approveDevicePairing(request, fingerprint)
-                },
+                onApproveDevicePairing = controller::approveDevicePairing,
                 onSavePairingApproval = pairingFiles.save,
                 onOpenPairingApproval = pairingFiles.open,
-                onLoadPairedDevices = { controller.loadPairedDevices() },
-                onRevokePairedDevice = { peer ->
-                    syncStatus?.serverUrl?.let { server ->
-                        localNetwork(server) { controller.revokePairedDevice(peer) }
-                    } ?: controller.revokePairedDevice(peer)
-                },
+                onLoadPairedDevices = controller::loadPairedDevices,
+                onRevokePairedDevice = controller::revokePairedDevice,
                 onCreateBackup = controller::createBackup,
                 onEncryptExternalFiles = controller::openExternalArchive,
                 onImportArchive = { choosingArchiveImport = true },
@@ -1519,17 +1500,9 @@ private fun VaultRoute(controller: ChurController) {
                 onNoticeShown = controller::consume,
                 onAddDeviceSlot = controller::enrollDeviceSlot,
                 onToggleDeviceSlotPolicy = controller::toggleDeviceSlotPolicy,
-                onConfigureSync = { serverUrl, secret ->
-                    localNetwork(serverUrl) { controller.configureSync(serverUrl, secret) }
-                },
-                onSyncNow = {
-                    syncStatus?.serverUrl?.let { localNetwork(it, controller::syncNow) } ?: controller.syncNow()
-                },
-                onDisconnectSync = controller::disconnectSync,
-                onAcknowledgeSyncStop = controller::acknowledgeSyncStop,
-                onInspectSharingRecipient = controller::inspectSharingRecipient,
-                onShareWithRecipient = controller::shareWithRecipient,
-                onRevokeSharingMember = controller::revokeSharingMember,
+                onListenPeer = { address -> localNetwork { controller.listenForPeer(address) } },
+                onConnectPeer = { invitation -> localNetwork { controller.connectToPeer(invitation) } },
+                onStopPeer = controller::stopPeerSync,
             ),
             systemBack = { enabled, onBack -> BackHandler(enabled = enabled, onBack = onBack) },
         )

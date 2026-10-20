@@ -51,10 +51,10 @@ fun userCopy(status: ChurStatus): String = when (status) {
     ChurStatus.NOT_FOUND -> "This item is no longer available. Refresh and try again."
     ChurStatus.CONFLICT -> "This changed on another device. Refresh and try again."
     ChurStatus.SYNC_CHAIN_FORK ->
-        "The sync server sent changes that do not match what this device already accepted, " +
+        "The other device sent changes that do not match what this device already accepted, " +
             "so Chur does not apply them."
     ChurStatus.SYNC_HEAD_ROLLBACK ->
-        "The sync server sent older data than this device already accepted, so Chur does not apply it."
+        "The other device sent older data than this device already accepted, so Chur does not apply it."
     ChurStatus.UNSUPPORTED_VERSION,
     ChurStatus.UNSUPPORTED_SUITE,
     -> "This version of Chur cannot open it. Update Chur or choose another file."
@@ -98,34 +98,11 @@ fun recoveryCopy(status: ChurStatus): String = when (status) {
     else -> userCopy(status)
 }
 
-/**
- * The sentence a user reads when the sync server refuses a request.
- *
- * A server refusal reuses the stable codes, and two of them mean something
- * else there. `docs/sync/SERVER_OPERATOR.md` answers every failed token check
- * with [ChurStatus.AUTHENTICATION_FAILED], a wrong bootstrap secret included,
- * so [userCopy]'s unlock line would send the user to a password and a recovery
- * phrase that cannot help. Nothing needs unlocking: the fix is the secret this
- * device set up sync with, and the same holds for
- * [ChurStatus.PERMISSION_DENIED]. The line is the same for every identity, so
- * the `security/DECOY_VAULT.md` §11 rule on error copy still holds. Every other
- * status reads as [userCopy] has it.
- */
-fun syncCopy(status: ChurStatus): String = when (status) {
-    ChurStatus.AUTHENTICATION_FAILED,
-    ChurStatus.PERMISSION_DENIED,
-    -> "The sync server did not accept this device. Check the bootstrap secret and set up sync again."
+/** Peer authentication is independent of the local vault password. */
+fun peerCopy(status: ChurStatus): String = when (status) {
+    ChurStatus.AUTHENTICATION_FAILED, ChurStatus.PERMISSION_DENIED ->
+        "Could not verify this device or invitation. Compare device fingerprints and use a new invitation."
+    ChurStatus.NETWORK_FAILURE ->
+        "Could not reach your other device. Keep both vaults open and check the direct network connection."
     else -> userCopy(status)
 }
-
-/**
- * What a sync setup or "Sync now" to a local server says on iOS when the server
- * does not answer, `IOS.md` §27.
- *
- * iOS lets no app read whether the user allowed local network access, so the
- * line cannot say that access is off, only where to allow it. It is the iOS
- * form of Android's `LOCAL_NETWORK_OFF` line.
- */
-internal const val LOCAL_NETWORK_REFUSED: String =
-    "Cannot reach the server. If local network access is off, allow it for this app " +
-        "in Settings > Privacy & Security > Local Network."

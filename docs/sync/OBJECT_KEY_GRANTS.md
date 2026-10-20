@@ -24,7 +24,7 @@ signature:bytes[64]
 
 The device signs `CHUR\x00OBJECT-PREKEY\x00SIGNATURE\x00V1` followed by all fields before `signature`. The source verifies the signature with the currently authorized recipient's Ed25519 key. The object ID, generation and container commitment must match an active source object. The source never answers a request for a deleted object. One prekey can receive only the object to which its signed request is bound.
 
-The recipient creates a request only for an accepted, committed object with no local permanent-deletion tombstone and no active local copy. The private X25519 bytes are random and are stored only in a mutable SQLCipher row. They are not derived from the root or stable device identity, and are never included in an operation, request, grant or server record. Each authenticated pending object has at most one outstanding local request. Transport pages contain at most 64 requests; unavailable objects do not consume a lifetime pool. An exact retry uses the same request.
+The recipient creates a request only for an accepted, committed object with no local permanent-deletion tombstone and no active local copy. The private X25519 bytes are random and are stored only in a mutable SQLCipher row. They are not derived from the root or stable device identity, and are never included in an operation, request, grant or peer record. Each authenticated pending object has at most one outstanding local request. Transport pages contain at most 64 requests; unavailable objects do not consume a lifetime pool. An exact retry uses the same request.
 
 ## 2. Signed grant
 
@@ -66,7 +66,7 @@ Deletion destroys all active and superseded local object envelopes, the object's
 
 A local tombstone referenced by an own-vault or shared signed log survives physical garbage collection. It prevents a replayed commit from creating another key request, including after restart or a backup made after deletion. A source must not send unsolicited keys to unbound prekeys: that would make a deleted key reachable again through a later request. Requests bind the exact object instead.
 
-Retained signed operation chains, collection keys, stable device identities, public requests and grants contain no reachable content key after this sequence. The server can retain old ciphertext and old public grant records without changing that result. A recipient that still holds its own live object key, and a backup made before deletion, are independent copies. Deletion in one vault does not erase those copies.
+Retained signed operation chains, collection keys, stable device identities, public requests and grants contain no reachable content key after this sequence. The peer can retain old ciphertext and old public grant records without changing that result. A recipient that still holds its own live object key, and a backup made before deletion, are independent copies. Deletion in one vault does not erase those copies.
 
 A source's permanent deletion publishes `PurgeObject` before local key erasure. Receipt removes keys and pending private prekeys in the accepted-log transaction, even if no local media row exists yet. The receive/process completion path always verifies WAL truncation. A blocked checkpoint returns failure and the next unlocked process rolls the deletion forward before reporting success. A recipient's local deletion creates no global purge operation.
 
@@ -74,7 +74,7 @@ Collection metadata keys remain available through root-domain `DeclareCollection
 
 ## 5. Transport
 
-The server stores bounded public requests and addressed grants. It does not hold private prekeys or plaintext content keys. Collection permissions gate request publication, source processing and recipient delivery. Request decoding rejects non-contributory X25519 public keys before admission or HPKE work.
+The peer stores bounded public requests and addressed grants. It does not hold private prekeys or plaintext content keys. Collection permissions gate request publication, source processing and recipient delivery. Request decoding rejects non-contributory X25519 public keys before admission or HPKE work.
 
 A source can acknowledge an unavailable or contradictory request only for its own device. The request remains available to other sources. An exact recipient retry resets these transient dismissals and moves the request to the FIFO tail, so later requests can proceed.
 

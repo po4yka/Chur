@@ -470,14 +470,24 @@ object ChurVault {
         return decodeSharedSourcePage(source.collectionId, bytes, bytes.size).single()
     }
 
+    /** Fixed output capacity prevents a mutating IO call from being repeated for sizing. */
+    fun peerCall(session: Long, input: ByteArray): ByteArray =
+        pairingCall(session, input, ChurNative::peerCall, when (input.firstOrNull()?.toInt()) {
+            1 -> 34
+            5 -> 4 * 1024 * 1024 + 1
+            8 -> 512 * 1024
+            10 -> 8_192
+            else -> 1
+        })
+
     fun prepareDevicePairing(session: Long): DevicePairingRequest =
         decodeDevicePairingRequest(pairingCall(session, byteArrayOf(), ChurNative::devicePairingPrepare, 512))
 
     fun inspectDevicePairing(session: Long, request: ByteArray): DevicePairingPreview =
         decodeDevicePairingPreview(pairingCall(session, request, ChurNative::devicePairingInspect, 128))
 
-    fun approveDevicePairing(session: Long, request: ByteArray, serverUrl: String, token: ByteArray, nowMs: Long): PreparedDevicePairing {
-        val encoded = encodeDevicePairingApproval(request, serverUrl, token, nowMs)
+    fun approveDevicePairing(session: Long, request: ByteArray, nowMs: Long): PreparedDevicePairing {
+        val encoded = encodeDevicePairingApproval(request, nowMs)
         return try {
             val response = pairingCall(session, encoded, ChurNative::devicePairingApprove)
             try { decodePreparedDevicePairing(response) } finally { response.fill(0) }
@@ -1215,8 +1225,8 @@ object ChurVault {
     }
 
     private fun requireCurrentAbi() {
-        if (ChurNative.abiVersionMajor() != 6) {
-            throw ChurFailure(ChurStatus.ABI_INCOMPATIBLE, "native ABI 6 is required")
+        if (ChurNative.abiVersionMajor() != 7) {
+            throw ChurFailure(ChurStatus.ABI_INCOMPATIBLE, "native ABI 7 is required")
         }
     }
 

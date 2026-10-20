@@ -2,7 +2,7 @@
 
 > **Status:** Accepted normative Phase 3 merge model
 
-Clients that receive the same valid operation set must converge without server-selected semantics. Immutable media bytes simplify conflicts; mutable metadata, memberships, favorites, tags, and deletions require explicit rules.
+Clients that receive the same valid operation set must converge without peer-selected semantics. Immutable media bytes simplify conflicts; mutable metadata, memberships, favorites, tags, and deletions require explicit rules.
 
 ## 1. Ordering model
 
@@ -89,7 +89,7 @@ V1 does not compact operation history. A checkpoint records the uncompacted-stat
 
 ## 11. UX
 
-Most conflicts resolve invisibly/deterministically. Expose only meaningful user choices, such as two concurrent captions or delete/edit conflict, after decryption. Do not reveal device IDs or private values to server.
+Most conflicts resolve invisibly/deterministically. Expose only meaningful user choices, such as two concurrent captions or delete/edit conflict, after decryption. Do not reveal device IDs or private values to peer.
 
 ## 12. Tests
 

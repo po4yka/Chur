@@ -21,7 +21,7 @@ targets:
         NSCameraUsageDescription: "Take public photos when you tap Take photo. Photos are saved only when you choose Save photo."
         NSPhotoLibraryAddUsageDescription: "Save selected vault media to your photo library."
         NSPhotoLibraryUsageDescription: "Import complete Live Photo resources and review deletion of imported originals only when you choose."
-        NSLocalNetworkUsageDescription: "Sync this vault with a server on your local network, when you connect to one."
+        NSLocalNetworkUsageDescription: "Connect directly to your other device to sync this vault while both apps are open."
         NSFaceIDUsageDescription: "Use Face ID to open your Chur vault and to confirm it's you before showing a recovery phrase."
         UTExportedTypeDeclarations:
           - UTTypeIdentifier: dev.po4yka.chur.live-photo
@@ -53,10 +53,6 @@ targets:
             UIWindowSceneSessionRoleApplication:
               - UISceneConfigurationName: Default Configuration
                 UISceneDelegateClassName: "$(PRODUCT_MODULE_NAME).SceneDelegate"
-        BGTaskSchedulerPermittedIdentifiers:
-          - dev.po4yka.chur.sync.refresh
-        UIBackgroundModes:
-          - fetch
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown

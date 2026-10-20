@@ -74,7 +74,7 @@ Rejected alternatives include:
 - storing private metadata in Room, DataStore, `SavedStateHandle`, bundles, or user defaults;
 - passing complete media through FFI as `ByteArray` or `NSData`;
 - global deduplication through an unkeyed plaintext hash;
-- trusting a server to select cryptographic algorithms or KDF resource parameters.
+- trusting a peer to select cryptographic algorithms or KDF resource parameters.
 
 ---
 
@@ -101,8 +101,8 @@ Rejected alternatives include:
   pickers and players  and user presence       catalog + objects
                                                       │
                                                       ▼
-                                            Optional opaque server
-                                            backup / sync / sharing
+                                            Other unlocked device
+                                            direct foreground P2P
 ```
 
 External actors and systems:
@@ -111,7 +111,7 @@ External actors and systems:
 - **Android/iOS operating system** — supplies sandboxing, file protection, media pickers, decoders, players, lifecycle, and authentication UX.
 - **Platform key service** — controls use or release of device-bound key material.
 - **Application filesystem** — stores public data, encrypted catalogs, encrypted objects, journals, and temporary ciphertext.
-- **Optional remote server** — self-hosted untrusted storage and synchronization relay; it must not require plaintext media, private metadata, or user root keys.
+- **Peer device** — an explicitly paired unlocked Chur app reached directly, with no account or relay.
 - **Recovery medium** — optional high-entropy recovery secret or encrypted portable backup controlled by the user.
 
 ---
@@ -155,18 +155,9 @@ Android Keystore and iOS Keychain protect device-bound key use. They do not crea
 
 After successful release or unwrapping, `VaultRootSecret` exists in the Chur process and is vulnerable to a fully compromised unlocked OS, runtime instrumentation, or malicious memory inspection. The platform key service primarily protects data at rest and gates access to the root secret.
 
-### 5.4 Server boundary
+### 5.4 Direct peer boundary
 
-The configured server is untrusted for confidentiality and content integrity. It MAY store and relay:
-
-- opaque object identifiers;
-- encrypted object containers;
-- wrapped keys;
-- encrypted catalog operations;
-- signed device-log entries;
-- ciphertext revisions and upload state.
-
-It MUST NOT be required to process plaintext filenames, metadata, thumbnails, album titles, media types, or root secrets.
+There is no backend, account, operator, hosted storage, or relay. An explicit foreground connection exchanges bounded encrypted frames with an active paired device. Rust authenticates membership, signed operations, checkpoint floors, key grants, and complete containers. Invitation secrets and direction keys are ephemeral. Lock closes the connection. See [ADR-0065](adr/0065-peer-only-sync-without-accounts.md).
 
 ### 5.5 Public-shell boundary
 
@@ -313,7 +304,6 @@ Chur/
 │       ├── chur-sync-protocol/
 │       ├── chur-ffi/
 │       ├── chur-jni/
-│       ├── chur-sync-server/
 │       └── chur-cli/
 │
 ├── docs/
@@ -342,7 +332,7 @@ Module boundaries MUST prevent feature modules from importing platform-native ke
 | Shared UI | Kotlin 2.4.20, Compose Multiplatform 1.12.1, Material 3 |
 | Navigation/state | shared route state, controllers, StateFlow, UDF |
 | Composition | explicit host construction; private owners bound to a session generation |
-| Network | Ktor 3.6.0, OkHttp/Darwin engines |
+| Device sync | Direct native TCP and authenticated peer frames |
 | Public persistence | JSON Notes, platform preferences, public camera files |
 | Private persistence | Rust-owned SQLCipher, schema v14 |
 | Images | authenticated derivatives, platform decoders, bounded session cache |
@@ -1551,7 +1541,7 @@ Triggers include:
 - configured inactivity timeout;
 - device lock;
 - app backgrounding according to policy;
-- account/vault switch;
+- vault switch;
 - unrecoverable integrity or platform-key error.
 
 Lock must be idempotent and safe during concurrent reader/import completion.
@@ -1647,66 +1637,15 @@ An `age`-compatible stream may be used for an interoperable export or backup env
 
 ## 34. Synchronization architecture
 
-Sync was added after the local format and migrations became stable.
+The only synchronization transport is a direct connection between two unlocked foreground devices. `shared/core-sync` coordinates it; `chur-media::peer_transport` owns bounded native TCP IO and authenticated frames. There is no account, service deployment, HTTP endpoint, relay, durable network token, background worker, or unlock-time network connection.
 
-### 34.1 Opaque server model
+An ordinary device creates a one-use invitation. A restored device must first obtain a fingerprint-verified encrypted approval, then receive and validate its required signed history before finalizing a fresh identity. Each device pulls signed operations, validates advertised heads and a source checkpoint, obtains addressed object keys, resumes ciphertext ranges, and activates only verified complete objects. Devices exchange roles and acknowledge completion before either reports a successful two-way transfer.
 
-The server stores:
+Existing native conflict, rollback, fork, tombstone, and revocation rules remain mandatory. Missing predecessors or originals produce an incomplete transfer, never a success claim. IPv4 direct routes are supported initially; discovery and NAT traversal are absent. The complete wire and lifetime contract is [SYNC_PROTOCOL_V1.md](sync/SYNC_PROTOCOL_V1.md).
 
-```text
-opaque account/device identifiers
-encrypted immutable objects
-encrypted catalog operations
-wrapped collection keys
-signed operation metadata
-upload/download status
-```
+## 35. Native collection-sharing primitives
 
-It does not need private filenames, EXIF, thumbnails, media types, album titles, root keys, or plaintext hashes.
-
-### 34.2 Upload commit
-
-```text
-Client creates immutable encrypted object
-    ↓
-Upload chunks or complete container
-    ↓
-Server confirms durable ciphertext
-    ↓
-Upload authenticated object commit/catalog operation
-    ↓
-Object becomes visible to other devices
-```
-
-A server-side partial upload is not a committed object.
-
-### 34.3 Authenticated operation log
-
-Mutable state uses signed per-device operations. The record fields, including the `observed_heads` vector that orders operations across devices, are defined in [sync/OPERATION_LOG.md](sync/OPERATION_LOG.md) §2 and §4.
-
-Clients track accepted sequence/head state. This detects many replay, rollback, and fork conditions. It does not by itself prove that a malicious server has not omitted an entire unseen branch; stronger transparency or device-gossip mechanisms may be added later.
-
-### 34.4 Conflict semantics
-
-Immutable media objects avoid content conflicts. Mutable metadata uses explicit revisions or operations with deterministic conflict rules.
-
-Deletion uses tombstones retained long enough to prevent an offline device from resurrecting data accidentally.
-
-### 34.5 Background synchronization
-
-Ktor transports opaque ciphertext. Locked devices may upload/download ciphertext and store pending operations, but cannot apply private catalog updates requiring root or collection keys until unlock.
-
-### 34.6 Deduplication
-
-Global deduplication through plaintext hashes is forbidden. Allowed options:
-
-- no deduplication;
-- local-only deduplication;
-- a user-specific keyed fingerprint under a dedicated derived key.
-
----
-
-## 35. Collection sharing architecture
+The service-mediated sharing UI and transport are removed by ADR-0065. The records below remain native cryptographic primitives; the current direct app transport accepts only enrolled peers of the same vault. It does not provide subscriptions to external recipients.
 
 Public-key cryptography wraps security-collection keys, not media files.
 
@@ -1820,7 +1759,7 @@ Migrations MUST be restartable or rollback-safe. An interrupted migration cannot
 | Password database extraction | Argon2id, random salt, bounded parameters |
 | Password change | rewrap root secret without media re-encryption |
 | Collection membership change | key epochs and object-key rewrapping |
-| Cloud compromise | ciphertext-only server model |
+| Cloud compromise | authenticated direct peer model |
 | Casual UI observation | functional public shell, privacy snapshots, immediate lock |
 | Coercive UI inspection | independent decoy vault with explicit limitations |
 | Interrupted import | transaction journal, fsync, atomic rename, catalog commit |
@@ -1837,7 +1776,7 @@ Migrations MUST be restartable or rollback-safe. An interrupted migration cannot
 | Universal screenshot prevention on iOS | no complete application-level guarantee |
 | Physical secure erase on flash | wear levelling, snapshots, and copy-on-write prevent guarantees |
 | Recipient deletion after sharing | recipients may retain keys or plaintext |
-| Malicious server omission | signed logs detect many rollbacks but not every unseen omitted branch |
+| Malicious peer omission | signed logs detect many rollbacks but not every unseen omitted branch |
 | Undetectable hidden volume | ciphertext volume, storage layout, backups, and I/O patterns may reveal data |
 | Forgotten credentials without recovery | strong cryptography implies irreversible loss |
 

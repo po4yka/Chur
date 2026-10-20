@@ -228,12 +228,12 @@ Thirty-four rows now name a concrete target — a Rust test, a Kotlin test, or t
 | SEC-037 | audit-only; API review of the surface in [`../interop/FFI_CONTRACT.md`](../interop/FFI_CONTRACT.md) at each change |
 | SEC-038 | `chur-format` `descriptor::tests::a_failed_slot_unwrap_still_returns_the_authentication_failure` |
 | SEC-039 | repository check: no forbidden claim listed in [`../security/DECOY_VAULT.md`](../security/DECOY_VAULT.md) §10 or [`../product/DISCREET_MODE.md`](../product/DISCREET_MODE.md) "Forbidden claims" appears in `docs/`, `DESIGN.md`, `README.md`, or a localized string resource |
-| SEC-040 | `chur-sync-protocol` `tests/malicious_server.rs::replay_omission_key_substitution_rollback_and_equivocation_fail_closed`; `chur-media` `tests/sync_download.rs::only_a_complete_authentic_download_can_be_published` |
-| SEC-041 | §2; `chur-sync-protocol` `tests/malicious_server.rs::replay_omission_key_substitution_rollback_and_equivocation_fail_closed` |
-| SEC-042 | `chur-sync-protocol` `tests/malicious_server.rs::replay_omission_key_substitution_rollback_and_equivocation_fail_closed`; `chur-media` `tests/sync_download.rs::only_a_complete_authentic_download_can_be_published` |
+| SEC-040 | `chur-sync-protocol` `tests/malicious_peer.rs::replay_omission_key_substitution_rollback_and_equivocation_fail_closed`; `chur-media` `tests/sync_download.rs::only_a_complete_authentic_download_can_be_published` |
+| SEC-041 | §2; `chur-sync-protocol` `tests/malicious_peer.rs::replay_omission_key_substitution_rollback_and_equivocation_fail_closed` |
+| SEC-042 | `chur-sync-protocol` `tests/malicious_peer.rs::replay_omission_key_substitution_rollback_and_equivocation_fail_closed`; `chur-media` `tests/sync_download.rs::only_a_complete_authentic_download_can_be_published` |
 | SEC-043 | §2 |
 | SEC-044 | §2 |
-| SEC-045 | SERVER_TRUST_MODEL §10 harness for the behaviour; audit-only for the claim wording |
+| SEC-045 | `PeerSyncHostTest` rejects a revoked device on a real direct connection; [Peer trust model](../sync/PEER_TRUST_MODEL.md) states the forward-only limit; audit-only for the claim wording |
 | SEC-046 | audit-only; design review of any deduplication proposal |
 | SEC-047 | [`FUZZING.md`](FUZZING.md) §2 targets, sixteen of which exist |
 | SEC-048 | `chur-format` `codec::tests::a_boolean_other_than_zero_or_one_is_non_canonical` |

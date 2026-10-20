@@ -11,7 +11,7 @@ The operation log represents private catalog changes as canonical encrypted and 
 - provide deterministic idempotent application;
 - synchronize mutable metadata separately from immutable media;
 - support tombstones and conflict resolution;
-- expose no private payload to server.
+- expose no private payload to peer.
 
 ## 2. Operation structure
 
@@ -100,7 +100,7 @@ An operation that observes a required head the receiver does not hold is not a f
 - request the missing heads and retry the pending set after each accepted batch;
 - when a bound is reached, or when a sync session ends with the operation still unresolved, drop it and fetch it again later; nothing is applied before its observed heads are held;
 - an entry naming an unknown device is a missing head, because enrollment is itself an operation;
-- a referenced head the server never delivers is omission or fork, handled by [`ROLLBACK_PROTECTION.md`](ROLLBACK_PROTECTION.md) §9.
+- a referenced head the peer never delivers is omission or fork, handled by [`ROLLBACK_PROTECTION.md`](ROLLBACK_PROTECTION.md) §9.
 
 ### 4.4 Revocation
 
@@ -127,7 +127,7 @@ The cleartext outer record is closed. It carries exactly the fields of §2 and n
 ```text
 protocol_version
 operation_id
-vault/account binding
+vault binding
 device_id
 device_sequence
 previous_operation_hash
@@ -137,19 +137,19 @@ encrypted_payload
 Ed25519 signature
 ```
 
-Every other field of an operation lives inside `encrypted_payload`: `operation_kind`, the collection and key epoch the operation belongs to, and every object, album, tag, and device identifier the operation names. Without this, the server reads a timestamped per-device stream of delete, favorite, rename, and tag events attributed to a collection, which is a behavioural profile of a private library and contradicts §1. A new routing need is a `protocol_version` change, not a new cleartext field.
+Every other field of an operation lives inside `encrypted_payload`: `operation_kind`, the collection and key epoch the operation belongs to, and every object, album, tag, and device identifier the operation names. Without this, the peer reads a timestamped per-device stream of delete, favorite, rename, and tag events attributed to a collection, which is a behavioural profile of a private library and contradicts §1. A new routing need is a `protocol_version` change, not a new cleartext field.
 
-`key_selector` is the 16-byte pseudorandom output fixed by [ADR-0051](../adr/0051-derive-sync-operation-keys-and-selectors.md). Root-domain operations derive it from `VaultRootSecret`; other operations derive it from `SecurityCollectionKey[epoch]`. The selector and payload key use separate HKDF labels. It is opaque: it carries no collection identity and no ordering, and the server learns only that two operations use the same key domain. Root-domain operations carry the vault's root selector.
+`key_selector` is the 16-byte pseudorandom output fixed by [ADR-0051](../adr/0051-derive-sync-operation-keys-and-selectors.md). Root-domain operations derive it from `VaultRootSecret`; other operations derive it from `SecurityCollectionKey[epoch]`. The selector and payload key use separate HKDF labels. It is opaque: it carries no collection identity and no ordering, and the peer learns only that two operations use the same key domain. Root-domain operations carry the vault's root selector.
 
 The root payload key is `RootSyncOperationKey = HKDF-SHA-256(VaultRootSecret, "chur/v1/root/sync-operations", vault_id)`. A collection payload key is `CollectionSyncOperationKey[epoch] = HKDF-SHA-256(SecurityCollectionKey[epoch], "chur/v1/collection/sync-operations", collection_id, collection_epoch)`. Exact HKDF framing and selector derivation are owned by [`../security/KEY_HIERARCHY.md`](../security/KEY_HIERARCHY.md) §3 and ADR-0051. A receiver derives a session selector directory from locally available wrapped keys and rejects an unknown or colliding selector before decryption.
 
 The payload AAD is `CHUR\x00SYNC\x00OPERATION\x00V1` followed by the exact wire encoding from `protocol_version` through `key_selector`, excluding `encrypted_payload` and `signature`. AAD must be readable before decryption, so no field inside the ciphertext may appear in it: `operation_kind`, collection, epoch, and object identifiers are authenticated as payload plaintext by the AEAD tag, and the signature of §7 binds the sealed payload to the outer record.
 
-What the server still observes is enumerated in [`SERVER_TRUST_MODEL.md`](SERVER_TRUST_MODEL.md) §8.
+What the peer still observes is enumerated in [`PEER_TRUST_MODEL.md`](PEER_TRUST_MODEL.md).
 
 ## 7. Signatures
 
-The signature covers the byte sequence fixed in §2. It authenticates device identity and prevents server modification.
+The signature covers the byte sequence fixed in §2. It authenticates device identity and prevents peer modification.
 
 Signing occurs only after local catalog transaction prepares a durable pending operation. Failed upload does not reuse sequence for a different operation.
 
@@ -179,7 +179,7 @@ If signing fails, logical change must not commit as sync-visible state unless an
 
 ## 10. Checkpoints
 
-Signed checkpoints may summarize accepted per-device heads and materialized state commitment. They improve bootstrap and rollback detection but do not prove server completeness without cross-device/witness comparison.
+Signed checkpoints may summarize accepted per-device heads and materialized state commitment. They improve bootstrap and rollback detection but do not prove peer completeness without cross-device/witness comparison.
 
 ## 11. Tombstones
 
@@ -215,7 +215,7 @@ A parser checks every declared length, count, and multiplication before allocati
 - unknown/revoked device;
 - payload tamper/wrong epoch;
 - local crash before/after operation commit;
-- server replay/rollback/fork/omission;
+- peer replay/rollback/fork/omission;
 - deterministic conflict application;
 - cross-platform vectors.
 

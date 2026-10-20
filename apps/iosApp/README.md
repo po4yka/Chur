@@ -70,18 +70,7 @@ source deletion. Export to Photos restores all roles in one request and reports
 unsupported combinations. Export to Files retains all resources inside the
 complete portable bundle. It does not create separate resource files on iOS. See [`LIVE_PHOTO_BUNDLE_V1.md`](../../docs/format/LIVE_PHOTO_BUNDLE_V1.md).
 After a default import, the host requests read-write Photos access if the user
-chooses to review the deletion of the originals, `IOS.md` §15.4. iOS asks for
-local network access by itself when sync first connects to a server on the
-local network, usually at setup, and `NSLocalNetworkUsageDescription` is the
-reason it shows. Every sync run to such a server with the vault open (setup,
-Sync now, and the pull after an unlock) runs as a system prompt, so the alert
-does not lock the vault under it, `IOS.md` §21.2 and §27. A sharing publish or
-revocation does not run as a prompt, so the vault locks when one of them is the
-first connection to a local address, `IOS.md` §27.
-
-`Info.plist` contains the background task identifier, `fetch` mode, scene
-configuration, and Compose's required frame-duration setting. Keep these in
-`project.yml` so project regeneration preserves them.
+chooses to review the deletion of the originals, `IOS.md` §15.4. iOS asks for local network access during an explicit direct peer connection. The system prompt is bracketed by the foreground session, and leaving the app still locks the vault. There is no account, service configuration, sync task registration, or background fetch mode. `NSLocalNetworkUsageDescription` in `project.yml` explains direct device sync. Both apps must remain open; see [the P2P protocol](../../docs/sync/SYNC_PROTOCOL_V1.md).
 
 ## App icon
 

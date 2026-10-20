@@ -11,8 +11,7 @@ import dev.po4yka.chur.app.PublicShellSetting
 import dev.po4yka.chur.app.RepositorySyncBoundary
 import dev.po4yka.chur.core.platformkeys.DeviceSlotPolicy
 import dev.po4yka.chur.notes.FileNoteStore
-import dev.po4yka.chur.sync.FileSyncStateStore
-import dev.po4yka.chur.sync.SyncCoordinator
+import dev.po4yka.chur.sync.PeerSyncCoordinator
 import java.io.File
 import java.io.IOException
 
@@ -51,18 +50,8 @@ internal class ChurHost private constructor(context: Context) {
     /** The cover of `PLAINTEXT_LIFECYCLE.md` §1, over whichever window is attached. */
     val privacy = AndroidPrivacyCover { activity }
 
-    /**
-     * The sync engine, `SYNC_PROTOCOL_V1.md` §7.
-     *
-     * The worker of [ChurSync] reads it for its periodic cycle. Its state file
-     * holds the device's transport token, so it lives in `noBackupFilesDir`,
-     * which `docs/ANDROID.md` §13.4 names for exactly this kind of state and
-     * every backup rule excludes.
-     */
-    val sync = SyncCoordinator(
-        store = FileSyncStateStore(File(context.noBackupFilesDir, "chur-sync.json").path),
-        clock = { System.currentTimeMillis() },
-    )
+    /** Ephemeral foreground peer connections belong to this process session. */
+    val sync = PeerSyncCoordinator(clock = { System.currentTimeMillis() })
 
     /**
      * The per-vault device-slot policy of `KEY_SLOTS.md` §1.
@@ -158,7 +147,6 @@ internal class ChurHost private constructor(context: Context) {
         autoLockSetting = autoLockSetting,
         sync = sync,
         contentExtractor = dev.po4yka.chur.app.vault.AndroidContentTextExtractor(context.applicationContext),
-        syncReachable = { serverUrl -> !localNetworkBlocked(context, serverUrl) },
     )
 
     /** Explicit, foreground-only desktop control of the open session. */
@@ -179,6 +167,10 @@ internal class ChurHost private constructor(context: Context) {
     }
 
     init {
+        for (name in listOf("chur-sync.json", "chur-sync.json.tmp")) {
+            val obsolete = File(context.noBackupFilesDir, name)
+            if (obsolete.exists() && !obsolete.delete()) throw IOException("obsolete network state could not be removed")
+        }
         sync.bind(RepositorySyncBoundary(controller.vault))
     }
 
@@ -204,7 +196,7 @@ internal class ChurHost private constructor(context: Context) {
          * `DESIGN.md` §14 before a person can leave, so what outlives a
          * finished activity is a storage path and no plaintext.
          *
-         * The activity and WorkManager may call this on different threads.
+         * Android entry points may call this on different threads.
          */
         @Synchronized
         fun of(context: Context): ChurHost =

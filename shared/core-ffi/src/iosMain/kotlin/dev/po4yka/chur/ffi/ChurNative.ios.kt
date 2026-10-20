@@ -279,6 +279,12 @@ internal actual object ChurNative {
         }
     }
 
+    actual fun peerCall(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
+        writtenCall(outWritten) { written ->
+            dev.po4yka.chur.native.chur_peer_call(session.toULong(), input.pointer, length.toUInt(), destination.pointer, destination.size.toULong(), written)
+        }
+    }
+
     actual fun ownSyncOperations(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
         writtenCall(outWritten) { written ->
             dev.po4yka.chur.native.chur_own_sync_operations(session.toULong(), input.pointer, length.toUInt(), destination.pointer, destination.size.toULong(), written)

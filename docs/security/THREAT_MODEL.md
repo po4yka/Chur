@@ -39,7 +39,7 @@ KMP application orchestration
   ↓ versioned FFI
 Rust vault runtime
   ↓ encrypted catalog and object store
-Application filesystem / optional untrusted server
+Application filesystem / directly connected peer
 ```
 
 Trusted for their stated role:
@@ -53,7 +53,7 @@ Trusted for their stated role:
 Not trusted with plaintext or root keys:
 
 - public JSON, preferences, camera files, and ordinary platform backup;
-- media backup/sync server;
+- directly connected sync peer;
 - analytics, crash reporting, and log collection;
 - public-shell UI;
 - other applications and content providers;
@@ -80,7 +80,7 @@ Controls the physical device and can attempt offline extraction, reboot, backup 
 
 Obtains application files, databases, backups, or filesystem snapshots but not an unlocked in-process root secret.
 
-### A5 — Malicious or compromised server
+### A5 — Malicious or compromised peer
 
 Controls stored ciphertext, responses, ordering, replay, omission, timing, and availability. Does not know user secrets.
 
@@ -136,7 +136,7 @@ Attempts to compromise dependencies, build scripts, CI actions, signing, generat
 | T-012 | public shell reveals private state | separate stores/graph/navigation/cache | storage volume may remain observable |
 | T-013 | real and decoy share state | separate roots/catalogs/namespaces/aliases/sessions | filesystem forensics may infer extra data |
 | T-014 | stale media reader survives lock | session generation, in-place zeroization, cancellation | compromised process can bypass application logic |
-| T-015 | server replays old valid data | signed operation chains, local accepted heads | server omission across all devices is difficult to prove |
+| T-015 | peer replays old valid data | signed operation chains, local accepted heads | peer omission across devices is difficult to prove |
 | T-016 | recipient impersonation | verified identity keys, signed grants, human verification | user may verify wrong identity |
 | T-017 | revoked recipient retains access | collection epoch rotation and rewrap | old ciphertext/plaintext already obtained remains available |
 | T-018 | malicious codec input | platform sandboxing, minimal parsing, bounded resources | platform codec vulnerabilities |
@@ -191,7 +191,7 @@ Even with full encryption, observers may learn:
 - import order: committed container access and modification times are normalized to the Unix epoch at commit under [`../format/OBJECT_CONTAINER_V1.md`](../format/OBJECT_CONTAINER_V1.md) §14, but directory-entry order and inode allocation order still correlate with the order objects were imported, and that residual is accepted;
 - network timing and transfer volume;
 - existence of a large encrypted application data set;
-- device/account activity.
+- device activity.
 
 Padding, batching, and metadata normalization may reduce leakage later. Oblivious storage is out of scope.
 
@@ -201,9 +201,9 @@ Decoy Vault protects against ordinary and coercive interface inspection by prese
 
 Marketing and UI must not use “undetectable,” “hidden volume,” or equivalent claims without a separate proven construction.
 
-## 11. Server and sharing model
+## 11. Direct peer model
 
-The server is assumed malicious for confidentiality and content integrity. Clients authenticate and encrypt canonical operations. Availability, global omission, traffic analysis, and recipient deletion cannot be guaranteed cryptographically by the local client alone.
+Peers and their networks remain untrusted. Native signatures, causal validation, checkpoint floors, object-key authorization, and full container verification remain mandatory. Chur has no account, backend, relay, remote storage, or support-held recovery key. Availability, peer omission, traffic analysis, and deletion of previously received copies remain limited.
 
 ## 12. Verification mapping
 

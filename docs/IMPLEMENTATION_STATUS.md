@@ -5,6 +5,10 @@
 
 This inventory describes the current pre-release code. Product contracts own behavior and limits. [Roadmap](../ROADMAP.md) owns phase scope; [release gates](assurance/RELEASE_GATES.md) own approval. Code, a local test pass, CI, device acceptance, and an independent audit are separate evidence.
 
+## Network model update — 2026-10-20
+
+The previous service transport has been removed. There is no account or backend of any operator. Direct foreground P2P now replaces HTTP sync, saved endpoints/tokens, background tasks, and service-mediated sharing UI. The new path includes explicit pairing, one-use invitations, signed-history verification, addressed object keys, resumable originals, and two-way completion. See [ADR-0065](adr/0065-peer-only-sync-without-accounts.md). Device acceptance and independent review of the replacement remain unverified; dated older sync evidence does not cover it.
+
 ## Available features
 
 | Area | Current behavior and contract |
@@ -25,7 +29,7 @@ This inventory describes the current pre-release code. Product contracts own beh
 | Share to Chur | Android SEND/SEND_MULTIPLE and an iOS Share Extension receive files, media, text, and URLs; normal authentication and destination confirmation precede import. Links are stored as text. [Contract](product/INCOMING_SHARES.md) |
 | App icon actions | iOS Home Screen Quick Actions and Android dynamic App Shortcuts for Import, Search, Lock and hide, and New private note; normal authorization with one authentication for an explicit private command. [Contract](product/APP_ICON_ACTIONS.md) |
 | Lock and privacy | immediate, idle, background, and panic lock; private screenshot/recents policy; Android Quick Settings Lock Chur tile. [Discreet Mode](product/DISCREET_MODE.md#lock-behavior) |
-| Sync and collection sharing | self-hosted ciphertext relay, signed operations, rollback/fork detection, verified recipient devices, grants, and forward-only revocation. This is distinct from incoming OS Share and archive exchange. [Sync documents](README.md#sync-and-sharing) |
+| Device synchronization | Direct foreground P2P only; no account, backend, saved endpoint, or background transfer. [Protocol](sync/SYNC_PROTOCOL_V1.md) |
 
 ## Storage and transfer boundaries
 
@@ -40,7 +44,7 @@ This inventory describes the current pre-release code. Product contracts own beh
 
 | Domain | Current value |
 | --- | --- |
-| Catalog | v10 (`0x000a`); sequential authenticated migrations from supported older schemas |
+| Catalog | v15 (`0x000f`); sequential authenticated migrations from supported older schemas |
 | Native ABI | 2.24; query capabilities before opening the runtime |
 | Object container, descriptor, key-slot, backup | existing v1 formats; see the [constant registry](format/CANONICAL_ENCODING_V1.md#15-constant-registry) |
 | Android | minimum API 29, compile/target API 37; arm64-v8a and x86_64 |
@@ -49,6 +53,8 @@ This inventory describes the current pre-release code. Product contracts own beh
 The repository manifests, lockfiles, and wrapper own dependency versions. [Development](../DEVELOPMENT.md) gives the current module layout and checks. No public release or backward downgrade guarantee follows from this table.
 
 ## Evidence and remaining acceptance
+
+The peer-only replacement was checked locally on 2026-10-20: 805 Rust workspace tests and 427 Kotlin host tests passed without skips; workspace Clippy passed with warnings denied; Android debug and test APKs, both iOS Kotlin targets, and the complete iOS Simulator application built successfully. The P2P tests use two real encrypted vaults, JNI, and TCP to verify bidirectional originals and album edits, restart and reconnect, revocation, and socket closure on lock. Physical-device peer transfer and visual UI acceptance were not exercised in this session.
 
 The [five P2 corrections](assurance/P2_CORRECTIONS_2026-10-17.md) cover external MIME bounds, private-note Trash export, committed imports after decoder shutdown failure, iOS provider cancellation, and video frame ownership. The dated record lists their regression coverage and acceptance limits.
 

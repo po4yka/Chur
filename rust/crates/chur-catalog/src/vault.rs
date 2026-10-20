@@ -24,8 +24,8 @@ use chur_format::constants::{
     CATALOG_FORMAT_VERSION_V4, CATALOG_FORMAT_VERSION_V5, CATALOG_FORMAT_VERSION_V6,
     CATALOG_FORMAT_VERSION_V7, CATALOG_FORMAT_VERSION_V8, CATALOG_FORMAT_VERSION_V9,
     CATALOG_FORMAT_VERSION_V10, CATALOG_FORMAT_VERSION_V11, CATALOG_FORMAT_VERSION_V12,
-    CATALOG_FORMAT_VERSION_V13, CATALOG_FORMAT_VERSION_V14, DESCRIPTOR_VERSION_V1, SlotType,
-    VaultState,
+    CATALOG_FORMAT_VERSION_V13, CATALOG_FORMAT_VERSION_V14, CATALOG_FORMAT_VERSION_V15,
+    DESCRIPTOR_VERSION_V1, SlotType, VaultState,
 };
 use chur_format::descriptor::{
     CatalogDescriptor, KeySlotDescriptor, MigrationDescriptor, ObjectStoreDescriptor,
@@ -328,7 +328,7 @@ pub fn create_with_params(
         descriptor_generation: 0,
         state: VaultState::Initializing,
         catalog: CatalogDescriptor {
-            catalog_format_version: CATALOG_FORMAT_VERSION_V14,
+            catalog_format_version: CATALOG_FORMAT_VERSION_V15,
             opaque_catalog_path_id: catalog_path_id,
             catalog_generation,
             catalog_header_commitment: header_commitment,
@@ -801,7 +801,10 @@ fn finish_unlock(
         if descriptor.state == VaultState::Active {
             let (to, migration_generation) =
                 match (descriptor.catalog.catalog_format_version, version) {
-                    (CATALOG_FORMAT_VERSION_V14, CATALOG_FORMAT_VERSION_V14) => break,
+                    (CATALOG_FORMAT_VERSION_V15, CATALOG_FORMAT_VERSION_V15) => break,
+                    (CATALOG_FORMAT_VERSION_V14, CATALOG_FORMAT_VERSION_V14) => {
+                        (CATALOG_FORMAT_VERSION_V15, 14)
+                    }
                     (CATALOG_FORMAT_VERSION_V13, CATALOG_FORMAT_VERSION_V13) => {
                         (CATALOG_FORMAT_VERSION_V14, 13)
                     }
@@ -896,6 +899,9 @@ fn finish_unlock(
                 (CATALOG_FORMAT_VERSION_V11, CATALOG_FORMAT_VERSION_V12) => {
                     schema::migrate_v11_to_v12(&mut catalog)?;
                 }
+                (CATALOG_FORMAT_VERSION_V14, CATALOG_FORMAT_VERSION_V15) => {
+                    schema::migrate_v14_to_v15(&mut catalog)?;
+                }
                 (CATALOG_FORMAT_VERSION_V13, CATALOG_FORMAT_VERSION_V14) => {
                     schema::migrate_v13_to_v14(&mut catalog)?;
                 }
@@ -927,8 +933,8 @@ fn finish_unlock(
     let version = schema::open_at_current_version(&mut catalog, now_ms)?;
     ensure!(
         descriptor.state == VaultState::Active
-            && descriptor.catalog.catalog_format_version == CATALOG_FORMAT_VERSION_V14
-            && version == CATALOG_FORMAT_VERSION_V14,
+            && descriptor.catalog.catalog_format_version == CATALOG_FORMAT_VERSION_V15
+            && version == CATALOG_FORMAT_VERSION_V15,
         CatalogCorrupt,
         "the catalog format version disagrees with the descriptor"
     );
@@ -1019,6 +1025,7 @@ fn validate_catalog_migration(descriptor: &VaultDescriptor) -> Result<MigrationD
                     | (CATALOG_FORMAT_VERSION_V11, CATALOG_FORMAT_VERSION_V12, 11)
                     | (CATALOG_FORMAT_VERSION_V12, CATALOG_FORMAT_VERSION_V13, 12)
                     | (CATALOG_FORMAT_VERSION_V13, CATALOG_FORMAT_VERSION_V14, 13)
+                    | (CATALOG_FORMAT_VERSION_V14, CATALOG_FORMAT_VERSION_V15, 14)
             ),
         MigrationRequired,
         "the descriptor names an unsupported migration"
@@ -1733,7 +1740,7 @@ pub fn install_descriptor(
 ///
 /// The restore namespace is not openable yet, so it does not need an
 /// intermediate installed `MIGRATING` descriptor. The caller must update the
-/// unpublished descriptor to catalog v14 before making it active when this
+/// unpublished descriptor to catalog v15 before making it active when this
 /// function returns `true`.
 pub fn prepare_restored_catalog(
     catalog: &mut CatalogDb,
@@ -1761,6 +1768,7 @@ pub fn prepare_restored_catalog(
             schema::migrate_v11_to_v12(catalog)?;
             schema::migrate_v12_to_v13(catalog)?;
             schema::migrate_v13_to_v14(catalog)?;
+            schema::migrate_v14_to_v15(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
@@ -1777,6 +1785,7 @@ pub fn prepare_restored_catalog(
             schema::migrate_v11_to_v12(catalog)?;
             schema::migrate_v12_to_v13(catalog)?;
             schema::migrate_v13_to_v14(catalog)?;
+            schema::migrate_v14_to_v15(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
@@ -1792,6 +1801,7 @@ pub fn prepare_restored_catalog(
             schema::migrate_v11_to_v12(catalog)?;
             schema::migrate_v12_to_v13(catalog)?;
             schema::migrate_v13_to_v14(catalog)?;
+            schema::migrate_v14_to_v15(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
@@ -1806,6 +1816,7 @@ pub fn prepare_restored_catalog(
             schema::migrate_v11_to_v12(catalog)?;
             schema::migrate_v12_to_v13(catalog)?;
             schema::migrate_v13_to_v14(catalog)?;
+            schema::migrate_v14_to_v15(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
@@ -1819,6 +1830,7 @@ pub fn prepare_restored_catalog(
             schema::migrate_v11_to_v12(catalog)?;
             schema::migrate_v12_to_v13(catalog)?;
             schema::migrate_v13_to_v14(catalog)?;
+            schema::migrate_v14_to_v15(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
@@ -1831,6 +1843,7 @@ pub fn prepare_restored_catalog(
             schema::migrate_v11_to_v12(catalog)?;
             schema::migrate_v12_to_v13(catalog)?;
             schema::migrate_v13_to_v14(catalog)?;
+            schema::migrate_v14_to_v15(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
@@ -1842,6 +1855,7 @@ pub fn prepare_restored_catalog(
             schema::migrate_v11_to_v12(catalog)?;
             schema::migrate_v12_to_v13(catalog)?;
             schema::migrate_v13_to_v14(catalog)?;
+            schema::migrate_v14_to_v15(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
@@ -1852,6 +1866,7 @@ pub fn prepare_restored_catalog(
             schema::migrate_v11_to_v12(catalog)?;
             schema::migrate_v12_to_v13(catalog)?;
             schema::migrate_v13_to_v14(catalog)?;
+            schema::migrate_v14_to_v15(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
@@ -1861,6 +1876,7 @@ pub fn prepare_restored_catalog(
             schema::migrate_v11_to_v12(catalog)?;
             schema::migrate_v12_to_v13(catalog)?;
             schema::migrate_v13_to_v14(catalog)?;
+            schema::migrate_v14_to_v15(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
@@ -1869,6 +1885,7 @@ pub fn prepare_restored_catalog(
             schema::migrate_v11_to_v12(catalog)?;
             schema::migrate_v12_to_v13(catalog)?;
             schema::migrate_v13_to_v14(catalog)?;
+            schema::migrate_v14_to_v15(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
@@ -1876,21 +1893,29 @@ pub fn prepare_restored_catalog(
             schema::migrate_v11_to_v12(catalog)?;
             schema::migrate_v12_to_v13(catalog)?;
             schema::migrate_v13_to_v14(catalog)?;
+            schema::migrate_v14_to_v15(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
         (CATALOG_FORMAT_VERSION_V12, CATALOG_FORMAT_VERSION_V12) => {
             schema::migrate_v12_to_v13(catalog)?;
             schema::migrate_v13_to_v14(catalog)?;
+            schema::migrate_v14_to_v15(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
         (CATALOG_FORMAT_VERSION_V13, CATALOG_FORMAT_VERSION_V13) => {
             schema::migrate_v13_to_v14(catalog)?;
+            schema::migrate_v14_to_v15(catalog)?;
             catalog.checkpoint()?;
             Ok(true)
         }
-        (CATALOG_FORMAT_VERSION_V14, CATALOG_FORMAT_VERSION_V14) => Ok(false),
+        (CATALOG_FORMAT_VERSION_V14, CATALOG_FORMAT_VERSION_V14) => {
+            schema::migrate_v14_to_v15(catalog)?;
+            catalog.checkpoint()?;
+            Ok(true)
+        }
+        (CATALOG_FORMAT_VERSION_V15, CATALOG_FORMAT_VERSION_V15) => Ok(false),
         _ => bail!(
             MigrationRequired,
             "the restored descriptor and catalog versions are unsupported"
@@ -2367,14 +2392,14 @@ mod tests {
         let reopened = unlock_with_password(&root_dir, PASSWORD, 2).expect("migrate and unlock");
         assert_eq!(
             reopened.descriptor.catalog.catalog_format_version,
-            CATALOG_FORMAT_VERSION_V14
+            CATALOG_FORMAT_VERSION_V15
         );
         assert_eq!(reopened.descriptor.state, VaultState::Active);
         assert!(reopened.descriptor.migration.is_none());
         assert_eq!(
             reopened.descriptor.descriptor_generation,
             source.descriptor_generation
-                + 2 * u64::from(CATALOG_FORMAT_VERSION_V14 - source.catalog.catalog_format_version)
+                + 2 * u64::from(CATALOG_FORMAT_VERSION_V15 - source.catalog.catalog_format_version)
         );
     }
 
@@ -2403,14 +2428,14 @@ mod tests {
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V14
+                CATALOG_FORMAT_VERSION_V15
             );
             assert!(reopened.descriptor.migration.is_none());
             assert_eq!(
                 reopened.descriptor.descriptor_generation,
                 migrating.descriptor_generation
                     + 1
-                    + 2 * u64::from(CATALOG_FORMAT_VERSION_V14 - CATALOG_FORMAT_VERSION_V2)
+                    + 2 * u64::from(CATALOG_FORMAT_VERSION_V15 - CATALOG_FORMAT_VERSION_V2)
             );
         }
     }
@@ -2439,14 +2464,14 @@ mod tests {
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V14
+                CATALOG_FORMAT_VERSION_V15
             );
             assert!(reopened.descriptor.migration.is_none());
             assert_eq!(
                 reopened.descriptor.descriptor_generation,
                 migrating.descriptor_generation
                     + 1
-                    + 2 * u64::from(CATALOG_FORMAT_VERSION_V14 - CATALOG_FORMAT_VERSION_V3)
+                    + 2 * u64::from(CATALOG_FORMAT_VERSION_V15 - CATALOG_FORMAT_VERSION_V3)
             );
         }
     }
@@ -2475,14 +2500,14 @@ mod tests {
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V14
+                CATALOG_FORMAT_VERSION_V15
             );
             assert!(reopened.descriptor.migration.is_none());
             assert_eq!(
                 reopened.descriptor.descriptor_generation,
                 migrating.descriptor_generation
                     + 1
-                    + 2 * u64::from(CATALOG_FORMAT_VERSION_V14 - CATALOG_FORMAT_VERSION_V4)
+                    + 2 * u64::from(CATALOG_FORMAT_VERSION_V15 - CATALOG_FORMAT_VERSION_V4)
             );
         }
     }
@@ -2511,14 +2536,14 @@ mod tests {
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V14
+                CATALOG_FORMAT_VERSION_V15
             );
             assert!(reopened.descriptor.migration.is_none());
             assert_eq!(
                 reopened.descriptor.descriptor_generation,
                 migrating.descriptor_generation
                     + 1
-                    + 2 * u64::from(CATALOG_FORMAT_VERSION_V14 - CATALOG_FORMAT_VERSION_V6)
+                    + 2 * u64::from(CATALOG_FORMAT_VERSION_V15 - CATALOG_FORMAT_VERSION_V6)
             );
         }
     }
@@ -3045,7 +3070,7 @@ mod tests {
             unlock_with_password(&root_dir, PASSWORD, 1_700_000_001_000).expect("v8 migration");
         assert_eq!(
             reopened.descriptor.catalog.catalog_format_version,
-            CATALOG_FORMAT_VERSION_V14
+            CATALOG_FORMAT_VERSION_V15
         );
         let note = crate::notes::save(
             reopened.catalog().expect("catalog"),
@@ -3097,7 +3122,7 @@ mod tests {
                 unlock_with_password(&root_dir, PASSWORD, 1_700_000_001_000).expect("resume");
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V14
+                CATALOG_FORMAT_VERSION_V15
             );
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert!(reopened.descriptor.migration.is_none());
@@ -3151,7 +3176,7 @@ mod tests {
                 unlock_with_password(&root_dir, PASSWORD, 1_700_000_001_000).expect("resume");
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V14
+                CATALOG_FORMAT_VERSION_V15
             );
             assert_eq!(
                 crate::notes::get(reopened.catalog_ref().expect("catalog"), &note.id)
@@ -3227,7 +3252,7 @@ mod tests {
                 unlock_with_password(&root_dir, PASSWORD, 1_700_000_001_000).expect("resume");
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V14
+                CATALOG_FORMAT_VERSION_V15
             );
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert!(reopened.descriptor.migration.is_none());
@@ -3275,7 +3300,7 @@ mod tests {
                 .expect("resume note format migration");
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V14
+                CATALOG_FORMAT_VERSION_V15
             );
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert!(reopened.descriptor.migration.is_none());
@@ -3320,7 +3345,7 @@ mod tests {
                 .expect("resume album intent migration");
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V14
+                CATALOG_FORMAT_VERSION_V15
             );
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert!(reopened.descriptor.migration.is_none());
@@ -3339,7 +3364,7 @@ mod tests {
     }
 
     #[test]
-    fn restore_prepares_v10_and_preserves_current_v14_without_an_implicit_future_downgrade() {
+    fn restore_prepares_v10_and_preserves_current_v15_without_an_implicit_future_downgrade() {
         let root_dir = scratch();
         let mut session = make(&root_dir);
         let descriptor = session.descriptor.clone();
@@ -3365,13 +3390,13 @@ mod tests {
         assert_eq!(
             schema::recorded_version(session.catalog().expect("catalog").connection())
                 .expect("version"),
-            Some(CATALOG_FORMAT_VERSION_V14)
+            Some(CATALOG_FORMAT_VERSION_V15)
         );
         session
             .catalog()
             .expect("catalog")
             .connection()
-            .execute("UPDATE vault_state SET catalog_format_version = 15", [])
+            .execute("UPDATE vault_state SET catalog_format_version = 16", [])
             .expect("future catalog fixture");
         assert_eq!(
             rejection(prepare_restored_catalog(
@@ -3383,7 +3408,7 @@ mod tests {
         assert_eq!(
             schema::recorded_version(session.catalog().expect("catalog").connection())
                 .expect("version"),
-            Some(15)
+            Some(16)
         );
     }
 
@@ -3411,7 +3436,7 @@ mod tests {
                 .expect("resume content migration");
             assert_eq!(
                 reopened.descriptor.catalog.catalog_format_version,
-                CATALOG_FORMAT_VERSION_V14
+                CATALOG_FORMAT_VERSION_V15
             );
             assert_eq!(reopened.descriptor.state, VaultState::Active);
             assert!(reopened.descriptor.migration.is_none());

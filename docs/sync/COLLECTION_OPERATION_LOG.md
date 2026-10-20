@@ -58,9 +58,9 @@ An observed head names the highest accepted sequence for another active collecti
 
 The issuer pair in a head must identify an active source device or an active collection recipient. `READ` recipients cannot author. `CONTRIBUTE` and `MANAGE_MEMBERS` recipients can author the allowed content kinds. Only a source-vault device can author `RewrapObjectKey`.
 
-## 5. Server routing
+## 5. Peer routing
 
-The server stores the record under its clear `key_selector`. It authenticates the transport caller as the issuer vault and checks current public membership state. A recipient can fetch a selector only while it has a current grant for that epoch. The server does not decrypt the payload and cannot choose a conflict winner.
+The peer stores the record under its clear `key_selector`. It authenticates the transport caller as the issuer vault and checks current public membership state. A recipient can fetch a selector only while it has a current grant for that epoch. The peer does not decrypt the payload and cannot choose a conflict winner.
 
 The selector reveals that records use one key epoch. It does not reveal the collection identifier or action kind. Grant and membership inboxes remain the authorization source for mapping a recipient to the selector.
 

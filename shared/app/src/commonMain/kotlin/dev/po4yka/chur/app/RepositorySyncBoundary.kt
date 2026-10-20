@@ -15,12 +15,13 @@ import dev.po4yka.chur.vault.VaultRepository
  *
  * `docs/ARCHITECTURE.md` §9 puts the handles in the repository and nothing
  * above it, so the engine's boundary is this adapter rather than the engine
- * holding a `Long`. Every call here is safe in either lock state by contract:
- * staging runs locked, and the two session calls answer `null` locked.
+ * holding a `Long`. Peer networking requires the current unlocked session.
+ * All canonical record verification and ciphertext activation remain native.
  */
 class RepositorySyncBoundary(
     private val repository: VaultRepository,
 ) : SyncVaultBoundary {
+    override suspend fun peerCall(input: ByteArray): ByteArray = repository.peerCall(input)
     override suspend fun identity(): SharingIdentity? = repository.syncIdentity()
 
     override suspend fun acceptedHeads(): List<dev.po4yka.chur.sync.DeviceCursor>? =
@@ -32,8 +33,8 @@ class RepositorySyncBoundary(
     override suspend fun ownSyncAuthor(source: SharedSourceObject): SharedSourceObject? = repository.ownSyncAuthor(source)
     override suspend fun prepareDevicePairing(): dev.po4yka.chur.ffi.DevicePairingRequest? = repository.prepareDevicePairing()
     override suspend fun inspectDevicePairing(request: ByteArray): dev.po4yka.chur.ffi.DevicePairingPreview? = repository.inspectDevicePairing(request)
-    override suspend fun approveDevicePairing(request: ByteArray, serverUrl: String, token: ByteArray, nowMs: Long): dev.po4yka.chur.ffi.PreparedDevicePairing? =
-        repository.approveDevicePairing(request, serverUrl, token, nowMs)
+    override suspend fun approveDevicePairing(request: ByteArray, nowMs: Long): dev.po4yka.chur.ffi.PreparedDevicePairing? =
+        repository.approveDevicePairing(request, nowMs)
     override suspend fun startDevicePairing(approval: ByteArray): dev.po4yka.chur.ffi.DevicePairingCredentials? = repository.startDevicePairing(approval)
     override suspend fun finishDevicePairing(nowMs: Long): ByteArray? = repository.finishDevicePairing(nowMs)
     override suspend fun currentDeviceCheckpoint(nowMs: Long): ByteArray? = repository.currentDeviceCheckpoint(nowMs)
@@ -51,16 +52,6 @@ class RepositorySyncBoundary(
 
     override suspend fun forkState(): SyncForkState? = repository.syncForkState()
 
-    override suspend fun acknowledgeForks(): Boolean = repository.acknowledgeSyncForks()
-
-    override suspend fun acceptSharePackage(packageBytes: ByteArray): Boolean =
-        repository.acceptSharePackage(packageBytes)
-
-    override suspend fun receiveSharedOperations(
-        packageBytes: ByteArray,
-        operations: List<ByteArray>,
-    ): SharedReceivePlan? = repository.receiveSharedOperations(packageBytes, operations)
-
     override suspend fun objectKeyRequest(collectionId: ByteArray, objectId: ByteArray): ByteArray? =
         repository.objectKeyRequest(collectionId, objectId)
 
@@ -68,9 +59,6 @@ class RepositorySyncBoundary(
 
     override suspend fun objectKeyAccept(packageBytes: ByteArray, grant: ByteArray): Boolean =
         repository.objectKeyAccept(packageBytes, grant)
-
-    override suspend fun outboundCollectionOperations(after: ULong): List<dev.po4yka.chur.ffi.CollectionOutbound>? =
-        repository.outboundCollectionOperations(after)
 
     override suspend fun sharedDownloadOffset(collectionId: ByteArray, objectId: ByteArray): ULong? =
         repository.sharedDownloadOffset(collectionId, objectId)
@@ -88,13 +76,10 @@ class RepositorySyncBoundary(
         nowMs: Long,
     ): Boolean = repository.finishSharedDownload(collectionId, objectId, nowMs)
 
-    override suspend fun sourceCollectionId(): ByteArray? = repository.sourceCollectionId()
-
     override suspend fun sourcePage(collectionId: ByteArray, afterObjectId: ByteArray): List<SharedSourceObject>? =
         repository.sourcePage(collectionId, afterObjectId)
 
     override suspend fun sourceRange(objectId: ByteArray, offset: ULong, maxBytes: Int): SharedSourceRange? =
         repository.sourceRange(objectId, offset, maxBytes)
 
-    override suspend fun sourceAuthor(source: SharedSourceObject): SharedSourceObject? = repository.sourceAuthor(source)
 }

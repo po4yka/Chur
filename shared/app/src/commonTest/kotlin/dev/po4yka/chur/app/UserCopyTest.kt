@@ -64,18 +64,13 @@ class UserCopyTest {
     }
 
     @Test
-    fun a_sync_refusal_names_the_bootstrap_secret_and_not_an_unlock() {
-        // `SERVER_OPERATOR.md` answers every failed token check, a wrong
-        // bootstrap secret included, with `AUTHENTICATION_FAILED`.
-        val refusals = setOf(ChurStatus.AUTHENTICATION_FAILED, ChurStatus.PERMISSION_DENIED)
-        for (status in refusals) {
-            val copy = syncCopy(status)
-            assertNotEquals(userCopy(status), copy, "$status reads as a failed unlock")
-            assertTrue("bootstrap secret" in copy, "$status does not name the secret: $copy")
-            assertFalse(codeName.containsMatchIn(copy), "$status reads as a code: $copy")
+    fun peer_authentication_failure_names_the_device_and_not_the_local_password() {
+        for (status in listOf(ChurStatus.AUTHENTICATION_FAILED, ChurStatus.PERMISSION_DENIED)) {
+            val text = peerCopy(status).lowercase()
+            assertTrue("device" in text && "fingerprint" in text)
+            assertFalse("password" in text || "bootstrap" in text)
         }
-        for (status in ChurStatus.entries - refusals) {
-            assertEquals(userCopy(status), syncCopy(status))
-        }
+        assertTrue("direct network" in peerCopy(ChurStatus.NETWORK_FAILURE))
     }
+
 }

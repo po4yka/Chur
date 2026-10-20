@@ -3876,3 +3876,43 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_contentIndexClear<'local
         finish_written(env, status, &out_written, written)
     })
 }
+
+/// Runs one bounded own-device sync control call.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_peerCall<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    input: JByteBuffer<'local>,
+    length: jint,
+    destination: JByteBuffer<'local>,
+    out_written: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((input_address, input_capacity)) = direct_buffer(env, &input) else {
+            return INVALID_INPUT;
+        };
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        let Ok(length) = u32::try_from(length) else {
+            return INVALID_INPUT;
+        };
+        if length as usize > input_capacity {
+            return INVALID_INPUT;
+        }
+        let mut written = 0usize;
+        // SAFETY: both live direct buffers cover their checked lengths, and the output local is writable.
+        let status = unsafe {
+            chur_ffi::peer::chur_peer_call(
+                handle_of(session),
+                input_address,
+                length,
+                address,
+                capacity,
+                &mut written,
+            )
+        };
+        finish_written(env, status, &out_written, written)
+    })
+}

@@ -269,6 +269,9 @@ internal actual object ChurNative {
     actual fun ownSyncCollections(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int =
         ChurJni.ownSyncCollections(session, input.buffer, length, destination.buffer, outWritten)
 
+    actual fun peerCall(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int =
+        ChurJni.peerCall(session, input.buffer, length, destination.buffer, outWritten)
+
     actual fun ownSyncOperations(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int =
         ChurJni.ownSyncOperations(session, input.buffer, length, destination.buffer, outWritten)
 

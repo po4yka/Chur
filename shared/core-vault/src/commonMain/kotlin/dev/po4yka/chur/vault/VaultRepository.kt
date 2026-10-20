@@ -853,6 +853,11 @@ class VaultRepository(
         if (session == 0L) null else ChurVault.ownSyncAuthor(session, source)
     }
 
+    suspend fun peerCall(input: ByteArray): ByteArray = mutex.withLock {
+        if (session == 0L) throw dev.po4yka.chur.ffi.ChurFailure(ChurStatus.VAULT_LOCKED, "peer requires an unlocked vault")
+        ChurVault.peerCall(session, input)
+    }
+
     suspend fun prepareDevicePairing(): dev.po4yka.chur.ffi.DevicePairingRequest? = mutex.withLock {
         if (session == 0L) null else ChurVault.prepareDevicePairing(session)
     }
@@ -861,8 +866,8 @@ class VaultRepository(
         if (session == 0L) null else ChurVault.inspectDevicePairing(session, request)
     }
 
-    suspend fun approveDevicePairing(request: ByteArray, serverUrl: String, token: ByteArray, nowMs: Long): dev.po4yka.chur.ffi.PreparedDevicePairing? = mutex.withLock {
-        if (session == 0L) null else ChurVault.approveDevicePairing(session, request, serverUrl, token, nowMs)
+    suspend fun approveDevicePairing(request: ByteArray, nowMs: Long): dev.po4yka.chur.ffi.PreparedDevicePairing? = mutex.withLock {
+        if (session == 0L) null else ChurVault.approveDevicePairing(session, request, nowMs)
     }
 
     suspend fun startDevicePairing(approval: ByteArray): dev.po4yka.chur.ffi.DevicePairingCredentials? = mutex.withLock {
@@ -912,11 +917,8 @@ class VaultRepository(
     }
 
     /**
-     * The identity this vault presents to a sync server, or `null` while
-     * locked.
-     *
-     * The engine reads it once, at bootstrap, because §6 of the sync protocol
-     * enrolls exactly the identity the open session owns and nothing else.
+     * The identity this unlocked vault presents to an enrolled peer, or `null`
+     * while locked. Native membership verification governs enrollment.
      */
     suspend fun syncIdentity(): SharingIdentity? = mutex.withLock {
         if (session == 0L) null else ChurVault.sharingIdentity(session)

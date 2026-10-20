@@ -20,10 +20,8 @@ import dev.po4yka.chur.ffi.fromHex
 import dev.po4yka.chur.ffi.toHex
 import dev.po4yka.chur.ffi.QueryScope
 import dev.po4yka.chur.ffi.QuerySort
-import dev.po4yka.chur.sync.SyncCoordinator
-import dev.po4yka.chur.sync.SyncStatus
-import dev.po4yka.chur.sync.SyncTransportFailure
-import dev.po4yka.chur.sync.isLocalSyncEndpoint
+import dev.po4yka.chur.sync.PeerSyncCoordinator
+import dev.po4yka.chur.sync.PeerSyncStatus
 import dev.po4yka.chur.ffi.SlotSummary
 import dev.po4yka.chur.ffi.StreamKind
 import dev.po4yka.chur.ffi.TagSummary
@@ -101,26 +99,8 @@ class ChurController(
      * section reads a `null` status and renders nothing, so an unbound
      * controller is unchanged rather than half-configured.
      */
-    private val sync: SyncCoordinator? = null,
-    /**
-     * Whether this device may connect to [serverUrl] now.
-     *
-     * An unlock skips its pull when it may not. On Android 17 a local server
-     * without the grant only times out, and a pull through its backoff kept
-     * "Sync now", whose tap asks for the grant, disabled for about 90 s,
-     * `ANDROID.md` §24. A host with no such check keeps the default.
-     */
-    private val syncReachable: suspend (serverUrl: String) -> Boolean = { true },
-    /**
-     * Whether the platform asks for local network access by itself as a
-     * connection to a local address goes out, which iOS does, `IOS.md` §27.
-     *
-     * The app can neither ask first nor tell which connection is the first,
-     * so every run to a local server that this controller starts with the
-     * vault open, the setup's bootstrap, "Sync now" and the pull after an
-     * unlock, runs under [underLocalNetworkAlert]. Android asks before the
-     * action, `ANDROID.md` §24, and keeps the default.
-     */
+    private val sync: PeerSyncCoordinator? = null,
+    /** iOS presents its local network prompt during the foreground peer connection. */
     private val localNetworkAlert: Boolean = false,
     private val contentExtractor: dev.po4yka.chur.app.vault.ContentTextExtractor? = null,
 ) {
@@ -144,8 +124,8 @@ class ChurController(
      * The parent of the sync runs the open session started: the unlock pull
      * and "Sync now".
      *
-     * A run holds the engine through its backoff, about 90 s against a server
-     * that does not answer, and shows this session's server on every retry.
+     * A run holds the engine through its backoff, about 90 s against a peer
+     * that does not answer, and shows this session's peer on every retry.
      * [clearPrivateProjections] cancels it, so the next identity's unlock does
      * not wait behind it or see what it showed, `DECOY_VAULT.md` §6.
      */
@@ -196,12 +176,8 @@ class ChurController(
     private var currentQuery = ObjectQuery()
     private var queryRevision = 0L
     private val _slots = MutableStateFlow<List<SlotSummary>>(emptyList())
-    private val _sharingIdentity = MutableStateFlow<SharingIdentity?>(null)
-    private val _sharingOverview = MutableStateFlow<SharingOverview?>(null)
-    private val _sharingRecipient = MutableStateFlow<SharingRecipient?>(null)
     private val _devicePairing = MutableStateFlow(dev.po4yka.chur.app.vault.DevicePairingUiState())
     private val _pairingApproval = MutableStateFlow<ByteArray?>(null)
-    private var recipientEnrollment: ByteArray? = null
     private val _notice = MutableStateFlow<Notice?>(null)
     private val _formError = MutableStateFlow<String?>(null)
     private var noticeCount = 0L
@@ -300,7 +276,7 @@ class ChurController(
      * when [onBackground] last ran.
      *
      * A bracket can end before the application enters the background: a
-     * local sync run to a server that is away ends while the user looks at
+     * local peer connection ends while the user looks at
      * the app switcher. A user who then leaves still left, so
      * [enteredBackground] locks for that bracket too, `DESIGN.md` §14.4.
      */
@@ -349,9 +325,6 @@ class ChurController(
     /** The key slots. */
     val slots: StateFlow<List<SlotSummary>> = _slots.asStateFlow()
 
-    val sharingIdentity: StateFlow<SharingIdentity?> = _sharingIdentity.asStateFlow()
-    val sharingOverview: StateFlow<SharingOverview?> = _sharingOverview.asStateFlow()
-    val sharingRecipient: StateFlow<SharingRecipient?> = _sharingRecipient.asStateFlow()
     val devicePairing: StateFlow<dev.po4yka.chur.app.vault.DevicePairingUiState> = _devicePairing.asStateFlow()
     val pairingApproval: StateFlow<ByteArray?> = _pairingApproval.asStateFlow()
 
@@ -359,7 +332,7 @@ class ChurController(
      * The outcome of the last action on the vault, shown once as the snackbar
      * of `DESIGN.md` §26, or a security notice until the user dismisses it.
      *
-     * Its text is [userCopy], [syncCopy], a count, or a fixed line, so it
+     * Its text is [userCopy], a count, or a fixed line, so it
      * carries no private value, `ERROR_MODEL.md` "Safe metadata". Only the
      * vault shell and the viewer read it. A route change clears it, so an
      * outcome never reaches another screen: not the public shell, which must
@@ -394,9 +367,9 @@ class ChurController(
      *
      * A settings surface renders the section from this: `null` means the host
      * bound no engine, so the section is absent rather than empty, and a
-     * non-null status is already bounded by `SyncStatus`'s contract.
+     * non-null status is already bounded by `PeerSyncStatus`'s contract.
      */
-    val syncStatus: StateFlow<SyncStatus?> = sync?.status ?: MutableStateFlow(null)
+    val syncStatus: StateFlow<PeerSyncStatus?> = sync?.status ?: MutableStateFlow(null)
 
     /**
      * Whether the unlock screen may offer the device slot.
@@ -1191,10 +1164,8 @@ class ChurController(
      * prompt ends and the vault locks at once, `DESIGN.md` §14.4 and
      * `PLAINTEXT_LIFECYCLE.md` §7. So does a prompt that held the lock off
      * when the application left the foreground and ended before this call,
-     * [promptHeldLock]; a picker still open keeps the lock off, as always. A
-     * setup's sync bootstrap behind a prompt goes on, since it needs no
-     * session after it read the identity; a Sync now or unlock pull behind
-     * one ends with the session, `IOS.md` §27.
+     * [promptHeldLock]; a picker still open keeps the lock off, as always.
+     * Foreground peer connections end with the unlocked session, `IOS.md` §27.
      */
     fun enteredBackground() {
         if (prompts == 0 && !promptHeldLock) return
@@ -1606,171 +1577,67 @@ class ChurController(
         say("${if (move) "Moved" else "Added"} ${items(count)} to the album.")
     }
 
-    // -----------------------------------------------------------------------
-    // Sync, `docs/sync/SYNC_PROTOCOL_V1.md`
-    // -----------------------------------------------------------------------
+    // Foreground-only peer synchronization. Network state never enters durable storage.
+    fun listenForPeer(address: String) = peerAction { it.listen(address) }
+    fun connectToPeer(invitation: String) = peerAction { it.connect(invitation) }
+    fun stopPeerSync() { sessionSync.cancelChildren() }
 
-    /**
-     * Connects the open vault to the server the user named, §6.
-     *
-     * The secret is the operator bootstrap secret and lives only for this
-     * call. A refusal lands in [notice] the way every other boundary failure
-     * does, and an engine that was already configured keeps the status it
-     * showed before.
-     *
-     * A bootstrap to a local server on iOS runs under the local network alert,
-     * [underLocalNetworkAlert], and when it gets no answer the notice says
-     * where to allow access. Android asks before this call, `ANDROID.md` §24,
-     * and shows nothing during it.
-     */
-    fun configureSync(serverUrl: String, bootstrapSecret: String) = guarded {
-        underLocalNetworkAlert(serverUrl) { local ->
-            try {
-                sync?.configure(serverUrl, bootstrapSecret)
-            } catch (failure: SyncTransportFailure) {
-                if (!local || failure.status != ChurStatus.NETWORK_FAILURE) throw failure
-                say(LOCAL_NETWORK_REFUSED)
-            }
-        }
-    }
-
-    /**
-     * Runs one sync cycle now, which the settings entry offers.
-     *
-     * A run to a local server on iOS runs under the local network alert, as
-     * the setup does, and when it gets no answer the notice says where to
-     * allow access, `IOS.md` §27. Android asks before this call.
-     */
-    fun syncNow() = guarded(context = sessionSync) {
+    private fun peerAction(action: suspend (PeerSyncCoordinator) -> Unit) = guarded(copy = ::peerCopy, context = sessionSync) {
         val engine = sync ?: return@guarded
         val generation = (repository.state.value as? VaultState.Unlocked)?.generation ?: return@guarded
-        withSyncCatalogRefresh(generation) {
-            underLocalNetworkAlert(engine.status.value.serverUrl) { local ->
-                if (!engine.syncNow() && local && engine.status.value.failure == ChurStatus.NETWORK_FAILURE) {
-                    say(LOCAL_NETWORK_REFUSED)
-                }
-            }
-        }
+        val prompt = if (localNetworkAlert) beginPrompt() else null
+        try { withSyncCatalogRefresh(generation) { withContext(Dispatchers.Default) { action(engine) } } }
+        finally { prompt?.let(::endPrompt) }
     }
 
-    /** A failed run can already have committed incoming records. Publish them only in its session. */
     internal suspend fun <T> withSyncCatalogRefresh(generation: Long, operation: suspend () -> T): T =
-        try {
-            operation()
-        } finally {
-            refreshAlbums(generation)
-            reload(generation)
-        }
-
-    /**
-     * Runs [run], a connection to [serverUrl], inside a [beginPrompt] bracket
-     * when the platform may show its local network alert for that server,
-     * [localNetworkAlert].
-     *
-     * The alert makes the scene resign active, and without the bracket the
-     * background lock would close the vault under the run, just after an
-     * unlock or a tap. The bracket lasts as long as [run], since the alert
-     * gives no signal of its own, and a user who leaves the app meanwhile ends
-     * it and is locked out at once, [enteredBackground]. [run] learns whether
-     * the bracket is up: iOS gives the app no answer to read, so a local server
-     * that does not answer may be a refusal.
-     */
-    private suspend fun underLocalNetworkAlert(serverUrl: String?, run: suspend (local: Boolean) -> Unit) {
-        val local = localNetworkAlert && serverUrl != null && isLocalSyncEndpoint(serverUrl)
-        val prompt = if (local) beginPrompt() else null
-        try {
-            run(local)
-        } finally {
-            prompt?.let(::endPrompt)
-        }
-    }
-
-    /** Forgets the server, which the settings entry offers beside the run. */
-    fun disconnectSync() = guarded {
-        sync?.disconnect()
-    }
+        try { operation() } finally { refreshAlbums(generation); reload(generation) }
 
     fun prepareDevicePairing() = pairingAction {
-        val engine = sync ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sync is unavailable")
-        val request = engine.prepareDevicePairing()
+        val request = (sync ?: return@pairingAction).prepareDevicePairing()
         _devicePairing.value = _devicePairing.value.copy(
             requestCode = request.request.toHex().chunked(32).joinToString("\n"),
             requestFingerprint = request.fingerprint,
         )
     }
-
     fun inspectDevicePairing(requestHex: String) = pairingAction {
-        val engine = sync ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sync is unavailable")
-        val preview = engine.inspectDevicePairing(pairingRequestBytes(requestHex))
+        val preview = (sync ?: return@pairingAction).inspectDevicePairing(pairingRequestBytes(requestHex))
         _pairingApproval.value?.fill(0)
         _pairingApproval.value = null
         _devicePairing.value = _devicePairing.value.copy(
             inspectedRequestCode = requestHex, inspectedFingerprint = preview.fingerprint, approvalReady = false,
         )
     }
-
     fun approveDevicePairing(requestHex: String, expectedFingerprint: String) = pairingAction {
-        val engine = sync ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sync is unavailable")
+        val engine = sync ?: return@pairingAction
         val preview = _devicePairing.value
-        if (preview.inspectedRequestCode != requestHex || preview.inspectedFingerprint != expectedFingerprint) {
-            throw ChurFailure(ChurStatus.AUTHENTICATION_FAILED, "check the device fingerprint again")
-        }
-        underLocalNetworkAlert(engine.status.value.serverUrl) {
-            if (!engine.syncNow()) throw ChurFailure(ChurStatus.NETWORK_FAILURE, "sync the approving device first")
-            val approval = engine.approveDevicePairing(pairingRequestBytes(requestHex), expectedFingerprint)
-            _pairingApproval.value?.fill(0)
-            _pairingApproval.value = approval
-            _devicePairing.value = _devicePairing.value.copy(approvalReady = true)
-        }
-        say("Device approved. Save the encrypted approval file.")
+        if (preview.inspectedRequestCode != requestHex || preview.inspectedFingerprint != expectedFingerprint)
+            throw ChurFailure(ChurStatus.AUTHENTICATION_FAILED, "compare the device fingerprint again")
+        val approval = withContext(Dispatchers.Default) { engine.approveDevicePairing(pairingRequestBytes(requestHex), expectedFingerprint) }
+        _pairingApproval.value?.fill(0)
+        _pairingApproval.value = approval
+        _devicePairing.value = _devicePairing.value.copy(approvalReady = true)
+        say("Device approved. Save the encrypted approval file and connect directly to finish pairing.")
     }
-
-    /** The host requests local network permission only after native approval authentication. */
-    fun pairingApprovalServer(approval: ByteArray, onServer: (String) -> Unit) = guarded(context = sessionSync) {
-        val engine = sync ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sync is unavailable")
-        onServer(engine.pairingApprovalServer(approval))
-    }
-
     fun acceptPairingApproval(approval: ByteArray) {
         if (_devicePairing.value.busy) return
         val captured = approval.copyOf()
         pairingAction {
             try {
-                val engine = sync ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sync is unavailable")
-                val server = engine.pairingApprovalServer(captured)
-                if (!syncReachable(server)) {
-                    say(LOCAL_NETWORK_REFUSED)
-                    return@pairingAction
-                }
-                underLocalNetworkAlert(server) {
-                    if (engine.acceptPairingApproval(captured)) {
-                        _devicePairing.value = dev.po4yka.chur.app.vault.DevicePairingUiState()
-                        reload()
-                        say("Device connected. Sync now to fetch new media.")
-                    } else {
-                        say("Device setup still needs signed history. Sync your connected device, then open this approval file again.")
-                    }
-                }
+                withContext(Dispatchers.Default) { sync?.acceptPairingApproval(captured) }
+                say("Approval verified. Connect directly to the approving device to finish pairing.")
             } finally { captured.fill(0) }
         }
     }
-
     fun loadPairedDevices() = pairingAction {
-        val engine = sync ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sync is unavailable")
-        _devicePairing.value = _devicePairing.value.copy(devices = engine.pairedDevices())
+        _devicePairing.value = _devicePairing.value.copy(devices = sync?.pairedDevices())
     }
-
     fun revokePairedDevice(peer: dev.po4yka.chur.ffi.PairedDevice) = pairingAction {
-        val engine = sync ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sync is unavailable")
-        underLocalNetworkAlert(engine.status.value.serverUrl) {
-            if (peer.active && !engine.syncNow()) throw ChurFailure(ChurStatus.NETWORK_FAILURE, "sync before revoking the device")
-            try { engine.revokePairedDevice(peer.deviceId, peer.fingerprint) } finally {
-                _devicePairing.value = _devicePairing.value.copy(devices = engine.pairedDevices())
-            }
-        }
-        say("Device revoked. Files already exported to it cannot be recalled.")
+        val engine = sync ?: return@pairingAction
+        withContext(Dispatchers.Default) { engine.revokePairedDevice(peer.deviceId, peer.fingerprint) }
+        _devicePairing.value = _devicePairing.value.copy(devices = engine.pairedDevices())
+        say("Device revoked locally. Sync with your other devices to propagate the revocation.")
     }
-
     private fun pairingAction(body: suspend () -> Unit) {
         if (_devicePairing.value.busy) return
         val epoch = lockEpoch
@@ -1781,112 +1648,14 @@ class ChurController(
             }
         }
     }
-
     private fun pairingRequestBytes(requestHex: String): ByteArray {
         val compact = requestHex.filterNot(Char::isWhitespace)
-        if (compact.length != 420) throw ChurFailure(ChurStatus.INVALID_INPUT, "device request length is invalid")
+        if (compact.length != 420) throw ChurFailure(ChurStatus.INVALID_INPUT, "invalid device request length")
         return try { compact.fromHex() } catch (_: IllegalArgumentException) {
-            throw ChurFailure(ChurStatus.INVALID_INPUT, "device request is not hexadecimal")
+            throw ChurFailure(ChurStatus.INVALID_INPUT, "invalid hexadecimal device request")
         }
     }
-
-    /** Records that the user saw the sync stop; the chain stays frozen. */
-    fun acknowledgeSyncStop() = guarded {
-        sync?.acknowledgeIntegrityStop()
-    }
-
-    /** Loads public sharing identity and current active recipients for Settings. */
-    fun loadSharing() = guarded(clearMessage = false) {
-        val session = privateSession() ?: return@guarded
-        val result = withContext(Dispatchers.Default) {
-            repository.syncIdentity() to repository.sharingOverview()
-        }
-        if (session.isCurrent()) {
-            _sharingIdentity.value = result.first
-            _sharingOverview.value = result.second
-        }
-    }
-
-    /** Validates the pasted self-signed enrollment and shows its fingerprint. */
-    fun inspectSharingRecipient(enrollmentHex: String) = guarded {
-        recipientEnrollment = null
-        _sharingRecipient.value = null
-        val compact = enrollmentHex.filterNot(Char::isWhitespace)
-        if (compact.length > 2048) throw ChurFailure(ChurStatus.INVALID_INPUT, "enrollment is too long")
-        val bytes = try {
-            compact.fromHex()
-        } catch (_: IllegalArgumentException) {
-            throw ChurFailure(ChurStatus.INVALID_INPUT, "enrollment is not hexadecimal")
-        }
-        val session = privateSession() ?: return@guarded
-        val recipient = withContext(Dispatchers.Default) { repository.inspectEnrollment(bytes) }
-        if (!session.isCurrent()) return@guarded
-        recipientEnrollment = bytes
-        _sharingRecipient.value = recipient
-    }
-
-    /** Publishes a grant after the UI confirms both identity and vault scope. */
-    fun shareWithRecipient(permission: SharingPermission) = guarded {
-        val enrollment = recipientEnrollment ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "recipient is not verified")
-        val collection = _sharingOverview.value?.collectionId
-            ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sharing overview is not loaded")
-        val engine = sync ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sync is unavailable")
-        if (!engine.status.value.configured) throw ChurFailure(ChurStatus.INVALID_INPUT, "connect sync first")
-        engine.requireActiveVault()
-        val share = withContext(Dispatchers.Default) {
-            repository.prepareShare(collection, enrollment, permission)
-        }
-        engine.publishShare(share)
-        publishPrivate(_sharingOverview) { repository.sharingOverview() }
-        recipientEnrollment = null
-        _sharingRecipient.value = null
-        say("Access published.")
-    }
-
-    /** Rotates the collection key and publishes the forward-only revocation. */
-    fun revokeSharingMember(member: SharingMember) = guarded {
-        val collection = _sharingOverview.value?.collectionId
-            ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sharing overview is not loaded")
-        val engine = sync ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "sync is unavailable")
-        if (!engine.status.value.configured) throw ChurFailure(ChurStatus.INVALID_INPUT, "connect sync first")
-        engine.requireActiveVault()
-        var batch = withContext(Dispatchers.Default) {
-            repository.revokeShare(collection, member.vaultId, member.deviceId)
-        }
-        while (true) {
-            engine.publishRevocation(batch)
-            if (batch.rotationComplete) break
-            batch = withContext(Dispatchers.Default) {
-                repository.revokeShare(collection, member.vaultId, member.deviceId)
-            }
-        }
-        publishPrivate(_sharingOverview) { repository.sharingOverview() }
-        say("Access revoked for future updates.")
-    }
-
-    /**
-     * One sync cycle a background schedule asked for.
-     *
-     * The iOS host calls this from a BGTask handler, a context where nothing
-     * waits on a screen; the result is the engine's status, not a return
-     * value. It runs regardless of lock state: staging is allowed locked, §7,
-     * and application happens at the next unlock.
-     */
-    suspend fun runBackgroundSync() {
-        withContext(Dispatchers.Default) { repository.start() }
-        sync?.syncNow()
-    }
-
-    /**
-     * Unbinds the engine from the vault, which a finishing host does.
-     *
-     * After the repository's runtime closes, a staged record has nowhere to
-     * land, so the engine learns "no vault" rather than calling into closed
-     * handles.
-     */
-    fun unbindSync() {
-        sync?.bind(null)
-    }
+    fun unbindSync() { sync?.bind(null) }
 
     /**
      * Stages a recovery slot and shows the phrase once, after the device
@@ -3205,10 +2974,6 @@ class ChurController(
         _albums.value = emptyList()
         _tags.value = emptyList()
         _slots.value = emptyList()
-        _sharingIdentity.value = null
-        _sharingOverview.value = null
-        _sharingRecipient.value = null
-        recipientEnrollment = null
         _devicePairing.value = dev.po4yka.chur.app.vault.DevicePairingUiState()
         _pairingApproval.value?.fill(0)
         _pairingApproval.value = null
@@ -3227,12 +2992,8 @@ class ChurController(
         // `RECOVERY.md` §2 shows the phrase exactly once, and §8 there is how
         // a user gets another one.
         _recoveryPhrase.value = null
-        // The session's sync run ends with it, and so does what it showed: the
-        // next identity's refresh then neither waits behind the run's backoff
-        // nor follows its server, `DECOY_VAULT.md` §6. A setup is not
-        // cancelled: its bootstrap still finishes. Until the next unlock finds
-        // the vault that owns the saved state, the engine shows nothing that
-        // a run or a setup reports, so neither can show the server late.
+        // Cancel the foreground peer session and erase its invitation before
+        // another vault or a public route can display private projections.
         endSessionSync()
         // A launch whose result never arrived belonged to the session that just
         // ended. Carrying its count forward would suppress the background lock
@@ -3289,60 +3050,9 @@ class ChurController(
         val initialPage = withContext(Dispatchers.Default) { repository.page(ObjectQuery()) }
         if (epoch != lockEpoch || (repository.state.value as? VaultState.Unlocked)?.generation != generation) return
         if (queryRevision == initialQueryRevision) _page.value = initialPage
-        // `SYNC_PROTOCOL_V1.md` §7: "Decrypted application occurs after
-        // explicit unlock". Whatever the locked puller staged while the vault
-        // was closed is validated and applied here, off the first frame, and
-        // then a configured engine pulls what arrived since the last run. The
-        // engine applies it, so a fork or rollback found in that pass reaches
-        // Settings as the run's own would, `ROLLBACK_PROTECTION.md` §4.
-        //
-        // The engine first loads the saved server for this identity alone, so
-        // Settings shows it after a restart, and a decoy session neither sees
-        // the other vault's server nor pulls from it, `DECOY_VAULT.md` §10. A
-        // state file that cannot be read is the next run's to report, not
-        // this unlock's.
         sync?.let { engine ->
             guarded(clearMessage = false, context = sessionSync) {
-                val configured =
-                    try {
-                        withContext(Dispatchers.Default) { engine.refresh() }
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (_: Exception) {
-                        false
-                    }
-                if (configured) {
-                    withSyncCatalogRefresh(generation) {
-                        withContext(Dispatchers.Default) { engine.applyStaged() }
-                    }
-                    // §4 has the user told, and the catalog keeps the fork
-                    // across restarts, so each unlock says so until the user
-                    // acknowledges it in Settings. It is a security notice,
-                    // which `DESIGN.md` §26 keeps until it is dismissed, and it
-                    // comes before the pull, which may wait on the network.
-                    // Settings drops it: its banner says the same and stays.
-                    val status = engine.status.value
-                    if (status.integrityStop != null && !status.integrityAcknowledged) {
-                        say(
-                            "Sync stopped for one device. Open Settings to see why.",
-                            security = true,
-                            pointsToSettings = true,
-                        )
-                    }
-                    // A server this device cannot reach now would only hold
-                    // "Sync now" through a backoff, [syncReachable]. On iOS
-                    // this pull can be the first connection to a local
-                    // server, whose alert must not lock the vault just after
-                    // the unlock. It says nothing when it gets no answer: away
-                    // from that network it never does, and Settings shows the
-                    // run's line.
-                    val serverUrl = engine.status.value.serverUrl
-                    if (serverUrl?.let { syncReachable(it) } != false) {
-                        withSyncCatalogRefresh(generation) {
-                            underLocalNetworkAlert(serverUrl) { engine.syncNow() }
-                        }
-                    }
-                }
+                withContext(Dispatchers.Default) { engine.refresh() }
             }
         }
     }
@@ -3353,11 +3063,7 @@ class ChurController(
      * `docs/ERROR_MODEL.md` keeps a private value out of a message, and the
      * boundary carries only a status, so the message is [userCopy] of that
      * status: the feature layer's copy of "Layer mapping", never the name of
-     * the code. The sync transport carries its stable status in a
-     * [SyncTransportFailure] rather than a [ChurFailure], and it gets
-     * [syncCopy]: a refused bootstrap secret or an unreachable server at sync
-     * setup is a status the user can act on, not an internal failure, and a
-     * refusal by the server is not a failed unlock.
+     * the code.
      *
      * The last catch is the backstop. Every action a surface can invoke goes
      * through here, and a platform adapter that raised something other than a
@@ -3390,8 +3096,6 @@ class ChurController(
                 throw cancellation
             } catch (failure: ChurFailure) {
                 say(copy(failure.status), security = failure.status in SECURITY_STATUSES)
-            } catch (failure: SyncTransportFailure) {
-                say(syncCopy(failure.status), security = failure.status in SECURITY_STATUSES)
             } catch (_: Exception) {
                 say(userCopy(ChurStatus.INTERNAL_FAILURE))
             }

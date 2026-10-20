@@ -6,7 +6,6 @@ import dev.po4yka.chur.notes.InMemoryNoteStore
 import dev.po4yka.chur.notes.Note
 import dev.po4yka.chur.notes.NoteStore
 import dev.po4yka.chur.notes.NotePackages
-import dev.po4yka.chur.sync.SyncTransportFailure
 import kotlinx.coroutines.async
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -79,26 +78,6 @@ class ControllerContainmentTest {
 
         // The backstop must not swallow the status a normalized failure carries.
         assertEquals(userCopy(ChurStatus.NOT_FOUND), controller.notice.value?.text)
-    }
-
-    @Test
-    fun a_sync_transport_failure_reports_its_own_status() = runTest(dispatcher) {
-        // Sync setup rethrows the transport's failure, which is not a
-        // `ChurFailure`. The note store stands in for that seam here: the
-        // guard must read the status it carries, not fold it into the backstop.
-        // A wrong bootstrap secret is `AUTHENTICATION_FAILED` on the server
-        // (`SERVER_OPERATOR.md`), and it must not read as a failed unlock.
-        val controller = controllerOver(
-            FailingNotes {
-                throw SyncTransportFailure(ChurStatus.AUTHENTICATION_FAILED, "sync server rejected bootstrap")
-            },
-        )
-
-        controller.putNote(note())
-        advanceUntilIdle()
-
-        assertEquals(syncCopy(ChurStatus.AUTHENTICATION_FAILED), controller.notice.value?.text)
-        assertNotEquals(userCopy(ChurStatus.AUTHENTICATION_FAILED), controller.notice.value?.text)
     }
 
     @Test

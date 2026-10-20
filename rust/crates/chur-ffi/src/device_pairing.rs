@@ -44,7 +44,7 @@ pub unsafe extern "C" fn chur_device_pairing_prepare(
                 );
                 let request = device_pairing::prepare_request(db, root, vault)?;
                 let mut writer = Writer::new();
-                writer.u16(1);
+                writer.u16(2);
                 writer.variable(&request.encode())?;
                 writer.string(&request.fingerprint())?;
                 Ok(writer.finish())
@@ -84,7 +84,7 @@ pub unsafe extern "C" fn chur_device_pairing_inspect(
                     "pairing request belongs to another vault"
                 );
                 let mut writer = Writer::new();
-                writer.u16(1).id(request.vault_id()).id(request.device_id());
+                writer.u16(2).id(request.vault_id()).id(request.device_id());
                 writer.string(&request.fingerprint())?;
                 Ok(writer.finish())
             },
@@ -118,21 +118,16 @@ pub unsafe extern "C" fn chur_device_pairing_approve(
             |db, root, vault, input| {
                 let mut reader = Reader::new(input, ChurStatus::NonCanonicalEncoding);
                 ensure!(
-                    reader.u16()? == 1,
+                    reader.u16()? == 2,
                     NonCanonicalEncoding,
                     "pairing approval request version is invalid"
                 );
                 let request = PairingRequest::decode(reader.variable(INPUT_MAX)?)?;
-                let server = reader.string(2_048)?;
-                let token = Zeroizing::new(reader.slice(32)?.try_into().map_err(|_| {
-                    Error::new(ChurStatus::InvalidInput, "pairing token length is invalid")
-                })?);
                 let now = reader.u64()?;
                 reader.finish()?;
-                let prepared =
-                    device_pairing::approve(db, root, vault, &request, server, &token, now)?;
+                let prepared = device_pairing::approve(db, root, vault, &request, now)?;
                 let mut writer = Writer::new();
-                writer.u16(1).fixed(&prepared.transport_token);
+                writer.u16(2);
                 writer.variable(&prepared.checkpoint)?;
                 writer.variable(&prepared.enrollment)?;
                 writer.variable(&prepared.operation)?;
@@ -168,16 +163,7 @@ pub unsafe extern "C" fn chur_device_pairing_start(
             bytes_written,
             |db, root, vault, input| {
                 let credentials = device_pairing::accept_start(db, root, vault, input)?;
-                let mut writer = Writer::new();
-                writer.u16(1);
-                writer.string(&credentials.server_url)?;
-                writer
-                    .id(&vault)
-                    .fixed(&credentials.token)
-                    .id(&credentials.device_id);
-                writer.variable(&credentials.enrollment)?;
-                writer.variable(&credentials.checkpoint)?;
-                Ok(writer.finish())
+                credentials_record(vault, &credentials)
             },
         )
     }
@@ -212,7 +198,7 @@ pub unsafe extern "C" fn chur_device_pairing_finish(
                 reader.finish()?;
                 let device = device_pairing::finalize(db, root, vault, now)?;
                 let mut writer = Writer::new();
-                writer.u16(1).id(&device);
+                writer.u16(2).id(&device);
                 Ok(writer.finish())
             },
         )
@@ -299,7 +285,7 @@ pub unsafe extern "C" fn chur_device_pairing_overview(
                 );
                 let devices = device_pairing::overview(db, root, vault)?;
                 let mut writer = Writer::new();
-                writer.u16(1).u32(u32::try_from(devices.len()).map_err(|_| {
+                writer.u16(2).u32(u32::try_from(devices.len()).map_err(|_| {
                     Error::new(ChurStatus::ResourceLimitExceeded, "too many paired devices")
                 })?);
                 for device in devices {
@@ -346,7 +332,7 @@ pub unsafe extern "C" fn chur_device_pairing_revoke(
                 reader.finish()?;
                 let prepared = device_pairing::prepare_revoke(db, root, vault, target, now_ms)?;
                 let mut writer = Writer::new();
-                writer.u16(1);
+                writer.u16(2);
                 writer.variable(&prepared.checkpoint)?;
                 writer.variable(&prepared.revocation)?;
                 writer.variable(&prepared.operation)?;
@@ -387,4 +373,17 @@ pub unsafe extern "C" fn chur_device_pairing_checkpoint(
             },
         )
     }
+}
+
+/// Encodes the one current pairing-evidence record for initial acceptance and resume.
+pub(crate) fn credentials_record(
+    vault: Id,
+    credentials: &device_pairing::PairCredentials,
+) -> Result<Vec<u8>> {
+    let mut writer = Writer::new();
+    writer.u16(2).id(&vault).id(&credentials.device_id);
+    writer
+        .variable(&credentials.enrollment)?
+        .variable(&credentials.checkpoint)?;
+    Ok(writer.finish())
 }

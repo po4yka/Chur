@@ -29,3 +29,6 @@ pub use commit::{Commitment, Committer};
 pub use kdf::{Context, Label};
 pub use secret::{Key, Secret};
 pub use tuple::{Tuple, tag};
+
+/// Transcript-bound ephemeral peer session keys.
+pub mod peer;

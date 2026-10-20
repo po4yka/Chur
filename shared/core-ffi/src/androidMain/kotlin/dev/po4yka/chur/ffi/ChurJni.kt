@@ -248,6 +248,8 @@ internal object ChurJni {
 
     external fun ownSyncCollections(session: Long, input: ByteBuffer, length: Int, destination: ByteBuffer, outWritten: IntArray): Int
 
+    external fun peerCall(session: Long, input: ByteBuffer, length: Int, destination: ByteBuffer, outWritten: IntArray): Int
+
     external fun ownSyncOperations(session: Long, input: ByteBuffer, length: Int, destination: ByteBuffer, outWritten: IntArray): Int
 
     external fun ownSyncPlan(session: Long, input: ByteBuffer, length: Int, destination: ByteBuffer, outWritten: IntArray): Int

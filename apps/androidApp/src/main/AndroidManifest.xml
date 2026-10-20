@@ -1,68 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  The Android host application.
-
-  docs/security/PROVISIONING.md section 8 forbids requesting a permission the
-  flow does not use. INTERNET is the sync flow's: the address the user enters
-  in settings is an https endpoint, and neither the pull of
-  `SYNC_PROTOCOL_V1.md` section 7 nor its bootstrap of section 6 can run
-  without the network. It is a normal permission, so no prompt and no runtime
-  gate exist to satisfy. Import needs none: the photo picker and the document
-  picker return a content URI the application already has permission to read.
-
-  The media read permissions belong to one step, the source deletion of
-  DESIGN.md section 15.3 and ANDROID.md section 14.5. The owner chose them over
-  only telling the user where to delete: a picked item is a grant to read that
-  one item, so Chur needs read access to find the original in the library before
-  it has the system ask the user and delete it. They are requested at that step,
-  after the user chooses "Review source deletion", and never before; "Keep
-  original" asks for nothing, and a refusal leaves the import as it was.
-  READ_MEDIA_VISUAL_USER_SELECTED lets the user grant only chosen photos and
-  videos on API 34 and later, and READ_EXTERNAL_STORAGE is the same read access
-  on API 30 to 32. API 29 has no system delete request, so there the step asks
-  for nothing; READ_EXTERNAL_STORAGE is declared on API 29 too, because a
-  permission entry cannot set a lowest API level, but nothing requests it there.
-
-  ACCESS_LOCAL_NETWORK belongs to sync with a server on the user's own
-  network, ANDROID.md section 24. From Android 17, the API level this app
-  targets, a connection on the local link (Wi-Fi or Ethernet, never a VPN)
-  to a private, shared (100.64.0.0/10), link-local, or unique local address,
-  to an IPv6 address on a directly connected route, or to a `.local` name
-  needs it, and without it the connection usually just times out. The owner
-  chose to support such servers rather than refuse them. It is requested when
-  the user connects to or syncs with a server whose address is local, and
-  never at launch or by the background worker; a refusal leaves sync as it
-  was, and Settings says how to allow it. It is a runtime permission of the
-  Nearby devices group, unknown to API 36 and lower.
-
-  ACCESS_NETWORK_STATE serves the same step, and WorkManager declares it as
-  well. It is a normal permission, with no prompt. It tells whether the active
-  network is a VPN, which Android does not guard, so a server the user reaches
-  through their VPN brings no request, and which IPv6 routes are on the link.
-  Nothing else Chur does touches a permission-guarded API.
-
-  Backup is on and governed by rule files, per ANDROID.md section 13.4 and the
-  "Public-shell disclosure and backup" section of docs/product/DISCREET_MODE.md.
-  The two halves are deliberate and disjoint: public-shell storage is included,
-  because a Notes surface that loses its content on device transfer is not
-  functional and a shell nobody uses announces what it hides; vault storage is
-  excluded, because an object store carried by a transport that chooses what to
-  copy is not restorable, and BACKUP_FORMAT_V1.md is how vault content leaves
-  the device.
-
-  An <include> set makes everything else excluded, so the rules fail closed
-  rather than needing to name the vault as the storage layout changes, which is
-  what opting out of backup entirely used to buy. scripts/check-backup-rules.py
-  fails the build if either file ever names a vault path. The sync state file
-  is not named anywhere in those rules, and that is what keeps it excluded: it
-  holds the device's transport token, which section 7 of the sync protocol
-  puts in storage that never leaves the device.
--->
+<!-- Private storage stays outside platform backup. INTERNET and ACCESS_LOCAL_NETWORK
+     are used only for explicit foreground P2P sessions and local device control.
+     No account, cloud storage, remote service, or background sync exists. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />

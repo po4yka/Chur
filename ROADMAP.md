@@ -107,56 +107,17 @@ These were excluded from the Phase 1 scope. Later phases implement sync, collect
 | real/decoy isolation tests pass | met. Nine tests over the §11 matrix: independent roots, catalogs, namespaces, and slots; a sibling credential failing exactly as a wrong one does, and a root holding one identity failing the same way; no path naming which identity it belongs to; locking, recovery, migration, and device-slot removal each touching one identity only |
 | backup restore succeeds across Android, iOS, and CLI | **partly met.** Native and CLI round trips and mobile restore routes exist. Both hosts are checked in. Supported physical-device cross-platform restore and catalog portability across SQLCipher builds remain unproved; the physical snapshot diverges from the canonical-export requirement |
 
-## Phase 3 — encrypted synchronization
+## Phase 3 — direct peer synchronization
 
-### Scope
+[ADR-0065](docs/adr/0065-peer-only-sync-without-accounts.md) removes every service-based path and every account. The implementation now uses explicit foreground P2P connections, one-use invitations, signed device enrollment, native operation/checkpoint validation, direct addressed key delivery, and resumable authenticated ciphertext transfer. There is no backend, remote storage, relay, durable network token, or background transfer.
 
-| Item | State |
-| --- | --- |
-| opaque object storage in a deployment the user controls | done. `chur-sync-server` stores immutable ciphertext under opaque vault and object identifiers; [`docs/sync/SERVER_OPERATOR.md`](docs/sync/SERVER_OPERATOR.md) is the operator contract |
-| reference sync-server implementation with operator documentation | done. The Axum service exposes authenticated membership, operation, checkpoint, resumable object, token-rotation, and signed-deletion routes |
-| ciphertext-only background transfers | done in code, unproved on a device. Ktor uses OkHttp on Android and Darwin on iOS; `LockedSyncPuller` stages bounded opaque records through ABI 1.4 without opening the catalog or advancing accepted cursors |
-| device identities | done. Ed25519 and X25519 keys are separated, the portable identity is root-wrapped in the catalog, and backup carries its recovery form |
-| signed per-device operation logs | done. Authoring, acceptance, durable heads, checkpoint floors, and historical verification-key retention are implemented |
-| replay, rollback, and fork detection | done. The operation state machine and malicious-server harness reject replay conflicts, rollback, equivocation, omission against a checkpoint, and key substitution |
-| deterministic conflict resolution | done. Causal scalar registers, observed-remove sets, materialization, and digest tie-breaking converge for the same authenticated operation set |
-| tombstones and garbage collection | done. Delete and restore follow causality; collection is gated by authenticated checkpoint coverage and retention |
-| multi-device recovery | done. Portable identity recovery restores the sync identity and its authenticated bootstrap state without exporting device-bound slots |
-| device revocation and forced collection-epoch rotation and rewrap | done. Revocation pins the final accepted device operation, revokes transport credentials, advances the epoch, and resumes bounded rewrap work |
+The initial transport needs literal IPv4 device addresses and a direct route. Discovery and NAT traversal are not implemented. Independent security review and Android/iOS physical-device acceptance remain open. Historical Phase 3 evidence does not establish acceptance of this replacement transport.
 
-### Exit criteria
+## Phase 4 — collection-sharing primitives
 
-| Criterion | State |
-| --- | --- |
-| server trust model and sync protocol finalized | met. The accepted v1 documents define the server's observable data, client trust rules, canonical records, limits, deletion authorization, and locked behavior |
-| malicious-server test harness operational | met. `chur-sync-protocol` `tests/malicious_server.rs` exercises replay, omission, key substitution, rollback, and equivocation |
-| protocol vectors published | met. The current v1 manifest has 106 vectors and the accompanying fixtures, including accepted and rejected sync records, and the reference server consumes them |
-| independent review of identity, log, and rollback design | **outstanding.** [`docs/assurance/SECURITY_REVIEW_SCOPE.md`](docs/assurance/SECURITY_REVIEW_SCOPE.md) defines the engagement; no repository job can supply an independent reviewer |
+The native canonical grant, fingerprint, membership, permission, epoch, object-key, and revocation primitives remain available and retain their tests. Service-mediated collection publication and subscription have been removed from the app together with the old transport. They are not a shipped user capability under the P2P-only model. The current direct transport synchronizes enrolled devices of one vault; it does not subscribe to another person's collection.
 
-[`docs/assurance/EVIDENCE_PHASE_3.md`](docs/assurance/EVIDENCE_PHASE_3.md) records the observed implementation and verification evidence.
-
-## Phase 4 — collection sharing
-
-### Scope
-
-- recipient verification;
-- X25519 HPKE collection grants;
-- Ed25519 sender/device authentication;
-- permissions and membership changes;
-- collection epochs and rewrapping;
-- revocation semantics;
-- multi-recipient and multi-device interoperability.
-
-### Exit criteria
-
-| Criterion | State |
-| --- | --- |
-| separate sharing-protocol audit | **outstanding.** The implementation team cannot supply an independent review |
-| clear forward-only revocation guarantees | met. Revocation advances the collection epoch and sends replacement grants only to current recipient devices; it cannot retract data already received |
-| recovery and device-loss behavior tested | met in code. Multi-recipient, multi-device loss, restart, and retry paths run in the workspace; physical-device proof is outstanding |
-| no claim that previously authorized recipients can be forced to delete plaintext | met. Recipient retention is an explicit protocol and product limitation |
-
-[`docs/assurance/EVIDENCE_PHASE_4.md`](docs/assurance/EVIDENCE_PHASE_4.md) records the observed implementation and verification evidence.
+Independent review and physical-device interoperability remain open. Historical Phase 4 evidence covers the retained cryptographic primitives and the removed transport, not acceptance of a new external-recipient P2P workflow. Existing recipient copies cannot be recalled.
 
 ## Current local extensions
 

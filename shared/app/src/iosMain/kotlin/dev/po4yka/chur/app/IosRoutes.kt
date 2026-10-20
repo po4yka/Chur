@@ -419,9 +419,6 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     val notice by controller.notice.collectAsState()
     val operation by controller.activeOperation.collectAsState()
     val syncStatus by controller.syncStatus.collectAsState()
-    val sharingIdentity by controller.sharingIdentity.collectAsState()
-    val sharingOverview by controller.sharingOverview.collectAsState()
-    val sharingRecipient by controller.sharingRecipient.collectAsState()
     val focusManager = LocalFocusManager.current
     val vaultDevicePairing by controller.devicePairing.collectAsState()
     val pairingFiles = rememberPairingFiles(controller)
@@ -611,7 +608,6 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             destination == VaultDestination.ALBUMS -> controller.loadAlbums()
             destination == VaultDestination.SETTINGS -> {
                 controller.loadSlots()
-                controller.loadSharing()
             }
             else -> Unit
         }
@@ -1111,9 +1107,6 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         autoLock = autoLock,
         sync = syncStatus,
         devicePairing = vaultDevicePairing,
-        sharingIdentity = sharingIdentity,
-        sharingOverview = sharingOverview,
-        sharingRecipient = sharingRecipient,
     )
     // Callbacks can outlive this rendered selection until Compose publishes
     // the next frame. Never let that interval retarget an old action.
@@ -1270,6 +1263,9 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         onSetAutoLock = controller::setAutoLock,
         onAddDeviceSlot = controller::enrollAppleDeviceSlot,
         onToggleDeviceSlotPolicy = controller::toggleDeviceSlotPolicy,
+        onListenPeer = controller::listenForPeer,
+        onConnectPeer = controller::connectToPeer,
+        onStopPeer = controller::stopPeerSync,
         onPrepareDevicePairing = { controller.prepareDevicePairing() },
         onInspectDevicePairing = { controller.inspectDevicePairing(it) },
         onApproveDevicePairing = { request, fingerprint -> controller.approveDevicePairing(request, fingerprint) },
@@ -1340,16 +1336,8 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         },
         onCancelOperation = controller::cancelActiveOperation,
         onNoticeShown = controller::consume,
-        // iOS asks for local network access by itself, as the first
-        // connection to a local server goes out; the controller the
-        // entry point binds holds the lock off under that alert.
-        onConfigureSync = controller::configureSync,
-        onSyncNow = controller::syncNow,
-        onDisconnectSync = controller::disconnectSync,
-        onAcknowledgeSyncStop = controller::acknowledgeSyncStop,
-        onInspectSharingRecipient = controller::inspectSharingRecipient,
-        onShareWithRecipient = controller::shareWithRecipient,
-        onRevokeSharingMember = controller::revokeSharingMember,
+        // The controller brackets iOS's local-network alert during a direct
+        // peer connection so the alert does not prematurely lock the vault.
     )
     val albumScreens = openAlbum?.let { albumPath(albums, it.id) }.orEmpty()
         .map { IosVaultScreen.Album(it.id) }
@@ -1898,7 +1886,7 @@ private fun IosRestoreRoute(controller: ChurController) {
  * It is a hook rather than a call for the reason the photo picker is one: the
  * presentation needs the host's window, which no composable has. The host
  * installs [present] once at launch, the way it registers the background task
- * of [IosSyncBackground], and answers with the path of a file this process can
+ * of the foreground vault session, and answers with the path of a file this process can
  * open and seek. `apps/iosApp/README.md` step 7 says which file that is.
  */
 public object IosBackupPicker {

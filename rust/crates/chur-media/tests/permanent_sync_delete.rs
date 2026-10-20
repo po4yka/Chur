@@ -541,16 +541,9 @@ fn source_purge_relay_erases_sibling_after_restart_and_backup_without_damaging_n
     let mut target = vault::unlock_with_password(&target_root, PASSWORD, NOW + 1).unwrap();
     let request =
         device_pairing::prepare_request(target.catalog().unwrap(), &secret, vault).unwrap();
-    let approval = device_pairing::approve(
-        source.catalog().unwrap(),
-        &secret,
-        vault,
-        &request,
-        "https://sync.example",
-        &[88; 32],
-        NOW + 2,
-    )
-    .unwrap();
+    let approval =
+        device_pairing::approve(source.catalog().unwrap(), &secret, vault, &request, NOW + 2)
+            .unwrap();
     device_pairing::accept_start(
         target.catalog().unwrap(),
         &secret,

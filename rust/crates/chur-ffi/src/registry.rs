@@ -60,6 +60,8 @@ pub enum Entry {
         session: Mutex<chur_catalog::vault::Session>,
         /// Bounded public ciphertext verification results for this session only.
         publication_cache: Mutex<crate::sharing_publish::VerificationCache>,
+        /// Foreground-only direct peer connection.
+        peer: Mutex<Option<Box<chur_media::peer_transport::Peer>>>,
     },
     /// A random-access reader, and the session that opened it.
     Reader {
@@ -386,6 +388,9 @@ pub fn drain_owned_by(owner: Handle) -> Vec<Arc<Entry>> {
 }
 
 fn revoke_reader(entry: &Entry) {
+    if let Entry::Session { peer, .. } = entry {
+        drop(lock(peer).take());
+    }
     if let Entry::Reader { reader, .. } = entry {
         drop(lock(reader).take());
     }
