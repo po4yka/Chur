@@ -33,6 +33,35 @@ import kotlin.test.assertTrue
 
 class IosVaultSceneTest {
     @Test
+    fun expanded_presentation_activates_both_leases_and_clear_retires_both_bodies() {
+        val controller = inertController()
+        val chrome = IosVaultChrome()
+        val scenes = IosVaultScenes(controller, GateResult.Compatible(0uL), chrome)
+        val root = IosVaultScreen.Root(VaultDestination.LIBRARY)
+        val viewer = IosVaultScreen.Viewer(1L)
+        scenes.begin(1L)
+        val libraryLease = scenes.publish(root) {}
+        val viewerLease = scenes.publish(viewer) {}
+        scenes.activateAll(setOf(root, viewer))
+        assertTrue(libraryLease.active)
+        assertTrue(viewerLease.active)
+        scenes.activateAll(setOf(viewer))
+        assertFalse(libraryLease.active)
+        assertTrue(viewerLease.active)
+        scenes.activateAll(setOf(root, viewer))
+        scenes.clear()
+        listOf(libraryLease, viewerLease).forEach {
+            assertTrue(it.retired)
+            assertFalse(it.active)
+            assertNull(it.content)
+        }
+        scenes.activateAll(setOf(root, viewer))
+        assertFalse(libraryLease.active)
+        assertFalse(viewerLease.active)
+        chrome.clear()
+    }
+
+    @Test
     fun retired_scene_clears_content_and_cannot_be_reactivated() {
         val controller = inertController()
         val chrome = IosVaultChrome()

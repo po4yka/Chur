@@ -3,6 +3,7 @@
 package dev.po4yka.chur.app.vault
 
 import androidx.compose.ui.graphics.Color
+import dev.po4yka.chur.app.IosAdaptiveBars
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -78,6 +79,30 @@ internal sealed interface IosVaultScreen {
 /** UIKit owns transitions; the shared route remains the authoritative stack. */
 internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, UINavigationControllerDelegateProtocol {
     internal val controller = UITabBarController()
+    internal val detailNavigation = UINavigationController()
+    internal val presentationController = IosVaultPaneController(controller, detailNavigation)
+    internal var dualPane by mutableStateOf(false)
+        private set
+    private var geometryWidth = 0.0
+    private var geometryHeight = 0.0
+    private var occlusions = emptyList<AdaptiveRegion>()
+    private var divisions = emptyList<AdaptiveRegion>()
+    private data class Projection(val generation: Long, val screens: List<IosVaultScreen>, val destination: VaultDestination)
+    private var projection: Projection? = null
+    internal var onVisibleScreens: ((Set<IosVaultScreen>) -> Unit)? = null
+
+    internal fun updateGeometry(width: Double, height: Double, occlusions: List<AdaptiveRegion> = emptyList(), divisions: List<AdaptiveRegion> = emptyList()) {
+        if (geometryWidth == width && geometryHeight == height && this.occlusions == occlusions && this.divisions == divisions) return
+        geometryWidth = width
+        geometryHeight = height
+        this.occlusions = occlusions
+        this.divisions = divisions
+        projection?.let { reconcile(it.generation, it.screens, it.destination, animated = false) }
+    }
+
+    private fun layoutFor(screens: List<IosVaultScreen>) = adaptiveVaultLayout(
+        geometryWidth, geometryHeight, occlusions, divisions, allowSplit = screens.lastOrNull() is IosVaultScreen.Viewer,
+    )
     internal val navigationControllers: List<UINavigationController> = VaultDestination.entries.map { UINavigationController() }
     private val selectedNavigation: UINavigationController
         get() = navigationControllers.getOrElse(controller.selectedIndex.toInt()) { navigationControllers.first() }
@@ -216,7 +241,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         private var active = true
 
         private fun current(): IosVaultChrome? = presenter.get()?.takeIf {
-            active && !it.lockRequested && it.generation != 0L && it.currentControls?.objcPtr() == objcPtr()
+            active && !it.lockRequested && it.generation != 0L && it.controlsAreVisible(this)
         }
 
         init {
@@ -257,6 +282,10 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         }
     }
     private val currentControls: ChromeControls? get() = stacks[selectedNavigation]?.lastOrNull()?.controls
+    private val viewerNavigation: UINavigationController get() = if (dualPane) detailNavigation else selectedNavigation
+    private val allNavigations: List<UINavigationController> get() = navigationControllers + detailNavigation
+    private fun controlsAreVisible(controls: ChromeControls): Boolean =
+        currentControls?.objcPtr() == controls.objcPtr() || (dualPane && stacks[detailNavigation]?.lastOrNull()?.controls?.objcPtr() == controls.objcPtr())
     private val stacks = mutableMapOf<UINavigationController, List<Frame>>()
     private val retiring = mutableMapOf<UINavigationController, List<Frame>>()
     private var screenFactory: ((IosVaultScreen) -> UIViewController)? = null
@@ -271,6 +300,8 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
     private var chromeUpdateEpoch = 0L
     internal val transitionInFlight: Boolean get() = transitioning.isNotEmpty() || searchDismissal != null
     private var actions: VaultActions? = null
+    private data class ShellPresentation(val state: VaultUiState, val actions: VaultActions, val accent: Color, val navigationBusy: Boolean, val covered: Boolean)
+    private var shellPresentation: ShellPresentation? = null
     private var key: ChromeKey? = null
     private var navigationBlocked = true
     private var lockRequested = false
@@ -314,6 +345,14 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
             it.enabled = it.customView == currentControls?.lock
         }
         selectedNavigation.topViewController?.toolbarItems?.filterIsInstance<UIBarButtonItem>()?.forEach { it.enabled = false }
+        if (dualPane) {
+            val frame = stacks[detailNavigation]?.lastOrNull()
+            frame?.content?.navigationItem?.leftBarButtonItem?.enabled = false
+            frame?.content?.navigationItem?.rightBarButtonItems?.filterIsInstance<UIBarButtonItem>()?.forEach {
+                it.enabled = it.customView == frame?.controls?.lock
+            }
+            frame?.content?.toolbarItems?.filterIsInstance<UIBarButtonItem>()?.forEach { it.enabled = false }
+        }
         tabBar.userInteractionEnabled = false
         tabBar.items?.filterIsInstance<UITabBarItem>()?.forEach { it.enabled = false }
         reconcileVisibility()
@@ -327,9 +366,9 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
 
     internal fun privateModalAnchor(anchor: PrivateModalAnchor): UIBarButtonItem? = when (anchor) {
         PrivateModalAnchor.Automatic -> null
-        PrivateModalAnchor.Info -> navigationItem?.rightBarButtonItems?.filterIsInstance<UIBarButtonItem>()
+        PrivateModalAnchor.Info -> viewerNavigation.topViewController?.navigationItem?.rightBarButtonItems?.filterIsInstance<UIBarButtonItem>()
             ?.firstOrNull { it.title == "Info" || it.title == "Hide info" }
-        PrivateModalAnchor.Export -> selectedNavigation.topViewController?.toolbarItems?.filterIsInstance<UIBarButtonItem>()
+        PrivateModalAnchor.Export -> viewerNavigation.topViewController?.toolbarItems?.filterIsInstance<UIBarButtonItem>()
             ?.firstOrNull { it.title == "Export" }
     }
 
@@ -366,14 +405,14 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
     }
     internal val toolbar get() = selectedNavigation.toolbar
     private val viewerIsTop: Boolean get() = viewerState != null &&
-        (stacks[selectedNavigation]?.lastOrNull()?.screen as? IosVaultScreen.Viewer)?.token == viewerState?.token &&
-            selectedNavigation.topViewController == stacks[selectedNavigation]?.lastOrNull()?.content
+        (stacks[viewerNavigation]?.lastOrNull()?.screen as? IosVaultScreen.Viewer)?.token == viewerState?.token &&
+            viewerNavigation.topViewController == stacks[viewerNavigation]?.lastOrNull()?.content
 
     init {
         navigationBar.translucent = true
         tabBar.translucent = true
         controller.delegate = this
-        navigationControllers.forEach { it.delegate = this; it.navigationBar.translucent = true; it.toolbar.translucent = true }
+        allNavigations.forEach { it.delegate = this; it.navigationBar.translucent = true; it.toolbar.translucent = true }
         clear()
     }
 
@@ -409,8 +448,9 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
             lockRequested = false
         }
         if (lockRequested) return
+        val browseScreen = if (layoutFor(screens).viewer != null) screens.dropLast(1).lastOrNull() else screens.lastOrNull()
         searchPresentation?.let { current ->
-            if (current.frame.screen != screens.lastOrNull() || current.scope.destination != destination) retireSearch()
+            if (current.frame.screen != browseScreen || current.scope.destination != destination) retireSearch()
         }
         if (searchDismissal != null) {
             val owner = WeakReference(this@IosVaultChrome)
@@ -418,46 +458,80 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
             return
         }
         require(screens.firstOrNull() == IosVaultScreen.Root(destination))
+        projection = Projection(generation, screens, destination)
+        val layout = layoutFor(screens)
+        val split = layout.viewer != null
+        val wasSplit = dualPane
+        val candidates = (stacks.values.flatten() + retiring.values.flatten()).distinct()
+        val desired = navigationControllers.mapIndexed { index, nav ->
+            nav to if (VaultDestination.entries[index] == destination) {
+                if (split) screens.filterNot { it is IosVaultScreen.Viewer } else screens
+            } else listOf(IosVaultScreen.Root(VaultDestination.entries[index]))
+        }.toMap() + (detailNavigation to if (split) screens.filterIsInstance<IosVaultScreen.Viewer>() else emptyList())
+        val retainedScreens = desired.values.flatten().toSet()
+        // Move existing controllers between navigation owners without retiring their scene.
+        // Empty the former owner first: UIKit permits only one parent per controller.
         reconciling = true
         try {
-            navigationControllers.forEachIndexed { index, nav ->
-                val tab = VaultDestination.entries[index]
-                val desired = if (tab == destination) screens else listOf(IosVaultScreen.Root(tab))
+            if (wasSplit != split) {
+                retireSearch()
+                allNavigations.forEach { nav ->
+                    nav.setViewControllers(emptyList<UIViewController>(), animated = false)
+                }
+                transitioning.clear()
+            }
+            dualPane = split
+            desired.forEach { (nav, wanted) ->
                 val old = stacks[nav].orEmpty()
-                if (old.map { it.screen } != desired) {
-                    controller.view.endEditing(true)
-                    val candidates = old + retiring[nav].orEmpty()
-                    val next = desired.map { screen -> candidates.firstOrNull { it.screen == screen }
-                        ?: Frame(screen, checkNotNull(screenFactory).invoke(screen), ChromeControls(this)).also {
-                            it.content.hidesBottomBarWhenPushed = screen is IosVaultScreen.Viewer
-                            pendingScroll.remove(screen)?.let { source ->
-                                source.content = WeakReference(it.content)
-                                it.scroll = source
-                            }
+                val next = wanted.map { screen -> candidates.firstOrNull { it.screen == screen }
+                    ?: Frame(screen, checkNotNull(screenFactory).invoke(screen), ChromeControls(this)).also {
+                        it.content.hidesBottomBarWhenPushed = screen is IosVaultScreen.Viewer
+                        pendingScroll.remove(screen)?.let { source ->
+                            source.content = WeakReference(it.content)
+                            it.scroll = source
                         }
                     }
-                    val animate = animated && old.isNotEmpty() && tab == destination && controller.view.window != null
-                    val removed = old.filter { it !in next }
-                    val pending = retiring[nav].orEmpty().filter { it !in next }
-                    if (animate) retiring[nav] = (pending + removed).distinct()
-                    else {
-                        (pending + removed).distinct().forEach(::retire)
-                        retiring.remove(nav)
-                    }
-                    stacks[nav] = next
+                }
+                val removed = (old + retiring[nav].orEmpty()).filter { it.screen !in retainedScreens }.distinct()
+                val animate = animated && wasSplit == split && old.isNotEmpty() &&
+                    nav == navigationControllers[destination.ordinal] && presentationController.view.window != null
+                if (animate && removed.isNotEmpty()) retiring[nav] = removed
+                else { removed.forEach(::retire); retiring.remove(nav) }
+                stacks[nav] = next
+                if (wasSplit != split || old != next) {
                     nav.setViewControllers(next.map { it.content }, animated = animate)
                     key = null
+                    renderedViewer = null
                 }
+            }
+            navigationControllers.forEachIndexed { index, nav ->
+                val tab = VaultDestination.entries[index]
                 nav.tabBarItem = UITabBarItem(tab.label, UIImage.systemImageNamed(tab.symbol()), index.toLong())
             }
             if (controller.viewControllers.isNullOrEmpty()) controller.setViewControllers(navigationControllers, animated = false)
-            if (controller.selectedIndex != destination.ordinal.toULong()) controller.view.endEditing(true)
+            if (controller.selectedIndex != destination.ordinal.toULong()) presentationController.view.endEditing(true)
             controller.selectedIndex = destination.ordinal.toULong()
             controller.view.hidden = false
             controller.view.accessibilityElementsHidden = false
             controller.view.userInteractionEnabled = true
+            presentationController.view.hidden = false
+            presentationController.view.accessibilityElementsHidden = false
+            presentationController.view.userInteractionEnabled = true
+            presentationController.apply(layout)
+            publishVisibleScreens()
+            renderViewer()
             reconcileVisibility()
         } finally { reconciling = false }
+        if (wasSplit != split) shellPresentation?.let {
+            update(it.state, it.actions, it.accent, it.navigationBusy, it.covered)
+        }
+    }
+
+    private fun publishVisibleScreens() {
+        onVisibleScreens?.invoke(buildSet {
+            stacks[selectedNavigation]?.lastOrNull()?.screen?.let(::add)
+            if (dualPane) stacks[detailNavigation]?.lastOrNull()?.screen?.let(::add)
+        })
     }
 
     private fun retire(frame: Frame) {
@@ -489,7 +563,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         // Concealment and slot retirement above are immediate. UIKit releases
         // its stack after the owned search presentation has actually ended.
         if (searchDismissal != null) return
-        navigationControllers.forEach {
+        allNavigations.forEach {
             it.delegate = null
             it.setViewControllers(emptyList<UIViewController>(), animated = false)
             it.delegate = this
@@ -503,7 +577,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         val covered = this.covered && !privateModalActive
         val selected = selectedNavigation
         stacks.forEach { (nav, frames) -> frames.forEach { frame ->
-            frame.content.view.accessibilityElementsHidden = nav != selected || frame != frames.lastOrNull()
+            frame.content.view.accessibilityElementsHidden = (nav != selected && !(dualPane && nav == detailNavigation)) || frame != frames.lastOrNull()
         } }
         val viewer = stacks[selected]?.lastOrNull()?.screen is IosVaultScreen.Viewer
         // UIKit's willShow controls bar interpolation during a native transition.
@@ -521,9 +595,17 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         navigationBar.accessibilityElementsHidden = (viewer && !nativeViewer) || covered
         toolbar.accessibilityElementsHidden = covered || selected.toolbarHidden
         tabBar.accessibilityElementsHidden = viewer || selectionBlocksPop || covered
+        if (dualPane) {
+            val nativeDetail = viewerState != null
+            applyBarAppearance(detailNavigation, viewer = true)
+            detailNavigation.setNavigationBarHidden(covered || !nativeDetail, animated = false)
+            detailNavigation.setToolbarHidden(covered || !nativeDetail || viewerState?.visible != true, animated = false)
+            detailNavigation.navigationBar.accessibilityElementsHidden = covered || !nativeDetail
+            detailNavigation.toolbar.accessibilityElementsHidden = covered || detailNavigation.toolbarHidden
+        }
         renderScrollAppearance()
-        navigationControllers.forEach { nav ->
-            val canPop = !navigationBlocked && !covered && !selectionBlocksPop && !viewerBlocksNavigation(nav)
+        allNavigations.forEach { nav ->
+            val canPop = nav != detailNavigation && !navigationBlocked && !covered && !selectionBlocksPop && !viewerBlocksNavigation(nav)
             nav.interactivePopGestureRecognizer?.enabled = canPop
             if ((UIDevice.currentDevice.systemVersion.substringBefore('.').toIntOrNull() ?: 0) >= 26) {
                 // ViewerPager owns horizontal drags across the media body.
@@ -553,9 +635,17 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         navigationItem?.setHidesBackButton(true, animated = false)
         navigationItem?.leftBarButtonItem?.enabled = false
         selectedNavigation.topViewController?.toolbarItems?.filterIsInstance<UIBarButtonItem>()?.forEach { it.enabled = false }
+        if (dualPane) {
+            val frame = stacks[detailNavigation]?.lastOrNull()
+            frame?.content?.navigationItem?.leftBarButtonItem?.enabled = false
+            frame?.content?.navigationItem?.rightBarButtonItems?.filterIsInstance<UIBarButtonItem>()?.forEach {
+                it.enabled = it.customView == frame?.controls?.lock
+            }
+            frame?.content?.toolbarItems?.filterIsInstance<UIBarButtonItem>()?.forEach { it.enabled = false }
+        }
         tabBar.userInteractionEnabled = false
         tabBar.items?.filterIsInstance<UITabBarItem>()?.forEach { it.enabled = false }
-        navigationControllers.forEach { dismissMenus(it.navigationBar); dismissMenus(it.toolbar) }
+        allNavigations.forEach { dismissMenus(it.navigationBar); dismissMenus(it.toolbar) }
         // Reuse the ordinary busy policy without replacing the displayed
         // title, selected destination or callbacks; Lock remains available.
         reconcileVisibility()
@@ -564,6 +654,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
     fun update(state: VaultUiState, actions: VaultActions, accent: Color, navigationBusy: Boolean, covered: Boolean = false) {
         if (lockRequested) return
         val controls = currentControls ?: return
+        shellPresentation = ShellPresentation(state, actions, accent, navigationBusy, covered)
         val lock = controls.lock
         val primary = controls.primary
         val secondary = controls.secondary
@@ -591,8 +682,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         if (viewerIsTop) {
             tabBar.userInteractionEnabled = !navigationBlocked
             tabBar.items?.filterIsInstance<UITabBarItem>()?.forEach { it.enabled = !navigationBlocked }
-            renderViewer()
-            return
+            if (!dualPane) { renderViewer(); return }
         }
         navigationItem?.setHidesBackButton(navigationBlocked || selectionBlocksPop, animated = false)
         navigationItem?.leftBarButtonItem?.enabled = !navigationBlocked
@@ -614,6 +704,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         navigationBar.tintColor = accentTint
         tabBar.tintColor = accentTint
         if (key == next) {
+            if (dualPane) renderViewer()
             // UIKit selects before its delegate runs; shared state is authoritative
             // even when a navigation request was rejected while becoming busy.
             controller.selectedIndex = state.destination.ordinal.toULong()
@@ -633,12 +724,12 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         }
         back.accessibilityLabel = if (state.selectedCount > 0) "Clear selection" else "Back"
         navigationItem?.leftBarButtonItem = if (backCommand != null) {
-            UIBarButtonItem(customView = back).also { it.enabled = !navigationBlocked }
+            UIBarButtonItem(customView = back).also { it.enabled = !navigationBlocked; IosAdaptiveBars.configureCustomItem?.invoke(it) }
         } else null
         primary.menu = null
         secondary.menu = null
         primaryCommand = null
-        val right = mutableListOf(UIBarButtonItem(customView = lock))
+        val right = mutableListOf(UIBarButtonItem(customView = lock).also { IosAdaptiveBars.configureCustomItem?.invoke(it) })
         val openAlbum = state.openAlbum
         val menu = when {
             state.selectedCount > 0 -> emptyList()
@@ -677,6 +768,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         navigationItem?.rightBarButtonItems = right
         selectedNavigation.topViewController?.toolbarItems = if (state.selectedCount > 0) selectionToolbar(state) else null
         controller.selectedIndex = state.destination.ordinal.toULong()
+        if (dualPane) renderViewer()
         reconcileVisibility()
     }
 
@@ -684,9 +776,14 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
     fun clear() {
         // Conceal first: transition snapshots and presentation callbacks may still
         // exist in UIKit until the next run-loop, but can no longer be displayed.
+        presentationController.view.hidden = true
+        presentationController.view.accessibilityElementsHidden = true
+        presentationController.view.userInteractionEnabled = false
         controller.view.hidden = true
         controller.view.accessibilityElementsHidden = true
         controller.view.userInteractionEnabled = false
+        projection = null
+        onVisibleScreens?.invoke(emptySet())
         lockRequested = true
         renderedScroll = null
         scrollInteractionEnabled = false
@@ -698,10 +795,12 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         pendingChromeUpdate = null
         retireSearch()
         actions = null
+        shellPresentation = null
+        onVisibleScreens = null
         resetViewer()
         navigationBlocked = true
         retireMenu()
-        navigationControllers.forEach { dismissMenus(it.navigationBar); dismissMenus(it.toolbar) }
+        allNavigations.forEach { dismissMenus(it.navigationBar); dismissMenus(it.toolbar) }
         key = null
         primaryCommand = null
         backCommand = null
@@ -725,11 +824,12 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         // Keep UINavigationController's own visibility state coherent. Directly
         // hiding only its bar leaves navigationBarHidden=false; a fresh visit's
         // setNavigationBarHidden(false) can then be a no-op and strand the bar.
-        navigationControllers.forEach {
+        allNavigations.forEach {
             applyBarAppearance(it, viewer = false)
             it.setNavigationBarHidden(true, animated = false)
             it.setToolbarHidden(true, animated = false)
         }
+        dualPane = false
         controller.setTabBarHidden(true, animated = false)
         navigationBar.accessibilityElementsHidden = true
         tabBar.accessibilityElementsHidden = true
@@ -791,6 +891,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         stacks[navigationController] = frames.take(index + 1)
         key = null
         popCallback?.invoke(target)
+        publishVisibleScreens()
         reconcileVisibility()
     }
 
@@ -949,7 +1050,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         } finally { binding.syncing = false }
     }
 
-    fun hasVisibleMenu(): Boolean = (menuInteractions(navigationBar) + menuInteractions(toolbar)).any {
+    fun hasVisibleMenu(): Boolean = allNavigations.flatMap { menuInteractions(it.navigationBar) + menuInteractions(it.toolbar) }.any {
         it.menuAppearance != UIContextMenuInteractionAppearanceUnknown
     }
 
@@ -1039,7 +1140,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
 
     /** Published only by the active shared Viewer scene; paging rotates the native action epoch. */
     fun updateViewer(state: IosViewerPanelState, actions: IosViewerPanelActions, accent: Color) {
-        if (lockRequested || state.generation != generation || (stacks[selectedNavigation]?.lastOrNull()?.screen as? IosVaultScreen.Viewer)?.token != state.token) return
+        if (lockRequested || state.generation != generation || (stacks[viewerNavigation]?.lastOrNull()?.screen as? IosVaultScreen.Viewer)?.token != state.token) return
         if (viewerState != state) {
             viewerEpoch++
             dismissMenus(navigationBar)
@@ -1064,7 +1165,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         viewerState = null
         viewerActions = null
         renderedViewer = null
-        navigationControllers.forEach { nav ->
+        allNavigations.forEach { nav ->
             dismissMenus(nav.toolbar)
             nav.viewControllers?.filterIsInstance<UIViewController>()?.filter {
                 stacks[nav]?.firstOrNull { frame -> frame.content == it }?.screen is IosVaultScreen.Viewer
@@ -1123,8 +1224,8 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         if (!viewerIsTop) return
         if (privateModalActive) { freezeModalSourceItems(); return }
         val state = viewerState ?: return
-        val content = selectedNavigation.topViewController ?: return
-        val lock = currentControls?.lock ?: return
+        val content = viewerNavigation.topViewController ?: return
+        val lock = stacks[viewerNavigation]?.lastOrNull()?.controls?.lock ?: return
         val renderKey = Triple(state, navigationBlocked, covered)
         if (renderedViewer == renderKey) { reconcileVisibility(); return }
         renderedViewer = renderKey
@@ -1133,7 +1234,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         content.navigationItem.setHidesBackButton(true, animated = false)
         content.navigationItem.leftBarButtonItem = if (state.visible) viewerItem("Back", "chevron.backward") { it.onBack() } else null
         content.navigationItem.rightBarButtonItems = buildList {
-            add(UIBarButtonItem(customView = lock))
+            add(UIBarButtonItem(customView = lock).also { IosAdaptiveBars.configureCustomItem?.invoke(it) })
             if (state.visible) add(viewerItem(if (state.infoVisible) "Hide info" else "Info", "info.circle", allowsDetailClose = true) { it.onInfo() })
         }
         content.toolbarItems = if (!state.visible) null else buildList {

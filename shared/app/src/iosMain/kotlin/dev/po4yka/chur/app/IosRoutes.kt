@@ -1033,6 +1033,8 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             scenes.activate(null)
             nativeChrome.suspendNavigation()
             nativeChrome.controller.view.endEditing(true)
+            nativeChrome.presentationController.view.hidden = true
+            nativeChrome.presentationController.view.accessibilityElementsHidden = true
             nativeChrome.controller.view.hidden = true
             nativeChrome.controller.view.accessibilityElementsHidden = true
             scenes.viewerChrome?.invoke(null)
@@ -1126,7 +1128,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         (controller.vaultState.value as? VaultState.Unlocked)?.generation == generation
     // Read the route's mutable flags when an event arrives, before UIKit or
     // child NavigationBusyEffect has received the next Compose frame.
-    fun routeModalCommandsBlocked(): Boolean = viewing != null || showingPrivateNotes ||
+    fun routeModalCommandsBlocked(): Boolean = (viewing != null && !nativeChrome.dualPane) || viewerNavigationBusy || showingPrivateNotes ||
         controller.activeOperation.value != null ||
         choosingArchive != null || choosingArchiveImport || choosingPrivateNoteExport != null ||
         exportingAlbum != null || albumPickerPending || documentPickerPending || choosingImportSource ||
@@ -1137,14 +1139,21 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     fun ordinaryShellAction(block: () -> Unit) {
         if (!routeModalCommandsBlocked() && controller.route.value == AppRoute.Vault &&
             (controller.vaultState.value as? VaultState.Unlocked)?.generation == generation
-        ) block()
+        ) {
+            // Browse commands leave the current detail before changing its query or opening a modal.
+            viewing = null
+            block()
+        }
     }
     fun updateSearch(value: String) {
         if (!trashOpen && currentSearchScope() == renderedSearchScope &&
             (destination == VaultDestination.LIBRARY || destination == VaultDestination.SEARCH || openAlbum != null) &&
             !searchCommandsBlocked() && controller.route.value == AppRoute.Vault &&
             (controller.vaultState.value as? VaultState.Unlocked)?.generation == generation
-        ) terms = value
+        ) {
+            viewing = null
+            terms = value
+        }
     }
     val renderedSelection = selection.toSet()
     fun selectionAction(block: () -> Unit) {
@@ -1187,7 +1196,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             }
         },
         onToggleSelection = { projection ->
-            if (renderedMediaIsCurrent() && !routeModalCommandsBlocked()) selection = selection.toggle(projection.id)
+            if (renderedMediaIsCurrent() && !routeModalCommandsBlocked()) { viewing = null; selection = selection.toggle(projection.id) }
         },
         onOpenPrivateNotes = { ordinaryShellAction { terms = ""; focusManager.clearFocus(); searchFocusRequest = null; selection = emptySet(); recentlyAdded = false; initialCreateRequest = null; showingPrivateNotes = true } },
         onImport = { ordinaryShellAction { choosingImportSource = true } },
@@ -1407,7 +1416,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             viewerNavigationBusy = false
             scenes.viewerChrome?.invoke(null)
         }
-        scenes.activate(viewerScreen ?: shellScreen)
+        nativeChrome.onVisibleScreens = scenes::activateAll
         nativeChrome.configureScreens(factory = { screen ->
             scenes.createController(screen).also { content ->
                 content.navigationItem.title = when (screen) {
@@ -1421,11 +1430,15 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 (controller.vaultState.value as? VaultState.Unlocked)?.generation == generation
             ) {
                 if (viewing != null && target == shellScreen) viewing = null
-                else when (target) {
-                    is IosVaultScreen.Album -> navigateAlbum(albums.firstOrNull { it.id == target.id })
-                    is IosVaultScreen.Root -> if (target.destination == VaultDestination.ALBUMS)
-                        navigateAlbum(null) else shellActions.onDestination(target.destination)
-                    is IosVaultScreen.Viewer -> Unit
+                else {
+                    // A primary-pane Back changes the browse query just like a tile navigation.
+                    viewing = null
+                    when (target) {
+                        is IosVaultScreen.Album -> navigateAlbum(albums.firstOrNull { it.id == target.id })
+                        is IosVaultScreen.Root -> if (target.destination == VaultDestination.ALBUMS)
+                            navigateAlbum(null) else shellActions.onDestination(target.destination)
+                        is IosVaultScreen.Viewer -> Unit
+                    }
                 }
             }
         }, onRetire = scenes::retire)

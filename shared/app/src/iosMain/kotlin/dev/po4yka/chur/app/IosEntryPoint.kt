@@ -9,6 +9,10 @@ import dev.po4yka.chur.app.vault.IosVaultChrome
 import dev.po4yka.chur.app.vault.LocalIosVaultChrome
 import dev.po4yka.chur.app.vault.IosVaultScenes
 import dev.po4yka.chur.app.vault.LocalIosVaultScenes
+import dev.po4yka.chur.app.vault.AdaptiveRegion
+import dev.po4yka.chur.app.vault.adaptiveContentRegion
+import kotlinx.cinterop.useContents
+import platform.CoreGraphics.CGRectMake
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.uikit.OnFocusBehavior
@@ -104,6 +108,17 @@ internal class ChurRootViewController(
     private val content: UIViewController,
     private val vaultChrome: IosVaultChrome,
 ) : UIViewController(nibName = null, bundle = null) {
+    private var occlusions: List<AdaptiveRegion> = emptyList()
+    private var divisions: List<AdaptiveRegion> = emptyList()
+    private var statusBarInSplit = false
+
+    internal fun updateRegions(occlusions: List<AdaptiveRegion>, divisions: List<AdaptiveRegion>) {
+        if (this.occlusions == occlusions && this.divisions == divisions) return
+        this.occlusions = occlusions
+        this.divisions = divisions
+        view.setNeedsLayout()
+    }
+
     /** `null` outside the viewer, else whether the viewer shows its chrome. */
     var viewerChrome: Boolean? = null
         set(value) {
@@ -119,7 +134,7 @@ internal class ChurRootViewController(
         content.view.setAutoresizingMask(UIViewAutoresizingFlexibleWidth or UIViewAutoresizingFlexibleHeight)
         view.addSubview(content.view)
         content.didMoveToParentViewController(this)
-        val tabs = vaultChrome.controller
+        val tabs = vaultChrome.presentationController
         addChildViewController(tabs)
         tabs.view.setFrame(view.bounds)
         tabs.view.setAutoresizingMask(UIViewAutoresizingFlexibleWidth or UIViewAutoresizingFlexibleHeight)
@@ -127,13 +142,32 @@ internal class ChurRootViewController(
         tabs.didMoveToParentViewController(this)
     }
 
-    override fun preferredStatusBarStyle(): UIStatusBarStyle =
-        if (viewerChrome == null) UIStatusBarStyleDefault else UIStatusBarStyleLightContent
+    override fun viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        val (width, height) = view.bounds.useContents { size.width to size.height }
+        // Authentication and public content must not bridge an active fold.
+        val region = adaptiveContentRegion(width, height, occlusions, divisions)
+        content.view.setFrame(CGRectMake(region.x, region.y, region.width, region.height))
+        vaultChrome.presentationController.view.setFrame(view.bounds)
+        vaultChrome.updateGeometry(width, height, occlusions, divisions)
+        if (statusBarInSplit != vaultChrome.dualPane) {
+            statusBarInSplit = vaultChrome.dualPane
+            setNeedsStatusBarAppearanceUpdate()
+        }
+    }
 
-    override fun prefersStatusBarHidden(): Boolean = viewerChrome == false
+    override fun preferredStatusBarStyle(): UIStatusBarStyle =
+        if (viewerChrome == null || vaultChrome.dualPane) UIStatusBarStyleDefault else UIStatusBarStyleLightContent
+
+    override fun prefersStatusBarHidden(): Boolean = viewerChrome == false && !vaultChrome.dualPane
 
     override fun preferredStatusBarUpdateAnimation(): UIStatusBarAnimation =
         UIStatusBarAnimation.UIStatusBarAnimationFade
+}
+
+/** Geometry only: no route, media identity or vault data crosses this bridge. */
+fun churUpdateLayout(controller: UIViewController, occlusions: List<AdaptiveRegion>, divisions: List<AdaptiveRegion>) {
+    (controller as? ChurRootViewController)?.updateRegions(occlusions, divisions)
 }
 
 /** Check the linked native library before opening a runtime. */

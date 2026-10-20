@@ -83,7 +83,7 @@ internal class IosVaultScenes(
     private val chrome = WeakReference(chrome)
     private val slots = mutableMapOf<IosVaultScreen, IosVaultScene>()
     private var generation = 0L
-    private var activeScreen: IosVaultScreen? = null
+    private var activeScreens = emptySet<IosVaultScreen>()
     var viewerChrome: ((Boolean?) -> Unit)? = null
 
     fun begin(generation: Long) {
@@ -95,28 +95,31 @@ internal class IosVaultScenes(
     private fun scene(screen: IosVaultScreen): IosVaultScene = slots.getOrPut(screen) {
         check(generation != 0L) { "A native scene needs a presentation visit" }
         IosVaultScene(generation, checkNotNull(controller.get()), checkNotNull(chrome.get())).also {
-            it.active = screen == activeScreen
+            it.active = screen in activeScreens
         }
     }
 
-    fun publish(screen: IosVaultScreen, scrollAllowed: (() -> Boolean)? = null, scrollScope: Any? = null, content: @Composable (IosVaultScene) -> Unit) {
+    fun publish(screen: IosVaultScreen, scrollAllowed: (() -> Boolean)? = null, scrollScope: Any? = null, content: @Composable (IosVaultScene) -> Unit): IosVaultScene =
         scene(screen).also { it.scrollAllowed = scrollAllowed; it.scrollScope = scrollScope; it.content = content }
-    }
 
     fun activate(screen: IosVaultScreen?) {
-        activeScreen = screen
-        slots.forEach { (key, scene) -> scene.active = key == screen && !scene.retired }
+        activateAll(setOfNotNull(screen))
+    }
+
+    fun activateAll(screens: Set<IosVaultScreen>) {
+        activeScreens = screens
+        slots.forEach { (key, scene) -> scene.active = key in screens && !scene.retired }
     }
 
     fun retire(screen: IosVaultScreen) {
         slots.remove(screen)?.retire()
-        if (activeScreen == screen) activeScreen = null
+        activeScreens = activeScreens - screen
     }
 
     fun clear() {
         slots.values.forEach(IosVaultScene::retire)
         slots.clear()
-        activeScreen = null
+        activeScreens = emptySet()
         generation = 0L
         viewerChrome?.invoke(null)
     }

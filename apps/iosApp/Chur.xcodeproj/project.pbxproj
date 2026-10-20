@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		0AF955302A28E36B2BECD0FC /* LivePhotoCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2897ADC9CB3A0F55520C3DD3 /* LivePhotoCapture.swift */; };
 		0B89FE5F310BFE65CBCA410E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BA457393957CC3760250CA00 /* Assets.xcassets */; };
+		257703C5AF77C14627205C7E /* AdaptiveScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C3619FEAF6DF8DBA5CE8021 /* AdaptiveScene.swift */; };
 		3C2F99026109BB38D8A3A6B5 /* DirectoryExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 585146D2614423BAEC21F11B /* DirectoryExport.swift */; };
 		436EEBE1565AF5D80B62B712 /* IncomingShareSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8273036673BB879A9FAC937 /* IncomingShareSelection.swift */; };
 		447A82A14D059F7F406C3264 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 875D1A98DA0F6D353EA2C2F6 /* ShareViewController.swift */; };
@@ -58,6 +59,7 @@
 		2897ADC9CB3A0F55520C3DD3 /* LivePhotoCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePhotoCapture.swift; sourceTree = "<group>"; };
 		2FEF35F12A854F397F674ABE /* IncomingShareItems.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncomingShareItems.swift; sourceTree = "<group>"; };
 		31B0CA2861DF43D785A14AA2 /* ChurApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChurApp.swift; sourceTree = "<group>"; };
+		3C3619FEAF6DF8DBA5CE8021 /* AdaptiveScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveScene.swift; sourceTree = "<group>"; };
 		585146D2614423BAEC21F11B /* DirectoryExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectoryExport.swift; sourceTree = "<group>"; };
 		5D4757613DACDFC38CB949AB /* IncomingShareInbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncomingShareInbox.swift; sourceTree = "<group>"; };
 		6F7130D48FBEA04E2DF3740B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -79,6 +81,7 @@
 		02A8F559F87009166EBB3A44 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
+				3C3619FEAF6DF8DBA5CE8021 /* AdaptiveScene.swift */,
 				31B0CA2861DF43D785A14AA2 /* ChurApp.swift */,
 				585146D2614423BAEC21F11B /* DirectoryExport.swift */,
 				0523F2FBC67DAC872B495D25 /* DocumentImport.swift */,
@@ -246,6 +249,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				257703C5AF77C14627205C7E /* AdaptiveScene.swift in Sources */,
 				F45227CA2321CC19791DBBA6 /* ChurApp.swift in Sources */,
 				3C2F99026109BB38D8A3A6B5 /* DirectoryExport.swift in Sources */,
 				9EF133A9F98E205C798773E1 /* DocumentImport.swift in Sources */,

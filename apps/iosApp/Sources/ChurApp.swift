@@ -103,6 +103,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        configureAdaptiveBars()
         #if DEBUG
         let releaseApplication = false
         #else
@@ -235,7 +236,9 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         }
         let window = UIWindow(windowScene: scene)
         if host.storageReady {
-            window.rootViewController = IosEntryPointKt.ChurViewController(controller: host.controller, gate: host.gate, privacy: host.privacy)
+            let root = IosEntryPointKt.ChurViewController(controller: host.controller, gate: host.gate, privacy: host.privacy)
+            installAdaptiveGeometry(on: root)
+            window.rootViewController = root
         } else {
             let failure = UIViewController()
             failure.view.backgroundColor = .systemBackground

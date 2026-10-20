@@ -12,7 +12,7 @@ xcodegen generate --spec apps/iosApp/project.yml --project apps/iosApp
 
 ## Build
 
-Use Xcode 27, the Rust targets `aarch64-apple-ios-sim` and
+Use Xcode 27.1 or later, the Rust targets `aarch64-apple-ios-sim` and
 `aarch64-apple-ios`, and the repository's Gradle wrapper. Open
 `apps/iosApp/Chur.xcodeproj` and select the `Chur` scheme, or run:
 
@@ -40,6 +40,23 @@ Xcode embeds the App Group entitlements for Simulator with ad-hoc signing.
 This does not register capabilities or change an Apple Developer account.
 
 ## Host bindings
+
+`AdaptiveScene.swift` observes active UIKit reserved regions in the
+current container's logical coordinates. Reads in `updateConstraints` let
+UIKit invalidate geometry when a fold or camera region changes even without
+a window resize. The Kotlin root keeps authentication and public content in a
+contiguous usable region. The private host displays collection and viewer
+alongside each other when both fit, retaining their existing scene leases and
+one shared route/session; compact layouts use the same controllers in the
+navigation stack. Closing the viewer and locking retire the same owners in
+either arrangement. Folding alone does not change the background-lock policy
+or open an additional scene.
+
+Build SDK 27.1 is required for the host; the iOS 18 deployment target remains.
+Reserved-region queries run only on iOS 27.1 and later. Verify on the Duo
+simulator in outer, open, book and tabletop poses, including an open modal,
+keyboard, viewer playback and privacy cover. Simulator geometry checks do not
+replace physical-device camera and privacy acceptance.
 
 `AppDelegate` checks the native ABI before any runtime opens, creates one
 controller, excludes the vault and sync-state directories from backup, and

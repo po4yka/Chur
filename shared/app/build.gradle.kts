@@ -54,6 +54,9 @@ val iosHostSymbols =
         "NoDeviceUnlock",
         // Step 2: the entry point and the gate verdict it takes.
         "ChurViewController",
+        "churUpdateLayout",
+        "AdaptiveRegion",
+        "IosAdaptiveBars",
         "GateResult",
         // Step 3: the privacy cover.
         "IosPrivacyCover",

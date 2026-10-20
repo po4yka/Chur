@@ -13,7 +13,7 @@ This document describes the checked-in Android, iOS, KMP, and Rust builds. Run c
 | Compose Multiplatform | 1.12.1 |
 | Gradle | 9.8.1, pinned by wrapper and distribution SHA-256 |
 | Android | compile/target API 37; NDK pinned in version catalog |
-| Xcode | 27 for the documented local host build; deployment target iOS 18.0 |
+| Xcode | 27.1 or later for Duo reserved-region APIs; deployment target iOS 18.0 |
 | Swift | toolchain shipped with pinned Xcode |
 | Rust | exact version pinned by `rust/rust-toolchain.toml`; supported floor in `rust-version` |
 | Cargo tools | pinned or locked where reproducibility matters |
