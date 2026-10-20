@@ -6,7 +6,7 @@ gradle.projectsEvaluated {
       doLast {
         def lock = project.file('gradle.lockfile')
         def names = lock.readLines().findAll { !it.startsWith('#') && it.contains('=') }.collectMany { it.split('=',2)[1].split(',').toList() }.toSet()
-        project.configurations.findAll { it.canBeResolved && names.contains(it.name) && (it.name.toLowerCase().contains('android') || it.name.toLowerCase().contains('compileclasspath') || it.name.toLowerCase().contains('runtimeclasspath') || it.name.startsWith('allSourceSets') || it.name.startsWith('allTestSourceSets')) }.each { config ->
+        project.configurations.findAll { it.canBeResolved && names.contains(it.name) && (it.name.toLowerCase().contains('lintchecksclasspath') || it.name.toLowerCase().contains('android') || it.name.toLowerCase().contains('compileclasspath') || it.name.toLowerCase().contains('runtimeclasspath') || it.name.startsWith('allSourceSets') || it.name.startsWith('allTestSourceSets')) }.each { config ->
           def graph = config.incoming.resolutionResult
           def failures = graph.allDependencies.findAll { it instanceof UnresolvedDependencyResult }
           if (!failures.empty) throw new GradleException("${path}:${config.name}: " + failures.collect { it.failure.message }.join('\n'))

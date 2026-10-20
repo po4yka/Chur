@@ -14,7 +14,10 @@ import platform.UIKit.UIImage
 import platform.UIKit.UIImageView
 import platform.UIKit.UILabel
 import platform.UIKit.UIView
-import platform.UIKit.UIViewContentModeScaleAspectFit
+import platform.UIKit.UIViewContentMode.UIViewContentModeScaleAspectFit
+import platform.UIKit.isAccessibilityElement
+import platform.UIKit.accessibilityElementsHidden
+import platform.UIKit.secondaryLabelColor
 
 /** Host-owned Metal renderer. Only public mascot state crosses this boundary. */
 public interface IosSpiritRenderer {
