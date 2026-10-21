@@ -1,0 +1,351 @@
+{
+  "schema_version": 1,
+  "provenance": "Procedural FFmpeg testsrc2 pixels and 440 Hz sine; no user or third-party media.",
+  "ffmpeg_version": "ffmpeg version 9.0.2 Copyright (c) 2000-2026 the FFmpeg developers",
+  "generation": "python3 tests/media/hevc-main10/generate.py",
+  "pattern": {
+    "top_grayscale_patches": {
+      "y_range": [
+        0,
+        31
+      ],
+      "width": 32,
+      "luma_10bit": [
+        64,
+        240,
+        416,
+        592,
+        768,
+        940
+      ],
+      "chroma_10bit": 512
+    },
+    "bottom": "Moving testsrc2 color pattern at y=32..95"
+  },
+  "files": [
+    {
+      "filename": "sdr10-hvc1.mp4",
+      "length": 26496,
+      "sha256": "e1899bfaf18cfa813fcc592bdf5e87670054d0d82314437dc221f878fb29b84a",
+      "ffprobe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "index": 0,
+            "codec_name": "hevc",
+            "profile": "Main 10",
+            "codec_type": "video",
+            "codec_tag_string": "hvc1",
+            "width": 192,
+            "height": 96,
+            "pix_fmt": "yuv420p10le",
+            "color_range": "tv",
+            "color_space": "bt709",
+            "color_transfer": "bt709",
+            "color_primaries": "bt709",
+            "r_frame_rate": "24/1",
+            "nb_frames": "30"
+          },
+          {
+            "index": 1,
+            "codec_name": "aac",
+            "profile": "LC",
+            "codec_type": "audio",
+            "codec_tag_string": "mp4a",
+            "sample_rate": "48000",
+            "channels": 1,
+            "r_frame_rate": "0/0",
+            "nb_frames": "60"
+          }
+        ],
+        "format": {
+          "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+          "duration": "1.250000"
+        },
+        "first_video_frame_side_data": [
+          {
+            "side_data_type": "H.26[45] User Data Unregistered SEI message"
+          }
+        ]
+      }
+    },
+    {
+      "filename": "sdr10-hev1.mp4",
+      "length": 26515,
+      "sha256": "f99a485d648d050388a10c1d5045dbbc9d7ad172b23ab9bf940e6dc2542821fb",
+      "ffprobe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "index": 0,
+            "codec_name": "hevc",
+            "profile": "Main 10",
+            "codec_type": "video",
+            "codec_tag_string": "hev1",
+            "width": 192,
+            "height": 96,
+            "pix_fmt": "yuv420p10le",
+            "color_range": "tv",
+            "color_space": "bt709",
+            "color_transfer": "bt709",
+            "color_primaries": "bt709",
+            "r_frame_rate": "24/1",
+            "nb_frames": "30"
+          },
+          {
+            "index": 1,
+            "codec_name": "aac",
+            "profile": "LC",
+            "codec_type": "audio",
+            "codec_tag_string": "mp4a",
+            "sample_rate": "48000",
+            "channels": 1,
+            "r_frame_rate": "0/0",
+            "nb_frames": "60"
+          }
+        ],
+        "format": {
+          "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+          "duration": "1.250000"
+        },
+        "first_video_frame_side_data": [
+          {
+            "side_data_type": "H.26[45] User Data Unregistered SEI message"
+          }
+        ]
+      }
+    },
+    {
+      "filename": "hdr10-hvc1.mp4",
+      "length": 33804,
+      "sha256": "6a1caf47b460a55f34b08670c40dca0b427acd7ef0efad911fbbb25492b5e9aa",
+      "ffprobe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "index": 0,
+            "codec_name": "hevc",
+            "profile": "Main 10",
+            "codec_type": "video",
+            "codec_tag_string": "hvc1",
+            "width": 192,
+            "height": 96,
+            "pix_fmt": "yuv420p10le",
+            "color_range": "tv",
+            "color_space": "bt2020nc",
+            "color_transfer": "smpte2084",
+            "color_primaries": "bt2020",
+            "r_frame_rate": "24/1",
+            "nb_frames": "30"
+          },
+          {
+            "index": 1,
+            "codec_name": "aac",
+            "profile": "LC",
+            "codec_type": "audio",
+            "codec_tag_string": "mp4a",
+            "sample_rate": "48000",
+            "channels": 1,
+            "r_frame_rate": "0/0",
+            "nb_frames": "60"
+          }
+        ],
+        "format": {
+          "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+          "duration": "1.250000"
+        },
+        "first_video_frame_side_data": [
+          {
+            "side_data_type": "H.26[45] User Data Unregistered SEI message"
+          },
+          {
+            "side_data_type": "H.26[45] User Data Unregistered SEI message"
+          },
+          {
+            "side_data_type": "Mastering display metadata",
+            "red_x": "34000/50000",
+            "red_y": "16000/50000",
+            "green_x": "13250/50000",
+            "green_y": "34500/50000",
+            "blue_x": "7500/50000",
+            "blue_y": "3000/50000",
+            "white_point_x": "15635/50000",
+            "white_point_y": "16450/50000",
+            "min_luminance": "50/10000",
+            "max_luminance": "10000000/10000"
+          },
+          {
+            "side_data_type": "Content light level metadata",
+            "max_content": 1000,
+            "max_average": 400
+          }
+        ]
+      }
+    },
+    {
+      "filename": "hdr10-hev1.mp4",
+      "length": 33823,
+      "sha256": "b88ecfcfe96affb92e0be401d501f0e2bbc6de2792d99d145e020f4f66cfc20a",
+      "ffprobe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "index": 0,
+            "codec_name": "hevc",
+            "profile": "Main 10",
+            "codec_type": "video",
+            "codec_tag_string": "hev1",
+            "width": 192,
+            "height": 96,
+            "pix_fmt": "yuv420p10le",
+            "color_range": "tv",
+            "color_space": "bt2020nc",
+            "color_transfer": "smpte2084",
+            "color_primaries": "bt2020",
+            "r_frame_rate": "24/1",
+            "nb_frames": "30"
+          },
+          {
+            "index": 1,
+            "codec_name": "aac",
+            "profile": "LC",
+            "codec_type": "audio",
+            "codec_tag_string": "mp4a",
+            "sample_rate": "48000",
+            "channels": 1,
+            "r_frame_rate": "0/0",
+            "nb_frames": "60"
+          }
+        ],
+        "format": {
+          "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+          "duration": "1.250000"
+        },
+        "first_video_frame_side_data": [
+          {
+            "side_data_type": "H.26[45] User Data Unregistered SEI message"
+          },
+          {
+            "side_data_type": "H.26[45] User Data Unregistered SEI message"
+          },
+          {
+            "side_data_type": "Mastering display metadata",
+            "red_x": "34000/50000",
+            "red_y": "16000/50000",
+            "green_x": "13250/50000",
+            "green_y": "34500/50000",
+            "blue_x": "7500/50000",
+            "blue_y": "3000/50000",
+            "white_point_x": "15635/50000",
+            "white_point_y": "16450/50000",
+            "min_luminance": "50/10000",
+            "max_luminance": "10000000/10000"
+          },
+          {
+            "side_data_type": "Content light level metadata",
+            "max_content": 1000,
+            "max_average": 400
+          }
+        ]
+      }
+    },
+    {
+      "filename": "hlg-hvc1.mp4",
+      "length": 26294,
+      "sha256": "a1bd7d365cb8a1af8f1c74c4d06e61eff4043a21f40a3c82e8913a55a2a82368",
+      "ffprobe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "index": 0,
+            "codec_name": "hevc",
+            "profile": "Main 10",
+            "codec_type": "video",
+            "codec_tag_string": "hvc1",
+            "width": 192,
+            "height": 96,
+            "pix_fmt": "yuv420p10le",
+            "color_range": "tv",
+            "color_space": "bt2020nc",
+            "color_transfer": "arib-std-b67",
+            "color_primaries": "bt2020",
+            "r_frame_rate": "24/1",
+            "nb_frames": "30"
+          },
+          {
+            "index": 1,
+            "codec_name": "aac",
+            "profile": "LC",
+            "codec_type": "audio",
+            "codec_tag_string": "mp4a",
+            "sample_rate": "48000",
+            "channels": 1,
+            "r_frame_rate": "0/0",
+            "nb_frames": "60"
+          }
+        ],
+        "format": {
+          "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+          "duration": "1.250000"
+        },
+        "first_video_frame_side_data": [
+          {
+            "side_data_type": "H.26[45] User Data Unregistered SEI message"
+          }
+        ]
+      }
+    },
+    {
+      "filename": "hlg-hev1.mp4",
+      "length": 26313,
+      "sha256": "5913fe45b0a64cb498bfa3e94a0be720de093929e4db3982e21c304bf3cc7259",
+      "ffprobe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "index": 0,
+            "codec_name": "hevc",
+            "profile": "Main 10",
+            "codec_type": "video",
+            "codec_tag_string": "hev1",
+            "width": 192,
+            "height": 96,
+            "pix_fmt": "yuv420p10le",
+            "color_range": "tv",
+            "color_space": "bt2020nc",
+            "color_transfer": "arib-std-b67",
+            "color_primaries": "bt2020",
+            "r_frame_rate": "24/1",
+            "nb_frames": "30"
+          },
+          {
+            "index": 1,
+            "codec_name": "aac",
+            "profile": "LC",
+            "codec_type": "audio",
+            "codec_tag_string": "mp4a",
+            "sample_rate": "48000",
+            "channels": 1,
+            "r_frame_rate": "0/0",
+            "nb_frames": "60"
+          }
+        ],
+        "format": {
+          "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+          "duration": "1.250000"
+        },
+        "first_video_frame_side_data": [
+          {
+            "side_data_type": "H.26[45] User Data Unregistered SEI message"
+          }
+        ]
+      }
+    }
+  ]
+}
