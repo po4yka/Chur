@@ -259,10 +259,10 @@ class FileNoteStoreTest {
     fun cancellation_during_metadata_commit_keeps_blob_metadata_and_cache_consistent() = runTest {
         FileNoteStore(path).put(Note("a", "Files", "body", 1))
         var duringWrite: () -> Unit = {}
-        val store = FileNoteStore(path, ::readNoteFile) { file, contents ->
+        val store = FileNoteStore(path, ::readNoteFile, writeFile = { file, contents ->
             duringWrite()
             writeNoteFile(file, contents)
-        }
+        })
         val operation = launch { store.addAttachment("a", "file.bin", byteArrayOf(1, 2, 3)) }
         duringWrite = { operation.cancel() }
         operation.join()
@@ -452,4 +452,95 @@ class FileNoteStoreTest {
         }
     }
 
+    @Test
+    fun load_removes_interrupted_write_leftovers_and_unreferenced_blobs_but_keeps_live_ones() = runTest {
+        val store = FileNoteStore(path)
+        val note = store.put(Note(id = "a", title = "with file", body = "", updatedMs = 1))
+        val live = store.addAttachment(note.id, "example.bin", byteArrayOf(1, 2, 3))
+        val attachments = File("$path.attachments")
+        val liveBlob = File(attachments, store.all().single().attachments.single().storageId)
+        assertTrue(liveBlob.isFile)
+        // What a kill leaves: a blob written before its commit, temporaries, and the state temporary.
+        val orphan = File(attachments, "0123456789abcdef0123456789abcdef").apply { writeBytes(byteArrayOf(9)) }
+        val blobTemporary = File(attachments, "fedcba9876543210fedcba9876543210.tmp").apply { writeBytes(byteArrayOf(8)) }
+        val liveTemporary = File(attachments, "${liveBlob.name}.tmp").apply { writeBytes(byteArrayOf(7)) }
+        val stateTemporary = File("$path.tmp").apply { writeText("{") }
+        // Names that this store never makes stay where they are.
+        val foreign = File(attachments, "keep-me.tmp").apply { writeBytes(byteArrayOf(6)) }
+        val neighbour = File(directory, "other.tmp").apply { writeText("other") }
+
+        val reopened = FileNoteStore(path)
+        assertEquals(listOf("a"), reopened.all().map { it.id })
+
+        assertFalse(orphan.exists())
+        assertFalse(blobTemporary.exists())
+        assertFalse(liveTemporary.exists())
+        assertFalse(stateTemporary.exists())
+        assertTrue(foreign.exists())
+        assertTrue(neighbour.exists())
+        assertContentEquals(byteArrayOf(1, 2, 3), reopened.readAttachment(note.id, live.id))
+    }
+
+    @Test
+    fun a_blob_that_only_a_retained_revision_names_survives_the_sweep() = runTest {
+        val store = FileNoteStore(path)
+        val note = store.put(Note(id = "a", title = "with file", body = "", updatedMs = 1))
+        val attachment = store.addAttachment(note.id, "example.bin", byteArrayOf(4, 5))
+        val storageId = store.all().single().attachments.single().storageId
+        store.removeAttachment(note.id, attachment.id)
+        val blob = File("$path.attachments", storageId)
+        val named = store.history(note.id).any { version -> version.note.attachments.any { it.storageId == storageId } }
+
+        FileNoteStore(path).all()
+
+        // A retained revision keeps its payload for restoration; only an unnamed blob goes.
+        assertEquals(named, blob.exists())
+    }
+
+    @Test
+    fun an_unreadable_state_file_deletes_nothing() = runTest {
+        val store = FileNoteStore(path)
+        val note = store.put(Note(id = "a", title = "with file", body = "", updatedMs = 1))
+        store.addAttachment(note.id, "example.bin", byteArrayOf(1))
+        val attachments = File("$path.attachments")
+        val before = attachments.list()!!.toSortedSet()
+        File(path).writeText("{ not json")
+        val stateTemporary = File("$path.tmp").apply { writeText("{") }
+        val orphan = File(attachments, "0123456789abcdef0123456789abcdef").apply { writeBytes(byteArrayOf(9)) }
+
+        assertFailsWith<IllegalStateException> { FileNoteStore(path).all() }
+
+        assertTrue(stateTemporary.exists())
+        assertTrue(orphan.exists())
+        assertEquals(before + orphan.name, attachments.list()!!.toSortedSet())
+    }
+
+    @Test
+    fun a_missing_state_file_deletes_nothing() = runTest {
+        val attachments = File("$path.attachments").apply { mkdirs() }
+        val orphan = File(attachments, "0123456789abcdef0123456789abcdef").apply { writeBytes(byteArrayOf(9)) }
+
+        assertTrue(FileNoteStore(path).all().isEmpty())
+
+        assertTrue(orphan.exists())
+    }
+
+    @Test
+    fun an_atomic_write_leaves_no_temporary_beside_the_file() = runTest {
+        FileNoteStore(path).put(Note(id = "a", title = "one", body = "", updatedMs = 1))
+
+        assertEquals(listOf("notes.json"), directory.list()!!.toList())
+    }
+
+    @Test
+    fun a_failed_directory_sync_after_the_rename_fails_no_write() = runTest {
+        assertTrue(syncNoteDirectory(directory))
+        assertFalse(syncNoteDirectory(directory) { throw IOException("sync failed") })
+        assertFalse(syncNoteDirectory(File(directory, "missing")))
+        // The store's own writes keep their state and blobs whatever the sync reports.
+        val store = FileNoteStore(path)
+        val note = store.put(Note(id = "a", title = "with file", body = "", updatedMs = 1))
+        val attachment = store.addAttachment(note.id, "example.bin", byteArrayOf(1, 2))
+        assertContentEquals(byteArrayOf(1, 2), FileNoteStore(path).readAttachment(note.id, attachment.id))
+    }
 }

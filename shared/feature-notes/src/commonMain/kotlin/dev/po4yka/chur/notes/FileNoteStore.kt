@@ -29,8 +29,9 @@ class FileNoteStore internal constructor(
     private val path: String,
     private val readFile: (String) -> String?,
     private val writeFile: (String, String) -> Unit,
+    private val listDirectory: (String) -> List<String> = { emptyList() },
 ) : NoteStore {
-    constructor(path: String) : this(path, ::readNoteFile, ::writeNoteFile)
+    constructor(path: String) : this(path, ::readNoteFile, ::writeNoteFile, ::listNoteDirectory)
 
     private val mutex = Mutex()
     private var cache: NoteState? = null
@@ -202,7 +203,8 @@ class FileNoteStore internal constructor(
         }
     }
 
-    // A failed cleanup leaves an unreachable public blob, never a broken saved note.
+    // A failed cleanup leaves an unreachable public blob, never a broken saved note;
+    // the sweep of the next load removes it.
     private suspend fun deleteBlob(storageId: String) = withContext(Dispatchers.Default) {
         runCatching { deleteNoteBlob(blobPath(storageId)) }
         Unit
@@ -241,8 +243,35 @@ class FileNoteStore internal constructor(
         } else {
             NoteState()
         }
+        if (text != null) sweep(state)
         cache = state
         return state
+    }
+
+    /**
+     * Removes what an interrupted write left behind: the temporary copy of
+     * the state file, attachment temporaries, and attachment blobs that no
+     * note or revision names (a blob is written before the commit that
+     * references it). It runs only after the state file parsed, so a state
+     * that cannot be read never costs a blob. It removes only names this
+     * store makes. One store instance owns a path. A failed removal is
+     * retried at the next load.
+     */
+    private suspend fun sweep(state: NoteState) = withContext(Dispatchers.Default) {
+        runCatching {
+            val name = path.substringAfterLast('/')
+            val directory = path.substringBeforeLast('/', "")
+            val attachments = "$path.attachments"
+            val live = state.blobs().keys
+            val stale = listDirectory(directory).filter { it == "$name.tmp" }
+                .map { if (directory.isEmpty()) it else "$directory/$it" } +
+                listDirectory(attachments).filter { entry ->
+                    val id = entry.removeSuffix(".tmp")
+                    NoteAttachments.validId(id) && (entry != id || id !in live)
+                }.map { "$attachments/$it" }
+            stale.forEach { runCatching { deleteNoteBlob(it) } }
+        }
+        Unit
     }
 
     /** Publish the new in-memory state only after its atomic write succeeds. */
@@ -312,3 +341,6 @@ internal expect fun writeNoteFile(path: String, text: String)
 internal expect fun readNoteBlob(path: String, maxBytes: Int): ByteArray?
 internal expect fun writeNoteBlob(path: String, bytes: ByteArray)
 internal expect fun deleteNoteBlob(path: String)
+
+/** The entry names in a directory, or none when it does not exist. */
+internal expect fun listNoteDirectory(path: String): List<String>

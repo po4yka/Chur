@@ -62,6 +62,10 @@ internal actual fun writeNoteBlob(path: String, bytes: ByteArray) {
     check(data.writeToFile(path, atomically = true)) { "cannot store attachment content" }
 }
 
+internal actual fun listNoteDirectory(path: String): List<String> =
+    platform.Foundation.NSFileManager.defaultManager.contentsOfDirectoryAtPath(path.ifEmpty { "." }, null)
+        ?.mapNotNull { it as? String }.orEmpty()
+
 internal actual fun deleteNoteBlob(path: String) {
     val manager = platform.Foundation.NSFileManager.defaultManager
     check(!manager.fileExistsAtPath(path) || manager.removeItemAtPath(path, null)) { "cannot delete attachment content" }
