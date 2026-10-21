@@ -8,6 +8,7 @@ import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.allocArray
 import kotlinx.cinterop.toKString
 import kotlinx.cinterop.LongVar
+import kotlinx.cinterop.ObjCObjectVar
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.autoreleasepool
@@ -25,6 +26,10 @@ import platform.AVFAudio.AVLinearPCMIsFloatKey
 import platform.AVFAudio.AVLinearPCMIsNonInterleaved
 import platform.AVFoundation.AVAsset
 import platform.AVFoundation.AVAssetImageGenerator
+import platform.AVFoundation.AVAssetImageGeneratorDynamicRangePolicyForceSDR
+import platform.AVFoundation.AVAssetImageGeneratorDynamicRangePolicyMatchSource
+import platform.AVFoundation.AVErrorDecodeFailed
+import platform.AVFoundation.AVFoundationErrorDomain
 import platform.AVFoundation.AVAssetReader
 import platform.AVFoundation.AVAssetReaderTrackOutput
 import platform.AVFoundation.AVAssetTrack
@@ -83,10 +88,20 @@ import platform.CoreGraphics.CGSizeMake
 import platform.CoreGraphics.CGImageGetHeight
 import platform.CoreGraphics.CGImageGetWidth
 import platform.CoreGraphics.CGImageRelease
+import platform.CoreGraphics.CGBitmapContextCreate
+import platform.CoreGraphics.CGBitmapContextCreateImage
+import platform.CoreGraphics.CGColorSpaceCreateWithName
+import platform.CoreGraphics.CGColorSpaceRelease
+import platform.CoreGraphics.CGContextDrawImage
+import platform.CoreGraphics.CGContextRelease
+import platform.CoreGraphics.CGImageAlphaInfo
+import platform.CoreGraphics.kCGBitmapByteOrder32Big
+import platform.CoreGraphics.kCGColorSpaceSRGB
 import platform.CoreMedia.CMTimeGetSeconds
 import platform.CoreMedia.CMTimeMake
 import platform.Foundation.NSData
 import platform.Foundation.NSDateFormatter
+import platform.Foundation.NSError
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSFileSize
 import platform.Foundation.NSLocale
@@ -314,6 +329,9 @@ class IosMediaCodec : MediaCodec {
             width = bounded.first
             height = bounded.second
         }
+        if (probe.mediaClass == MediaBounds.CLASS_VIDEO) {
+            return videoSdrDerivative(image, width, height, kind, cancelRequested)
+        }
 
         // A scale of 1.0 keeps the pixel size the target names rather than
         // multiplying it by the screen scale: §11 makes the derivative's size a
@@ -440,13 +458,57 @@ class IosMediaCodec : MediaCodec {
         try { UIImage.imageWithCGImage(frame) } finally { CGImageRelease(frame) }
     }
 
-    private fun posterFrame(url: NSURL, maxEdge: Int): UIImage? {
+    private fun posterFrame(url: NSURL, maxEdge: Int): UIImage? = memScoped {
         val asset: AVAsset = mediaAsset(url)
         val generator = AVAssetImageGenerator(asset)
+        // iOS 18 is the minimum deployment target. AVFoundation converts PQ/HLG
+        // to SDR; the bitmap step below also converts wide primaries to sRGB.
+        generator.dynamicRangePolicy = AVAssetImageGeneratorDynamicRangePolicyForceSDR
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSizeMake(maxEdge.toDouble(), maxEdge.toDouble())
-        val frame = generator.copyCGImageAtTime(CMTimeMake(0, 1), null, null) ?: return null
-        return try { UIImage.imageWithCGImage(frame) } finally { CGImageRelease(frame) }
+        val error = alloc<ObjCObjectVar<NSError?>>()
+        error.value = null
+        val frame = generator.copyCGImageAtTime(CMTimeMake(0, 1), null, error.ptr) ?: run {
+            // Some native configurations can decode PQ but fail ForceSDR's
+            // conversion with AVErrorDecodeFailed. Decode the source image and
+            // let the SDR sRGB CGContext below perform Apple's native tone map.
+            val failure = error.value
+            if (failure == null || failure.domain != AVFoundationErrorDomain || failure.code != AVErrorDecodeFailed) return@memScoped null
+            val fallback = AVAssetImageGenerator(asset)
+            fallback.dynamicRangePolicy = AVAssetImageGeneratorDynamicRangePolicyMatchSource
+            fallback.appliesPreferredTrackTransform = true
+            fallback.maximumSize = generator.maximumSize
+            fallback.copyCGImageAtTime(CMTimeMake(0, 1), null, null) ?: return@memScoped null
+        }
+        try { UIImage.imageWithCGImage(frame) } finally { CGImageRelease(frame) }
+    }
+
+    /** Video previews use an explicit 8-bit sRGB JPEG; original video is unchanged. */
+    private fun videoSdrDerivative(
+        image: UIImage,
+        width: Int,
+        height: Int,
+        kind: StreamKind,
+        cancelRequested: () -> Boolean,
+    ): Derivative? {
+        if (cancelRequested()) return null
+        val space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB) ?: return null
+        val context = try {
+            CGBitmapContextCreate(null, width.toULong(), height.toULong(), 8uL, width.toULong() * 4uL, space,
+                CGImageAlphaInfo.kCGImageAlphaNoneSkipLast.value or kCGBitmapByteOrder32Big)
+        } finally { CGColorSpaceRelease(space) } ?: return null
+        try {
+            CGContextDrawImage(context, CGRectMake(0.0, 0.0, width.toDouble(), height.toDouble()), image.CGImage)
+            if (cancelRequested()) return null
+            val frame = CGBitmapContextCreateImage(context) ?: return null
+            try {
+                val data = UIImageJPEGRepresentation(UIImage.imageWithCGImage(frame), MediaBounds.quality(kind) / 100.0)
+                    ?: return null
+                val bytes = data.toByteArray()
+                if (cancelRequested()) { bytes.fill(0); return null }
+                return Derivative(kind, bytes, width, height)
+            } finally { CGImageRelease(frame) }
+        } finally { CGContextRelease(context) }
     }
 
     private fun urlOf(media: PickedMedia): NSURL? = media.platformHandle as? NSURL

@@ -88,4 +88,8 @@ tasks.withType<KotlinNativeSimulatorTest>().configureEach {
     inputs.file(fixtures.file("camera.dng")).withPathSensitivity(PathSensitivity.RELATIVE)
     environment("CHUR_MEDIA_TEST_FIXTURES", fixtures.asFile.absolutePath)
     environment("SIMCTL_CHILD_CHUR_MEDIA_TEST_FIXTURES", fixtures.asFile.absolutePath)
+    val hevcFixtures = rootProject.layout.projectDirectory.dir("tests/media/hevc-main10")
+    inputs.dir(hevcFixtures).withPathSensitivity(PathSensitivity.RELATIVE)
+    environment("CHUR_HEVC_MAIN10_FIXTURES", hevcFixtures.asFile.absolutePath)
+    environment("SIMCTL_CHILD_CHUR_HEVC_MAIN10_FIXTURES", hevcFixtures.asFile.absolutePath)
 }
