@@ -10,6 +10,7 @@ import android.view.TextureView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.findViewTreeLifecycleOwner
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
@@ -89,9 +90,18 @@ private class SpiritTexture(context: Context, private val data: ByteArray, priva
     private var motionInputAge = 0f
     private var state = SpiritRenderState()
     private var clipTime = 0f
-    private var restPose = emptyMap<Int, FloatArray>()
-    private var authoredPose = emptyMap<Int, FloatArray>()
-    private var transitionPose = emptyMap<Int, FloatArray>()
+    private var animationIndex = emptyMap<String, Int>()
+    private var poseInstances = intArrayOf()
+    private var restPose = emptyArray<FloatArray>()
+    private var authoredPose = emptyArray<FloatArray>()
+    private var transitionPose: Array<FloatArray>? = null
+    private var authoredReady = false
+    private var tailPoseIndex = intArrayOf()
+    private var tailInstances = intArrayOf()
+    private var eyeInstances = intArrayOf()
+    private var rootInstance = 0
+    private val leanTransform = FloatArray(16)
+    private val tailScratch = FloatArray(16)
     private var transitionTime = 0f
     private var displayedAperture = 1f
     private var transitionAperture = 1f
@@ -106,7 +116,7 @@ private class SpiritTexture(context: Context, private val data: ByteArray, priva
     private val frameClock = Choreographer.getInstance()
     private val hostActivity = generateSequence(context) { (it as? ContextWrapper)?.baseContext }
         .filterIsInstance<Activity>().firstOrNull()
-    private val hostLifecycle = (hostActivity as? LifecycleOwner)?.lifecycle
+    private var hostLifecycle: Lifecycle? = null
     private val lifecycleObserver = LifecycleEventObserver { _, event ->
         resumed = hostLifecycle?.currentState?.isAtLeast(Lifecycle.State.RESUMED) == true
         if (event == Lifecycle.Event.ON_DESTROY) release()
@@ -118,12 +128,12 @@ private class SpiritTexture(context: Context, private val data: ByteArray, priva
 
     fun submit(value: SpiritRenderState) {
         if (value.clipSerial != state.clipSerial || value.clip != state.clip || value.reducedMotion != state.reducedMotion) {
-            transitionPose = authoredPose.mapValues { it.value.copyOf() }
+            transitionPose = if (authoredReady) Array(authoredPose.size) { authoredPose[it].copyOf() } else null
             transitionTime = 0f
             transitionAperture = displayedAperture
             clipTime = 0f
         }
-        if (value.reducedMotion) { lean = 0f; tailSignals.fill(0f); transitionPose = emptyMap(); displayedAperture = 1f; transitionAperture = 1f }
+        if (value.reducedMotion) { lean = 0f; tailSignals.fill(0f); transitionPose = null; displayedAperture = 1f; transitionAperture = 1f }
         if (state != value) dirty = true
         if (value.reducedMotion) motionInputAge = Float.POSITIVE_INFINITY
         else if (value.motionSerial != state.motionSerial) motionInputAge = 0f
@@ -134,6 +144,7 @@ private class SpiritTexture(context: Context, private val data: ByteArray, priva
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         released = false
+        hostLifecycle = (findViewTreeLifecycleOwner() ?: hostActivity as? LifecycleOwner)?.lifecycle
         resumed = hostLifecycle?.currentState?.isAtLeast(Lifecycle.State.RESUMED) == true
         hostLifecycle?.addObserver(lifecycleObserver)
         try { createRenderer(); schedule() } catch (_: Exception) { release(); failed() }
@@ -176,15 +187,24 @@ private class SpiritTexture(context: Context, private val data: ByteArray, priva
         rl.loadResources(a)
         eyes = a.entities.filter { a.getName(it) == "Spirit_Eye_L" || a.getName(it) == "Spirit_Eye_R" }.toIntArray()
         check(eyes.size == 2) { "Eye contract mismatch" }
-        check(eyes.all { e.renderableManager.getMorphTargetCount(e.renderableManager.getInstance(it)) == 11 })
-        val animationNames = (0 until a.instance.animator.animationCount)
-            .map { a.instance.animator.getAnimationName(it) }.toSet()
-        check(animationNames.containsAll(listOf("idle_soft", "tap_react", "hold_enter", "hold_loop", "release_settle"))) {
-            "Animation contract mismatch"
-        }
-        tails = spiritTailJoints.map { joint -> a.entities.first { a.getName(it) == joint.name } }.toIntArray()
-        restPose = a.entities.filter { it != a.root && e.transformManager.getInstance(it) != 0 }
-            .associateWith { e.transformManager.getTransform(e.transformManager.getInstance(it), null) }
+        eyeInstances = IntArray(2) { e.renderableManager.getInstance(eyes[it]) }
+        check(eyeInstances.all { it != 0 && e.renderableManager.getMorphTargetCount(it) == 11 }) { "Eye contract mismatch" }
+        check(eyes.all { a.getMorphTargetNames(it).toList() == apertureNames }) { "Eye morph contract mismatch" }
+        val animator = a.instance.animator
+        animationIndex = (0 until animator.animationCount).associate { animator.getAnimationName(it) to it }
+        check(animationIndex.keys.containsAll(requiredClips)) { "Animation contract mismatch" }
+        tails = spiritTailJoints.map { joint -> a.entities.firstOrNull { a.getName(it) == joint.name } ?: 0 }.toIntArray()
+        check(tails.none { it == 0 }) { "Tail contract mismatch" }
+        val tm = e.transformManager
+        val poseEntities = a.entities.filter { it != a.root && tm.getInstance(it) != 0 }
+        poseInstances = IntArray(poseEntities.size) { tm.getInstance(poseEntities[it]) }
+        restPose = Array(poseEntities.size) { tm.getTransform(poseInstances[it], null) }
+        authoredPose = Array(poseEntities.size) { FloatArray(16) }
+        authoredReady = false; transitionPose = null
+        tailPoseIndex = IntArray(tails.size) { poseEntities.indexOf(tails[it]) }
+        check(tailPoseIndex.none { it < 0 }) { "Tail contract mismatch" }
+        tailInstances = IntArray(tails.size) { tm.getInstance(tails[it]) }
+        rootInstance = tm.getInstance(a.root)
         // The small animated mesh must not be culled by imported bind-pose bounds.
         for (entity in a.entities) {
             val renderable = e.renderableManager.getInstance(entity)
@@ -248,46 +268,45 @@ private class SpiritTexture(context: Context, private val data: ByteArray, priva
         val animator = a.instance.animator
         // Export optimizes constant channels out of some clips. Restore rest first,
         // otherwise an interrupted tap can leave MotionRoot rotated during a hold.
-        for ((entity, rest) in restPose) e.transformManager.setTransform(e.transformManager.getInstance(entity), rest)
+        val tm = e.transformManager
+        for (i in poseInstances.indices) tm.setTransform(poseInstances[i], restPose[i])
         val sample = sampleSpiritClip(state.clip, clipTime, state.reducedMotion)
-        val index = (0 until animator.animationCount).firstOrNull { animator.getAnimationName(it) == sample.name }
+        val index = animationIndex[sample.name]
         if (index != null) animator.applyAnimation(index, sample.seconds)
         // Snapshot the actually displayed authored pose, including an interrupted blend.
         // This avoids a snap when a fast drag-release interrupts an earlier transition.
-        val tm = e.transformManager
-        val nextPose = mutableMapOf<Int, FloatArray>()
         val alpha = (transitionTime / .12f).coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
-        for (entity in a.entities) {
-            if (entity == a.root) continue
-            val instance = tm.getInstance(entity)
-            if (instance == 0) continue
-            val target = tm.getTransform(instance, null)
-            val previous = transitionPose[entity]
-            val result = if (previous != null && alpha < 1f && !state.reducedMotion)
-                blendSpiritPose(previous, target, alpha) else target
-            tm.setTransform(instance, result)
-            nextPose[entity] = result
+        val previousPose = transitionPose
+        for (i in poseInstances.indices) {
+            val buffer = authoredPose[i]
+            tm.getTransform(poseInstances[i], buffer)
+            val previous = previousPose?.get(i)
+            if (previous != null && alpha < 1f && !state.reducedMotion) {
+                val blended = blendSpiritPose(previous, buffer, alpha)
+                if (blended !== buffer) System.arraycopy(blended, 0, buffer, 0, 16)
+            }
+            tm.setTransform(poseInstances[i], buffer)
         }
-        authoredPose = nextPose
-        if (alpha >= 1f) transitionPose = emptyMap()
+        authoredReady = true
+        if (alpha >= 1f) transitionPose = null
         val motionSignal = if (state.reducedMotion || motionInputAge > .08f) 0f else state.dragX
         lean += ((-motionSignal * 12f) - lean) * (1f - exp(-dt * 12f))
-        val transform = FloatArray(16)
-        Matrix.setIdentityM(transform, 0); Matrix.rotateM(transform, 0, lean, 0f, 0f, 1f)
-        e.transformManager.setTransform(e.transformManager.getInstance(a.root), transform)
+        Matrix.setIdentityM(leanTransform, 0); Matrix.rotateM(leanTransform, 0, lean, 0f, 0f, 1f)
+        tm.setTransform(rootInstance, leanTransform)
         // Eye overrides happen AFTER clip evaluation. No TRS crossfade can corrupt aperture weights.
         val targetAperture = SpiritEyes.aperture(sample, state.reducedMotion)
         displayedAperture = if (state.reducedMotion) 1f else
             transitionAperture * (1f - alpha) + targetAperture * alpha
         val weights = SpiritEyes.weights(displayedAperture)
-        for (entity in eyes) e.renderableManager.setMorphWeights(e.renderableManager.getInstance(entity), weights, 0)
+        for (instance in eyeInstances) e.renderableManager.setMorphWeights(instance, weights, 0)
         tailSignals = advanceSpiritTail(tailSignals, -motionSignal, dt, state.reducedMotion)
-        for ((i, entity) in tails.withIndex()) {
+        for (i in tailInstances.indices) {
             val joint = spiritTailJoints[i]
-            val pose = authoredPose.getValue(entity).copyOf()
+            val pose = tailScratch
+            System.arraycopy(authoredPose[tailPoseIndex[i]], 0, pose, 0, 16)
             Matrix.rotateM(pose, 0, tailSignals[i] * joint.maxRadians * (180f / Math.PI.toFloat()),
                 joint.axis[0], joint.axis[1], joint.axis[2])
-            tm.setTransform(tm.getInstance(entity), pose)
+            tm.setTransform(tailInstances[i], pose)
         }
         animator.updateBoneMatrices()
         val swap = swapChain
@@ -303,7 +322,9 @@ private class SpiritTexture(context: Context, private val data: ByteArray, priva
         released = true; stop(); hostLifecycle?.removeObserver(lifecycleObserver)
         val e = engine ?: return
         helper?.detach(); helper = null
-        asset?.let { scene?.removeEntities(it.entities); loader?.destroyAsset(it) }; asset = null; restPose = emptyMap(); authoredPose = emptyMap(); transitionPose = emptyMap()
+        asset?.let { scene?.removeEntities(it.entities); loader?.destroyAsset(it) }; asset = null
+        animationIndex = emptyMap(); poseInstances = intArrayOf(); restPose = emptyArray(); authoredPose = emptyArray(); transitionPose = null; authoredReady = false
+        tailPoseIndex = intArrayOf(); tailInstances = intArrayOf(); eyeInstances = intArrayOf(); rootInstance = 0
         resources?.destroy(); resources = null
         loader?.destroy(); loader = null
         materials?.destroyMaterials(); materials?.destroy(); materials = null
@@ -315,3 +336,8 @@ private class SpiritTexture(context: Context, private val data: ByteArray, priva
         e.destroy(); engine = null
     }
 }
+
+private val requiredClips: List<String> = listOf("idle_soft", "notice", "tap_react", "hold_enter", "hold_loop",
+    "release_settle", "sleep_enter", "sleep_loop", "wake")
+private val apertureNames: List<String> = listOf("Aperture_00000", "Aperture_00025", "Aperture_00050", "Aperture_00100",
+    "Aperture_00250", "Aperture_00750", "Aperture_01500", "Aperture_03000", "Aperture_05000", "Aperture_07000", "Aperture_08500")
