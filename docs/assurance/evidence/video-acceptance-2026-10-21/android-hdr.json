@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "device": {
+    "model": "Pixel 8 Pro",
+    "sdk": "37"
+  },
+  "result": "passed",
+  "test_count": 1,
+  "native_decoder_output": {
+    "sdr10-hvc1": {
+      "transfer": 3,
+      "standard": 1,
+      "range": 2
+    },
+    "hdr10-hvc1": {
+      "transfer": 6,
+      "standard": 6,
+      "range": 2
+    },
+    "hlg-hvc1": {
+      "transfer": 7,
+      "standard": 6,
+      "range": 2
+    },
+    "sdr10-hev1": {
+      "transfer": 3,
+      "standard": 1,
+      "range": 2
+    },
+    "hdr10-hev1": {
+      "transfer": 6,
+      "standard": 6,
+      "range": 2
+    },
+    "hlg-hev1": {
+      "transfer": 7,
+      "standard": 6,
+      "range": 2
+    }
+  },
+  "surfaceflinger_output": {
+    "hdr10-hvc1": {
+      "app_surface": "dev.po4yka.chur SurfaceView",
+      "dataspace": "BT2020_ITU_PQ",
+      "dataspace_value": 298188800
+    },
+    "hlg-hvc1": {
+      "app_surface": "dev.po4yka.chur SurfaceView",
+      "dataspace": "BT2020_ITU_HLG",
+      "dataspace_value": 302383104
+    },
+    "hdr10-hev1": {
+      "app_surface": "dev.po4yka.chur SurfaceView",
+      "dataspace": "BT2020_ITU_PQ",
+      "dataspace_value": 298188800
+    },
+    "hlg-hev1": {
+      "app_surface": "dev.po4yka.chur SurfaceView",
+      "dataspace": "BT2020_ITU_HLG",
+      "dataspace_value": 302383104
+    }
+  },
+  "physical_luminance_measured": false,
+  "limitations": "Layer dataspace and decoder output do not establish calibrated luminance, gamut or Dolby Vision RPU rendering"
+}

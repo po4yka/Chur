@@ -1,0 +1,19 @@
+{
+  "schema_version" : 1,
+  "platform" : "ios",
+  "simulator" : 1,
+  "device_model" : "iPhone",
+  "os_version" : "27.0",
+  "fixture" : "camera-dolby-vision.mov",
+  "passed" : 1,
+  "eligible_for_hdr_playback" : 0,
+  "native_hdr_modes" : 0,
+  "decoded_pixel_format" : 2016686640,
+  "decoded_transfer_function" : "ITU_R_2100_HLG",
+  "decoded_hdr_buffer_verified" : 1,
+  "native_player_layer_first_frame_ready" : 1,
+  "layer_attachment" : "offscreen UIView layer in native test process",
+  "physical_hdr_luminance_verified" : 0,
+  "display_verification_reason" : "Simulator does not establish physical HDR display output",
+  "dolby_vision_limitation" : "HLG base-layer decode does not prove Dolby Vision RPU rendering"
+}

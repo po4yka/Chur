@@ -234,8 +234,9 @@ actual fun VaultPlayer(
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = {
-                (if (audio) LayoutInflater.from(it).inflate(R.layout.chur_audio_player, null) as PlayerView
-                else PlayerView(it)).apply {
+                (LayoutInflater.from(it).inflate(
+                    if (audio) R.layout.chur_audio_player else R.layout.chur_video_player, null,
+                ) as PlayerView).apply {
                     if (audio) {
                         // The bounded, authenticated derivative stays behind
                         // Media3's controls throughout audio playback. Do not
