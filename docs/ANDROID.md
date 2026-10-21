@@ -918,6 +918,8 @@ The activity must display a neutral public/privacy surface before background sna
 - real/decoy indicators;
 - unlock failures.
 
+The exported `singleTask` activity sets `android:taskAffinity=""`. The default affinity is the package name, and another app can declare that affinity to place its own activity in Chur's task, above or below the vault (task hijacking, which API 29 and 30 do not block without a security patch).
+
 ### 20.3 External surfaces
 
 Private content MUST NOT be published to:

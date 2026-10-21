@@ -204,6 +204,17 @@ class AndroidSecurityTest {
     }
 
     @Test
+    fun mainActivityHasNoTaskAffinityThatAnotherAppCouldClaim() {
+        val context = instrumentation.targetContext
+        val info = context.packageManager.getActivityInfo(
+            android.content.ComponentName(context, MainActivity::class.java), 0,
+        )
+        // The default affinity is the package name, which another app can declare to
+        // put its own activity into Chur's task (task hijacking on API 29 and 30).
+        assertTrue("taskAffinity=${info.taskAffinity}", info.taskAffinity.isNullOrEmpty())
+    }
+
+    @Test
     fun exportProviderIsNotExported() {
         val context = instrumentation.targetContext
         val provider = context.packageManager.resolveContentProvider(
