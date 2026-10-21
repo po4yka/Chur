@@ -1559,7 +1559,12 @@ impl<'a> ContainerReader<'a> {
             InvalidInput,
             "range extends past the authenticated object length"
         );
-        let mut out = Zeroizing::new(Vec::new());
+        // The whole range is reserved first: a vector that grew while it was
+        // filled would release each smaller buffer, with plaintext in it,
+        // without a wipe.
+        let capacity = usize::try_from(length)
+            .map_err(|_| Error::new(ChurStatus::ResourceLimitExceeded, "range exceeds a usize"))?;
+        let mut out = Zeroizing::new(Vec::with_capacity(capacity));
         if length == 0 {
             return Ok(out);
         }
@@ -2588,6 +2593,9 @@ mod tests {
                 &plaintext[from..to],
                 "range {offset}+{length}"
             );
+            // One allocation of the exact size: a regrowth would have released
+            // a smaller plaintext buffer without a wipe.
+            assert_eq!(read.capacity(), to - from, "range {offset}+{length}");
         }
     }
 

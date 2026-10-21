@@ -23,6 +23,7 @@ use chur_crypto::commit::{Commitment, Committer};
 use chur_crypto::kdf::{self, Context, Label};
 use chur_crypto::tuple::{Tuple, tag};
 use chur_crypto::{Key, Nonce, aead};
+use zeroize::Zeroizing;
 
 use crate::codec::Reader;
 use crate::constants::{
@@ -590,7 +591,15 @@ fn final_commit_aad(vault_id: &Id) -> Vec<u8> {
 /// in transit and a package sealed for another identity — are deliberately one
 /// status: a MAC failure cannot tell them apart, and a reader that claimed to
 /// would be guessing.
-fn open_sealed(payload: &[u8], key: &Key, aad: &[u8], what: &'static str) -> Result<Vec<u8>> {
+///
+/// The plaintext stays in the AEAD's wiping buffer; a plain copy would outlive
+/// the decode without a wipe.
+fn open_sealed(
+    payload: &[u8],
+    key: &Key,
+    aad: &[u8],
+    what: &'static str,
+) -> Result<Zeroizing<Vec<u8>>> {
     let nonce_len = chur_core::limits::NONCE_LEN;
     ensure!(
         payload.len() > nonce_len,
@@ -598,9 +607,8 @@ fn open_sealed(payload: &[u8], key: &Key, aad: &[u8], what: &'static str) -> Res
         "the package record is shorter than its nonce"
     );
     let nonce = Nonce::from_slice(&payload[..nonce_len])?;
-    let plaintext = aead::open(key, &nonce, &payload[nonce_len..], aad)
-        .map_err(|_| Error::new(ChurStatus::VaultCorrupt, what))?;
-    Ok(plaintext.to_vec())
+    aead::open(key, &nonce, &payload[nonce_len..], aad)
+        .map_err(|_| Error::new(ChurStatus::VaultCorrupt, what))
 }
 
 /// The manifest of §4, before it is sealed.
