@@ -7,7 +7,6 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import androidx.compose.ui.graphics.asAndroidBitmap
-import androidx.core.content.FileProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.po4yka.chur.app.MediaImporter
@@ -310,7 +309,7 @@ class JpegXlAndroidTest {
     }
 
     private fun fixture(name: String) = instrumentation.context.assets.open("jpeg-xl/$name").use { it.readBytes() }
-    private fun uri(file: File) = FileProvider.getUriForFile(context, "${context.packageName}.exports", file)
+    private fun uri(file: File) = leasedExportUri(context, file)
     private fun sourceFile(bytes: ByteArray) = File(context.cacheDir, "export-scratch/jxl-${System.nanoTime()}.bin").apply {
         parentFile?.mkdirs(); writeBytes(bytes)
     }
