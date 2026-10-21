@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
-import androidx.core.content.FileProvider
 import androidx.media3.common.C
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -60,7 +59,7 @@ internal class VideoAcceptanceSession private constructor(
         originalHash = fileDigest(file)
         originalSize = file.length()
         val codec = AndroidMediaCodec(context)
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.exports", file)
+        val uri = leasedExportUri(context, file)
         val outcome = MediaImporter(codec).import(vault, requireNotNull(codec.open(uri)))
         assertTrue("$name must preserve the original: $outcome", outcome is MediaImporter.Outcome.Imported)
         imported = outcome as MediaImporter.Outcome.Imported

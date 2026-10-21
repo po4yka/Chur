@@ -18,7 +18,6 @@ import android.os.storage.StorageManager
 import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
-import androidx.core.content.FileProvider
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.container.NalUnitUtil
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -340,7 +339,7 @@ class VideoCompatibilityAndroidTest {
         val file = File(directory, "$name.mp4").apply { writeBytes(bytes) }
         val codec = AndroidMediaCodec(context)
         val result = MediaImporter(codec).import(vault, requireNotNull(codec.open(
-            FileProvider.getUriForFile(context, "${context.packageName}.exports", file),
+            leasedExportUri(context, file),
         ))) as MediaImporter.Outcome.Imported
         return PlaybackSource(vault, result.objectId, vault.detail(result.objectId).contentType, bytes.size.toLong()) to bytes
     }

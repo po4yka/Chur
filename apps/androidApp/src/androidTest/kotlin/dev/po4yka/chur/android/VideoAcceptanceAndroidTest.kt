@@ -6,7 +6,6 @@ import android.media.MediaFormat
 import android.media.MediaCodecList
 import android.os.Build
 import android.os.SystemClock
-import androidx.core.content.FileProvider
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -78,8 +77,7 @@ class VideoAcceptanceAndroidTest {
                         "main10-portrait-rotation.mp4" -> {
                             assertTrue("Portrait fixture must carry a rotation matrix", format.getInteger(MediaFormat.KEY_ROTATION) in setOf(90, 270))
                             val codec = AndroidMediaCodec(instrumentation.targetContext)
-                            val uri = FileProvider.getUriForFile(instrumentation.targetContext,
-                                "${instrumentation.targetContext.packageName}.exports", file)
+                            val uri = leasedExportUri(instrumentation.targetContext, file)
                             val picked = requireNotNull(codec.open(uri))
                             try {
                                 val probe = requireNotNull(codec.probe(picked))

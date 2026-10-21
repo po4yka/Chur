@@ -5,7 +5,6 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
-import androidx.core.content.FileProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.po4yka.chur.app.MediaImporter
@@ -154,7 +153,7 @@ class VideoTimelineAndroidTest {
         val file = File(directory, path.substringAfterLast('/')).apply { writeBytes(bytes) }
         val codec = AndroidMediaCodec(context)
         val result = MediaImporter(codec).import(vault, requireNotNull(codec.open(
-            FileProvider.getUriForFile(context, "${context.packageName}.exports", file),
+            leasedExportUri(context, file),
         ))) as MediaImporter.Outcome.Imported
         return PlaybackSource(vault, result.objectId, vault.detail(result.objectId).contentType, bytes.size.toLong()) to bytes
     }

@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
-import androidx.core.content.FileProvider
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.Player
@@ -87,7 +86,7 @@ class VideoHdrOutputAndroidTest {
                 }
                 val codec = AndroidMediaCodec(context)
                 val imported = MediaImporter(codec).import(vault, requireNotNull(codec.open(
-                    FileProvider.getUriForFile(context, "${context.packageName}.exports", source),
+                    leasedExportUri(context, source),
                 )))
                 assertTrue("$name must import through the real media pipeline: $imported", imported is MediaImporter.Outcome.Imported)
                 val result = imported as MediaImporter.Outcome.Imported
