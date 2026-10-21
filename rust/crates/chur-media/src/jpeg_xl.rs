@@ -418,7 +418,7 @@ mod fixture_tests {
         let d = Decoder::open(&fixture("alpha.jxl")).unwrap();
         let mut p = vec![0; 32 * 16 * 4];
         d.render(0, 32, &mut p).unwrap();
-        assert!(p.chunks_exact(4).any(|p| p[3] < 255));
+        assert!(p.as_chunks::<4>().0.iter().any(|p| p[3] < 255));
     }
     #[test]
     fn animation_preserves_keyframe_delays_and_pixels() {
