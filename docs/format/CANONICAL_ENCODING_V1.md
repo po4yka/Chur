@@ -295,6 +295,7 @@ Each format version field has its own namespace:
 | `catalog_format_version` | `0x000d` | private catalog schema v13 with note-owned encrypted attachments | [`CATALOG_SCHEMA_V13.md`](CATALOG_SCHEMA_V13.md) |
 | `catalog_format_version` | `0x000e` | private catalog schema v14 with encrypted note organization and recovery | [`CATALOG_SCHEMA_V14.md`](CATALOG_SCHEMA_V14.md) |
 | `catalog_format_version` | `0x000f` | peer-only pairing without network credentials | [`CATALOG_SCHEMA_V15.md`](CATALOG_SCHEMA_V15.md) |
+| `catalog_format_version` | `0x0010` | encrypted compatible-video derivative capability | [`CATALOG_SCHEMA_V16.md`](CATALOG_SCHEMA_V16.md) |
 | `object_store_format_version` | `0x0001` | object store layout v1 | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §6 |
 | `slot_version` | `0x0001` | v1 key-slot families | [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §1 |
 
@@ -375,6 +376,7 @@ An unallocated `record_type` is a parse failure, never an ignorable record.
 | `0x07` | OCR text layer |
 | `0x08` | face record |
 | `0x09` | embedding record |
+| `0x0a` | compatible video, encrypted H.264/AAC SDR MP4 |
 
 `0x01` is the only kind whose `source_content_revision` is absent; every other kind is derived from an original. The animated preview of that section is future scope and takes the next free value in the change that freezes it.
 

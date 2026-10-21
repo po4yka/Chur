@@ -105,6 +105,7 @@ small thumbnail
 grid preview
 screen preview
 video poster frame
+compatible video viewing copy
 animated preview (future)
 audio waveform
 OCR text (current storage is catalog v10, not a derived asset stream)
@@ -253,6 +254,20 @@ video even when its audio track lets `AVPlayerItem` become ready. In particular,
 an unsupported `hev1` sample entry must not appear to play as audio-only video.
 Chur does not rewrite sample entries in the original to make a decoder accept it.
 
+### 11.1. Private video playback derivatives
+
+An explicit action can create stream kind `0x0a`, generator profile 2: an
+H.264 Main, 8-bit SDR BT.709 MP4 viewing copy with AAC audio. Its long edge is
+at most 1280 px, its short edge at most 720 px, and its frame rate at most
+30 fps. It is at most 32 MiB. Native decoders read authenticated ranges;
+native encoders write a bounded memory output, then Rust encrypts it. They do
+not write a plaintext temporary video. HDR conversion must change the pixels
+through a native SDR conversion path; output color tags alone are insufficient.
+If a declared track cannot be decoded, creation fails. It must not silently
+remove audio. Creation supports cancellation and a session change cancels it.
+The original remains the default export source. Playback can select either
+stream. No import or ordinary playback action starts a conversion.
+
 ## 12. Limits
 
 - still image at most 16384 px in either dimension and at most 67108864 px in total; a source above either bound is rejected before decode;
@@ -262,7 +277,7 @@ Chur does not rewrite sample entries in the original to make a decoder accept it
 - derivative long-edge targets: small thumbnail 320 px, grid preview 640 px, screen preview 2048 px, video poster frame 2048 px. The audio waveform has no long edge, because §6.1 makes it a data record rather than a picture; it is bounded instead at 4096 buckets and 4104 bytes for the whole record;
 - derivative codec: baseline JPEG with 4:2:0 chroma, quality 80 for the small thumbnail, 82 for the grid preview, and 85 for the screen preview and poster frame. JPEG is the v1 derivative codec because Android and iOS both encode and decode it without an added native dependency; a different codec takes a new generator profile under §11 rather than a silent change;
 - decode and import buffers at most 268435456 bytes (256 MiB) in flight per import;
-- one derivative generation is cancelled after 30 seconds of wall-clock work, and cancellation reports `CANCELLED`, never corruption;
+- picture derivative generation is cancelled after 30 seconds of wall-clock work; an explicit video viewing-copy operation has a five-minute bound and a 15-second codec-stall guard. Cancellation reports `CANCELLED`, never corruption;
 - no recursive archive/container expansion without separate parser policy.
 
 ## 13. Failure behavior

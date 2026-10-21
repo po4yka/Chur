@@ -1860,6 +1860,9 @@ enum class StreamKind(
      * peak-envelope record that section defines, which shared code draws.
      */
     AUDIO_WAVEFORM(6),
+
+    /** Explicit H.264/AAC SDR viewing copy; original export stays unchanged. */
+    COMPATIBLE_VIDEO(10),
 }
 
 /** One page request. */

@@ -80,6 +80,25 @@ actual fun VaultPlayer(
     controlsPadding: PaddingValues,
     touches: Int,
 ) {
+    VideoPlaybackTools(source, modifier, controlsVisible, controlsPadding) { effective, childModifier, onViewCopy ->
+        NativeVaultPlayer(effective, childModifier, poster, controlsVisible, controlsPinned,
+            onControlsVisibleChange, controlsPadding, touches, onViewCopy)
+    }
+}
+
+@androidx.annotation.OptIn(UnstableApi::class)
+@Composable
+private fun NativeVaultPlayer(
+    source: PlaybackSource,
+    modifier: Modifier,
+    poster: ImageBitmap?,
+    controlsVisible: Boolean,
+    controlsPinned: Boolean,
+    onControlsVisibleChange: (Boolean) -> Unit,
+    controlsPadding: PaddingValues,
+    touches: Int,
+    onViewCopy: (() -> Unit)?,
+) {
     val context = LocalContext.current
     val audio = source.contentType.startsWith("audio/")
     // `DESIGN.md` §13.4 and §23.3: the controls, and the chrome with them,

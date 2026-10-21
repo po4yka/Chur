@@ -67,6 +67,8 @@ pub const CATALOG_FORMAT_VERSION_V13: u16 = 0x000d;
 pub const CATALOG_FORMAT_VERSION_V14: u16 = 0x000e;
 /// Private catalog without persisted network endpoints or transport credentials.
 pub const CATALOG_FORMAT_VERSION_V15: u16 = 0x000f;
+/// Private catalog supporting encrypted compatible-video derivative streams.
+pub const CATALOG_FORMAT_VERSION_V16: u16 = 0x0010;
 /// §15.2: `object_store_format_version`.
 pub const OBJECT_STORE_FORMAT_VERSION_V1: u16 = 0x0001;
 /// §15.2: `slot_version` of the v1 key-slot families.
@@ -202,6 +204,8 @@ discriminant_enum! {
         FaceRecord = 0x08;
         /// Embedding record.
         EmbeddingRecord = 0x09;
+        /// An explicit H.264/AAC SDR viewing copy of a video original.
+        CompatibleVideo = 0x0a;
     }
 }
 

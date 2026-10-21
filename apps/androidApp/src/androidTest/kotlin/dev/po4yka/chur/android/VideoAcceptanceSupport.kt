@@ -26,6 +26,8 @@ import dev.po4yka.chur.app.theme.ChurTheme
 import dev.po4yka.chur.app.vault.PlaybackSource
 import dev.po4yka.chur.app.vault.VaultPlayer
 import dev.po4yka.chur.ffi.LockReason
+import dev.po4yka.chur.ffi.StreamKind
+import dev.po4yka.chur.vault.VaultState
 import dev.po4yka.chur.imports.AndroidMediaCodec
 import dev.po4yka.chur.vault.VaultRepository
 import java.io.File
@@ -221,4 +223,26 @@ internal class VideoTestWindow private constructor(val activity: MainActivity, p
             }
         }
     }
+}
+
+/** Viewing copies use the video range reader, not the small thumbnail read buffer. */
+internal suspend fun readCompatibleVideoForTest(vault: VaultRepository, objectId: ByteArray): ByteArray {
+    val generation = (vault.state.value as VaultState.Unlocked).generation
+    val reader = vault.leaseReader(objectId, StreamKind.COMPATIBLE_VIDEO, generation)
+    try {
+        val info = vault.readerContentInfo(reader)
+        assertTrue(info.complete && info.byteRangeSupported)
+        assertEquals("video/mp4", info.contentType)
+        assertTrue(info.plaintextSize in 1L..32L * 1024 * 1024)
+        return vault.readLeased(reader, 0, info.plaintextSize.toInt())
+    } finally { vault.releaseReader(reader) }
+}
+
+/** Wait for two real window animation frames after the native/Compose readiness signal. */
+internal fun awaitVideoWindowDraw(activity: MainActivity) {
+    val drawn = java.util.concurrent.CountDownLatch(1)
+    onVideoMain { activity.window.decorView.postOnAnimation {
+        activity.window.decorView.postOnAnimation { drawn.countDown() }
+    } }
+    assertTrue("The test-owned video window must draw", drawn.await(2, java.util.concurrent.TimeUnit.SECONDS))
 }

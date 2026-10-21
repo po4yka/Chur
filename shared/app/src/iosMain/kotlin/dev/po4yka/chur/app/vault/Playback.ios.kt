@@ -44,6 +44,7 @@ import androidx.compose.ui.viewinterop.UIKitView
 import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.ChurFailure
 import dev.po4yka.chur.vault.VaultRepository
+import dev.po4yka.chur.vault.VaultState
 import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.addressOf
@@ -51,6 +52,11 @@ import kotlinx.cinterop.usePinned
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import platform.AVFoundation.AVErrorDecoderNotFound
 import platform.AVFoundation.AVErrorFileFormatNotRecognized
@@ -135,6 +141,24 @@ actual fun VaultPlayer(
     onControlsVisibleChange: (Boolean) -> Unit,
     controlsPadding: PaddingValues,
     touches: Int,
+) {
+    VideoPlaybackTools(source, modifier, controlsVisible, controlsPadding) { effective, childModifier, onViewCopy ->
+        NativeVaultPlayer(effective, childModifier, poster, controlsVisible, controlsPinned,
+            onControlsVisibleChange, controlsPadding, touches, onViewCopy)
+    }
+}
+
+@Composable
+private fun NativeVaultPlayer(
+    source: PlaybackSource,
+    modifier: Modifier,
+    poster: ImageBitmap?,
+    controlsVisible: Boolean,
+    controlsPinned: Boolean,
+    onControlsVisibleChange: (Boolean) -> Unit,
+    controlsPadding: PaddingValues,
+    touches: Int,
+    onViewCopy: (() -> Unit)?,
 ) {
     val audio = source.contentType.startsWith("audio/")
     var voiceOver by remember { mutableStateOf(UIAccessibilityIsVoiceOverRunning()) }
@@ -283,7 +307,7 @@ actual fun VaultPlayer(
                 onVerify = source.onVerify,
                 modifier = Modifier.align(Alignment.Center).padding(controlsPadding),
                 onExport = source.onExport,
-                onRetry = { attempt += 1 },
+                onRetry = { attempt += 1 }, onViewCopy = onViewCopy,
             )
         }
         if ((controlsVisible || controlsHeld) && !posterOffersPlay && problem == null) {
@@ -438,7 +462,20 @@ internal class ChurResourceLoader(private val source: PlaybackSource) :
     // The terminal flag crosses threads; the reader and size stay on loaderQueue.
     private var reader = 0L
     private var size = 0L
+    private val generation = (vault.state.value as? VaultState.Unlocked)?.generation
+    // Video chunks are 1 MiB. Native parser reads are often only a few KiB;
+    // one private window avoids authenticating and decrypting the whole chunk
+    // again for each read. Only loaderQueue accesses these bytes.
+    private var cachedOffset = -1L
+    private var cachedBytes = ByteArray(0)
     private val retirement = IosPlaybackReaderRetirement(loaderQueue) { releaseReader() }
+    private var lockWatcher: Job? = null
+    init {
+        lockWatcher = CoroutineScope(Dispatchers.Default).launch {
+            vault.state.first { state -> (state as? VaultState.Unlocked)?.generation != generation || generation == null }
+            retirement.retire()
+        }
+    }
 
     override fun resourceLoader(
         resourceLoader: AVAssetResourceLoader,
@@ -456,6 +493,10 @@ internal class ChurResourceLoader(private val source: PlaybackSource) :
                 information.setContentLength(size)
                 information.setByteRangeAccessSupported(true)
                 information.setContentType(utTypeOf(source.contentType))
+                // This complete authenticated object is local and every byte
+                // can be supplied on demand. Without this hint, native fMP4
+                // loading repeatedly requests the whole object as a stream.
+                information.setEntireLengthAvailableOnDemand(true)
             }
             val data = request.dataRequest
             if (data == null) {
@@ -469,15 +510,17 @@ internal class ChurResourceLoader(private val source: PlaybackSource) :
                 return true
             }
             val alreadyDelivered = offset - data.requestedOffset
-            val wanted = minOf((data.requestedLength.toLong() - alreadyDelivered).coerceAtLeast(0L), size - offset)
+            val wanted = if (data.requestsAllDataToEndOfResource) size - offset else
+                minOf((data.requestedLength.toLong() - alreadyDelivered).coerceAtLeast(0L), size - offset)
             var delivered = 0L
             while (delivered < wanted) {
                 if (retirement.terminal) return finishRetired(request)
                 val take = minOf(65_536L, wanted - delivered).toInt()
-                val bytes = vault.readLeased(reader, source.offset + offset + delivered, take)
+                val bytes = readCached(offset + delivered, take)
                 try {
                     // Disposal wins even when an authenticated read was already in flight.
                     if (retirement.terminal) return finishRetired(request)
+                    checkGeneration()
                     if (bytes.isEmpty()) return fail(request, ChurStatus.OBJECT_INCOMPLETE)
                     data.respondWithData(bytes.toNSData())
                     delivered += bytes.size
@@ -501,6 +544,11 @@ internal class ChurResourceLoader(private val source: PlaybackSource) :
     }
 
     private fun releaseReader() {
+        cachedBytes.fill(0)
+        cachedBytes = ByteArray(0)
+        cachedOffset = -1L
+        size = 0L
+        lockWatcher?.cancel()
         if (reader != 0L) {
             vault.releaseReader(reader)
             reader = 0L
@@ -517,8 +565,9 @@ internal class ChurResourceLoader(private val source: PlaybackSource) :
 
     private fun ensureReader() {
         if (retirement.terminal) throw ChurFailure(ChurStatus.SESSION_EXPIRED, "private playback retired")
+        checkGeneration()
         if (reader != 0L) return
-        reader = runBlocking { vault.leaseReader(source.objectId, source.kind) }
+        reader = runBlocking { vault.leaseReader(source.objectId, source.kind, generation) }
         val info = vault.readerContentInfo(reader)
         if (!info.complete) throw ChurFailure(ChurStatus.OBJECT_INCOMPLETE, "private playback")
         if (!info.byteRangeSupported || info.plaintextSize < 0) {
@@ -529,6 +578,30 @@ internal class ChurResourceLoader(private val source: PlaybackSource) :
             throw ChurFailure(ChurStatus.INVALID_INPUT, "private playback resource bounds")
         }
         size = source.length
+    }
+
+    private fun checkGeneration() {
+        if (generation == null || (vault.state.value as? VaultState.Unlocked)?.generation != generation) {
+            retirement.retire()
+            throw ChurFailure(ChurStatus.SESSION_EXPIRED, "private playback session")
+        }
+    }
+
+    private fun readCached(offset: Long, length: Int): ByteArray {
+        checkGeneration()
+        if (cachedOffset < 0 || offset < cachedOffset || offset >= cachedOffset + cachedBytes.size) {
+            cachedBytes.fill(0)
+            cachedBytes = ByteArray(0)
+            cachedOffset = -1L
+            val aligned = offset / 1_048_576L * 1_048_576L
+            val bytes = vault.readLeased(reader, source.offset + aligned, minOf(1_048_576L, size - aligned).toInt())
+            try { checkGeneration() } catch (failure: Throwable) { bytes.fill(0); throw failure }
+            cachedOffset = aligned
+            cachedBytes = bytes
+        }
+        val start = (offset - cachedOffset).toInt()
+        if (start !in cachedBytes.indices) throw ChurFailure(ChurStatus.OBJECT_INCOMPLETE, "private playback cached range")
+        return cachedBytes.copyOfRange(start, minOf(cachedBytes.size, start + length))
     }
 
 }
@@ -555,9 +628,8 @@ internal fun utTypeOf(contentType: String): String? =
 /**
  * The queue the resource loader answers on.
  *
- * One serial queue for the process. A second player replaces the first on this
- * surface, so two loaders are never live at once, and sharing the queue keeps
- * the ordering AVFoundation and `FFI_CONTRACT.md` §8 both want.
+ * One serial queue preserves request and reader-release order for each loader.
+ * Players and derivative readers can share it without sharing plaintext caches.
  */
 private val loaderQueue = dispatch_queue_create("dev.po4yka.chur.resource-loader", null)
 

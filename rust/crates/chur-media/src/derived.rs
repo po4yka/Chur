@@ -37,6 +37,9 @@ use crate::store::{ContainerFile, TemporaryContainer};
 /// resize rule takes the next profile value rather than a silent difference.
 pub const GENERATOR_PROFILE_V1: u32 = 1;
 
+/// A native H.264/AAC SDR viewing copy, distinct from the JPEG profile.
+pub const COMPATIBLE_VIDEO_PROFILE_V1: u32 = 2;
+
 /// The long-edge target of one derivative kind, §12.
 ///
 /// An unlisted kind has no v1 target, so it returns `None` rather than a
@@ -102,6 +105,22 @@ pub fn put(
         NotFound,
         "the object is not listable"
     );
+    if kind == StreamKind::CompatibleVideo {
+        ensure!(
+            object.media_kind == MediaClass::Video,
+            InvalidInput,
+            "a viewing copy requires a video original"
+        );
+        ensure!(
+            width > 0
+                && height > 0
+                && width.max(height) <= 1280
+                && width.min(height) <= 720
+                && bytes.len() <= 32 * 1024 * 1024,
+            ResourceLimitExceeded,
+            "the viewing copy exceeds its dimensions or byte bound"
+        );
+    }
     let source_content_revision = object.object_generation.try_into().map_err(|_| {
         chur_core::err!(
             ResourceLimitExceeded,
@@ -128,7 +147,9 @@ pub fn put(
     // A derivative of an image is an image; of a video's poster frame, also an
     // image, as is embedded audio artwork. Waveforms and future records carry
     // no pixels.
-    let properties = if width == 0 && height == 0 {
+    let properties = if kind == StreamKind::CompatibleVideo {
+        MediaProperties::new(MediaClass::Video, width, height, object.duration_ms)?
+    } else if width == 0 && height == 0 {
         MediaProperties::opaque()
     } else {
         MediaProperties::new(MediaClass::Image, width, height, 0)?
@@ -208,7 +229,11 @@ pub fn put(
             kind,
             source_content_revision,
             asset_revision: stream_revision,
-            generator_profile: GENERATOR_PROFILE_V1,
+            generator_profile: if kind == StreamKind::CompatibleVideo {
+                COMPATIBLE_VIDEO_PROFILE_V1
+            } else {
+                GENERATOR_PROFILE_V1
+            },
             stream_id,
         },
         &Stream {

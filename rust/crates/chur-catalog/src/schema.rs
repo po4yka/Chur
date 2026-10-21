@@ -18,6 +18,7 @@ use chur_format::{
         CATALOG_FORMAT_VERSION_V7, CATALOG_FORMAT_VERSION_V8, CATALOG_FORMAT_VERSION_V9,
         CATALOG_FORMAT_VERSION_V10, CATALOG_FORMAT_VERSION_V11, CATALOG_FORMAT_VERSION_V12,
         CATALOG_FORMAT_VERSION_V13, CATALOG_FORMAT_VERSION_V14, CATALOG_FORMAT_VERSION_V15,
+        CATALOG_FORMAT_VERSION_V16,
     },
     envelope::ObjectKeyEnvelope,
 };
@@ -78,6 +79,9 @@ const STEPS: &[Step] = &[
     },
     Step {
         version: CATALOG_FORMAT_VERSION_V15,
+    },
+    Step {
+        version: CATALOG_FORMAT_VERSION_V16,
     },
 ];
 
@@ -886,6 +890,23 @@ pub fn migrate_v14_to_v15(db: &mut CatalogDb) -> Result<()> {
     })
 }
 
+/// Records support for compatible-video streams without rewriting media or catalog rows.
+pub fn migrate_v15_to_v16(db: &mut CatalogDb) -> Result<()> {
+    ensure!(
+        recorded_version(db.connection())? == Some(CATALOG_FORMAT_VERSION_V15),
+        MigrationRequired,
+        "the catalog is not version fifteen"
+    );
+    db.transaction(|tx| {
+        tx.execute_batch(
+            "UPDATE vault_state SET active_migration_target = 16 WHERE only_row = 1;
+             UPDATE vault_state SET catalog_format_version = 16, active_migration_target = NULL WHERE only_row = 1;",
+        )
+        .map_err(|error| map_sqlite(error, "the compatible-video catalog capability could not be recorded"))?;
+        Ok(())
+    })
+}
+
 /// Creates the current schema or opens it without performing an implicit migration.
 ///
 /// `docs/format/CATALOG_SCHEMA_V1.md` §18 forbids skipping an untested step, so
@@ -895,15 +916,15 @@ pub fn open_at_current_version(db: &mut CatalogDb, now_ms: u64) -> Result<u16> {
     let present = recorded_version(db.connection())?;
     let Some(present) = present else {
         install(db, now_ms)?;
-        return Ok(CATALOG_FORMAT_VERSION_V15);
+        return Ok(CATALOG_FORMAT_VERSION_V16);
     };
-    if present != CATALOG_FORMAT_VERSION_V15 {
+    if present != CATALOG_FORMAT_VERSION_V16 {
         bail!(
             MigrationRequired,
             "the catalog requires an authenticated schema migration"
         );
     }
-    Ok(CATALOG_FORMAT_VERSION_V15)
+    Ok(CATALOG_FORMAT_VERSION_V16)
 }
 
 /// The version the database records, or `None` when the schema is absent.
@@ -986,7 +1007,7 @@ fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
                      active_migration_target, object_store_checkpoint,
                      integrity_checkpoint_ms, capability_flags
                  ) VALUES (1, ?1, 1, NULL, 0, ?2, 0)",
-                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V15), checkpoint],
+                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V16), checkpoint],
             )
             .map_err(|error| map_sqlite(error, "the catalog state row could not be written"))?;
         Ok(())
@@ -1670,11 +1691,64 @@ mod tests {
     }
 
     #[test]
-    fn a_new_catalog_installs_version_fifteen() {
+    fn compatible_video_capability_migration_is_atomic_and_preserves_rows() {
+        let mut db = open();
+        open_at_current_version(&mut db, 1).expect("install");
+        db.connection().execute_batch(
+            "UPDATE vault_state SET catalog_format_version = 15;
+             INSERT INTO tags (tag_id, name, created_ms) VALUES (zeroblob(16), 'catalog-canary', 1);
+             CREATE TRIGGER fail_video_capability BEFORE UPDATE OF catalog_format_version ON vault_state
+                 WHEN NEW.catalog_format_version = 16 BEGIN SELECT RAISE(ABORT, 'interrupted'); END;",
+        ).expect("v15 fixture");
+        assert!(migrate_v15_to_v16(&mut db).is_err());
+        assert_eq!(
+            recorded_version(db.connection()).expect("version"),
+            Some(CATALOG_FORMAT_VERSION_V15)
+        );
+        let target: Option<u16> = db
+            .connection()
+            .query_row(
+                "SELECT active_migration_target FROM vault_state WHERE only_row = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("target");
+        assert_eq!(
+            target, None,
+            "a failed transaction must not retain its target"
+        );
+        db.connection()
+            .execute_batch("DROP TRIGGER fail_video_capability")
+            .expect("retry");
+        migrate_v15_to_v16(&mut db).expect("capability migration");
+        assert_eq!(
+            recorded_version(db.connection()).expect("version"),
+            Some(CATALOG_FORMAT_VERSION_V16)
+        );
+        let name: String = db
+            .connection()
+            .query_row(
+                "SELECT name FROM tags WHERE tag_id = zeroblob(16)",
+                [],
+                |row| row.get(0),
+            )
+            .expect("preserved tag");
+        assert_eq!(name, "catalog-canary");
+        assert_eq!(generation(&db).expect("generation"), 1);
+        assert_eq!(
+            migrate_v15_to_v16(&mut db)
+                .expect_err("wrong source version")
+                .status(),
+            chur_core::ChurStatus::MigrationRequired
+        );
+    }
+
+    #[test]
+    fn a_new_catalog_installs_version_sixteen() {
         let mut db = open();
         assert_eq!(
             open_at_current_version(&mut db, 1_700_000_000_000).expect("install"),
-            CATALOG_FORMAT_VERSION_V15
+            CATALOG_FORMAT_VERSION_V16
         );
         let sharing_tables: i64 = db
             .connection()
@@ -1746,7 +1820,7 @@ mod tests {
         }
         assert_eq!(
             STEPS.last().map(|step| step.version),
-            Some(CATALOG_FORMAT_VERSION_V15)
+            Some(CATALOG_FORMAT_VERSION_V16)
         );
     }
 

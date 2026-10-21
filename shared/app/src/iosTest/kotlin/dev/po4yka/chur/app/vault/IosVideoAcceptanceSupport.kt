@@ -12,6 +12,7 @@ import dev.po4yka.chur.vault.VaultRepository
 import dev.po4yka.chur.vault.VaultState
 import kotlinx.cinterop.*
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withTimeout
 import platform.AVFoundation.*
 import platform.CoreMedia.*
@@ -134,17 +135,26 @@ internal class IosTestVideoPlayer(val loader: ChurResourceLoader, val item: AVPl
 
     fun seek(case: IosVideoCase, seconds: Double) {
         player.pause()
-        var completed = false
-        player.seekToTime(CMTimeMakeWithSeconds(seconds, 600), toleranceBefore = kCMTimeZero.readValue(), toleranceAfter = kCMTimeZero.readValue()) { finished -> completed = finished }
-        iosVideoWait { completed || item.error != null }
-        assertTrue(completed, "${case.name} seek completion at $seconds")
+        val completed = MutableStateFlow<Boolean?>(null)
+        player.seekToTime(CMTimeMakeWithSeconds(seconds, 600), toleranceBefore = kCMTimeZero.readValue(), toleranceAfter = kCMTimeZero.readValue()) { finished -> completed.value = finished }
+        iosVideoWait { completed.value != null || item.error != null }
+        val diagnostic = "${case.name} target=$seconds callback=${completed.value} current=${CMTimeGetSeconds(player.currentTime())} " +
+            "itemStatus=${item.status} errorCode=${item.error?.code} readerProblem=${loader.problem.value}"
+        assertEquals(true, completed.value, "Native seek completion: $diagnostic")
         assertNull(item.error)
         assertTrue(kotlin.math.abs(CMTimeGetSeconds(player.currentTime()) - seconds) <= 0.15, "${case.name} seek to $seconds")
         player.play()
         CVPixelBufferRelease(frame(case, seconds))
     }
 
-    fun close() { player.pause(); player.replaceCurrentItemWithPlayerItem(null); loader.release() }
+    fun close() {
+        player.pause()
+        item.cancelPendingSeeks()
+        item.removeOutput(output)
+        player.replaceCurrentItemWithPlayerItem(null)
+        item.asset.cancelLoading()
+        loader.release()
+    }
 }
 
 internal fun iosVideoWait(timeoutSeconds: Double = 15.0, condition: () -> Boolean) {

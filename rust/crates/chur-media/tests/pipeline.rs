@@ -688,6 +688,100 @@ fn a_derivative_above_its_long_edge_is_refused() {
 }
 
 #[test]
+fn a_compatible_video_is_encrypted_and_never_replaces_the_original() {
+    let (_root, mut session) = new_vault();
+    let original = Zeroizing::new(
+        include_bytes!("../../../../tests/media/hevc-main10/sdr10-hvc1.mp4").to_vec(),
+    );
+    let object_id = import::import_bytes(
+        &mut session,
+        source("source.mp4", original.len() as u64),
+        CanonicalMedia {
+            media_class: MediaClass::Video,
+            width: 192,
+            height: 96,
+            duration_ms: 1250,
+        },
+        "video/mp4",
+        &original,
+        NOW,
+    )
+    .unwrap();
+    let copy = Zeroizing::new(
+        include_bytes!("../../../../tests/media/video-compatibility/reference-sdr.mp4").to_vec(),
+    );
+    derived::put(
+        &mut session,
+        &object_id,
+        StreamKind::CompatibleVideo,
+        192,
+        96,
+        &copy,
+        NOW,
+    )
+    .unwrap();
+    let mut reader = reader::open(&session, &object_id, StreamKind::CompatibleVideo).unwrap();
+    let info = reader.content_info().unwrap();
+    assert_eq!(info.content_type, "video/mp4");
+    assert_eq!(info.media_kind, u16::from(MediaClass::Video.value()));
+    assert_eq!(reader.dimensions(), (192, 96));
+    assert_eq!(
+        reader
+            .read_range(0, info.plaintext_size)
+            .unwrap()
+            .as_slice(),
+        copy.as_slice()
+    );
+    let mut exported = Vec::new();
+    export::export_stream(
+        &session,
+        &object_id,
+        StreamKind::Original,
+        &mut exported,
+        &mut Uninterrupted,
+    )
+    .unwrap();
+    assert_eq!(exported.as_slice(), original.as_slice());
+    assert_eq!(
+        derived::put(
+            &mut session,
+            &object_id,
+            StreamKind::CompatibleVideo,
+            1920,
+            1080,
+            &copy,
+            NOW
+        )
+        .unwrap_err()
+        .status(),
+        ChurStatus::ResourceLimitExceeded
+    );
+}
+
+#[test]
+fn a_viewing_copy_cannot_be_attached_to_a_nonvideo_object() {
+    let (_root, mut session) = new_vault();
+    let (object_id, _) = import_photo(&mut session, 512, "source.jpg");
+    let copy = Zeroizing::new(
+        include_bytes!("../../../../tests/media/video-compatibility/reference-sdr.mp4").to_vec(),
+    );
+    assert_eq!(
+        derived::put(
+            &mut session,
+            &object_id,
+            StreamKind::CompatibleVideo,
+            192,
+            96,
+            &copy,
+            NOW
+        )
+        .unwrap_err()
+        .status(),
+        ChurStatus::InvalidInput
+    );
+}
+
+#[test]
 fn an_integrity_scan_confirms_an_intact_object() {
     let (_root, mut session) = new_vault();
     let (object_id, _) = import_photo(&mut session, 300_000, "a.jpg");

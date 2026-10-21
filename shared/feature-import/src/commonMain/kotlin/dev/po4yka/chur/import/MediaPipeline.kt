@@ -145,6 +145,7 @@ object MediaBounds {
         StreamKind.GRID_PREVIEW -> 640
         StreamKind.SCREEN_PREVIEW -> 2_048
         StreamKind.VIDEO_POSTER -> 2_048
+        StreamKind.COMPATIBLE_VIDEO -> null
         // A waveform is a data record rather than a picture: §6 lists it beside
         // the OCR and embedding records, and §12 gives it no long edge.
         StreamKind.AUDIO_WAVEFORM -> null
