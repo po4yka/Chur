@@ -1861,3 +1861,51 @@ fn private_workspace_commands_are_bounded_cas_and_restore_saved_source() {
     assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// The one vault directory a fresh root holds.
+fn only_vault_directory(root: &std::path::Path) -> std::path::PathBuf {
+    let mut vaults = std::fs::read_dir(root.join("vaults"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(vaults.len(), 1);
+    vaults.remove(0)
+}
+
+fn unlock_with_password(runtime: u64) -> u64 {
+    let unlock = ChurUnlockRequestV1 {
+        factor: 1,
+        reserved: [0; 3],
+        secret: PASSWORD.as_ptr(),
+        secret_length: PASSWORD.len() as u32,
+    };
+    let mut session = 0u64;
+    assert_eq!(
+        unsafe { chur_vault_unlock(runtime, &unlock, &mut session) },
+        OK
+    );
+    session
+}
+
+/// A backup that is killed keeps its encrypted catalog snapshot in
+/// `incoming/`. The next unlock removes it before the session is returned.
+#[test]
+fn an_unlock_removes_the_catalog_snapshot_a_killed_backup_left() {
+    let root = scratch();
+    let runtime = open_runtime(&root);
+    let session = fresh_session(runtime);
+    assert_eq!(unsafe { chur_vault_lock(session, 1) }, OK);
+    assert_eq!(unsafe { chur_session_close(session) }, OK);
+
+    let snapshot = only_vault_directory(&root)
+        .join("incoming")
+        .join(chur_media::backup::SNAPSHOT_DIRECTORY);
+    std::fs::create_dir_all(&snapshot).unwrap();
+    std::fs::write(snapshot.join("catalog.db"), b"an abandoned catalog copy").unwrap();
+
+    let session = unlock_with_password(runtime);
+    assert!(!snapshot.exists());
+    assert_eq!(unsafe { chur_session_close(session) }, OK);
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+    std::fs::remove_dir_all(root).unwrap();
+}

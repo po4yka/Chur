@@ -345,6 +345,48 @@ pub fn create(
     })
 }
 
+/// The name of the catalog snapshot directory under `incoming/`.
+///
+/// The name is fixed, so a snapshot that a killed process left behind is found
+/// and removed: at the next unlock by [`clear_snapshot`], and at the next
+/// backup before the new copy is written. It is not a hexadecimal identifier,
+/// so it cannot be read as the name of a temporary container.
+pub const SNAPSHOT_DIRECTORY: &str = "backup-snapshot";
+
+/// Removes the catalog snapshot a killed backup left behind.
+///
+/// The snapshot is an encrypted copy of the whole catalog. `Drop` removes it
+/// when a backup ends in this process, but a process that is killed keeps no
+/// `Drop`, and each kept copy holds rows the user may delete later. It runs at
+/// unlock, before the session becomes a handle, so no backup of this session
+/// can be in progress. It returns whether a snapshot was removed.
+///
+/// # Errors
+///
+/// Returns [`ChurStatus::IoFailure`] when the directory exists and cannot be
+/// removed.
+pub fn clear_snapshot(session: &Session) -> Result<bool> {
+    remove_snapshot(&snapshot_directory(session))
+}
+
+fn snapshot_directory(session: &Session) -> PathBuf {
+    session
+        .root_dir()
+        .incoming(&session.object_store_id())
+        .join(SNAPSHOT_DIRECTORY)
+}
+
+fn remove_snapshot(directory: &Path) -> Result<bool> {
+    match std::fs::remove_dir_all(directory) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(_) => Err(chur_core::err!(
+            IoFailure,
+            "a stale backup snapshot could not be removed"
+        )),
+    }
+}
+
 /// Owns the encrypted catalog copy, including any SQLite sidecar files.
 struct CatalogSnapshot {
     directory: PathBuf,
@@ -352,10 +394,8 @@ struct CatalogSnapshot {
 
 impl CatalogSnapshot {
     fn create(session: &Session, progress: &impl Progress) -> Result<Self> {
-        let directory = session
-            .root_dir()
-            .incoming(&session.object_store_id())
-            .join(random::id()?.to_hex());
+        let directory = snapshot_directory(session);
+        remove_snapshot(&directory)?;
         std::fs::create_dir(&directory).map_err(|_| {
             chur_core::err!(
                 IoFailure,

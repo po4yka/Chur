@@ -181,6 +181,8 @@ atomic finalize where destination supports it
 
 When writing to a non-atomic external provider, incomplete state remains explicitly marked and is never advertised as complete.
 
+The catalog snapshot is an encrypted copy of the catalog in the fixed directory `incoming/backup-snapshot/` of the vault. The writer removes the directory when the backup ends. If a process stops before that, the next unlock removes the directory before the session opens, and the next backup removes it before it writes a new copy. Thus no more than one snapshot copy can exist, and it does not outlive the next unlock.
+
 ### 7.1 Inventory order
 
 A stream inventory entry is one canonical structure per backed-up stream, and a slot inventory entry is one per portable slot:

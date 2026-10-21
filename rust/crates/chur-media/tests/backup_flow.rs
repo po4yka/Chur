@@ -1235,3 +1235,25 @@ fn clearing_ocr_while_trashed_does_not_resurrect_text_on_restore_or_backup() {
     std::fs::remove_dir_all(root.base()).unwrap();
     std::fs::remove_dir_all(destination.base()).unwrap();
 }
+
+/// The catalog snapshot has one fixed name. A copy that a killed backup left
+/// behind does not stop the next backup, and neither copy survives it.
+#[test]
+fn a_backup_replaces_and_removes_a_stale_catalog_snapshot() {
+    let (root, mut session) = new_vault();
+    let snapshot = root
+        .incoming(&session.object_store_id())
+        .join(backup::SNAPSHOT_DIRECTORY);
+    std::fs::create_dir_all(&snapshot).unwrap();
+    std::fs::write(snapshot.join("catalog.db"), b"an abandoned catalog copy").unwrap();
+
+    let mut package = Cursor::new(Vec::new());
+    backup::create(&mut session, &mut package, NOW, &mut Uninterrupted).expect("create");
+    assert!(!snapshot.exists());
+
+    std::fs::create_dir_all(&snapshot).unwrap();
+    assert!(backup::clear_snapshot(&session).expect("clear"));
+    assert!(!snapshot.exists());
+    assert!(!backup::clear_snapshot(&session).expect("clear again"));
+    session.lock().expect("lock");
+}

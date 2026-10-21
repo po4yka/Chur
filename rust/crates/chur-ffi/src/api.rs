@@ -21,7 +21,7 @@ use chur_core::{ChurStatus, Error, Id, Result};
 use chur_crypto::Key;
 use chur_format::constants::{MediaClass, ObjectState, StreamKind};
 use chur_media::import::{CanonicalMedia, SourceCapability};
-use chur_media::{export, import, integrity, reader};
+use chur_media::{backup, export, import, integrity, reader};
 
 use crate::operation::{Operation, OperationKind, Stage};
 use crate::panic::{guard_status, guard_status_for};
@@ -422,6 +422,13 @@ pub unsafe extern "C" fn chur_vault_unlock(
         // call observes an entry that is about to be deleted and a crash the
         // previous process died in leaves no readable plaintext behind it.
         export::clear_scratch(&session)?;
+        // A backup that was killed leaves its encrypted catalog snapshot in
+        // `incoming/`. It is removed here, for the same reason as the scratch
+        // entries above.
+        if let Err(error) = backup::clear_snapshot(&session) {
+            let _ = session.lock();
+            return Err(error);
+        }
         crate::selective::sweep_staging(&session)?;
         if let Err(error) = crate::product::sweep_expired_trash(&mut session, now) {
             let _ = session.lock();
