@@ -306,10 +306,10 @@ jobs:
           test -e /dev/kvm
           sudo chown "$(id -u):$(id -g)" /dev/kvm
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "emulator" "system-images;android-35;google_apis;x86_64"
-      - name: exercise notes, private lock, and HEVC Main10 behavior on Android
+      - name: exercise notes, private lock, Main10, and extended video on Android
         timeout-minutes: 20
         run: scripts/test-android-notes-ui.sh
-      - name: upload notes and HEVC Main10 results, screenshots, and device logs
+      - name: upload notes and video results, screenshots, and device logs
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -472,7 +472,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-test-results-${{ github.sha }}-${{ github.run_attempt }}
-          path: shared/**/build/test-results/iosSimulatorArm64Test/*.xml
+          path: |
+            shared/**/build/test-results/iosSimulatorArm64Test/*.xml
+            shared/app/build/reports/video-acceptance/ios/*.json
           if-no-files-found: warn
       - name: remove the owned Vision test simulator
         if: always()

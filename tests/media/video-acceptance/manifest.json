@@ -1,0 +1,365 @@
+{
+  "schema_version": 1,
+  "ffmpeg_version": "ffmpeg version 9.0.2 Copyright (c) 2000-2026 the FFmpeg developers",
+  "generation": "python3 tests/media/video-acceptance/generate.py",
+  "files": [
+    {
+      "filename": "main10-4k60.mp4",
+      "length": 6464046,
+      "sha256": "9c07f0242fa7bf900e1e3395acd5d57103daee9822560a6559bc8731ef50282d",
+      "role": "4k60",
+      "genuine_camera": false,
+      "provenance": "Procedural testsrc2 moving texture and 440 Hz sine.",
+      "seek_seconds": [
+        0.5,
+        1.5
+      ],
+      "ffprobe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "index": 0,
+            "codec_name": "hevc",
+            "profile": "Main 10",
+            "codec_type": "video",
+            "codec_tag_string": "hvc1",
+            "width": 3840,
+            "height": 2160,
+            "pix_fmt": "yuv420p10le",
+            "color_range": "tv",
+            "color_space": "bt709",
+            "color_transfer": "bt709",
+            "color_primaries": "bt709",
+            "r_frame_rate": "60/1",
+            "avg_frame_rate": "60/1",
+            "time_base": "1/50000",
+            "duration": "2.500000",
+            "nb_frames": "150"
+          },
+          {
+            "index": 1,
+            "codec_name": "aac",
+            "profile": "LC",
+            "codec_type": "audio",
+            "codec_tag_string": "mp4a",
+            "sample_rate": "48000",
+            "channels": 1,
+            "r_frame_rate": "0/0",
+            "avg_frame_rate": "0/0",
+            "time_base": "1/48000",
+            "duration": "2.500000",
+            "nb_frames": "119"
+          }
+        ],
+        "format": {
+          "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+          "duration": "2.500000",
+          "tags": {}
+        }
+      },
+      "timing": {
+        "decoded_video_frames": 150,
+        "presentation_interval_seconds": [
+          0.01666,
+          0.01668
+        ],
+        "keyframe_seconds": [
+          0.0
+        ],
+        "frame_side_data_types": [
+          "H.26[45] User Data Unregistered SEI message"
+        ]
+      }
+    },
+    {
+      "filename": "main10-long-gop-vfr.mp4",
+      "length": 1893790,
+      "sha256": "17e47414f542339a0fd3141fe4660e4079e89f5233aa2ef816d39ce1a8a6528e",
+      "role": "long-gop-vfr",
+      "genuine_camera": false,
+      "provenance": "Procedural testsrc2 moving texture and 440 Hz sine.",
+      "seek_seconds": [
+        0.5,
+        31,
+        55,
+        62
+      ],
+      "ffprobe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "index": 0,
+            "codec_name": "hevc",
+            "profile": "Main 10",
+            "codec_type": "video",
+            "codec_tag_string": "hvc1",
+            "width": 320,
+            "height": 180,
+            "pix_fmt": "yuv420p10le",
+            "color_range": "tv",
+            "color_space": "bt709",
+            "color_transfer": "bt709",
+            "color_primaries": "bt709",
+            "r_frame_rate": "50/1",
+            "avg_frame_rate": "343/16",
+            "time_base": "1/50000",
+            "duration": "64.000000",
+            "nb_frames": "1372"
+          },
+          {
+            "index": 1,
+            "codec_name": "aac",
+            "profile": "LC",
+            "codec_type": "audio",
+            "codec_tag_string": "mp4a",
+            "sample_rate": "48000",
+            "channels": 1,
+            "r_frame_rate": "0/0",
+            "avg_frame_rate": "0/0",
+            "time_base": "1/48000",
+            "duration": "64.000000",
+            "nb_frames": "3001"
+          }
+        ],
+        "format": {
+          "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+          "duration": "64.000000",
+          "tags": {}
+        }
+      },
+      "timing": {
+        "decoded_video_frames": 1372,
+        "presentation_interval_seconds": [
+          0.02,
+          0.04,
+          0.08
+        ],
+        "keyframe_seconds": [
+          0.0,
+          16.02,
+          32.06,
+          48.02
+        ],
+        "frame_side_data_types": [
+          "H.26[45] User Data Unregistered SEI message"
+        ]
+      }
+    },
+    {
+      "filename": "main10-portrait-rotation.mp4",
+      "length": 1247640,
+      "sha256": "4f5578660f7fc92428608d1929ae7396c4ef11b1f225baf6f5e3c2e0cff31ae5",
+      "role": "portrait-rotation",
+      "genuine_camera": false,
+      "provenance": "Procedural testsrc2 moving texture and 440 Hz sine.",
+      "seek_seconds": [
+        0.5,
+        1.5
+      ],
+      "ffprobe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "index": 0,
+            "codec_name": "hevc",
+            "profile": "Main 10",
+            "codec_type": "video",
+            "codec_tag_string": "hvc1",
+            "width": 1920,
+            "height": 1080,
+            "pix_fmt": "yuv420p10le",
+            "color_range": "tv",
+            "color_space": "bt709",
+            "color_transfer": "bt709",
+            "color_primaries": "bt709",
+            "r_frame_rate": "24/1",
+            "avg_frame_rate": "24/1",
+            "time_base": "1/50000",
+            "duration": "2.500000",
+            "nb_frames": "60",
+            "side_data_list": [
+              {
+                "side_data_type": "Display Matrix",
+                "displaymatrix": "\n00000000:            0      -65536           0\n00000001:        65536           0           0\n00000002:            0           0  1073741824\n",
+                "rotation": 90
+              }
+            ]
+          },
+          {
+            "index": 1,
+            "codec_name": "aac",
+            "profile": "LC",
+            "codec_type": "audio",
+            "codec_tag_string": "mp4a",
+            "sample_rate": "48000",
+            "channels": 1,
+            "r_frame_rate": "0/0",
+            "avg_frame_rate": "0/0",
+            "time_base": "1/48000",
+            "duration": "2.500000",
+            "nb_frames": "119"
+          }
+        ],
+        "format": {
+          "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+          "duration": "2.500000",
+          "tags": {}
+        }
+      },
+      "timing": {
+        "decoded_video_frames": 60,
+        "presentation_interval_seconds": [
+          0.04166,
+          0.04168
+        ],
+        "keyframe_seconds": [
+          0.0
+        ],
+        "frame_side_data_types": [
+          "3x3 displaymatrix",
+          "H.26[45] User Data Unregistered SEI message"
+        ]
+      }
+    },
+    {
+      "filename": "camera-dolby-vision.mov",
+      "length": 64565,
+      "sha256": "c96e24bdfa7f3e0ef9b73b0b891805100119b9fa129e4cf10375af90846de534",
+      "role": "camera-dolby-vision",
+      "genuine_camera": null,
+      "camera_origin": "Inferred from Apple iPhone 14 Pro capture metadata; not independently witnessed.",
+      "provenance": {
+        "repository": "https://github.com/androidx/media",
+        "revision": "dac651634e15a8a97076037fd81285de18d86d62",
+        "path": "libraries/test_data/src/test/assets/media/mp4/dolbyVision-hdr.MOV",
+        "url": "https://raw.githubusercontent.com/androidx/media/dac651634e15a8a97076037fd81285de18d86d62/libraries/test_data/src/test/assets/media/mp4/dolbyVision-hdr.MOV",
+        "license": "Apache-2.0",
+        "modified": false
+      },
+      "seek_seconds": [],
+      "ffprobe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "index": 0,
+            "codec_name": "hevc",
+            "profile": "Main 10",
+            "codec_type": "video",
+            "codec_tag_string": "hvc1",
+            "width": 1280,
+            "height": 720,
+            "pix_fmt": "yuv420p10le",
+            "color_range": "tv",
+            "color_space": "bt2020nc",
+            "color_transfer": "arib-std-b67",
+            "color_primaries": "bt2020",
+            "r_frame_rate": "30/1",
+            "avg_frame_rate": "30/1",
+            "time_base": "1/600",
+            "duration": "0.106667",
+            "nb_frames": "5",
+            "side_data_list": [
+              {
+                "side_data_type": "DOVI configuration record",
+                "dv_version_major": 1,
+                "dv_version_minor": 0,
+                "dv_profile": 8,
+                "dv_level": 2,
+                "rpu_present_flag": 1,
+                "el_present_flag": 0,
+                "bl_present_flag": 1,
+                "dv_bl_signal_compatibility_id": 4,
+                "dv_md_compression": "none"
+              },
+              {
+                "side_data_type": "Display Matrix",
+                "displaymatrix": "\n00000000:            0       65536           0\n00000001:       -65536           0           0\n00000002:     47185920           0  1073741824\n",
+                "rotation": -90
+              },
+              {
+                "side_data_type": "Ambient viewing environment",
+                "ambient_illuminance": "3140000/10000",
+                "ambient_light_x": "15635/50000",
+                "ambient_light_y": "16450/50000"
+              }
+            ]
+          },
+          {
+            "index": 1,
+            "codec_name": "aac",
+            "profile": "LC",
+            "codec_type": "audio",
+            "codec_tag_string": "mp4a",
+            "sample_rate": "44100",
+            "channels": 2,
+            "r_frame_rate": "0/0",
+            "avg_frame_rate": "0/0",
+            "time_base": "1/44100",
+            "duration": "0.105011",
+            "nb_frames": "7"
+          },
+          {
+            "index": 2,
+            "codec_type": "data",
+            "codec_tag_string": "mebx",
+            "r_frame_rate": "0/0",
+            "avg_frame_rate": "0/0",
+            "time_base": "1/600",
+            "duration": "0.106667",
+            "nb_frames": "1"
+          },
+          {
+            "index": 3,
+            "codec_type": "data",
+            "codec_tag_string": "mebx",
+            "r_frame_rate": "0/0",
+            "avg_frame_rate": "0/0",
+            "time_base": "1/600",
+            "duration": "0.106667",
+            "nb_frames": "1"
+          },
+          {
+            "index": 4,
+            "codec_type": "data",
+            "codec_tag_string": "mebx",
+            "r_frame_rate": "0/0",
+            "avg_frame_rate": "0/0",
+            "time_base": "1/600",
+            "duration": "0.106667",
+            "nb_frames": "4"
+          }
+        ],
+        "format": {
+          "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+          "duration": "0.106667",
+          "tags": {
+            "com.apple.quicktime.make": "Apple",
+            "com.apple.quicktime.model": "iPhone 14 Pro",
+            "com.apple.quicktime.software": "16.4.1"
+          }
+        }
+      },
+      "timing": {
+        "decoded_video_frames": 4,
+        "presentation_interval_seconds": [
+          0.033333,
+          0.033334
+        ],
+        "keyframe_seconds": [
+          0.0
+        ],
+        "frame_side_data_types": [
+          "3x3 displaymatrix",
+          "Ambient viewing environment",
+          "Dolby Vision Metadata",
+          "Dolby Vision RPU Data",
+          "H.26[45] User Data Unregistered SEI message"
+        ]
+      }
+    }
+  ]
+}

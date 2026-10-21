@@ -1,0 +1,46 @@
+{
+  "cases": [
+    {
+      "fixture": "main10-4k60.mp4",
+      "strictVideoSupported": true,
+      "sdk": 37,
+      "firstFrameMs": 532,
+      "seekTargetMs": 1250,
+      "seekFramePtsUs": 1250000,
+      "result": "decoded",
+      "originalExportIdentical": true,
+      "lockedReaderRejected": true
+    },
+    {
+      "fixture": "main10-long-gop-vfr.mp4",
+      "strictVideoSupported": true,
+      "sdk": 37,
+      "firstFrameMs": 320,
+      "seekTargetMs": 32000,
+      "seekFramePtsUs": 32060000,
+      "result": "decoded",
+      "originalExportIdentical": true,
+      "lockedReaderRejected": true
+    },
+    {
+      "fixture": "main10-portrait-rotation.mp4",
+      "strictVideoSupported": true,
+      "sdk": 37,
+      "firstFrameMs": 351,
+      "seekTargetMs": 1250,
+      "seekFramePtsUs": 1250000,
+      "result": "decoded",
+      "originalExportIdentical": true,
+      "lockedReaderRejected": true
+    },
+    {
+      "fixture": "camera-dolby-vision.mov",
+      "strictVideoSupported": true,
+      "sdk": 37,
+      "firstFrameMs": 335,
+      "result": "decoded",
+      "originalExportIdentical": true,
+      "lockedReaderRejected": true
+    }
+  ]
+}

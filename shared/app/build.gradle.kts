@@ -325,4 +325,11 @@ tasks.withType<KotlinNativeSimulatorTest>().configureEach {
     inputs.dir(jpegXlFixtures).withPathSensitivity(PathSensitivity.RELATIVE)
     environment("CHUR_JPEG_XL_FIXTURES", jpegXlFixtures.asFile.absolutePath)
     environment("SIMCTL_CHILD_CHUR_JPEG_XL_FIXTURES", jpegXlFixtures.asFile.absolutePath)
+    val videoFixtures = rootProject.layout.projectDirectory.dir("tests/media/video-acceptance")
+    inputs.dir(videoFixtures).withPathSensitivity(PathSensitivity.RELATIVE)
+    environment("CHUR_VIDEO_ACCEPTANCE_FIXTURES", videoFixtures.asFile.absolutePath)
+    environment("SIMCTL_CHILD_CHUR_VIDEO_ACCEPTANCE_FIXTURES", videoFixtures.asFile.absolutePath)
+    val videoReports = layout.buildDirectory.dir("reports/video-acceptance/ios").get().asFile.absolutePath
+    environment("CHUR_VIDEO_ACCEPTANCE_REPORTS", videoReports)
+    environment("SIMCTL_CHILD_CHUR_VIDEO_ACCEPTANCE_REPORTS", videoReports)
 }

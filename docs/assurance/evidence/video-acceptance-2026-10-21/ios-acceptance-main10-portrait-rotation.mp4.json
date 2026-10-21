@@ -1,0 +1,19 @@
+{
+  "schema_version" : 1,
+  "platform" : "ios",
+  "simulator" : 1,
+  "device_model" : "iPhone",
+  "os_version" : "27.0",
+  "fixture" : "main10-portrait-rotation.mp4",
+  "passed" : 1,
+  "coded_width" : 1920,
+  "coded_height" : 1080,
+  "display_width" : 1080,
+  "display_height" : 1920,
+  "seek_targets_seconds" : [
+    0.5,
+    1.5
+  ],
+  "original_export_sha256_verified" : 1,
+  "reader_invalidated_after_lock" : 1
+}

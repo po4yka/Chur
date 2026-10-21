@@ -1,0 +1,14 @@
+AndroidX Media Dolby Vision test asset
+
+Source repository: https://github.com/androidx/media
+Pinned revision: dac651634e15a8a97076037fd81285de18d86d62
+Original path: libraries/test_data/src/test/assets/media/mp4/dolbyVision-hdr.MOV
+Original introducing commit: 2db2de59933f87e7b76cbaefda56d25633bf252d
+License: Apache License, Version 2.0 (see LICENSE.androidx-media).
+
+The local file camera-dolby-vision.mov has the exact upstream bytes.
+Only its filename and repository location changed. No stream, metadata,
+Dolby Vision RPU, timestamp or pixel transformation was made.
+
+The three main10-*.mp4 files are separately generated procedural Chur test
+patterns and tones. They are not camera captures or copies of this asset.

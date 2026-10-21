@@ -134,9 +134,18 @@ if grep -Eq 'INSTRUMENTATION_(FAILED|ABORTED)|INSTRUMENTATION_STATUS_CODE: -[0-9
     echo "HEVC Main10 instrumentation failed, skipped a selected test, or aborted" >&2
     exit 1
 fi
+timeout 600 "$adb" -s "$serial" shell am instrument -w -r \
+    -e class dev.po4yka.chur.android.VideoAcceptanceAndroidTest \
+    "$application.test/androidx.test.runner.AndroidJUnitRunner" 2>&1 | tr -d '\r' | tee "$results/instrumentation-video-acceptance.txt"
+grep -Eq '^OK \(2 tests\)$' "$results/instrumentation-video-acceptance.txt"
+grep -Eq '^INSTRUMENTATION_CODE: -1$' "$results/instrumentation-video-acceptance.txt"
+if grep -Eq 'INSTRUMENTATION_(FAILED|ABORTED)|INSTRUMENTATION_STATUS_CODE: -[0-9]+|FAILURES!!!|shortMsg=' "$results/instrumentation-video-acceptance.txt"; then
+    echo "Extended video instrumentation failed, skipped a selected test, or aborted" >&2
+    exit 1
+fi
 collect_artifacts
 [[ "$files_collected" == true ]] || { echo "Could not retrieve the UI screenshots" >&2; exit 1; }
 [[ -n "$(find "$results/screenshots" -name private-note-managed-image-public-fixture.png -print -quit)" ]] || {
     echo "The actual native attachment image screenshot is missing" >&2; exit 1;
 }
-echo "All 22 notes/lock and 3 HEVC Main10 tests passed; screenshots and device logs: $results"
+echo "All 22 notes/lock, 3 HEVC Main10 and 2 extended video tests passed; screenshots and device logs: $results"

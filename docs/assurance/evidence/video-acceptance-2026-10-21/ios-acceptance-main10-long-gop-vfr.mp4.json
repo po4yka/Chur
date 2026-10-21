@@ -1,0 +1,20 @@
+{
+  "schema_version" : 1,
+  "platform" : "ios",
+  "simulator" : 1,
+  "device_model" : "iPhone",
+  "os_version" : "27.0",
+  "fixture" : "main10-long-gop-vfr.mp4",
+  "passed" : 1,
+  "coded_width" : 320,
+  "coded_height" : 180,
+  "display_width" : 320,
+  "display_height" : 180,
+  "seek_targets_seconds" : [
+    0.5,
+    31,
+    62
+  ],
+  "original_export_sha256_verified" : 1,
+  "reader_invalidated_after_lock" : 1
+}
