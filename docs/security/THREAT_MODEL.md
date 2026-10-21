@@ -142,7 +142,7 @@ Attempts to compromise dependencies, build scripts, CI actions, signing, generat
 | T-018 | malicious codec input | platform sandboxing, minimal parsing, bounded resources | platform codec vulnerabilities |
 | T-019 | dependency compromise | pinning, review, SBOM, reproducible release evidence | ecosystem compromise can still occur |
 | T-020 | backup omits objects | authenticated backup manifest and completeness check | stale but authentic backup remains possible without trusted checkpoint |
-| T-021 | another local app or host process connects to desktop control | loopback-only listener, random 128-bit pairing code shown in the unlocked vault, length bounds, session shutdown on pause/lock | a compromised unlocked device or paired desktop can observe authorized commands |
+| T-021 | another local app or host process connects to desktop control | abstract UNIX socket with a random name that serves only the ADB shell UID or root, link shown only on screen and never copied, random 128-bit pairing code shown in the unlocked vault, length bounds, session shutdown on pause/lock | a compromised unlocked device or paired desktop can observe authorized commands |
 
 ### Additional local-feature boundaries
 

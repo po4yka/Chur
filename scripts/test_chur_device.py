@@ -48,12 +48,14 @@ class DeviceProtocolTest(unittest.TestCase):
         connection.__enter__.return_value = connection
         replies = [{"ok": True, "version": 2}, {"objects": [{"id": "ab" * 16}]},
                    {"error": "NOT_FOUND"}]
-        with patch("sys.argv", ["chur-device", "--port", "1234", "--code-stdin", "list", "--details"]), \
+        with patch("sys.argv", ["chur-device", "--socket", "chur-dc-0123456789abcdef", "--code-stdin", "list", "--details"]), \
                 patch("sys.stdin", io.StringIO("a" * 32 + "\n")), \
                 patch.object(device.socket, "create_connection", return_value=connection), \
-                patch.object(device.subprocess, "run"), \
+                patch.object(device.subprocess, "run") as run, \
                 patch.object(device, "exchange", side_effect=replies), redirect_stdout(io.StringIO()):
             self.assertEqual(device.main(), 1)
+        # The forward reaches the abstract socket of the session, not a device TCP port.
+        self.assertEqual(run.call_args_list[0].args[0][-1], "localabstract:chur-dc-0123456789abcdef")
 
     def test_manifest_preserves_empty_nested_directories_and_refuses_symlinks(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -78,7 +80,7 @@ class DeviceProtocolTest(unittest.TestCase):
             source = Path(directory) / "source.bin"
             source.write_bytes(b"original")
             checkpoint = Path(directory) / "checkpoint.json"
-            args = device.parser().parse_args(["--port", "1234", "import", str(source),
+            args = device.parser().parse_args(["--socket", "chur-dc-0123456789abcdef", "import", str(source),
                                               "--transfer-state", str(checkpoint)])
             _, original = device.prepare_import(args, "vault-one")
             _, resumed = device.prepare_import(args, "vault-one")
@@ -98,7 +100,7 @@ class DeviceProtocolTest(unittest.TestCase):
             (root / "nested" / "photo.jpg").write_bytes(b"photo")
             checkpoint = Path(directory) / "state.json"
             destination = "d" * 32
-            args = device.parser().parse_args(["--port", "1234", "import", str(root),
+            args = device.parser().parse_args(["--socket", "chur-dc-0123456789abcdef", "import", str(root),
                                               "--album", destination, "--transfer-state", str(checkpoint)])
             albums, objects, moves, memberships = {}, {}, {}, []
             imports = []
@@ -142,7 +144,7 @@ class DeviceProtocolTest(unittest.TestCase):
             root = Path(directory) / "empty"
             root.mkdir()
             checkpoint = Path(directory) / "state.json"
-            args = device.parser().parse_args(["--port", "1234", "import", str(root),
+            args = device.parser().parse_args(["--socket", "chur-dc-0123456789abcdef", "import", str(root),
                                               "--transfer-state", str(checkpoint)])
             ids = []
 
@@ -181,7 +183,7 @@ class DeviceProtocolTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             directory = str(Path(directory).resolve())
             target = Path(directory) / "export"
-            args = device.parser().parse_args(["--port", "1234", "export-album", root_id, str(target)])
+            args = device.parser().parse_args(["--socket", "chur-dc-0123456789abcdef", "export-album", root_id, str(target)])
             with patch.object(device, "exchange", side_effect=reply), patch.object(device, "export_file", side_effect=export), redirect_stdout(io.StringIO()):
                 self.assertEqual(device.run_export_album(None, args), 0)
                 with self.assertRaises(FileExistsError):
@@ -215,7 +217,7 @@ class DeviceProtocolTest(unittest.TestCase):
             directory = str(Path(directory).resolve())
             source = Path(directory) / "body.txt"
             source.write_text("new private body", encoding="utf-8")
-            args = device.parser().parse_args(["--port", "1234", "note-update", "a" * 32,
+            args = device.parser().parse_args(["--socket", "chur-dc-0123456789abcdef", "note-update", "a" * 32,
                                               str(source), "--revision", "3"])
             requests = []
 
@@ -235,12 +237,12 @@ class DeviceProtocolTest(unittest.TestCase):
         for action, operation in (("note-pin", "note_pin"), ("note-unpin", "note_pin"),
                                   ("note-trash", "note_trash"), ("note-restore", "note_restore"),
                                   ("note-delete", "note_delete")):
-            args = device.parser().parse_args(["--port", "1234", action, "a" * 32] + (["--yes"] if action == "note-delete" else []))
+            args = device.parser().parse_args(["--socket", "chur-dc-0123456789abcdef", action, "a" * 32] + (["--yes"] if action == "note-delete" else []))
             with patch.object(device, "exchange", side_effect=[{"revision": 9}, {"ok": True}]) as call, redirect_stdout(io.StringIO()):
                 self.assertEqual(device.run_note(None, args), 0)
                 self.assertEqual(call.call_args.args[1]["op"], operation)
                 self.assertEqual(call.call_args.args[1]["revision"], 9)
-        args = device.parser().parse_args(["--port", "1234", "note-delete", "a" * 32])
+        args = device.parser().parse_args(["--socket", "chur-dc-0123456789abcdef", "note-delete", "a" * 32])
         with patch.object(device, "exchange") as call:
             with self.assertRaisesRegex(ValueError, "requires --yes"):
                 device.run_note(None, args)
@@ -261,7 +263,7 @@ class DeviceProtocolTest(unittest.TestCase):
             source = Path(directory) / "source.bin"
             source.write_bytes(b"original")
             checkpoint = Path(directory) / "state.json"
-            args = device.parser().parse_args(["--port", "1234", "import", str(source),
+            args = device.parser().parse_args(["--socket", "chur-dc-0123456789abcdef", "import", str(source),
                                               "--transfer-state", str(checkpoint)])
 
             def reply(connection, request, stream=None, progress=None):
@@ -282,7 +284,7 @@ class DeviceProtocolTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "folder"
             root.mkdir()
-            args = device.parser().parse_args(["--port", "1234", "import", str(root),
+            args = device.parser().parse_args(["--socket", "chur-dc-0123456789abcdef", "import", str(root),
                                               "--transfer-state", str(root / "state.json")])
             with self.assertRaisesRegex(ValueError, "outside imported"):
                 device.prepare_import(args, "vault")
@@ -304,7 +306,7 @@ class DeviceProtocolTest(unittest.TestCase):
             root.mkdir()
             (root / "file.bin").write_bytes(b"original")
             checkpoint = Path(directory) / "state.json"
-            args = device.parser().parse_args(["--port", "1234", "import", str(root),
+            args = device.parser().parse_args(["--socket", "chur-dc-0123456789abcdef", "import", str(root),
                                               "--transfer-state", str(checkpoint)])
             calls = []
             clock = 0
@@ -342,7 +344,7 @@ class DeviceProtocolTest(unittest.TestCase):
             root.mkdir()
             (root / "symlink").symlink_to(root, target_is_directory=True)
             checkpoint = Path(directory) / "state.json"
-            args = device.parser().parse_args(["--port", "1234", "import", str(root),
+            args = device.parser().parse_args(["--socket", "chur-dc-0123456789abcdef", "import", str(root),
                                               "--transfer-state", str(checkpoint)])
             with patch.object(device.time, "monotonic", side_effect=[0, 16, 17, 33, 34]), \
                     patch.object(device, "exchange", return_value={"objects": []}) as exchange:
@@ -353,29 +355,29 @@ class DeviceProtocolTest(unittest.TestCase):
 
     def test_object_trash_tags_and_destruction_contracts(self):
         for action, operation in (("trash", "object_trash"), ("restore", "object_restore")):
-            args = device.parser().parse_args(["--port", "1234", action, "a" * 32])
+            args = device.parser().parse_args(["--socket", "chur-dc-0123456789abcdef", action, "a" * 32])
             self.assertEqual(device.command_request(args), {"op": operation, "object": "a" * 32})
-        args = device.parser().parse_args(["--port", "1234", "tag-rename", "a" * 32, "New name"])
+        args = device.parser().parse_args(["--socket", "chur-dc-0123456789abcdef", "tag-rename", "a" * 32, "New name"])
         self.assertEqual(device.command_request(args), {"op": "tag_rename", "tag": "a" * 32, "name": "New name"})
         for action in ("delete", "tag-delete", "trash-empty", "damaged-delete"):
-            argv = ["--port", "1234", action] + (["a" * 32] if action in ("delete", "tag-delete") else [])
+            argv = ["--socket", "chur-dc-0123456789abcdef", action] + (["a" * 32] if action in ("delete", "tag-delete") else [])
             with self.assertRaisesRegex(ValueError, "requires --yes"):
                 device.command_request(device.parser().parse_args(argv))
             self.assertIn("op", device.command_request(device.parser().parse_args(argv + ["--yes"])))
 
     def test_album_commands_and_delete_confirmation(self):
         cli = device.parser()
-        args = cli.parse_args(["--port", "1234", "album-move", "a" * 32,
+        args = cli.parse_args(["--socket", "chur-dc-0123456789abcdef", "album-move", "a" * 32,
                                "--parent", "b" * 32, "--before", "c" * 32])
         self.assertEqual(device.command_request(args),
                          {"op": "album_move", "album": "a" * 32,
                           "parent": "b" * 32, "before": "c" * 32})
-        args = cli.parse_args(["--port", "1234", "album-delete", "a" * 32])
+        args = cli.parse_args(["--socket", "chur-dc-0123456789abcdef", "album-delete", "a" * 32])
         with self.assertRaisesRegex(ValueError, "requires --yes"):
             device.command_request(args)
-        args = cli.parse_args(["--port", "1234", "album-delete", "a" * 32, "--yes"])
+        args = cli.parse_args(["--socket", "chur-dc-0123456789abcdef", "album-delete", "a" * 32, "--yes"])
         self.assertEqual(device.command_request(args)["op"], "album_delete")
-        args = cli.parse_args(["--port", "1234", "import", "--album", "a" * 32, "photo.jpg"])
+        args = cli.parse_args(["--socket", "chur-dc-0123456789abcdef", "import", "--album", "a" * 32, "photo.jpg"])
         self.assertEqual(args.album, "a" * 32)
 
     def test_batch_previews_before_mutation_and_reports_each_result(self):
@@ -398,7 +400,7 @@ class DeviceProtocolTest(unittest.TestCase):
 
             worker = threading.Thread(target=app)
             worker.start()
-            argv = ["--port", "1234", "batch", "favorite", "--scope", "search", "--terms", "beach"]
+            argv = ["--socket", "chur-dc-0123456789abcdef", "batch", "favorite", "--scope", "search", "--terms", "beach"]
             args = cli.parse_args(argv + (["--apply"] if apply else []))
             output = io.StringIO()
             with host, redirect_stdout(output):
@@ -412,13 +414,16 @@ class DeviceProtocolTest(unittest.TestCase):
 
     def test_session_link_accepts_only_the_expected_local_session(self):
         code = "0123456789abcdef" * 2
-        self.assertEqual(device.parse_session_link(f"chur://device-control/v2?port=54321#{code}"),
-                         (54321, code))
-        for link in (f"chur://device-control/v2?port=0#{code}",
-                     f"chur://device-control/v2?port=65536#{code}",
-                     f"chur://device-control/v2?port=54321#{code.upper()}",
-                     f"chur://other/v1?port=54321#{code}",
-                     f"chur://device-control/v2?port=54321#{code}&extra=1"):
+        name = "chur-dc-0123456789abcdef"
+        self.assertEqual(device.parse_session_link(f"chur://device-control/v3?socket={name}#{code}"),
+                         (name, code))
+        for link in (f"chur://device-control/v2?port=54321#{code}",
+                     f"chur://device-control/v3?socket=chur-dc-0123#{code}",
+                     f"chur://device-control/v3?socket=other-0123456789abcdef#{code}",
+                     f"chur://device-control/v3?socket={name.upper()}#{code}",
+                     f"chur://device-control/v3?socket={name}#{code.upper()}",
+                     f"chur://other/v1?socket={name}#{code}",
+                     f"chur://device-control/v3?socket={name}#{code}&extra=1"):
             with self.subTest(link=link), self.assertRaises(ValueError):
                 device.parse_session_link(link)
 

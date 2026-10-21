@@ -1,6 +1,10 @@
 package dev.po4yka.chur.android
 
 import android.content.Context
+import android.net.LocalServerSocket
+import android.net.LocalSocket
+import android.net.LocalSocketAddress
+import android.os.Process
 import android.os.SystemClock
 import android.util.Base64
 import dev.po4yka.chur.app.ChurController
@@ -17,9 +21,6 @@ import dev.po4yka.chur.vault.VaultState
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.IOException
-import java.net.InetAddress
-import java.net.ServerSocket
-import java.net.Socket
 import java.net.SocketTimeoutException
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -36,15 +37,25 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** A user-enabled, loopback-only command channel for the currently open vault. */
+/**
+ * A user-enabled command channel for the currently open vault, for `adb forward` only.
+ *
+ * It listens on an abstract-namespace UNIX socket with a random name, not on TCP:
+ * any local app can connect to a loopback port. The kernel reports the peer UID,
+ * and only ADB ([isAdbPeer]) is served, so an app that learns the session link
+ * still cannot connect.
+ */
 internal class DeviceControlBridge(
     private val context: Context,
     private val controller: ChurController,
     private val idleTimeoutMs: Long = IDLE_TIMEOUT_MS,
     private val handshakeTimeoutMs: Long = HANDSHAKE_TIMEOUT_MS,
     private val frameTimeoutMs: Long = FRAME_TIMEOUT_MS,
+    private val acceptPeer: (Int) -> Boolean = ::isAdbPeer,
 ) {
-    data class Pairing(val port: Int, val code: String)
+    data class Pairing(val socket: String, val code: String) {
+        val link: String get() = "chur://device-control/v3?socket=$socket#$code"
+    }
 
     init { require(idleTimeoutMs > 0 && handshakeTimeoutMs > 0 && frameTimeoutMs > 0) }
 
@@ -53,10 +64,10 @@ internal class DeviceControlBridge(
     val pairing = _pairing.asStateFlow()
     private val _connected = MutableStateFlow(false)
     val connected = _connected.asStateFlow()
-    private class Session(val listener: ServerSocket, val pairing: Pairing, val generation: Long) {
+    private class Session(val listener: LocalServerSocket, val pairing: Pairing, val generation: Long) {
         val job = SupervisorJob()
         @Volatile var lastActivityAt = SystemClock.elapsedRealtime()
-        @Volatile var client: Socket? = null
+        @Volatile var client: LocalSocket? = null
         @Volatile var peer: Peer? = null
     }
 
@@ -69,10 +80,10 @@ internal class DeviceControlBridge(
             if (it.generation == unlocked.generation) return it.pairing
             stop(it)
         }
-        val listener = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
-        listener.soTimeout = 1_000
-        val current = Session(listener,
-            Pairing(listener.localPort, ByteArray(16).also(random::nextBytes).hex()),
+        // A random name: another app cannot bind it first and take the forward.
+        val name = "chur-dc-" + ByteArray(8).also(random::nextBytes).hex()
+        val listener = LocalServerSocket(name)
+        val current = Session(listener, Pairing(name, ByteArray(16).also(random::nextBytes).hex()),
             unlocked.generation)
         session = current
         _pairing.value = current.pairing
@@ -91,17 +102,23 @@ internal class DeviceControlBridge(
         }
         thread(name = "chur-device-control", isDaemon = true) {
             while (session === current) {
-                var socket: Socket? = null
+                var socket: LocalSocket? = null
                 try {
                     val accepted = listener.accept()
+                    synchronized(this) {
+                        if (session !== current) { accepted.close(); return@thread }
+                    }
+                    val uid = try { accepted.peerCredentials.uid } catch (_: IOException) { -1 }
+                    if (!acceptPeer(uid)) {
+                        accepted.close()
+                        continue
+                    }
                     socket = accepted
                     synchronized(this) {
                         if (session !== current) { accepted.close(); return@thread }
                         current.client = accepted
                     }
                     accepted.use { serve(it, current) }
-                } catch (_: SocketTimeoutException) {
-                    continue
                 } catch (_: IOException) {
                     if (session !== current) break
                 } finally {
@@ -123,11 +140,16 @@ internal class DeviceControlBridge(
     @Synchronized private fun stop(current: Session) {
         if (session !== current) return
         session = null
-        _pairing.value = null
+        // Connected goes first: a watcher that sees the pairing end must not still
+        // see a connected computer.
         _connected.value = false
+        _pairing.value = null
         current.job.cancel()
+        // Closing a LocalServerSocket does not wake a blocked accept(). A connection
+        // does: the accept thread sees the ended session and exits.
+        runCatching { LocalSocket().use { it.connect(LocalSocketAddress(current.pairing.socket)) } }
         runCatching { current.listener.close() }
-        runCatching { current.client?.close() }
+        current.client?.hangUp()
     }
 
     private fun requireCurrent(current: Session) {
@@ -136,13 +158,13 @@ internal class DeviceControlBridge(
             (controller.vaultState.value as? VaultState.Unlocked)?.generation == current.generation)
     }
 
-    private fun serve(socket: Socket, current: Session) {
+    private fun serve(socket: LocalSocket, current: Session) {
         val connectionJob = Job(current.job)
         try { serveConnected(socket, current, connectionJob) }
         finally { connectionJob.cancel() }
     }
 
-    private fun serveConnected(socket: Socket, current: Session, connectionJob: Job) {
+    private fun serveConnected(socket: LocalSocket, current: Session, connectionJob: Job) {
         val peer = Peer(socket, frameTimeoutMs, handshakeTimeoutMs,
             expired = { connectionJob.cancel() },
             activity = { current.lastActivityAt = SystemClock.elapsedRealtime() })
@@ -569,7 +591,7 @@ internal class DeviceControlBridge(
     }
 
     /** Both reads and writes have an absolute deadline; slow trickles cannot renew it. */
-    private class Peer(private val socket: Socket, private val frameTimeoutMs: Long,
+    private class Peer(private val socket: LocalSocket, private val frameTimeoutMs: Long,
         handshakeTimeoutMs: Long, private val expired: () -> Unit, private val activity: () -> Unit) {
         private val input = DataInputStream(socket.getInputStream())
         private val output = DataOutputStream(socket.getOutputStream())
@@ -580,7 +602,7 @@ internal class DeviceControlBridge(
         fun expire(now: Long) {
             if (now >= deadline || (!authenticated && now >= handshakeDeadline)) {
                 expired()
-                runCatching { socket.close() }
+                socket.hangUp()
             }
         }
 
@@ -635,3 +657,19 @@ internal class DeviceControlBridge(
         }
     }
 }
+
+/**
+ * Close a connection so that the peer sees the end at once. A plain close does not
+ * wake a thread of this process that is blocked in a read of the same socket.
+ */
+private fun LocalSocket.hangUp() {
+    runCatching { shutdownInput() }
+    runCatching { shutdownOutput() }
+    runCatching { close() }
+}
+
+/**
+ * The peers that `adb forward` connects as: the shell UID, and root under `adb root`.
+ * Root already has full access to the device, so accepting it adds no reach.
+ */
+internal fun isAdbPeer(uid: Int): Boolean = uid == Process.SHELL_UID || uid == Process.ROOT_UID

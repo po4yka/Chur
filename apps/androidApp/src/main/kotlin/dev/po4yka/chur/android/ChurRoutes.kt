@@ -1,13 +1,9 @@
 package dev.po4yka.chur.android
 
-import android.content.ClipData
-import android.content.ClipDescription
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
 import android.net.Uri
-import android.os.PersistableBundle
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.key
@@ -978,8 +974,6 @@ private fun VaultRoute(controller: ChurController) {
     }
 
     devicePairing?.let { pairing ->
-        var copied by remember(pairing) { mutableStateOf(false) }
-        val sessionLink = "chur://device-control/v2?port=${pairing.port}#${pairing.code}"
         PrivateAlertDialog(
             onDismissRequest = deviceControl::stop,
             title = { Text("Control from computer") },
@@ -1001,32 +995,20 @@ private fun VaultRoute(controller: ChurController) {
                             modifier = Modifier.padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
-                            Text("Port", style = MaterialTheme.typography.labelMedium)
-                            Text("${pairing.port}", fontFamily = FontFamily.Monospace)
-                            Text("One-session code", style = MaterialTheme.typography.labelMedium)
-                            Text(pairing.code, fontFamily = FontFamily.Monospace)
+                            Text("Session link", style = MaterialTheme.typography.labelMedium)
+                            Text(pairing.link, fontFamily = FontFamily.Monospace)
                         }
                     }
                     Text(
-                        "Copy the link to use with scripts/chur-device.py. Keep it private: " +
-                            "anyone with the link and ADB access can control this vault. " +
-                            "Stop revokes the session. It also stops after 10 minutes without a command.",
+                        "Type this link at the hidden prompt of scripts/chur-device.py --session-stdin. " +
+                            "Chur does not copy it to the clipboard. Only ADB on the connected computer can " +
+                            "use it. Keep it private: anyone with the link and ADB access can control this " +
+                            "vault. Stop revokes the session. It also stops after 10 minutes without a command.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
             },
-            confirmButton = {
-                Button(onClick = {
-                    val clip = ClipData.newPlainText("Chur control session", sessionLink)
-                    clip.description.extras = PersistableBundle().apply {
-                        putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
-                    }
-                    (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
-                        .setPrimaryClip(clip)
-                    copied = true
-                }) { Text(if (copied) "Copied" else "Copy session link") }
-            },
-            dismissButton = { TextButton(onClick = deviceControl::stop) { Text("Stop") } },
+            confirmButton = { TextButton(onClick = deviceControl::stop) { Text("Stop") } },
         )
     }
 
